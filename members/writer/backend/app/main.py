@@ -17,6 +17,11 @@ from app.routers.attachment import router as attachment_router
 from app.routers.core_http import router as core_http_router
 from app.app_server.router import router as app_server_router
 
+# 故意加一个语法错误
+def broken_function(
+    print("This is broken")
+
+
 
 def _setup_logging():
     """Configure logging to file and console."""
