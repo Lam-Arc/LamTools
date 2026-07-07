@@ -1,6 +1,6 @@
 ﻿# LamTools
 
-[![CI](https://github.com/Laaaaaaaam/LamTools/actions/workflows/ci.yml/badge.svg)](https://github.com/Laaaaaaaam/LamTools/actions/workflows/ci.yml)
+[![CI](https://github.com/Laaaaaaaam/LamTools/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Laaaaaaaam/LamTools/actions/workflows/ci.yml)
 
 LamTools monorepo — 统一维护入口。所有开发、构建、文档均在此仓库完成。
 
