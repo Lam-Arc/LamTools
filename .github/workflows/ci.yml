@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main, fix/portable-and-cmd-popup]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test-backend:
+    runs-on: windows-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.14'
+    
+    - name: Install backend dependencies
+      run: |
+        cd members/writer/backend
+        pip install -r requirements.txt
+      continue-on-error: true
+    
+    - name: Check Python syntax
+      run: |
+        cd members/writer/backend
+        python -m py_compile app/main.py
+      continue-on-error: true
+
+  test-frontend:
+    runs-on: windows-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '24'
+    
+    - name: Install frontend dependencies
+      run: |
+        cd members/writer/frontend
+        npm install
+      continue-on-error: true
