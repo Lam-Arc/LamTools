@@ -50,13 +50,19 @@ class Settings(BaseSettings):
     def model_post_init(self, __context) -> None:
         # Data directory
         if not self.data_dir:
-            if platform.system() == "Windows":
-                base = Path(os.environ.get("APPDATA", Path.home()))
-            elif platform.system() == "Darwin":
-                base = Path.home() / "Library" / "Application Support"
+            # 优先使用环境变量指定的路径（便携模式）
+            env_data_dir = os.environ.get("LAMWRITER_DATA_DIR")
+            if env_data_dir:
+                self.data_dir = env_data_dir
             else:
-                base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
-            self.data_dir = str(base / "LamWriter")
+                # 原来的逻辑（兼容旧版本）
+                if platform.system() == "Windows":
+                    base = Path(os.environ.get("APPDATA", Path.home()))
+                elif platform.system() == "Darwin":
+                    base = Path.home() / "Library" / "Application Support"
+                else:
+                    base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+                self.data_dir = str(base / "LamWriter")
         Path(self.data_dir).mkdir(parents=True, exist_ok=True)
 
         # Database URL

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import multiprocessing
 import os
 
 import uvicorn
@@ -14,4 +15,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    # Windows: 必须在最前面设置，防止 PyInstaller + multiprocessing 弹出控制台
+    if os.name == "nt":
+        multiprocessing.freeze_support()
     main()

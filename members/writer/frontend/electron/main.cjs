@@ -77,9 +77,27 @@ function backendCommand(port) {
   if (app.isPackaged) {
     const exePath = path.join(process.resourcesPath, 'backend', 'lamwriter-backend.exe')
     const runtimeRoot = path.join(process.resourcesPath, 'runtime')
+    
+    // 便携模式：数据目录放在程序目录下
+    const appDir = path.dirname(process.resourcesPath)
+    const dataDir = path.join(appDir, 'data')
+    const userDataDir = path.join(appDir, 'user-data')
+    
+    // 确保目录存在
+    const fs = require('node:fs')
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true })
+    }
+    if (!fs.existsSync(userDataDir)) {
+      fs.mkdirSync(userDataDir, { recursive: true })
+    }
+    
     env.LAMTOOLS_RUNTIME_ROOT = runtimeRoot
     env.LAMTOOLS_CORE_RESOURCE_DIR = path.join(runtimeRoot, 'core')
     env.LAMWRITER_MEMBER_RESOURCE_DIR = path.join(runtimeRoot, 'members', 'writer')
+    env.LAMWRITER_DATA_DIR = dataDir
+    env.LAMWRITER_USER_DATA_DIR = userDataDir
+    
     return { command: exePath, args: [], cwd: path.dirname(exePath), env }
   }
 
@@ -145,6 +163,18 @@ async function createWindow() {
 app.whenReady()
   .then(() => {
     if (!gotSingleInstanceLock) return undefined
+    
+    // 便携模式：设置 Electron 用户数据目录
+    if (app.isPackaged) {
+      const appDir = path.dirname(process.resourcesPath)
+      const userDataDir = path.join(appDir, 'user-data')
+      const fs = require('node:fs')
+      if (!fs.existsSync(userDataDir)) {
+        fs.mkdirSync(userDataDir, { recursive: true })
+      }
+      app.setPath('userData', userDataDir)
+    }
+    
     Menu.setApplicationMenu(null)
     return createWindow()
   })

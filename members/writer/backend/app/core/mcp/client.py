@@ -35,13 +35,20 @@ class MCPClient:
             return
         env = os.environ.copy()
         env.update(self.config.env)
+        import sys
+        kwargs = {
+            "stdin": asyncio.subprocess.PIPE,
+            "stdout": asyncio.subprocess.PIPE,
+            "stderr": asyncio.subprocess.PIPE,
+            "env": env,
+        }
+        if sys.platform == "win32":
+            import subprocess
+            kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         self._proc = await asyncio.create_subprocess_exec(
             self.config.command,
             *self.config.args,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=env,
+            **kwargs,
         )
         self._reader_task = asyncio.create_task(self._read_loop())
         self._stderr_task = asyncio.create_task(self._drain_stderr())

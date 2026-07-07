@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime
@@ -135,8 +136,8 @@ def _run_git_blocking(
     extra_env: dict[str, str] | None = None,
 ) -> GitCommandResult:
     try:
-        completed = subprocess.run(
-            args,
+        kwargs: dict[str, Any] = dict(
+            args=args,
             cwd=cwd,
             env=_git_env(extra_env),
             input=stdin,
@@ -147,6 +148,9 @@ def _run_git_blocking(
             errors="replace",
             check=False,
         )
+        if sys.platform == "win32":
+            kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        completed = subprocess.run(**kwargs)
         out = completed.stdout or ""
         err = completed.stderr or ""
         if len(out) > max_output_chars:

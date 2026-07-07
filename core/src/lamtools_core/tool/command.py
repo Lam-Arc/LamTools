@@ -58,6 +58,7 @@ def terminate_process_tree(process: subprocess.Popen[Any]) -> None:
             stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL,
             check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         return
     process.kill()
@@ -75,6 +76,7 @@ def run_subprocess_blocking(
     creationflags = 0
     if sys.platform == "win32":
         creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        creationflags |= getattr(subprocess, "CREATE_NO_WINDOW", 0)
     process: subprocess.Popen[str] | None = None
     try:
         process = subprocess.Popen(
@@ -163,6 +165,7 @@ def run_subprocess_streaming_blocking(
     creationflags = 0
     if sys.platform == "win32":
         creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        creationflags |= getattr(subprocess, "CREATE_NO_WINDOW", 0)
     process: subprocess.Popen[str] | None = None
     stdout_parts: list[str] = []
     stderr_parts: list[str] = []

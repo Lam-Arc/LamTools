@@ -258,7 +258,7 @@ class LLMClient:
         # Validate payload is JSON-serializable before sending
         try:
             payload_json = json.dumps(payload, ensure_ascii=False)
-            logger.info(f"Payload size: {len(payload_json)} chars (first 100: {payload_json[:100]})")
+            logger.info(f"Payload size: {len(payload_json)} chars")
         except (TypeError, ValueError) as e:
             logger.error(f"Payload not JSON-serializable: {e}")
             # Try to identify the problematic message

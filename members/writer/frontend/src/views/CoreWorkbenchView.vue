@@ -2403,17 +2403,42 @@ const newProjectWorkRoot = ref('')
 const newProjectName = ref('')
 const selectingProjectDirectory = ref(false)
 
+// 浏览器模式下用于选择目录的隐藏 input
+const projectDirInput = ref<HTMLInputElement | null>(null)
+
 function resetNewProjectForm() {
   showNewProject.value = false
   newProjectWorkRoot.value = ''
   newProjectName.value = ''
 }
 
+function handleBrowserDirectorySelect(event: Event) {
+  const input = event.target as HTMLInputElement
+  const files = input.files
+  if (files && files.length > 0) {
+    // 从第一个文件的路径提取目录路径
+    const file = files[0]
+    const fullPath = (file as any).path || file.webkitRelativePath || ''
+    if (fullPath) {
+      // 提取目录路径（去掉文件名）
+      const dirPath = fullPath.replace(/[/\\][^/\\]*$/, '')
+      newProjectWorkRoot.value = dirPath
+      if (!newProjectName.value.trim()) {
+        newProjectName.value = dirPath.split(/[/\\]/).filter(Boolean).pop() || ''
+      }
+    }
+  }
+  // 清空 input，允许重复选择同一目录
+  input.value = ''
+}
+
 async function browseProjectDirectory() {
+  // 浏览器模式：使用隐藏的 file input
   if (!window.lamwriterDesktop?.selectDirectory) {
-    window.alert('当前环境不支持目录浏览，请手动输入绝对路径。')
+    projectDirInput.value?.click()
     return
   }
+  // Electron 模式：使用桌面 API
   selectingProjectDirectory.value = true
   try {
     const selected = await window.lamwriterDesktop.selectDirectory()
@@ -2482,6 +2507,15 @@ onMounted(async () => {
     <!-- Header action: replace default "+" with project-aware menu -->
     <template #sidebar-header-action>
       <div class="header-new-menu">
+        <!-- 隐藏的目录选择 input（浏览器模式用） -->
+        <input
+          ref="projectDirInput"
+          type="file"
+          webkitdirectory
+          directory
+          style="display: none"
+          @change="handleBrowserDirectorySelect"
+        />
         <button class="icon-btn" title="新建项目" @click="showNewProject = !showNewProject">+</button>
         <div v-if="showNewProject" class="new-project-popover" @keydown.esc="resetNewProjectForm">
           <div class="new-project-head">
