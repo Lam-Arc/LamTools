@@ -34,6 +34,11 @@ jobs:
         cd members/writer/backend
         python -m py_compile app/main.py
     
+    - name: Force fail for testing
+      run: |
+        echo "This is a test failure"
+        exit 1
+    
     - name: Run backend tests
       run: |
         cd members/writer/backend
