@@ -222,6 +222,14 @@ my-plugin/
 }
 ```
 
+一期最简自定义入口：
+
+- 项目级 hooks：`<project_root>/.lamtools/hooks.json`
+- 用户级 hooks：`%APPDATA%/LamTools/hooks.json`
+- 插件级 hooks：`<plugin_root>/hooks/hooks.json`，或由 `plugin.json` 的 `hooks` 字段指定
+
+设置页不是一期必需项。用户必须能通过 JSON 配置自定义 hooks，并通过 CLI/app-server 操作审查、信任和禁用这些 hooks；后续 GUI 只是在同一配置和操作入口上提供可视化管理。
+
 支持 handler 类型：
 
 - `command`：本地脚本，stdin 接 JSON，stdout 可返回 JSON。
