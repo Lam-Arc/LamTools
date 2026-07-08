@@ -106,7 +106,7 @@ export const useWriterAppServerStore = defineStore('writerAppServer', {
       threadId: string,
       input: string | WriterInputItem[],
       workRoot?: string,
-      options: { thinking_enabled?: boolean; thinking_budget?: number } = {},
+      options: { thinking_enabled?: boolean; thinking_budget?: number; shallow_thinking_enabled?: boolean } = {},
     ) {
       await this.ensureClient()
       const inputItems = typeof input === 'string' ? [{ type: 'text' as const, text: input }] : input

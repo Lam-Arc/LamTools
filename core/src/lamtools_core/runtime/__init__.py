@@ -55,11 +55,14 @@ class RuntimeToolStep:
 @dataclass
 class RuntimeTurnInput:
     user_message: str = ""
+    user_content: str | list[dict[str, Any]] | None = None
     state: RuntimeState | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {"user_message": self.user_message}
+        if self.user_content is not None:
+            d["user_content"] = self.user_content
         if self.state is not None:
             d["state"] = self.state.to_dict()
         return d

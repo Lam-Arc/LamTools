@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from lamtools_core.llm import ChatMessage, LLMClient, LLMRequest
+from lamtools_core.llm.policy import RetryPolicy
+from lamtools_core.llm.retry import ModelRetryExhausted, ModelRetrySink, complete_with_retry, stream_with_retry
 from lamtools_core.tokens import estimate_message_tokens, estimate_text_tokens
 
 COMPACTION_PREFIX = "[Compacted Context]"
@@ -56,6 +58,10 @@ class ContextCompactionRequest:
     retain_tail_count: int = 0
     preserve_latest_user: bool = True
     estimate_tokens: CompactionTokenEstimator | None = None
+    model_retries: int = 1
+    model_timeout_seconds: float | None = None
+    retry_policy: RetryPolicy = field(default_factory=RetryPolicy)
+    on_model_retry: ModelRetrySink | None = None
 
 
 @dataclass(frozen=True)
@@ -129,6 +135,10 @@ async def compact_context(request: ContextCompactionRequest) -> ContextCompactio
         target_tokens=request.target_tokens,
         existing_summary=request.existing_summary,
         on_delta=request.on_delta,
+        model_retries=request.model_retries,
+        model_timeout_seconds=request.model_timeout_seconds,
+        retry_policy=request.retry_policy,
+        on_model_retry=request.on_model_retry,
     )
     summary_message = ChatMessage(
         role="system",
@@ -287,6 +297,10 @@ async def summarize_context_messages(
     target_tokens: int = 4096,
     existing_summary: str = "",
     on_delta: CompactionDeltaSink | None = None,
+    model_retries: int = 1,
+    model_timeout_seconds: float | None = None,
+    retry_policy: RetryPolicy | None = None,
+    on_model_retry: ModelRetrySink | None = None,
 ) -> str:
     """Return a structured summary for replacing compacted context."""
     transcript = format_messages_for_compaction(messages, existing_summary=existing_summary)
@@ -304,21 +318,39 @@ async def summarize_context_messages(
             max_tokens=summary_budget,
             timeout=timeout,
         )
-        if on_delta is not None:
-            try:
-                content, emitted_delta = await _stream_compaction_content(
-                    llm_client,
-                    summary_request,
-                    on_delta,
-                )
-            except (AttributeError, NotImplementedError):
-                content = ""
-            except Exception as exc:
-                raise ContextCompactionError(f"Context compaction failed: {exc}") from exc
+        try:
+            content, emitted_delta = await _stream_compaction_content(
+                llm_client,
+                summary_request,
+                on_delta=on_delta,
+                model_retries=model_retries,
+                model_timeout_seconds=model_timeout_seconds,
+                retry_policy=retry_policy,
+                on_model_retry=on_model_retry,
+            )
+        except (AttributeError, NotImplementedError):
+            content = ""
+        except ModelRetryExhausted as exc:
+            if exc.attempts <= 1:
+                raise ContextCompactionError(f"Context compaction failed: {exc.last_error}") from exc
+            raise ContextCompactionError(f"Context compaction failed: {exc}") from exc
+        except Exception as exc:
+            raise ContextCompactionError(f"Context compaction failed: {exc}") from exc
         try:
             if not content:
-                response = await llm_client.complete(summary_request)
+                response = await complete_with_retry(
+                    llm_client,
+                    summary_request,
+                    max_attempts=model_retries,
+                    timeout_seconds=model_timeout_seconds,
+                    retry_policy=retry_policy,
+                    on_retry=on_model_retry,
+                )
                 content = (response.content or "").strip()
+        except ModelRetryExhausted as exc:
+            if exc.attempts <= 1:
+                raise ContextCompactionError(f"Context compaction failed: {exc.last_error}") from exc
+            raise ContextCompactionError(f"Context compaction failed: {exc}") from exc
         except Exception as exc:
             raise ContextCompactionError(f"Context compaction failed: {exc}") from exc
         if not content:
@@ -340,22 +372,28 @@ async def _emit_compaction_delta(on_delta: CompactionDeltaSink, text: str) -> No
 async def _stream_compaction_content(
     llm_client: LLMClient,
     request: LLMRequest,
-    on_delta: CompactionDeltaSink,
+    *,
+    on_delta: CompactionDeltaSink | None,
+    model_retries: int,
+    model_timeout_seconds: float | None,
+    retry_policy: RetryPolicy | None,
+    on_model_retry: ModelRetrySink | None,
 ) -> tuple[str, bool]:
-    stream = llm_client.stream(request)
-    if inspect.isawaitable(stream):
-        stream = await stream
-    if not hasattr(stream, "__aiter__"):
-        raise NotImplementedError
     parts: list[str] = []
     emitted_delta = False
-    async for event in stream:
+    async for event in stream_with_retry(
+        llm_client,
+        request,
+        max_attempts=model_retries,
+        timeout_seconds=model_timeout_seconds,
+        retry_policy=retry_policy,
+        on_retry=on_model_retry,
+    ):
         if event.kind == "content_delta" and event.content:
             parts.append(event.content)
-            await _emit_compaction_delta(on_delta, event.content)
-            emitted_delta = True
-        elif event.kind == "error":
-            raise RuntimeError(event.error or "model stream failed")
+            if on_delta is not None:
+                await _emit_compaction_delta(on_delta, event.content)
+                emitted_delta = True
     return "".join(parts).strip(), emitted_delta
 
 

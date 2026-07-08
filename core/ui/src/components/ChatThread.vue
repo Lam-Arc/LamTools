@@ -51,13 +51,36 @@
           </div>
 
           <div v-if="isInitialWaitingMessage(msg)" class="initial-waiting-indicator" aria-label="请求中">
-            <span class="stream-spinner" />
+            <span v-if="shouldShowShallowThinkingPending(msg)" class="shallow-thinking-pending" role="status" aria-live="polite">
+              shallow thinking<span class="shallow-thinking-dots" aria-hidden="true"><span>.</span><span>.</span><span>.</span></span>
+            </span>
+            <span v-else class="stream-spinner" />
           </div>
 
           <!-- ── Part-based rendering ── -->
-          <template v-if="msg.parts && msg.parts.length > 0">
+          <template v-if="(msg.parts && msg.parts.length > 0) || shouldShowShallowThinkingPending(msg)">
+            <div
+              v-if="shouldShowShallowThinkingPending(msg) && !isLiveMessage(msg) && !isInitialWaitingMessage(msg)"
+              class="process-step process-step--reasoning shallow-thinking-pending-row"
+            >
+              <div class="reasoning-body reasoning-body--pending">
+                <span class="shallow-thinking-pending" role="status" aria-live="polite">
+                  shallow thinking<span class="shallow-thinking-dots" aria-hidden="true"><span>.</span><span>.</span><span>.</span></span>
+                </span>
+              </div>
+            </div>
             <template v-if="isTimelineMessage(msg)">
               <template v-if="isLiveMessage(msg)">
+                <div
+                  v-if="shouldShowShallowThinkingPending(msg)"
+                  class="process-step process-step--reasoning shallow-thinking-pending-row"
+                >
+                  <div class="reasoning-body reasoning-body--pending">
+                    <span class="shallow-thinking-pending" role="status" aria-live="polite">
+                      shallow thinking<span class="shallow-thinking-dots" aria-hidden="true"><span>.</span><span>.</span><span>.</span></span>
+                    </span>
+                  </div>
+                </div>
                 <template
                   v-for="part in timelineParts(msg)"
                   :key="part.id"
@@ -160,7 +183,7 @@
                         <span class="process-step-marker" />
                         <span class="tool-type-tag" :class="toolColorClass(part)">{{ toolTypeLabel(part) }}</span>
                         <span class="process-step-title">{{ readableProcessTitle(part) }}</span>
-                        <span v-if="part.toolArgs && Object.keys(part.toolArgs).length > 0 && !isCommandTool(part)" class="tool-args-preview">{{ toolArgsPreview(part.toolArgs) }}</span>
+                        <span v-if="shouldShowToolArgsPreview(part)" class="tool-args-preview">{{ toolArgsPreview(part.toolArgs || {}) }}</span>
                         <span
                           v-if="hasToolDisplay(part)"
                           class="tool-expand-chevron"
@@ -189,6 +212,12 @@
                             <span v-for="item in testResultMeta(part)" :key="item">{{ item }}</span>
                           </div>
                           <pre v-if="testResultOutput(part)" class="test-result-output">{{ testResultOutput(part) }}</pre>
+                        </div>
+                        <div v-else-if="displayToolInputPreview(part)" class="tool-output tool-input-preview">
+                          <div class="tool-output-meta">
+                            <span>{{ toolInputPreviewMeta(part) }}</span>
+                          </div>
+                          <pre class="tool-output-content" :class="{ 'tool-output-content--wrap': isToolWrapEnabled(part.id) }" @click="toggleToolWrap(part.id)">{{ displayToolInputPreview(part) }}</pre>
                         </div>
                         <div v-else-if="displayToolResult(part) && isCommandTool(part)" class="command-output">
                           <strong class="command-output-command">{{ commandDisplayText(part) }}</strong>
@@ -237,7 +266,7 @@
 
                 <div v-if="isProcessExpanded(msg)" class="process-stream process-stream--history">
                   <template
-                    v-for="group in groupParts(msg.parts)"
+                    v-for="group in groupParts(msg.parts || [])"
                     :key="group.kind === 'context-group' ? `context-${group.items.map((item) => item.id).join('-')}` : group.part.id"
                   >
                     <div v-if="group.kind === 'context-group'" class="process-step process-step--context" :class="'process-step--' + (group.status || 'pending')">
@@ -260,7 +289,7 @@
                           <div class="context-tool-head">
                             <span class="tool-type-tag" :class="toolColorClass(item)">{{ toolTypeLabel(item) }}</span>
                             <span class="process-step-title">{{ readableProcessTitle(item) }}</span>
-                            <span v-if="item.toolArgs && Object.keys(item.toolArgs).length > 0 && !isCommandTool(item)" class="tool-args-preview">{{ toolArgsPreview(item.toolArgs) }}</span>
+                            <span v-if="shouldShowToolArgsPreview(item)" class="tool-args-preview">{{ toolArgsPreview(item.toolArgs || {}) }}</span>
                           </div>
                           <div v-if="displayToolResult(item) || readableProcessDetail(item)" class="tool-output context-tool-output">
                             <div v-if="toolMetaItems(item).length > 0" class="tool-output-meta">
@@ -287,7 +316,7 @@
                           <span class="process-step-marker" />
                           <span class="tool-type-tag" :class="toolColorClass(group.part)">{{ toolTypeLabel(group.part) }}</span>
                           <span class="process-step-title">{{ readableProcessTitle(group.part) }}</span>
-                          <span v-if="group.part.toolArgs && Object.keys(group.part.toolArgs).length > 0 && !isCommandTool(group.part)" class="tool-args-preview">{{ toolArgsPreview(group.part.toolArgs) }}</span>
+                          <span v-if="shouldShowToolArgsPreview(group.part)" class="tool-args-preview">{{ toolArgsPreview(group.part.toolArgs || {}) }}</span>
                           <span
                             v-if="hasToolDisplay(group.part)"
                             class="tool-expand-chevron"
@@ -316,6 +345,12 @@
                               <span v-for="item in testResultMeta(group.part)" :key="item">{{ item }}</span>
                             </div>
                             <pre v-if="testResultOutput(group.part)" class="test-result-output">{{ testResultOutput(group.part) }}</pre>
+                          </div>
+                          <div v-else-if="displayToolInputPreview(group.part)" class="tool-output tool-input-preview">
+                            <div class="tool-output-meta">
+                              <span>{{ toolInputPreviewMeta(group.part) }}</span>
+                            </div>
+                            <pre class="tool-output-content" :class="{ 'tool-output-content--wrap': isToolWrapEnabled(group.part.id) }" @click="toggleToolWrap(group.part.id)">{{ displayToolInputPreview(group.part) }}</pre>
                           </div>
                           <div v-else-if="displayToolResult(group.part) && isCommandTool(group.part)" class="command-output">
                             <strong class="command-output-command">{{ commandDisplayText(group.part) }}</strong>
@@ -423,89 +458,32 @@
                           <span v-for="item in agentDeliveryMeta(group.part)" :key="item">{{ item }}</span>
                         </div>
                         <div class="sub-line-body">
-                            <div v-if="agentAssignmentText(group.part)" class="user-row sub-line-user-row">
-                              <div class="user-bubble sub-line-user-bubble">{{ agentAssignmentText(group.part) }}</div>
-                            </div>
-                            <div v-if="agentTimelineParts(group.part).length > 0" class="sub-line-nested-process">
-                              <template
-                                v-for="itemPart in agentTimelineParts(group.part)"
-                                :key="itemPart.id"
-                              >
-                                <div
-                                  v-if="itemPart.partType === 'reasoning'"
-                                  class="process-step process-step--reasoning"
-                                >
-                                  <button
-                                    type="button"
-                                    class="reasoning-toggle"
-                                    @click="togglePartExpand(itemPart, false)"
-                                  >
-                                    <span class="process-step-marker" />
-                                    <span class="process-step-title">思考</span>
-                                    <span v-if="reasoningDuration(itemPart)" class="reasoning-duration">{{ reasoningDuration(itemPart) }}</span>
-                                    <span class="tool-expand-chevron">{{ isPartExpanded(itemPart, false) ? '▾' : '▸' }}</span>
-                                  </button>
-                                  <div v-if="isPartExpanded(itemPart, false)" class="reasoning-body">
-                                    <slot name="reasoning-content" :content="itemPart.content" :live="false">
-                                      <span class="process-step-detail">{{ itemPart.content }}</span>
-                                    </slot>
-                                  </div>
-                                </div>
-                                <div
-                                  v-else
-                                  class="process-step process-step--tool"
-                                  :class="['process-step--' + itemPart.status, toolColorClass(itemPart)]"
-                                >
-                                  <button
-                                    type="button"
-                                    class="tool-card-header"
-                                    :class="[{ 'has-detail': hasToolDisplay(itemPart) || readableProcessDetail(itemPart) }, toolColorClass(itemPart)]"
-                                    @click="togglePartExpand(itemPart, false)"
-                                  >
-                                    <span class="process-step-marker" />
-                                    <span class="tool-type-tag" :class="toolColorClass(itemPart)">{{ toolTypeLabel(itemPart) }}</span>
-                                    <span class="process-step-title">{{ readableProcessTitle(itemPart) }}</span>
-                                    <span
-                                      v-if="hasToolDisplay(itemPart) || readableProcessDetail(itemPart)"
-                                      class="tool-expand-chevron"
-                                    >{{ isPartExpanded(itemPart, false) ? '▾' : '▸' }}</span>
-                                  </button>
-                                  <div v-if="isPartExpanded(itemPart, false)" class="tool-card-body">
-                                    <pre v-if="displayToolError(itemPart)" class="tool-output tool-output--error">{{ displayToolError(itemPart) }}</pre>
-                                    <div v-else-if="displayToolResult(itemPart) && isFileTool(itemPart)" class="diff-block" :class="[fileDiffClass(itemPart), { 'diff-block--wrap': isToolWrapEnabled(itemPart.id) }]">
-                                      <div class="diff-header">
-                                        <span class="diff-file">{{ diffHeaderText(itemPart) }}</span>
-                                        <button type="button" class="wrap-toggle" @click.stop="toggleToolWrap(itemPart.id)">{{ isToolWrapEnabled(itemPart.id) ? 'wrap' : 'scroll' }}</button>
-                                      </div>
-                                      <div class="diff-lines">
-                                        <div v-for="(line, li) in diffDisplayLines(itemPart)" :key="li" class="diff-line" :class="diffLineClass(line, itemPart)">
-                                          <span class="diff-line-num">{{ diffLineGutter(line, li, itemPart) }}</span>
-                                          <span class="diff-line-content">{{ diffLineContent(line, itemPart) }}</span>
-                                        </div>
-                                      </div>
-                                    </div>
-                                    <div v-else-if="displayToolResult(itemPart) && isCommandTool(itemPart)" class="command-output">
-                                      <strong class="command-output-command">{{ commandDisplayText(itemPart) }}</strong>
-                                      <pre class="command-output-result">{{ commandOutputText(itemPart) }}</pre>
-                                    </div>
-                                    <pre v-else-if="displayToolResult(itemPart)" class="tool-output">{{ toolOutputContent(itemPart) }}</pre>
-                                    <pre v-else-if="readableProcessDetail(itemPart)" class="tool-output">{{ readableProcessDetail(itemPart) }}</pre>
-                                  </div>
-                                </div>
-                              </template>
-                            </div>
-                            <div v-if="agentConclusion(group.part)" class="assistant-answer sub-line-assistant-answer">
-                              <slot name="assistant-content" :content="agentConclusion(group.part)">
-                                <div class="part-text-content">{{ agentConclusion(group.part) }}</div>
+                          <ChatThread
+                            class="sub-line-chat"
+                            :messages="agentSubMessages(group.part)"
+                            :assistant-label="agentTitle(group.part)"
+                            :process-expanded-ids="agentProcessExpandedIds(group.part)"
+                            @toggle-process="toggleAgentProcess"
+                            @decision-select="emit('decision-select', $event)"
+                          >
+                            <template #assistant-content="slotProps">
+                              <slot name="assistant-content" v-bind="slotProps">
+                                <div class="part-text-content">{{ slotProps.content }}</div>
                               </slot>
-                            </div>
+                            </template>
+                            <template #reasoning-content="slotProps">
+                              <slot name="reasoning-content" v-bind="slotProps">
+                                <span class="process-step-detail">{{ slotProps.content }}</span>
+                              </slot>
+                            </template>
+                          </ChatThread>
                         </div>
                       </div>
 
                       <div
                         v-else-if="group.part.partType === 'compaction'"
-                        class="process-step process-step--compaction"
-                        :class="'process-step--' + group.part.status"
+                        class="compaction-step"
+                        :class="'compaction-step--' + group.part.status"
                       >
                         <button
                           type="button"
@@ -575,7 +553,7 @@
                 </div>
                 <template v-else>
                   <div
-                    v-for="(group, gi) in textGroups(msg.parts)"
+                    v-for="(group, gi) in textGroups(msg.parts || [])"
                     :key="'timeline-txt-' + gi"
                     class="assistant-answer"
                   >
@@ -596,6 +574,10 @@
                 <span class="stream-spinner" />
                 <span class="process-current-title">{{ liveStatusText(msg) }}</span>
                 <span v-if="liveDetailText(msg)" class="process-current-detail">{{ liveDetailText(msg) }}</span>
+              </div>
+
+              <div v-if="shouldShowShallowThinkingPending(msg)" class="shallow-thinking-pending shallow-thinking-pending--process" role="status" aria-live="polite">
+                shallow thinking<span class="shallow-thinking-dots" aria-hidden="true"><span>.</span><span>.</span><span>.</span></span>
               </div>
 
               <div v-if="liveProcessItems(msg).length > 0" class="process-timeline">
@@ -622,7 +604,7 @@
               </div>
               <template v-else>
                 <div
-                  v-for="(group, gi) in textGroups(msg.parts)"
+                  v-for="(group, gi) in textGroups(msg.parts || [])"
                   :key="'live-txt-' + gi"
                   class="assistant-answer"
                 >
@@ -652,7 +634,7 @@
 
             <div v-if="!isTimelineMessage(msg) && !isLiveMessage(msg) && isProcessExpanded(msg)" class="process-stream process-stream--history">
               <template
-                v-for="group in groupParts(msg.parts)"
+                v-for="group in groupParts(msg.parts || [])"
                 :key="group.kind === 'context-group' ? `context-${group.items.map((item) => item.id).join('-')}` : group.part.id"
               >
                 <div v-if="group.kind === 'context-group'" class="process-step process-step--context" :class="'process-step--' + (group.status || 'pending')">
@@ -675,7 +657,7 @@
                       <div class="context-tool-head">
                         <span class="tool-type-tag" :class="toolColorClass(item)">{{ toolTypeLabel(item) }}</span>
                         <span class="process-step-title">{{ readableProcessTitle(item) }}</span>
-                        <span v-if="item.toolArgs && Object.keys(item.toolArgs).length > 0 && !isCommandTool(item)" class="tool-args-preview">{{ toolArgsPreview(item.toolArgs) }}</span>
+                        <span v-if="shouldShowToolArgsPreview(item)" class="tool-args-preview">{{ toolArgsPreview(item.toolArgs || {}) }}</span>
                       </div>
                       <div v-if="displayToolResult(item) || readableProcessDetail(item)" class="tool-output context-tool-output">
                         <div v-if="toolMetaItems(item).length > 0" class="tool-output-meta">
@@ -723,7 +705,7 @@
                       <span class="process-step-marker" />
                       <span class="tool-type-tag" :class="toolColorClass(group.part)">{{ toolTypeLabel(group.part) }}</span>
                       <span class="process-step-title">{{ readableProcessTitle(group.part) }}</span>
-                      <span v-if="group.part.toolArgs && Object.keys(group.part.toolArgs).length > 0 && !isCommandTool(group.part)" class="tool-args-preview">{{ toolArgsPreview(group.part.toolArgs) }}</span>
+                      <span v-if="shouldShowToolArgsPreview(group.part)" class="tool-args-preview">{{ toolArgsPreview(group.part.toolArgs || {}) }}</span>
                       <span
                         v-if="hasToolDisplay(group.part)"
                         class="tool-expand-chevron"
@@ -754,6 +736,12 @@
                           <span v-for="item in testResultMeta(group.part)" :key="item">{{ item }}</span>
                         </div>
                         <pre v-if="testResultOutput(group.part)" class="test-result-output">{{ testResultOutput(group.part) }}</pre>
+                      </div>
+                      <div v-else-if="displayToolInputPreview(group.part)" class="tool-output tool-input-preview">
+                        <div class="tool-output-meta">
+                          <span>{{ toolInputPreviewMeta(group.part) }}</span>
+                        </div>
+                        <pre class="tool-output-content" :class="{ 'tool-output-content--wrap': isToolWrapEnabled(group.part.id) }" @click="toggleToolWrap(group.part.id)">{{ displayToolInputPreview(group.part) }}</pre>
                       </div>
                       <!-- Non-file tools: plain code block -->
                       <div v-else-if="displayToolResult(group.part) && isCommandTool(group.part)" class="command-output">
@@ -879,82 +867,25 @@
                           <span v-for="item in agentDeliveryMeta(group.part)" :key="item">{{ item }}</span>
                         </div>
                         <div class="sub-line-body">
-                            <div v-if="agentAssignmentText(group.part)" class="user-row sub-line-user-row">
-                              <div class="user-bubble sub-line-user-bubble">{{ agentAssignmentText(group.part) }}</div>
-                            </div>
-                            <div v-if="agentTimelineParts(group.part).length > 0" class="sub-line-nested-process">
-                              <template
-                                v-for="itemPart in agentTimelineParts(group.part)"
-                                :key="itemPart.id"
-                              >
-                                <div
-                                  v-if="itemPart.partType === 'reasoning'"
-                                  class="process-step process-step--reasoning"
-                                >
-                                  <button
-                                    type="button"
-                                    class="reasoning-toggle"
-                                    @click="togglePartExpand(itemPart, false)"
-                                  >
-                                    <span class="process-step-marker" />
-                                    <span class="process-step-title">思考</span>
-                                    <span v-if="reasoningDuration(itemPart)" class="reasoning-duration">{{ reasoningDuration(itemPart) }}</span>
-                                    <span class="tool-expand-chevron">{{ isPartExpanded(itemPart, false) ? '▾' : '▸' }}</span>
-                                  </button>
-                                  <div v-if="isPartExpanded(itemPart, false)" class="reasoning-body">
-                                    <slot name="reasoning-content" :content="itemPart.content" :live="false">
-                                      <span class="process-step-detail">{{ itemPart.content }}</span>
-                                    </slot>
-                                  </div>
-                                </div>
-                                <div
-                                  v-else
-                                  class="process-step process-step--tool"
-                                  :class="['process-step--' + itemPart.status, toolColorClass(itemPart)]"
-                                >
-                                  <button
-                                    type="button"
-                                    class="tool-card-header"
-                                    :class="[{ 'has-detail': hasToolDisplay(itemPart) || readableProcessDetail(itemPart) }, toolColorClass(itemPart)]"
-                                    @click="togglePartExpand(itemPart, false)"
-                                  >
-                                    <span class="process-step-marker" />
-                                    <span class="tool-type-tag" :class="toolColorClass(itemPart)">{{ toolTypeLabel(itemPart) }}</span>
-                                    <span class="process-step-title">{{ readableProcessTitle(itemPart) }}</span>
-                                    <span
-                                      v-if="hasToolDisplay(itemPart) || readableProcessDetail(itemPart)"
-                                      class="tool-expand-chevron"
-                                    >{{ isPartExpanded(itemPart, false) ? '▾' : '▸' }}</span>
-                                  </button>
-                                  <div v-if="isPartExpanded(itemPart, false)" class="tool-card-body">
-                                    <pre v-if="displayToolError(itemPart)" class="tool-output tool-output--error">{{ displayToolError(itemPart) }}</pre>
-                                    <div v-else-if="displayToolResult(itemPart) && isFileTool(itemPart)" class="diff-block" :class="[fileDiffClass(itemPart), { 'diff-block--wrap': isToolWrapEnabled(itemPart.id) }]">
-                                      <div class="diff-header">
-                                        <span class="diff-file">{{ diffHeaderText(itemPart) }}</span>
-                                        <button type="button" class="wrap-toggle" @click.stop="toggleToolWrap(itemPart.id)">{{ isToolWrapEnabled(itemPart.id) ? 'wrap' : 'scroll' }}</button>
-                                      </div>
-                                      <div class="diff-lines">
-                                        <div v-for="(line, li) in diffDisplayLines(itemPart)" :key="li" class="diff-line" :class="diffLineClass(line, itemPart)">
-                                          <span class="diff-line-num">{{ diffLineGutter(line, li, itemPart) }}</span>
-                                          <span class="diff-line-content">{{ diffLineContent(line, itemPart) }}</span>
-                                        </div>
-                                      </div>
-                                    </div>
-                                    <div v-else-if="displayToolResult(itemPart) && isCommandTool(itemPart)" class="command-output">
-                                      <strong class="command-output-command">{{ commandDisplayText(itemPart) }}</strong>
-                                      <pre class="command-output-result">{{ commandOutputText(itemPart) }}</pre>
-                                    </div>
-                                    <pre v-else-if="displayToolResult(itemPart)" class="tool-output">{{ toolOutputContent(itemPart) }}</pre>
-                                    <pre v-else-if="readableProcessDetail(itemPart)" class="tool-output">{{ readableProcessDetail(itemPart) }}</pre>
-                                  </div>
-                                </div>
-                              </template>
-                            </div>
-                            <div v-if="agentConclusion(group.part)" class="assistant-answer sub-line-assistant-answer">
-                              <slot name="assistant-content" :content="agentConclusion(group.part)">
-                                <div class="part-text-content">{{ agentConclusion(group.part) }}</div>
+                          <ChatThread
+                            class="sub-line-chat"
+                            :messages="agentSubMessages(group.part)"
+                            :assistant-label="agentTitle(group.part)"
+                            :process-expanded-ids="agentProcessExpandedIds(group.part)"
+                            @toggle-process="toggleAgentProcess"
+                            @decision-select="emit('decision-select', $event)"
+                          >
+                            <template #assistant-content="slotProps">
+                              <slot name="assistant-content" v-bind="slotProps">
+                                <div class="part-text-content">{{ slotProps.content }}</div>
                               </slot>
-                            </div>
+                            </template>
+                            <template #reasoning-content="slotProps">
+                              <slot name="reasoning-content" v-bind="slotProps">
+                                <span class="process-step-detail">{{ slotProps.content }}</span>
+                              </slot>
+                            </template>
+                          </ChatThread>
                         </div>
                       </div>
 
@@ -987,8 +918,8 @@
 
                   <div
                     v-else-if="group.part.partType === 'compaction'"
-                    class="process-step process-step--compaction"
-                    :class="'process-step--' + group.part.status"
+                    class="compaction-step"
+                    :class="'compaction-step--' + group.part.status"
                   >
                     <button
                       type="button"
@@ -1017,7 +948,7 @@
             </div>
             <template v-else-if="!isTimelineMessage(msg) && !isLiveMessage(msg)">
               <div
-                v-for="(group, gi) in textGroups(msg.parts)"
+                v-for="(group, gi) in textGroups(msg.parts || [])"
                 :key="'txt-' + gi"
                 class="assistant-answer"
               >
@@ -1046,6 +977,17 @@
 <script setup lang="ts">
 import type { CoreAttachment, CoreMessage, MessagePart, MessagePartStatus } from '../types'
 import { computed, defineComponent, h, onBeforeUnmount, ref, watch } from 'vue'
+
+defineOptions({ name: 'ChatThread' })
+
+defineSlots<{
+  empty?: () => unknown
+  tail?: () => unknown
+  'message-product'?: (props: { message: CoreMessage }) => unknown
+  'assistant-content'?: (props: { content: string; live?: boolean }) => unknown
+  'reasoning-content'?: (props: { content: string; live?: boolean }) => unknown
+  'message-footer'?: (props: { message: CoreMessage }) => unknown
+}>()
 
 const STREAM_BASE_CHARS_PER_SECOND = 44
 const STREAM_FAST_CHARS_PER_SECOND = 96
@@ -1235,6 +1177,7 @@ interface ChecklistItem {
 const toolExpandedIds = ref<Set<string>>(new Set())
 const toolCollapsedIds = ref<Set<string>>(new Set())
 const toolWrapIds = ref<Set<string>>(new Set())
+const subLineProcessCollapsedIds = ref<Set<string>>(new Set())
 
 function toggleToolExpand(partId: string) {
   const next = new Set(toolExpandedIds.value)
@@ -1284,6 +1227,58 @@ function isSubLinePart(part: MessagePart): boolean {
   return part.partType === 'sub_line' || part.partType === 'agent_summary'
 }
 
+function agentAssistantMessageId(part: MessagePart): string {
+  return `${part.id}:assistant`
+}
+
+function agentSubMessages(part: MessagePart): CoreMessage[] {
+  const messages: CoreMessage[] = []
+  const assignment = agentAssignmentText(part)
+  if (assignment) {
+    messages.push({
+      id: `${part.id}:assignment`,
+      role: 'user',
+      content: assignment,
+      timestamp: '',
+      parts: [],
+    })
+  }
+
+  const processParts = agentTimelineParts(part)
+  const conclusion = agentConclusion(part)
+  if (processParts.length > 0 || conclusion) {
+    messages.push({
+      id: agentAssistantMessageId(part),
+      role: 'assistant',
+      content: conclusion,
+      timestamp: '',
+      parts: processParts,
+      metadata: {
+        timeline: processParts.length > 0 ? true : undefined,
+        live: part.status === 'running' ? true : undefined,
+        liveStatus: agentStatusLabel(part),
+      },
+    })
+  }
+  return messages
+}
+
+function agentProcessExpandedIds(part: MessagePart): Set<string> {
+  const messageId = agentAssistantMessageId(part)
+  if (subLineProcessCollapsedIds.value.has(messageId)) return new Set()
+  return new Set([messageId])
+}
+
+function toggleAgentProcess(messageId: string) {
+  const next = new Set(subLineProcessCollapsedIds.value)
+  if (next.has(messageId)) {
+    next.delete(messageId)
+  } else {
+    next.add(messageId)
+  }
+  subLineProcessCollapsedIds.value = next
+}
+
 function attachmentParts(message: CoreMessage): MessagePart[] {
   return (message.parts || []).filter(part => part.partType === 'attachment')
 }
@@ -1320,7 +1315,7 @@ function isToolWrapEnabled(partId: string): boolean {
 }
 
 function hasToolDisplay(part: MessagePart): boolean {
-  return Boolean(displayToolResult(part) || displayToolError(part) || readableProcessDetail(part))
+  return Boolean(displayToolResult(part) || displayToolError(part) || displayToolInputPreview(part) || readableProcessDetail(part))
 }
 
 function shouldShowToolBody(part: MessagePart, live = false): boolean {
@@ -1356,6 +1351,14 @@ function toolArgsPreview(args: Record<string, unknown>): string {
   })
   const more = entries.length > 3 ? ` +${entries.length - 3}` : ''
   return `(${parts.join(', ')}${more})`
+}
+
+function shouldShowToolArgsPreview(part: MessagePart): boolean {
+  if (!part.toolArgs || Object.keys(part.toolArgs).length === 0) return false
+  if (isCommandTool(part)) return false
+  const target = processTarget(part)
+  const name = (part.toolName || part.label || '').toLowerCase()
+  return !(target && processActionTitle(name, target))
 }
 
 function toolArgChips(args: Record<string, unknown>): string[] {
@@ -1517,6 +1520,20 @@ function isInitialWaitingMessage(msg: CoreMessage): boolean {
 
 function isTimelineMessage(msg: CoreMessage): boolean {
   return !!(msg.metadata as Record<string, unknown>)?.timeline
+}
+
+function shouldShowShallowThinkingPending(msg: CoreMessage): boolean {
+  const metadata = (msg.metadata || {}) as Record<string, unknown>
+  return Boolean(metadata.shallowThinkingPending)
+    && !hasReasoningContent(msg)
+    && !hasAnswerContent(msg)
+}
+
+function hasReasoningContent(msg: CoreMessage): boolean {
+  return (msg.parts || []).some(part => (
+    part.partType === 'reasoning'
+    && String(part.content || '').trim().length > 0
+  ))
 }
 
 function timelineParts(msg: CoreMessage): MessagePart[] {
@@ -1709,20 +1726,29 @@ function readableProcessTitle(part: MessagePart): string {
   if (part.partType === 'tool_call' || part.partType === 'tool_result') {
     const target = processTarget(part)
     const name = (part.toolName || part.label || '').toLowerCase()
+    const actionTitle = processActionTitle(name, target)
+    if (actionTitle) return actionTitle
     if (/command|shell|exec|bash|powershell|run|npm|python/.test(name)) return target ? `命令 ${target}` : part.toolName || '命令'
     return part.toolName || part.label || livePartTitle(part)
   }
 
   const target = processTarget(part)
   const name = (part.toolName || part.label || '').toLowerCase()
-  if (/read|cat|get-content|open/.test(name)) return target ? `读取 ${target}` : '读取文件'
-  if (/list|ls|dir/.test(name)) return target ? `列出 ${target}` : '列出目录'
-  if (/grep|rg|search|find|glob/.test(name)) return target ? `搜索 ${target}` : '搜索内容'
-  if (/write|edit|patch|create|apply/.test(name)) return target ? `修改 ${target}` : '修改文件'
-  if (/delete|remove/.test(name)) return target ? `删除 ${target}` : '删除内容'
+  const actionTitle = processActionTitle(name, target)
+  if (actionTitle) return actionTitle
   if (/command|shell|exec|bash|powershell|run|npm|python/.test(name)) return target ? `命令 ${target}` : '命令'
   if (/agent|subagent/.test(name)) return target ? `Agent：${target}` : 'Agent'
   return part.label || part.toolName || livePartTitle(part)
+}
+
+function processActionTitle(name: string, target: string): string {
+  if (/read|cat|get-content|open/.test(name)) return target ? `读取 ${target}` : '读取文件'
+  if (/list|ls|dir/.test(name)) return target ? `列出 ${target}` : '列出目录'
+  if (/grep|rg|search|find|glob/.test(name)) return target ? `搜索 ${target}` : '搜索内容'
+  if (/write|create/.test(name)) return target ? `写入 ${target}` : '写入文件'
+  if (/edit|patch|apply/.test(name)) return target ? `修改 ${target}` : '修改文件'
+  if (/delete|remove/.test(name)) return target ? `删除 ${target}` : '删除内容'
+  return ''
 }
 
 function readableProcessDetail(part: MessagePart): string {
@@ -1815,6 +1841,7 @@ function compactionPreview(part: MessagePart): string {
 function displayToolResult(part: MessagePart): string {
   const artifactText = fileArtifactContent(part)
   if (artifactText) return artifactText
+  if (displayToolInputPreview(part)) return ''
   const raw = sanitizeUnavailableToolText(String(part.toolResult || (isWriteTool(part) ? part.detail || part.content || '' : ''))).trim()
   if (!raw) return ''
   return formatWritePreviewAsDiff(part, raw)
@@ -1842,6 +1869,20 @@ function commandOutputText(part: MessagePart): string {
 
 function displayToolError(part: MessagePart): string {
   return sanitizeUnavailableToolText(String(part.toolError || '')).trim()
+}
+
+function displayToolInputPreview(part: MessagePart): string {
+  if (part.status !== 'running') return ''
+  return String(part.inputPreview?.content || '')
+}
+
+function toolInputPreviewMeta(part: MessagePart): string {
+  const preview = part.inputPreview
+  if (!preview) return '生成工具输入'
+  const field = preview.field ? `生成 ${preview.field}` : '生成工具输入'
+  const chars = Number.isFinite(preview.chars) ? `${preview.chars} chars` : ''
+  const truncated = preview.truncated ? '已截断' : ''
+  return [field, chars, truncated].filter(Boolean).join(' · ')
 }
 
 function toolOutputContent(part: MessagePart): string {
@@ -2023,32 +2064,21 @@ function formatWritePreviewAsDiff(part: MessagePart, text: string): string {
 }
 
 function agentDisplayName(name: string): string {
-  const cleanName = name.trim().replace(/^(agent[:：]\s*)+/i, '')
+  const cleanName = name
+    .trim()
+    .replace(/^(agent[:：]\s*)+/i, '')
+    .replace(/^completed[:：]\s*/i, '')
+    .trim()
   const normalized = cleanName.toLowerCase()
   if (!normalized) return ''
-  if (normalized === 'default' || normalized === 'general-purpose' || normalized === 'general_purpose') return '通用子任务'
-  if (normalized === 'explorer') return '探索子任务'
-  if (normalized === 'worker') return '执行子任务'
-  if (normalized === 'reviewer') return '复核子任务'
-  if (normalized === 'sub' || normalized === 'sub_agent' || normalized === 'subagent') return '子任务'
-  if (normalized === 'architecture' || normalized === 'architecture_agent') return '架构设计'
-  if (normalized === 'delegate_to_member') return '外部协作'
-  return `Agent：${compactDetail(cleanName, 40)}`
+  if (normalized === 'sub_agent' || normalized === 'subagent') return 'sub'
+  return compactDetail(cleanName, 40)
 }
 
-function agentRoleLabel(role: string): string {
-  const normalized = role.trim().toLowerCase().replace(/[-\s]+/g, '_')
-  const labels: Record<string, string> = {
-    general: '通用处理',
-    research: '调研',
-    ui_brief: '界面梳理',
-    dependency: '依赖分析',
-    review: '复核',
-    test: '测试诊断',
-    diagnosis: '问题诊断',
-    implementation: '小范围实现',
-  }
-  return labels[normalized] || ''
+function agentIndexLabel(part: MessagePart): string {
+  const args = part.toolArgs || {}
+  const meta = part.metadata || {}
+  return String(meta.agent_index || meta.agentIndex || args.agent_index || args.agentIndex || '').trim()
 }
 
 function agentToolLabel(name: string): string {
@@ -2060,10 +2090,11 @@ function agentTitle(part: MessagePart): string {
   const meta = part.metadata || {}
   const name = meta.agent || meta.agent_name || args.agent || args.agent_name || args.name || part.label
   const display = agentDisplayName(String(name || ''))
-  const role = agentRoleLabel(String(args.role || meta.role || ''))
-  if (display === '子任务') return role ? `子任务：${role}` : '子任务'
+  const index = agentIndexLabel(part)
+  if (display && index) return `${index} · ${display}`
   if (display) return display
-  return part.label || 'Agent'
+  if (index) return `${index} · sub`
+  return 'sub'
 }
 
 function agentStatusLabel(part: MessagePart): string {
@@ -2171,6 +2202,7 @@ function normalizeSubLineChildPart(parent: MessagePart, raw: unknown, index: num
     toolArgs: normalizeRecord(record.toolArgs || record.tool_args),
     toolResult: record.toolResult === undefined && record.tool_result === undefined ? undefined : String(record.toolResult || record.tool_result),
     toolError: record.toolError === undefined && record.tool_error === undefined ? undefined : String(record.toolError || record.tool_error),
+    inputPreview: normalizeToolInputPreview(record.inputPreview || record.input_preview),
     artifacts: Array.isArray(record.artifacts) ? record.artifacts as MessagePart['artifacts'] : undefined,
     metadata: {
       ...(normalizeRecord(record.metadata) || {}),
@@ -2184,6 +2216,21 @@ function normalizeSubLineChildPart(parent: MessagePart, raw: unknown, index: num
 function normalizeRecord(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
   return value as Record<string, unknown>
+}
+
+function normalizeToolInputPreview(value: unknown): MessagePart['inputPreview'] | undefined {
+  const record = normalizeRecord(value)
+  if (!record) return undefined
+  const field = typeof record.field === 'string' ? record.field : ''
+  const content = typeof record.content === 'string' ? record.content : ''
+  const chars = typeof record.chars === 'number' ? record.chars : content.length
+  if (!field || !content) return undefined
+  return {
+    field,
+    content,
+    chars,
+    truncated: record.truncated === true,
+  }
 }
 
 function agentTimelineItemToPart(parent: MessagePart, item: AgentTimelineItem): MessagePart {
@@ -2338,7 +2385,7 @@ function agentConclusion(part: MessagePart): string {
   const meta = part.metadata || {}
   const finalAnswer = String(meta.final_answer || '').trim()
   if (finalAnswer) return finalAnswer
-  const text = String(part.detail || part.content || part.toolResult || '').trim()
+  const text = String(part.content || part.toolResult || part.detail || '').trim()
   if (!text) return ''
   return text
 }
@@ -2859,6 +2906,39 @@ function formatContextSummary(c: ContextCounts): string {
   font-size: 14px;
   flex-shrink: 0;
 }
+.shallow-thinking-pending {
+  display: inline-flex;
+  align-items: baseline;
+  min-width: 0;
+  color: color-mix(in srgb, var(--green) 72%, var(--theme-main-text, #fff) 28%);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.45;
+}
+.shallow-thinking-pending--process {
+  margin-left: 22px;
+}
+.shallow-thinking-pending-row {
+  padding: 1px 0 2px;
+}
+.reasoning-body--pending {
+  margin-top: 0;
+  margin-bottom: 4px;
+  padding-bottom: 0;
+}
+.shallow-thinking-dots {
+  display: inline-flex;
+  width: 1.2em;
+}
+.shallow-thinking-dots span {
+  animation: shallow-thinking-dot 1.2s ease-in-out infinite;
+}
+.shallow-thinking-dots span:nth-child(2) {
+  animation-delay: .15s;
+}
+.shallow-thinking-dots span:nth-child(3) {
+  animation-delay: .3s;
+}
 
 /* ── Process step color coding ── */
 .process-step--completed .process-step-marker {
@@ -2879,6 +2959,16 @@ function formatContextSummary(c: ContextCounts): string {
 @keyframes process-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: .4; }
+}
+@keyframes shallow-thinking-dot {
+  0%, 70%, 100% { opacity: .28; }
+  35% { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .shallow-thinking-dots span {
+    animation: none;
+    opacity: 1;
+  }
 }
 
 /* ── Part dot status colors ── */
@@ -3529,12 +3619,6 @@ function formatContextSummary(c: ContextCounts): string {
   gap: 8px;
 }
 
-.sub-line-nested-process {
-  display: grid;
-  gap: 7px;
-  padding-left: 14px;
-}
-
 .sub-line-block .user-row {
   padding: 1px 0 4px;
 }
@@ -3858,7 +3942,7 @@ function formatContextSummary(c: ContextCounts): string {
   -webkit-line-clamp: unset;
 }
 
-.process-step.process-step--compaction {
+.compaction-step {
   display: block;
   width: 100%;
   min-width: 0;

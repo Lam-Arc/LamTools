@@ -1,0 +1,46 @@
+<div class="admin-header">
+  <h1 class="page-title">管理后台</h1>
+  <a href="/admin/new" class="btn btn-primary">+ 新建文章</a>
+</div>
+
+<div class="admin-table-wrapper">
+<table class="admin-table">
+  <thead>
+    <tr>
+      <th>ID</th>
+      <th>标题</th>
+      <th>作者</th>
+      <th>发布日期</th>
+      <th>状态</th>
+      <th>操作</th>
+    </tr>
+  </thead>
+  <tbody>
+    <% if (posts.length === 0) { %>
+      <tr>
+        <td colspan="6" class="empty-cell">暂无文章</td>
+      </tr>
+    <% } else { %>
+      <% posts.forEach(function(post) { %>
+        <tr>
+          <td><%= post.id %></td>
+          <td><a href="/post/<%= post.slug %>"><%= post.title %></a></td>
+          <td><%= post.author %></td>
+          <td><%= post.created_at %></td>
+          <td>
+            <span class="badge <%= post.published ? 'badge-success' : 'badge-warning' %>">
+              <%= post.published ? '已发布' : '草稿' %>
+            </span>
+          </td>
+          <td class="actions">
+            <a href="/admin/edit/<%= post.id %>" class="btn btn-sm btn-secondary">编辑</a>
+            <form action="/admin/posts/<%= post.id %>/delete" method="POST" class="inline-form">
+              <button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('确定删除这篇文章吗？')">删除</button>
+            </form>
+          </td>
+        </tr>
+      <% }) %>
+    <% } %>
+  </tbody>
+</table>
+</div>

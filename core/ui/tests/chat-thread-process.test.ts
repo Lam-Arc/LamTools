@@ -70,7 +70,7 @@ describe('ChatThread process cards', () => {
       },
     });
 
-    const row = wrapper.find('.process-step--compaction');
+    const row = wrapper.find('.compaction-step');
     expect(row.text()).toContain('上下文已压缩');
     expect(row.text()).toContain('351051 -> 153000 tokens');
     expect(row.text()).toContain('42 条消息');
@@ -147,7 +147,7 @@ describe('ChatThread process cards', () => {
       },
     });
 
-    const row = wrapper.find('.process-step--compaction');
+    const row = wrapper.find('.compaction-step');
     expect(row.text()).toContain('暂无可压缩上下文');
     expect(row.text()).toContain('Not enough history to compact');
     expect(row.text()).not.toContain('点击查看摘要');
@@ -156,12 +156,13 @@ describe('ChatThread process cards', () => {
 
   it('keeps compaction expanded content below the title row', () => {
     const source = readFileSync(resolve(__dirname, '../src/components/ChatThread.vue'), 'utf8');
-    const compactionRule = source.match(/\.process-step\.process-step--compaction\s*\{[^}]+\}/)?.[0] || '';
+    const compactionRule = source.match(/\.compaction-step\s*\{[^}]+\}/)?.[0] || '';
     const summaryRule = source.match(/\.compaction-summary\s*\{[^}]+\}/)?.[0] || '';
 
     expect(compactionRule).toContain('display: block');
     expect(compactionRule).toContain('width: 100%');
     expect(summaryRule).toContain('margin: 6px 0 0 18px');
+    expect(source).not.toContain('class="process-step process-step--compaction"');
     expect(source).not.toContain('class="compaction-summary-label"');
   });
 
@@ -277,6 +278,114 @@ describe('ChatThread process cards', () => {
     expect(wrapper.find('.diff-block--wrap').exists()).toBe(true);
   });
 
+  it('uses file paths as the main title for file write steps', () => {
+    const messages: CoreMessage[] = [{
+      id: 'm-write-title',
+      role: 'assistant',
+      content: '',
+      timestamp: '2026-06-18T00:00:00.000Z',
+      metadata: { timeline: true },
+      parts: [{
+        id: 'p-write-title',
+        partType: 'tool_call',
+        status: 'completed',
+        label: 'write_file',
+        toolName: 'write_file',
+        toolArgs: { path: 'notes.txt' },
+        toolResult: 'Created notes.txt: 12 chars, 3 lines.',
+      }],
+    }];
+
+    const wrapper = mount(ChatThread, {
+      props: {
+        messages,
+        processExpandedIds: new Set(['m-write-title']),
+      },
+    });
+
+    const title = wrapper.find('.tool-card-header .process-step-title');
+    expect(title.text()).toBe('写入 notes.txt');
+    expect(wrapper.find('.tool-card-header').text()).not.toContain('文件 notes.txt');
+  });
+
+  it('renders running write tool input preview before final result', async () => {
+    const messages: CoreMessage[] = [{
+      id: 'm-write-preview',
+      role: 'assistant',
+      content: '',
+      timestamp: '2026-06-18T00:00:00.000Z',
+      metadata: { timeline: true },
+      parts: [{
+        id: 'p-write-preview',
+        partType: 'tool_call',
+        status: 'running',
+        label: 'write_file',
+        toolName: 'write_file',
+        toolArgs: { path: 'index.html' },
+        inputPreview: {
+          field: 'content',
+          content: '<html>\n<body>Live</body>',
+          chars: 24,
+          truncated: false,
+        },
+      }],
+    }];
+
+    const wrapper = mount(ChatThread, {
+      props: {
+        messages,
+        processExpandedIds: new Set(['m-write-preview']),
+      },
+    });
+
+    await wrapper.find('.tool-card-header').trigger('click');
+
+    const body = wrapper.find('.tool-card-body');
+    expect(body.exists()).toBe(true);
+    expect(wrapper.find('.tool-card-header').text()).toContain('index.html');
+    expect(body.text()).toContain('<body>Live</body>');
+  });
+
+  it('prefers even a tiny running write input preview over progress detail', async () => {
+    const messages: CoreMessage[] = [{
+      id: 'm-write-preview-tiny',
+      role: 'assistant',
+      content: '',
+      timestamp: '2026-06-18T00:00:00.000Z',
+      metadata: { timeline: true },
+      parts: [{
+        id: 'p-write-preview-tiny',
+        partType: 'tool_call',
+        status: 'running',
+        label: 'write_file',
+        detail: '参数生成中：36 chars',
+        content: '参数生成中：36 chars',
+        toolName: 'write_file',
+        inputPreview: {
+          field: 'content',
+          content: '<',
+          chars: 1,
+          truncated: false,
+        },
+      }],
+    }];
+
+    const wrapper = mount(ChatThread, {
+      props: {
+        messages,
+        processExpandedIds: new Set(['m-write-preview-tiny']),
+      },
+    });
+
+    await wrapper.find('.tool-card-header').trigger('click');
+
+    const body = wrapper.find('.tool-card-body');
+    expect(body.exists()).toBe(true);
+    expect(body.find('.tool-input-preview').exists(), body.html()).toBe(true);
+    expect(body.find('.tool-input-preview').text()).toContain('<');
+    expect(body.text()).not.toContain('参数生成中：36 chars');
+  });
+
   it('emits a normal reply payload when a decision option is selected', async () => {
     const messages: CoreMessage[] = [{
       id: 'm-decision',
@@ -347,6 +456,8 @@ describe('ChatThread process cards', () => {
           task: 'Audit Writer tool display\n\n## Scope\nCheck the nested timeline.',
         },
         metadata: {
+          agent_name: 'repo_reader',
+          agent_index: '001',
           mode: 'review',
           valid_design: true,
           winner_name: 'smaller implementation',
@@ -380,10 +491,11 @@ describe('ChatThread process cards', () => {
 
     const block = wrapper.find('.sub-line-block');
     expect(block.exists()).toBe(true);
-    expect(block.find('.sub-line-heading').text()).toContain('子任务');
+    expect(block.find('.sub-line-heading').text()).toContain('001 · repo_reader');
+    expect(block.find('.sub-line-heading').text()).not.toContain('子任务');
     expect(block.find('.sub-line-heading.tool-card-header').exists()).toBe(false);
-    expect(block.find('.sub-line-user-row .user-bubble').exists()).toBe(true);
-    expect(block.find('.sub-line-user-row .user-bubble').text()).toContain('## Scope');
+    expect(block.find('.sub-line-chat .user-bubble').exists()).toBe(true);
+    expect(block.find('.sub-line-chat .user-bubble').text()).toContain('## Scope');
     expect(block.findAll('.process-step--tool').length).toBeGreaterThan(1);
     expect(block.findAll('.tool-card-header').length).toBeGreaterThan(1);
     expect(block.find('.process-step--reasoning').exists()).toBe(true);
@@ -394,12 +506,12 @@ describe('ChatThread process cards', () => {
     await block.find('.reasoning-toggle').trigger('click');
     expect(block.find('.process-step--reasoning').text()).toContain('Inspect the component flow');
 
-    expect(block.find('.sub-line-assistant-answer .part-text-content').exists()).toBe(true);
+    expect(block.find('.sub-line-chat .assistant-answer .part-text-content').exists()).toBe(true);
     expect(block.text()).toContain('Inspect the component flow');
     expect(block.text()).toContain('## Scope');
     expect(block.text()).toContain('smaller implementation');
     expect(block.text()).not.toContain('调用子 Agent');
-    expect(block.text()).toContain('read_file');
+    expect(block.text()).toContain('Context');
     expect(block.text()).toContain('write_file');
     const writeHeader = block.findAll('.tool-card-header').find(header => header.text().includes('write_file'));
     expect(writeHeader).toBeTruthy();
@@ -410,6 +522,55 @@ describe('ChatThread process cards', () => {
     expect(writeDiff.text()).toContain('src/index.html');
     expect(writeDiff.text()).toContain('<main>Hello</main>');
     expect(block.text()).toContain('Use the smaller implementation.');
+  });
+
+  it('renders sub agent process through the same ChatThread timeline renderer', () => {
+    const messages: CoreMessage[] = [{
+      id: 'm-agent-shared-renderer',
+      role: 'assistant',
+      content: '',
+      timestamp: '2026-06-18T00:00:00.000Z',
+      metadata: { timeline: true },
+      parts: [{
+        id: 'p-agent-shared-renderer',
+        partType: 'agent_summary',
+        status: 'completed',
+        content: '子 agent 已完成复核。',
+        toolResult: '子 agent 已完成复核。',
+        toolName: 'sub_agent',
+        toolArgs: {
+          agent: 'sub',
+          task: '复核子线渲染是否复用主线逻辑',
+        },
+        metadata: {
+          agent_name: 'retrospective_analyst',
+          agent_index: '001',
+          subLineParts: [
+            {
+              id: 'sub-reasoning',
+              partType: 'reasoning',
+              status: 'completed',
+              content: '先读取子任务，再复用主线过程块展示。',
+            },
+          ],
+        },
+      }],
+    }];
+
+    const wrapper = mount(ChatThread, {
+      props: {
+        messages,
+        processExpandedIds: new Set(['m-agent-shared-renderer']),
+      },
+    });
+
+    const block = wrapper.find('.sub-line-block');
+    expect(block.find('.chat-thread').exists()).toBe(true);
+    expect(block.find('.sub-line-nested-process').exists()).toBe(false);
+    expect(block.find('.assistant-meta').text()).toContain('001 · retrospective_analyst');
+    expect(block.find('.reasoning-body').text()).toContain('先读取子任务');
+    expect(block.find('.sub-line-assistant-answer').exists()).toBe(false);
+    expect(block.find('.assistant-answer').text()).toContain('子 agent 已完成复核。');
   });
 
   it('renders agent final answer as user-facing conclusion', () => {
@@ -431,6 +592,7 @@ describe('ChatThread process cards', () => {
         toolResult: '已创建首页、样式和交互脚本。',
         metadata: {
           agent: 'worker',
+          agent_index: '002',
           role: 'implementation',
         },
       }],
@@ -444,11 +606,44 @@ describe('ChatThread process cards', () => {
     });
 
     const blockText = wrapper.find('.sub-line-block').text();
-    expect(blockText).toContain('子任务');
+    expect(blockText).toContain('002 · worker');
+    expect(blockText).not.toContain('执行子任务');
     expect(blockText).toContain('已创建首页、样式和交互脚本。');
     expect(blockText).not.toContain('Agent: sub');
     expect(blockText).not.toContain('"handoff"');
     expect(blockText).not.toContain('"confidence"');
+  });
+
+  it('prefers agent content over tool-name detail for sub-line conclusion', () => {
+    const messages: CoreMessage[] = [{
+      id: 'm-agent-content',
+      role: 'assistant',
+      content: '',
+      timestamp: '2026-06-18T00:00:00.000Z',
+      metadata: { timeline: true },
+      parts: [{
+        id: 'p-agent-content',
+        partType: 'agent_summary',
+        status: 'completed',
+        label: 'sub_agent',
+        toolName: 'sub_agent',
+        toolArgs: { agent: 'retrospective-analyst', task: '复盘失败过程' },
+        content: '# 复盘报告\n\n子 agent 的完整结论。',
+        detail: 'sub_agent',
+        toolResult: '# 复盘报告\n\n子 agent 的完整结论。',
+      }],
+    }];
+
+    const wrapper = mount(ChatThread, {
+      props: {
+        messages,
+        processExpandedIds: new Set(['m-agent-content']),
+      },
+    });
+
+    const answerText = wrapper.find('.sub-line-chat .part-text-content').text();
+    expect(answerText).toContain('子 agent 的完整结论。');
+    expect(answerText).not.toBe('sub_agent');
   });
 
   it('renders structured checklist parts as checkbox items', () => {
@@ -564,6 +759,67 @@ describe('ChatThread process cards', () => {
 
     expect(wrapper.find('.assistant-answer--process').exists()).toBe(true);
     expect(wrapper.find('.assistant-answer--process').text()).toContain('Streaming model text is visible.');
+  });
+
+  it('shows a shallow thinking placeholder without forcing the message into live rendering', () => {
+    const messages: CoreMessage[] = [{
+      id: 'm-live-shallow-pending',
+      role: 'assistant',
+      content: '',
+      timestamp: '2026-06-18T00:00:00.000Z',
+      metadata: { timeline: true, shallowThinkingPending: true },
+      parts: [],
+    }];
+
+    const wrapper = mount(ChatThread, {
+      props: { messages },
+    });
+
+    const pending = wrapper.find('.shallow-thinking-pending');
+    expect(pending.exists()).toBe(true);
+    expect(pending.text()).toContain('shallow thinking...');
+    expect(wrapper.find('.assistant-message--live').exists()).toBe(false);
+  });
+
+  it('shows the shallow thinking placeholder during initial waiting', () => {
+    const messages: CoreMessage[] = [{
+      id: 'm-live-shallow-initial',
+      role: 'assistant',
+      content: '',
+      timestamp: '2026-06-18T00:00:00.000Z',
+      metadata: { live: true, initialWaiting: true, shallowThinkingPending: true },
+      parts: [],
+    }];
+
+    const wrapper = mount(ChatThread, {
+      props: { messages },
+    });
+
+    expect(wrapper.find('.initial-waiting-indicator').text()).toContain('shallow thinking...');
+  });
+
+  it('hides the shallow thinking placeholder after reasoning content arrives', () => {
+    const messages: CoreMessage[] = [{
+      id: 'm-live-shallow-reasoning',
+      role: 'assistant',
+      content: '',
+      timestamp: '2026-06-18T00:00:00.000Z',
+      metadata: { live: true, timeline: true, shallowThinkingPending: true },
+      parts: [{
+        id: 'p-live-shallow-reasoning',
+        partType: 'reasoning',
+        status: 'running',
+        label: '思考',
+        content: '[结论]\n先整理目标。',
+      }],
+    }];
+
+    const wrapper = mount(ChatThread, {
+      props: { messages },
+    });
+
+    expect(wrapper.find('.shallow-thinking-pending').exists()).toBe(false);
+    expect(wrapper.find('.reasoning-body').text()).toContain('先整理目标');
   });
 
   it('renders historical non-final model text inside the expanded process area', () => {

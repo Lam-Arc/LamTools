@@ -12,6 +12,7 @@ from app.core.writer.git import WriterGitManager
 from app.models.project import WriterProject
 from app.models.session import WriterSession
 from app.routers.path_utils import ensure_work_root
+from app.services.session_deletion import delete_writer_session_records
 
 logger = logging.getLogger(__name__)
 
@@ -173,6 +174,9 @@ async def delete_writer_project(db: AsyncSession, project_id: str) -> None:
     project = await db.get(WriterProject, project_id)
     if project is None:
         raise LookupError("Project not found")
+    result = await db.execute(select(WriterSession.id).where(WriterSession.project_id == project_id))
+    for session_id in result.scalars().all():
+        await delete_writer_session_records(db, session_id)
     await db.delete(project)
     await db.commit()
 

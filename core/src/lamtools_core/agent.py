@@ -30,7 +30,7 @@ class CoreAgentSpec:
 SUB_AGENT_SPEC = CoreAgentSpec(
     name=SUB_AGENT_NAME,
     tool_name=SUB_AGENT_TOOL_NAME,
-    description="Delegate one focused task to a named sub-agent. The model may call this tool multiple times in one turn for independent sub-tasks.",
+    description="Delegate one focused task to a reusable sub session controlled by the running agent.",
     capabilities=("delegated_reasoning", "bounded_tool_use", "focused_handoff"),
 )
 
@@ -43,65 +43,17 @@ SUB_AGENT_TOOL_SPEC: dict[str, Any] = {
         "additionalProperties": False,
         "properties": {
             "task": {"type": "string", "description": "Self-contained task for the sub-agent."},
-            "mode": {"type": ["string", "null"], "description": "Depth: auto | low | medium | high."},
-            "clean": {"type": ["boolean", "null"], "description": "Run from a clean state."},
-            "options": {
-                "type": ["object", "null"],
-                "description": (
-                    "Explicit sub-agent options. Tool access comes from the agent definition."
-                ),
-                "additionalProperties": False,
-                "properties": {
-                    "agent": {"type": ["string", "null"], "description": "Named sub-agent definition to use."},
-                    "name": {"type": ["string", "null"], "description": "Alias for agent."},
-                    "role": {"type": ["string", "null"], "description": "Short role instruction for the sub-agent."},
-                    "expected_output": {
-                        "type": ["string", "null"],
-                        "description": "Concrete output expected from the sub-agent.",
-                    },
-                    "context": {
-                        "type": ["string", "null"],
-                        "description": "Brief context or handoff document path for the delegated task.",
-                    },
-                    "write_scope": {
-                        "type": ["array", "null"],
-                        "items": {"type": "string"},
-                        "description": "Relative files or directories the sub-agent may modify.",
-                    },
-                    "model": {"type": ["string", "null"], "description": "Optional model override."},
-                    "max_tool_rounds": {
-                        "type": ["integer", "null"],
-                        "description": "Optional maximum tool rounds for the sub-agent.",
-                    },
-                    "developer_instructions": {
-                        "type": ["string", "null"],
-                        "description": "Additional bounded instructions for this delegated run.",
-                    },
-                    "hooks": {
-                        "type": ["boolean", "null"],
-                        "description": "Whether runtime hooks should be enabled for this delegated run.",
-                    },
-                    "isolated": {
-                        "type": ["boolean", "null"],
-                        "description": "Whether to run with isolated delivery semantics.",
-                    },
-                },
-                "required": [
-                    "agent",
-                    "name",
-                    "role",
-                    "expected_output",
-                    "context",
-                    "write_scope",
-                    "model",
-                    "max_tool_rounds",
-                    "developer_instructions",
-                    "hooks",
-                    "isolated",
-                ],
+            "agent": {
+                "type": ["string", "null"],
+                "description": "Stable sub-session name chosen by the running agent; leave null to use the default sub session.",
+            },
+            "model": {"type": ["string", "null"], "description": "Optional model override chosen by the running agent."},
+            "expected_output": {
+                "type": ["string", "null"],
+                "description": "Concrete output expected from the sub session.",
             },
         },
-        "required": ["task", "mode", "clean", "options"],
+        "required": ["task", "agent", "model", "expected_output"],
     },
     "permission": AUTO_ALLOW,
     "failure_modes": [{"type": "agent_failed", "message": "Agent execution failed"}],

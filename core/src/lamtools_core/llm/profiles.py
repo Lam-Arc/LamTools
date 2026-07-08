@@ -221,7 +221,7 @@ def build_profiled_anthropic_request(
         if message.get("role") == "system":
             system_content += str(message.get("content") or "") + "\n"
         else:
-            chat_messages.append(copy.deepcopy(message))
+            chat_messages.append(_anthropic_message_from_openai_message(message))
 
     payload: dict[str, Any] = {
         "model": model,
@@ -240,6 +240,64 @@ def build_profiled_anthropic_request(
         "endpoint": endpoint_path(profile, endpoint_fallback),
         "payload": payload,
     }
+
+
+def _anthropic_message_from_openai_message(message: dict[str, Any]) -> dict[str, Any]:
+    converted = copy.deepcopy(message)
+    converted["content"] = _anthropic_content_from_openai_content(message.get("content"))
+    return converted
+
+
+def _anthropic_content_from_openai_content(content: Any) -> Any:
+    if not isinstance(content, list):
+        return copy.deepcopy(content)
+    blocks: list[dict[str, Any]] = []
+    for part in content:
+        if not isinstance(part, dict):
+            blocks.append({"type": "text", "text": str(part)})
+            continue
+        part_type = part.get("type")
+        if part_type in ("text", "input_text"):
+            blocks.append({"type": "text", "text": str(part.get("text") or "")})
+            continue
+        if part_type in ("image_url", "input_image"):
+            image_url = _image_url_from_content_part(part)
+            image_block = _anthropic_image_block_from_url(image_url)
+            blocks.append(image_block if image_block is not None else copy.deepcopy(part))
+            continue
+        blocks.append(copy.deepcopy(part))
+    return blocks
+
+
+def _image_url_from_content_part(part: dict[str, Any]) -> str:
+    raw = part.get("image_url")
+    if isinstance(raw, str):
+        return raw
+    if isinstance(raw, dict):
+        return str(raw.get("url") or "")
+    return ""
+
+
+def _anthropic_image_block_from_url(url: str) -> dict[str, Any] | None:
+    data_url = re.match(r"^data:([^;,]+);base64,(.*)$", url, flags=re.DOTALL)
+    if data_url:
+        return {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": data_url.group(1),
+                "data": data_url.group(2),
+            },
+        }
+    if url.startswith("http://") or url.startswith("https://"):
+        return {
+            "type": "image",
+            "source": {
+                "type": "url",
+                "url": url,
+            },
+        }
+    return None
 
 
 def normalize_stream_chunk_with_profile(

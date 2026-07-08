@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from app.core.mcp.client import MCPClient
+from app.core.mcp import client as mcp_client_module
 from app.core.mcp.config import load_mcp_server_configs
 from app.core.mcp.registry import MCPToolRegistry
 from app.core.mcp.schemas import MCPServerConfig
@@ -103,6 +104,15 @@ while True:
     sys.stdout.write(json.dumps(payload) + "\n")
     sys.stdout.flush()
 '''
+
+
+def test_windows_mcp_creationflags_hide_console(monkeypatch):
+    monkeypatch.setattr(mcp_client_module.sys, "platform", "win32")
+    monkeypatch.setattr(mcp_client_module.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+
+    kwargs = mcp_client_module._subprocess_start_kwargs(env={"LAMWRITER_TEST": "1"})
+
+    assert kwargs["creationflags"] & 0x08000000
 
 
 def write_server(tmp_path: Path) -> Path:

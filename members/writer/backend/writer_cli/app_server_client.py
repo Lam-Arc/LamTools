@@ -56,7 +56,16 @@ class AppServerClient:
             return command_result if isinstance(command_result, dict) else result
         return {}
 
-    async def start_turn(self, *, thread_id: str, message: str, work_root: str = "", mode: str = "", model_id: str | None = None) -> None:
+    async def start_turn(
+        self,
+        *,
+        thread_id: str,
+        message: str,
+        work_root: str = "",
+        mode: str = "",
+        model_id: str | None = None,
+        shallow_thinking_enabled: bool | None = None,
+    ) -> None:
         params: dict[str, Any] = {
             "thread_id": thread_id,
             "client_message_id": str(uuid.uuid4()),
@@ -66,6 +75,8 @@ class AppServerClient:
         }
         if model_id:
             params["model_id"] = model_id
+        if shallow_thinking_enabled is not None:
+            params["shallow_thinking_enabled"] = shallow_thinking_enabled
         response = await self.request("turn.start", params)
         for event in response.get("events") or []:
             await self._events.put(_app_server_event(event))

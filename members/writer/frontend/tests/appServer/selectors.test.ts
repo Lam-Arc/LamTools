@@ -661,6 +661,184 @@ test('selectors render canonical core tool calls without outer app items', () =>
   assert.deepEqual(part.arguments, { path: 'draft.md' })
 })
 
+test('selectors preserve canonical tool input preview payload', () => {
+  const state = snapshot({
+    item_order: [],
+    items: {},
+    core: {
+      thread_id: 'thread-1',
+      snapshot_seq: 2,
+      seen_event_ids: ['core-event-1'],
+      status: 'running',
+      turns: {
+        'turn-1': {
+          turn_id: 'turn-1',
+          status: 'running',
+          items: ['tool-1'],
+        },
+      },
+      item_order: ['tool-1'],
+      items: {
+        'tool-1': {
+          item_id: 'tool-1',
+          turn_id: 'turn-1',
+          kind: 'tool_call',
+          status: 'running',
+          payload: {
+            type: 'dynamicToolCall',
+            tool_name: 'write_file',
+            arguments: { path: 'draft.md' },
+            input_preview: {
+              field: 'content',
+              content: '<html>',
+              chars: 6,
+              truncated: false,
+            },
+          },
+        },
+      },
+      requests: {},
+      artifacts: {},
+    },
+  })
+
+  const part = selectChatMessages(state)[0].parts[0]
+
+  assert.deepEqual(part.input_preview, {
+    field: 'content',
+    content: '<html>',
+    chars: 6,
+    truncated: false,
+  })
+})
+
+test('selectors promote canonical sub_agent tool items to agent summaries', () => {
+  const state = snapshot({
+    item_order: ['user-1'],
+    items: {
+      'user-1': { item_id: 'user-1', turn_id: 'turn-1', type: 'userMessage', content: [{ type: 'text', text: 'Review' }] },
+    },
+    core: {
+      thread_id: 'thread-1',
+      snapshot_seq: 2,
+      seen_event_ids: ['core-event-1'],
+      status: 'completed',
+      turns: {
+        'turn-1': {
+          turn_id: 'turn-1',
+          status: 'completed',
+          items: ['agent-tool-1'],
+        },
+      },
+      item_order: ['agent-tool-1'],
+      items: {
+        'agent-tool-1': {
+          item_id: 'agent-tool-1',
+          turn_id: 'turn-1',
+          kind: 'tool_result',
+          status: 'completed',
+          content: '独立复盘完成',
+          payload: {
+            type: 'dynamicToolCall',
+            tool_name: 'sub_agent',
+            arguments: { agent: 'retrospective-analyst', task: '复盘失败过程' },
+            metadata: {
+              agent_index: '001',
+              agent_name: 'retrospective_analyst',
+              sub_session_id: 'thread-1:sub:001:retrospective_analyst',
+              task: '复盘失败过程',
+            },
+          },
+        },
+      },
+      requests: {},
+      artifacts: {},
+    },
+  })
+
+  const part = selectChatMessages(state)[1].parts[0]
+
+  assert.equal(part.type, 'agent_summary')
+  assert.equal(part.tool_name, 'sub_agent')
+  assert.equal(part.content, '独立复盘完成')
+  assert.deepEqual(part.arguments, { agent: 'retrospective-analyst', task: '复盘失败过程' })
+  assert.deepEqual(part.metadata, {
+    agent_index: '001',
+    agent_name: 'retrospective_analyst',
+    sub_session_id: 'thread-1:sub:001:retrospective_analyst',
+    task: '复盘失败过程',
+  })
+})
+
+test('selectors suppress sub_agent duplicate child output from the main timeline', () => {
+  const state = snapshot({
+    item_order: ['user-1'],
+    items: {
+      'user-1': { item_id: 'user-1', turn_id: 'turn-1', type: 'userMessage', content: [{ type: 'text', text: 'Review' }] },
+    },
+    core: {
+      thread_id: 'thread-1',
+      snapshot_seq: 2,
+      seen_event_ids: ['core-event-1'],
+      status: 'completed',
+      turns: {
+        'turn-1': {
+          turn_id: 'turn-1',
+          status: 'completed',
+          items: ['agent-tool-1', 'child-run:stream-fallback', 'child-run:response-0:text', 'main-reply'],
+        },
+      },
+      item_order: ['agent-tool-1', 'child-run:stream-fallback', 'child-run:response-0:text', 'main-reply'],
+      items: {
+        'agent-tool-1': {
+          item_id: 'agent-tool-1',
+          turn_id: 'turn-1',
+          kind: 'tool_result',
+          status: 'completed',
+          content: '# 复盘报告\n\n子 agent 的完整结论。',
+          payload: {
+            type: 'dynamicToolCall',
+            tool_name: 'sub_agent',
+            arguments: { agent: 'retrospective-analyst', task: '复盘失败过程' },
+          },
+        },
+        'child-run:stream-fallback': {
+          item_id: 'child-run:stream-fallback',
+          turn_id: 'turn-1',
+          kind: 'message',
+          status: 'failed',
+          content: 'LLM API error 503',
+          payload: { type: 'error', content: 'LLM API error 503' },
+        },
+        'child-run:response-0:text': {
+          item_id: 'child-run:response-0:text',
+          turn_id: 'turn-1',
+          kind: 'message',
+          status: 'completed',
+          content: '# 复盘报告\n\n子 agent 的完整结论。',
+          payload: { type: 'agentMessage', content: '# 复盘报告\n\n子 agent 的完整结论。' },
+        },
+        'main-reply': {
+          item_id: 'main-reply',
+          turn_id: 'turn-1',
+          kind: 'message',
+          status: 'completed',
+          content: '主 Writer 已完成总结。',
+          payload: { type: 'agentMessage', content: '主 Writer 已完成总结。' },
+        },
+      },
+      requests: {},
+      artifacts: {},
+    },
+  })
+
+  const assistant = selectChatMessages(state)[1]
+
+  assert.equal(assistant.content, '主 Writer 已完成总结。')
+  assert.deepEqual(assistant.parts.map(part => part.item_id), ['agent-tool-1'])
+  assert.equal(assistant.parts[0].type, 'agent_summary')
+})
+
 test('selectors render canonical core messages and thinking without outer app items', () => {
   const state = snapshot({
     item_order: ['user-1'],

@@ -47,6 +47,7 @@ class WriterRuntimeLifecycle:
         work_root: object = None,
         thinking_enabled: bool | None = None,
         thinking_budget: int | None = None,
+        shallow_thinking_enabled: bool | None = None,
         model_id: str | None = None,
         attachment_ids: list[str] | None = None,
     ) -> None:
@@ -63,6 +64,7 @@ class WriterRuntimeLifecycle:
                 work_root=work_root,
                 thinking_enabled=thinking_enabled,
                 thinking_budget=thinking_budget,
+                shallow_thinking_enabled=shallow_thinking_enabled,
                 model_id=model_id,
                 attachment_ids=attachment_ids,
             )
@@ -148,6 +150,7 @@ class WriterRuntimeLifecycle:
         work_root: object = None,
         thinking_enabled: bool | None = None,
         thinking_budget: int | None = None,
+        shallow_thinking_enabled: bool | None = None,
         model_id: str | None = None,
         attachment_ids: list[str] | None = None,
     ) -> None:
@@ -168,6 +171,7 @@ class WriterRuntimeLifecycle:
                     user_message=text,
                     thinking_enabled=thinking_enabled,
                     thinking_budget=thinking_budget,
+                    shallow_thinking_enabled=shallow_thinking_enabled,
                     model_id=model_id,
                     user_message_id=user_message_id,
                     transcript_turn_id=turn_id,

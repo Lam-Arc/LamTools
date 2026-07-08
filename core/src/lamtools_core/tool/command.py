@@ -49,6 +49,14 @@ def _decode_timeout_output(value: str | bytes | None) -> str:
     return value
 
 
+def _windows_command_creationflags() -> int:
+    if sys.platform != "win32":
+        return 0
+    flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    flags |= getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    return flags
+
+
 def terminate_process_tree(process: subprocess.Popen[Any]) -> None:
     pid = process.pid
     if sys.platform == "win32":
@@ -58,7 +66,7 @@ def terminate_process_tree(process: subprocess.Popen[Any]) -> None:
             stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL,
             check=False,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            creationflags=_windows_command_creationflags(),
         )
         return
     process.kill()
@@ -73,10 +81,7 @@ def run_subprocess_blocking(
 ) -> CommandExecution:
     """Run a command without depending on the active asyncio loop's subprocess support."""
     started_at = time.monotonic()
-    creationflags = 0
-    if sys.platform == "win32":
-        creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-        creationflags |= getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    creationflags = _windows_command_creationflags()
     process: subprocess.Popen[str] | None = None
     try:
         process = subprocess.Popen(
@@ -162,10 +167,7 @@ def run_subprocess_streaming_blocking(
     cancel_event: threading.Event | None = None,
 ) -> CommandExecution:
     started_at = time.monotonic()
-    creationflags = 0
-    if sys.platform == "win32":
-        creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-        creationflags |= getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    creationflags = _windows_command_creationflags()
     process: subprocess.Popen[str] | None = None
     stdout_parts: list[str] = []
     stderr_parts: list[str] = []

@@ -5,19 +5,19 @@ set PYTHONIOENCODING=utf-8
 
 py -3.14 --version >nul 2>&1
 if %errorlevel%==0 (
-  py -3.14 "%~dp0scripts\lamtools_cli.py" %*
+  py -3.14 "%~dp0lamtools_cli.py" %*
   exit /b %errorlevel%
 )
 
 where python3 >nul 2>&1
 if %errorlevel%==0 (
-  python3 "%~dp0scripts\lamtools_cli.py" %*
+  python3 "%~dp0lamtools_cli.py" %*
   exit /b %errorlevel%
 )
 
 where python >nul 2>&1
 if %errorlevel%==0 (
-  python "%~dp0scripts\lamtools_cli.py" %*
+  python "%~dp0lamtools_cli.py" %*
   exit /b %errorlevel%
 )
 

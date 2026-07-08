@@ -61,6 +61,30 @@ test('startTurn sends text plus attachment input items', async () => {
   ])
 })
 
+test('startTurn transports shallow thinking mode separately from native thinking', async () => {
+  setActivePinia(createPinia())
+  const store = useWriterAppServerStore()
+  const calls: Array<{ method: string; params: Record<string, unknown> }> = []
+
+  store.client = {
+    request: async (method: string, params: Record<string, unknown>) => {
+      calls.push({ method, params })
+      return { snapshot: snapshot(1, 'running') }
+    },
+  } as never
+
+  await store.startTurn('thread-1', '解释这个问题', '', {
+    thinking_enabled: true,
+    thinking_budget: 10000,
+    shallow_thinking_enabled: true,
+  })
+
+  assert.equal(calls[0].method, 'turn/start')
+  assert.equal(calls[0].params.thinking_enabled, true)
+  assert.equal(calls[0].params.thinking_budget, 10000)
+  assert.equal(calls[0].params.shallow_thinking_enabled, true)
+})
+
 test('store transports skill input items and command operations', async () => {
   setActivePinia(createPinia())
   const store = useWriterAppServerStore()

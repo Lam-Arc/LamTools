@@ -242,3 +242,41 @@ def test_anthropic_request_and_response_use_profile_paths():
         "usage": {"prompt_tokens": 7, "completion_tokens": 8, "total_tokens": 15},
         "finish_reason": "end_turn",
     }
+
+
+def test_anthropic_request_converts_openai_image_url_content_blocks():
+    assembled = build_profiled_anthropic_request(
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "describe"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,AA==", "detail": "auto"},
+                    },
+                ],
+            }
+        ],
+        {},
+        model="claude-test",
+        max_tokens=100,
+        temperature=0.2,
+    )
+
+    assert assembled["payload"]["messages"] == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "describe"},
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": "AA==",
+                    },
+                },
+            ],
+        }
+    ]

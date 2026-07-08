@@ -115,6 +115,115 @@ def test_snapshot_tracks_tool_call_and_result_items():
     assert snapshot["items"]["tool-result-1"]["content"] == "ok"
 
 
+def test_snapshot_preserves_tool_input_preview():
+    event = RunItemEvent(
+        kind="tool_call",
+        thread_id="thread-1",
+        event_id="event-1",
+        turn_id="turn-1",
+        item_id="thread-1:run-1:call-1:tool",
+        seq=1,
+        status="running",
+        payload={
+            "type": "dynamicToolCall",
+            "tool_name": "write_file",
+            "arguments": {"path": "index.html"},
+            "input_preview": {
+                "field": "content",
+                "content": "<html>",
+                "chars": 6,
+                "truncated": False,
+            },
+        },
+    )
+
+    snapshot = reduce_run_item_events("thread-1", [event])
+    item = snapshot["items"]["thread-1:run-1:call-1:tool"]
+
+    assert item["payload"]["input_preview"]["content"] == "<html>"
+
+
+def test_snapshot_tool_input_preview_does_not_clear_existing_arguments():
+    events = [
+        RunItemEvent(
+            kind="tool_call",
+            thread_id="thread-1",
+            event_id="event-1",
+            turn_id="turn-1",
+            item_id="tool-1",
+            seq=1,
+            status="running",
+            payload={
+                "type": "dynamicToolCall",
+                "tool_name": "write_file",
+                "arguments": {"path": "index.html"},
+            },
+        ),
+        RunItemEvent(
+            kind="tool_call",
+            thread_id="thread-1",
+            event_id="event-2",
+            turn_id="turn-1",
+            item_id="tool-1",
+            seq=2,
+            status="running",
+            payload={
+                "type": "dynamicToolCall",
+                "tool_name": "write_file",
+                "input_preview": {
+                    "field": "content",
+                    "content": "<html>",
+                    "chars": 6,
+                    "truncated": False,
+                },
+            },
+        ),
+    ]
+
+    snapshot = reduce_run_item_events("thread-1", events)
+
+    assert snapshot["items"]["tool-1"]["payload"]["arguments"] == {"path": "index.html"}
+    assert snapshot["items"]["tool-1"]["payload"]["input_preview"]["content"] == "<html>"
+
+
+def test_snapshot_promotes_same_tool_item_to_tool_result():
+    events = [
+        RunItemEvent(
+            kind="tool_call",
+            thread_id="thread-1",
+            event_id="event-1",
+            turn_id="turn-1",
+            item_id="tool-1",
+            seq=1,
+            status="running",
+            payload={"type": "dynamicToolCall", "tool_name": "run_command", "arguments": {"command": "echo ok"}},
+        ),
+        RunItemEvent(
+            kind="tool_result",
+            thread_id="thread-1",
+            event_id="event-2",
+            turn_id="turn-1",
+            item_id="tool-1",
+            seq=2,
+            status="running",
+            payload={
+                "type": "dynamicToolCall",
+                "tool_name": "run_command",
+                "tool_result": "[stdout]\nok",
+                "delta": "[stdout]\nok",
+            },
+        ),
+    ]
+
+    snapshot = reduce_run_item_events("thread-1", events)
+    item = snapshot["items"]["tool-1"]
+
+    assert item["kind"] == "tool_result"
+    assert item["last_kind"] == "tool_result"
+    assert item["status"] == "running"
+    assert item["payload"]["tool_result"] == "[stdout]\nok"
+
+
 def test_snapshot_indexes_tool_result_artifacts():
     event = RunItemEvent(
         kind="tool_result",

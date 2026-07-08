@@ -13,7 +13,7 @@ from lamtools_core.runtime import RuntimeState, RuntimeTurnInput
 
 
 async def _system_messages(work_root: str = "") -> list[str]:
-    kit = WriterKit(work_root=work_root, completion_verifier_enabled=False)
+    kit = WriterKit(work_root=work_root)
     state = RuntimeState(session_id="prompt-test")
     context = await kit.build_context(
         state,

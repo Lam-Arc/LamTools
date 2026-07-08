@@ -209,14 +209,14 @@
 
 小类：
 
-- Writer completion verifier：`members/writer/backend/app/core/writer/completion_verifier.py`
-- Writer verification specs：维护标注（2026-07-01 第七十四切片）：旧 `members/writer/backend/app/core/writer/verification_specs.py` 只是未被调用的说明常量，已删除；当前验收主线在 `completion_verifier.py` 与 `failure_specs.py`
+- Writer completion verifier：维护标注（2026-07-08）：旧 `members/writer/backend/app/core/writer/completion_verifier.py` 自研完成验收层已删除；Writer 不再在自然最终回复后自动跑语法/浏览器/产物扫描，后续需要检查时由用户或任务 prompt 显式要求模型调用工具执行。
+- Writer verification specs：维护标注（2026-07-01 第七十四切片）：旧 `members/writer/backend/app/core/writer/verification_specs.py` 只是未被调用的说明常量，已删除；维护标注（2026-07-08）：当前普通任务不再保留自动完成验收主线，只保留 `failure_specs.py` 等失败恢复提示。
 - Writer failure specs：`members/writer/backend/app/core/writer/failure_specs.py`
-- Writer 普通自审：维护标注（2026-07-01 第七十三切片）：`members/writer/backend/app/core/writer/self_review.py` 未接入生产主线，已删除；当前普通任务验收保留 `completion_verifier.py`、`failure_specs.py`
+- Writer 普通自审：维护标注（2026-07-01 第七十三切片）：`members/writer/backend/app/core/writer/self_review.py` 未接入生产主线，已删除；维护标注（2026-07-08）：普通任务自动完成验收层已删除，显式语法/构建检查走模型工具调用。
 - Artist visual review：当前主线在 `members/artist/backend/app/core/artist/core_kernel_adapter.py` 的 VLM verification；维护标注（2026-07-01 第七十八切片）：旧 `visual_review.py` 无生产入边，已删除
 - Novel guardrail/self review：`members/writer/backend/app/core/writer/novel/guardrail.py`、`members/writer/backend/app/core/writer/novel/self_review.py`
 
-判断：存疑。验收是 agent 质量关键，但 Writer verifier 单文件过大，后续应按“验收输入、判定策略、修复触发、可视化证据”拆深模块。
+判断：维护标注（2026-07-08）：旧判断已过期。自研自动完成验收收益不足且会破坏最终回复边界，已按减法删除；显式检查需求不再沉为运行时隐式层。
 
 ### 14. 持久化、会话和 transcript
 

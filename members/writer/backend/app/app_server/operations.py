@@ -1557,6 +1557,7 @@ async def handle_turn_start_operation(
             "work_root": work_root,
             "thinking_enabled": params.get("thinking_enabled") if isinstance(params.get("thinking_enabled"), bool) else None,
             "thinking_budget": params.get("thinking_budget") if isinstance(params.get("thinking_budget"), int) else None,
+            "shallow_thinking_enabled": params.get("shallow_thinking_enabled") if isinstance(params.get("shallow_thinking_enabled"), bool) else None,
             "model_id": params.get("model_id") if isinstance(params.get("model_id"), str) else None,
             "attachment_ids": input_attachment_ids(prepared.runtime_items),
         }
@@ -1904,10 +1905,39 @@ async def _publish_compact_failed_event(
                 status="failed",
             ),
         )
+        terminal_envelope = await append_run_item_event_and_apply_snapshot(
+            db,
+            _compact_command_terminal_event(session_id, ids=ids, error=error),
+        )
         await db.commit()
     if emit_event is not None:
         await emit_event(envelope)
+        await emit_event(terminal_envelope)
     return envelope
+
+
+def _compact_command_terminal_event(
+    session_id: str,
+    *,
+    ids: dict[str, str],
+    error: str,
+) -> RunItemEvent:
+    return RunItemEvent(
+        kind="status",
+        thread_id=session_id,
+        event_id=f"compact:failed-status:{uuid4().hex[:16]}",
+        run_id=ids["run_id"],
+        turn_id=ids["turn_id"],
+        status="failed",
+        payload={
+            "type": "turn",
+            "status": "failed",
+            "raw_end_reason": "command_failed",
+            "message": error,
+        },
+        source="command.execute",
+        metadata={"command": "compact"},
+    )
 
 
 async def handle_queue_delete_operation(

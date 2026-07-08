@@ -1,0 +1,1135 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Writer Sub Agent 显示方案预览</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: oklch(0.975 0.006 250);
+      --surface: oklch(0.998 0 0);
+      --surface-2: oklch(0.955 0.008 250);
+      --surface-3: oklch(0.925 0.012 250);
+      --ink: oklch(0.235 0.018 255);
+      --ink-soft: oklch(0.405 0.026 252);
+      --muted: oklch(0.545 0.026 252);
+      --line: oklch(0.865 0.016 250);
+      --line-strong: oklch(0.755 0.026 250);
+      --accent: oklch(0.535 0.115 215);
+      --accent-soft: oklch(0.925 0.035 215);
+      --success: oklch(0.52 0.125 148);
+      --success-soft: oklch(0.925 0.04 148);
+      --warning: oklch(0.66 0.13 72);
+      --warning-soft: oklch(0.94 0.055 78);
+      --danger: oklch(0.56 0.16 28);
+      --danger-soft: oklch(0.935 0.045 28);
+      --code-bg: oklch(0.19 0.02 255);
+      --code-ink: oklch(0.94 0.012 250);
+      --radius: 8px;
+      --font: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: var(--font);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    button,
+    input,
+    textarea {
+      font: inherit;
+    }
+
+    .page {
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 28px 24px 56px;
+    }
+
+    .header {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 24px;
+      align-items: end;
+      padding-bottom: 18px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .header h1 {
+      margin: 0 0 8px;
+      font-size: 26px;
+      line-height: 1.2;
+      letter-spacing: 0;
+      font-weight: 720;
+      text-wrap: balance;
+    }
+
+    .header p {
+      max-width: 72ch;
+      margin: 0;
+      color: var(--ink-soft);
+    }
+
+    .stamp {
+      display: grid;
+      gap: 4px;
+      color: var(--muted);
+      text-align: right;
+      white-space: nowrap;
+    }
+
+    .stamp strong {
+      color: var(--ink);
+      font-size: 13px;
+      font-weight: 680;
+    }
+
+    .criteria {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 1px;
+      margin: 18px 0 28px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      overflow: hidden;
+      background: var(--line);
+    }
+
+    .criterion {
+      min-height: 76px;
+      padding: 12px 14px;
+      background: var(--surface);
+    }
+
+    .criterion b {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 13px;
+    }
+
+    .criterion span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .toc {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      overflow-x: auto;
+      padding: 10px 0;
+      margin-bottom: 18px;
+      background: color-mix(in oklch, var(--bg) 92%, transparent);
+      backdrop-filter: blur(8px);
+      border-bottom: 1px solid color-mix(in oklch, var(--line) 70%, transparent);
+    }
+
+    .toc a {
+      flex: 0 0 auto;
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      min-height: 32px;
+      padding: 6px 10px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--surface);
+      color: var(--ink-soft);
+      text-decoration: none;
+      font-size: 12px;
+      font-weight: 620;
+    }
+
+    .toc a:hover {
+      border-color: var(--line-strong);
+      color: var(--ink);
+    }
+
+    .toc .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--accent);
+    }
+
+    .option {
+      display: grid;
+      grid-template-columns: 330px minmax(0, 1fr);
+      gap: 22px;
+      align-items: start;
+      padding: 26px 0 34px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .option:last-child {
+      border-bottom: 0;
+    }
+
+    .option-intro {
+      position: sticky;
+      top: 58px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .option-kicker {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    .index {
+      display: inline-grid;
+      place-items: center;
+      width: 28px;
+      height: 28px;
+      border-radius: 999px;
+      background: var(--surface-2);
+      border: 1px solid var(--line);
+      color: var(--ink-soft);
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    .option h2 {
+      margin: 0;
+      font-size: 20px;
+      line-height: 1.25;
+      letter-spacing: 0;
+    }
+
+    .option p {
+      margin: 0;
+      color: var(--ink-soft);
+    }
+
+    .fit-list {
+      display: grid;
+      gap: 6px;
+      padding: 0;
+      margin: 0;
+      list-style: none;
+    }
+
+    .fit-list li {
+      display: grid;
+      grid-template-columns: 74px minmax(0, 1fr);
+      gap: 8px;
+      font-size: 12px;
+    }
+
+    .fit-list b {
+      color: var(--muted);
+      font-weight: 650;
+    }
+
+    .fit-list span {
+      color: var(--ink-soft);
+    }
+
+    .preview {
+      display: grid;
+      gap: 14px;
+      min-width: 0;
+    }
+
+    .workbench {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      overflow: hidden;
+      background: var(--surface);
+    }
+
+    .workbench-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      min-height: 42px;
+      padding: 0 14px;
+      background: var(--surface-2);
+      border-bottom: 1px solid var(--line);
+    }
+
+    .workbench-title {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+      font-weight: 680;
+    }
+
+    .run-state {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      color: var(--ink-soft);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--success);
+    }
+
+    .workbench-body {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 0;
+      padding: 18px;
+    }
+
+    .message {
+      display: grid;
+      gap: 12px;
+      max-width: 780px;
+    }
+
+    .assistant-label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    .answer {
+      color: var(--ink);
+      font-size: 14px;
+    }
+
+    .process {
+      display: grid;
+      gap: 6px;
+      margin-top: 2px;
+    }
+
+    .step {
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: start;
+      min-height: 34px;
+      padding: 7px 0;
+      border-top: 1px solid var(--line);
+    }
+
+    .step:first-child {
+      border-top: 0;
+    }
+
+    .marker {
+      width: 9px;
+      height: 9px;
+      margin-top: 6px;
+      border-radius: 50%;
+      background: var(--line-strong);
+    }
+
+    .marker.running {
+      background: var(--success);
+    }
+
+    .marker.warning {
+      background: var(--warning);
+    }
+
+    .marker.failed {
+      background: var(--danger);
+    }
+
+    .step-main {
+      min-width: 0;
+    }
+
+    .step-title {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      align-items: baseline;
+      color: var(--ink);
+      font-weight: 660;
+    }
+
+    .step-title code,
+    .chip,
+    .index-chip {
+      font-family: var(--mono);
+      font-size: 11px;
+    }
+
+    .chip,
+    .index-chip,
+    .state-chip {
+      display: inline-flex;
+      align-items: center;
+      min-height: 20px;
+      padding: 2px 7px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: var(--surface-2);
+      color: var(--ink-soft);
+      white-space: nowrap;
+    }
+
+    .index-chip {
+      background: var(--accent-soft);
+      border-color: color-mix(in oklch, var(--accent) 28%, var(--line));
+      color: oklch(0.34 0.07 215);
+      font-weight: 720;
+    }
+
+    .state-chip {
+      font-size: 11px;
+      font-weight: 650;
+    }
+
+    .state-chip.done {
+      background: var(--success-soft);
+      border-color: color-mix(in oklch, var(--success) 28%, var(--line));
+      color: oklch(0.32 0.075 148);
+    }
+
+    .state-chip.running {
+      background: var(--accent-soft);
+      border-color: color-mix(in oklch, var(--accent) 28%, var(--line));
+      color: oklch(0.34 0.07 215);
+    }
+
+    .state-chip.waiting {
+      background: var(--warning-soft);
+      border-color: color-mix(in oklch, var(--warning) 32%, var(--line));
+      color: oklch(0.38 0.08 72);
+    }
+
+    .step-detail {
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .step-meta {
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .subline {
+      display: grid;
+      gap: 8px;
+      margin-top: 8px;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface-2);
+    }
+
+    .subline-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .subline-title {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      font-weight: 680;
+    }
+
+    .subline-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .kv {
+      display: grid;
+      gap: 2px;
+      min-width: 0;
+    }
+
+    .kv b {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 650;
+    }
+
+    .kv span {
+      overflow: hidden;
+      color: var(--ink-soft);
+      font-family: var(--mono);
+      font-size: 11px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .cli {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      overflow: hidden;
+      background: var(--code-bg);
+    }
+
+    .cli-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 12px;
+      border-bottom: 1px solid color-mix(in oklch, var(--code-ink) 18%, transparent);
+      color: oklch(0.74 0.02 250);
+      font-size: 12px;
+    }
+
+    pre {
+      margin: 0;
+      white-space: pre-wrap;
+    }
+
+    .cli pre {
+      padding: 12px;
+      color: var(--code-ink);
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .agent-group {
+      display: grid;
+      gap: 0;
+      margin-top: 6px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      overflow: hidden;
+      background: var(--surface);
+    }
+
+    .agent-group-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: center;
+      min-height: 42px;
+      padding: 9px 12px;
+      background: var(--surface-2);
+      border-bottom: 1px solid var(--line);
+    }
+
+    .agent-group-title {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      font-weight: 700;
+    }
+
+    .agent-group-body {
+      padding: 4px 12px 8px;
+    }
+
+    .rail-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 230px;
+      min-height: 360px;
+    }
+
+    .rail-layout .workbench-body {
+      border-right: 1px solid var(--line);
+    }
+
+    .rail {
+      display: grid;
+      align-content: start;
+      gap: 14px;
+      padding: 14px;
+      background: var(--surface-2);
+    }
+
+    .rail-section {
+      display: grid;
+      gap: 8px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .rail-section:last-child {
+      border-bottom: 0;
+      padding-bottom: 0;
+    }
+
+    .rail-title {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .rail-row {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      color: var(--ink-soft);
+      font-size: 12px;
+    }
+
+    .rail-row b {
+      color: var(--ink);
+      font-family: var(--mono);
+      font-size: 11px;
+    }
+
+    .handoff {
+      display: grid;
+      gap: 10px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface-2);
+    }
+
+    .handoff-title {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      font-weight: 720;
+    }
+
+    .handoff-summary {
+      margin: 0;
+      color: var(--ink);
+    }
+
+    .handoff-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .plain-button {
+      min-height: 30px;
+      padding: 5px 10px;
+      border: 1px solid var(--line-strong);
+      border-radius: 6px;
+      background: var(--surface);
+      color: var(--ink-soft);
+      cursor: default;
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    .log-table {
+      display: grid;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+
+    .log-row {
+      display: grid;
+      grid-template-columns: 76px 96px minmax(0, 1fr) 82px;
+      gap: 10px;
+      align-items: center;
+      min-height: 36px;
+      padding: 7px 10px;
+      border-top: 1px solid var(--line);
+      background: var(--surface);
+      font-size: 12px;
+    }
+
+    .log-row:first-child {
+      border-top: 0;
+      background: var(--surface-2);
+      color: var(--muted);
+      font-weight: 700;
+    }
+
+    .log-row code {
+      font-family: var(--mono);
+      color: var(--ink-soft);
+    }
+
+    .recommendation {
+      margin-top: 26px;
+      padding: 16px 18px;
+      border: 1px solid color-mix(in oklch, var(--accent) 30%, var(--line));
+      border-radius: var(--radius);
+      background: var(--accent-soft);
+    }
+
+    .recommendation h2 {
+      margin: 0 0 8px;
+      font-size: 18px;
+    }
+
+    .recommendation p {
+      margin: 0;
+      color: var(--ink-soft);
+    }
+
+    @media (max-width: 980px) {
+      .header,
+      .option,
+      .rail-layout {
+        grid-template-columns: 1fr;
+      }
+
+      .stamp,
+      .option-intro {
+        position: static;
+        text-align: left;
+      }
+
+      .criteria {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .rail-layout .workbench-body {
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+    }
+
+    @media (max-width: 640px) {
+      .page {
+        padding: 20px 14px 40px;
+      }
+
+      .criteria,
+      .subline-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .log-row {
+        grid-template-columns: 68px minmax(0, 1fr);
+      }
+
+      .log-row span:nth-child(3),
+      .log-row span:nth-child(4) {
+        grid-column: 2;
+      }
+
+      .step {
+        grid-template-columns: 16px minmax(0, 1fr);
+      }
+
+      .step-meta {
+        grid-column: 2;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="header">
+      <div>
+        <h1>Writer Sub Agent 显示方案预览</h1>
+        <p>目标是把“一个主会话委托一个可复用 sub session”的 MVP 讲清楚：用户要能看出谁在跑、编号是多少、做了什么、结果如何，同时不把界面重新扩张成复杂 Agent 管理台。</p>
+      </div>
+      <div class="stamp">
+        <strong>范围</strong>
+        <span>GUI + CLI 显示方案</span>
+        <span>2026-07-07</span>
+      </div>
+    </header>
+
+    <section class="criteria" aria-label="设计评判标准">
+      <div class="criterion">
+        <b>最低认知成本</b>
+        <span>用户不用理解 agent 系统，也能知道这是一次委托。</span>
+      </div>
+      <div class="criterion">
+        <b>日志可查</b>
+        <span>编号 `001/002` 必须在 GUI 或 CLI 中稳定可见。</span>
+      </div>
+      <div class="criterion">
+        <b>不鼓励并行误解</b>
+        <span>MVP 只有顺序委托，显示不能暗示多 agent 池。</span>
+      </div>
+      <div class="criterion">
+        <b>可渐进扩展</b>
+        <span>未来多个执行方时能自然扩展，不推翻当前结构。</span>
+      </div>
+    </section>
+
+    <nav class="toc" aria-label="方案导航">
+      <a href="#option-1"><span class="dot"></span>方案一：内联委托行</a>
+      <a href="#option-2"><span class="dot"></span>方案二：子时间线</a>
+      <a href="#option-3"><span class="dot"></span>方案三：右栏运行账本</a>
+      <a href="#option-4"><span class="dot"></span>方案四：结果优先</a>
+      <a href="#option-5"><span class="dot"></span>方案五：CLI 镜像</a>
+    </nav>
+
+    <section class="option" id="option-1">
+      <aside class="option-intro">
+        <div class="option-kicker"><span class="index">01</span><span>最小改动 / 推荐起点</span></div>
+        <h2>内联委托行</h2>
+        <p>把 sub agent 当成一条更聪明的工具调用显示。主时间线不新增结构，只在工具行里补 `001 · worker`、模型、子会话 ID。</p>
+        <ul class="fit-list">
+          <li><b>适合</b><span>当前 MVP，最少 UI 改动。</span></li>
+          <li><b>风险</b><span>复杂子任务的内部步骤会显得拥挤。</span></li>
+          <li><b>CLI</b><span>一行 start、一行 done，和普通工具输出一致。</span></li>
+        </ul>
+      </aside>
+      <div class="preview">
+        <div class="workbench">
+          <div class="workbench-head">
+            <div class="workbench-title"><span class="status-dot"></span>修复测试失败</div>
+            <div class="run-state">运行中 · 4 次模型调用</div>
+          </div>
+          <div class="workbench-body">
+            <div class="message">
+              <div class="assistant-label">Writer</div>
+              <div class="answer">我会先让子任务检查失败原因，再根据结果修改最小范围。</div>
+              <div class="process">
+                <div class="step">
+                  <span class="marker running"></span>
+                  <div class="step-main">
+                    <div class="step-title">
+                      <span>子任务</span>
+                      <span class="index-chip">001</span>
+                      <code>worker</code>
+                      <span class="state-chip running">运行中</span>
+                    </div>
+                    <div class="step-detail">任务：定位 `test_writer_core_kernel_adapter.py` 中 sub_agent 相关失败。</div>
+                    <div class="subline">
+                      <div class="subline-head">
+                        <div class="subline-title"><span>委托上下文</span><span class="chip">glm5.2-xfyun-maas</span></div>
+                        <span class="state-chip running">sub session</span>
+                      </div>
+                      <div class="subline-grid">
+                        <div class="kv"><b>session</b><span>parent:sub:001:worker</span></div>
+                        <div class="kv"><b>tools</b><span>parent - sub_agent</span></div>
+                        <div class="kv"><b>permission</b><span>same as parent</span></div>
+                      </div>
+                    </div>
+                  </div>
+                  <span class="step-meta">12s</span>
+                </div>
+                <div class="step">
+                  <span class="marker"></span>
+                  <div class="step-main">
+                    <div class="step-title"><span>读取文件</span><span class="chip">read_file</span></div>
+                    <div class="step-detail">members/writer/backend/tests/test_writer_core_kernel_adapter.py</div>
+                  </div>
+                  <span class="step-meta">完成</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="cli">
+          <div class="cli-head"><span>CLI 普通模式</span><span>方案一</span></div>
+          <pre>[00:02] agent 001 worker running 定位 sub_agent 测试失败
+[00:11] file read_file members/writer/backend/tests/test_writer_core_kernel_adapter.py
+[00:18] agent 001 worker done 发现期望仍包含 write_scope，建议更新断言</pre>
+        </div>
+      </div>
+    </section>
+
+    <section class="option" id="option-2">
+      <aside class="option-intro">
+        <div class="option-kicker"><span class="index">02</span><span>推荐定稿方向</span></div>
+        <h2>子时间线</h2>
+        <p>主 Writer 时间线中打开一个 scoped child chat，但不新增一套视觉样式。标题是 sub name；Writer 发给它的委托内容显示为这条子时间线里的用户信息；子 agent 的思考、工具、结果继续使用 Writer 本身的时间线样式。</p>
+        <ul class="fit-list">
+          <li><b>适合</b><span>准确表达“委托方 / 执行方”的产品语义。</span></li>
+          <li><b>风险</b><span>需要控制缩进和标题，避免层级过深。</span></li>
+          <li><b>CLI</b><span>普通模式用缩进镜像子时间线，`--raw` 保留完整事件。</span></li>
+        </ul>
+      </aside>
+      <div class="preview">
+        <div class="workbench">
+          <div class="workbench-head">
+            <div class="workbench-title"><span class="status-dot"></span>实现 sub agent MVP</div>
+            <div class="run-state">已完成 · 7 次模型调用</div>
+          </div>
+          <div class="workbench-body">
+            <div class="message">
+              <div class="assistant-label">Writer</div>
+              <div class="answer">我把测试排查委托给 worker。下面是这个 sub session 的完整执行时间线。</div>
+              <div class="process" aria-label="worker 子时间线">
+                <div class="step">
+                  <span class="marker"></span>
+                  <div class="step-main">
+                    <div class="step-title">
+                      <span>worker</span>
+                      <span class="index-chip">001</span>
+                      <span class="chip">sub session</span>
+                      <span class="state-chip done">完成</span>
+                    </div>
+                    <div class="step-detail">parent:sub:001:worker · 使用 Writer 时间线样式渲染内部消息和工具。</div>
+                  </div>
+                  <span class="step-meta">parent:sub:001:worker</span>
+                </div>
+                <div class="step">
+                  <span class="marker"></span>
+                  <div class="step-main">
+                    <div class="step-title"><span>用户信息</span><span class="chip">from Writer</span></div>
+                    <div class="step-detail">请定位 `sub_agent` MVP 测试失败原因。重点确认是否还残留 `write_scope`、角色 allowlist 或并行冲突判断，并返回最小修改建议。</div>
+                  </div>
+                  <span class="step-meta">user</span>
+                </div>
+                <div class="step">
+                  <span class="marker"></span>
+                  <div class="step-main">
+                    <div class="step-title"><span>worker 回复</span></div>
+                    <div class="step-detail">我会先搜索旧约束，再检查运行路径和测试断言。</div>
+                  </div>
+                  <span class="step-meta">assistant</span>
+                </div>
+                <div class="step">
+                  <span class="marker"></span>
+                  <div class="step-main">
+                    <div class="step-title"><span>思考</span><span class="chip">reasoning</span></div>
+                    <div class="step-detail">需要区分旧配置解析仍存在和 runtime 是否实际使用。</div>
+                  </div>
+                  <span class="step-meta">完成</span>
+                </div>
+                <div class="step">
+                  <span class="marker"></span>
+                  <div class="step-main">
+                    <div class="step-title"><span>搜索旧约束</span><span class="chip">rg</span></div>
+                    <div class="step-detail">命中只在 legacy helper 和配置解析，当前 runtime 路径不再使用。</div>
+                  </div>
+                  <span class="step-meta">完成</span>
+                </div>
+                <div class="step">
+                  <span class="marker"></span>
+                  <div class="step-main">
+                    <div class="step-title"><span>运行验证</span><span class="chip">pytest</span></div>
+                    <div class="step-detail">252 passed，只有既有 Windows asyncio closed-pipe warning。</div>
+                  </div>
+                  <span class="step-meta">完成</span>
+                </div>
+                <div class="step">
+                  <span class="marker"></span>
+                  <div class="step-main">
+                    <div class="step-title"><span>worker 最终回复</span><span class="chip">final</span></div>
+                    <div class="step-detail">建议保留旧配置接口，但 runtime 展示只围绕 sub session。</div>
+                  </div>
+                  <span class="step-meta">完成</span>
+                </div>
+              </div>
+              <div class="process">
+                <div class="step">
+                  <span class="marker"></span>
+                  <div class="step-main">
+                    <div class="step-title">
+                      <span>Writer 接收结果</span>
+                      <span class="index-chip">001</span>
+                    </div>
+                    <div class="step-detail">worker 已返回。我会按它的结论继续修改主流程。</div>
+                  </div>
+                  <span class="step-meta">继续</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="cli">
+          <div class="cli-head"><span>CLI 普通模式</span><span>方案二</span></div>
+          <pre>[00:02] sub 001 worker start parent:sub:001:worker
+        user  请定位 sub_agent MVP 测试失败原因
+        think 区分旧配置解析和 runtime 实际路径
+        tool  rg write_scope / parallel scope
+        tool  pytest targeted writer backend tests
+[00:18] sub 001 worker done 建议保留旧配置接口，runtime 只展示 sub session</pre>
+        </div>
+      </div>
+    </section>
+
+    <section class="option" id="option-3">
+      <aside class="option-intro">
+        <div class="option-kicker"><span class="index">03</span><span>长任务监控</span></div>
+        <h2>右栏运行账本</h2>
+        <p>主时间线保持安静，右侧栏显示当前父会话下的 sub session 账本：编号、名字、模型、最近状态。适合长任务，但比 MVP 多一点信息架构。</p>
+        <ul class="fit-list">
+          <li><b>适合</b><span>用户频繁查状态、看多个历史委托。</span></li>
+          <li><b>风险</b><span>右栏刚刚做过减法，容易重新变重。</span></li>
+          <li><b>CLI</b><span>`writer status` 可补一个 Sub sessions 小节。</span></li>
+        </ul>
+      </aside>
+      <div class="preview">
+        <div class="workbench rail-layout">
+          <div>
+            <div class="workbench-head">
+              <div class="workbench-title"><span class="status-dot"></span>Writer 主会话</div>
+              <div class="run-state">运行中</div>
+            </div>
+            <div class="workbench-body">
+              <div class="message">
+                <div class="assistant-label">Writer</div>
+                <div class="answer">我已把测试排查委托给 worker，会在它返回后继续修改。</div>
+                <div class="process">
+                  <div class="step">
+                    <span class="marker running"></span>
+                    <div class="step-main">
+                      <div class="step-title"><span>等待子会话返回</span><span class="index-chip">001</span></div>
+                      <div class="step-detail">当前主流程没有额外动作，避免并行冲突。</div>
+                    </div>
+                    <span class="step-meta">21s</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <aside class="rail" aria-label="右侧运行账本">
+            <div class="rail-section">
+              <div class="rail-title">Sub sessions</div>
+              <div class="rail-row"><b>001</b><span>worker</span><span class="state-chip running">运行中</span></div>
+              <div class="rail-row"><b>002</b><span>repo_reader</span><span class="state-chip done">完成</span></div>
+            </div>
+            <div class="rail-section">
+              <div class="rail-title">当前委托</div>
+              <div class="kv"><b>model</b><span>glm5.2-xfyun-maas</span></div>
+              <div class="kv"><b>session</b><span>parent:sub:001:worker</span></div>
+              <div class="kv"><b>tools</b><span>same as parent, no sub_agent</span></div>
+            </div>
+            <div class="rail-section">
+              <div class="rail-title">最近事件</div>
+              <div class="rail-row"><b>00:12</b><span>读取测试文件</span><span>ok</span></div>
+              <div class="rail-row"><b>00:18</b><span>运行 pytest</span><span>ok</span></div>
+            </div>
+          </aside>
+        </div>
+        <div class="cli">
+          <div class="cli-head"><span>writer status</span><span>方案三</span></div>
+          <pre>session session-core-sub-agent
+status  running  phase=execute
+sub     001 worker      running  glm5.2-xfyun-maas
+sub     002 repo_reader completed default
+root    E:\LamTools</pre>
+        </div>
+      </div>
+    </section>
+
+    <section class="option" id="option-4">
+      <aside class="option-intro">
+        <div class="option-kicker"><span class="index">04</span><span>阅读优先</span></div>
+        <h2>结果优先 handoff</h2>
+        <p>把子 agent 的最终交付放在最前面，内部过程退到“查看证据”。适合 Writer 的主阅读流，用户先看到结论，再决定是否展开细节。</p>
+        <ul class="fit-list">
+          <li><b>适合</b><span>主会话结果质量比过程审计更重要。</span></li>
+          <li><b>风险</b><span>如果失败，需要额外露出诊断入口。</span></li>
+          <li><b>CLI</b><span>默认输出 done 摘要，`--verbose` 展开 evidence。</span></li>
+        </ul>
+      </aside>
+      <div class="preview">
+        <div class="workbench">
+          <div class="workbench-head">
+            <div class="workbench-title"><span class="status-dot"></span>子任务结果返回</div>
+            <div class="run-state">完成</div>
+          </div>
+          <div class="workbench-body">
+            <div class="message">
+              <div class="assistant-label">Writer</div>
+              <div class="handoff">
+                <div class="handoff-title">
+                  <span class="index-chip">001</span>
+                  <span>worker 交付</span>
+                  <span class="state-chip done">完成</span>
+                  <span class="chip">glm5.2-xfyun-maas</span>
+                </div>
+                <p class="handoff-summary">已确认失败来自旧测试仍检查 `write_scope`。建议删除该断言，改为检查 `agent_index`、`sub_session_id` 和工具列表不包含 `sub_agent`。</p>
+                <div class="handoff-actions">
+                  <button class="plain-button" type="button">查看 3 条证据</button>
+                  <button class="plain-button" type="button">查看内部工具</button>
+                  <button class="plain-button" type="button">复制 sub session id</button>
+                </div>
+              </div>
+              <div class="process">
+                <div class="step">
+                  <span class="marker"></span>
+                  <div class="step-main">
+                    <div class="step-title"><span>Writer 继续处理</span></div>
+                    <div class="step-detail">根据子任务建议更新测试并运行验证。</div>
+                  </div>
+                  <span class="step-meta">下一步</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="cli">
+          <div class="cli-head"><span>CLI 普通模式</span><span>方案四</span></div>
+          <pre>[00:18] agent 001 worker done: 旧测试仍检查 write_scope
+        evidence: 3 items, tools: 2, session: parent:sub:001:worker
+[00:19] reply 我将按子任务建议更新断言并验证。</pre>
+        </div>
+      </div>
+    </section>
+
+    <section class="option" id="option-5">
+      <aside class="option-intro">
+        <div class="option-kicker"><span class="index">05</span><span>CLI / GUI 同构</span></div>
+        <h2>事件日志镜像</h2>
+        <p>GUI 直接采用接近日志的表格化事件流，CLI 与 GUI 字段完全一致。它最利于排查，但产品感最“工程化”。</p>
+        <ul class="fit-list">
+          <li><b>适合</b><span>内部调试、开发者模式、验收报告。</span></li>
+          <li><b>风险</b><span>普通用户会觉得噪声偏多。</span></li>
+          <li><b>CLI</b><span>同一套事件字段，不再单独设计文案。</span></li>
+        </ul>
+      </aside>
+      <div class="preview">
+        <div class="workbench">
+          <div class="workbench-head">
+            <div class="workbench-title"><span class="status-dot"></span>Runtime event log</div>
+            <div class="run-state">debug view</div>
+          </div>
+          <div class="workbench-body">
+            <div class="log-table" role="table" aria-label="事件日志镜像">
+              <div class="log-row" role="row">
+                <span>time</span><span>scope</span><span>event</span><span>status</span>
+              </div>
+              <div class="log-row" role="row">
+                <code>00:02</code><code>agent.001</code><span>worker start: 定位测试失败</span><span class="state-chip running">running</span>
+              </div>
+              <div class="log-row" role="row">
+                <code>00:05</code><code>agent.001</code><span>read_file test_writer_core_kernel_adapter.py</span><span class="state-chip done">ok</span>
+              </div>
+              <div class="log-row" role="row">
+                <code>00:10</code><code>agent.001</code><span>pytest targeted writer backend tests</span><span class="state-chip done">ok</span>
+              </div>
+              <div class="log-row" role="row">
+                <code>00:18</code><code>agent.001</code><span>handoff returned to parent Writer</span><span class="state-chip done">done</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="cli">
+          <div class="cli-head"><span>CLI raw-human hybrid</span><span>方案五</span></div>
+          <pre>00:02 agent.001 worker start    model=glm5.2-xfyun-maas
+00:05 agent.001 tool  ok       read_file test_writer_core_kernel_adapter.py
+00:10 agent.001 tool  ok       pytest targeted writer backend tests
+00:18 agent.001 done           handoff returned to parent</pre>
+        </div>
+      </div>
+    </section>
+
+    <section class="recommendation">
+      <h2>建议选择</h2>
+      <p>按你的方向，建议定稿为“方案二：子时间线”。主 Writer 时间线只承担委托和接收结果；sub timeline 标题显示 `001 · subName`，Writer 发给它的委托作为子时间线里的用户信息，子 agent 的思考、工具调用、工具结果和最终回复尽量复用主 Writer 的展示组件。右栏账本先不做，避免重新增加信息架构负担。</p>
+    </section>
+  </main>
+</body>
+</html>

@@ -18,7 +18,6 @@ from app.routers.core_http import router as core_http_router
 from app.app_server.router import router as app_server_router
 
 
-
 def _setup_logging():
     """Configure logging to file and console."""
     log_file = Path(settings.data_dir) / "lamwriter.log"

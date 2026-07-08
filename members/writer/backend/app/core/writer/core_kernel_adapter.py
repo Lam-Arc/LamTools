@@ -107,12 +107,10 @@ from app.core.writer.agent_runtime import (
     AgentRegistry,
     AgentRuntime,
     AgentRunResult,
-    AgentWriteScope,
     SubAgentDefinition,
     default_agent_registry,
 )
 from app.core.writer.command_tools import _validate_command_paths
-from app.core.writer.completion_verifier import CompletionVerifier
 from app.core.writer.failure_specs import failure_recovery_instruction
 from app.core.writer.llm_bridge import WriterLLMClientAdapter
 from app.core.writer.permission import command_permission_decision
@@ -127,12 +125,6 @@ from app.core.writer.runtime_resources import (
 )
 from app.core.writer.sub_agent_events import SubAgentEventForwardingSink
 from app.core.writer.sub_agent_projection import project_sub_agent_result
-from app.core.writer.sub_agent_workspace import (
-    cleanup_sub_agent_context_files,
-    copy_sub_agent_context_files,
-    create_default_sub_agent_workspace,
-    finalize_sub_agent_workspace,
-)
 from app.core.writer.task_plan import (
     apply_checklist_update as _apply_checklist_update,
     auto_advance_plan as _auto_advance_plan,
@@ -208,7 +200,6 @@ class WriterKit:
         sub_agent_workspace_factory: Callable[[SubAgentDefinition, AgentCall], Awaitable[dict[str, Any] | None]] | None = None,
         core_event_callback: Callable[[CoreEvent], Awaitable[None]] | None = None,
         tool_allowlist: set[str] | frozenset[str] | None = None,
-        completion_verifier_enabled: bool = True,
     ) -> None:
         """Initialise with optional tool_executor, initial_history, work_root, and agent_llm_client.
 
@@ -235,10 +226,9 @@ class WriterKit:
         self._agent_llm_client = agent_llm_client
         self._runtime_controls = runtime_controls or {}
         self._sub_agent_llm_client_factory = sub_agent_llm_client_factory
-        self._sub_agent_workspace_factory = sub_agent_workspace_factory or self._default_sub_agent_workspace
+        self._sub_agent_workspace_factory = sub_agent_workspace_factory
         self._core_event_callback = core_event_callback
         self._tool_allowlist = frozenset(tool_allowlist) if tool_allowlist is not None else None
-        self._completion_verifier_enabled = completion_verifier_enabled
         self._agent_runtime: AgentRuntime | None = None
         self._agent_registry = self._build_agent_registry()
         self._intervention_pending: str = ""  # System-level repair prompt, injected on next turn
@@ -374,19 +364,6 @@ class WriterKit:
             "error": f"工具 {name} 不可用：请求了当前环境没有注册的工具。",
         }, ensure_ascii=False)
 
-    async def _default_sub_agent_workspace(
-        self,
-        definition: SubAgentDefinition,
-        call: AgentCall,
-    ) -> dict[str, Any] | None:
-        return await create_default_sub_agent_workspace(definition, call, self._work_root)
-
-    def _copy_sub_agent_context_files(self, call: AgentCall, worktree_path: Path) -> list[str]:
-        return copy_sub_agent_context_files(call, self._work_root, worktree_path)
-
-    def _cleanup_sub_agent_context_files(self, workspace: dict[str, Any]) -> None:
-        cleanup_sub_agent_context_files(workspace)
-
     async def _run_sub_agent_kernel(
         self,
         definition: SubAgentDefinition,
@@ -408,28 +385,34 @@ class WriterKit:
         else:
             raise RuntimeError("SubAgent LLM client must have .chat_full() or .complete()")
 
-        work_root = str(workspace.get("work_root") or self._work_root or "")
-        if workspace.get("work_root"):
-            tool_executor = _resolve_tool_executor(None, work_root)
+        work_root = str(self._work_root or "")
+        tool_executor = _resolve_tool_executor(self._tool_executor, work_root or None)
+
+        sub_session_id = str(call.options.get("_sub_session_id") or "")
+        if not sub_session_id:
+            sub_session_id = f"sub:{definition.name}:{uuid.uuid4().hex[:8]}"
+        option_state_store = call.options.get("_sub_session_state_store")
+        if hasattr(option_state_store, "get") and hasattr(option_state_store, "save"):
+            state_store = option_state_store
         else:
-            tool_executor = _resolve_tool_executor(self._tool_executor, work_root or None)
+            state_store = InMemoryRuntimeStateStore()
+        initial_history = await self._sub_session_history(state_store, sub_session_id)
 
         nested_kit = WriterKit(
             tool_executor=tool_executor,
-            initial_history=[],
+            initial_history=initial_history,
             work_root=work_root,
             agent_llm_client=None,
             runtime_controls=self._runtime_controls,
             tool_allowlist=available_tools,
             core_event_callback=self._core_event_callback,
-            completion_verifier_enabled=False,
         )
         event_log = InMemoryEventLog()
 
         kernel = CoreLoopKernel(
             kit=nested_kit,
             llm_client=core_llm,
-            state_store=InMemoryRuntimeStateStore(),
+            state_store=state_store,
             event_sink=SubAgentEventForwardingSink(
                 event_log=event_log,
                 core_event_callback=self._core_event_callback,
@@ -440,30 +423,58 @@ class WriterKit:
                 parallel_tool_names=(),
             ),
         )
-        session_id = f"sub:{definition.name}:{uuid.uuid4().hex[:8]}"
         result = await kernel.run(RuntimeTurnInput(
             user_message=prompt,
-            metadata={"session_id": session_id},
+            metadata={"session_id": sub_session_id},
         ))
+        await self._record_sub_session_history(state_store, sub_session_id, prompt, result.message)
         nested_events = [event for _, event in event_log.replay_since()]
         data, tool_records, reasoning_blocks, diagnostics = project_sub_agent_result(result, nested_events)
-        self._cleanup_sub_agent_context_files(workspace)
-        delivery = await self._finalize_sub_agent_workspace(definition, workspace, result.decision)
-        if delivery:
-            diagnostics["workspace_delivery"] = delivery
-            if not delivery.get("ok", False):
-                diagnostics.setdefault("fallback_reason", "workspace_delivery_failed")
-                diagnostics.setdefault("error", str(delivery.get("error") or "SubAgent workspace delivery failed"))
-                return {}, tool_records, reasoning_blocks, diagnostics
         return data, tool_records, reasoning_blocks, diagnostics
 
-    async def _finalize_sub_agent_workspace(
+    async def _sub_session_history(
         self,
-        definition: SubAgentDefinition,
-        workspace: dict[str, Any],
-        decision: str,
-    ) -> dict[str, Any]:
-        return await finalize_sub_agent_workspace(definition, workspace, self._work_root, decision)
+        state_store: RuntimeStateStore,
+        sub_session_id: str,
+    ) -> list[ChatMessage]:
+        state = await state_store.get(sub_session_id)
+        if state is None:
+            return []
+        raw = state.metadata.get("_sub_session_history")
+        if not isinstance(raw, list):
+            return []
+        messages: list[ChatMessage] = []
+        for item in raw[-20:]:
+            if not isinstance(item, dict):
+                continue
+            role = str(item.get("role") or "")
+            content = str(item.get("content") or "")
+            if role in {"user", "assistant"} and content:
+                messages.append(ChatMessage(role=role, content=content))
+        return messages
+
+    async def _record_sub_session_history(
+        self,
+        state_store: RuntimeStateStore,
+        sub_session_id: str,
+        user_message: str,
+        assistant_message: str,
+    ) -> None:
+        if not sub_session_id:
+            return
+        state = await state_store.get(sub_session_id)
+        if state is None:
+            state = RuntimeState(session_id=sub_session_id)
+        history = state.metadata.get("_sub_session_history")
+        if not isinstance(history, list):
+            history = []
+            state.metadata["_sub_session_history"] = history
+        if user_message:
+            history.append({"role": "user", "content": user_message})
+        if assistant_message:
+            history.append({"role": "assistant", "content": assistant_message})
+        del history[:-20]
+        await state_store.save(state)
 
     # -- RuntimeKit protocol --------------------------------------------------
 
@@ -475,8 +486,6 @@ class WriterKit:
         if turn_input.user_message:
             state.metadata["current_task"] = turn_input.user_message
             state.metadata["original_task"] = turn_input.user_message
-            state.metadata.pop("completion_verifier_attempt", None)
-            state.metadata.pop("completion_verifier_last_summary", None)
         if not self._mcp_loaded:
             try:
                 self._mcp_registry = await cached_mcp_registry(self._work_root)
@@ -840,56 +849,8 @@ class WriterKit:
         state: RuntimeState,
         calls: list[ToolCall],
     ) -> dict[str, ToolResult]:
-        _ = state
-        sub_agent_calls = [call for call in calls if call.name == "sub_agent"]
-        if len(sub_agent_calls) < 2 or self._agent_runtime is None:
-            return {}
-        blocked = self._parallel_sub_agent_scope_error(sub_agent_calls)
-        if not blocked:
-            return {}
-        return {
-            call.id: ToolResult(
-                call_id=call.id,
-                name=call.name,
-                status="failed",
-                content=blocked,
-                error=blocked,
-                metadata={"error": "parallel_write_scope_conflict"},
-            )
-            for call in sub_agent_calls
-        }
-
-    def _parallel_sub_agent_scope_error(self, calls: list[ToolCall]) -> str:
-        if self._agent_runtime is None:
-            return ""
-        write_items: list[tuple[str, AgentWriteScope]] = []
-        for call in calls:
-            args = call.arguments if isinstance(call.arguments, dict) else {}
-            options = args.get("options") if isinstance(args.get("options"), dict) else {}
-            agent_call = AgentCall(
-                name="sub",
-                task=str(args.get("task") or args.get("task_description") or ""),
-                mode=str(args.get("mode") or "auto"),
-                clean=bool(args.get("clean") or False),
-                options=dict(options),
-            )
-            definition = self._agent_runtime._sub_agent_definition_for_call(agent_call)
-            scope = self._agent_runtime._write_scope_for_call(definition, agent_call)
-            missing = self._agent_runtime._write_scope_error(definition, scope)
-            if missing:
-                return missing
-            if self._agent_runtime._is_write_capable(definition) and scope is not None:
-                write_items.append((definition.name, scope))
-        for index, (left_name, left_scope) in enumerate(write_items):
-            for right_name, right_scope in write_items[index + 1:]:
-                if self._agent_runtime._scopes_conflict(left_scope, right_scope):
-                    return (
-                        "并行写入范围冲突："
-                        f"{left_name}({', '.join(left_scope.paths)}) 与 "
-                        f"{right_name}({', '.join(right_scope.paths)}) 可能修改同一文件区域。"
-                        "请重新拆分任务或顺序执行。"
-                    )
-        return ""
+        _ = state, calls
+        return {}
 
     # -- Agent dispatch --------------------------------------------------------
 
@@ -949,7 +910,9 @@ class WriterKit:
         logger.info(f"Agent dispatch: name={name} mode={mode} task={task[:80]}...")
         try:
             result: AgentRunResult = await self._agent_runtime.run(
-                state.session_id, agent_call
+                state.session_id,
+                agent_call,
+                parent_state=state,
             )
         except Exception as exc:
             logger.error(f"Agent runtime error: {exc}", exc_info=True)
@@ -1005,76 +968,6 @@ class WriterKit:
         _ = state
         return _format_tool_result_for_model(call, result)
 
-    def _should_run_completion_verifier(
-        self,
-        state: RuntimeState,
-        turn: KernelTurn,
-        tool_results: list[ToolResult],
-    ) -> bool:
-        if not self._completion_verifier_enabled:
-            return False
-        if not self._work_root:
-            return False
-        if tool_results or turn.tool_calls:
-            return False
-        if not turn.is_natural_stop or turn.decision_hint != "done":
-            return False
-        written_files = state.metadata.get("written_files") if isinstance(state.metadata, dict) else None
-        if not isinstance(written_files, list):
-            return False
-        artifact_suffixes = {
-            ".html",
-            ".htm",
-            ".css",
-            ".js",
-            ".mjs",
-            ".jsx",
-            ".ts",
-            ".tsx",
-            ".py",
-        }
-        artifact_names = {"package.json", "pyproject.toml", "requirements.txt"}
-        for item in written_files:
-            path = Path(str(item).strip())
-            if path.suffix.lower() in artifact_suffixes or path.name.lower() in artifact_names:
-                return True
-        return False
-
-    async def _run_completion_verifier(self, state: RuntimeState) -> VerificationResult:
-        max_attempts = 3
-        attempt = int(state.metadata.get("completion_verifier_attempt", 0)) + 1
-        task = str(state.metadata.get("current_task") or state.metadata.get("original_task") or "")
-        verifier = CompletionVerifier()
-        result = await verifier.verify(self._work_root, task=task)
-        summaries = state.metadata.setdefault("completion_verifier_summaries", [])
-        if isinstance(summaries, list):
-            summaries.append(result.summary)
-            del summaries[:-10]
-        state.metadata["completion_verifier_last_summary"] = result.summary
-        if result.passed:
-            state.metadata.pop("completion_verifier_attempt", None)
-            return VerificationResult(
-                passed=True,
-                required=True,
-                summary=result.summary,
-                attempt=0,
-                max_attempts=max_attempts,
-                metadata={"completion_verifier": "passed"},
-            )
-
-        state.metadata["completion_verifier_attempt"] = attempt
-        repair_prompt = result.repair_prompt(attempt, max_attempts)
-        self._intervention_pending = repair_prompt
-        return VerificationResult(
-            passed=False,
-            required=True,
-            summary=result.summary,
-            repair_prompt=repair_prompt,
-            attempt=attempt,
-            max_attempts=max_attempts,
-            metadata={"completion_verifier": "failed"},
-        )
-
     async def verify(
         self,
         state: RuntimeState,
@@ -1115,9 +1008,6 @@ class WriterKit:
                 attempt=0,
                 max_attempts=3,
             )
-
-        if self._should_run_completion_verifier(state, turn, tool_results):
-            return await self._run_completion_verifier(state)
 
         return verify_written_tool_results(self._work_root, tool_results)
 
@@ -1241,12 +1131,16 @@ async def run_core_kernel(
     sub_agent_llm_client_factory: Callable[[SubAgentDefinition, AgentCall], Awaitable[Any]] | None = None,
     sub_agent_workspace_factory: Callable[[SubAgentDefinition, AgentCall], Awaitable[dict[str, Any] | None]] | None = None,
     cancel_event: asyncio.Event | None = None,
+    user_content: str | list[dict[str, Any]] | None = None,
 ) -> KernelResult:
     """Run Writer through CoreLoopKernel.
 
     Args:
         goal: The user's task / message.
         session_id: Session identifier.
+        user_content: Optional provider-neutral current user content blocks
+            for model-visible multimodal input. ``goal`` remains the plain
+            text task used by Writer state and planning logic.
         llm_client: Writer llm_client (has .chat_full) or Core LLMClient.
             If None, a ``WriterLLMClientAdapter`` must be constructable —
             but for testing you should always pass one explicitly.
@@ -1302,6 +1196,9 @@ async def run_core_kernel(
     # Resolve effective tool_executor
     effective_executor = _resolve_tool_executor(tool_executor, work_root, live_event_callback)
 
+    # Build state store before Kit so sub sessions can reuse the same storage.
+    effective_state_store = state_store or InMemoryRuntimeStateStore()
+
     # Convert history dicts to ChatMessage objects. Keep summary system entries
     # model-visible after capping, then use the remaining slots for the latest
     # conversation turns while preserving original order in the final list.
@@ -1341,9 +1238,6 @@ async def run_core_kernel(
         core_event_callback=live_event_callback,
     )
 
-    # Build state store
-    effective_state_store = state_store or InMemoryRuntimeStateStore()
-
     # Build event sink (collects events in memory)
     event_log = InMemoryEventLog()
 
@@ -1358,7 +1252,7 @@ async def run_core_kernel(
     policy = LoopPolicy(
         context_window_tokens=context_window if context_window > 0 else None,
         compact_trigger_ratio=0.8,
-        parallel_tool_names=("sub_agent",),
+        parallel_tool_names=(),
     )
 
     # Build kernel. WriterKit handles all lifecycle logic: persona, tools,
@@ -1385,6 +1279,7 @@ async def run_core_kernel(
     # Build turn input
     turn_input = RuntimeTurnInput(
         user_message=goal,
+        user_content=user_content,
         metadata={"session_id": session_id},
     )
 

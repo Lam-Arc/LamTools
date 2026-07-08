@@ -7,6 +7,31 @@ from pathlib import Path
 from pydantic_settings import BaseSettings
 
 
+def _default_project_data_dir() -> Path:
+    return Path(__file__).resolve().parents[2] / "data"
+
+
+def _legacy_appdata_dir() -> Path:
+    if platform.system() == "Windows":
+        base = Path(os.environ.get("APPDATA", Path.home()))
+    elif platform.system() == "Darwin":
+        base = Path.home() / "Library" / "Application Support"
+    else:
+        base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+    return base / "LamWriter"
+
+
+def _migrate_legacy_database(target_dir: Path, legacy_dir: Path | None = None) -> bool:
+    legacy_dir = legacy_dir or _legacy_appdata_dir()
+    source = legacy_dir / "lamwriter.db"
+    target = target_dir / "lamwriter.db"
+    if target.exists() or not source.exists():
+        return False
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(source.read_bytes())
+    return True
+
+
 class Settings(BaseSettings):
     # --- App ---
     app_name: str = "LamWriter"
@@ -50,28 +75,18 @@ class Settings(BaseSettings):
     def model_post_init(self, __context) -> None:
         # Data directory
         if not self.data_dir:
-            # 优先使用环境变量指定的路径（便携模式）
-            env_data_dir = os.environ.get("LAMWRITER_DATA_DIR")
-            if env_data_dir:
-                self.data_dir = env_data_dir
-            else:
-                # 原来的逻辑（兼容旧版本）
-                if platform.system() == "Windows":
-                    base = Path(os.environ.get("APPDATA", Path.home()))
-                elif platform.system() == "Darwin":
-                    base = Path.home() / "Library" / "Application Support"
-                else:
-                    base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
-                self.data_dir = str(base / "LamWriter")
-        Path(self.data_dir).mkdir(parents=True, exist_ok=True)
+            self.data_dir = str(_default_project_data_dir())
+        data_dir = Path(self.data_dir)
+        data_dir.mkdir(parents=True, exist_ok=True)
+        _migrate_legacy_database(data_dir)
 
         # Database URL
         if not self.database_url:
-            self.database_url = f"sqlite+aiosqlite:///{Path(self.data_dir) / 'lamwriter.db'}"
+            self.database_url = f"sqlite+aiosqlite:///{data_dir / 'lamwriter.db'}"
 
         # Writer work root: session-specific dir under data, not home
         if not self.writer_work_root:
-            self.writer_work_root = str(Path(self.data_dir) / "workspace")
+            self.writer_work_root = str(data_dir / "workspace")
 
 
 settings = Settings()

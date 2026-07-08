@@ -74,8 +74,6 @@ async def test_writer_kit_resets_original_task_for_each_turn():
         metadata={
             "current_task": "old current task",
             "original_task": "old original task",
-            "completion_verifier_attempt": 2,
-            "completion_verifier_last_summary": "old verifier summary",
         },
     )
 
@@ -83,8 +81,6 @@ async def test_writer_kit_resets_original_task_for_each_turn():
 
     assert state.metadata["current_task"] == "new queued task"
     assert state.metadata["original_task"] == "new queued task"
-    assert "completion_verifier_attempt" not in state.metadata
-    assert "completion_verifier_last_summary" not in state.metadata
 
 
 # ---------------------------------------------------------------------------
@@ -1076,7 +1072,7 @@ class TestRunCoreKernelIntegration:
             )
 
     @pytest.mark.asyncio
-    async def test_sub_agent_uses_same_kernel_loop_with_reduced_tools(self, tmp_path):
+    async def test_sub_agent_uses_same_kernel_loop_with_parent_tools_minus_sub_agent(self, tmp_path):
         (tmp_path / "README.md").write_text("hello from workspace", encoding="utf-8")
         llm = FakeLLMClient()
         llm.add_response(LLMResponse(
@@ -1135,7 +1131,7 @@ class TestRunCoreKernelIntegration:
         }
         assert "read_file" in tool_names
         assert "sub_agent" not in tool_names
-        assert "write_file" not in tool_names
+        assert "write_file" in tool_names
         sub_tool_results = [
             item.result
             for step in result.steps
@@ -1238,7 +1234,7 @@ class TestRunCoreKernelIntegration:
         assert "drift_warning" not in state.metadata
 
     @pytest.mark.asyncio
-    async def test_sub_agent_isolated_file_delivery_waits_for_writer_acceptance(self, tmp_path):
+    async def test_sub_agent_mvp_writes_in_parent_workspace_without_branch_delivery(self, tmp_path):
         subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True, text=True)
         subprocess.run(["git", "config", "user.email", "writer@example.test"], cwd=tmp_path, check=True)
         subprocess.run(["git", "config", "user.name", "Writer Test"], cwd=tmp_path, check=True)
@@ -1291,26 +1287,21 @@ class TestRunCoreKernelIntegration:
         )
 
         assert result.decision == "done"
-        assert not (tmp_path / "worker.txt").exists()
+        assert (tmp_path / "worker.txt").read_text(encoding="utf-8") == "worker delivery\n"
         sub_result = next(
             item.result
             for step in result.steps
             for item in step.tool_steps
             if item.call.name == "sub_agent"
         )
-        delivery = sub_result.metadata["diagnostics"]["workspace_delivery"]
-        assert delivery["ok"] is True
-        assert delivery["merged"] is False
-        assert delivery["needs_acceptance"] is True
-        assert delivery["paths"] == ["worker.txt"]
-        assert delivery["changed_files"] == ["worker.txt"]
-        assert delivery["changed_files_count"] == 1
-        assert sub_result.metadata["workspace_delivery"] == delivery
-        assert sub_result.metadata["changed_files"] == ["worker.txt"]
-        assert sub_result.metadata["changed_files_count"] == 1
-        assert sub_result.metadata["tool_facts"]["branch"].startswith("writer/agent/")
-        assert sub_result.metadata["tool_facts"]["changed_files"] == ["worker.txt"]
-        assert sub_result.metadata["tool_facts"]["changed_files_count"] == 1
+        assert sub_result.status == "ok"
+        assert sub_result.metadata["agent_name"] == "worker"
+        assert sub_result.metadata["agent_index"] == "001"
+        assert sub_result.metadata["sub_session_id"] == "test-sub-agent-delivery-merge:sub:001:worker"
+        assert sub_result.metadata["workspace_delivery"] == {}
+        assert sub_result.metadata["changed_files"] == []
+        assert sub_result.metadata["changed_files_count"] == 0
+        assert "branch" not in sub_result.metadata["tool_facts"]
         tool_calls = sub_result.metadata["tool_calls"]
         write_call = next(item for item in tool_calls if item["name"] == "write_file")
         assert write_call["tool_name"] == "write_file"
@@ -1319,8 +1310,6 @@ class TestRunCoreKernelIntegration:
         assert "worker delivery" in write_call["artifacts"][0]["content"]
         assert "[SubAgent 工作区]" not in (sub_result.content or "")
         assert "待主 Writer 审查后接收或放弃" not in (sub_result.content or "")
-        assert sub_result.metadata["worktree"]
-        assert sub_result.metadata["branch"].startswith("writer/agent/")
         assert "worker.txt" in (sub_result.content or "")
         tool_messages = [
             message.content
@@ -1329,11 +1318,10 @@ class TestRunCoreKernelIntegration:
             if message.role == "tool" and message.name == "sub_agent"
         ]
         assert any("[系统事实]" in content for content in tool_messages)
-        assert any('"changed_files_count": 1' in content for content in tool_messages)
-        assert any('"changed_files": [\n    "worker.txt"\n  ]' in content for content in tool_messages)
+        assert any('"agent_index": "001"' in content for content in tool_messages)
 
     @pytest.mark.asyncio
-    async def test_sub_agent_blocked_write_scope_returns_failed_tool_result(self, tmp_path):
+    async def test_sub_agent_without_write_scope_runs_as_mvp_tool_result(self, tmp_path):
         llm = FakeLLMClient()
         llm.add_response(LLMResponse(
             content="",
@@ -1351,7 +1339,8 @@ class TestRunCoreKernelIntegration:
             ],
             finish_reason="tool_calls",
         ))
-        llm.add_response(LLMResponse(content="子代理未获写入范围，不能视为完成。", finish_reason="stop"))
+        llm.add_response(LLMResponse(content="子代理完成。", finish_reason="stop"))
+        llm.add_response(LLMResponse(content="主流程收到结果。", finish_reason="stop"))
 
         result = await run_core_kernel(
             goal="派发 worker 创建文件",
@@ -1366,13 +1355,12 @@ class TestRunCoreKernelIntegration:
             for item in step.tool_steps
             if item.call.name == "sub_agent"
         )
-        assert sub_result.status == "failed"
-        assert "write_scope" in (sub_result.error or "")
+        assert sub_result.status == "ok"
+        assert "子代理完成" in (sub_result.content or "")
+        assert "write_scope" not in (sub_result.error or "")
 
     @pytest.mark.asyncio
-    async def test_completion_verifier_blocks_javascript_syntax_before_done(self, tmp_path):
-        if not shutil.which("node"):
-            pytest.skip("Node.js is unavailable in this environment")
+    async def test_natural_final_reply_does_not_run_completion_verifier(self, tmp_path):
         llm = FakeLLMClient()
         llm.add_response(LLMResponse(
             content="",
@@ -1386,32 +1374,20 @@ class TestRunCoreKernelIntegration:
             finish_reason="tool_calls",
         ))
         llm.add_response(LLMResponse(content="已经完成。", finish_reason="stop"))
-        llm.add_response(LLMResponse(
-            content="",
-            tool_calls=[
-                LLMToolCall(
-                    id="write-fixed-js",
-                    name="write_file",
-                    arguments={"path": "app.js", "content": "function fixed() {\n  return 1;\n}\n"},
-                )
-            ],
-            finish_reason="tool_calls",
-        ))
-        llm.add_response(LLMResponse(content="已经修复并完成。", finish_reason="stop"))
 
         result = await run_core_kernel(
             goal="开发一个 JavaScript 工具",
-            session_id="test-js-completion-verifier",
+            session_id="test-no-completion-verifier",
             llm_client=llm,
             work_root=str(tmp_path),
         )
 
         assert result.decision == "done"
-        assert result.message == "已经修复并完成。"
-        assert "function fixed()" in (tmp_path / "app.js").read_text(encoding="utf-8")
+        assert result.message == "已经完成。"
+        assert llm.call_count == 2
+        assert "function broken" in (tmp_path / "app.js").read_text(encoding="utf-8")
         summaries = [step.verification.summary for step in result.steps if step.verification]
-        assert any("javascript_syntax: failed" in summary for summary in summaries)
-        assert any("javascript_syntax: passed" in summary for summary in summaries)
+        assert summaries == ["ok", "ok"]
 
     @pytest.mark.asyncio
     async def test_many_tool_rounds_continue_until_final_text(self):
@@ -2543,18 +2519,124 @@ class TestKernelResultMetadataObservability:
             for event in events
             if event.get("event_name") == "runtime.part" and event.get("part_type") == "tool_call"
         )
+        input_delta = next(
+            event
+            for event in events
+            if event.get("event_name") == "runtime.part" and event.get("part_type") == "tool_input_delta"
+        )
         started = next(event for event in events if event.get("event_name") == "runtime.tool.started")
         part_index = events.index(tool_part)
+        delta_index = events.index(input_delta)
         started_index = events.index(started)
 
         assert part_index < started_index
+        assert part_index < delta_index < started_index
         assert tool_part["status"] == "running"
         assert tool_part["tool_name"] == "write_file"
         assert tool_part["call_id"] == "functions.write_file:0"
+        assert input_delta["tool_name"] == "write_file"
+        assert input_delta["call_id"] == "functions.write_file:0"
+        assert "content" in input_delta["arguments_text"]
+        assert all(
+            not (
+                isinstance(event.get("tool_args"), dict)
+                and isinstance(event["tool_args"].get("content"), str)
+                and "chars streaming" in event["tool_args"]["content"]
+            )
+            for event in events
+            if event.get("event_name") == "runtime.part" and event.get("part_type") == "tool_call"
+        )
         assert tool_part["tool_args"]["path"] == "index.html"
-        assert tool_part["tool_args"]["content"] == {"chars": 13, "preview": "<html></html>"}
+        assert "content" not in tool_part["tool_args"]
         assert "raw_arguments" not in tool_part
         assert started["call_id"] == "functions.write_file:0"
+
+    @pytest.mark.asyncio
+    async def test_final_tool_call_arguments_refresh_streamed_input_preview(self):
+        """Final tool arguments refresh previews when deltas only exposed the first char."""
+
+        final_content = "# Title\n\nThe final README content is available only on the done event.\n"
+
+        class FinalArgumentsStreamingClient:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def complete(self, request: LLMRequest) -> LLMResponse:
+                raise AssertionError("streaming path should be used")
+
+            async def stream(self, request: LLMRequest):
+                self.calls += 1
+                if self.calls > 1:
+                    yield LLMStreamEvent(kind="content_delta", content="Done")
+                    yield LLMStreamEvent(kind="done", metadata={"finish_reason": "stop"})
+                    return
+
+                yield LLMStreamEvent(
+                    kind="tool_call_delta",
+                    metadata={
+                        "tool_calls_delta": [
+                            {
+                                "index": 0,
+                                "type": "function",
+                                "function": {
+                                    "name": "write_file",
+                                    "arguments": "{\"path\":\"README.md\",\"content\":\"#",
+                                },
+                            }
+                        ]
+                    },
+                )
+                yield LLMStreamEvent(
+                    kind="done",
+                    tool_calls=[
+                        LLMToolCall(
+                            id="",
+                            name="write_file",
+                            arguments={"path": "README.md", "content": final_content},
+                            metadata={
+                                "raw_arguments": json.dumps(
+                                    {"path": "README.md", "content": final_content},
+                                    ensure_ascii=False,
+                                )
+                            },
+                        )
+                    ],
+                    metadata={"finish_reason": "tool_calls"},
+                )
+
+        result = await run_core_kernel(
+            goal="Write the README",
+            session_id="test-obs-final-tool-input-preview",
+            llm_client=FinalArgumentsStreamingClient(),
+            tool_executor=lambda call: ToolResult(
+                call_id=call.id,
+                name=call.name,
+                status="ok",
+                content="Wrote README.md",
+            ),
+        )
+
+        events = result.metadata["core_events"]
+        input_deltas = [
+            event
+            for event in events
+            if event.get("event_name") == "runtime.part" and event.get("part_type") == "tool_input_delta"
+        ]
+        started = next(event for event in events if event.get("event_name") == "runtime.tool.started")
+
+        assert result.decision == "done"
+        assert any(
+            event.get("event_name") == "runtime.part" and event.get("part_type") == "tool_call"
+            for event in events
+        )
+        event_summary = [
+            (event.get("event_name"), event.get("part_type"), event.get("tool_name"), event.get("detail"))
+            for event in events
+        ]
+        assert [event["call_id"] for event in input_deltas] == ["functions.write_file:0"], event_summary
+        assert json.loads(input_deltas[0]["arguments_text"])["content"] == final_content
+        assert events.index(input_deltas[0]) < events.index(started)
+        assert result.steps[0].tool_steps[0].call.arguments["content"] == final_content
 
     @pytest.mark.asyncio
     async def test_text_only_steps_count(self):
@@ -4620,6 +4702,31 @@ class TestMultiTurnHistory:
         assert messages[2].role == "user" and messages[2].content == "Second question"
         assert messages[3].role == "assistant" and messages[3].content == "Second answer"
         assert messages[4].role == "user" and messages[4].content == "Third question"
+
+    @pytest.mark.asyncio
+    async def test_current_user_content_blocks_are_passed_to_llm_request(self):
+        llm = FakeLLMClient()
+        llm.add_response(LLMResponse(content="I can see it.", finish_reason="stop"))
+        user_content = [
+            {"type": "text", "text": "Describe the screenshot."},
+            {
+                "type": "image_url",
+                "image_url": {"url": "data:image/png;base64,AA==", "detail": "auto"},
+            },
+        ]
+
+        result = await run_core_kernel(
+            goal="Describe the screenshot.",
+            user_content=user_content,
+            session_id="test-current-image-content",
+            llm_client=llm,
+        )
+
+        assert result.decision == "done"
+        assert llm.last_request is not None
+        messages = _conversation_messages(llm.last_request.messages)
+        assert messages[-1].role == "user"
+        assert messages[-1].content == user_content
 
     @pytest.mark.asyncio
     async def test_current_user_message_not_duplicated(self):

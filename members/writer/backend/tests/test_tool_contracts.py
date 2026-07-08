@@ -197,6 +197,17 @@ def test_advertised_tool_input_schemas_match_declarative_specs():
         )
 
 
+def test_sub_agent_tool_schema_is_mvp_minimal():
+    spec = next(spec for spec in WRITER_TOOL_SPECS if spec["name"] == "sub_agent")
+    schema = spec["input_schema"]
+    properties = schema["properties"]
+
+    assert set(properties) == {"task", "agent", "model", "expected_output"}
+    assert "options" not in properties
+    assert "write_scope" not in str(schema)
+    assert "isolated" not in str(schema)
+
+
 def test_every_tool_spec_has_category_display_and_output_contract():
     valid_categories = {
         "file_read",
@@ -543,7 +554,9 @@ async def test_agent_tool_summary_includes_standard_agent_metadata(tmp_path):
     summary = result.metadata["tool_results_summary"]
     agent_summary = next(item for item in summary if item["tool_name"] == "sub_agent")
     metadata = agent_summary["metadata"]
-    assert metadata["agent_name"] == "default"
+    assert metadata["agent_name"] == "sub"
+    assert metadata["agent_index"] == "001"
+    assert metadata["sub_session_id"] == "agent-standard-metadata:sub:001:sub"
     assert metadata["runtime_agent"] == "sub"
     assert metadata["role"] == "review"
     assert metadata["task"] == "Review the project"
@@ -558,7 +571,7 @@ async def test_agent_tool_summary_includes_standard_agent_metadata(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_parallel_sub_agent_tool_calls_preflight_blocks_overlapping_write_scope(tmp_path):
+async def test_sub_agent_preflight_does_not_add_mvp_parallel_locking(tmp_path):
     kit = WriterKit(work_root=str(tmp_path), agent_llm_client=_FakeAgentLLM())
     calls = [
         ToolCall(
@@ -585,9 +598,7 @@ async def test_parallel_sub_agent_tool_calls_preflight_blocks_overlapping_write_
 
     blocked = await kit.preflight_tool_calls(RuntimeState(session_id="preflight"), calls)
 
-    assert set(blocked) == {"call-agent-a", "call-agent-b"}
-    assert all(result.status == "failed" for result in blocked.values())
-    assert all("范围冲突" in (result.error or "") for result in blocked.values())
+    assert blocked == {}
 
 
 @pytest.mark.asyncio

@@ -1,0 +1,35 @@
+<h1 class="page-title"><%= post ? '编辑文章' : '新建文章' %></h1>
+
+<form action="<%= post ? '/admin/posts/' + post.id : '/admin/posts' %>" method="POST" class="post-form">
+  <div class="form-group">
+    <label for="title">标题</label>
+    <input type="text" id="title" name="title" value="<%= post ? post.title : '' %>" required>
+  </div>
+
+  <div class="form-group">
+    <label for="slug">Slug（可选，留空将自动生成）</label>
+    <input type="text" id="slug" name="slug" value="<%= post ? post.slug : '' %>">
+  </div>
+
+  <div class="form-group">
+    <label for="summary">摘要</label>
+    <textarea id="summary" name="summary" rows="3"><%= post ? post.summary : '' %></textarea>
+  </div>
+
+  <div class="form-group">
+    <label for="content">内容（支持 Markdown）</label>
+    <textarea id="content" name="content" rows="15" required><%= post ? post.content : '' %></textarea>
+  </div>
+
+  <div class="form-group checkbox-group">
+    <label>
+      <input type="checkbox" name="published" <%= post && post.published ? 'checked' : '' %>>
+      发布文章
+    </label>
+  </div>
+
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary">保存</button>
+    <a href="/admin" class="btn btn-secondary">取消</a>
+  </div>
+</form>

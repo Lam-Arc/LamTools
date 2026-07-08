@@ -11,7 +11,8 @@
   },
   "scripts": {
     "dev": "vite --port 6174",
-    "test": "node scripts/check-app-server-schema.mjs && node --test --experimental-strip-types --experimental-transform-types --experimental-specifier-resolution=node tests/appServer/*.test.ts",
+    "lint": "vue-tsc -b --noEmit",
+    "test": "node scripts/check-app-server-schema.mjs && node --test --experimental-strip-types --experimental-transform-types --experimental-specifier-resolution=node tests/appServer/*.test.ts tests/runtime/*.test.ts",
     "build": "vue-tsc -b && vite build",
     "e2e:app-server": "node scripts/writer-app-server-e2e.mjs",
     "e2e:app-server:approval": "node scripts/writer-app-server-approval-e2e.mjs",

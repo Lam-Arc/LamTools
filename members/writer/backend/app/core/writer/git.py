@@ -127,6 +127,12 @@ def _exception_summary(exc: BaseException) -> str:
     return type(exc).__name__
 
 
+def _windows_git_creationflags() -> int:
+    if sys.platform != "win32":
+        return 0
+    return getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
 def _run_git_blocking(
     cwd: str | None,
     args: list[str],
@@ -136,20 +142,20 @@ def _run_git_blocking(
     extra_env: dict[str, str] | None = None,
 ) -> GitCommandResult:
     try:
-        kwargs: dict[str, Any] = dict(
-            args=args,
-            cwd=cwd,
-            env=_git_env(extra_env),
-            input=stdin,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            stdin=None if stdin is not None else subprocess.DEVNULL,
-            encoding="utf-8",
-            errors="replace",
-            check=False,
-        )
+        kwargs: dict[str, Any] = {
+            "args": args,
+            "cwd": cwd,
+            "env": _git_env(extra_env),
+            "input": stdin,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
+            "stdin": None if stdin is not None else subprocess.DEVNULL,
+            "encoding": "utf-8",
+            "errors": "replace",
+            "check": False,
+        }
         if sys.platform == "win32":
-            kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            kwargs["creationflags"] = _windows_git_creationflags()
         completed = subprocess.run(**kwargs)
         out = completed.stdout or ""
         err = completed.stderr or ""

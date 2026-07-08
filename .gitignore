@@ -52,6 +52,7 @@ opencode*.log
 tmp/
 
 # Desktop build outputs
+LamWriter-*.zip
 members/writer/frontend/src-tauri/target/
 members/writer/frontend/src-tauri/gen/
 members/writer/frontend/.electron-app-stage/

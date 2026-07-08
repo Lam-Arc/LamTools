@@ -1,0 +1,45 @@
+<div class="page-header">
+  <h1>最新文章</h1>
+  <p>分享技术心得与生活感悟</p>
+</div>
+
+<% if (typeof keyword !== 'undefined' && keyword) { %>
+  <div class="search-info">
+    <p>搜索 "<%= keyword %>" 的结果：</p>
+    <a href="/" class="clear-search">清除搜索</a>
+  </div>
+<% } %>
+
+<% if (posts.length === 0) { %>
+  <div class="empty-state">
+    <p>暂无文章，<a href="/admin/new">去写一篇</a>。</p>
+  </div>
+<% } else { %>
+  <div class="post-list">
+    <% posts.forEach(function(post) { %>
+      <article class="post-card">
+        <h2><a href="/post/<%= post.slug %>"><%- post.title %></a></h2>
+        <p class="post-meta">
+          <span><%= post.created_at %></span>
+          <span>by <%= post.author %></span>
+        </p>
+        <p class="post-summary"><%- post.summary %></p>
+        <a href="/post/<%= post.slug %>" class="read-more">阅读全文 &rarr;</a>
+      </article>
+    <% }) %>
+  </div>
+
+  <% if (pagination && pagination.totalPages > 1) { %>
+    <div class="pagination">
+      <% if (pagination.page > 1) { %>
+        <a href="/?page=<%= pagination.page - 1 %>" class="btn btn-secondary">&larr; 上一页</a>
+      <% } %>
+      
+      <span class="page-info">第 <%= pagination.page %> 页 / 共 <%= pagination.totalPages %> 页</span>
+      
+      <% if (pagination.page < pagination.totalPages) { %>
+        <a href="/?page=<%= pagination.page + 1 %>" class="btn btn-secondary">下一页 &rarr;</a>
+      <% } %>
+    </div>
+  <% } %>
+<% } %>

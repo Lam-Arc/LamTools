@@ -3,7 +3,7 @@ from app.core.writer.core_kernel_adapter import WriterKit
 from lamtools_core.runtime import RuntimeState, RuntimeTurnInput
 
 async def main():
-    kit = WriterKit(work_root="E:\\test", completion_verifier_enabled=False)
+    kit = WriterKit(work_root="E:\\test")
     state = RuntimeState(session_id="test")
     context = await kit.build_context(
         state,

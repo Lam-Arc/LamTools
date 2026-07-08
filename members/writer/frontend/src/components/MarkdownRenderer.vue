@@ -329,8 +329,8 @@ onMounted(async () => {
 .markdown-body :deep(blockquote) {
   margin: 6px 0;
   padding: 6px 14px;
-  border-left: 3px solid rgba(255, 255, 255, 0.2);
-  color: rgba(255, 255, 255, 0.6);
+  border-left: 3px solid color-mix(in srgb, var(--theme-main-text, var(--text, currentColor)) 22%, transparent);
+  color: color-mix(in srgb, var(--theme-main-text, var(--text, currentColor)) 76%, transparent);
 }
 
 /* Links */

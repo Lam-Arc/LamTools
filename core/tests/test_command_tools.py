@@ -15,6 +15,7 @@ from lamtools_core.tool.command import (
     run_subprocess,
     validate_command_paths,
 )
+import lamtools_core.tool.command as command_module
 
 
 def test_command_execution_defaults_are_tool_friendly():
@@ -23,6 +24,17 @@ def test_command_execution_defaults_are_tool_friendly():
     assert execution.stdout == ""
     assert execution.stderr == ""
     assert execution.metadata == {}
+
+
+def test_windows_command_creationflags_hide_console(monkeypatch):
+    monkeypatch.setattr(command_module.sys, "platform", "win32")
+    monkeypatch.setattr(command_module.subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200, raising=False)
+    monkeypatch.setattr(command_module.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+
+    flags = command_module._windows_command_creationflags()
+
+    assert flags & 0x200
+    assert flags & 0x08000000
 
 
 def test_format_command_output_keeps_stdout_and_stderr_separate():

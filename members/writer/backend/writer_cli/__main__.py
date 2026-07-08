@@ -854,6 +854,7 @@ async def _stream_chat(
             work_root=args.work_root or "",
             mode=args.mode,
             model_id=getattr(args, "model_id", None),
+            shallow_thinking_enabled=bool(getattr(args, "shallow_thinking", False)),
         )
         async for event in client.events():
             if _is_failed_event(event):
@@ -980,6 +981,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--work-root", "--project", dest="work_root", default="")
     run_parser.add_argument("--mode", default=DEFAULT_MODE)
     run_parser.add_argument("--model-id", dest="model_id", default=None, help="Override the resolved model (per-request switch)")
+    run_parser.add_argument("--shallow-thinking", action="store_true", help="Enable prompt-based shallow thinking for this turn")
     run_parser.add_argument("--raw", action="store_true")
     run_parser.add_argument("--verbose", action="store_true", help="Show additional app-server details")
     run_parser.add_argument("--heartbeat-interval", type=int, default=30, help="Seconds between wait heartbeat lines")
@@ -992,6 +994,7 @@ def build_parser() -> argparse.ArgumentParser:
     resume_parser.add_argument("message", nargs="+")
     resume_parser.add_argument("--work-root", "--project", dest="work_root", default="")
     resume_parser.add_argument("--mode", default=DEFAULT_MODE)
+    resume_parser.add_argument("--shallow-thinking", action="store_true", help="Enable prompt-based shallow thinking for this turn")
     resume_parser.add_argument("--raw", action="store_true")
     resume_parser.add_argument("--verbose", action="store_true", help="Show additional app-server details")
     resume_parser.add_argument("--heartbeat-interval", type=int, default=30, help="Seconds between wait heartbeat lines")

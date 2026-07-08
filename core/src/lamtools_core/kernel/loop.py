@@ -30,12 +30,18 @@ from lamtools_core.context_compaction import (
 from lamtools_core.event import CoreEvent, EventCategory, EventSink
 from lamtools_core.llm import ChatMessage, LLMClient, LLMRequest, LLMResponse, LLMStreamEvent, LLMToolCall
 from lamtools_core.llm.helpers import merge_tool_call_deltas, resolve_tool_calls
-from lamtools_core.llm.policy import BackoffStrategy, RetryPolicy
+from lamtools_core.llm.policy import RetryPolicy
+from lamtools_core.llm.retry import (
+    ModelRetryEvent,
+    ModelRetryExhausted,
+    classify_model_error,
+    complete_with_retry,
+)
 from lamtools_core.runtime import RuntimeState, RuntimeStateStore, RuntimeToolStep, RuntimeTurnInput
 from lamtools_core.tokens import estimate_message_tokens, estimate_text_tokens
 from lamtools_core.tool import ToolCall, ToolResult
 
-from .errors import KernelError, ModelCallError, RateLimitError, TokenOverflowError
+from .errors import KernelError, ModelCallError, TokenOverflowError
 from .kit import RuntimeKit
 from .policy import LoopPolicy
 from .state import KernelResult, KernelStep, KernelTurn, LoopDecision, LoopPhase, VerificationResult
@@ -170,8 +176,13 @@ class CoreLoopKernel:
 
         # 4. Initialize history with user input
         history: list[ChatMessage] = []
-        if turn_input.user_message:
-            history.append(ChatMessage(role="user", content=turn_input.user_message))
+        current_user_content = (
+            turn_input.user_content
+            if turn_input.user_content is not None
+            else turn_input.user_message
+        )
+        if current_user_content:
+            history.append(ChatMessage(role="user", content=current_user_content))
 
         steps: list[KernelStep] = []
         latest_message = ""
@@ -234,7 +245,17 @@ class CoreLoopKernel:
                         run_id=state.run_id,
                         tags=["usage"],
                     ))
-
+                if response.thinking and not streamed_response:
+                    await self._emit_stream_part(
+                        state,
+                        part_id=f"{state.run_id}:response-{index}:reasoning",
+                        part_type="reasoning",
+                        status="completed",
+                        label="思考",
+                        content=response.thinking,
+                        response_index=index,
+                        raw=response.raw,
+                    )
                 # 5.5 Parse model output
                 turn = await self.kit.parse_model_output(state, response)
                 step.turn = turn
@@ -510,6 +531,8 @@ class CoreLoopKernel:
         accumulated = ""
         thinking = ""
         pending_tool_calls: dict[int, dict] = {}
+        emitted_tool_call_indexes: set[int] = set()
+        emitted_tool_input_arguments: dict[int, str] = {}
         try:
             async for event in stream:
                 if event.kind == "content_delta" and event.content:
@@ -554,6 +577,11 @@ class CoreLoopKernel:
                     if tc_delta:
                         pending_tool_calls = merge_tool_call_deltas(pending_tool_calls, {"tool_calls": tc_delta})
                         for tool_index in sorted(pending_tool_calls):
+                            if tool_index in emitted_tool_call_indexes:
+                                continue
+                            fn = pending_tool_calls[tool_index].get("function")
+                            if not isinstance(fn, dict) or not str(fn.get("name") or "").strip():
+                                continue
                             await self._emit_stream_tool_call_part(
                                 state,
                                 response_index=response_index,
@@ -561,6 +589,30 @@ class CoreLoopKernel:
                                 accumulated_call=pending_tool_calls[tool_index],
                                 raw=event.raw,
                             )
+                            emitted_tool_call_indexes.add(tool_index)
+                        incoming_tool_deltas = tc_delta if isinstance(tc_delta, list) else [tc_delta]
+                        for incoming_tool_delta in incoming_tool_deltas:
+                            if not isinstance(incoming_tool_delta, dict):
+                                continue
+                            fn_delta = incoming_tool_delta.get("function")
+                            fn_delta = fn_delta if isinstance(fn_delta, dict) else {}
+                            argument_delta = fn_delta.get("arguments")
+                            if not argument_delta:
+                                continue
+                            tool_index = int(incoming_tool_delta.get("index") or 0)
+                            accumulated_call = pending_tool_calls.get(tool_index)
+                            if accumulated_call:
+                                await self._emit_stream_tool_input_delta_part(
+                                    state,
+                                    response_index=response_index,
+                                    tool_index=tool_index,
+                                    accumulated_call=accumulated_call,
+                                    delta=str(argument_delta),
+                                    raw=event.raw,
+                                )
+                                fn = accumulated_call.get("function") if isinstance(accumulated_call, dict) else {}
+                                fn = fn if isinstance(fn, dict) else {}
+                                emitted_tool_input_arguments[tool_index] = str(fn.get("arguments") or "")
                 elif event.kind == "done":
                     # Prefer tool_calls from the done event (some providers
                     # include complete tool_calls in the final chunk);
@@ -571,6 +623,13 @@ class CoreLoopKernel:
                     if not accumulated and not thinking and not tool_calls:
                         await self._emit_stream_fallback(state, "流式响应未返回内容")
                         return None
+                    await self._emit_final_stream_tool_input_delta_parts(
+                        state,
+                        response_index=response_index,
+                        tool_calls=tool_calls,
+                        emitted_arguments=emitted_tool_input_arguments,
+                        raw=event.raw,
+                    )
                     # Emit a terminal delta so members can format the done chunk
                     finish_reason = event.metadata.get("finish_reason", "stop") if event.metadata else "stop"
                     usage_dict = event.usage.to_dict() if event.usage else None
@@ -594,6 +653,7 @@ class CoreLoopKernel:
                         tool_calls=tool_calls,
                         usage=event.usage,
                         finish_reason=finish_reason,
+                        metadata=event.metadata or {},
                     )
                 elif event.kind == "error":
                     await self._emit_stream_fallback(state, event.error or "stream error")
@@ -607,6 +667,12 @@ class CoreLoopKernel:
         if not accumulated and not thinking and not merged_tool_calls:
             await self._emit_stream_fallback(state, "流式响应未返回内容")
             return None
+        await self._emit_final_stream_tool_input_delta_parts(
+            state,
+            response_index=response_index,
+            tool_calls=merged_tool_calls,
+            emitted_arguments=emitted_tool_input_arguments,
+        )
         return LLMResponse(
             content=accumulated,
             thinking=thinking,
@@ -628,7 +694,8 @@ class CoreLoopKernel:
         tool_name: str | None = None,
         call_id: str | None = None,
         tool_args: dict[str, Any] | None = None,
-        raw_arguments: str | None = None,
+        delta: str | None = None,
+        arguments_text: str | None = None,
     ) -> None:
         payload: dict[str, Any] = {
             "part_id": part_id,
@@ -647,8 +714,10 @@ class CoreLoopKernel:
             payload["tool_call_id"] = call_id
         if tool_args is not None:
             payload["tool_args"] = tool_args
-        if raw_arguments is not None:
-            payload["raw_arguments"] = raw_arguments
+        if delta is not None:
+            payload["delta"] = delta
+        if arguments_text is not None:
+            payload["arguments_text"] = arguments_text
         if raw is not None:
             payload["raw"] = raw
         await self.event_sink.emit(CoreEvent(
@@ -692,8 +761,85 @@ class CoreLoopKernel:
             tool_name=tool_name,
             call_id=call_id,
             tool_args=tool_args,
-            raw_arguments=raw_arguments[:4000],
         )
+
+    async def _emit_stream_tool_input_delta_part(
+        self,
+        state: RuntimeState,
+        *,
+        response_index: int,
+        tool_index: int,
+        accumulated_call: dict[str, Any],
+        delta: str,
+        raw: Any = None,
+    ) -> None:
+        fn = accumulated_call.get("function") if isinstance(accumulated_call, dict) else {}
+        fn = fn if isinstance(fn, dict) else {}
+        tool_name = str(fn.get("name") or "").strip()
+        arguments_text = str(fn.get("arguments") or "")
+        call_id = str(accumulated_call.get("id") or "").strip()
+        if not call_id:
+            call_id = f"functions.{tool_name or 'invalid_tool_call'}:{tool_index}"
+        await self._emit_stream_part(
+            state,
+            part_id=f"{state.run_id}:response-{response_index}:tool-call-{tool_index}:input",
+            part_type="tool_input_delta",
+            status="running",
+            label="工具输入生成中",
+            content="",
+            detail=f"参数生成中：{len(arguments_text)} chars",
+            response_index=response_index,
+            raw=raw,
+            tool_name=tool_name,
+            call_id=call_id,
+            delta=delta,
+            arguments_text=arguments_text,
+        )
+
+    async def _emit_final_stream_tool_input_delta_parts(
+        self,
+        state: RuntimeState,
+        *,
+        response_index: int,
+        tool_calls: list[LLMToolCall],
+        emitted_arguments: dict[int, str],
+        raw: Any = None,
+    ) -> None:
+        for tool_index, call in enumerate(tool_calls):
+            tool_name = str(call.name or "").strip()
+            if tool_name not in {"write_file", "edit_file"}:
+                continue
+            arguments_text = self._tool_call_arguments_text(call)
+            if not arguments_text or emitted_arguments.get(tool_index) == arguments_text:
+                continue
+            accumulated_call = {
+                "id": str(call.id or "").strip(),
+                "type": "function",
+                "function": {
+                    "name": tool_name,
+                    "arguments": arguments_text,
+                },
+            }
+            await self._emit_stream_tool_input_delta_part(
+                state,
+                response_index=response_index,
+                tool_index=tool_index,
+                accumulated_call=accumulated_call,
+                delta="",
+                raw=raw,
+            )
+            emitted_arguments[tool_index] = arguments_text
+
+    @staticmethod
+    def _tool_call_arguments_text(call: LLMToolCall) -> str:
+        metadata = call.metadata if isinstance(call.metadata, dict) else {}
+        raw_arguments = metadata.get("raw_arguments")
+        if isinstance(raw_arguments, str) and raw_arguments:
+            return raw_arguments
+        arguments = call.arguments if isinstance(call.arguments, dict) else {}
+        if not arguments:
+            return ""
+        return json.dumps(arguments, ensure_ascii=False)
 
     @staticmethod
     def _summarize_tool_arguments(raw_arguments: str) -> dict[str, Any]:
@@ -714,8 +860,6 @@ class CoreLoopKernel:
             match = re.search(rf'"{re.escape(key)}"\s*:\s*"([^"]*)', raw_arguments)
             if match:
                 summary[key] = match.group(1)[:500]
-        if '"content"' in raw_arguments:
-            summary["content"] = f"{len(raw_arguments)} chars streaming"
         return summary
 
     @staticmethod
@@ -783,45 +927,45 @@ class CoreLoopKernel:
           fall back to retry_policy backoff.
         - Other errors: retry per retry_policy.
         """
-        last_error: Exception | None = None
-        for attempt in range(self.policy.model_retries):
-            try:
-                call = self.llm_client.complete(request)
-                timeout = request.timeout if request.timeout is not None else self.policy.model_timeout_seconds
-                if timeout is not None and timeout > 0:
-                    return await asyncio.wait_for(call, timeout=timeout)
-                return await call
-            except Exception as e:
-                last_error = e
-                kind = self._classify_model_error(e)
-                # Token overflow is not retryable
-                if kind == "token_overflow":
-                    raise TokenOverflowError(
-                        f"Model context window exceeded: {e}"
-                    ) from e
-                # Last attempt → stop retrying
-                if attempt >= self.policy.model_retries - 1:
-                    break
-                # Rate limit → honor Retry-After if available
-                if kind == "rate_limit":
-                    retry_after = getattr(e, "retry_after", None)
-                    if retry_after is not None and retry_after > 0:
-                        delay = float(retry_after)
-                    else:
-                        delay = self._retry_delay(attempt)
-                else:
-                    delay = self._retry_delay(attempt)
-                await self._emit_model_retry(
+        try:
+            return await complete_with_retry(
+                self.llm_client,
+                request,
+                max_attempts=self.policy.model_retries,
+                timeout_seconds=self.policy.model_timeout_seconds,
+                retry_policy=self.retry_policy,
+                on_retry=lambda retry: self._emit_model_retry_from_event(
+                    retry,
                     state=state,
-                    attempt=attempt + 1,
-                    max_retries=max(0, self.policy.model_retries - 1),
-                    delay_seconds=delay,
-                    kind=kind,
-                    error=e,
                     response_index=response_index,
-                )
-                await asyncio.sleep(delay)
-        raise ModelCallError(f"Model call failed after {self.policy.model_retries} attempts: {last_error}")
+                ),
+                sleep=asyncio.sleep,
+            )
+        except ModelRetryExhausted as exc:
+            raise ModelCallError(str(exc)) from exc.last_error
+        except Exception as exc:
+            if classify_model_error(exc) == "token_overflow":
+                raise TokenOverflowError(
+                    f"Model context window exceeded: {exc}"
+                ) from exc
+            raise
+
+    async def _emit_model_retry_from_event(
+        self,
+        retry: ModelRetryEvent,
+        *,
+        state: RuntimeState | None,
+        response_index: int | None,
+    ) -> None:
+        await self._emit_model_retry(
+            state=state,
+            attempt=retry.attempt,
+            max_retries=retry.max_retries,
+            delay_seconds=retry.delay_seconds,
+            kind=retry.kind,
+            error=retry.error,
+            response_index=response_index,
+        )
 
     async def _emit_model_retry(
         self,
@@ -858,52 +1002,6 @@ class CoreLoopKernel:
             run_id=state.run_id,
             tags=["progress"],
         ))
-
-    @staticmethod
-    def _classify_model_error(exc: Exception) -> str:
-        """Classify a model call exception into token_overflow / rate_limit / retryable.
-
-        Checks exception type first (KernelError subclasses), then falls back
-        to substring matching on the message for provider-native exceptions.
-        """
-        if isinstance(exc, TokenOverflowError):
-            return "token_overflow"
-        if isinstance(exc, RateLimitError):
-            return "rate_limit"
-        msg = str(exc).lower()
-        # Token overflow indicators (OpenAI: "maximum context length")
-        if any(s in msg for s in (
-            "context length", "context window", "maximum context",
-            "too long", "token limit", "max_tokens",
-        )):
-            return "token_overflow"
-        # Rate limit indicators
-        if any(s in msg for s in ("rate limit", "rate_limit", "429", "too many requests")):
-            return "rate_limit"
-        return "retryable"
-
-    def _retry_delay(self, attempt: int) -> float:
-        rp = self.retry_policy
-        use_staged = rp.backoff_strategy == BackoffStrategy.EXPONENTIAL and bool(rp.staged_delay_seconds)
-        if use_staged and attempt < len(rp.staged_delay_seconds):
-            return min(float(rp.staged_delay_seconds[attempt]), rp.max_delay_seconds)
-        base = rp.initial_delay_seconds
-        effective_attempt = attempt - len(rp.staged_delay_seconds) if use_staged else attempt
-        if rp.backoff_strategy == BackoffStrategy.FIXED:
-            delay = base
-        elif rp.backoff_strategy == BackoffStrategy.LINEAR:
-            delay = base * (effective_attempt + 1)
-        elif use_staged:
-            staged_base = max(base, float(rp.staged_delay_seconds[-1]))
-            delay = staged_base * (2 ** (effective_attempt + 1))
-        else:
-            delay = base * (2 ** effective_attempt)
-        if delay > rp.max_delay_seconds:
-            delay = rp.max_delay_seconds
-        if rp.jitter:
-            import random
-            delay = delay * (0.5 + random.random())
-        return delay
 
     async def _execute_tool(self, state: RuntimeState, call: ToolCall) -> ToolResult:
         """Execute a single tool call via Kit.
@@ -1037,6 +1135,22 @@ class CoreLoopKernel:
             finally:
                 request.messages = original_messages
 
+        streamed_summary = ""
+
+        async def on_compaction_delta(delta: str) -> None:
+            nonlocal streamed_summary
+            if not delta:
+                return
+            streamed_summary += delta
+            await self._emit_stream_part(
+                state,
+                part_id=f"{state.run_id}:context-compaction",
+                part_type="compaction",
+                status="running",
+                label="正在压缩",
+                content=streamed_summary[:20_000],
+            )
+
         result = await compact_context(
             ContextCompactionRequest(
                 trigger="auto",
@@ -1046,6 +1160,15 @@ class CoreLoopKernel:
                 timeout=request.timeout,
                 target_tokens=target_tokens,
                 estimate_tokens=estimate_compaction_tokens,
+                on_delta=on_compaction_delta,
+                model_retries=self.policy.model_retries,
+                model_timeout_seconds=self.policy.model_timeout_seconds,
+                retry_policy=self.retry_policy,
+                on_model_retry=lambda retry: self._emit_model_retry_from_event(
+                    retry,
+                    state=state,
+                    response_index=None,
+                ),
             )
         )
         if result.status != "compacted":

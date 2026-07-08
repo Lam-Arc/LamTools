@@ -8,6 +8,7 @@ Follows the artist_orchestrate pattern from LamImager:
 - Functions close over shared state (settings, clients, stores)
 """
 import logging
+import base64
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -15,7 +16,9 @@ from typing import Any
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from lamtools_core.kernel import summarize_kernel_result
+from lamtools_core.kernel import LoopPolicy, summarize_kernel_result
+from lamtools_core.llm.shallow_thinking import ShallowThinkingClient
+from lamtools_core.llm.policy import RetryPolicy
 
 from app.config import Settings
 from app.core.writer.state_store import WriterStateStore
@@ -33,6 +36,7 @@ from app.models.attachment import WriterAttachment
 from app.models.app_setting import AppSetting
 from app.models.transcript import WriterTranscriptBlock, WriterTranscriptTurn
 from app.services.app_projection_sink import AppProjectionSink
+from app.services.attachment_service import read_text_preview
 from app.services.checkpoint_service import WriterCheckpointService
 from app.services.commit_review_service import WriterCommitReviewService
 from app.services.runtime_approved_tool import APPROVABLE_TOOL_NAMES, execute_approved_waiting_tool
@@ -60,11 +64,22 @@ def _is_llm_auth_error(exc: BaseException) -> bool:
     return "401" in text or "authentication" in text or "api key" in text or "unauthorized" in text
 
 
+def _with_shallow_thinking_client(client: Any, enabled: bool | None) -> Any:
+    if not enabled:
+        return client
+    if hasattr(client, "complete"):
+        return ShallowThinkingClient(client)
+    if hasattr(client, "chat_full"):
+        return ShallowThinkingClient(WriterLLMClientAdapter(writer_client=client))
+    return client
+
+
 def _model_context_from_resolved(
     resolved: Any,
     *,
     thinking_enabled: bool | None,
     thinking_budget: int | None,
+    shallow_thinking_enabled: bool | None = None,
 ) -> dict[str, Any]:
     if isinstance(resolved, dict):
         context = {
@@ -75,6 +90,8 @@ def _model_context_from_resolved(
             context["thinking_enabled"] = bool(thinking_enabled)
         if thinking_budget is not None:
             context["thinking_budget"] = thinking_budget
+        if shallow_thinking_enabled is not None:
+            context["shallow_thinking_enabled"] = bool(shallow_thinking_enabled)
         return {key: value for key, value in context.items() if value != ""}
 
     provider = getattr(resolved, "provider", None)
@@ -97,6 +114,7 @@ def _model_context_from_resolved(
         "matched_rule": bool(getattr(resolved, "matched_rule", False)),
         "thinking_enabled": bool(actual_thinking_enabled),
         "thinking_budget": actual_thinking_budget,
+        "shallow_thinking_enabled": bool(shallow_thinking_enabled) if shallow_thinking_enabled is not None else None,
     }
     return {key: value for key, value in context.items() if value not in {"", None}}
 
@@ -223,6 +241,7 @@ def writer_orchestrate(settings: Settings) -> dict[str, Any]:
         db: AsyncSession,
         thinking_enabled: bool | None = None,
         thinking_budget: int | None = None,
+        shallow_thinking_enabled: bool | None = None,
         model_id: str | None = None,
     ):
         """Resolve Writer LLM from DB route `writer`, falling back to DB `default`.
@@ -234,10 +253,13 @@ def writer_orchestrate(settings: Settings) -> dict[str, Any]:
         the specified model directly (per-request model switching).
         """
         resolved = await _resolve_writer_llm_config(db, model_id=model_id)
-        return build_llm_client(
-            resolved,
-            thinking_enabled=thinking_enabled,
-            thinking_budget=thinking_budget,
+        return _with_shallow_thinking_client(
+            build_llm_client(
+                resolved,
+                thinking_enabled=thinking_enabled,
+                thinking_budget=thinking_budget,
+            ),
+            shallow_thinking_enabled,
         )
 
     async def _resolve_sub_agent_llm_client(
@@ -247,29 +269,35 @@ def writer_orchestrate(settings: Settings) -> dict[str, Any]:
         *,
         thinking_enabled: bool | None = None,
         thinking_budget: int | None = None,
+        shallow_thinking_enabled: bool | None = None,
     ):
         model_override = str(call.options.get("model") or definition.model or "").strip()
-        task_type = f"sub_agent:{definition.name}"
         if model_override:
-            resolved = await resolve_llm_config(db, task_type, model_id=model_override)
+            resolved = await resolve_llm_config(db, "sub_agent", model_id=model_override)
         else:
-            resolved = await resolve_llm_config(db, task_type)
+            resolved = await resolve_llm_config(db, "sub_agent")
         if resolved is None:
             resolved = await resolve_llm_config(db, "sub_agent")
         if resolved is None:
             raise RuntimeError("No LLM provider/model configured in DB")
-        primary = build_llm_client(
-            resolved,
-            thinking_enabled=thinking_enabled,
-            thinking_budget=thinking_budget,
+        primary = _with_shallow_thinking_client(
+            build_llm_client(
+                resolved,
+                thinking_enabled=thinking_enabled,
+                thinking_budget=thinking_budget,
+            ),
+            shallow_thinking_enabled,
         )
         writer_resolved = await resolve_llm_config(db, "writer")
         if writer_resolved is None or writer_resolved.model.id == resolved.model.id:
             return primary
-        fallback = build_llm_client(
-            writer_resolved,
-            thinking_enabled=thinking_enabled,
-            thinking_budget=thinking_budget,
+        fallback = _with_shallow_thinking_client(
+            build_llm_client(
+                writer_resolved,
+                thinking_enabled=thinking_enabled,
+                thinking_budget=thinking_budget,
+            ),
+            shallow_thinking_enabled,
         )
         return _FallbackLLMClient(primary, fallback)
 
@@ -425,8 +453,10 @@ def writer_orchestrate(settings: Settings) -> dict[str, Any]:
         llm_client: Any,
         work_root: str,
         runtime_controls: dict[str, dict[str, bool]] | None = None,
+        user_content_blocks: list[dict[str, Any]] | None = None,
         thinking_enabled: bool | None = None,
         thinking_budget: int | None = None,
+        shallow_thinking_enabled: bool | None = None,
         model_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Run Writer through the CoreLoopKernel path.
@@ -452,6 +482,7 @@ def writer_orchestrate(settings: Settings) -> dict[str, Any]:
             transcript_turn_id=transcript_turn_id,
             user_message=user_message,
             raw_user_message=raw_user_message,
+            user_content_blocks=user_content_blocks,
             llm_client=llm_client,
             work_root=work_root,
             runtime_controls=runtime_controls,
@@ -461,6 +492,7 @@ def writer_orchestrate(settings: Settings) -> dict[str, Any]:
                 call,
                 thinking_enabled=thinking_enabled,
                 thinking_budget=thinking_budget,
+                shallow_thinking_enabled=shallow_thinking_enabled,
             ),
             model_context=model_context,
         )
@@ -471,6 +503,7 @@ def writer_orchestrate(settings: Settings) -> dict[str, Any]:
         user_message: str,
         thinking_enabled: bool | None = None,
         thinking_budget: int | None = None,
+        shallow_thinking_enabled: bool | None = None,
         attachment_ids: list[str] | None = None,
         model_id: str | None = None,
         user_message_id: str | None = None,
@@ -535,12 +568,18 @@ def writer_orchestrate(settings: Settings) -> dict[str, Any]:
             thinking_enabled=thinking_enabled,
             thinking_budget=thinking_budget,
         )
+        resolved_client = _with_shallow_thinking_client(resolved_client, shallow_thinking_enabled)
         model_context = _model_context_from_resolved(
             resolved_config,
             thinking_enabled=thinking_enabled,
             thinking_budget=thinking_budget,
+            shallow_thinking_enabled=shallow_thinking_enabled,
         )
-        attachment_context = await _session_attachment_context(session_id, attachment_ids or [])
+        attachment_context, user_content_blocks = await _session_attachment_input(
+            db,
+            session_id,
+            attachment_ids or [],
+        )
         runtime_user_message = user_message + attachment_context
 
         summary = await _run_core_kernel_path(
@@ -549,11 +588,13 @@ def writer_orchestrate(settings: Settings) -> dict[str, Any]:
             transcript_turn_id=transcript_turn.id,
             user_message=runtime_user_message,
             raw_user_message=user_message,
+            user_content_blocks=user_content_blocks,
             llm_client=resolved_client,
             work_root=work_root,
             runtime_controls=await _runtime_controls(db),
             thinking_enabled=thinking_enabled,
             thinking_budget=thinking_budget,
+            shallow_thinking_enabled=shallow_thinking_enabled,
             model_context=model_context,
         )
         # _run_core_kernel_path stores the final visible assistant message
@@ -697,6 +738,7 @@ def writer_orchestrate(settings: Settings) -> dict[str, Any]:
         session_id: str,
         on_summary_delta: Any | None = None,
     ) -> dict[str, Any]:
+        loop_policy = LoopPolicy()
         resolved_config = await _resolve_writer_llm_config(db)
         resolved_client = WriterLLMClientAdapter(writer_client=build_llm_client(resolved_config))
         model_context = _model_context_from_resolved(
@@ -710,6 +752,9 @@ def writer_orchestrate(settings: Settings) -> dict[str, Any]:
             llm_client=resolved_client,
             model=str(model_context.get("model") or ""),
             on_summary_delta=on_summary_delta,
+            model_retries=loop_policy.model_retries,
+            model_timeout_seconds=loop_policy.model_timeout_seconds,
+            retry_policy=RetryPolicy(),
         )
 
     # --- Return service dict ---
@@ -759,24 +804,84 @@ def _attachment_ids_from_parts(parts: dict[str, Any] | None) -> list[str]:
     return ids
 
 
-async def _session_attachment_context(session_id: str, current_ids: list[str]) -> str:
-    from app.database import async_session as async_session_factory
-
-    async with async_session_factory() as db:
-        result = await db.execute(
-            select(WriterAttachment)
-            .where(WriterAttachment.session_id == session_id)
-            .order_by(WriterAttachment.created_at.desc())
-            .limit(50)
-        )
-        attachments = list(reversed(result.scalars().all()))
+async def _session_attachment_input(
+    db: AsyncSession,
+    session_id: str,
+    current_ids: list[str],
+) -> tuple[str, list[dict[str, Any]]]:
+    result = await db.execute(
+        select(WriterAttachment)
+        .where(WriterAttachment.session_id == session_id)
+        .order_by(WriterAttachment.created_at.desc())
+        .limit(50)
+    )
+    attachments = list(reversed(result.scalars().all()))
     if not attachments:
-        return ""
+        return "", []
     current = set(current_ids)
-    lines = ["", "当前会话附件索引（可按文件名查找，需要查看时可读取对应路径）："]
+    lines = ["", "当前会话附件索引（本地存储路径不会提供给模型）："]
+    content_blocks: list[dict[str, Any]] = []
     for attachment in attachments:
         marker = "本条消息附件" if attachment.id in current else "历史附件"
+        if attachment.id in current and _is_image_attachment(attachment):
+            block = _image_attachment_content_block(attachment)
+            if block is not None:
+                content_blocks.append(block)
+                lines.append(
+                    f"- [{marker}] {attachment.filename} | {attachment.mime_type} | {attachment.size} bytes | 已作为图片输入提供"
+                )
+            else:
+                lines.append(
+                    f"- [{marker}] {attachment.filename} | {attachment.mime_type} | {attachment.size} bytes | 图片文件缺失，未能提供给模型"
+                )
+            continue
+        if attachment.id in current and attachment.preview_type == "text":
+            lines.append(_text_attachment_context_line(marker, attachment))
+            continue
         lines.append(
-            f"- [{marker}] {attachment.filename} | {attachment.mime_type} | {attachment.size} bytes | {attachment.storage_path}"
+            f"- [{marker}] {attachment.filename} | {attachment.mime_type} | {attachment.size} bytes | {_attachment_label(attachment)}"
         )
-    return "\n".join(lines)
+    return "\n".join(lines), content_blocks
+
+
+def _is_image_attachment(attachment: WriterAttachment) -> bool:
+    return attachment.preview_type == "image" or str(attachment.mime_type or "").startswith("image/")
+
+
+def _image_attachment_content_block(attachment: WriterAttachment) -> dict[str, Any] | None:
+    path = Path(attachment.storage_path)
+    if not path.exists() or not path.is_file():
+        return None
+    mime_type = str(attachment.mime_type or "application/octet-stream")
+    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+    return {
+        "type": "image_url",
+        "image_url": {
+            "url": f"data:{mime_type};base64,{encoded}",
+            "detail": "auto",
+        },
+    }
+
+
+def _text_attachment_context_line(marker: str, attachment: WriterAttachment) -> str:
+    path = Path(attachment.storage_path)
+    if not path.exists() or not path.is_file():
+        return (
+            f"- [{marker}] {attachment.filename} | {attachment.mime_type} | "
+            f"{attachment.size} bytes | 文本文件缺失，未能提供内容"
+        )
+    preview = read_text_preview(path)
+    return (
+        f"- [{marker}] {attachment.filename} | {attachment.mime_type} | {attachment.size} bytes | 文本内容如下：\n"
+        f"{preview}"
+    )
+
+
+def _attachment_label(attachment: WriterAttachment) -> str:
+    if _is_image_attachment(attachment):
+        return "图片附件；仅本条消息图片会直接提供给模型"
+    if attachment.preview_type == "text":
+        return "文本附件；仅本条消息文本会直接提供给模型"
+    if attachment.preview_type == "pdf" or attachment.mime_type == "application/pdf":
+        return "PDF 附件；当前未自动解析"
+    return "二进制附件；当前未自动解析"

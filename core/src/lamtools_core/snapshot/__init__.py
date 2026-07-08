@@ -211,7 +211,10 @@ def _upsert_item(state: dict[str, Any], event: RunItemEvent) -> dict[str, Any]:
             "status": event.status,
         },
     )
-    item["kind"] = item.get("kind") or event.kind
+    if event.kind == "tool_result":
+        item["kind"] = "tool_result"
+    else:
+        item["kind"] = item.get("kind") or event.kind
     item["last_kind"] = event.kind
     item["last_seq"] = event.seq or state.get("snapshot_seq", 0)
     item["status"] = event.status

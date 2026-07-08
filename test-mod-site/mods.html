@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mod展示 - Lam's Mods</title>
+  <meta name="description" content="浏览Lam开发的所有Minecraft Mod作品">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="nav-container">
+      <a href="index.html" class="nav-logo">
+        <span style="font-size:2rem;">&#x1F527;</span> Lam's Mods
+      </a>
+      <button class="menu-toggle" id="menuToggle" aria-label="切换菜单">&#x2261;</button>
+      <ul class="nav-links" id="navLinks">
+        <li><a href="index.html">首页</a></li>
+        <li><a href="mods.html" class="active">Mod展示</a></li>
+        <li><a href="about.html">关于我</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <header class="hero" style="padding: 60px 20px 40px;">
+    <div class="hero-content">
+      <h1 class="hero-title">Mod 展示</h1>
+      <p class="hero-desc">
+        这里汇集了 Lam 开发的所有 Minecraft Mod 作品，涵盖科技、魔法、冒险等多个领域。
+        每个 Mod 都经过精心设计和反复测试，希望能为你的游戏体验带来全新的乐趣。
+      </p>
+    </div>
+  </header>
+
+  <section class="section" style="padding-bottom: 20px;">
+    <div class="search-bar">
+      <span class="search-icon">&#x1F50D;</span>
+      <input type="text" id="modSearch" placeholder="搜索 Mod 名称、描述或标签..." aria-label="搜索Mod">
+    </div>
+    <div class="filter-tags">
+      <button class="filter-btn active" data-filter="all">全部</button>
+      <button class="filter-btn" data-filter="tech">科技</button>
+      <button class="filter-btn" data-filter="magic">魔法</button>
+      <button class="filter-btn" data-filter="adventure">冒险</button>
+      <button class="filter-btn" data-filter="utility">工具</button>
+    </div>
+  </section>
+
+  <section class="section" style="padding-top: 0;">
+    <div class="card-grid" id="modGrid"></div>
+    <div id="noResults" style="text-align: center; padding: 60px 20px; display: none;">
+      <p style="font-family: var(--font-pixel); font-size: 1.5rem; color: var(--mc-stone);">&#x2753; 未找到匹配的 Mod</p>
+      <p style="color: #666; margin-top: 10px;">尝试使用其他关键词搜索</p>
+    </div>
+  </section>
+
+  <footer class="footer">
+    <div class="footer-content">
+      <div class="footer-links">
+        <a href="index.html">首页</a>
+        <a href="mods.html">Mod展示</a>
+        <a href="about.html">关于我</a>
+      </div>
+      <p class="footer-text">用热爱点亮方块世界</p>
+      <p class="footer-copy">&copy; 2024 Lam's Mods. 保留所有权利。</p>
+    </div>
+  </footer>
+
+  <button class="back-to-top" id="backToTop" aria-label="返回顶部">&#x25B2;</button>
+
+  <script src="js/main.js"></script>
+</body>
+</html>

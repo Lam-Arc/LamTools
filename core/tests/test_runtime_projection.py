@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from lamtools_core.event.runtime_projection import (
     RuntimeProjectionBuffer,
     RuntimeProjectionInput,
+    extract_tool_input_preview,
     event_model_call_id,
     raw_tool_call_id_from_payload,
     runtime_fact_to_run_item_events,
@@ -43,6 +44,134 @@ def _part_fact(event_id: str, content: str) -> RuntimeProjectionInput:
     )
 
 
+def test_runtime_projection_accumulates_tool_input_delta_preview():
+    first = runtime_fact_to_run_item_events(
+        thread_id="thread-1",
+        event_id="evt-1",
+        group="runtime",
+        source="core",
+        phase="runtime.part",
+        status="running",
+        sequence=1,
+        summary="",
+        metadata={
+            "payload": {
+                "part_type": "tool_call",
+                "status": "running",
+                "tool_name": "write_file",
+                "call_id": "call-1",
+                "tool_args": {"path": "index.html"},
+                "run_id": "run-1",
+                "turn_id": "turn-1",
+            }
+        },
+    )
+    second = runtime_fact_to_run_item_events(
+        thread_id="thread-1",
+        event_id="evt-2",
+        group="runtime",
+        source="core",
+        phase="runtime.part",
+        status="running",
+        sequence=2,
+        summary="",
+        metadata={
+            "payload": {
+                "part_type": "tool_input_delta",
+                "status": "running",
+                "tool_name": "write_file",
+                "call_id": "call-1",
+                "delta": '{"path":"index.html","content":"<html>',
+                "arguments_text": '{"path":"index.html","content":"<html>',
+                "run_id": "run-1",
+                "turn_id": "turn-1",
+            }
+        },
+    )
+
+    assert first is not None
+    assert second is not None
+    assert first[0].item_id == second[0].item_id
+    assert "arguments" not in second[0].payload
+    assert second[0].payload["input_preview"]["field"] == "content"
+    assert second[0].payload["input_preview"]["content"] == "<html>"
+
+
+def test_runtime_projection_gives_tool_input_growth_unique_event_ids():
+    buffer = RuntimeProjectionBuffer()
+    first = buffer.merge_part_growth(RuntimeProjectionInput(
+        id="fact-1",
+        thread_id="thread-1",
+        group="runtime",
+        source="core",
+        phase="runtime.part",
+        status="running",
+        sequence=1,
+        metadata={
+            "payload": {
+                "part_type": "tool_input_delta",
+                "status": "running",
+                "tool_name": "write_file",
+                "call_id": "call-1",
+                "part_id": "run-1:response-0:tool-call-0:input",
+                "arguments_text": '{"path":"README.md","content":"#',
+                "run_id": "run-1",
+                "turn_id": "turn-1",
+            }
+        },
+        created_at=datetime.now(timezone.utc),
+    ))
+    first_events = runtime_projection_to_run_item_events(first)
+
+    second = buffer.merge_part_growth(RuntimeProjectionInput(
+        id="fact-2",
+        thread_id="thread-1",
+        group="runtime",
+        source="core",
+        phase="runtime.part",
+        status="running",
+        sequence=2,
+        metadata={
+            "payload": {
+                "part_type": "tool_input_delta",
+                "status": "running",
+                "tool_name": "write_file",
+                "call_id": "call-1",
+                "part_id": "run-1:response-0:tool-call-0:input",
+                "arguments_text": '{"path":"README.md","content":"# Title',
+                "run_id": "run-1",
+                "turn_id": "turn-1",
+            }
+        },
+        created_at=datetime.now(timezone.utc),
+    ))
+    second_events = runtime_projection_to_run_item_events(second)
+
+    assert first_events is not None
+    assert second_events is not None
+    assert first_events[0].item_id == second_events[0].item_id
+    assert first_events[0].event_id != second_events[0].event_id
+    assert second_events[0].payload["input_preview"]["content"] == "# Title"
+
+
+def test_extract_tool_input_preview_write_file_content():
+    preview = extract_tool_input_preview(
+        "write_file",
+        '{"path":"index.html","content":"hello\\nworld',
+    )
+
+    assert preview == {
+        "field": "content",
+        "content": "hello\nworld",
+        "chars": 11,
+        "truncated": False,
+    }
+
+
+def test_extract_tool_input_preview_ignores_read_tools():
+    assert extract_tool_input_preview("read_file", '{"path":"a.py"}') is None
+
+
 def test_runtime_projection_maps_tool_lifecycle():
     events = runtime_fact_to_run_item_events(
         thread_id="thread-1",
@@ -70,10 +199,207 @@ def test_runtime_projection_maps_tool_lifecycle():
     assert event.kind == "tool_call"
     assert event.thread_id == "thread-1"
     assert event.turn_id == "turn-1"
-    assert event.item_id == "thread-1:call-1:tool"
+    assert event.item_id == "thread-1:turn-1:call-1:tool"
     assert event.seq == 7
     assert event.payload["tool_name"] == "read_file"
     assert event.payload["arguments"] == {"path": "README.md"}
+
+
+def test_runtime_projection_preserves_tool_result_metadata():
+    events = runtime_fact_to_run_item_events(
+        thread_id="thread-1",
+        event_id="event-1",
+        group="tool",
+        source="core",
+        phase="runtime.tool.finished",
+        status="ok",
+        sequence=8,
+        preview="done",
+        metadata={
+            "payload": {
+                "turn_id": "turn-1",
+                "tool_name": "sub_agent",
+                "call_id": "call-1",
+                "content": "agent result",
+                "metadata": {
+                    "agent_name": "reviewer",
+                    "agent_index": "001",
+                },
+            }
+        },
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+
+    assert events is not None
+    assert len(events) == 1
+    event = events[0]
+    assert event.kind == "tool_result"
+    assert event.payload["metadata"] == {
+        "agent_name": "reviewer",
+        "agent_index": "001",
+    }
+    assert event.payload["tool_result"] == "agent result"
+
+
+def test_runtime_part_tool_result_projects_as_running_tool_result():
+    events = runtime_fact_to_run_item_events(
+        thread_id="thread-1",
+        event_id="event-1",
+        group="tool",
+        source="core",
+        phase="runtime.part",
+        status="running",
+        sequence=9,
+        preview="[stdout]\nline 1",
+        metadata={
+            "payload": {
+                "turn_id": "turn-1",
+                "part_id": "call-1:result",
+                "part_type": "tool_result",
+                "status": "running",
+                "content": "[stdout]\nline 1",
+                "tool_name": "run_command",
+                "call_id": "call-1",
+                "metadata": {
+                    "command": "echo line 1",
+                },
+            }
+        },
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+
+    assert events is not None
+    assert len(events) == 1
+    event = events[0]
+    assert event.kind == "tool_result"
+    assert event.item_id == "thread-1:turn-1:call-1:tool"
+    assert event.status == "running"
+    assert event.payload["tool_name"] == "run_command"
+    assert event.payload["tool_result"] == "[stdout]\nline 1"
+    assert event.payload["metadata"]["command"] == "echo line 1"
+
+
+def test_runtime_projection_scopes_reused_tool_call_ids_by_run():
+    first = runtime_fact_to_run_item_events(
+        thread_id="thread-1",
+        event_id="event-1",
+        group="tool",
+        source="core",
+        phase="runtime.part",
+        status="running",
+        sequence=1,
+        metadata={
+            "payload": {
+                "turn_id": "turn-1",
+                "run_id": "run-1",
+                "part_type": "tool_call",
+                "tool_name": "write_file",
+                "call_id": "functions.write_file:0",
+                "content": "准备调用 write_file",
+            }
+        },
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    second = runtime_fact_to_run_item_events(
+        thread_id="thread-1",
+        event_id="event-2",
+        group="tool",
+        source="core",
+        phase="runtime.part",
+        status="running",
+        sequence=2,
+        metadata={
+            "payload": {
+                "turn_id": "turn-2",
+                "run_id": "run-2",
+                "part_type": "tool_call",
+                "tool_name": "write_file",
+                "call_id": "functions.write_file:0",
+                "content": "准备调用 write_file",
+            }
+        },
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+
+    assert first is not None
+    assert second is not None
+    assert first[0].item_id == "thread-1:run-1:functions.write_file:0:tool"
+    assert second[0].item_id == "thread-1:run-2:functions.write_file:0:tool"
+
+
+def test_runtime_projection_keeps_tool_call_and_result_part_on_same_run_item():
+    call_events = runtime_fact_to_run_item_events(
+        thread_id="thread-1",
+        event_id="event-1",
+        group="tool",
+        source="core",
+        phase="runtime.part",
+        status="running",
+        sequence=1,
+        metadata={
+            "payload": {
+                "turn_id": "turn-1",
+                "run_id": "run-1",
+                "part_type": "tool_call",
+                "tool_name": "run_command",
+                "call_id": "functions.run_command:0",
+                "content": "准备调用 run_command",
+            }
+        },
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    progress_events = runtime_fact_to_run_item_events(
+        thread_id="thread-1",
+        event_id="event-2",
+        group="tool",
+        source="core",
+        phase="runtime.part",
+        status="running",
+        sequence=2,
+        metadata={
+            "payload": {
+                "turn_id": "turn-1",
+                "run_id": "run-1",
+                "part_type": "tool_result",
+                "tool_name": "run_command",
+                "call_id": "functions.run_command:0",
+                "content": "[stdout]\nline 1",
+            }
+        },
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+
+    assert call_events is not None
+    assert progress_events is not None
+    assert call_events[0].item_id == progress_events[0].item_id
+
+
+def test_runtime_projection_omits_forwarded_sub_agent_events_from_main_timeline():
+    events = runtime_fact_to_run_item_events(
+        thread_id="thread-1",
+        event_id="event-1",
+        group="plan",
+        source="core",
+        phase="runtime.part",
+        status="completed",
+        sequence=9,
+        preview="nested result",
+        metadata={
+            "payload": {
+                "turn_id": "turn-1",
+                "part_id": "child-run:response-0:text",
+                "part_type": "text",
+                "content": "nested result",
+                "sub_agent": {
+                    "sub_line_id": "subline-1",
+                    "agent": "reviewer",
+                },
+            }
+        },
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+
+    assert events == []
 
 
 def test_runtime_projection_maps_terminal_status():

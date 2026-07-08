@@ -3,17 +3,14 @@ from __future__ import annotations
 import logging
 
 from fastapi import HTTPException
-from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.writer.core_kernel_adapter import schedule_writer_startup_prewarm
 from app.core.writer.git import WriterGitManager
-from app.models.attachment import WriterAttachment
-from app.models.message import WriterMessage
 from app.models.project import WriterProject
-from app.models.queued_input import WriterQueuedInput
 from app.models.session import WriterSession
 from app.routers.path_utils import ensure_work_root
+from app.services.session_deletion import delete_writer_session_records
 from app.services.project_management import ensure_writer_project
 from app.services.session_projection import session_response_projected
 
@@ -120,14 +117,7 @@ async def update_writer_session(
 
 
 async def delete_writer_session(db: AsyncSession, session_id: str) -> None:
-    session = await db.get(WriterSession, session_id)
-    if session is None:
-        raise LookupError("Session not found")
-
-    await db.execute(delete(WriterAttachment).where(WriterAttachment.session_id == session_id))
-    await db.execute(delete(WriterMessage).where(WriterMessage.session_id == session_id))
-    await db.execute(delete(WriterQueuedInput).where(WriterQueuedInput.session_id == session_id))
-    await db.delete(session)
+    await delete_writer_session_records(db, session_id)
     await db.commit()
 
 

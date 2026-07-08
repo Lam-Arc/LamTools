@@ -12,6 +12,8 @@ from app.models.session import WriterSession
 from app.services.session_rollback_markers import is_rolled_back_metadata
 from lamtools_core.context_compaction import ContextCompactionRequest, compact_context
 from lamtools_core.llm import ChatMessage, LLMClient
+from lamtools_core.llm.policy import RetryPolicy
+from lamtools_core.llm.retry import ModelRetrySink
 
 MAX_RETAIN_MESSAGE_COUNT = 6
 MAX_SUMMARY_CHARS = 20000
@@ -26,6 +28,10 @@ async def compact_session_context_response(
     model: str = "",
     timeout: float | None = None,
     on_summary_delta: Any | None = None,
+    model_retries: int = 1,
+    model_timeout_seconds: float | None = None,
+    retry_policy: RetryPolicy | None = None,
+    on_model_retry: ModelRetrySink | None = None,
 ) -> dict[str, Any]:
     session = await db.get(WriterSession, session_id)
     if session is None:
@@ -56,6 +62,10 @@ async def compact_session_context_response(
             retain_tail_count=MAX_RETAIN_MESSAGE_COUNT,
             existing_summary=session.context_summary or "",
             on_delta=on_summary_delta,
+            model_retries=model_retries,
+            model_timeout_seconds=model_timeout_seconds,
+            retry_policy=retry_policy or RetryPolicy(),
+            on_model_retry=on_model_retry,
         )
     )
     if result.status != "compacted":

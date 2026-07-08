@@ -1,4 +1,5 @@
 <!-- 历史参考，不代表当前架构 -->
+<!-- 维护标注（2026-07-08）：本文记录 2026-05-30 的旧运行时验收设计。当前 Writer 已删除 `CompletionVerifier` 自研自动完成验收层；普通任务不再在自然最终回复后自动跑语法/浏览器/产物扫描。若后续需要语法或构建检查，应由用户或任务 prompt 显式要求模型调用工具执行。 -->
 # Writer Known Defects — 2026-05-30
 
 This checkpoint changes completion from a Writer self-declaration into a

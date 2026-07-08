@@ -19,9 +19,6 @@ frontend/dist/
 *.sqlite
 *.sqlite3
 *.pid
-venv/
-data/
-
 
 # Logs and transient server output
 *.log

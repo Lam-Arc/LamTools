@@ -17,6 +17,7 @@ const RENDERABLE_ITEM_TYPES = new Set([
   'contextCompaction',
   'compaction',
   'status',
+  'agent_summary',
 ])
 
 export interface AppServerChatMessage {
@@ -63,7 +64,9 @@ export function selectChatMessages(state: WriterAppSnapshot): AppServerChatMessa
   const messages: AppServerChatMessage[] = []
   const itemOrder = mergedItemOrder(state)
   const artifactsByItem = artifactsGroupedByItem(state)
+  const suppressedItemIds = duplicateSubAgentChildItemIds(state, itemOrder)
   for (const itemId of itemOrder) {
+    if (suppressedItemIds.has(itemId)) continue
     const rawItem = canonicalItemForId(state, itemId) ?? outerProductItemForId(state, itemId)
     const item = rawItem ? withItemArtifacts(rawItem, artifactsByItem.get(itemId)) : undefined
     if (!item) continue
@@ -104,6 +107,44 @@ export function selectChatMessages(state: WriterAppSnapshot): AppServerChatMessa
     || message.parts.length > 0
     || Boolean(message.metadata?.initialWaiting)
   ))
+}
+
+function duplicateSubAgentChildItemIds(state: WriterAppSnapshot, itemOrder: string[]): Set<string> {
+  const subAgentOutputs = new Set<string>()
+  const items = new Map<string, WriterAppItem>()
+  for (const itemId of itemOrder) {
+    const item = canonicalItemForId(state, itemId) ?? outerProductItemForId(state, itemId)
+    if (!item) continue
+    items.set(itemId, item)
+    if (item.type !== 'agent_summary' || item.tool_name !== 'sub_agent') continue
+    const text = normalizedComparableText(itemText(item))
+    if (text.length >= 20) subAgentOutputs.add(text)
+  }
+  if (subAgentOutputs.size === 0) return new Set()
+
+  const suppressed = new Set<string>()
+  for (const [itemId, item] of items) {
+    if (item.type !== 'agentMessage') continue
+    const text = normalizedComparableText(itemText(item))
+    if (!subAgentOutputs.has(text)) continue
+    suppressed.add(itemId)
+    const runId = subAgentChildRunId(itemId)
+    if (runId) suppressed.add(`${runId}:stream-fallback`)
+  }
+  return suppressed
+}
+
+function itemText(item: WriterAppItem): string {
+  return String(item.content || item.message || item.summary || item.tool_result || '')
+}
+
+function normalizedComparableText(value: string): string {
+  return String(value || '').replace(/\s+/g, ' ').trim()
+}
+
+function subAgentChildRunId(itemId: string): string {
+  const match = itemId.match(/^(.+):response-\d+:text$/)
+  return match?.[1] || ''
 }
 
 function maybeAppendInitialAssistantWaiting(state: WriterAppSnapshot, messages: AppServerChatMessage[]): void {
@@ -231,7 +272,7 @@ function outerProductItemForId(state: WriterAppSnapshot, itemId: string): Writer
 function coreItemToWriterItem(item: WriterCoreItem): WriterAppItem {
   const rawPayload: Record<string, unknown> = item.payload && typeof item.payload === 'object' ? item.payload : {}
   const payload = normalizeLegacyDeliveryFields(rawPayload)
-  const type = String(payload.type || coreItemType(item))
+  const type = normalizeCoreItemDisplayType(payload, coreItemType(item))
   return {
     ...payload,
     item_id: item.item_id,
@@ -250,6 +291,14 @@ function coreItemToWriterItem(item: WriterCoreItem): WriterAppItem {
     core_kind: item.kind,
     core_last_kind: item.last_kind,
   }
+}
+
+function normalizeCoreItemDisplayType(payload: Record<string, unknown>, fallback: string): string {
+  const type = String(payload.type || fallback)
+  if (type === 'dynamicToolCall' && String(payload.tool_name || '') === 'sub_agent') {
+    return 'agent_summary'
+  }
+  return type
 }
 
 function normalizeLegacyDeliveryFields(payload: Record<string, unknown>): Record<string, unknown> {

@@ -82,7 +82,7 @@ from app.app_server.ledger import append_event, append_run_item_event, list_even
 from app.app_server.queue import dispatch_next_queue_item
 from app.app_server.reducer import apply_event, empty_thread_state
 from app.app_server.runtime import WriterRuntimeLifecycle
-from app.app_server.snapshot import apply_event_to_snapshot, rebuild_snapshot
+from app.app_server.snapshot import apply_event_to_snapshot, load_snapshot, rebuild_snapshot
 from app.app_server.protocol import WriterAppEventEnvelope
 from app.database import Base
 from app.models.app_setting import AppSetting
@@ -656,6 +656,37 @@ async def test_turn_start_expands_selected_skill_without_changing_visible_messag
 
 
 @pytest.mark.asyncio
+async def test_turn_start_passes_shallow_thinking_mode_to_runtime(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'shallow-thinking-turn.db'}", future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    try:
+        async with session_factory() as db:
+            db.add(WriterSession(id="thread-shallow", title="Shallow", work_root=str(tmp_path)))
+            await db.commit()
+
+        outcome = await handle_turn_start_operation(
+            request_id=1,
+            params={
+                "thread_id": "thread-shallow",
+                "client_message_id": "client-shallow",
+                "work_root": str(tmp_path),
+                "shallow_thinking_enabled": True,
+                "input": [{"type": "text", "text": "解释这个问题"}],
+            },
+            session_factory=session_factory,
+        )
+
+        assert "error" not in outcome.response
+        assert outcome.runtime_start is not None
+        assert outcome.runtime_start["shallow_thinking_enabled"] is True
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_turn_start_expands_normalized_mixed_case_skill_command_name(tmp_path):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'skill-turn-normalized.db'}", future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -1083,6 +1114,57 @@ async def test_command_execute_compact_emits_running_delta_and_completed_events(
         compact_items = compact.response["result"]["snapshot"]["core"]["items"]
         compact_item = next(item for item in compact_items.values() if item.get("payload", {}).get("type") == "compaction")
         assert compact_item["content"] == summary
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_command_execute_compact_failure_marks_thread_terminal(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'command-compact-failure-terminal.db'}", future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async def compact_session_context(db, *, session_id: str, on_summary_delta=None):
+        raise ValueError("forced compaction failure")
+
+    try:
+        async with session_factory() as db:
+            db.add(WriterSession(id="thread-failing-compact", title="Command"))
+            await db.commit()
+
+        compact = await handle_command_execute_operation(
+            request_id=1,
+            params={"session_id": "thread-failing-compact", "command": "compact"},
+            session_factory=session_factory,
+            writer_service={"compact_session_context": compact_session_context},
+        )
+
+        async with session_factory() as db:
+            after_failure = await load_snapshot(db, "thread-failing-compact")
+
+        stop = await handle_turn_cancel_operation(
+            request_id=2,
+            params={"thread_id": "thread-failing-compact"},
+            session_factory=session_factory,
+        )
+
+        async with session_factory() as db:
+            after_stop = await load_snapshot(db, "thread-failing-compact")
+
+        assert compact.response["error"]["message"] == "forced compaction failure"
+        assert after_failure["status"] == "failed"
+        assert after_failure["core"]["status"] == "failed"
+        compact_items = after_failure["core"]["items"]
+        assert any(
+            item.get("payload", {}).get("type") == "compaction"
+            and item.get("payload", {}).get("label") == "压缩失败"
+            and item.get("status") == "failed"
+            for item in compact_items.values()
+        )
+        assert stop.response["result"]["status"] == "idle"
+        assert after_stop["status"] == "failed"
+        assert after_stop["core"]["status"] == "failed"
     finally:
         await engine.dispose()
 
@@ -2385,6 +2467,16 @@ async def test_project_operations_create_list_update_get_and_delete(tmp_path):
             session_factory=session_factory,
         )
         assert read.response["result"]["project"]["id"] == project["id"]
+        async with session_factory() as db:
+            db.add(
+                WriterSession(
+                    id="project-session",
+                    title="Project Session",
+                    work_root=project["work_root"],
+                    project_id=project["id"],
+                )
+            )
+            await db.commit()
 
         deleted = await handle_project_delete_operation(
             request_id=5,
@@ -2394,6 +2486,7 @@ async def test_project_operations_create_list_update_get_and_delete(tmp_path):
         assert deleted.response["result"] == {"ok": True}
         async with session_factory() as db:
             assert await db.get(WriterProject, project["id"]) is None
+            assert await db.get(WriterSession, "project-session") is None
     finally:
         await engine.dispose()
 

@@ -214,7 +214,7 @@ def test_running_runtime_tool_part_projects_as_tool_started_item():
     assert mapped == []
     assert len(run_items) == 1
     assert run_items[0].kind == "tool_call"
-    assert run_items[0].item_id == "thread-1:functions.write_file:0:tool"
+    assert run_items[0].item_id == "thread-1:turn-1:functions.write_file:0:tool"
     assert run_items[0].payload["type"] == "dynamicToolCall"
     assert run_items[0].payload["tool_name"] == "write_file"
     assert run_items[0].payload["arguments"]["path"] == "blog/index.html"
@@ -465,7 +465,7 @@ async def test_runtime_bridge_persists_events_and_updates_snapshot(tmp_path):
             snapshot = await load_snapshot(db, "thread-1")
             assert [item.method for item in envelopes] == ["core/runItem"]
             assert snapshot["items"] == {}
-            assert snapshot["core"]["items"]["thread-1:call-1:tool"]["payload"]["tool_name"] == "shell"
+            assert snapshot["core"]["items"]["thread-1:turn-1:call-1:tool"]["payload"]["tool_name"] == "shell"
     finally:
         await engine.dispose()
 
@@ -513,7 +513,7 @@ async def test_runtime_bridge_persists_tool_artifacts_as_core_facts(tmp_path):
             assert snapshot["items"] == {}
             assert snapshot["artifacts"] == {}
             assert snapshot["core"]["artifacts"][artifact.artifact_id]["path"] == str(artifact_path)
-            assert snapshot["core"]["items"]["thread-1:write-1:tool"]["content"] == "Created report.md"
+            assert snapshot["core"]["items"]["thread-1:turn-1:write-1:tool"]["content"] == "Created report.md"
     finally:
         await engine.dispose()
 
@@ -713,6 +713,55 @@ async def test_runtime_part_growth_appends_new_events_instead_of_deduping_same_r
             assert replay[0].item_id == replay[1].item_id == "reasoning-1"
             assert snapshot["items"] == {}
             assert snapshot["core"]["items"]["reasoning-1"]["content"] == "用户提供的视频里，思考块不应该只剩两个字。"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_tool_input_delta_growth_appends_new_events_instead_of_deduping_same_runtime_id(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'tool-input-growth.db'}", future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    try:
+        async with session_factory() as db:
+            event = runtime_fact(
+                "runtime-tool-input-1",
+                "runtime.part",
+                {
+                    "turn_id": "turn-1",
+                    "part_id": "run-1:response-0:tool-call-0:input",
+                    "part_type": "tool_input_delta",
+                    "tool_name": "write_file",
+                    "call_id": "write-1",
+                    "arguments_text": '{"path":"README.md","content":"#',
+                },
+                status="running",
+            )
+            await persist_projection_from_runtime_fact(db, event)
+
+            event["metadata"] = {
+                "payload": {
+                    "turn_id": "turn-1",
+                    "part_id": "run-1:response-0:tool-call-0:input",
+                    "part_type": "tool_input_delta",
+                    "tool_name": "write_file",
+                    "call_id": "write-1",
+                    "arguments_text": '{"path":"README.md","content":"# Title',
+                }
+            }
+            await persist_projection_from_runtime_fact(db, event)
+            await db.commit()
+
+            replay = await list_events_after(db, thread_id="thread-1")
+            snapshot = await load_snapshot(db, "thread-1")
+
+            assert [item.method for item in replay] == ["core/runItem", "core/runItem"]
+            assert replay[0].event_id != replay[1].event_id
+            assert replay[0].item_id == replay[1].item_id == "thread-1:turn-1:write-1:tool"
+            assert snapshot["items"] == {}
+            assert snapshot["core"]["items"]["thread-1:turn-1:write-1:tool"]["payload"]["input_preview"]["content"] == "# Title"
     finally:
         await engine.dispose()
 

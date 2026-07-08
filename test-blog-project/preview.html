@@ -1,0 +1,806 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="我的个人博客，分享技术心得与生活感悟。使用 Node.js + Express + SQLite 构建。">
+  <meta property="og:title" content="我的个人博客">
+  <meta property="og:description" content="分享技术心得与生活感悟">
+  <meta property="og:type" content="website">
+  <title>我的个人博客 | 预览</title>
+  <style>
+    :root {
+      --primary: #2563eb;
+      --primary-dark: #1d4ed8;
+      --primary-light: #3b82f6;
+      --text: #1f2937;
+      --text-light: #6b7280;
+      --bg: #f3f4f6;
+      --white: #ffffff;
+      --border: #e5e7eb;
+      --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+      --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+      --radius: 12px;
+      --transition: 0.25s ease;
+      color-scheme: light;
+    }
+
+    .dark {
+      --primary: #60a5fa;
+      --primary-dark: #3b82f6;
+      --primary-light: #93c5fd;
+      --text: #e2e8f0;
+      --text-light: #94a3b8;
+      --bg: #0f172a;
+      --white: #1e293b;
+      --border: #334155;
+      --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.4);
+      --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
+      color-scheme: dark;
+    }
+
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans SC", sans-serif;
+      color: var(--text);
+      background-color: var(--bg);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      line-height: 1.6;
+    }
+
+    /* ===== 导航栏 ===== */
+    .navbar {
+      background-color: var(--white);
+      border-bottom: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    .navbar .container {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      height: 64px;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 0 1.5rem;
+    }
+
+    .logo {
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: var(--text);
+      text-decoration: none;
+      transition: color var(--transition);
+    }
+
+    .logo:hover, .logo:focus {
+      color: var(--primary);
+    }
+
+    .logo:focus-visible {
+      outline: 2px solid var(--primary);
+      outline-offset: 2px;
+      border-radius: 4px;
+    }
+
+    .nav-wrapper {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+
+    .nav-links {
+      display: flex;
+      list-style: none;
+      gap: 2rem;
+    }
+
+    .nav-links a {
+      color: var(--text-light);
+      text-decoration: none;
+      font-weight: 500;
+      transition: color var(--transition);
+      position: relative;
+    }
+
+    .nav-links a::after {
+      content: '';
+      position: absolute;
+      bottom: -4px;
+      left: 0;
+      width: 0;
+      height: 2px;
+      background-color: var(--primary);
+      transition: width var(--transition);
+    }
+
+    .nav-links a:hover, .nav-links a:focus {
+      color: var(--primary);
+    }
+
+    .nav-links a:hover::after, .nav-links a:focus::after {
+      width: 100%;
+    }
+
+    .nav-links a:focus-visible {
+      outline: 2px solid var(--primary);
+      outline-offset: 4px;
+      border-radius: 4px;
+    }
+
+    .theme-toggle {
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 50%;
+      width: 36px;
+      height: 36px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      color: var(--text);
+      font-size: 1.1rem;
+      transition: background-color var(--transition), border-color var(--transition), transform var(--transition);
+      flex-shrink: 0;
+    }
+
+    .theme-toggle:hover {
+      background-color: var(--bg);
+      border-color: var(--primary);
+      transform: rotate(15deg);
+    }
+
+    .theme-toggle:focus-visible {
+      outline: 2px solid var(--primary);
+      outline-offset: 2px;
+    }
+
+    /* ===== 主体内容 ===== */
+    .main {
+      flex: 1;
+      padding: 2rem 0;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 0 1.5rem;
+    }
+
+    .page-header {
+      text-align: center;
+      padding: 2rem 0;
+    }
+
+    .page-header h1 {
+      font-size: 2rem;
+      margin-bottom: 0.5rem;
+      font-weight: 700;
+    }
+
+    .page-header p {
+      color: var(--text-light);
+      font-size: 1rem;
+    }
+
+    /* ===== 文章列表 ===== */
+    .post-list {
+      display: flex;
+      flex-direction: column;
+      gap: 1.5rem;
+    }
+
+    .post-card {
+      background: var(--white);
+      border-radius: var(--radius);
+      padding: 1.5rem;
+      box-shadow: var(--shadow);
+      transition: transform var(--transition), box-shadow var(--transition);
+      border: 1px solid transparent;
+    }
+
+    .post-card:hover {
+      transform: translateY(-2px);
+      box-shadow: var(--shadow-lg);
+      border-color: var(--border);
+    }
+
+    .post-card h2 {
+      font-size: 1.35rem;
+      margin-bottom: 0.5rem;
+      line-height: 1.4;
+    }
+
+    .post-card h2 a {
+      color: var(--text);
+      text-decoration: none;
+      transition: color var(--transition);
+    }
+
+    .post-card h2 a:hover {
+      color: var(--primary);
+    }
+
+    .post-card h2 a:focus-visible {
+      outline: 2px solid var(--primary);
+      outline-offset: 2px;
+      border-radius: 4px;
+    }
+
+    .post-meta {
+      color: var(--text-light);
+      font-size: 0.875rem;
+      margin-bottom: 0.75rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .post-meta time {
+      font-variant-numeric: tabular-nums;
+    }
+
+    .post-summary {
+      color: var(--text-light);
+      line-height: 1.6;
+      margin-bottom: 1rem;
+    }
+
+    .read-more {
+      color: var(--primary);
+      text-decoration: none;
+      font-weight: 500;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.25rem;
+      transition: gap var(--transition);
+      background: none;
+      border: none;
+      font-size: inherit;
+      cursor: pointer;
+      padding: 0;
+    }
+
+    .read-more:hover {
+      gap: 0.5rem;
+      color: var(--primary-dark);
+    }
+
+    .read-more:focus-visible {
+      outline: 2px solid var(--primary);
+      outline-offset: 2px;
+      border-radius: 4px;
+    }
+
+    /* ===== 文章详情 ===== */
+    .post-detail {
+      background: var(--white);
+      border-radius: var(--radius);
+      padding: 2rem;
+      box-shadow: var(--shadow);
+      margin-bottom: 1.5rem;
+    }
+
+    .post-header {
+      margin-bottom: 2rem;
+      padding-bottom: 1.5rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .post-header h1 {
+      font-size: 2rem;
+      margin-bottom: 0.75rem;
+      line-height: 1.3;
+    }
+
+    .post-content {
+      line-height: 1.8;
+    }
+
+    .post-content h2 {
+      font-size: 1.5rem;
+      margin: 2rem 0 1rem;
+      font-weight: 600;
+    }
+
+    .post-content h3 {
+      font-size: 1.25rem;
+      margin: 1.5rem 0 0.75rem;
+      font-weight: 600;
+    }
+
+    .post-content p {
+      margin-bottom: 1rem;
+    }
+
+    .post-content ul, .post-content ol {
+      margin-bottom: 1rem;
+      padding-left: 1.5rem;
+    }
+
+    .post-content li {
+      margin-bottom: 0.25rem;
+    }
+
+    .post-content code {
+      background: #f1f5f9;
+      padding: 0.2rem 0.4rem;
+      border-radius: 4px;
+      font-size: 0.875em;
+      font-family: "SF Mono", Consolas, "Liberation Mono", Menlo, monospace;
+    }
+
+    .post-content pre {
+      background: #1e293b;
+      color: #e2e8f0;
+      padding: 1rem;
+      border-radius: 8px;
+      overflow-x: auto;
+      margin-bottom: 1rem;
+      font-size: 0.9rem;
+      line-height: 1.5;
+    }
+
+    .post-content pre code {
+      background: none;
+      color: inherit;
+      padding: 0;
+      font-size: inherit;
+    }
+
+    .post-content blockquote {
+      border-left: 4px solid var(--primary);
+      padding-left: 1rem;
+      color: var(--text-light);
+      margin-bottom: 1rem;
+      font-style: italic;
+    }
+
+    .post-content strong {
+      font-weight: 600;
+    }
+
+    .post-footer {
+      margin-top: 2rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid var(--border);
+    }
+
+    /* ===== 按钮 ===== */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.25rem;
+      padding: 0.5rem 1rem;
+      border-radius: 8px;
+      font-weight: 500;
+      text-decoration: none;
+      cursor: pointer;
+      border: none;
+      font-size: 0.875rem;
+      transition: background-color var(--transition), transform var(--transition);
+    }
+
+    .btn:hover {
+      transform: translateY(-1px);
+    }
+
+    .btn:focus-visible {
+      outline: 2px solid var(--primary);
+      outline-offset: 2px;
+    }
+
+    .btn-primary {
+      background-color: var(--primary);
+      color: var(--white);
+    }
+
+    .btn-primary:hover {
+      background-color: var(--primary-dark);
+    }
+
+    .btn-secondary {
+      background-color: var(--bg);
+      color: var(--text);
+    }
+
+    .btn-secondary:hover {
+      background-color: var(--border);
+    }
+
+    /* ===== 页脚 ===== */
+    .footer {
+      background: var(--white);
+      border-top: 1px solid var(--border);
+      padding: 1.5rem 0;
+      text-align: center;
+      color: var(--text-light);
+      font-size: 0.875rem;
+    }
+
+    /* ===== 视图切换动画 ===== */
+    .view-section {
+      opacity: 1;
+      transform: translateY(0);
+      transition: opacity 0.3s ease, transform 0.3s ease;
+    }
+
+    .view-section.hidden {
+      display: none;
+      opacity: 0;
+      transform: translateY(8px);
+    }
+
+    /* 面包屑导航 */
+    .breadcrumb {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-bottom: 1rem;
+      font-size: 0.875rem;
+      color: var(--text-light);
+    }
+
+    .breadcrumb a {
+      color: var(--primary);
+      text-decoration: none;
+      transition: color var(--transition);
+    }
+
+    .breadcrumb a:hover {
+      color: var(--primary-dark);
+      text-decoration: underline;
+    }
+
+    .breadcrumb a:focus-visible {
+      outline: 2px solid var(--primary);
+      outline-offset: 2px;
+      border-radius: 4px;
+    }
+
+    .breadcrumb-separator {
+      opacity: 0.5;
+    }
+
+    /* ===== 响应式 ===== */
+    @media (max-width: 640px) {
+      .navbar .container {
+        padding: 0 1rem;
+      }
+
+      .nav-links {
+        gap: 1.25rem;
+      }
+
+      .page-header h1 {
+        font-size: 1.75rem;
+      }
+
+      .post-card {
+        padding: 1.25rem;
+      }
+
+      .post-detail {
+        padding: 1.5rem;
+      }
+
+      .post-header h1 {
+        font-size: 1.5rem;
+      }
+
+      .container {
+        padding: 0 1rem;
+      }
+    }
+
+    /* 减少动画偏好 */
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header class="navbar">
+    <div class="container">
+      <a href="/" class="logo" onclick="showList(); return false;">我的个人博客</a>
+      <nav aria-label="主导航" class="nav-wrapper">
+        <ul class="nav-links">
+          <li><a href="/" onclick="showList(); return false;" aria-current="page">首页</a></li>
+          <li><a href="/admin">管理后台</a></li>
+        </ul>
+        <button class="theme-toggle" id="theme-toggle" onclick="toggleTheme()" aria-label="切换深色模式" title="切换主题">
+          <span class="theme-icon" id="theme-icon" aria-hidden="true">🌙</span>
+        </button>
+      </nav>
+    </div>
+  </header>
+
+  <main class="main">
+    <div class="container">
+      <!-- 文章列表 -->
+      <div id="post-list" class="view-section">
+        <div class="page-header">
+          <h1>最新文章</h1>
+          <p>分享技术心得与生活感悟</p>
+        </div>
+        <div class="post-list" role="feed" aria-label="文章列表">
+          <article class="post-card">
+            <h2><a href="/post/1" onclick="showPost(0); return false;">欢迎来到我的个人博客</a></h2>
+            <p class="post-meta">
+              <time datetime="2024-01-15">2024/1/15</time>
+              <span aria-hidden="true">·</span>
+              <span>by Admin</span>
+            </p>
+            <p class="post-summary">这是我的第一篇博客文章，介绍博客的技术栈和初衷。</p>
+            <button class="read-more" onclick="showPost(0)">
+              阅读全文 <span aria-hidden="true">→</span>
+            </button>
+          </article>
+          <article class="post-card">
+            <h2><a href="/post/2" onclick="showPost(1); return false;">如何学习 Node.js</a></h2>
+            <p class="post-meta">
+              <time datetime="2024-01-14">2024/1/14</time>
+              <span aria-hidden="true">·</span>
+              <span>by Admin</span>
+            </p>
+            <p class="post-summary">分享 Node.js 学习路径和建议。</p>
+            <button class="read-more" onclick="showPost(1)">
+              阅读全文 <span aria-hidden="true">→</span>
+            </button>
+          </article>
+          <article class="post-card">
+            <h2><a href="/post/3" onclick="showPost(2); return false;">SQLite 入门指南</a></h2>
+            <p class="post-meta">
+              <time datetime="2024-01-13">2024/1/13</time>
+              <span aria-hidden="true">·</span>
+              <span>by Admin</span>
+            </p>
+            <p class="post-summary">介绍 SQLite 数据库的特点和基本用法。</p>
+            <button class="read-more" onclick="showPost(2)">
+              阅读全文 <span aria-hidden="true">→</span>
+            </button>
+          </article>
+        </div>
+      </div>
+
+      <!-- 文章详情 -->
+      <div id="post-detail" class="view-section hidden" aria-live="polite">
+        <nav class="breadcrumb" aria-label="面包屑导航">
+          <a href="/" onclick="showList(); return false;">首页</a>
+          <span class="breadcrumb-separator" aria-hidden="true">/</span>
+          <span id="breadcrumb-title">文章详情</span>
+        </nav>
+        <article class="post-detail">
+          <div class="post-header">
+            <h1 id="detail-title"></h1>
+            <p class="post-meta" id="detail-meta"></p>
+          </div>
+          <div class="post-content" id="detail-content"></div>
+        </article>
+        <div class="post-footer">
+          <button class="btn btn-secondary" onclick="showList()">
+            <span aria-hidden="true">←</span> 返回首页
+          </button>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <footer class="footer">
+    <div class="container">
+      <p>© 2024 我的个人博客. All rights reserved.</p>
+    </div>
+  </footer>
+
+  <script>
+    // ===== 主题切换 =====
+    const THEME_KEY = 'blog-theme';
+    const body = document.body;
+
+    /**
+     * 初始化主题：优先读取用户手动选择，其次检测系统偏好
+     */
+    function initTheme() {
+      const saved = localStorage.getItem(THEME_KEY);
+      if (saved === 'dark') {
+        body.classList.add('dark');
+        updateThemeIcon(true);
+      } else if (saved === 'light') {
+        body.classList.remove('dark');
+        updateThemeIcon(false);
+      } else {
+        // 未保存过，检测系统偏好
+        const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        if (prefersDark) {
+          body.classList.add('dark');
+        }
+        updateThemeIcon(prefersDark);
+      }
+    }
+
+    /**
+     * 切换主题
+     */
+    function toggleTheme() {
+      const isDark = body.classList.toggle('dark');
+      localStorage.setItem(THEME_KEY, isDark ? 'dark' : 'light');
+      updateThemeIcon(isDark);
+    }
+
+    /**
+     * 更新主题按钮图标
+     */
+    function updateThemeIcon(isDark) {
+      const iconEl = document.getElementById('theme-icon');
+      if (iconEl) {
+        iconEl.textContent = isDark ? '☀️' : '🌙';
+      }
+      const toggleBtn = document.getElementById('theme-toggle');
+      if (toggleBtn) {
+        toggleBtn.setAttribute('aria-label', isDark ? '切换浅色模式' : '切换深色模式');
+      }
+    }
+
+    // 监听系统主题变化
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
+      // 只有当用户没有手动选择时才自动切换
+      if (!localStorage.getItem(THEME_KEY)) {
+        if (e.matches) {
+          body.classList.add('dark');
+        } else {
+          body.classList.remove('dark');
+        }
+        updateThemeIcon(e.matches);
+      }
+    });
+
+    // 页面加载时初始化主题
+    initTheme();
+
+    // ===== 文章数据 =====
+    const posts = [
+      {
+        title: '欢迎来到我的个人博客',
+        date: '2024/1/15',
+        dateISO: '2024-01-15',
+        author: 'Admin',
+        content: `<p>这是我的第一篇博客文章。这个博客使用 Node.js + Express + SQLite 构建，简洁、快速且易于维护。</p>
+        <p>在这里，我会分享技术心得、生活感悟和有趣的项目。希望你能喜欢！</p>`
+      },
+      {
+        title: '如何学习 Node.js',
+        date: '2024/1/14',
+        dateISO: '2024-01-14',
+        author: 'Admin',
+        content: `<p>Node.js 是一个非常强大的 JavaScript 运行时环境。以下是一些学习建议：</p>
+        <ol>
+        <li><strong>掌握 JavaScript 基础</strong>：了解 ES6+ 语法、异步编程、Promise 等概念。</li>
+        <li><strong>理解 Node.js 核心模块</strong>：如 fs、path、http、events 等。</li>
+        <li><strong>学习 Express 框架</strong>：快速构建 Web 应用。</li>
+        <li><strong>实践项目</strong>：通过实际项目加深理解。</li>
+        </ol>
+        <p>最重要的是保持好奇心和持续学习的心态！</p>`
+      },
+      {
+        title: 'SQLite 入门指南',
+        date: '2024/1/13',
+        dateISO: '2024-01-13',
+        author: 'Admin',
+        content: `<p>SQLite 是一个嵌入式关系型数据库，非常适合中小型项目。</p>
+        <h2>特点</h2>
+        <ul>
+        <li>零配置，无需单独的服务器进程</li>
+        <li>单文件存储，便于备份和迁移</li>
+        <li>支持 ACID 事务</li>
+        <li>跨平台兼容</li>
+        </ul>
+        <h2>基本用法</h2>
+        <pre><code>const db = new Database('data.db');
+db.exec("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)");
+const stmt = db.prepare("INSERT INTO users (name) VALUES (?)");
+stmt.run("Alice");</code></pre>
+        <p>SQLite 是构建个人项目和原型开发的绝佳选择。</p>`
+      }
+    ];
+
+    /**
+     * 显示指定索引的文章详情
+     * @param {number} index - 文章索引
+     */
+    function showPost(index) {
+      if (index < 0 || index >= posts.length) {
+        console.warn('无效的文章索引:', index);
+        return;
+      }
+
+      const post = posts[index];
+      const listEl = document.getElementById('post-list');
+      const detailEl = document.getElementById('post-detail');
+      const titleEl = document.getElementById('detail-title');
+      const metaEl = document.getElementById('detail-meta');
+      const contentEl = document.getElementById('detail-content');
+      const breadcrumbEl = document.getElementById('breadcrumb-title');
+
+      // 更新内容
+      titleEl.textContent = post.title;
+      breadcrumbEl.textContent = post.title;
+      metaEl.innerHTML = `<time datetime="${post.dateISO}">${post.date}</time> <span aria-hidden="true">·</span> <span>by ${post.author}</span>`;
+      contentEl.innerHTML = post.content;
+
+      // 更新文档标题
+      document.title = `${post.title} | 我的个人博客`;
+
+      // 切换视图
+      listEl.classList.add('hidden');
+      detailEl.classList.remove('hidden');
+
+      // 滚动到顶部
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+
+      // 更新导航状态
+      updateNavState('detail');
+    }
+
+    /**
+     * 返回文章列表视图
+     */
+    function showList() {
+      const listEl = document.getElementById('post-list');
+      const detailEl = document.getElementById('post-detail');
+
+      detailEl.classList.add('hidden');
+      listEl.classList.remove('hidden');
+
+      document.title = '我的个人博客 | 预览';
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+
+      updateNavState('list');
+    }
+
+    /**
+     * 更新导航栏的 aria-current 状态
+     * @param {string} view - 当前视图 'list' 或 'detail'
+     */
+    function updateNavState(view) {
+      const homeLink = document.querySelector('.nav-links a:first-child');
+      if (homeLink) {
+        homeLink.setAttribute('aria-current', view === 'list' ? 'page' : 'false');
+      }
+    }
+
+    // 键盘快捷键支持
+    document.addEventListener('keydown', (e) => {
+      // ESC 返回列表
+      if (e.key === 'Escape') {
+        const detailEl = document.getElementById('post-detail');
+        if (!detailEl.classList.contains('hidden')) {
+          showList();
+        }
+      }
+    });
+
+    // 防止链接的默认行为（仅用于演示环境）
+    document.querySelectorAll('a[href="#"]').forEach(link => {
+      link.addEventListener('click', (e) => e.preventDefault());
+    });
+  </script>
+</body>
+</html>

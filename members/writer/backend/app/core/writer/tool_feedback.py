@@ -117,12 +117,18 @@ def agent_tool_facts_for_model(runtime_agent: str, metadata: dict[str, Any]) -> 
     facts: dict[str, Any] = {
         "type": "sub_agent_result_facts",
         "agent": str(metadata.get("agent_name") or metadata.get("agent") or "sub"),
+        "agent_index": str(metadata.get("agent_index") or ""),
+        "sub_session_id": str(metadata.get("sub_session_id") or ""),
         "status": "失败" if delivery.get("ok") is False else "完成",
-        "branch": str(delivery.get("branch") or metadata.get("branch") or ""),
-        "worktree": str(delivery.get("worktree") or metadata.get("worktree") or ""),
         "changed_files_count": len(changed_files),
         "changed_files": changed_files,
     }
+    branch = str(delivery.get("branch") or metadata.get("branch") or "")
+    worktree = str(delivery.get("worktree") or metadata.get("worktree") or "")
+    if branch:
+        facts["branch"] = branch
+    if worktree:
+        facts["worktree"] = worktree
     if delivery.get("commit"):
         facts["commit"] = str(delivery["commit"])
     if "needs_acceptance" in delivery or "needs_writer_acceptance" in delivery:

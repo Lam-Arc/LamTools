@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lam's Mods - Minecraft Mod 开发者</title>
+  <meta name="description" content="Lam的Minecraft Mod分享网站，展示原创Mod作品与开发理念">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="nav-container">
+      <a href="index.html" class="nav-logo">
+        <span style="font-size:2rem;">&#x1F527;</span> Lam's Mods
+      </a>
+      <button class="menu-toggle" id="menuToggle" aria-label="切换菜单">&#x2261;</button>
+      <ul class="nav-links" id="navLinks">
+        <li><a href="index.html" class="active">首页</a></li>
+        <li><a href="mods.html">Mod展示</a></li>
+        <li><a href="about.html">关于我</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <header class="hero">
+    <div class="hero-content">
+      <h1 class="hero-title">欢迎来到 Lam 的 Mod 世界</h1>
+      <p class="hero-subtitle">用代码编织方块世界的无限可能</p>
+      <p class="hero-desc">
+        我是一名热爱 Minecraft 的 Mod 开发者，致力于创造有趣、实用且富有创意的 Mod 作品。
+        每一个 Mod 都承载着我对游戏的热爱和对玩家体验的执着追求。
+      </p>
+      <div style="margin-top: 30px;">
+        <a href="mods.html" class="mc-btn">浏览 Mod</a>
+        <a href="about.html" class="mc-btn secondary" style="margin-left: 15px;">了解更多</a>
+      </div>
+    </div>
+  </header>
+
+  <section class="section">
+    <h2 class="section-title">开发理念</h2>
+    <p class="section-subtitle">让每一个方块都充满想象</p>
+    <div class="card-grid">
+      <div class="mc-card fade-in">
+        <div class="card-icon">&#x1F48E;</div>
+        <h3 class="card-title">品质至上</h3>
+        <p class="card-text">
+          每个 Mod 都经过精心打磨，从代码架构到用户体验，追求极致的品质。
+          我相信好的 Mod 不仅要功能强大，更要稳定可靠、易于使用。
+        </p>
+      </div>
+      <div class="mc-card fade-in">
+        <div class="card-icon">&#x1F527;</div>
+        <h3 class="card-title">实用创新</h3>
+        <p class="card-text">
+          在尊重原版游戏体验的基础上，融入创新的玩法和机制。
+          每个 Mod 都经过反复测试和优化，确保与各种环境兼容。
+        </p>
+      </div>
+      <div class="mc-card fade-in">
+        <div class="card-icon">&#x1F91D;</div>
+        <h3 class="card-title">社区驱动</h3>
+        <p class="card-text">
+          积极倾听玩家反馈，持续迭代更新。
+          社区的意见和建议是我不断进步的动力源泉。
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" style="background: #1a1a1a; margin: 0 -20px; padding: 60px 20px;">
+    <h2 class="section-title">精选 Mod</h2>
+    <p class="section-subtitle">最受欢迎的作品</p>
+    <div class="card-grid" id="featuredMods"></div>
+    <div style="text-align: center; margin-top: 40px;">
+      <a href="mods.html" class="mc-btn">查看全部 Mod</a>
+    </div>
+  </section>
+
+  <section class="section">
+    <h2 class="section-title">开发数据</h2>
+    <p class="section-subtitle">用数字记录成长</p>
+    <div class="card-grid">
+      <div class="mc-card" style="text-align: center;">
+        <div class="card-icon" style="margin: 0 auto 15px;">&#x1F4E6;</div>
+        <h3 class="card-title" style="font-size: 2.5rem; color: var(--mc-diamond);">12+</h3>
+        <p class="card-text">原创 Mod</p>
+      </div>
+      <div class="mc-card" style="text-align: center;">
+        <div class="card-icon" style="margin: 0 auto 15px;">&#x2B07;&#xFE0F;</div>
+        <h3 class="card-title" style="font-size: 2.5rem; color: var(--mc-diamond);">50K+</h3>
+        <p class="card-text">总下载量</p>
+      </div>
+      <div class="mc-card" style="text-align: center;">
+        <div class="card-icon" style="margin: 0 auto 15px;">&#x2B50;</div>
+        <h3 class="card-title" style="font-size: 2.5rem; color: var(--mc-diamond);">4.8</h3>
+        <p class="card-text">平均评分</p>
+      </div>
+    </div>
+  </section>
+
+  <footer class="footer">
+    <div class="footer-content">
+      <div class="footer-links">
+        <a href="index.html">首页</a>
+        <a href="mods.html">Mod展示</a>
+        <a href="about.html">关于我</a>
+      </div>
+      <p class="footer-text">用热爱点亮方块世界</p>
+      <p class="footer-copy">&copy; 2024 Lam's Mods. 保留所有权利。</p>
+    </div>
+  </footer>
+
+  <button class="back-to-top" id="backToTop" aria-label="返回顶部">&#x25B2;</button>
+
+  <script src="js/main.js"></script>
+</body>
+</html>

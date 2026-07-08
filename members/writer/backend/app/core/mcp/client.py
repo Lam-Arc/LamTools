@@ -4,11 +4,25 @@ import asyncio
 import json
 import logging
 import os
+import subprocess
+import sys
 from typing import Any
 
 from .schemas import MCPServerConfig, MCPTool
 
 logger = logging.getLogger(__name__)
+
+
+def _subprocess_start_kwargs(*, env: dict[str, str]) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {
+        "stdin": asyncio.subprocess.PIPE,
+        "stdout": asyncio.subprocess.PIPE,
+        "stderr": asyncio.subprocess.PIPE,
+        "env": env,
+    }
+    if sys.platform == "win32":
+        kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    return kwargs
 
 
 class MCPError(RuntimeError):
@@ -35,16 +49,7 @@ class MCPClient:
             return
         env = os.environ.copy()
         env.update(self.config.env)
-        import sys
-        kwargs = {
-            "stdin": asyncio.subprocess.PIPE,
-            "stdout": asyncio.subprocess.PIPE,
-            "stderr": asyncio.subprocess.PIPE,
-            "env": env,
-        }
-        if sys.platform == "win32":
-            import subprocess
-            kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        kwargs = _subprocess_start_kwargs(env=env)
         self._proc = await asyncio.create_subprocess_exec(
             self.config.command,
             *self.config.args,

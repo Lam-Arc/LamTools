@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import * as api from '@/api'
+import { removeSessionsByIds } from '@/lib/session-list'
 import type { Session, SessionCreate, SessionUpdate } from '@/types'
 
 export const useSessionStore = defineStore('session', () => {
@@ -53,8 +54,13 @@ export const useSessionStore = defineStore('session', () => {
 
   async function deleteSession(id: string) {
     await api.deleteSession(id)
-    sessions.value = sessions.value.filter(x => x.id !== id)
-    if (activeSession.value?.id === id) {
+    removeSessions([id])
+  }
+
+  function removeSessions(ids: Iterable<string>) {
+    const deleted = new Set(ids)
+    sessions.value = removeSessionsByIds(sessions.value, deleted)
+    if (activeSession.value?.id && deleted.has(activeSession.value.id)) {
       activeSession.value = null
     }
   }
@@ -76,6 +82,6 @@ export const useSessionStore = defineStore('session', () => {
   return {
     sessions, activeSession, loading, activeSessionId, sessionsByProject,
     fetchSessions, createSession, selectSession, updateSession, deleteSession,
-    clearMessages, updateSessionField,
+    clearMessages, updateSessionField, removeSessions,
   }
 })

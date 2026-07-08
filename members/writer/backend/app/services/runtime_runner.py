@@ -26,6 +26,15 @@ RuntimeTaskRegistryFactory = Callable[[], Any]
 SubAgentLLMClientFactory = Callable[[Any, Any], Awaitable[Any]]
 
 
+def _current_user_content(
+    text: str,
+    extra_blocks: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]] | None:
+    if not extra_blocks:
+        return None
+    return [{"type": "text", "text": text}, *extra_blocks]
+
+
 class WriterRuntimeRunner:
     def __init__(
         self,
@@ -56,6 +65,7 @@ class WriterRuntimeRunner:
         transcript_turn_id: str,
         user_message: str,
         raw_user_message: str,
+        user_content_blocks: list[dict[str, Any]] | None = None,
         llm_client: Any,
         work_root: str,
         runtime_controls: dict[str, dict[str, bool]] | None = None,
@@ -88,6 +98,7 @@ class WriterRuntimeRunner:
         try:
             result = await self._run_core_kernel(
                 goal=input_context.goal,
+                user_content=_current_user_content(input_context.goal, user_content_blocks),
                 session_id=session_id,
                 llm_client=llm_client,
                 work_root=work_root,

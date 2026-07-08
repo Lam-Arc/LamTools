@@ -1,5 +1,6 @@
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import select
@@ -9,11 +10,13 @@ from app.app_server.ledger import list_events_after
 from app.app_server.snapshot import load_snapshot
 from app.config import Settings
 from app.database import Base
+from app.models.attachment import WriterAttachment
 from app.models.message import WriterMessage
 from app.models.session import WriterSession
 from app.models.transcript import WriterTranscriptBlock, WriterTranscriptTurn
 import app.services.app_projection_sink as app_projection_sink_module
 import app.services.writer_service as writer_service_module
+from app.core.writer.agent_runtime import AgentCall, SubAgentDefinition
 from app.services.writer_service import writer_orchestrate
 from lamtools_core.event import CoreEvent
 from lamtools_core.kernel import KernelResult
@@ -122,6 +125,83 @@ async def test_run_turn_persists_message():
             writer_service_module.build_llm_client = _orig_build
             writer_service_module.run_core_kernel = _orig_run
 
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_run_turn_sends_current_image_attachment_as_multimodal_content(monkeypatch, tmp_path):
+    settings = Settings(
+        data_dir=str(tmp_path / "data"),
+        database_url=f"sqlite+aiosqlite:///{tmp_path / 'image-attachment.db'}",
+        llm_api_key="test",
+    )
+
+    engine = create_async_engine(settings.database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    captured: dict[str, object] = {}
+
+    async def _fake_resolve_llm_config(db, route, model_id=None):
+        return {"provider": "test", "model": "test-model"}
+
+    def _fake_build_llm_client(resolved, thinking_enabled=None, thinking_budget=None):
+        return object()
+
+    async def _fake_run_core_kernel(**kwargs):
+        captured.update(kwargs)
+        return KernelResult(
+            session_id=kwargs["session_id"],
+            run_id="run-image",
+            decision="done",
+            message="我看到了截图。",
+            metadata={"core_events": [], "steps_count": 1, "tool_results_summary": [], "verification_summaries": []},
+        )
+
+    monkeypatch.setattr(writer_service_module, "resolve_llm_config", _fake_resolve_llm_config)
+    monkeypatch.setattr(writer_service_module, "build_llm_client", _fake_build_llm_client)
+    monkeypatch.setattr(writer_service_module, "run_core_kernel", _fake_run_core_kernel)
+
+    image_path = tmp_path / "screenshot.png"
+    image_path.write_bytes(b"\x89PNG\r\n\x1a\nimage-bytes")
+
+    try:
+        services = writer_orchestrate(settings)
+        run_turn = services["run_turn"]
+
+        async with session_factory() as db:
+            session = WriterSession(
+                id="session-image-attachment",
+                title="test",
+                work_root=str(tmp_path / "workspace"),
+            )
+            db.add(session)
+            db.add(
+                WriterAttachment(
+                    id="att-image",
+                    session_id=session.id,
+                    filename="screenshot.png",
+                    mime_type="image/png",
+                    size=image_path.stat().st_size,
+                    storage_path=str(image_path),
+                    preview_type="image",
+                )
+            )
+            await db.commit()
+
+            await run_turn(db, session.id, "请看这张截图", attachment_ids=["att-image"])
+
+        assert str(image_path) not in str(captured["goal"])
+        user_content = captured["user_content"]
+        assert isinstance(user_content, list)
+        assert user_content[0] == {"type": "text", "text": str(captured["goal"])}
+        assert user_content[1]["type"] == "image_url"
+        assert user_content[1]["image_url"]["url"].startswith("data:image/png;base64,")
+        assert user_content[1]["image_url"]["detail"] == "auto"
+        assert str(image_path) not in str(user_content)
+    finally:
         await engine.dispose()
 
 
@@ -262,6 +342,77 @@ async def test_run_turn_binds_post_run_checkpoint_to_app_server_turn(monkeypatch
             "turn_id": "turn-bound",
             "stage": "after_turn",
         }
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_sub_agent_model_factory_uses_generic_route_and_explicit_model(monkeypatch, tmp_path):
+    resolved_calls: list[dict[str, str | None]] = []
+
+    async def _fake_resolve_llm_config(db, route, model_id=None):
+        resolved_calls.append({"route": route, "model_id": model_id})
+        model_key = model_id or route
+        return SimpleNamespace(
+            provider=SimpleNamespace(id=f"provider:{model_key}"),
+            model=SimpleNamespace(id=f"model:{model_key}", model_id=model_key),
+            task_type=route,
+        )
+
+    def _fake_build_llm_client(resolved, thinking_enabled=None, thinking_budget=None):
+        return SimpleNamespace(model_id=resolved.model.model_id)
+
+    async def _fake_run_core_kernel(**kwargs):
+        factory = kwargs["sub_agent_llm_client_factory"]
+        await factory(
+            SubAgentDefinition(
+                name="worker",
+                description="Worker",
+                role="sub",
+                developer_instructions="",
+                tools=(),
+            ),
+            AgentCall(
+                name="sub",
+                task="delegate",
+                options={"agent": "worker", "model": "glm5.2-xfyun-maas"},
+            ),
+        )
+        return KernelResult(
+            session_id=kwargs["session_id"],
+            run_id="run-sub-agent-route",
+            decision="done",
+            message="done",
+            metadata={"core_events": [], "steps_count": 0, "tool_results_summary": [], "verification_summaries": []},
+        )
+
+    monkeypatch.setattr(writer_service_module, "resolve_llm_config", _fake_resolve_llm_config)
+    monkeypatch.setattr(writer_service_module, "build_llm_client", _fake_build_llm_client)
+    monkeypatch.setattr(writer_service_module, "run_core_kernel", _fake_run_core_kernel)
+
+    settings = Settings(
+        data_dir=str(tmp_path / "data"),
+        database_url=f"sqlite+aiosqlite:///{tmp_path / 'sub-agent-route.db'}",
+        llm_api_key="test",
+    )
+    engine = create_async_engine(settings.database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+        services = writer_orchestrate(settings)
+        run_turn = services["run_turn"]
+        session_id = "session-sub-agent-route"
+
+        async with session_factory() as db:
+            db.add(WriterSession(id=session_id, title="test", work_root=str(tmp_path / "workspace")))
+            await db.commit()
+
+            await run_turn(db, session_id, "delegate work")
+
+        assert {"route": "sub_agent", "model_id": "glm5.2-xfyun-maas"} in resolved_calls
+        assert all(call["route"] != "sub_agent:worker" for call in resolved_calls)
     finally:
         await engine.dispose()
 

@@ -1,0 +1,16 @@
+<article class="post-detail">
+  <div class="post-header">
+    <h1><%= post.title %></h1>
+    <p class="post-meta">
+      <span><%= post.created_at %></span>
+      <span>by <%= post.author %></span>
+    </p>
+  </div>
+  <div class="post-content">
+    <%- post.content %>
+  </div>
+</article>
+
+<div class="post-footer">
+  <a href="/" class="btn btn-secondary">&larr; 返回首页</a>
+</div>

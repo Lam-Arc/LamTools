@@ -24,11 +24,19 @@ from lamtools_core.kernel import (
     RuntimeKit,
     VerificationResult,
 )
-from lamtools_core.llm import ChatMessage, LLMClient, LLMRequest, LLMResponse
+from lamtools_core.llm import ChatMessage, LLMClient, LLMRequest, LLMResponse, LLMStreamEvent, LLMToolCall
 from lamtools_core.llm.policy import BackoffStrategy, RetryPolicy
 from lamtools_core.prompt import PromptContext
 from lamtools_core.runtime import RuntimeState, RuntimeStateStore, RuntimeToolStep, RuntimeTurnInput
 from lamtools_core.tool import ToolCall, ToolResult
+
+
+def test_partial_tool_arguments_do_not_emit_content_streaming_placeholder():
+    summary = CoreLoopKernel._summarize_partial_tool_arguments(
+        '{"path":"index.html","content":"<html>'
+    )
+
+    assert summary == {"path": "index.html"}
 
 
 # ---------------------------------------------------------------------------
@@ -322,6 +330,42 @@ class FailingCompactionOnlyLLMClient(CapturingLLMClient):
         return LLMResponse(content="done")
 
 
+class FlakyStreamingCompactionLLMClient(CapturingLLMClient):
+    def __init__(self, *, compaction_failures: int) -> None:
+        super().__init__()
+        self.compaction_failures = compaction_failures
+        self.stream_requests: list[LLMRequest] = []
+
+    async def stream(self, request: LLMRequest):
+        self.stream_requests.append(request)
+        first_content = request.messages[0].content if request.messages else ""
+        if isinstance(first_content, str) and first_content.startswith("Summarize this agent session context"):
+            if self.compaction_failures > 0:
+                self.compaction_failures -= 1
+                raise RuntimeError("transient compaction model unavailable")
+            yield LLMStreamEvent(kind="content_delta", content="1. Current Goal\n- Continue after retry.\n\n")
+            yield LLMStreamEvent(
+                kind="content_delta",
+                content=(
+                    "2. User History, Instructions, And Decisions\n"
+                    "- Preserve the compacted user constraints.\n\n"
+                    "3. Completed Work\n"
+                    "- Compaction retried through the shared model path.\n\n"
+                    "4. Key Decisions And Constraints\n"
+                    "- Use one retry policy for model calls.\n\n"
+                    "5. Files, APIs, Commands, And Results\n"
+                    "- None.\n\n"
+                    "6. Open Issues Or Risks\n"
+                    "- None.\n\n"
+                    "7. Next Best Actions\n"
+                    "- Continue."
+                ),
+            )
+            yield LLMStreamEvent(kind="done", metadata={"finish_reason": "stop"})
+            return
+        raise NotImplementedError
+
+
 class FailingLLMClient:
     """LLM client that always raises an error."""
 
@@ -381,9 +425,11 @@ def _make_kernel(
 def _make_turn_input(
     user_message: str = "hello",
     session_id: str = "test-session",
+    user_content: str | list[dict[str, Any]] | None = None,
 ) -> RuntimeTurnInput:
     return RuntimeTurnInput(
         user_message=user_message,
+        user_content=user_content,
         metadata={"session_id": session_id},
     )
 
@@ -407,6 +453,30 @@ class TestKernelTypes:
         assert turn.repair_prompt == ""
         assert turn.events == []
         assert turn.metadata == {}
+
+    @pytest.mark.asyncio
+    async def test_current_user_content_can_be_multimodal_blocks(self):
+        class HistoryEchoKit(MockRuntimeKit):
+            async def build_model_request(self, state, context):
+                return LLMRequest(messages=context.history, model="mock-model")
+
+        llm = CapturingLLMClient()
+        image_content = [
+            {"type": "text", "text": "describe this screenshot"},
+            {
+                "type": "image_url",
+                "image_url": {"url": "data:image/png;base64,AA==", "detail": "auto"},
+            },
+        ]
+        kernel = _make_kernel(HistoryEchoKit(steps=[MockKitStep(decision="done")]), llm_client=llm)
+
+        result = await kernel.run(_make_turn_input(user_message="describe this screenshot", user_content=image_content))
+
+        assert result.decision == "done"
+        assert llm.last_request is not None
+        user_messages = [message for message in llm.last_request.messages if message.role == "user"]
+        assert user_messages
+        assert user_messages[0].content == image_content
 
     def test_kernel_turn_with_values(self):
         call = ToolCall(id="c1", name="search", arguments={"q": "test"})
@@ -808,6 +878,72 @@ class TestKernelEvents:
         reply_events = [e for e in sink.events if e.name == "runtime.reply"]
         assert len(reply_events) == 1
         assert reply_events[0].payload["content"] == "hello user"
+
+    @pytest.mark.asyncio
+    async def test_non_streaming_thinking_is_emitted_as_reasoning_part(self):
+        """Kernel renders non-streaming thinking with the same reasoning part contract."""
+        kit = MockRuntimeKit(steps=[MockKitStep(reply="final answer", decision="done")])
+        sink = CollectingEventSink()
+        llm = MockLLMClient(LLMResponse(content="final answer", thinking="visible shallow plan"))
+        kernel = _make_kernel(kit, llm_client=llm, event_sink=sink)
+
+        await kernel.run(_make_turn_input())
+
+        reasoning_parts = [
+            event.payload
+            for event in sink.events
+            if event.name == "runtime.part" and event.payload.get("part_type") == "reasoning"
+        ]
+        assert len(reasoning_parts) == 1
+        assert reasoning_parts[0]["content"] == "visible shallow plan"
+        assert reasoning_parts[0]["status"] == "completed"
+
+    @pytest.mark.asyncio
+    async def test_shallow_thinking_missing_does_not_block_tool_execution(self):
+        """A shallow-thinking miss is diagnostic and must not replace model output."""
+        call = LLMToolCall(id="call-1", name="search", arguments={"q": "test"})
+
+        class ResponseDrivenToolKit(MockRuntimeKit):
+            def __init__(self) -> None:
+                super().__init__([MockKitStep(decision="failed")])
+                self.executed: list[str] = []
+
+            async def parse_model_output(self, state: RuntimeState, response: LLMResponse) -> KernelTurn:
+                return KernelTurn(
+                    reply=response.content,
+                    tool_calls=[
+                        ToolCall(id=tc.id, name=tc.name, arguments=tc.arguments if isinstance(tc.arguments, dict) else {})
+                        for tc in response.tool_calls
+                    ],
+                    decision_hint="continue",
+                )
+
+            async def execute_tool(self, state: RuntimeState, call: ToolCall) -> ToolResult:
+                self.executed.append(call.id)
+                return await super().execute_tool(state, call)
+
+        kit = ResponseDrivenToolKit()
+        sink = CollectingEventSink()
+        llm = MockLLMClient(LLMResponse(
+            content="I will search first",
+            tool_calls=[call],
+            finish_reason="tool_calls",
+            metadata={"shallow_thinking_missing": True},
+        ))
+        kernel = _make_kernel(kit, llm_client=llm, event_sink=sink)
+
+        await kernel.run(_make_turn_input())
+
+        assert kit.executed == ["call-1"]
+        assert [event for event in sink.events if event.name == "runtime.tool.started"]
+        replies = [event.payload["content"] for event in sink.events if event.name == "runtime.reply"]
+        assert replies == []
+        text_parts = [
+            event.payload
+            for event in sink.events
+            if event.name == "runtime.part" and event.payload.get("part_type") == "text"
+        ]
+        assert any(part["content"] == "I will search first" for part in text_parts)
 
     @pytest.mark.asyncio
     async def test_tool_turn_text_is_process_not_reply(self):
@@ -1530,10 +1666,10 @@ class TestKernelContextCompaction:
             for event in sink.events
             if event.name == "runtime.part" and event.payload.get("part_type") == "compaction"
         ]
-        assert len(part_events) == 1
-        assert part_events[0].payload["label"] == "上下文已压缩"
-        assert part_events[0].payload["trigger"] == "auto"
-        assert "[Compacted Context]" in part_events[0].payload["content"]
+        assert [event.payload["status"] for event in part_events] == ["running", "completed"]
+        assert part_events[-1].payload["label"] == "上下文已压缩"
+        assert part_events[-1].payload["trigger"] == "auto"
+        assert "[Compacted Context]" in part_events[-1].payload["content"]
 
     @pytest.mark.asyncio
     async def test_compaction_target_ratio_is_a_hard_upper_bound(self):
@@ -1576,6 +1712,75 @@ class TestKernelContextCompaction:
         assert "tool output " not in summary_messages[0].content
 
     @pytest.mark.asyncio
+    async def test_compaction_stream_model_call_uses_kernel_retry_policy(self):
+        class LargeRequestKit(MockRuntimeKit):
+            async def build_model_request(self, state, context):
+                messages = [ChatMessage(role="system", content="stable prefix")]
+                for i in range(5):
+                    messages.append(ChatMessage(role="user", content=f"old user {i} " + ("x" * 500)))
+                    messages.append(ChatMessage(role="assistant", content=f"old assistant {i} " + ("y" * 500)))
+                messages.append(ChatMessage(role="user", content="current task"))
+                return LLMRequest(messages=messages, model="mock-model")
+
+        sink = CollectingEventSink()
+        llm = FlakyStreamingCompactionLLMClient(compaction_failures=2)
+        kernel = _make_kernel(
+            LargeRequestKit(steps=[MockKitStep(decision="done")]),
+            llm_client=llm,
+            event_sink=sink,
+            policy=LoopPolicy(
+                context_window_tokens=2_000,
+                compact_trigger_ratio=0.8,
+                compact_target_ratio=0.6,
+                model_retries=3,
+            ),
+            retry_policy=RetryPolicy(
+                initial_delay_seconds=0,
+                max_delay_seconds=0,
+                jitter=False,
+                staged_delay_seconds=(),
+            ),
+        )
+
+        result = await kernel.run(_make_turn_input())
+
+        assert result.decision == "done"
+        compaction_requests = [
+            request
+            for request in llm.stream_requests
+            if request.messages
+            and isinstance(request.messages[0].content, str)
+            and request.messages[0].content.startswith("Summarize this agent session context")
+        ]
+        assert len(compaction_requests) == 3
+        compaction_complete_requests = [
+            request
+            for request in llm.requests
+            if request.messages
+            and isinstance(request.messages[0].content, str)
+            and request.messages[0].content.startswith("Summarize this agent session context")
+        ]
+        assert compaction_complete_requests == []
+        retry_events = [
+            event
+            for event in sink.events
+            if event.name == "runtime.part" and event.payload.get("status") == "retrying"
+        ]
+        assert [event.payload["attempt"] for event in retry_events] == [1, 2]
+        assert [event.payload["max_retries"] for event in retry_events] == [2, 2]
+        compaction_parts = [
+            event
+            for event in sink.events
+            if event.name == "runtime.part" and event.payload.get("part_type") == "compaction"
+        ]
+        assert [event.payload["status"] for event in compaction_parts] == [
+            "running",
+            "running",
+            "completed",
+        ]
+        assert [event for event in sink.events if event.name == "runtime.context_compacted"]
+
+    @pytest.mark.asyncio
     async def test_compaction_model_failure_stops_run_without_success_event(self):
         class LargeRequestKit(MockRuntimeKit):
             async def build_model_request(self, state, context):
@@ -1596,23 +1801,39 @@ class TestKernelContextCompaction:
                 context_window_tokens=2_000,
                 compact_trigger_ratio=0.8,
                 compact_target_ratio=0.6,
+                model_retries=3,
+            ),
+            retry_policy=RetryPolicy(
+                initial_delay_seconds=0,
+                max_delay_seconds=0,
+                jitter=False,
+                staged_delay_seconds=(),
             ),
         )
 
         result = await kernel.run(_make_turn_input())
 
         assert result.decision == "failed"
-        assert result.error == "Context compaction failed: compaction model unavailable"
-        assert llm.call_count == 1
+        assert result.error == (
+            "Context compaction failed: "
+            "Model call failed after 3 attempts: compaction model unavailable"
+        )
+        assert llm.call_count == 3
         assert [event for event in sink.events if event.name == "runtime.context_compacted"] == []
         assert [
             event
             for event in sink.events
             if event.name == "runtime.part" and event.payload.get("part_type") == "compaction"
         ] == []
+        retry_events = [
+            event
+            for event in sink.events
+            if event.name == "runtime.part" and event.payload.get("status") == "retrying"
+        ]
+        assert [event.payload["attempt"] for event in retry_events] == [1, 2]
         failed_events = [event for event in sink.events if event.name == "runtime.failed"]
         assert len(failed_events) == 1
-        assert failed_events[0].payload["error"] == "Context compaction failed: compaction model unavailable"
+        assert failed_events[0].payload["error"] == result.error
 
     @pytest.mark.asyncio
     async def test_compaction_fails_clearly_when_preserved_context_exceeds_target(self):

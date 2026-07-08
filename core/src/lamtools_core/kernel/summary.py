@@ -119,6 +119,8 @@ def core_event_to_progress_dict(event: CoreEvent) -> dict[str, Any]:
             "tool_args",
             "tool_result",
             "tool_error",
+            "delta",
+            "arguments_text",
             "before_tokens",
             "after_tokens",
             "trigger_tokens",

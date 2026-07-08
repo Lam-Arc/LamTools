@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title><%= title %> | 我的个人博客</title>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="alternate" type="application/rss+xml" title="我的个人博客" href="/feed/rss">
+</head>
+<body>
+  <header class="navbar">
+    <div class="container">
+      <a href="/" class="logo">我的个人博客</a>
+      <div class="nav-right">
+        <button class="theme-toggle" id="themeToggle" title="切换主题" aria-label="切换明暗主题">
+          🌙
+        </button>
+        <form action="/search" method="GET" class="search-form">
+          <input type="text" name="q" placeholder="搜索文章..." class="search-input" required>
+          <button type="submit" class="search-btn">🔍</button>
+        </form>
+        <ul class="nav-links">
+          <li><a href="/">首页</a></li>
+          <li><a href="/admin">管理后台</a></li>
+        </ul>
+      </div>
+    </div>
+  </header>
+
+  <main class="main">
+    <div class="container">
+      <%- body %>
+    </div>
+  </main>
+
+  <footer class="footer">
+    <div class="container">
+      <p>&copy; <%= currentYear %> 我的个人博客. All rights reserved.</p>
+    </div>
+  </footer>
+
+  <script>
+    (function() {
+      const btn = document.getElementById('themeToggle');
+      if (!btn) return;
+
+      const stored = localStorage.getItem('theme');
+      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      const isDark = stored ? stored === 'dark' : prefersDark;
+
+      if (isDark) {
+        document.documentElement.setAttribute('data-theme', 'dark');
+        btn.textContent = '☀️';
+      } else {
+        document.documentElement.removeAttribute('data-theme');
+        btn.textContent = '🌙';
+      }
+
+      btn.addEventListener('click', function() {
+        const html = document.documentElement;
+        if (html.getAttribute('data-theme') === 'dark') {
+          html.removeAttribute('data-theme');
+          localStorage.setItem('theme', 'light');
+          btn.textContent = '🌙';
+        } else {
+          html.setAttribute('data-theme', 'dark');
+          localStorage.setItem('theme', 'dark');
+          btn.textContent = '☀️';
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

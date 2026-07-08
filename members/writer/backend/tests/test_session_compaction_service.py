@@ -15,7 +15,8 @@ from app.models.transcript import WriterTranscriptTurn
 from app.services import writer_service as writer_service_module
 from app.services.runtime_input_context import prepare_runtime_input_context
 from app.services.session_compaction_service import compact_session_context_response
-from lamtools_core.llm import LLMResponse
+from lamtools_core.llm import LLMResponse, LLMStreamEvent
+from lamtools_core.llm.policy import RetryPolicy
 
 
 class _FakeLLMClient:
@@ -58,6 +59,45 @@ class _FailingCompactionLLMClient(_FakeLLMClient):
     async def complete(self, request):
         self.last_request = request
         raise RuntimeError("compaction model unavailable")
+
+
+class _FlakyCompactionLLMClient(_CompactionLLMClient):
+    def __init__(self, *, failures: int) -> None:
+        super().__init__()
+        self.failures = failures
+        self.call_count = 0
+        self.stream_count = 0
+
+    async def complete(self, request):
+        self.call_count += 1
+        self.last_request = request
+        return await super().complete(request)
+
+    async def stream(self, request):
+        self.stream_count += 1
+        self.last_request = request
+        if self.failures > 0:
+            self.failures -= 1
+            raise RuntimeError("transient compaction model unavailable")
+        yield LLMStreamEvent(kind="content_delta", content="1. Current Goal\n- Continue.\n\n")
+        yield LLMStreamEvent(
+            kind="content_delta",
+            content=(
+                "2. User History, Instructions, And Decisions\n"
+                "- Preserve explicit user decisions from compacted history.\n\n"
+                "3. Completed Work\n"
+                "- Old turns were summarized by the shared Core compactor.\n\n"
+                "4. Key Decisions And Constraints\n"
+                "- Use one compaction interface.\n\n"
+                "5. Files, APIs, Commands, And Results\n"
+                "- None.\n\n"
+                "6. Open Issues Or Risks\n"
+                "- None.\n\n"
+                "7. Next Best Actions\n"
+                "- Continue."
+            ),
+        )
+        yield LLMStreamEvent(kind="done", metadata={"finish_reason": "stop"})
 
 
 class _WriterStyleCompactionClient:
@@ -258,6 +298,58 @@ async def test_manual_compaction_uses_shared_model_compactor_when_client_is_prov
             assert result["summary"].startswith("[Compacted Context]")
             assert "shared Core compactor" in result["summary"]
             assert "".join(deltas) == result["summary"]
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_manual_compaction_retries_model_calls_with_shared_policy(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'compact-model-retry.db'}", future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    llm = _FlakyCompactionLLMClient(failures=2)
+    deltas: list[str] = []
+    try:
+        async with session_factory() as db:
+            db.add(WriterSession(id="model-compact-retry", title="Model Compact Retry"))
+            base_time = now()
+            for index in range(8):
+                db.add(
+                    WriterMessage(
+                        id=f"model-retry-{index}",
+                        session_id="model-compact-retry",
+                        role="user" if index % 2 == 0 else "assistant",
+                        content=f"model-retry-message-{index}",
+                        created_at=base_time + timedelta(seconds=index),
+                    )
+                )
+            await db.commit()
+
+            result = await compact_session_context_response(
+                db,
+                session_id="model-compact-retry",
+                llm_client=llm,
+                model="mock-compact-model",
+                on_summary_delta=deltas.append,
+                model_retries=3,
+                retry_policy=RetryPolicy(
+                    initial_delay_seconds=0,
+                    max_delay_seconds=0,
+                    jitter=False,
+                    staged_delay_seconds=(),
+                ),
+            )
+
+            assert result["status"] == "compacted"
+            assert llm.stream_count == 3
+            assert llm.call_count == 0
+            assert "".join(deltas) in result["summary"]
+            session = await db.get(WriterSession, "model-compact-retry")
+            assert session is not None
+            runtime_state = session.runtime_state if isinstance(session.runtime_state, dict) else {}
+            assert "manual_compaction" in runtime_state
     finally:
         await engine.dispose()
 

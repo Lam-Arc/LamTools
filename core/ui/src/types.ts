@@ -128,6 +128,13 @@ export interface ToolArtifact {
   metadata?: Record<string, unknown>;
 }
 
+export interface ToolInputPreview {
+  field: string;
+  content: string;
+  chars: number;
+  truncated?: boolean;
+}
+
 export interface MessagePart {
   id: string;
   partType: MessagePartType;
@@ -142,6 +149,7 @@ export interface MessagePart {
   toolArgs?: Record<string, unknown>;
   toolResult?: string;
   toolError?: string;
+  inputPreview?: ToolInputPreview;
   artifacts?: ToolArtifact[];
   /** Timing */
   runId?: string;

@@ -15,6 +15,14 @@ from app.core.writer.agent_runtime import (
 )
 
 
+MODEL_TOOLS = [
+    {"type": "function", "function": {"name": "read_file"}},
+    {"type": "function", "function": {"name": "write_file"}},
+    {"type": "function", "function": {"name": "run_tests"}},
+    {"type": "function", "function": {"name": "sub_agent"}},
+]
+
+
 class SimpleLLMResponse:
     def __init__(
         self,
@@ -153,32 +161,48 @@ async def test_agent_tool_allowlist_rejects_out_of_scope_tool():
 
 
 @pytest.mark.asyncio
-async def test_sub_agent_runs_delegated_role_with_core_prompt():
+async def test_sub_agent_uses_writer_chosen_name_and_core_identity():
     runner = RecordingSubAgentKernelRunner(content="先补测试再交付")
     runtime = AgentRuntime(
         llm_client=RecordingLLM([]),
         design_mode_selector=lambda task: "low",
+        model_tools=MODEL_TOOLS,
         sub_agent_kernel_runner=runner,
     )
 
-    result = await runtime.run(
+    first = await runtime.run(
         "agent-runtime-test",
         AgentCall(
             name="sub",
             task="审查项目",
             mode="low",
-            options={"agent": "default", "role": "review", "expected_output": "阻塞问题和下一步"},
+            options={"agent": "repo_reader", "expected_output": "阻塞问题和下一步"},
         ),
     )
+    second = await runtime.run(
+        "agent-runtime-test",
+        AgentCall(name="sub", task="继续审查", mode="low", options={"agent": "repo_reader"}),
+    )
+    third = await runtime.run(
+        "agent-runtime-test",
+        AgentCall(name="sub", task="修测试", mode="low", options={"agent": "test_fixer"}),
+    )
 
-    assert result.output == "先补测试再交付"
-    assert result.metadata["agent_name"] == "default"
-    assert result.metadata["runtime_agent"] == "sub"
-    assert result.metadata["agent"] == "default"
-    assert "final_answer" not in result.metadata
+    assert first.output == "先补测试再交付"
+    assert first.metadata["agent_name"] == "repo_reader"
+    assert first.metadata["agent_index"] == "001"
+    assert first.metadata["sub_session_id"] == "agent-runtime-test:sub:001:repo_reader"
+    assert second.metadata["agent_index"] == "001"
+    assert second.metadata["sub_session_id"] == first.metadata["sub_session_id"]
+    assert third.metadata["agent_name"] == "test_fixer"
+    assert third.metadata["agent_index"] == "002"
+    assert third.metadata["sub_session_id"] == "agent-runtime-test:sub:002:test_fixer"
+    assert first.metadata["runtime_agent"] == "sub"
+    assert "final_answer" not in first.metadata
     assert "临时 SubAgent" in runner.calls[0]["prompt"]
     assert "最终必须输出 JSON" not in runner.calls[0]["prompt"]
     assert "read_file" in runner.calls[0]["available_tools"]
+    assert "write_file" in runner.calls[0]["available_tools"]
     assert "sub_agent" not in runner.calls[0]["available_tools"]
 
 
@@ -287,7 +311,7 @@ async def test_sub_agent_empty_kernel_result_exposes_diagnostic_reason_to_writer
 
 
 @pytest.mark.asyncio
-async def test_reviewer_sub_agent_uses_review_tool_allowlist():
+async def test_sub_agent_inherits_parent_tools_without_role_allowlist():
     runner = RecordingSubAgentKernelRunner(
         content="README 可继续复核",
         tool_records=[{
@@ -301,6 +325,7 @@ async def test_reviewer_sub_agent_uses_review_tool_allowlist():
     runtime = AgentRuntime(
         llm_client=RecordingLLM([]),
         design_mode_selector=lambda task: "low",
+        model_tools=MODEL_TOOLS,
         sub_agent_kernel_runner=runner,
     )
 
@@ -318,7 +343,8 @@ async def test_reviewer_sub_agent_uses_review_tool_allowlist():
     assert "referenced_tools" not in result.metadata
     assert result.metadata["tool_calls"][0]["status"] == "completed"
     assert "read_file" in runner.calls[0]["available_tools"]
-    assert "write_file" not in runner.calls[0]["available_tools"]
+    assert "write_file" in runner.calls[0]["available_tools"]
+    assert "sub_agent" not in runner.calls[0]["available_tools"]
 
 
 @pytest.mark.asyncio
@@ -350,24 +376,6 @@ async def test_sub_agent_records_reasoning_blocks():
 
 
 @pytest.mark.asyncio
-async def test_explorer_sub_agent_does_not_receive_write_tools():
-    runner = RecordingSubAgentKernelRunner(content="不执行写入")
-    runtime = AgentRuntime(
-        llm_client=RecordingLLM([]),
-        design_mode_selector=lambda task: "low",
-        sub_agent_kernel_runner=runner,
-    )
-
-    result = await runtime.run(
-        "agent-runtime-test",
-        AgentCall(name="sub", task="复核", mode="low", options={"agent": "explorer"}),
-    )
-
-    assert result.metadata["agent"] == "explorer"
-    assert "write_file" not in runner.calls[0]["available_tools"]
-
-
-@pytest.mark.asyncio
 async def test_worker_sub_agent_can_write_but_not_call_agents():
     runner = RecordingSubAgentKernelRunner(
         content="检查 todo.txt",
@@ -382,12 +390,13 @@ async def test_worker_sub_agent_can_write_but_not_call_agents():
     runtime = AgentRuntime(
         llm_client=RecordingLLM([]),
         design_mode_selector=lambda task: "low",
+        model_tools=MODEL_TOOLS,
         sub_agent_kernel_runner=runner,
     )
 
     result = await runtime.run(
         "agent-runtime-test",
-        AgentCall(name="sub", task="小范围实现", mode="low", options={"agent": "worker", "write_scope": ["todo.txt"]}),
+        AgentCall(name="sub", task="小范围实现", mode="low", options={"agent": "worker"}),
     )
 
     assert result.metadata["agent"] == "worker"
@@ -398,13 +407,13 @@ async def test_worker_sub_agent_can_write_but_not_call_agents():
 
 
 @pytest.mark.asyncio
-async def test_write_capable_sub_agent_requires_write_scope():
-    llm = RecordingLLM([
-        '{"role":"implementation","task":"实现","summary":"不应调用","findings":[],"risks":[],"required_next_actions":[],"handoff":"不应调用","confidence":"low"}',
-    ])
+async def test_write_capable_sub_agent_does_not_require_write_scope():
+    runner = RecordingSubAgentKernelRunner(content="不需要单独声明写入范围")
     runtime = AgentRuntime(
-        llm_client=llm,
+        llm_client=RecordingLLM([]),
         design_mode_selector=lambda task: "low",
+        model_tools=MODEL_TOOLS,
+        sub_agent_kernel_runner=runner,
     )
 
     result = await runtime.run(
@@ -412,18 +421,19 @@ async def test_write_capable_sub_agent_requires_write_scope():
         AgentCall(name="sub", task="实现", mode="low", options={"agent": "worker"}),
     )
 
-    assert llm.calls == 0
-    assert result.metadata["status"] == "blocked"
-    assert result.metadata["error"] == "missing_write_scope"
-    assert "write_scope" in result.output
+    assert result.output == "不需要单独声明写入范围"
+    assert runner.calls
+    assert result.metadata["status"] == "completed"
+    assert "missing_write_scope" not in result.metadata.values()
 
 
 @pytest.mark.asyncio
-async def test_write_scope_rejects_out_of_scope_mutation():
-    runner = RecordingSubAgentKernelRunner(content="只允许修改 todo.txt")
+async def test_sub_agent_ignores_legacy_write_scope_option():
+    runner = RecordingSubAgentKernelRunner(content="主体权限执行")
     runtime = AgentRuntime(
         llm_client=RecordingLLM([]),
         design_mode_selector=lambda task: "low",
+        model_tools=MODEL_TOOLS,
         sub_agent_kernel_runner=runner,
     )
 
@@ -432,7 +442,7 @@ async def test_write_scope_rejects_out_of_scope_mutation():
         AgentCall(name="sub", task="实现", mode="low", options={"agent": "worker", "write_scope": ["todo.txt"]}),
     )
 
-    assert result.metadata["write_scope"] == ["todo.txt"]
+    assert "write_scope" not in result.metadata
     assert runner.calls[0]["workspace"] == {}
 
 
@@ -493,7 +503,7 @@ def test_project_sub_agent_definition_write_and_delete_roundtrip(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_runtime_uses_project_sub_agent_definition_tools(tmp_path):
+async def test_runtime_ignores_project_sub_agent_definition_tools_for_mvp(tmp_path):
     project = tmp_path / "project"
     agent_dir = project / ".lamtools" / "agents"
     agent_dir.mkdir(parents=True)
@@ -512,6 +522,7 @@ async def test_runtime_uses_project_sub_agent_definition_tools(tmp_path):
     runtime = AgentRuntime(
         llm_client=RecordingLLM([]),
         design_mode_selector=lambda task: "low",
+        model_tools=MODEL_TOOLS,
         work_root=project,
         sub_agent_kernel_runner=runner,
     )
@@ -521,9 +532,9 @@ async def test_runtime_uses_project_sub_agent_definition_tools(tmp_path):
         AgentCall(name="sub", task="实现", mode="low", options={"agent": "worker"}),
     )
 
-    assert result.metadata["subagent_description"] == "Read-only project worker"
-    assert result.metadata["tools"] == ["read_file"]
-    assert runner.calls[0]["available_tools"] == frozenset({"read_file"})
+    assert result.metadata["agent"] == "worker"
+    assert result.metadata["tools"] == ["read_file", "run_tests", "write_file"]
+    assert runner.calls[0]["available_tools"] == frozenset({"read_file", "run_tests", "write_file"})
 
 
 @pytest.mark.asyncio
@@ -550,12 +561,13 @@ async def test_runtime_still_reads_legacy_writer_project_sub_agent_definitions(t
 
 
 @pytest.mark.asyncio
-async def test_sub_agent_workspace_is_passed_to_tool_runner(tmp_path):
+async def test_sub_agent_workspace_factory_is_not_used_in_mvp(tmp_path):
     workspace = tmp_path / "agent-worktree"
     workspace.mkdir()
     runner = RecordingSubAgentKernelRunner(content="完成")
 
     async def workspace_factory(definition, call):
+        raise AssertionError("MVP must not create a sub-agent workspace")
         return {"work_root": str(workspace), "branch": f"writer/agent/{definition.name}/test"}
 
     runtime = AgentRuntime(
@@ -567,7 +579,7 @@ async def test_sub_agent_workspace_is_passed_to_tool_runner(tmp_path):
 
     await runtime.run(
         "agent-runtime-test",
-        AgentCall(name="sub", task="实现", mode="low", options={"agent": "worker", "write_scope": ["x.txt"]}),
+        AgentCall(name="sub", task="实现", mode="low", options={"agent": "worker"}),
     )
 
-    assert runner.calls[0]["workspace"]["work_root"] == str(workspace)
+    assert runner.calls[0]["workspace"] == {}

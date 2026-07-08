@@ -14,21 +14,21 @@ from typing import Any
 from uuid import uuid4
 
 from lamtools_core.agent import SUB_AGENT_SPEC, build_sub_agent_prompt
+from lamtools_core.runtime import RuntimeState
+from lamtools_core.sub_session import (
+    SubSessionManager,
+    SubSessionRuntimeStateStore,
+    filter_sub_agent_tools,
+    normalize_sub_session_agent_name,
+)
 from lamtools_core.tool.sub_agent import (
-    AgentWriteScope,
     SubAgentDefinition,
     definition_map,
     delete_project_sub_agent_definition,
-    is_write_capable,
-    normalize_scope_path,
     parse_sub_agent_definition,
     project_sub_agent_definition_path,
     render_sub_agent_definition,
-    scope_allows_path,
-    scopes_conflict,
     validate_project_sub_agent_name,
-    write_scope_error,
-    write_scope_from_options,
     write_project_sub_agent_definition,
 )
 
@@ -262,9 +262,16 @@ class AgentRuntime:
         self._agent_stack: list[str] = []
         self._agent_tool_stack: list[frozenset[str]] = []
         self._agent_workspace_stack: list[dict[str, Any]] = []
-        self._agent_write_scope_stack: list[AgentWriteScope | None] = []
+        self._sub_session_manager = SubSessionManager()
+        self._fallback_parent_states: dict[str, RuntimeState] = {}
 
-    async def run(self, session_id: str, call: AgentCall) -> AgentRunResult:
+    async def run(
+        self,
+        session_id: str,
+        call: AgentCall,
+        *,
+        parent_state: RuntimeState | None = None,
+    ) -> AgentRunResult:
         spec = self.registry.resolve(call.name)
         if spec is None:
             available = ", ".join(self.registry.names()) or "(none)"
@@ -287,30 +294,31 @@ class AgentRuntime:
                 metadata={"error": "agent_depth_exceeded", "max_depth": spec.max_depth},
             )
 
+        if spec.name == "sub":
+            if parent_state is None:
+                parent_state = self._fallback_parent_states.setdefault(
+                    session_id,
+                    RuntimeState(session_id=session_id),
+                )
+            sub_session = self._sub_session_manager.get_or_create(
+                parent_state,
+                self._agent_name_for_call(call),
+            )
+            call.options.setdefault("_agent_name", sub_session.agent_name)
+            call.options.setdefault("_agent_index", sub_session.agent_index)
+            call.options.setdefault("_sub_session_id", sub_session.session_id)
+            call.options.setdefault("_sub_session_state_store", SubSessionRuntimeStateStore(parent_state))
+
         available_tools = self._available_tools_for_call(spec, call)
         run_id = f"{spec.name}-{uuid4().hex[:12]}"
         sub_line_id = f"subline-{run_id}"
         call.options.setdefault("_agent_run_id", run_id)
         call.options.setdefault("_sub_line_id", sub_line_id)
         definition = self._sub_agent_definition_for_call(call) if spec.name == "sub" else None
-        write_scope = self._write_scope_for_call(definition, call) if definition is not None else None
-        if definition is not None:
-            scope_error = self._write_scope_error(definition, write_scope)
-            if scope_error:
-                return AgentRunResult(
-                    name=spec.name,
-                    output=scope_error,
-                    metadata={
-                        "agent": definition.name,
-                        "status": "blocked",
-                        "error": "missing_write_scope",
-                    },
-                )
         workspace = await self._workspace_for_call(spec, call)
         self._agent_stack.append(spec.name)
         self._agent_tool_stack.append(available_tools)
         self._agent_workspace_stack.append(workspace)
-        self._agent_write_scope_stack.append(write_scope)
         try:
             if spec.name == "sub":
                 result = await self._run_sub(session_id, spec, call)
@@ -319,7 +327,6 @@ class AgentRuntime:
             result.metadata = self._standard_agent_metadata(spec, call, result)
             return result
         finally:
-            self._agent_write_scope_stack.pop()
             self._agent_tool_stack.pop()
             self._agent_workspace_stack.pop()
             self._agent_stack.pop()
@@ -386,59 +393,42 @@ class AgentRuntime:
         if spec.name != "sub":
             return self.AGENT_TOOL_ALLOWLIST.get(spec.name, frozenset())
 
-        definition = self._sub_agent_definition_for_call(call)
-        available = set(definition.tools)
+        available = set(self._parent_tool_names())
         return frozenset(available)
 
-    @staticmethod
-    def _is_write_capable(definition: SubAgentDefinition) -> bool:
-        return is_write_capable(definition.tools)
-
-    def _write_scope_error(self, definition: SubAgentDefinition, scope: AgentWriteScope | None) -> str:
-        return write_scope_error(agent_name=definition.name, tools=definition.tools, scope=scope)
-
-    @staticmethod
-    def _write_scope_for_call(definition: SubAgentDefinition | None, call: AgentCall) -> AgentWriteScope | None:
-        if definition is None:
-            return None
-        return write_scope_from_options(call.options)
-
-    @staticmethod
-    def _normalize_scope_path(path: str) -> str:
-        return normalize_scope_path(path)
-
-    @staticmethod
-    def _scope_allows_path(scope: AgentWriteScope | None, path: str) -> bool:
-        return scope_allows_path(scope, path)
-
-    @staticmethod
-    def _scopes_conflict(left: AgentWriteScope, right: AgentWriteScope) -> bool:
-        return scopes_conflict(left, right)
-
-    @staticmethod
-    def _scope_paths_conflict(left: str, right: str) -> bool:
-        from lamtools_core.tool.sub_agent import scope_paths_conflict
-
-        return scope_paths_conflict(left, right)
-
     def _sub_agent_definition_for_call(self, call: AgentCall) -> SubAgentDefinition:
-        requested = (
-            call.options.get("agent")
-            or call.options.get("name")
+        agent_name = self._agent_name_for_call(call)
+        return SubAgentDefinition(
+            name=agent_name,
+            description="Reusable delegated sub session",
+            role="sub",
+            developer_instructions="",
+            tools=tuple(sorted(self._parent_tool_names())),
+            source="runtime",
         )
-        if requested:
-            key = str(requested).strip().lower().replace("-", "_").replace(" ", "_")
-            definition = self._sub_agent_definitions.get(key)
-            if definition is not None:
-                return definition
-        return self._sub_agent_definitions["default"]
 
     async def _workspace_for_call(self, spec: AgentSpec, call: AgentCall) -> dict[str, Any]:
-        if spec.name != "sub" or self._sub_agent_workspace_factory is None:
-            return {}
-        definition = self._sub_agent_definition_for_call(call)
-        workspace = await self._sub_agent_workspace_factory(definition, call)
-        return dict(workspace or {})
+        _ = spec, call
+        return {}
+
+    def _agent_name_for_call(self, call: AgentCall) -> str:
+        return normalize_sub_session_agent_name(
+            call.options.get("_agent_name")
+            or call.options.get("agent")
+            or call.options.get("name")
+        )
+
+    def _parent_tool_names(self) -> tuple[str, ...]:
+        names: list[str] = []
+        for tool in filter_sub_agent_tools(self._model_tools):
+            function = tool.get("function") if isinstance(tool, dict) else None
+            if isinstance(function, dict):
+                name = str(function.get("name") or "").strip()
+            else:
+                name = str(tool.get("name") or "").strip() if isinstance(tool, dict) else ""
+            if name:
+                names.append(name)
+        return tuple(sorted(dict.fromkeys(names)))
 
     @staticmethod
     def _agent_final_answer(output_data: dict[str, Any], fallback: str) -> str:
@@ -465,18 +455,14 @@ class AgentRuntime:
         expected_output = str(call.options.get("expected_output") or "focused findings and concrete next steps").strip()
         context = call.options.get("context", {})
         workspace = self._agent_workspace_stack[-1] if self._agent_workspace_stack else {}
-        write_scope = self._agent_write_scope_stack[-1] if self._agent_write_scope_stack else None
         task_context = {
-            "context_inheritance": "compressed_task_package",
+            "context_inheritance": "sub_session",
             "delegated_by": "Writer",
             "full_main_conversation": False,
+            "agent_name": definition.name,
+            "agent_index": str(call.options.get("_agent_index") or ""),
+            "sub_session_id": str(call.options.get("_sub_session_id") or ""),
             "project_context": context if isinstance(context, dict) else {"value": context},
-            "write_scope": list(write_scope.paths) if write_scope else [],
-            "workspace": {
-                "isolated": bool(workspace.get("isolated")),
-                "work_root": str(workspace.get("work_root") or ""),
-                "branch": str(workspace.get("branch") or ""),
-            },
         }
         available_tools = self._available_tools_for_call(spec, call)
         developer_instructions = str(call.options.get("developer_instructions") or definition.developer_instructions)
@@ -489,8 +475,8 @@ class AgentRuntime:
             context=json_dumps(task_context),
             tools=tuple(sorted(available_tools)),
             tool_policy=(
-                "你是低权限 Writer 副本；只能调用列出的工具。"
-                "不能调用 agent、提交审核、用户决策、回退或正式 Git 提交类工具。"
+                "权限等同主 Agent；只能调用列出的工具。"
+                "不能继续调用 sub_agent 或派发其它 Agent。"
             ),
             developer_instructions=developer_instructions,
         )
@@ -531,11 +517,10 @@ class AgentRuntime:
             "sub_line_id": str(call.options.get("_sub_line_id") or ""),
             "role": role,
             "agent": definition.name,
+            "agent_index": str(call.options.get("_agent_index") or ""),
+            "sub_session_id": str(call.options.get("_sub_session_id") or ""),
             "subagent_description": definition.description,
             "model": str(call.options.get("model") or definition.model or ""),
-            "write_scope": list(write_scope.paths) if write_scope else [],
-            "worktree": str(workspace.get("work_root") or ""),
-            "branch": str(workspace.get("branch") or ""),
             "workspace_delivery": delivery_meta,
             "changed_files": changed_files,
             "changed_files_count": len(changed_files),
@@ -596,15 +581,6 @@ class AgentRuntime:
                 f"AGENT TOOL REJECTED: agent={current_agent or 'unknown'} "
                 f"cannot call tool={name}. Allowed tools: {', '.join(sorted(allowlist)) or '(none)'}."
             )
-        if name in {"write_file", "edit_file"}:
-            scope = self._agent_write_scope_stack[-1] if self._agent_write_scope_stack else None
-            path = str(params.get("path") or params.get("file") or "")
-            if not self._scope_allows_path(scope, path):
-                allowed = ", ".join(scope.paths) if scope and scope.paths else "(none)"
-                return (
-                    f"AGENT TOOL REJECTED: path={path or '(empty)'} is outside write_scope. "
-                    f"Allowed paths: {allowed}."
-                )
         if self._tool_runner is None:
             return f"Tool unavailable for agent runtime: {name}"
         workspace = self._agent_workspace_stack[-1] if self._agent_workspace_stack else {}

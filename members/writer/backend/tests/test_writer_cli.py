@@ -55,6 +55,16 @@ def test_parser_accepts_run_command_with_project_alias():
     assert args.work_root == "E:\\LamTools\\members\\writer"
 
 
+def test_parser_accepts_shallow_thinking_for_run_and_resume():
+    parser = build_parser()
+
+    run = parser.parse_args(["run", "do", "work", "--shallow-thinking"])
+    resume = parser.parse_args(["resume", "sess-1", "继续", "--shallow-thinking"])
+
+    assert run.shallow_thinking is True
+    assert resume.shallow_thinking is True
+
+
 @pytest.mark.parametrize("command", ["chat", "quick", "agent", "tool"])
 def test_parser_rejects_removed_side_channel_commands(command):
     parser = build_parser()

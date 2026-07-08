@@ -192,7 +192,7 @@
 }
 
 /* =========================================================================
-   Main card — centered content area with rounded corners & shadow
+   Main card — centered content area with top rounding & shadow
    ========================================================================= */
 .workspace-main {
   --text: var(--theme-main-text);
@@ -205,7 +205,7 @@
   overflow: hidden;
   padding: 44px var(--main-x-padding) 142px var(--main-x-padding);
   border: 1px solid color-mix(in srgb, var(--theme-main-text) 14%, transparent);
-  border-radius: 22px;
+  border-radius: 22px 22px 0 0;
   background: var(--theme-main-background);
   color: var(--theme-main-text);
   display: flex;
@@ -2251,6 +2251,39 @@
   min-height: 18px;
   padding: 1px 0 4px;
 }
+.shallow-thinking-pending {
+  display: inline-flex;
+  align-items: baseline;
+  min-width: 0;
+  color: color-mix(in srgb, var(--green) 72%, var(--theme-main-text, #fff) 28%);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.45;
+}
+.shallow-thinking-pending--process {
+  margin-left: 22px;
+}
+.shallow-thinking-pending-row {
+  padding: 1px 0 2px;
+}
+.reasoning-body--pending {
+  margin-top: 0;
+  margin-bottom: 4px;
+  padding-bottom: 0;
+}
+.shallow-thinking-dots {
+  display: inline-flex;
+  width: 1.2em;
+}
+.shallow-thinking-dots span {
+  animation: shallow-thinking-dot 1.2s ease-in-out infinite;
+}
+.shallow-thinking-dots span:nth-child(2) {
+  animation-delay: .15s;
+}
+.shallow-thinking-dots span:nth-child(3) {
+  animation-delay: .3s;
+}
 
 .assistant-answer {
   margin-top: 10px;
@@ -2280,10 +2313,18 @@
 @keyframes stream-caret {
   50% { opacity: 0; }
 }
+@keyframes shallow-thinking-dot {
+  0%, 70%, 100% { opacity: .28; }
+  35% { opacity: 1; }
+}
 @media (prefers-reduced-motion: reduce) {
   .part-text-content--streaming::after {
     animation: none;
     opacity: 0;
+  }
+  .shallow-thinking-dots span {
+    animation: none;
+    opacity: 1;
   }
 }
 

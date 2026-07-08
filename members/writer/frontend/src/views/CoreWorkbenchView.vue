@@ -42,6 +42,7 @@ import {
   listCoreProviders,
 } from '@/api/core'
 import * as api from '@/api'
+import { removeSessionsByIds } from '@/lib/session-list'
 import type { Provider, Project, Session, Model, SessionChanges, SessionCheckpoint, CommitReview, AgentBranch, WriterQueuedInput } from '@/types'
 
 const router = useRouter()
@@ -57,7 +58,9 @@ const composerErrorText = ref('')
 const selectedModelId = ref<string>('')
 type ThinkingMode = 'none' | 'low' | 'medium' | 'high' | 'max'
 const THINKING_MODE_KEY = 'lamwriter.composer.thinkingMode'
+const SHALLOW_THINKING_KEY = 'lamwriter.composer.shallowThinking'
 const selectedThinkingMode = ref<ThinkingMode>(readThinkingMode())
+const shallowThinkingEnabled = ref(readShallowThinkingEnabled())
 const thinkingBudgets: Record<Exclude<ThinkingMode, 'none'>, number> = {
   low: 2000,
   medium: 6000,
@@ -216,6 +219,14 @@ watch(selectedThinkingMode, (mode) => {
   }
 })
 
+watch(shallowThinkingEnabled, (enabled) => {
+  try {
+    window.localStorage?.setItem(SHALLOW_THINKING_KEY, enabled ? '1' : '0')
+  } catch {
+    // Local storage can be unavailable in hardened desktop/browser contexts.
+  }
+})
+
 function normalizeThinkingMode(value: unknown): ThinkingMode {
   return value === 'low' || value === 'medium' || value === 'high' || value === 'max' ? value : 'none'
 }
@@ -229,20 +240,33 @@ function readThinkingMode(): ThinkingMode {
   }
 }
 
+function readShallowThinkingEnabled(): boolean {
+  try {
+    return window.localStorage?.getItem(SHALLOW_THINKING_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
 function selectThinkingMode(value: string) {
   selectedThinkingMode.value = normalizeThinkingMode(value)
 }
 
-function currentThinkingOptions(): { thinking_enabled: boolean; thinking_budget?: number } {
+function toggleShallowThinking() {
+  shallowThinkingEnabled.value = !shallowThinkingEnabled.value
+}
+
+function currentThinkingOptions(): { thinking_enabled: boolean; thinking_budget?: number; shallow_thinking_enabled?: boolean } {
   const mode = normalizeThinkingMode(selectedThinkingMode.value)
+  const shallow = shallowThinkingEnabled.value
   if (mode === 'none' || !activeExecutionModel.value?.thinking_supported) {
-    return { thinking_enabled: false }
+    return { thinking_enabled: false, shallow_thinking_enabled: shallow }
   }
   const modelBudget = Number(activeExecutionModel.value.thinking_budget || 0)
   const budget = isXfyunCodingProvider.value
     ? modelBudget || 10000
     : Math.max(modelBudget || 0, thinkingBudgets[mode])
-  return { thinking_enabled: true, thinking_budget: budget }
+  return { thinking_enabled: true, thinking_budget: budget, shallow_thinking_enabled: shallow }
 }
 
 // --- Core controller ---
@@ -545,7 +569,13 @@ function normalizeSessionStatus(status: string): string {
 
 function appServerMessages(): CoreMessage[] {
   if (!appServerStore.state) return buildSystemMessages()
-  const rendered = selectChatMessages(appServerStore.state).map((message) => ({
+  const sourceMessages = selectChatMessages(appServerStore.state)
+  const lastAssistantIndex = sourceMessages.findLastIndex(message => message.role === 'assistant')
+  const rendered = sourceMessages.map((message, index) => {
+    const isActiveAssistant = index === lastAssistantIndex
+      && message.role === 'assistant'
+      && isActiveTurnStatus(activeSessionStatus.value)
+    return {
     id: message.id,
     role: message.role,
     content: message.content,
@@ -561,8 +591,14 @@ function appServerMessages(): CoreMessage[] {
         metadata: { attachment },
       })),
     ],
-    metadata: { source: 'writer_app_server', ...(message.metadata || {}) },
-  } satisfies CoreMessage))
+    metadata: {
+      source: 'writer_app_server',
+      ...(message.metadata || {}),
+      live: message.metadata?.live,
+      shallowThinkingPending: isActiveAssistant && shallowThinkingEnabled.value ? true : undefined,
+    },
+  } satisfies CoreMessage
+  })
   return [...buildSystemMessages(), ...rendered]
 }
 
@@ -596,7 +632,9 @@ function appServerItemToPart(item: WriterAppItem): MessagePart {
       ...(Array.isArray(item.options) ? { options: item.options } : {}),
     },
     toolResult: typeof item.content === 'string' ? item.content : undefined,
+    inputPreview: normalizeInputPreview(item.input_preview || item.inputPreview),
     metadata: {
+      ...(isRecord(item.metadata) ? item.metadata : {}),
       request_id: requestId || undefined,
       title: item.title,
       question: item.question,
@@ -610,6 +648,20 @@ function appServerItemToPart(item: WriterAppItem): MessagePart {
         response: waitingResponse,
       } : undefined,
     },
+  }
+}
+
+function normalizeInputPreview(value: unknown): MessagePart['inputPreview'] | undefined {
+  if (!isRecord(value)) return undefined
+  const content = typeof value.content === 'string' ? value.content : ''
+  const field = typeof value.field === 'string' ? value.field : ''
+  const chars = typeof value.chars === 'number' ? value.chars : content.length
+  if (!content || !field) return undefined
+  return {
+    field,
+    content,
+    chars,
+    truncated: value.truncated === true,
   }
 }
 
@@ -649,6 +701,7 @@ function appServerPartType(type: string): MessagePart['partType'] {
   if (type === 'fileChange') return 'file_diff'
   if (type === 'commandExecution') return 'command_output'
   if (type === 'dynamicToolCall' || type === 'mcpToolCall' || type === 'collabToolCall' || type === 'webSearch') return 'tool_call'
+  if (type === 'agent_summary' || type === 'sub_line') return type
   if (type === 'toolResult') return 'tool_result'
   if (type === 'plan') return 'plan'
   if (type === 'contextCompaction' || type === 'compaction') return 'compaction'
@@ -1425,6 +1478,7 @@ function currentSessionWorkRoot(): string {
 }
 
 async function handleDeleteProject(projectGroupId: string) {
+  const group = projectGroups.value.find((item) => item.id === projectGroupId)
   const rawProjectGroupKey = rawProjectGroupKeyFromId(projectGroupId)
   const rawGroup = projectStore.projects.find(
     (p) => projectGroupKey(p as unknown as { work_root: string; id: string }) === rawProjectGroupKey,
@@ -1436,7 +1490,20 @@ async function handleDeleteProject(projectGroupId: string) {
   const confirmed = window.confirm(`确定删除项目「${rawGroup.name || rawGroup.work_root}」？此操作不可撤销。`)
   if (!confirmed) return
   try {
+    const deletedSessionIds = new Set((group?.sessions || []).map((session) => session.id))
     await projectStore.deleteProject(rawGroup.id)
+    sessions.value = removeSessionsByIds(sessions.value, deletedSessionIds)
+    sessionStore.removeSessions(deletedSessionIds)
+    if (activeSessionId.value && deletedSessionIds.has(activeSessionId.value)) {
+      appServerStore.disconnect()
+      sessionStore.clearMessages()
+      const nextSession = sessions.value[0]
+      if (nextSession) {
+        await selectSession(nextSession.id)
+      } else {
+        await loadInitialData()
+      }
+    }
   } catch (err) {
     console.error('Failed to delete project:', err)
   }
@@ -1455,7 +1522,7 @@ async function handleDeleteOrphanProjectGroup(projectGroupId: string) {
       await sessionStore.deleteSession(sessionId)
     }
     const deleted = new Set(sessionIds)
-    sessions.value = sessions.value.filter((session) => !deleted.has(session.id))
+    sessions.value = removeSessionsByIds(sessions.value, deleted)
     if (activeSessionId.value && deleted.has(activeSessionId.value)) {
       appServerStore.disconnect()
       sessionStore.clearMessages()
@@ -2403,42 +2470,17 @@ const newProjectWorkRoot = ref('')
 const newProjectName = ref('')
 const selectingProjectDirectory = ref(false)
 
-// 浏览器模式下用于选择目录的隐藏 input
-const projectDirInput = ref<HTMLInputElement | null>(null)
-
 function resetNewProjectForm() {
   showNewProject.value = false
   newProjectWorkRoot.value = ''
   newProjectName.value = ''
 }
 
-function handleBrowserDirectorySelect(event: Event) {
-  const input = event.target as HTMLInputElement
-  const files = input.files
-  if (files && files.length > 0) {
-    // 从第一个文件的路径提取目录路径
-    const file = files[0]
-    const fullPath = (file as any).path || file.webkitRelativePath || ''
-    if (fullPath) {
-      // 提取目录路径（去掉文件名）
-      const dirPath = fullPath.replace(/[/\\][^/\\]*$/, '')
-      newProjectWorkRoot.value = dirPath
-      if (!newProjectName.value.trim()) {
-        newProjectName.value = dirPath.split(/[/\\]/).filter(Boolean).pop() || ''
-      }
-    }
-  }
-  // 清空 input，允许重复选择同一目录
-  input.value = ''
-}
-
 async function browseProjectDirectory() {
-  // 浏览器模式：使用隐藏的 file input
   if (!window.lamwriterDesktop?.selectDirectory) {
-    projectDirInput.value?.click()
+    window.alert('当前环境不支持目录浏览，请手动输入绝对路径。')
     return
   }
-  // Electron 模式：使用桌面 API
   selectingProjectDirectory.value = true
   try {
     const selected = await window.lamwriterDesktop.selectDirectory()
@@ -2507,15 +2549,6 @@ onMounted(async () => {
     <!-- Header action: replace default "+" with project-aware menu -->
     <template #sidebar-header-action>
       <div class="header-new-menu">
-        <!-- 隐藏的目录选择 input（浏览器模式用） -->
-        <input
-          ref="projectDirInput"
-          type="file"
-          webkitdirectory
-          directory
-          style="display: none"
-          @change="handleBrowserDirectorySelect"
-        />
         <button class="icon-btn" title="新建项目" @click="showNewProject = !showNewProject">+</button>
         <div v-if="showNewProject" class="new-project-popover" @keydown.esc="resetNewProjectForm">
           <div class="new-project-head">
@@ -2750,6 +2783,17 @@ onMounted(async () => {
           direction="up"
           @update:model-value="selectThinkingMode"
         />
+        <button
+          class="composer-shallow-toggle"
+          :class="{ active: shallowThinkingEnabled }"
+          type="button"
+          title="Shallow thinking"
+          aria-label="Shallow thinking"
+          :aria-pressed="shallowThinkingEnabled"
+          @click="toggleShallowThinking"
+        >
+          Shallow
+        </button>
       </div>
     </template>
 
@@ -2907,6 +2951,37 @@ onMounted(async () => {
 :deep(.composer-thinking-select .ui-select-arrow),
 :deep(.composer-model-select .ui-select-arrow) {
   right: 10px;
+}
+
+.composer-shallow-toggle {
+  height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: color-mix(in srgb, var(--theme-composer-text, currentColor) 70%, transparent);
+  box-shadow: none;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 28px;
+  cursor: pointer;
+}
+
+.composer-shallow-toggle:hover {
+  background: color-mix(in srgb, var(--theme-composer-text, currentColor) 8%, transparent);
+  color: var(--theme-composer-text, currentColor);
+}
+
+.composer-shallow-toggle.active {
+  background: transparent;
+  color: var(--green);
+  box-shadow: none;
+}
+
+.composer-shallow-toggle:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--theme-composer-text, currentColor) 26%, transparent);
+  outline-offset: 2px;
 }
 
 :global(.floating-composer:has(.composer-thinking-select.open)),

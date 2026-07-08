@@ -363,6 +363,7 @@ export interface ChatRequest {
   attachment_ids?: string[]
   thinking_enabled?: boolean
   thinking_budget?: number
+  shallow_thinking_enabled?: boolean
   model_id?: string  // Per-request model override
 }
 

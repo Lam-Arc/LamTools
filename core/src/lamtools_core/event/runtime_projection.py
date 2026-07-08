@@ -248,6 +248,8 @@ def runtime_fact_to_run_item_events(
         created_at=created_at or datetime.now(timezone.utc),
     )
     payload = _payload(fact)
+    if isinstance(payload.get("sub_agent"), dict):
+        return []
     phase = str(fact.phase or "")
     status = str(fact.status or "")
     turn_id = _turn_id(fact, payload)
@@ -298,6 +300,8 @@ def runtime_fact_to_run_item_events(
     if phase == "runtime.tool.finished":
         completed_status = "completed" if status in {"ok", "completed", "done"} else "failed"
         item_id = _tool_item_id(fact, payload)
+        result_text = str(payload.get("content") or payload.get("tool_result") or fact.preview or fact.summary or "")
+        payload_metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
         return [
             RunItemEvent(
                 kind="tool_result",
@@ -305,7 +309,10 @@ def runtime_fact_to_run_item_events(
                 status=completed_status,
                 payload={
                     "type": "dynamicToolCall",
+                    "tool_name": _tool_name(payload),
                     "delta": fact.preview or fact.summary or str(payload.get("result") or payload.get("error") or ""),
+                    "tool_result": result_text,
+                    "metadata": payload_metadata,
                     "status": completed_status,
                     "error": str(payload.get("error") or "") or None,
                 },
@@ -411,6 +418,59 @@ def runtime_fact_to_run_item_events(
                     **base,
                 )
             ]
+        if part_type == "tool_input_delta":
+            arguments_text = str(payload.get("arguments_text") or "")
+            input_preview = extract_tool_input_preview(
+                _tool_name(payload),
+                arguments_text,
+            )
+            if input_preview is None:
+                return []
+            input_base = {
+                **base,
+                "event_id": _content_event_id(fact, "runtime-part-tool-input", arguments_text),
+            }
+            item_payload: dict[str, Any] = {
+                "type": "dynamicToolCall",
+                "tool_name": _tool_name(payload),
+                "summary": str(payload.get("content") or payload.get("label") or fact.summary or ""),
+                "message": str(payload.get("detail") or fact.preview or ""),
+                "input_preview": input_preview,
+            }
+            arguments = payload.get("tool_args") or payload.get("arguments")
+            if isinstance(arguments, dict) and arguments:
+                item_payload["arguments"] = arguments
+            return [
+                RunItemEvent(
+                    kind="tool_call",
+                    item_id=_tool_item_id(fact, payload),
+                    status=_canonical_status(status or "running"),
+                    payload=item_payload,
+                    **input_base,
+                )
+            ]
+        if part_type == "tool_result":
+            result_text = _complete_text_from_event(fact, payload) if status in TERMINAL_STATUSES else _text_from_event(fact, payload)
+            if not result_text or result_text == "runtime.part":
+                return []
+            payload_metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+            return [
+                RunItemEvent(
+                    kind="tool_result",
+                    item_id=_tool_item_id(fact, payload),
+                    status="completed" if status in {"done", "ok"} else _canonical_status(status),
+                    payload={
+                        "type": "dynamicToolCall",
+                        "tool_name": _tool_name(payload),
+                        "delta": result_text,
+                        "tool_result": result_text,
+                        "metadata": payload_metadata,
+                        "status": "completed" if status in {"done", "ok"} else _canonical_status(status),
+                        "error": str(payload.get("error") or payload.get("tool_error") or "") or None,
+                    },
+                    **base,
+                )
+            ]
         item_type = "agentMessage" if part_type in {"text", "model_text"} else part_type
         item_id = str(payload.get("part_id") or f"{fact.thread_id}:part:{fact.sequence or fact.id}")
         content = _complete_text_from_event(fact, payload) if status in TERMINAL_STATUSES else _text_from_event(fact, payload)
@@ -507,8 +567,65 @@ def _tool_name(payload: dict[str, Any]) -> str:
     return name or "invalid_tool_call"
 
 
+def extract_tool_input_preview(tool_name: str, arguments_text: str) -> dict[str, Any] | None:
+    name = tool_name.strip().lower()
+    field = "content" if name == "write_file" else "new_string" if name == "edit_file" else ""
+    if not field or not arguments_text:
+        return None
+    value = _partial_json_string_field(arguments_text, field)
+    if value is None:
+        return None
+    truncated = len(value) > DEFAULT_RUNTIME_PREVIEW_CHARS
+    content = value[:DEFAULT_RUNTIME_PREVIEW_CHARS]
+    return {
+        "field": field,
+        "content": content,
+        "chars": len(value),
+        "truncated": truncated,
+    }
+
+
+def _partial_json_string_field(text: str, field: str) -> str | None:
+    marker = f'"{field}"'
+    start = text.find(marker)
+    if start < 0:
+        return None
+    colon = text.find(":", start + len(marker))
+    if colon < 0:
+        return None
+    quote = text.find('"', colon + 1)
+    if quote < 0:
+        return None
+
+    chars: list[str] = []
+    escaped = False
+    for char in text[quote + 1:]:
+        if escaped:
+            chars.append({
+                "n": "\n",
+                "r": "\r",
+                "t": "\t",
+                '"': '"',
+                "\\": "\\",
+            }.get(char, char))
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        if char == '"':
+            break
+        chars.append(char)
+    if escaped:
+        chars.append("\\")
+    return "".join(chars)
+
+
 def _tool_item_id(fact: RuntimeProjectionInput, payload: dict[str, Any]) -> str:
-    return f"{fact.thread_id}:{_tool_call_id(fact, payload)}:tool"
+    metadata = _metadata(fact)
+    run_id = str(payload.get("run_id") or metadata.get("run_id") or "").strip()
+    scope_id = run_id or _turn_id(fact, payload)
+    return f"{fact.thread_id}:{scope_id}:{_tool_call_id(fact, payload)}:tool"
 
 
 def _agent_item_id(fact: RuntimeProjectionInput, payload: dict[str, Any]) -> str:
@@ -658,6 +775,7 @@ __all__ = [
     "DEFAULT_RUNTIME_PREVIEW_CHARS",
     "RuntimeProjectionBuffer",
     "RuntimeProjectionInput",
+    "extract_tool_input_preview",
     "event_model_call_id",
     "event_response_index",
     "event_run_id",

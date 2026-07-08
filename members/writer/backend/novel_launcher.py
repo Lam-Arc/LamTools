@@ -42,7 +42,11 @@ def start(chapters: int = 50, words: int = 5000):
             cwd=str(BACKEND_DIR),
             stdout=open(str(STDOUT_LOG), "w", encoding="utf-8"),
             stderr=open(str(STDERR_LOG), "w", encoding="utf-8"),
-            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | 0x00000008 | getattr(subprocess, "CREATE_NO_WINDOW", 0),  # DETACHED_PROCESS + NO_WINDOW
+            creationflags=(
+                subprocess.CREATE_NEW_PROCESS_GROUP
+                | 0x00000008
+                | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            ),
         )
     else:
         proc = subprocess.Popen(
