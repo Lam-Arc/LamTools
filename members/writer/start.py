@@ -49,6 +49,55 @@ def _run_setup_command(args: list[str], *, cwd: Path) -> None:
         raise RuntimeError(f"Command failed: {' '.join(args)}")
 
 
+def _check_prerequisites() -> list[str]:
+    """Check if required tools are installed. Returns list of missing tools."""
+    missing = []
+
+    # Check Python (py launcher or python3)
+    python_ok = False
+    if os.name == "nt":
+        try:
+            result = subprocess.run(
+                ["py", "-3.14", "--version"],
+                capture_output=True,
+                check=False,
+            )
+            python_ok = result.returncode == 0
+        except FileNotFoundError:
+            pass
+    else:
+        try:
+            result = subprocess.run(
+                ["python3", "--version"],
+                capture_output=True,
+                check=False,
+            )
+            python_ok = result.returncode == 0
+        except FileNotFoundError:
+            pass
+
+    if not python_ok:
+        missing.append("Python 3.14")
+
+    # Check Node.js
+    npm_cmd = "npm.cmd" if os.name == "nt" else "npm"
+    node_ok = False
+    try:
+        result = subprocess.run(
+            [npm_cmd, "--version"],
+            capture_output=True,
+            check=False,
+        )
+        node_ok = result.returncode == 0
+    except FileNotFoundError:
+        pass
+
+    if not node_ok:
+        missing.append("Node.js")
+
+    return missing
+
+
 def _ensure_environment() -> Path:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     python_exe = VENV_DIR / "Scripts" / "python.exe"
@@ -77,6 +126,28 @@ def main() -> int:
     if _port_open(6173) and _port_open(6174):
         webbrowser.open(FRONTEND_URL)
         return 0
+
+    # Check prerequisites before attempting setup
+    missing = _check_prerequisites()
+    if missing:
+        print("=" * 60)
+        print("  缺少必要的运行环境")
+        print("=" * 60)
+        for tool in missing:
+            if tool == "Python 3.14":
+                print(f"\n  ❌ 未找到 {tool}")
+                print("     请从 https://www.python.org/downloads/ 下载安装")
+                print("     安装时记得勾选 'Add Python to PATH'")
+            elif tool == "Node.js":
+                print(f"\n  ❌ 未找到 {tool}")
+                print("     请从 https://nodejs.org/ 下载安装 LTS 版本")
+        print("\n  安装完成后，请重新运行 start.bat")
+        print("=" * 60)
+        try:
+            input("\n按 Enter 键退出...")
+        except EOFError:
+            pass
+        return 1
 
     try:
         python_exe = _ensure_environment()
