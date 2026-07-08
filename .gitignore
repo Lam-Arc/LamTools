@@ -45,6 +45,8 @@ Thumbs.db
 .reasonix/
 reasonix.toml
 .codegraph/
+.codex-screenshots/
+.opencode-tmp-data/
 opencode*.log
 .archives/
 .codex-runtime/
