@@ -8,6 +8,7 @@ from .models import (
     PluginManifest,
     PluginResource,
 )
+from .operations import build_plugin_operation_catalog
 from .registry import (
     PluginRegistry,
     PluginStateStore,
@@ -28,6 +29,7 @@ __all__ = [
     "PluginRegistry",
     "PluginResource",
     "PluginStateStore",
+    "build_plugin_operation_catalog",
     "default_project_hooks_path",
     "default_project_plugin_root",
     "default_user_hooks_path",
