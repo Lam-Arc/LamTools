@@ -9,6 +9,9 @@ on:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    env:
+      LAMWRITER_DATA_DIR: ${{ runner.temp }}/lamwriter-data
+      LAMWRITER_DATABASE_URL: sqlite+aiosqlite:///${{ runner.temp }}/lamwriter-data/lamwriter.db
 
     steps:
       - uses: actions/checkout@v4
@@ -31,6 +34,7 @@ jobs:
         run: |
           cd members/writer/backend
           pip install -r requirements.txt
+          pip install pytest pytest-asyncio pytest-mock
 
       - name: Check Python syntax
         run: |
@@ -53,22 +57,36 @@ jobs:
         with:
           node-version: '24'
           cache: 'npm'
-          cache-dependency-path: members/writer/frontend/package-lock.json
+          cache-dependency-path: |
+            core/ui/package-lock.json
+            members/writer/frontend/package-lock.json
 
       - name: Check whitespace
         run: git diff --check
 
       - name: Install frontend dependencies
         run: |
-          cd members/writer/frontend
+          cd core/ui
+          npm ci
+          cd ../../members/writer/frontend
           npm ci
 
-      - name: Lint frontend
+      - name: Lint core UI
+        run: |
+          cd core/ui
+          npm run typecheck
+
+      - name: Build core UI
+        run: |
+          cd core/ui
+          npm run build
+
+      - name: Lint writer frontend
         run: |
           cd members/writer/frontend
           npm run lint
 
-      - name: Build frontend
+      - name: Build writer frontend
         run: |
           cd members/writer/frontend
           npm run build
