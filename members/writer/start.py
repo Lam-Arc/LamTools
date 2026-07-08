@@ -59,7 +59,8 @@ def _ensure_environment() -> Path:
             cwd=WRITER_DIR,
         )
     if not (FRONTEND_DIR / "node_modules").exists():
-        _run_setup_command(["npm", "install"], cwd=FRONTEND_DIR)
+        npm_cmd = "npm.cmd" if os.name == "nt" else "npm"
+        _run_setup_command([npm_cmd, "install"], cwd=FRONTEND_DIR)
     return python_exe
 
 
