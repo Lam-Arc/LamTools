@@ -72,21 +72,21 @@ def _frontend_url(target: str) -> str | None:
     ports = _load_ports()
     if target == "core":
         return f"http://127.0.0.1:{ports['core']['frontend_dev']}"
-    if target in {"writer", "artist"}:
+    if target == "writer":
         return f"http://127.0.0.1:{ports[target]['frontend_dev']}"
     return None
 
 
 def _backend_health_url(target: str) -> str | None:
     ports = _load_ports()
-    if target in {"writer", "artist"}:
+    if target == "writer":
         return f"http://127.0.0.1:{ports[target]['backend']}/api/health"
     return None
 
 
 def _targets(value: str) -> list[str]:
     if value == "all":
-        return ["core", "writer", "artist"]
+        return ["core", "writer"]
     return [value]
 
 
@@ -179,8 +179,8 @@ def _doctor_static_checks(targets: list[str]) -> list[Check]:
         checks.append(Check(f"{target}.cmd", "ok" if (ROOT / f"{target}.cmd").exists() else "warn", f"{target}.cmd"))
 
     if "writer" in targets:
-        appdata = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
-        db_path = appdata / "LamWriter" / "lamwriter.db"
+        data_dir = Path(os.environ.get("LAMWRITER_DATA_DIR", ROOT / "members" / "writer" / "data"))
+        db_path = data_dir / "lamwriter.db"
         if db_path.exists():
             checks.append(Check("writer.db", "ok", str(db_path)))
         elif _path_writable(db_path):
@@ -268,25 +268,25 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     dev = sub.add_parser("dev", help="Start development services")
-    dev.add_argument("component", nargs="?", default="all", choices=["core", "writer", "artist", "all"])
+    dev.add_argument("component", nargs="?", default="all", choices=["core", "writer", "all"])
     dev.add_argument("layer", nargs="?", default="all", choices=["backend", "frontend", "all"])
     dev.add_argument("--open", action="store_true", help="Open frontend URL after starting")
     dev.set_defaults(func=cmd_dev)
 
     build = sub.add_parser("build", help="Build frontend packages")
-    build.add_argument("component", nargs="?", default="all", choices=["core", "writer", "artist", "all"])
+    build.add_argument("component", nargs="?", default="all", choices=["core", "writer", "all"])
     build.set_defaults(func=cmd_build)
 
     test = sub.add_parser("test", help="Run test suites")
-    test.add_argument("component", nargs="?", default="all", choices=["core", "writer", "artist", "all"])
+    test.add_argument("component", nargs="?", default="all", choices=["core", "writer", "all"])
     test.set_defaults(func=cmd_test)
 
     open_cmd = sub.add_parser("open", help="Open a running frontend")
-    open_cmd.add_argument("target", choices=["core", "writer", "artist", "all"])
+    open_cmd.add_argument("target", choices=["core", "writer", "all"])
     open_cmd.set_defaults(func=cmd_open)
 
     doctor = sub.add_parser("doctor", help="Check local runtime health")
-    doctor.add_argument("target", nargs="?", default="all", choices=["core", "writer", "artist", "all"])
+    doctor.add_argument("target", nargs="?", default="all", choices=["core", "writer", "all"])
     doctor.add_argument("--json", action="store_true", help="Print machine-readable output")
     doctor.set_defaults(func=cmd_doctor)
 

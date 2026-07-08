@@ -3,7 +3,7 @@
   Build all or specific LamTools components.
 .DESCRIPTION
   Usage:
-    .\scripts\build.ps1 [core|writer|artist|all]
+    .\scripts\build.ps1 [core|writer|all]
 #>
 param(
     [Parameter(Position=0)][string]$Component = "all"
@@ -26,17 +26,12 @@ function Build-Component {
             & npm run build --prefix "$Root\members\writer\frontend"
             if ($LASTEXITCODE -ne 0) { Write-Host "[writer/frontend] BUILD FAILED" -ForegroundColor Red; exit 1 }
         }
-        "artist" {
-            Write-Host "[artist/frontend] npm run build" -ForegroundColor Cyan
-            & npm run build --prefix "$Root\members\artist\frontend"
-            if ($LASTEXITCODE -ne 0) { Write-Host "[artist/frontend] BUILD FAILED" -ForegroundColor Red; exit 1 }
-        }
-        default { Write-Host "Unknown component: $Comp. Use: core, writer, artist, or all" -ForegroundColor Red; exit 1 }
+        default { Write-Host "Unknown component: $Comp. Use: core, writer, or all" -ForegroundColor Red; exit 1 }
     }
 }
 
 if ($Component -eq "all") {
-    @("core","writer","artist") | ForEach-Object { Build-Component $_ }
+    @("core","writer") | ForEach-Object { Build-Component $_ }
 } else {
     Build-Component $Component
 }

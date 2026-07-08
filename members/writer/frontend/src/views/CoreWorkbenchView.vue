@@ -1725,17 +1725,13 @@ const runtimeMetricRecords = computed<Record<string, unknown>[]>(() => {
   return records
 })
 const DEFAULT_CONTEXT_COMPACTION_TRIGGER_RATIO = 0.8
-const contextStatText = computed(() => {
+const contextResourceStats = computed(() => {
   const metrics = latestRuntimeMetrics.value
   const current = firstNumberMetric(
     metrics.estimated_prompt_tokens,
     metrics.estimatedPromptTokens,
     metrics.context_tokens,
     metrics.contextTokens,
-    metrics.input_tokens,
-    metrics.inputTokens,
-    metrics.prompt_tokens,
-    metrics.promptTokens,
   )
   const max = firstNumberMetric(
     metrics.context_window_tokens,
@@ -1748,12 +1744,25 @@ const contextStatText = computed(() => {
     metrics.trigger_tokens,
     metrics.triggerTokens,
   )
-  if (current < 0 || max <= 0) return ''
+  if (current < 0 || max <= 0) return null
   const currentPct = Math.round((current / max) * 100)
   const thresholdPct = threshold > 0
     ? Math.round((threshold / max) * 100)
     : Math.round(DEFAULT_CONTEXT_COMPACTION_TRIGGER_RATIO * 100)
-  return `${formatTokenK(current)} / ${formatTokenK(max)}  ${currentPct}% / ${thresholdPct}%`
+  const currentRatio = clampRatio(current / max)
+  const thresholdRatio = threshold > 0
+    ? clampRatio(threshold / max)
+    : DEFAULT_CONTEXT_COMPACTION_TRIGGER_RATIO
+  return {
+    current,
+    max,
+    currentPct,
+    thresholdPct,
+    currentRatio,
+    thresholdRatio,
+    contextCompacted: metrics.context_compacted === true || metrics.contextCompacted === true,
+    contextLabel: `${formatTokenCompact(current)} / ${formatTokenCompact(max)}`,
+  }
 })
 const callStats = computed(() => {
   let calls = 0
@@ -1786,14 +1795,29 @@ const callStats = computed(() => {
     outputTokens: hasOutput ? outputTokens : null,
   }
 })
-const callStatRows = computed(() => {
-  const stats = callStats.value
-  if (!stats) return []
-  const rows: Array<{ label: string; value: string }> = []
-  if (stats.calls !== null) rows.push({ label: '调用', value: `${stats.calls} 次` })
-  if (stats.inputTokens !== null) rows.push({ label: '输入', value: formatWholeNumber(stats.inputTokens) })
-  if (stats.outputTokens !== null) rows.push({ label: '输出', value: formatWholeNumber(stats.outputTokens) })
-  return rows
+const runtimeResourceSummary = computed(() => {
+  const context = contextResourceStats.value
+  const calls = callStats.value
+  if (!context && !calls) return null
+  const currentPct = context?.currentPct ?? 0
+  const thresholdPct = context?.thresholdPct ?? Math.round(DEFAULT_CONTEXT_COMPACTION_TRIGGER_RATIO * 100)
+  const contextCompacted = context?.contextCompacted === true
+  return {
+    currentPct,
+    thresholdPct,
+    contextLabel: context?.contextLabel || '暂无上下文',
+    percentLabel: context ? `${currentPct}%` : '--',
+    statusLabel: contextCompacted ? '已压缩' : (context && currentPct >= thresholdPct ? '需压缩' : '正常'),
+    style: {
+      '--runtime-resource-used': String(context?.currentRatio ?? 0),
+      '--runtime-resource-blocked-left': `${((context?.thresholdRatio ?? DEFAULT_CONTEXT_COMPACTION_TRIGGER_RATIO) * 100).toFixed(2)}%`,
+    } as Record<string, string>,
+    callItems: [
+      { label: '调用', value: calls?.calls !== null && calls?.calls !== undefined ? String(calls.calls) : '--' },
+      { label: '输入', value: calls?.inputTokens !== null && calls?.inputTokens !== undefined ? formatCompactNumber(calls.inputTokens) : '--' },
+      { label: '输出', value: calls?.outputTokens !== null && calls?.outputTokens !== undefined ? formatCompactNumber(calls.outputTokens) : '--' },
+    ],
+  }
 })
 const gitRuntimeItems = computed(() => {
   const items = [
@@ -1952,10 +1976,27 @@ function firstNumberMetric(...values: unknown[]): number {
   return -1
 }
 
-function formatTokenK(tokens: number): string {
+function clampRatio(value: number): number {
+  if (!Number.isFinite(value)) return 0
+  return Math.min(1, Math.max(0, value))
+}
+
+function formatTokenCompact(tokens: number): string {
   const value = tokens / 1000
   const rounded = value >= 10 ? Math.round(value) : Math.round(value * 10) / 10
-  return `${rounded} k`
+  return `${rounded}k`
+}
+
+function formatCompactNumber(value: number): string {
+  if (value >= 1_000_000) {
+    const rounded = Math.round((value / 1_000_000) * 100) / 100
+    return `${rounded}M`
+  }
+  if (value >= 1_000) {
+    const rounded = value >= 10_000 ? Math.round(value / 1_000) : Math.round((value / 1_000) * 10) / 10
+    return `${rounded}k`
+  }
+  return formatWholeNumber(value)
 }
 
 function formatWholeNumber(value: number): string {
@@ -2895,29 +2936,50 @@ onMounted(async () => {
 
     <template #right-panel>
       <div class="runtime-toolbar">
-        <section class="runtime-widget">
+        <section class="runtime-widget runtime-resource-widget">
           <div class="runtime-widget-head">
             <div>
-              <h3>上下文统计</h3>
+              <h3>资源</h3>
             </div>
+            <strong v-if="runtimeResourceSummary" class="runtime-resource-state">{{ runtimeResourceSummary.statusLabel }}</strong>
           </div>
-          <div v-if="contextStatText" class="runtime-stat-line">{{ contextStatText }}</div>
-          <div v-else class="review-empty">暂无上下文统计。</div>
-        </section>
-
-        <section class="runtime-widget">
-          <div class="runtime-widget-head">
-            <div>
-              <h3>调用统计</h3>
+          <template v-if="runtimeResourceSummary">
+            <div class="runtime-resource-main">
+              <div class="runtime-resource-values">
+                <Transition name="runtime-resource-value" mode="out-in">
+                  <strong :key="runtimeResourceSummary.contextLabel">{{ runtimeResourceSummary.contextLabel }}</strong>
+                </Transition>
+                <Transition name="runtime-resource-value" mode="out-in">
+                  <strong :key="runtimeResourceSummary.percentLabel">{{ runtimeResourceSummary.percentLabel }}</strong>
+                </Transition>
+              </div>
+              <div
+                class="runtime-resource-bar"
+                :style="runtimeResourceSummary.style"
+                tabindex="0"
+                :aria-label="`当前 ${runtimeResourceSummary.currentPct}%，${runtimeResourceSummary.thresholdPct}% 后自动压缩`"
+              >
+                <span class="runtime-resource-used"></span>
+                <span class="runtime-resource-blocked"></span>
+              </div>
+              <div class="runtime-resource-hint">
+                当前 {{ runtimeResourceSummary.currentPct }}% · {{ runtimeResourceSummary.thresholdPct }}% 后自动压缩
+              </div>
             </div>
-          </div>
-          <div v-if="callStatRows.length" class="runtime-stat-list">
-            <div v-for="item in callStatRows" :key="item.label" class="runtime-stat-row">
-              <span>{{ item.label }}</span>
-              <strong>{{ item.value }}</strong>
+            <div class="runtime-resource-legend">
+              <span>可用至 {{ runtimeResourceSummary.thresholdPct }}%</span>
+              <span>灰色区压缩</span>
             </div>
-          </div>
-          <div v-else class="review-empty">暂无调用统计。</div>
+            <div class="runtime-resource-stats">
+              <div v-for="item in runtimeResourceSummary.callItems" :key="item.label" class="runtime-resource-stat">
+                <span>{{ item.label }}</span>
+                <Transition name="runtime-resource-value" mode="out-in">
+                  <strong :key="`${item.label}-${item.value}`">{{ item.value }}</strong>
+                </Transition>
+              </div>
+            </div>
+          </template>
+          <div v-else class="review-empty">暂无资源统计。</div>
         </section>
 
         <section class="runtime-widget review-panel">
@@ -3330,6 +3392,163 @@ onMounted(async () => {
 
 .send--stop:hover {
   background: color-mix(in srgb, var(--red) 18%, var(--theme-control-background));
+}
+
+.runtime-resource-widget {
+  --runtime-resource-ease: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.runtime-resource-state {
+  color: var(--green);
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.2;
+}
+
+.runtime-resource-main {
+  display: grid;
+  gap: 6px;
+}
+
+.runtime-resource-values {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.runtime-resource-values strong {
+  min-width: 0;
+  color: var(--theme-backdrop-text);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 850;
+  line-height: 1.25;
+  transition: opacity 120ms var(--runtime-resource-ease);
+  white-space: nowrap;
+}
+
+.runtime-resource-values strong:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.runtime-resource-bar {
+  position: relative;
+  height: 8px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--theme-backdrop-text) 10%, transparent);
+  outline: none;
+}
+
+.runtime-resource-used {
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--green) 82%, var(--theme-backdrop-text));
+  transform: scaleX(var(--runtime-resource-used, 0));
+  transform-origin: left center;
+  transition: transform 180ms var(--runtime-resource-ease);
+}
+
+.runtime-resource-blocked {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: var(--runtime-resource-blocked-left, 80%);
+  background-color: color-mix(in srgb, var(--theme-backdrop-text) 14%, transparent);
+  background-image: linear-gradient(
+    135deg,
+    transparent 0 42%,
+    color-mix(in srgb, var(--theme-backdrop-text) 34%, transparent) 43% 52%,
+    transparent 53% 100%
+  );
+  background-size: 9px 9px;
+}
+
+.runtime-resource-hint {
+  min-height: 17px;
+  color: color-mix(in srgb, var(--theme-backdrop-text) 52%, transparent);
+  font-size: 12px;
+  line-height: 1.35;
+  opacity: 0;
+  transform: translateY(-2px);
+  transition: opacity 160ms var(--runtime-resource-ease), transform 160ms var(--runtime-resource-ease);
+}
+
+.runtime-resource-bar:hover + .runtime-resource-hint,
+.runtime-resource-bar:focus-visible + .runtime-resource-hint {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.runtime-resource-bar:focus-visible {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--theme-backdrop-text) 20%, transparent);
+}
+
+.runtime-resource-legend {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: -4px;
+  color: color-mix(in srgb, var(--theme-backdrop-text) 52%, transparent);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.runtime-resource-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 12px;
+  border-top: 1px solid color-mix(in srgb, var(--theme-backdrop-text) 11%, transparent);
+}
+
+.runtime-resource-stat {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.runtime-resource-stat span {
+  color: color-mix(in srgb, var(--theme-backdrop-text) 52%, transparent);
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.runtime-resource-stat strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--theme-backdrop-text);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 850;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  transition: opacity 120ms var(--runtime-resource-ease);
+  white-space: nowrap;
+}
+
+.runtime-resource-value-enter-active,
+.runtime-resource-value-leave-active {
+  transition: opacity 120ms var(--runtime-resource-ease);
+}
+
+.runtime-resource-value-enter-from,
+.runtime-resource-value-leave-to {
+  opacity: 0.28;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .runtime-resource-values strong,
+  .runtime-resource-stat strong,
+  .runtime-resource-used,
+  .runtime-resource-hint,
+  .runtime-resource-value-enter-active,
+  .runtime-resource-value-leave-active {
+    transition-duration: 0.01ms !important;
+  }
 }
 
 @media (max-width: 760px) {

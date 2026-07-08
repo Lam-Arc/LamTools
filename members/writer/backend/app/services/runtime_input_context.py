@@ -100,7 +100,7 @@ async def _load_recent_history(
         if message.id not in compacted_ids and not is_rolled_back_metadata(message.metadata_)
     ][-21:]
     history = [
-        {"role": message.role, "content": message.content}
+        {"role": message.role, "content": message.content, "id": message.id}
         for message in db_messages
         if message.content
     ]

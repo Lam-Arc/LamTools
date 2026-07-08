@@ -10,7 +10,7 @@ LamTools is used by operators and developers who run local AI-assisted writing, 
 
 ## Product Purpose
 
-LamTools provides a unified monorepo and shared UI foundation for LamWriter, LamArtist, and future member products. Success means each member can keep its own business behavior while sharing a reliable, consistent workbench shell for sessions, runtime state, configuration, and task execution.
+LamTools provides a unified monorepo and shared UI foundation for LamWriter first, with future member products rebuilt from the current Core base. Success means Writer can keep its own business behavior while Core remains a reliable, product-neutral workbench shell for sessions, runtime state, configuration, and task execution.
 
 ## Brand Personality
 
@@ -23,9 +23,9 @@ Avoid marketing-style landing pages, oversized hero treatments, decorative gradi
 ## Design Principles
 
 - Put task state first: users should quickly see what is running, waiting, failed, or done.
-- Keep shared UI product-neutral: core surfaces must not encode Writer or Artist-specific assumptions.
+- Keep shared UI product-neutral: core surfaces must not encode product-specific assumptions.
 - Prefer dense, readable tools over decorative composition.
-- Make member differences explicit through slots and labels, not divergent control behavior.
+- Make future member differences explicit through slots and labels, not divergent control behavior.
 - Treat empty, loading, error, and disconnected states as first-class workflow states.
 
 ## Accessibility & Inclusion

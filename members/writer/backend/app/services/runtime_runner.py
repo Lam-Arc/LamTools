@@ -6,6 +6,7 @@ from typing import Any, Awaitable, Callable
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.writer.llm_bridge import WriterLLMClientAdapter
 from app.models.session import WriterSession
 from app.models.transcript import WriterTranscriptBlock, WriterTranscriptTurn
 from app.services.app_projection_sink import AppProjectionSink
@@ -14,8 +15,11 @@ from app.services.commit_review_service import WriterCommitReviewService
 from app.services.runtime_fact_recorder import RuntimeFactRecorder
 from app.services.runtime_finalization_sink import RuntimeFinalizationSink
 from app.services.runtime_input_context import prepare_runtime_input_context
+from app.services.session_compaction_service import compact_session_context_response, session_needs_context_compaction
+from lamtools_core.event import CoreEvent
 from lamtools_core.event.runtime_projection import runtime_group_from_event_name
-from lamtools_core.kernel import KernelResult
+from lamtools_core.kernel import KernelResult, LoopPolicy
+from lamtools_core.llm.policy import RetryPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +37,30 @@ def _current_user_content(
     if not extra_blocks:
         return None
     return [{"type": "text", "text": text}, *extra_blocks]
+
+
+def _int_result(result: dict[str, Any], key: str) -> int:
+    value = result.get(key)
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return 0
+
+
+def _string_list_result(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    result: list[str] = []
+    for item in value:
+        text = str(item or "").strip()
+        if text:
+            result.append(text)
+    return result
 
 
 class WriterRuntimeRunner:
@@ -72,6 +100,12 @@ class WriterRuntimeRunner:
         sub_agent_llm_client_factory: SubAgentLLMClientFactory | None = None,
         model_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        pre_run_compaction = await self._compact_before_history_cap(
+            db,
+            session_id=session_id,
+            llm_client=llm_client,
+            model_context=model_context,
+        )
         input_context = await prepare_runtime_input_context(
             db,
             session_id=session_id,
@@ -94,6 +128,19 @@ class WriterRuntimeRunner:
             model_context=model_context,
         )
         await recorder.start_runtime_producer()
+        if pre_run_compaction is not None:
+            try:
+                await self._record_pre_run_compaction(
+                    recorder,
+                    session_id=session_id,
+                    result=pre_run_compaction,
+                )
+            except Exception:
+                logger.warning(
+                    "Session %s: context pre-compaction visibility event failed",
+                    session_id,
+                    exc_info=True,
+                )
 
         try:
             result = await self._run_core_kernel(
@@ -135,6 +182,112 @@ class WriterRuntimeRunner:
         )
         self._schedule_prewarm(work_root)
         return summary
+
+    async def _compact_before_history_cap(
+        self,
+        db: AsyncSession,
+        *,
+        session_id: str,
+        llm_client: Any,
+        model_context: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        try:
+            should_compact = await session_needs_context_compaction(db, session_id=session_id)
+            if not should_compact:
+                return None
+            loop_policy = LoopPolicy()
+            result = await compact_session_context_response(
+                db,
+                session_id=session_id,
+                llm_client=self._compaction_llm_client(llm_client),
+                model=str((model_context or {}).get("model") or ""),
+                model_retries=loop_policy.model_retries,
+                model_timeout_seconds=loop_policy.model_timeout_seconds,
+                retry_policy=RetryPolicy(),
+                trigger="auto",
+            )
+            await db.commit()
+            return result
+        except Exception:
+            await db.rollback()
+            logger.warning(
+                "Session %s: context pre-compaction failed; falling back to recent-history cap",
+                session_id,
+                exc_info=True,
+            )
+            return None
+
+    @staticmethod
+    def _compaction_llm_client(llm_client: Any) -> Any:
+        if hasattr(llm_client, "complete"):
+            return llm_client
+        if hasattr(llm_client, "chat_full"):
+            return WriterLLMClientAdapter(writer_client=llm_client)
+        return None
+
+    async def _record_pre_run_compaction(
+        self,
+        recorder: RuntimeFactRecorder,
+        *,
+        session_id: str,
+        result: dict[str, Any],
+    ) -> None:
+        summary = str(result.get("summary") or "").strip()
+        if not summary:
+            return
+        run_id = f"{session_id}:pre-run-compaction"
+        compacted_messages = _int_result(result, "compacted_messages")
+        retained_messages = _int_result(result, "retained_messages")
+        before_tokens = _int_result(result, "before_tokens")
+        after_tokens = _int_result(result, "after_tokens")
+        target_tokens = _int_result(result, "target_tokens")
+        common_payload = {
+            "before_tokens": before_tokens,
+            "after_tokens": after_tokens,
+            "target_tokens": target_tokens,
+            "trigger_tokens": 0,
+            "window_tokens": 0,
+            "trigger": "auto",
+            "compacted_message_ids": _string_list_result(result.get("compacted_message_ids")),
+            "retained_message_ids": _string_list_result(result.get("retained_message_ids")),
+        }
+        await recorder.record_core_event(
+            CoreEvent(
+                name="runtime.part",
+                category="progress",
+                payload={
+                    **common_payload,
+                    "part_id": f"{run_id}:context-compaction",
+                    "part_type": "compaction",
+                    "status": "completed",
+                    "label": "上下文已压缩",
+                    "detail": f"{before_tokens} -> {after_tokens} tokens",
+                    "content": summary[:20_000],
+                    "compacted_messages": compacted_messages,
+                    "retained_messages": retained_messages,
+                    "removed_messages": compacted_messages,
+                },
+                session_id=session_id,
+                run_id=run_id,
+                tags=["compaction", "token_budget", "part"],
+            )
+        )
+        await recorder.record_core_event(
+            CoreEvent(
+                name="runtime.context_compacted",
+                category="progress",
+                payload={
+                    **common_payload,
+                    "removed": compacted_messages,
+                    "before_messages": compacted_messages + retained_messages,
+                    "after_messages": retained_messages + 1,
+                    "summary": summary[:20_000],
+                },
+                session_id=session_id,
+                run_id=run_id,
+                tags=["compaction", "token_budget"],
+            )
+        )
 
     async def _record_failure(
         self,

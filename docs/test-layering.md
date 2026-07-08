@@ -1,5 +1,7 @@
 # 测试分层说明
 
+维护标注（2026-07-08）：当前活跃产品成员只有 Writer；已下线的旧成员不再作为测试分层对象。`scripts/test.ps1 all` 只覆盖 Core 后端和 Writer 后端，前端与 E2E 仍需按下方命令显式运行。
+
 ## 分层
 
 | 层级 | 位置 | 速度 | 依赖 | 运行频率 |
@@ -32,7 +34,7 @@
 
 ## real e2e
 
-- 接真实 LLM，可能生成图片
+- 接真实 LLM，可能修改本地任务文件
 - 脚本式 E2E 在 `members/writer/backend/tests/` 下
 - **不能直接全量 pytest**——部分文件是脚本不是测试用例
 - 已加 `if __name__ == "__main__":` 保护的文件：`bench_v2.py`、`bench_v3.py`、`self_contained_test.py`、`quick_api_test.py`、`send_task.py`、`demo_constraint_validator.py`

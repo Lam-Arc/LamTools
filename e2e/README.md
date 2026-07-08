@@ -1,6 +1,6 @@
 ﻿# LamTools E2E Tests
 
-Playwright E2E smoke tests for the LamTools monorepo frontends.
+Playwright E2E smoke tests for the active LamTools frontend.
 
 ## Setup
 
@@ -14,17 +14,11 @@ npx playwright install chromium
 
 ### 1. Start frontend dev servers
 
-Open two terminals:
+Open one terminal:
 
 ```bash
 # Terminal 1 — Writer frontend (port 6174)
 cd E:\LamTools\members\writer\frontend
-npm run dev
-```
-
-```bash
-# Terminal 2 — Artist frontend (port 5174)
-cd E:\LamTools\members\Artist\frontend
 npm run dev
 ```
 
@@ -35,11 +29,10 @@ cd E:\LamTools\e2e
 npm run test:smoke
 ```
 
-Or run a specific project:
+Or run the Writer smoke spec directly:
 
 ```bash
 npx playwright test --project=writer-smoke
-npx playwright test --project=Artist-smoke
 ```
 
 ## Ports
@@ -47,13 +40,12 @@ npx playwright test --project=Artist-smoke
 | Frontend | Dev port | Playwright project |
 |----------|----------|--------------------|
 | Writer   | 6174     | writer-smoke       |
-| Artist   | 5174     | Artist-smoke       |
 
 ## What smoke tests check
 
 - Page shell loads (body visible)
 - Left sidebar drawer exists (`.drawer-left`)
-- Brand text in sidebar header (LamWriter / lamartist)
+- Brand text in sidebar header (LamWriter)
 - Composer textarea exists (`.floating-composer textarea`)
 - Main content area exists (`.writer-main`)
 

@@ -70,6 +70,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable, Awaitable
 
+from lamtools_core.context_compaction import COMPACTION_PREFIX
 from lamtools_core.event import CoreEvent, EventSink, InMemoryEventLog
 from lamtools_core.kernel import (
     CoreLoopKernel,
@@ -1211,7 +1212,14 @@ async def run_core_kernel(
             if not content:
                 continue
             if role in ("system", "user", "assistant"):
-                filtered_history.append((index, ChatMessage(role=role, content=content)))
+                metadata: dict[str, Any] = {}
+                message_id = str(entry.get("id") or entry.get("message_id") or "").strip()
+                if message_id:
+                    metadata["writer_message_id"] = message_id
+                if role == "system" and str(content).startswith(COMPACTION_PREFIX):
+                    metadata["key"] = "context_compaction_summary"
+                    metadata["kind"] = "history"
+                filtered_history.append((index, ChatMessage(role=role, content=content, metadata=metadata)))
         system_entries = [item for item in filtered_history if item[1].role == "system"]
         if len(system_entries) >= 20:
             kept_indices = {index for index, _ in system_entries[-20:]}
@@ -1377,6 +1385,11 @@ async def run_core_kernel(
         if usage_prompt_tokens > 0 and usage_cached_tokens > 0
         else None
     )
+    context_metrics = {}
+    state_metadata = result.state.metadata if result.state and isinstance(result.state.metadata, dict) else {}
+    raw_context_metrics = state_metadata.get("runtime_context_metrics")
+    if isinstance(raw_context_metrics, dict):
+        context_metrics = dict(raw_context_metrics)
 
     # Enrich metadata (KernelResult.metadata is dict[str, Any])
     result.metadata["core_events"] = core_events_summary
@@ -1391,6 +1404,7 @@ async def run_core_kernel(
         "total_tokens": usage_total_tokens,
         "cache_hit_rate": cache_hit_rate,
         "llm_calls": len(result.steps),
+        **context_metrics,
     }
     if result.decision:
         result.metadata["decision"] = result.decision

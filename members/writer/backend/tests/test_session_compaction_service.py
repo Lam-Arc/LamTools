@@ -167,6 +167,11 @@ async def test_manual_compaction_persists_summary_and_runtime_uses_it(tmp_path):
             assert session is not None
             assert result["status"] == "compacted"
             assert result["compacted_messages"] == 6
+            assert result["compacted_message_ids"] == ["m-0", "m-1", "m-2", "m-3", "m-4", "m-5"]
+            assert result["retained_message_ids"] == ["m-6", "m-7", "m-8", "m-9", "m-10", "m-11"]
+            assert result["before_tokens"] > 0
+            assert result["after_tokens"] > 0
+            assert result["target_tokens"] == 6000
             assert "message-0" in (session.context_summary or "")
             assert session.runtime_state["manual_compaction"]["retained_message_count"] == 6
             assert session.runtime_state["manual_compaction"]["compacted_message_ids"] == [

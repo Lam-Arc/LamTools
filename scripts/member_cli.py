@@ -65,62 +65,22 @@ def _writer(args: list[str]) -> int:
     return _run(PY + ["-m", "writer_cli", *args], cwd)
 
 
-def _artist(args: list[str]) -> int:
-    cwd = ROOT / "members" / "artist" / "backend"
-    artist_cli = ["-m", "app.cli"]
-    if not args or args[0] in {"-h", "--help", "help"}:
-        return _run(PY + artist_cli + ["--help"], cwd)
-
-    command = args[0]
-    rest = args[1:]
-    if command == "run":
-        if not rest:
-            print("usage: artist run <task...>", file=sys.stderr)
-            return 2
-        return _run(PY + artist_cli + rest, cwd)
-    if command == "resume":
-        if len(rest) < 2:
-            print("usage: artist resume <session-id> <message...>", file=sys.stderr)
-            return 2
-        return _run(PY + artist_cli + ["session", rest[0], *rest[1:]], cwd)
-    if command == "image":
-        if not rest:
-            print("usage: artist image <prompt...>", file=sys.stderr)
-            return 2
-        return _run(PY + artist_cli + ["image", *rest], cwd)
-    if command == "session":
-        if not rest or rest[0] in {"-h", "--help", "help"}:
-            return _run(PY + artist_cli + ["--help"], cwd)
-        if not rest or rest[0] in {"list", "ls"}:
-            return _run(PY + artist_cli + ["session", "ls", *rest[1:]], cwd)
-        if rest[0] in {"new", "copy", "rename"}:
-            return _run(PY + artist_cli + ["session", *rest], cwd)
-        return _run(PY + artist_cli + ["session", *rest], cwd)
-    if command == "health":
-        return _member_health("artist")
-
-    print("usage: artist <run|resume|image|session|health> [args...]", file=sys.stderr)
-    return 2
-
-
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     invoked = Path(sys.argv[0]).stem.lower()
 
-    if invoked in {"writer", "artist"}:
+    if invoked == "writer":
         member = invoked
         args = argv
     else:
         if not argv:
-            print("usage: member_cli.py <writer|artist> <command> ...", file=sys.stderr)
+            print("usage: member_cli.py <writer> <command> ...", file=sys.stderr)
             return 2
         member = argv[0].lower()
         args = argv[1:]
 
     if member == "writer":
         return _writer(args)
-    if member == "artist":
-        return _artist(args)
 
     print(f"unknown member: {member}", file=sys.stderr)
     return 2

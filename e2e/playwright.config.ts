@@ -15,11 +15,5 @@ export default defineConfig({
       testMatch: /writer.*\.spec\.ts/,
       use: { baseURL: 'http://localhost:6174' },
     },
-    {
-      name: 'artist-smoke',
-      testDir: './tests',
-      testMatch: /artist.*\.spec\.ts/,
-      use: { baseURL: 'http://localhost:5174' },
-    },
   ],
 });

@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>运行资源统计 - 方案二细化</title>
+  <style>
+    :root {
+      --ink: #252525;
+      --muted: #77736b;
+      --line: #ded9ce;
+      --page: #e9e5da;
+      --paper: #f5f2e9;
+      --track: #e4dfd3;
+      --used: #2f735f;
+      --blocked: #d1d0ca;
+      --blocked-line: rgba(102, 102, 96, .42);
+      --ease: cubic-bezier(0.22, 1, 0.36, 1);
+      --font: Inter, "Noto Sans SC", "Microsoft YaHei UI", system-ui, sans-serif;
+      --mono: "JetBrains Mono", Consolas, "Noto Sans Mono CJK SC", monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: var(--page);
+      color: var(--ink);
+      font-family: var(--font);
+    }
+
+    .panel {
+      --usage-ratio: .3;
+      width: 320px;
+      padding: 22px;
+      border: 1px solid var(--line);
+      background: var(--paper);
+    }
+
+    .variant {
+      margin: 0 0 14px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 750;
+    }
+
+    .head,
+    .metric,
+    .legend,
+    .stats {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .head {
+      margin-bottom: 14px;
+    }
+
+    .title-group {
+      min-width: 0;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 22px;
+      line-height: 1.2;
+    }
+
+    .demo-update {
+      margin-left: auto;
+      border: 1px solid var(--line);
+      background: transparent;
+      color: var(--muted);
+      padding: 3px 8px;
+      font: inherit;
+      font-size: 12px;
+      font-weight: 750;
+      line-height: 1.2;
+      cursor: pointer;
+      transition: color 120ms var(--ease), border-color 120ms var(--ease), background-color 120ms var(--ease);
+    }
+
+    .demo-update:hover,
+    .demo-update:focus-visible {
+      border-color: color-mix(in srgb, var(--used) 36%, var(--line));
+      background: color-mix(in srgb, var(--used) 7%, transparent);
+      color: var(--used);
+      outline: none;
+    }
+
+    .state {
+      color: var(--used);
+      font-size: 13px;
+      font-weight: 850;
+    }
+
+    .metric {
+      margin-bottom: 8px;
+    }
+
+    .tokens {
+      font-family: var(--mono);
+      font-size: 20px;
+      font-weight: 850;
+      letter-spacing: 0;
+      transition: opacity 120ms var(--ease);
+    }
+
+    .percent {
+      font-family: var(--mono);
+      font-size: 18px;
+      font-weight: 850;
+      transition: opacity 120ms var(--ease);
+    }
+
+    .bar {
+      position: relative;
+      display: flex;
+      width: 100%;
+      height: 8px;
+      overflow: hidden;
+      background: var(--track);
+    }
+
+    .used {
+      position: absolute;
+      inset: 0;
+      background: var(--used);
+      transform: scaleX(var(--usage-ratio));
+      transform-origin: left center;
+      transition: transform 180ms var(--ease);
+    }
+
+    .free {
+      display: none;
+    }
+
+    .blocked {
+      position: absolute;
+      top: 0;
+      right: 0;
+      bottom: 0;
+      width: 20%;
+      background-color: var(--blocked);
+      background-image: linear-gradient(
+        135deg,
+        transparent 0 42%,
+        var(--blocked-line) 43% 52%,
+        transparent 53% 100%
+      );
+      background-size: 9px 9px;
+    }
+
+    .hint {
+      min-height: 17px;
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+      opacity: 0;
+      transform: translateY(-2px);
+      transition: opacity 160ms var(--ease), transform 160ms var(--ease);
+    }
+
+    .bar:hover + .hint,
+    .bar:focus-visible + .hint {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .legend {
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .stats {
+      margin-top: 18px;
+      padding-top: 14px;
+      border-top: 1px solid var(--line);
+      align-items: stretch;
+    }
+
+    .stat {
+      min-width: 0;
+    }
+
+    .label {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.2;
+    }
+
+    .value {
+      display: block;
+      font-family: var(--mono);
+      font-size: 14px;
+      font-weight: 850;
+      line-height: 1.25;
+      white-space: nowrap;
+      transition: opacity 120ms var(--ease);
+    }
+
+    .is-fading .tokens,
+    .is-fading .percent,
+    .is-fading .value {
+      opacity: .28;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .demo-update,
+      .used,
+      .hint,
+      .tokens,
+      .percent,
+      .value {
+        transition-duration: 0.01ms !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <section class="panel" aria-label="运行资源统计">
+    <p class="variant">方案 2 · 细化</p>
+
+    <div class="head">
+      <div class="title-group">
+        <h1>资源</h1>
+      </div>
+      <button class="demo-update" type="button" data-action="demo-update">更新</button>
+      <span class="state">正常</span>
+    </div>
+
+    <div class="metric">
+      <span class="tokens" data-field="tokens">77k / 256k</span>
+      <span class="percent" data-field="percent">30%</span>
+    </div>
+
+    <div class="bar" tabindex="0" aria-label="当前 30%，80% 后自动压缩">
+      <span class="used"></span>
+      <span class="free"></span>
+      <span class="blocked"></span>
+    </div>
+    <div class="hint" data-field="hint">当前 30% · 80% 后自动压缩</div>
+
+    <div class="legend">
+      <span>可用至 80%</span>
+      <span>灰色区压缩</span>
+    </div>
+
+    <div class="stats">
+      <span class="stat">
+        <span class="label">调用</span>
+        <strong class="value" data-field="calls">156</strong>
+      </span>
+      <span class="stat">
+        <span class="label">输入</span>
+        <strong class="value" data-field="input">4.11M</strong>
+      </span>
+      <span class="stat">
+        <span class="label">输出</span>
+        <strong class="value" data-field="output">72k</strong>
+      </span>
+    </div>
+  </section>
+  <script>
+    const panel = document.querySelector('.panel')
+    const bar = document.querySelector('.bar')
+    const fields = {
+      tokens: document.querySelector('[data-field="tokens"]'),
+      percent: document.querySelector('[data-field="percent"]'),
+      hint: document.querySelector('[data-field="hint"]'),
+      calls: document.querySelector('[data-field="calls"]'),
+      input: document.querySelector('[data-field="input"]'),
+      output: document.querySelector('[data-field="output"]'),
+    }
+    const states = [
+      { ratio: .3, percent: '30%', tokens: '77k / 256k', calls: '156', input: '4.11M', output: '72k' },
+      { ratio: .48, percent: '48%', tokens: '123k / 256k', calls: '164', input: '4.54M', output: '81k' },
+    ]
+    let stateIndex = 0
+
+    function render(nextState) {
+      panel.style.setProperty('--usage-ratio', String(nextState.ratio))
+      fields.tokens.textContent = nextState.tokens
+      fields.percent.textContent = nextState.percent
+      fields.hint.textContent = `当前 ${nextState.percent} · 80% 后自动压缩`
+      fields.calls.textContent = nextState.calls
+      fields.input.textContent = nextState.input
+      fields.output.textContent = nextState.output
+      bar.setAttribute('aria-label', `当前 ${nextState.percent}，80% 后自动压缩`)
+    }
+
+    document.querySelector('[data-action="demo-update"]').addEventListener('click', () => {
+      stateIndex = (stateIndex + 1) % states.length
+      panel.classList.add('is-fading')
+      window.setTimeout(() => {
+        render(states[stateIndex])
+        window.requestAnimationFrame(() => panel.classList.remove('is-fading'))
+      }, 90)
+    })
+  </script>
+</body>
+</html>

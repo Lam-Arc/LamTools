@@ -4,6 +4,7 @@ import pytest
 
 from app.core.writer.schemas import WriterSessionState
 from app.core.writer.state_store import WriterStateStore
+from app.models.session import WriterSession
 
 
 class TestWriterStateStore:
@@ -61,6 +62,48 @@ class TestWriterStateStore:
         assert retrieved is not None
         assert retrieved.turn_count == 5
         assert retrieved.phase == "verifying"
+
+    @pytest.mark.asyncio
+    async def test_save_preserves_existing_compaction_state_from_database(self, data_dir):
+        store = WriterStateStore(data_dir)
+        state = WriterSessionState(
+            session_id="compact-preserve",
+            context_summary="[Compacted Context]\nold summary",
+            turn_count=1,
+        )
+        await store.save(state)
+
+        db = await store._get_db()
+        try:
+            session = await db.get(WriterSession, "compact-preserve")
+            assert session is not None
+            session.context_summary = "[Compacted Context]\nlatest summary"
+            session.runtime_state = {
+                **(session.runtime_state or {}),
+                "manual_compaction": {
+                    "compacted_at": "2026-07-08T00:00:00+00:00",
+                    "compacted_message_ids": ["m-1", "m-2"],
+                    "retained_message_ids": ["m-3"],
+                    "retained_message_count": 1,
+                },
+            }
+            await db.commit()
+        finally:
+            await db.close()
+
+        state.turn_count = 2
+        await store.save(state)
+
+        verify_db = await store._get_db()
+        try:
+            session = await verify_db.get(WriterSession, "compact-preserve")
+            assert session is not None
+            assert session.context_summary == "[Compacted Context]\nlatest summary"
+            assert session.runtime_state["manual_compaction"]["compacted_message_ids"] == ["m-1", "m-2"]
+            assert session.runtime_state["manual_compaction"]["retained_message_ids"] == ["m-3"]
+            assert session.turn_count == 2
+        finally:
+            await verify_db.close()
 
     @pytest.mark.asyncio
     async def test_delete_removes_state(self, data_dir):

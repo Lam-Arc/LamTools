@@ -1607,8 +1607,16 @@ class TestKernelContextCompaction:
             async def build_model_request(self, state, context):
                 messages = [ChatMessage(role="system", content="stable prefix")]
                 for i in range(5):
-                    messages.append(ChatMessage(role="user", content=f"old user {i} " + ("x" * 500)))
-                    messages.append(ChatMessage(role="assistant", content=f"old assistant {i} " + ("y" * 500)))
+                    messages.append(ChatMessage(
+                        role="user",
+                        content=f"old user {i} " + ("x" * 500),
+                        metadata={"writer_message_id": f"user-{i}"},
+                    ))
+                    messages.append(ChatMessage(
+                        role="assistant",
+                        content=f"old assistant {i} " + ("y" * 500),
+                        metadata={"writer_message_id": f"assistant-{i}"},
+                    ))
                 messages.append(ChatMessage(role="user", content="current task"))
                 return LLMRequest(messages=messages, model="mock-model")
 
@@ -1660,6 +1668,8 @@ class TestKernelContextCompaction:
         assert events[0].payload["trigger_tokens"] == 1_600
         assert events[0].payload["target_tokens"] == 1_200
         assert events[0].payload["removed"] > 0
+        assert events[0].payload["compacted_message_ids"][:2] == ["user-0", "assistant-0"]
+        assert "user-4" in events[0].payload["compacted_message_ids"]
 
         part_events = [
             event

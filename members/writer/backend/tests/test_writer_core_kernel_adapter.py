@@ -2677,6 +2677,23 @@ class TestKernelResultMetadataObservability:
         assert result.decision == "done"
 
     @pytest.mark.asyncio
+    async def test_runtime_metrics_include_current_context_budget_estimate(self):
+        llm = FakeLLMClient()
+        llm.context_window = 256_000
+        llm.add_response(LLMResponse(content="Done", finish_reason="stop"))
+
+        result = await run_core_kernel(
+            goal="Simple task",
+            session_id="test-obs-context-metrics",
+            llm_client=llm,
+        )
+
+        metrics = result.metadata["runtime_metrics"]
+        assert metrics["estimated_prompt_tokens"] > 0
+        assert metrics["context_window_tokens"] == 256_000
+        assert metrics["context_compaction_trigger_tokens"] == 204_800
+
+    @pytest.mark.asyncio
     async def test_read_file_has_tool_started_and_finished(self):
         """read_file tool call: core_events has runtime.tool.started and runtime.tool.finished."""
         llm = FakeLLMClient()
@@ -4727,6 +4744,42 @@ class TestMultiTurnHistory:
         messages = _conversation_messages(llm.last_request.messages)
         assert messages[-1].role == "user"
         assert messages[-1].content == user_content
+
+    @pytest.mark.asyncio
+    async def test_history_message_ids_are_preserved_for_auto_compaction_metadata(self):
+        llm = FakeLLMClient()
+        llm.add_response(LLMResponse(content="Done.", finish_reason="stop"))
+
+        history = [
+            {"role": "system", "content": "[Compacted Context]\n1. Current Goal\n- Continue."},
+            {"role": "user", "content": "Previous question", "id": "message-user-1"},
+            {"role": "assistant", "content": "Previous answer", "id": "message-assistant-1"},
+        ]
+
+        result = await run_core_kernel(
+            goal="Current question",
+            session_id="test-history-message-ids",
+            llm_client=llm,
+            history=history,
+        )
+
+        assert result.decision == "done"
+        assert llm.last_request is not None
+        previous = [
+            message
+            for message in llm.last_request.messages
+            if message.content in {"Previous question", "Previous answer"}
+        ]
+        assert [message.metadata["writer_message_id"] for message in previous] == [
+            "message-user-1",
+            "message-assistant-1",
+        ]
+        summary = next(
+            message
+            for message in llm.last_request.messages
+            if message.content == "[Compacted Context]\n1. Current Goal\n- Continue."
+        )
+        assert summary.metadata["key"] == "context_compaction_summary"
 
     @pytest.mark.asyncio
     async def test_current_user_message_not_duplicated(self):

@@ -83,6 +83,16 @@ class WriterStateStore:
             db.add(session)
 
         updates = state.to_session_updates()
+        existing_runtime_state = session.runtime_state if isinstance(session.runtime_state, dict) else {}
+        next_runtime_state = updates.get("runtime_state") if isinstance(updates.get("runtime_state"), dict) else {}
+        if existing_runtime_state:
+            updates["runtime_state"] = {**existing_runtime_state, **next_runtime_state}
+            if (
+                isinstance(existing_runtime_state.get("manual_compaction"), dict)
+                and session.context_summary
+                and updates.get("context_summary") != session.context_summary
+            ):
+                updates["context_summary"] = session.context_summary
         for key, value in updates.items():
             if hasattr(session, key):
                 setattr(session, key, value)

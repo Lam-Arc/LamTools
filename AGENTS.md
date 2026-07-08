@@ -14,7 +14,7 @@
 
 ```text
 core/      通用协议、运行骨架、共享 UI、基础能力
-members/   Writer、Artist 等产品特化实现
+members/   当前仅 Writer；未来成员必须从脚手架重新接入
 scripts/   跨组件脚本和命令分发
 docs/      monorepo 级文档
 ```
@@ -22,12 +22,12 @@ docs/      monorepo 级文档
 - `core/` 不放产品 persona、业务路由、专用工具；`members/{id}/` 保留产品语义、业务流程和专用展示。
 - 通用 Agent 应具备的输入、输出、运行时、状态、模型能力、文件资源、工具协议、权限、错误处理归 `core/`。
 - 共享能力优先下沉 `core/`；只服务单一产品的能力留在对应 member。
-- 改 `core/` 前评估 Writer 和 Artist；改 member 时避免牵动其他成员。
+- 改 `core/` 前评估 Writer 和未来成员接入影响；改 Writer 时避免把产品语义下沉到 Core。
 
 ## 架构规则
 
 1. Kernel 管流程，Kit 管业务；Kit 是唯一业务注入点，不设平行 Hook 层。
-2. Core 不认产品名：`core/src/lamtools_core/` 不出现 Writer/Artist 等产品名，不写 `if product ==`。
+2. Core 不认产品名：`core/src/lamtools_core/` 不出现产品名，不写 `if product ==`。
 3. 产品业务单产品留 member；两个产品共用时只抽协议和骨架，不抽业务逻辑。
 4. 通用基础能力归 Core，即使第一处需求来自单个 member。
 
@@ -35,15 +35,12 @@ docs/      monorepo 级文档
 
 ```powershell
 .\scripts\dev.ps1 writer all
-.\scripts\dev.ps1 artist all
 .\scripts\build.ps1 all
 .\scripts\test.ps1 all
 .\scripts\scaffold-member.ps1 -Id editor -Name LamEditor -DisplayName LamEditor -Capabilities code,git
 
 .\writer.cmd run 任务描述
-.\artist.cmd run 任务描述
 .\writer.cmd session list
-.\artist.cmd session list
 ```
 
 未来可在此之上增加 `lam run ...` 智能路由层。

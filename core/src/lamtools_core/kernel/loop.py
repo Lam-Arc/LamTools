@@ -51,6 +51,21 @@ if TYPE_CHECKING:
     pass
 
 
+def _message_reference_ids(messages: list[ChatMessage]) -> list[str]:
+    ids: list[str] = []
+    for message in messages:
+        metadata = message.metadata if isinstance(message.metadata, dict) else {}
+        raw_id = (
+            metadata.get("writer_message_id")
+            or metadata.get("message_id")
+            or metadata.get("id")
+        )
+        message_id = str(raw_id or "").strip()
+        if message_id:
+            ids.append(message_id)
+    return ids
+
+
 def _new_run_id() -> str:
     return uuid.uuid4().hex[:12]
 
@@ -1122,6 +1137,12 @@ class CoreLoopKernel:
         request.metadata["estimated_prompt_tokens"] = before_tokens
         request.metadata["context_window_tokens"] = window
         request.metadata["context_compaction_trigger_tokens"] = trigger_tokens
+        state.metadata["runtime_context_metrics"] = {
+            "estimated_prompt_tokens": before_tokens,
+            "context_window_tokens": window,
+            "context_compaction_trigger_tokens": trigger_tokens,
+            "context_compacted": False,
+        }
         if before_tokens < trigger_tokens:
             return
 
@@ -1183,6 +1204,17 @@ class CoreLoopKernel:
         request.metadata["context_tokens_after_compaction"] = result.after_tokens
         request.metadata["context_messages_before_compaction"] = before_messages
         request.metadata["context_messages_after_compaction"] = len(request.messages)
+        state.metadata["runtime_context_metrics"] = {
+            "estimated_prompt_tokens": result.after_tokens,
+            "context_window_tokens": window,
+            "context_compaction_trigger_tokens": trigger_tokens,
+            "context_compacted": True,
+            "context_compaction_mode": "structured_summary",
+            "context_tokens_before_compaction": result.before_tokens,
+            "context_tokens_after_compaction": result.after_tokens,
+            "context_messages_before_compaction": before_messages,
+            "context_messages_after_compaction": len(request.messages),
+        }
         await self._emit_compaction_part(
             state,
             content=result.summary,
@@ -1193,6 +1225,8 @@ class CoreLoopKernel:
             window_tokens=window,
             removed=result.compacted_count,
             trigger="auto",
+            compacted_message_ids=_message_reference_ids(result.compacted_messages),
+            retained_message_ids=_message_reference_ids(result.retained_messages),
         )
         await self._emit_context_compacted(
             state,
@@ -1206,6 +1240,8 @@ class CoreLoopKernel:
             window_tokens=window,
             summary=result.summary,
             trigger="auto",
+            compacted_message_ids=_message_reference_ids(result.compacted_messages),
+            retained_message_ids=_message_reference_ids(result.retained_messages),
         )
 
     async def _emit_state_event(self, state: RuntimeState, name: str, message: str) -> None:
@@ -1451,6 +1487,8 @@ class CoreLoopKernel:
         window_tokens: int,
         summary: str = "",
         trigger: str = "",
+        compacted_message_ids: list[str] | None = None,
+        retained_message_ids: list[str] | None = None,
     ) -> None:
         """Emit a token-budget context compaction event."""
         event = CoreEvent(
@@ -1467,6 +1505,8 @@ class CoreLoopKernel:
                 "window_tokens": window_tokens,
                 "summary": summary[:20_000],
                 "trigger": trigger or "auto",
+                "compacted_message_ids": list(compacted_message_ids or []),
+                "retained_message_ids": list(retained_message_ids or []),
             },
             session_id=state.session_id,
             run_id=state.run_id,
@@ -1486,6 +1526,8 @@ class CoreLoopKernel:
         window_tokens: int,
         removed: int,
         trigger: str = "",
+        compacted_message_ids: list[str] | None = None,
+        retained_message_ids: list[str] | None = None,
     ) -> None:
         """Emit a UI part for compacted context."""
         event = CoreEvent(
@@ -1505,6 +1547,8 @@ class CoreLoopKernel:
                 "window_tokens": window_tokens,
                 "removed_messages": removed,
                 "trigger": trigger or "auto",
+                "compacted_message_ids": list(compacted_message_ids or []),
+                "retained_message_ids": list(retained_message_ids or []),
             },
             session_id=state.session_id,
             run_id=state.run_id,

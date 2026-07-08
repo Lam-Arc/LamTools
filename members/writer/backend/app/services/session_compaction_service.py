@@ -18,6 +18,7 @@ from lamtools_core.llm.retry import ModelRetrySink
 MAX_RETAIN_MESSAGE_COUNT = 6
 MAX_SUMMARY_CHARS = 20000
 MANUAL_COMPACTION_TARGET_TOKENS = 6000
+RUNTIME_HISTORY_VISIBLE_MESSAGE_LIMIT = 21
 
 
 async def compact_session_context_response(
@@ -32,6 +33,7 @@ async def compact_session_context_response(
     model_timeout_seconds: float | None = None,
     retry_policy: RetryPolicy | None = None,
     on_model_retry: ModelRetrySink | None = None,
+    trigger: str = "manual",
 ) -> dict[str, Any]:
     session = await db.get(WriterSession, session_id)
     if session is None:
@@ -53,7 +55,7 @@ async def compact_session_context_response(
         raise ValueError("Not enough summary space to compact history")
     result = await compact_context(
         ContextCompactionRequest(
-            trigger="manual",
+            trigger=trigger,
             messages=[_message_to_chat_message(message) for message in messages],
             llm_client=llm_client,
             model=model,
@@ -77,6 +79,7 @@ async def compact_session_context_response(
         raise ValueError("Not enough summary space to compact history")
     manual_compaction = {
         "compacted_at": now().astimezone(timezone.utc).isoformat(),
+        "trigger": trigger,
         "compacted_message_ids": [
             *existing_compacted_ids,
             *[message.id for message in compacted if message.id not in compacted_ids],
@@ -93,9 +96,36 @@ async def compact_session_context_response(
         "compacted_at": manual_compaction["compacted_at"],
         "compacted_messages": len(compacted),
         "retained_messages": len(retained),
-        "trigger": "manual",
+        "compacted_message_ids": manual_compaction["compacted_message_ids"],
+        "retained_message_ids": manual_compaction["retained_message_ids"],
+        "before_tokens": result.before_tokens,
+        "after_tokens": result.after_tokens,
+        "target_tokens": result.target_tokens,
+        "trigger": trigger,
         "summary": session.context_summary,
     }
+
+
+async def session_needs_context_compaction(
+    db: AsyncSession,
+    *,
+    session_id: str,
+    active_message_limit: int = RUNTIME_HISTORY_VISIBLE_MESSAGE_LIMIT,
+) -> bool:
+    session = await db.get(WriterSession, session_id)
+    if session is None:
+        return False
+    existing_state = session.runtime_state if isinstance(session.runtime_state, dict) else {}
+    existing_compaction = (
+        existing_state.get("manual_compaction") if isinstance(existing_state.get("manual_compaction"), dict) else {}
+    )
+    compacted_ids = {
+        str(message_id)
+        for message_id in (existing_compaction.get("compacted_message_ids") or [])
+        if str(message_id).strip()
+    }
+    messages = await _load_active_messages(db, session_id=session_id, compacted_ids=compacted_ids)
+    return len(messages) > active_message_limit
 
 
 async def _load_active_messages(

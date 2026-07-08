@@ -1691,8 +1691,8 @@ async def test_session_rollback_turn_excludes_rolled_back_messages_from_runtime_
             )
 
         assert context.history == [
-            {"role": "user", "content": "保留第一轮"},
-            {"role": "assistant", "content": "第一轮完成"},
+            {"role": "user", "content": "保留第一轮", "id": "user-1"},
+            {"role": "assistant", "content": "第一轮完成", "id": "assistant-1"},
         ]
     finally:
         await engine.dispose()

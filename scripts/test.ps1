@@ -3,7 +3,7 @@
   Run tests for all or specific LamTools components.
 .DESCRIPTION
   Usage:
-    .\scripts\test.ps1 [core|writer|artist|all]
+    .\scripts\test.ps1 [core|writer|all]
 #>
 param(
     [Parameter(Position=0)][string]$Component = "all"
@@ -28,17 +28,12 @@ function Test-Component {
             & py -3.14 -m pytest "$Root\members\writer\backend"
             if ($LASTEXITCODE -ne 0) { Write-Host "[writer] TESTS FAILED" -ForegroundColor Red; exit 1 }
         }
-        "artist" {
-            Write-Host "[artist] py -3.14 -m pytest" -ForegroundColor Cyan
-            & py -3.14 -m pytest "$Root\members\artist\backend"
-            if ($LASTEXITCODE -ne 0) { Write-Host "[artist] TESTS FAILED" -ForegroundColor Red; exit 1 }
-        }
-        default { Write-Host "Unknown component: $Comp. Use: core, writer, artist, or all" -ForegroundColor Red; exit 1 }
+        default { Write-Host "Unknown component: $Comp. Use: core, writer, or all" -ForegroundColor Red; exit 1 }
     }
 }
 
 if ($Component -eq "all") {
-    @("core","writer","artist") | ForEach-Object { Test-Component $_ }
+    @("core","writer") | ForEach-Object { Test-Component $_ }
 } else {
     Test-Component $Component
 }

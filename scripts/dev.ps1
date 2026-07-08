@@ -3,7 +3,7 @@
   LamTools monorepo unified dev entry point.
 .DESCRIPTION
   Usage:
-    .\scripts\dev.ps1 [core|writer|artist] [backend|frontend]
+    .\scripts\dev.ps1 [core|writer] [backend|frontend]
     .\scripts\dev.ps1 all              # start all backends + frontends
 #>
 param(
@@ -42,24 +42,12 @@ function Start-Dev {
                 Start-Process -FilePath "npm.cmd" -ArgumentList "run","dev" -WorkingDirectory "$Root\members\writer\frontend"
             }
         }
-        "artist" {
-            $bPort = $Ports.artist.backend
-            $fPort = $Ports.artist.frontend_dev
-            if ($Lyr -eq "all" -or $Lyr -eq "backend") {
-                Write-Host "[artist/backend] uvicorn --port $bPort" -ForegroundColor Cyan
-                Start-Process -FilePath "py" -ArgumentList "-3.14","-m","uvicorn","app.main:app","--reload","--port",$bPort -WorkingDirectory "$Root\members\artist\backend"
-            }
-            if ($Lyr -eq "all" -or $Lyr -eq "frontend") {
-                Write-Host "[artist/frontend] npm run dev (port $fPort)" -ForegroundColor Cyan
-                Start-Process -FilePath "npm.cmd" -ArgumentList "run","dev" -WorkingDirectory "$Root\members\artist\frontend"
-            }
-        }
-        default { Write-Host "Unknown component: $Comp. Use: core, writer, artist, or all" -ForegroundColor Red; exit 1 }
+        default { Write-Host "Unknown component: $Comp. Use: core, writer, or all" -ForegroundColor Red; exit 1 }
     }
 }
 
 if ($Component -eq "all") {
-    @("core","writer","artist") | ForEach-Object { Start-Dev $_ $Layer }
+    @("core","writer") | ForEach-Object { Start-Dev $_ $Layer }
 } else {
     Start-Dev $Component $Layer
 }
