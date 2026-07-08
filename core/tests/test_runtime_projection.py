@@ -182,6 +182,70 @@ def test_extract_tool_input_preview_edit_file_new_text():
     }
 
 
+def test_runtime_tool_started_edit_file_arguments_include_input_preview():
+    events = runtime_fact_to_run_item_events(
+        thread_id="thread-1",
+        event_id="event-edit-started",
+        group="tool",
+        source="core",
+        phase="runtime.tool.started",
+        status="running",
+        sequence=1,
+        metadata={
+            "payload": {
+                "turn_id": "turn-1",
+                "tool_name": "edit_file",
+                "call_id": "edit-1",
+                "arguments": {
+                    "path": "main.py",
+                    "old_text": "old",
+                    "new_text": "new\nvalue",
+                },
+            }
+        },
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+
+    assert events is not None
+    assert events[0].payload["input_preview"] == {
+        "field": "new_text",
+        "content": "new\nvalue",
+        "chars": 9,
+        "truncated": False,
+    }
+
+
+def test_runtime_part_edit_file_tool_args_include_input_preview():
+    events = runtime_fact_to_run_item_events(
+        thread_id="thread-1",
+        event_id="event-edit-part",
+        group="runtime",
+        source="core",
+        phase="runtime.part",
+        status="running",
+        sequence=1,
+        metadata={
+            "payload": {
+                "turn_id": "turn-1",
+                "run_id": "run-1",
+                "part_type": "tool_call",
+                "tool_name": "edit_file",
+                "call_id": "edit-1",
+                "tool_args": {
+                    "path": "main.py",
+                    "old_text": "old",
+                    "new_text": "new\nvalue",
+                },
+            }
+        },
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+
+    assert events is not None
+    assert events[0].payload["input_preview"]["field"] == "new_text"
+    assert events[0].payload["input_preview"]["content"] == "new\nvalue"
+
+
 def test_extract_tool_input_preview_ignores_read_tools():
     assert extract_tool_input_preview("read_file", '{"path":"a.py"}') is None
 

@@ -282,17 +282,22 @@ def runtime_fact_to_run_item_events(
         ]
 
     if phase == "runtime.tool.started":
+        arguments = payload.get("arguments") or payload.get("tool_args") or {}
+        item_payload = {
+            "type": "dynamicToolCall",
+            "tool_name": _tool_name(payload),
+            "arguments": arguments,
+            "summary": fact.summary or fact.preview or "",
+        }
+        input_preview = extract_tool_input_preview_from_arguments(_tool_name(payload), arguments)
+        if input_preview:
+            item_payload["input_preview"] = input_preview
         return [
             RunItemEvent(
                 kind="tool_call",
                 item_id=_tool_item_id(fact, payload),
                 status="running",
-                payload={
-                    "type": "dynamicToolCall",
-                    "tool_name": _tool_name(payload),
-                    "arguments": payload.get("arguments") or payload.get("tool_args") or {},
-                    "summary": fact.summary or fact.preview or "",
-                },
+                payload=item_payload,
                 **base,
             )
         ]
@@ -403,18 +408,23 @@ def runtime_fact_to_run_item_events(
         if part_type == "tool_call":
             if status in TERMINAL_STATUSES:
                 return []
+            arguments = payload.get("tool_args") or payload.get("arguments") or {}
+            item_payload = {
+                "type": "dynamicToolCall",
+                "tool_name": _tool_name(payload),
+                "arguments": arguments,
+                "summary": str(payload.get("content") or payload.get("label") or fact.summary or ""),
+                "message": str(payload.get("detail") or fact.preview or ""),
+            }
+            input_preview = extract_tool_input_preview_from_arguments(_tool_name(payload), arguments)
+            if input_preview:
+                item_payload["input_preview"] = input_preview
             return [
                 RunItemEvent(
                     kind="tool_call",
                     item_id=_tool_item_id(fact, payload),
                     status=_canonical_status(status or "running"),
-                    payload={
-                        "type": "dynamicToolCall",
-                        "tool_name": _tool_name(payload),
-                        "arguments": payload.get("tool_args") or payload.get("arguments") or {},
-                        "summary": str(payload.get("content") or payload.get("label") or fact.summary or ""),
-                        "message": str(payload.get("detail") or fact.preview or ""),
-                    },
+                    payload=item_payload,
                     **base,
                 )
             ]
@@ -569,7 +579,7 @@ def _tool_name(payload: dict[str, Any]) -> str:
 
 def extract_tool_input_preview(tool_name: str, arguments_text: str) -> dict[str, Any] | None:
     name = tool_name.strip().lower()
-    fields = ["content"] if name == "write_file" else ["new_text", "new_string"] if name == "edit_file" else []
+    fields = _tool_input_preview_fields(name)
     if not fields or not arguments_text:
         return None
     field = ""
@@ -589,6 +599,31 @@ def extract_tool_input_preview(tool_name: str, arguments_text: str) -> dict[str,
         "chars": len(value),
         "truncated": truncated,
     }
+
+
+def extract_tool_input_preview_from_arguments(tool_name: str, arguments: Any) -> dict[str, Any] | None:
+    if not isinstance(arguments, dict):
+        return None
+    for field in _tool_input_preview_fields(tool_name.strip().lower()):
+        value = arguments.get(field)
+        if not isinstance(value, str):
+            continue
+        truncated = len(value) > DEFAULT_RUNTIME_PREVIEW_CHARS
+        return {
+            "field": field,
+            "content": value[:DEFAULT_RUNTIME_PREVIEW_CHARS],
+            "chars": len(value),
+            "truncated": truncated,
+        }
+    return None
+
+
+def _tool_input_preview_fields(name: str) -> list[str]:
+    if name == "write_file":
+        return ["content"]
+    if name == "edit_file":
+        return ["new_text", "new_string"]
+    return []
 
 
 def _partial_json_string_field(text: str, field: str) -> str | None:
