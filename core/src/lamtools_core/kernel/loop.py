@@ -37,6 +37,7 @@ from lamtools_core.llm.retry import (
     classify_model_error,
     complete_with_retry,
 )
+from lamtools_core.plugins import HookEvent
 from lamtools_core.runtime import RuntimeState, RuntimeStateStore, RuntimeToolStep, RuntimeTurnInput
 from lamtools_core.tokens import estimate_message_tokens, estimate_text_tokens
 from lamtools_core.tool import ToolCall, ToolResult
@@ -113,6 +114,7 @@ class CoreLoopKernel:
     policy: LoopPolicy = field(default_factory=LoopPolicy)
     retry_policy: RetryPolicy = field(default_factory=RetryPolicy)
     tracer: Tracer = field(default_factory=NoopTracer)
+    hook_engine: Any | None = None
     _cancel_event: asyncio.Event = field(default_factory=asyncio.Event, init=False, repr=False)
 
     def cancel(self) -> None:
@@ -324,7 +326,16 @@ class CoreLoopKernel:
 
                 # 5.8 Execute tool calls
                 tool_results: list[ToolResult] = []
-                approval_calls = [call for call in turn.tool_calls if call.requires_approval]
+                blocked_results: dict[str, ToolResult] = {}
+                for call in turn.tool_calls:
+                    blocked = await self._apply_pre_tool_hook(state, call)
+                    if blocked is not None:
+                        blocked_results[call.id] = blocked
+                approval_calls = [
+                    call
+                    for call in turn.tool_calls
+                    if call.id not in blocked_results and call.requires_approval
+                ]
                 if approval_calls:
                     approval_call = approval_calls[0]
                     await self._emit_tool_waiting_for_approval(
@@ -367,7 +378,6 @@ class CoreLoopKernel:
                     # Parallel execution (OpenAI Agents SDK style): emit all
                     # started events, run concurrently with optional cap,
                     # then emit finished events and write back in original order.
-                    blocked_results: dict[str, ToolResult] = {}
                     preflight = getattr(self.kit, "preflight_tool_calls", None)
                     if callable(preflight):
                         maybe_blocked = await preflight(state, turn.tool_calls)
@@ -395,7 +405,10 @@ class CoreLoopKernel:
                     # Sequential execution (OpenAI Codex default for shell-safety)
                     for call in turn.tool_calls:
                         await self._emit_tool_started(state, call, response_index=index)
-                        result = await self._execute_tool(state, call)
+                        if call.id in blocked_results:
+                            result = blocked_results[call.id]
+                        else:
+                            result = await self._execute_tool(state, call)
                         tool_results.append(result)
                         step.tool_steps.append(RuntimeToolStep(call=call, result=result))
                         await self._emit_tool_finished(state, call, result, response_index=index)
@@ -1047,6 +1060,47 @@ class CoreLoopKernel:
                 status="failed",
                 error=f"Tool timed out after {timeout} seconds",
             )
+
+    async def _apply_pre_tool_hook(
+        self,
+        state: RuntimeState,
+        call: ToolCall,
+    ) -> ToolResult | None:
+        if self.hook_engine is None:
+            return None
+        decision = await self.hook_engine.run(HookEvent(
+            event_name="PreToolUse",
+            session_id=state.session_id,
+            run_id=state.run_id,
+            cwd=str(call.metadata.get("cwd") or ""),
+            project_root=str(call.metadata.get("work_root") or call.metadata.get("project_root") or ""),
+            metadata=dict(call.metadata),
+            tool_name=call.name,
+            tool_input=dict(call.arguments if isinstance(call.arguments, dict) else {}),
+        ))
+        if decision.updated_input is not None:
+            call.arguments = dict(decision.updated_input)
+        if decision.additional_context:
+            call.metadata["hook_additional_context"] = decision.additional_context
+        if decision.permission_decision == "ask_user":
+            call.requires_approval = True
+            call.metadata["hook_permission_reason"] = decision.permission_decision_reason
+        if decision.permission_decision == "deny" or decision.decision == "block":
+            reason = decision.permission_decision_reason or decision.reason or "blocked by hook"
+            return ToolResult(
+                call_id=call.id,
+                name=call.name,
+                status="blocked",
+                content=reason,
+                error=reason,
+                metadata={
+                    "hook_decision": "blocked",
+                    "hook_audit": decision.audit_events,
+                },
+            )
+        if decision.audit_events:
+            call.metadata["hook_audit"] = decision.audit_events
+        return None
 
     async def _execute_tools_parallel(
         self, state: RuntimeState, calls: list[ToolCall]
