@@ -291,6 +291,8 @@ const messages = ref<CoreMessage[]>([])
 const queuedInputs = computed<WriterQueuedInput[]>(() => appServerQueuedInputs())
 const editingQueuedInputId = ref<string | null>(null)
 const queuedInputDraft = ref('')
+const editingActiveSessionTitle = ref(false)
+const activeSessionTitleDraft = ref('')
 const composerTextareaEl = ref<HTMLTextAreaElement | null>(null)
 const composerCursor = ref(0)
 const commandCatalog = ref<CoreCommandCatalogItem[]>([])
@@ -448,6 +450,20 @@ const activeSessionStatus = computed(() => {
   const active = sessions.value.find(session => session.id === activeSessionId.value)
   return normalizeSessionStatus(active?.status || 'idle')
 })
+
+const activeSession = computed(() => (
+  sessions.value.find(session => session.id === activeSessionId.value) || null
+))
+
+const activeSessionTitle = computed(() => (
+  activeSession.value?.title || 'Session'
+))
+
+watch([activeSessionId, activeSessionTitle], () => {
+  if (!editingActiveSessionTitle.value) {
+    activeSessionTitleDraft.value = activeSessionTitle.value
+  }
+}, { immediate: true })
 
 const canGuideQueuedInput = computed(() =>
   activeSessionStatus.value === 'running' || activeSessionStatus.value === 'waiting',
@@ -1110,6 +1126,33 @@ async function handleRenameSession(sessionId: string, title: string) {
     console.error('Failed to rename session:', err)
     runtimeStatusText.value = '重命名失败'
   }
+}
+
+function handleActiveSessionTitleFocus() {
+  if (!activeSessionId.value) return
+  editingActiveSessionTitle.value = true
+}
+
+function handleActiveSessionTitleInput(event: Event) {
+  editingActiveSessionTitle.value = true
+  activeSessionTitleDraft.value = (event.target as HTMLInputElement).value
+}
+
+function cancelActiveSessionTitleEdit() {
+  editingActiveSessionTitle.value = false
+  activeSessionTitleDraft.value = activeSessionTitle.value
+}
+
+async function submitActiveSessionTitle() {
+  if (!activeSessionId.value) return
+  const sessionId = activeSessionId.value
+  const title = activeSessionTitleDraft.value.trim()
+  if (!title || title === activeSessionTitle.value) {
+    cancelActiveSessionTitleEdit()
+    return
+  }
+  editingActiveSessionTitle.value = false
+  await handleRenameSession(sessionId, title)
 }
 
 async function handleDeleteSession(sessionId: string) {
@@ -2619,13 +2662,13 @@ onMounted(async () => {
         :allow-session-delete="true"
         :allow-project-click="true"
         :allow-project-context-menu="true"
+        :allow-rename="false"
         @select-session="selectSession"
         @new-session="handleNewSession"
         @delete-project="handleDeleteProject"
         @delete-session="handleDeleteSession"
         @select-project="(id) => { /* select first session in project */ }"
         @project-context-menu="handleProjectContextMenu"
-        @rename-session="handleRenameSession"
       >
         <template #empty>
           <div style="text-align:center;padding:18px 12px;color:var(--muted);font-size:13px">
@@ -2638,11 +2681,21 @@ onMounted(async () => {
     <!-- Main header -->
     <template #main-header>
       <div v-if="activeSessionId" class="thread-header">
-        <div>
-          <div>
-            <h1>{{ sessions.find(s => s.id === activeSessionId)?.title || 'Session' }}</h1>
-            <span>#{{ activeSessionId?.slice(0, 8) }}</span>
-          </div>
+        <div class="session-title-editor">
+          <h1>
+            <input
+              v-model="activeSessionTitleDraft"
+              class="session-title-input"
+              aria-label="会话标题"
+              spellcheck="false"
+              @focus="handleActiveSessionTitleFocus"
+              @input="handleActiveSessionTitleInput"
+              @blur="submitActiveSessionTitle"
+              @keydown.enter.prevent="submitActiveSessionTitle"
+              @keydown.esc.prevent="cancelActiveSessionTitleEdit"
+            />
+          </h1>
+          <span>#{{ activeSessionId?.slice(0, 8) }}</span>
         </div>
       </div>
     </template>
@@ -2937,6 +2990,41 @@ onMounted(async () => {
   overflow: hidden;
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
+}
+
+.session-title-editor {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.session-title-editor h1 {
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+}
+
+.session-title-input {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  height: 28px;
+  border: 0;
+  background: transparent;
+  color: var(--theme-main-text, currentColor);
+  caret-color: var(--theme-main-text, currentColor);
+  padding: 2px 0;
+  font: inherit;
+  font-size: 17px;
+  font-weight: 760;
+  line-height: 1.2;
+  outline: none;
+  text-overflow: ellipsis;
+}
+
+.session-title-input:focus {
+  background: transparent;
 }
 
 :deep(.composer-model-select) {

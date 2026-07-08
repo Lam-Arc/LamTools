@@ -166,7 +166,7 @@ describe('ChatThread process cards', () => {
     expect(source).not.toContain('class="compaction-summary-label"');
   });
 
-  it('renders command as bold command text with plain output', async () => {
+  it('renders command output as a terminal window', async () => {
     const messages: CoreMessage[] = [{
       id: 'm-command-meta',
       role: 'assistant',
@@ -193,7 +193,10 @@ describe('ChatThread process cards', () => {
 
     await wrapper.find('.tool-card-header').trigger('click');
 
-    expect(wrapper.find('.command-output-command').text()).toContain('npm test');
+    expect(wrapper.find('.command-terminal-chrome').exists()).toBe(true);
+    expect(wrapper.findAll('.command-terminal-light')).toHaveLength(3);
+    expect(wrapper.find('.command-terminal-title').text()).toBe('run command');
+    expect(wrapper.find('.command-output-command').text()).toContain('$ npm test');
     expect(wrapper.find('.command-output-result').text()).toContain('ok');
     expect(wrapper.find('.command-output-result').text()).not.toContain('[exit_code]');
     expect(wrapper.find('.command-output-result').text()).not.toContain('[duration_seconds]');

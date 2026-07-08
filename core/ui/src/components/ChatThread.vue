@@ -220,8 +220,16 @@
                           <pre class="tool-output-content" :class="{ 'tool-output-content--wrap': isToolWrapEnabled(part.id) }" @click="toggleToolWrap(part.id)">{{ displayToolInputPreview(part) }}</pre>
                         </div>
                         <div v-else-if="displayToolResult(part) && isCommandTool(part)" class="command-output">
-                          <strong class="command-output-command">{{ commandDisplayText(part) }}</strong>
-                          <pre class="command-output-result">{{ commandOutputText(part) }}</pre>
+                          <div class="command-terminal-chrome" aria-hidden="true">
+                            <span class="command-terminal-light command-terminal-light--close" />
+                            <span class="command-terminal-light command-terminal-light--minimize" />
+                            <span class="command-terminal-light command-terminal-light--maximize" />
+                            <span class="command-terminal-title">run command</span>
+                          </div>
+                          <div class="command-terminal-body">
+                            <strong class="command-output-command">$ {{ commandDisplayText(part) }}</strong>
+                            <pre class="command-output-result">{{ commandOutputText(part) }}</pre>
+                          </div>
                         </div>
                         <div v-else-if="displayToolResult(part)" class="tool-output">
                           <div v-if="toolMetaItems(part).length > 0" class="tool-output-meta">
@@ -353,8 +361,16 @@
                             <pre class="tool-output-content" :class="{ 'tool-output-content--wrap': isToolWrapEnabled(group.part.id) }" @click="toggleToolWrap(group.part.id)">{{ displayToolInputPreview(group.part) }}</pre>
                           </div>
                           <div v-else-if="displayToolResult(group.part) && isCommandTool(group.part)" class="command-output">
-                            <strong class="command-output-command">{{ commandDisplayText(group.part) }}</strong>
-                            <pre class="command-output-result">{{ commandOutputText(group.part) }}</pre>
+                            <div class="command-terminal-chrome" aria-hidden="true">
+                              <span class="command-terminal-light command-terminal-light--close" />
+                              <span class="command-terminal-light command-terminal-light--minimize" />
+                              <span class="command-terminal-light command-terminal-light--maximize" />
+                              <span class="command-terminal-title">run command</span>
+                            </div>
+                            <div class="command-terminal-body">
+                              <strong class="command-output-command">$ {{ commandDisplayText(group.part) }}</strong>
+                              <pre class="command-output-result">{{ commandOutputText(group.part) }}</pre>
+                            </div>
                           </div>
                           <div v-else-if="displayToolResult(group.part)" class="tool-output">
                             <div v-if="toolMetaItems(group.part).length > 0" class="tool-output-meta">
@@ -745,8 +761,16 @@
                       </div>
                       <!-- Non-file tools: plain code block -->
                       <div v-else-if="displayToolResult(group.part) && isCommandTool(group.part)" class="command-output">
-                        <strong class="command-output-command">{{ commandDisplayText(group.part) }}</strong>
-                        <pre class="command-output-result">{{ commandOutputText(group.part) }}</pre>
+                        <div class="command-terminal-chrome" aria-hidden="true">
+                          <span class="command-terminal-light command-terminal-light--close" />
+                          <span class="command-terminal-light command-terminal-light--minimize" />
+                          <span class="command-terminal-light command-terminal-light--maximize" />
+                          <span class="command-terminal-title">run command</span>
+                        </div>
+                        <div class="command-terminal-body">
+                          <strong class="command-output-command">$ {{ commandDisplayText(group.part) }}</strong>
+                          <pre class="command-output-result">{{ commandOutputText(group.part) }}</pre>
+                        </div>
                       </div>
                       <div v-else-if="displayToolResult(group.part) && !isFileTool(group.part)" class="tool-output">
                         <div v-if="toolMetaItems(group.part).length > 0" class="tool-output-meta">
@@ -3330,22 +3354,68 @@ function formatContextSummary(c: ContextCounts): string {
   width: 100%;
   min-width: 0;
   display: grid;
-  gap: 6px;
-  padding: 8px 12px;
-  border: 1px solid var(--theme-main-border, color-mix(in srgb, var(--theme-main-text, #fff) 10%, transparent));
-  border-radius: var(--radius-sm);
-  background: var(--theme-main-soft-background, color-mix(in srgb, var(--theme-main-text, #fff) 5%, transparent));
-  color: var(--theme-main-text, var(--text));
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--theme-main-text, #fff) 18%, transparent);
+  border-radius: 10px;
+  background: #050806;
+  color: #6ee36b;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+.command-terminal-chrome {
+  min-width: 0;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  background: linear-gradient(180deg, #2f3438 0%, #24282c 100%);
+}
+.command-terminal-light {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+}
+.command-terminal-light--close {
+  background: #ff5f56;
+}
+.command-terminal-light--minimize {
+  background: #ffbd2e;
+}
+.command-terminal-light--maximize {
+  background: #27c93f;
+}
+.command-terminal-title {
+  min-width: 0;
+  margin-left: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1;
+  color: rgba(255, 255, 255, 0.62);
+}
+.command-terminal-body {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+  padding: 13px 15px 15px;
+  background:
+    radial-gradient(circle at 18px 18px, rgba(110, 227, 107, 0.08), transparent 34px),
+    #050806;
 }
 .command-output-command {
   min-width: 0;
   display: block;
   overflow-wrap: anywhere;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 12.5px;
   line-height: 1.45;
   font-weight: 720;
-  color: color-mix(in srgb, var(--theme-main-text, #fff) 86%, transparent);
+  color: #75ec72;
+  text-shadow: 0 0 8px rgba(117, 236, 114, 0.2);
 }
 .command-output-result {
   min-width: 0;
@@ -3353,10 +3423,11 @@ function formatContextSummary(c: ContextCounts): string {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 12.5px;
   line-height: 1.5;
   font-weight: 400;
-  color: color-mix(in srgb, var(--theme-main-text, #fff) 68%, transparent);
+  color: #6ee36b;
+  text-shadow: 0 0 8px rgba(110, 227, 107, 0.16);
 }
 
 .process-step--model-text {
