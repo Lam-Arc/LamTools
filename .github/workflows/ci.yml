@@ -41,6 +41,7 @@ jobs:
       - name: Run backend tests
         run: |
           cd members/writer/backend
+          export PYTHONPATH="$GITHUB_WORKSPACE/core/src"
           export LAMWRITER_DATA_DIR="$RUNNER_TEMP/lamwriter-data"
           export LAMWRITER_DATABASE_URL="sqlite+aiosqlite:///$RUNNER_TEMP/lamwriter-data/lamwriter.db"
           pytest tests/ -v --tb=short
