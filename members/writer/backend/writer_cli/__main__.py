@@ -563,6 +563,27 @@ async def cmd_health(args: argparse.Namespace) -> int:
     return 0
 
 
+async def cmd_pick_directory(args: argparse.Namespace) -> int:
+    async with AppServerClient(_base_url(args)) as client:
+        await client.connect()
+        path = await client.pick_project_directory()
+    print(path)
+    return 0
+
+
+async def cmd_project_create(args: argparse.Namespace) -> int:
+    work_root = str(args.work_root or "").strip()
+    if not work_root:
+        raise CliError("work-root is required")
+    async with AppServerClient(_base_url(args)) as client:
+        await client.connect()
+        project = await client.create_project(work_root=work_root)
+    if not project:
+        raise CliError("Project creation returned an invalid response")
+    print(f"{project.get('id')}  {project.get('work_root')}")
+    return 0
+
+
 async def cmd_list(args: argparse.Namespace) -> int:
     async with AppServerClient(_base_url(args)) as client:
         await client.connect()
@@ -938,6 +959,14 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("health", help="Check backend health").set_defaults(func=cmd_health)
+
+    project_parser = sub.add_parser("project", help="Project utilities")
+    project_sub = project_parser.add_subparsers(dest="project_command", required=True)
+    project_create = project_sub.add_parser("create", help="Create a project")
+    project_create.add_argument("--work-root", required=True)
+    project_create.set_defaults(func=cmd_project_create)
+    project_pick = project_sub.add_parser("pick-directory", help="Open the local directory picker")
+    project_pick.set_defaults(func=cmd_pick_directory)
 
     list_parser = sub.add_parser("list", help="List sessions")
     list_parser.add_argument("-n", "--limit", type=int, default=20)

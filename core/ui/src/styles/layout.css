@@ -1248,6 +1248,7 @@
 }
 .conversation {
   width: 100%; min-width: 0;
+  border: 0;
   border-radius: 10px;
   background: transparent;
   padding: 7px 8px;
@@ -1257,9 +1258,17 @@
   align-items: center;
   text-align: left;
   color: var(--theme-backdrop-text);
+  cursor: pointer;
 }
 .conversation:hover { background: color-mix(in srgb, var(--theme-backdrop-text) 7%, transparent); }
+.conversation:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--blue) 75%, transparent);
+  outline-offset: 2px;
+}
 .conversation.active { background: color-mix(in srgb, var(--theme-backdrop-text) 10%, transparent); }
+.conversation-main {
+  min-width: 0;
+}
 .conversation-dot {
   width: 18px; height: 18px;
   border-radius: 7px;
@@ -1282,6 +1291,30 @@
 .conversation span span {
   display: block; margin-top: 2px;
   color: color-mix(in srgb, var(--theme-backdrop-text) 62%, transparent); font-size: 11px;
+}
+.conversation-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.conversation-delete {
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: color-mix(in srgb, var(--theme-backdrop-text) 52%, transparent);
+  font-size: 15px;
+  line-height: 1;
+  display: inline-grid;
+  place-items: center;
+  cursor: pointer;
+}
+.conversation-delete:hover,
+.conversation-delete:focus-visible {
+  background: color-mix(in srgb, var(--red) 14%, transparent);
+  color: var(--red);
+  outline: none;
 }
 
 /* Session status indicators */

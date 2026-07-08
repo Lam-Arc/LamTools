@@ -569,10 +569,16 @@ def _tool_name(payload: dict[str, Any]) -> str:
 
 def extract_tool_input_preview(tool_name: str, arguments_text: str) -> dict[str, Any] | None:
     name = tool_name.strip().lower()
-    field = "content" if name == "write_file" else "new_string" if name == "edit_file" else ""
-    if not field or not arguments_text:
+    fields = ["content"] if name == "write_file" else ["new_text", "new_string"] if name == "edit_file" else []
+    if not fields or not arguments_text:
         return None
-    value = _partial_json_string_field(arguments_text, field)
+    field = ""
+    value = None
+    for candidate in fields:
+        value = _partial_json_string_field(arguments_text, candidate)
+        if value is not None:
+            field = candidate
+            break
     if value is None:
         return None
     truncated = len(value) > DEFAULT_RUNTIME_PREVIEW_CHARS

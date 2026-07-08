@@ -113,6 +113,11 @@ export function createProject(data: ProjectCreate): Promise<Project> {
     })
 }
 
+export function pickProjectDirectory(): Promise<string> {
+  return appServerOperation<{ path?: string }>('project.directory.pick')
+    .then((result) => result.path ?? '')
+}
+
 export function getProject(id: string): Promise<Project> {
   return appServerOperation<{ project?: Project }>('project.get', { project_id: id })
     .then((result) => {

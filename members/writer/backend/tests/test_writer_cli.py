@@ -19,6 +19,7 @@ from writer_cli.__main__ import (
     cmd_open_change_file,
     cmd_list,
     cmd_messages,
+    cmd_pick_directory,
     cmd_rename,
     cmd_result,
     cmd_show,
@@ -53,6 +54,23 @@ def test_parser_accepts_run_command_with_project_alias():
     assert args.command == "run"
     assert args.message == ["do", "work"]
     assert args.work_root == "E:\\LamTools\\members\\writer"
+
+
+def test_parser_accepts_project_create_with_work_root():
+    parser = build_parser()
+    args = parser.parse_args(["project", "create", "--work-root", "E:\\Work\\DemoProject"])
+
+    assert args.command == "project"
+    assert args.project_command == "create"
+    assert args.work_root == "E:\\Work\\DemoProject"
+
+
+def test_parser_accepts_project_pick_directory():
+    parser = build_parser()
+    args = parser.parse_args(["project", "pick-directory"])
+
+    assert args.command == "project"
+    assert args.project_command == "pick-directory"
 
 
 def test_parser_accepts_shallow_thinking_for_run_and_resume():
@@ -428,6 +446,41 @@ async def test_cli_delete_uses_app_server_session_delete(monkeypatch, capsys):
         ("exit",),
     ]
     assert "[session_delete] session_id: session-1" in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+async def test_cli_pick_directory_uses_app_server_project_directory_pick(monkeypatch, capsys):
+    calls = []
+
+    class FakeAppServerClient:
+        def __init__(self, base_url):
+            calls.append(("init", base_url))
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            calls.append(("exit",))
+
+        async def connect(self, *, thread_id=None, last_seen_seq=0):
+            calls.append(("connect", thread_id, last_seen_seq))
+
+        async def pick_project_directory(self):
+            calls.append(("project.directory.pick",))
+            return "E:\\Picked"
+
+    monkeypatch.setattr("writer_cli.__main__.AppServerClient", FakeAppServerClient)
+
+    result = await cmd_pick_directory(SimpleNamespace(base_url="http://writer.test"))
+
+    assert result == 0
+    assert calls == [
+        ("init", "http://writer.test"),
+        ("connect", None, 0),
+        ("project.directory.pick",),
+        ("exit",),
+    ]
+    assert "E:\\Picked" in capsys.readouterr().out
 
 
 @pytest.mark.asyncio

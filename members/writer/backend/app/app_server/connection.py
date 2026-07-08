@@ -40,6 +40,7 @@ from .operations import (
     handle_project_agents_md_get_operation,
     handle_project_agents_md_update_operation,
     handle_project_delete_operation,
+    handle_project_directory_pick_operation,
     handle_project_get_operation,
     handle_project_list_operation,
     handle_project_sessions_list_operation,
@@ -215,6 +216,7 @@ class WriterAppServerConnection:
             queue_update=self._queue_update,
             queue_delete=self._queue_delete,
             project_create=self._project_create,
+            project_directory_pick=self._project_directory_pick,
             project_get=self._project_get,
             project_list=self._project_list,
             project_update=self._project_update,
@@ -539,6 +541,13 @@ class WriterAppServerConnection:
             request_id=request.id,
             params=request.params,
             session_factory=async_session,
+        )
+        await self._send(outcome.response)
+
+    async def _project_directory_pick(self, request: JsonRpcRequest) -> None:
+        outcome = await handle_project_directory_pick_operation(
+            request_id=request.id,
+            params=request.params,
         )
         await self._send(outcome.response)
 

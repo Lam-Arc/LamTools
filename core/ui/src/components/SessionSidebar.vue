@@ -52,16 +52,20 @@
       </div>
 
       <div class="conversation-list">
-        <button
+        <div
           v-for="s in visibleSessions(group)"
           :key="s.id"
           class="conversation"
           :class="{ active: s.id === activeSessionId }"
+          role="button"
+          tabindex="0"
           :aria-label="`打开会话 ${s.title || s.id.slice(0, 8)}`"
           @click.stop="emit('select-session', s.id)"
+          @keydown.enter.prevent.stop="emit('select-session', s.id)"
+          @keydown.space.prevent.stop="emit('select-session', s.id)"
         >
           <span class="conversation-dot">{{ sessionOrdinal(group, s) }}</span>
-          <span>
+          <span class="conversation-main">
             <strong
               v-if="renamingId !== s.id"
               @click.stop="startRename(s)"
@@ -77,15 +81,26 @@
             />
             <span v-if="s.meta">{{ s.meta }}</span>
           </span>
-          <span
-            v-if="s.status"
-            class="status"
-            :class="statusClass(s.status)"
-            :title="statusLabel(s.status)"
-            :aria-label="`状态：${statusLabel(s.status)}`"
-            role="img"
-          ></span>
-        </button>
+          <span class="conversation-actions">
+            <span
+              v-if="s.status"
+              class="status"
+              :class="statusClass(s.status)"
+              :title="statusLabel(s.status)"
+              :aria-label="`状态：${statusLabel(s.status)}`"
+              role="img"
+            ></span>
+            <button
+              v-if="allowSessionDelete"
+              class="conversation-delete"
+              type="button"
+              title="删除会话"
+              :aria-label="`删除会话 ${s.title || s.id.slice(0, 8)}`"
+              :data-session-delete="s.id"
+              @click.stop="emit('delete-session', s.id)"
+            >×</button>
+          </span>
+        </div>
         <button
           v-if="hiddenCount(group) > 0"
           type="button"
@@ -137,6 +152,8 @@ const props = withDefaults(
     allowProjectNewSession?: boolean
     /** Show × delete button per project */
     allowProjectDelete?: boolean
+    /** Show × delete button per session */
+    allowSessionDelete?: boolean
     /** Allow clicking project name to select */
     allowProjectClick?: boolean
     /** Allow right-click on project name */
@@ -147,6 +164,7 @@ const props = withDefaults(
     allowRename: true,
     allowProjectNewSession: true,
     allowProjectDelete: false,
+    allowSessionDelete: false,
     allowProjectClick: false,
     allowProjectContextMenu: false,
   },
@@ -157,6 +175,7 @@ const emit = defineEmits<{
   'select-project': [id: string]
   'new-session': [projectGroupId: string]
   'delete-project': [projectGroupId: string]
+  'delete-session': [sessionId: string]
   'project-context-menu': [projectGroupId: string]
   'rename-session': [sessionId: string, newTitle: string]
 }>()

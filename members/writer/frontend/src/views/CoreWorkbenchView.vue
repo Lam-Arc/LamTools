@@ -33,6 +33,7 @@ import { useConfigStore } from '@/stores/config'
 import { useWriterAppServerStore } from '@/appServer/store'
 import { selectChatMessages, selectLatestTurnStatus, selectQueueTray } from '@/appServer/selectors'
 import { workbenchSessionRouteQuery, type WorkbenchRouteQuery } from '@/utils/workbenchRoute'
+import { pickProjectDirectory, projectNameFromPath } from '@/lib/project-directory-picker'
 import type { WriterAppItem, WriterAppQueueItem, WriterAppRequestState } from '@/appServer/protocol'
 import UiSelect from '@/components/UiSelect.vue'
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
@@ -1108,6 +1109,32 @@ async function handleRenameSession(sessionId: string, title: string) {
   } catch (err) {
     console.error('Failed to rename session:', err)
     runtimeStatusText.value = '重命名失败'
+  }
+}
+
+async function handleDeleteSession(sessionId: string) {
+  const session = sessions.value.find((item) => item.id === sessionId)
+  const label = session?.title || `Session ${sessionId.slice(0, 8)}`
+  const confirmed = window.confirm(`确定删除对话「${label}」？此操作不可撤销。`)
+  if (!confirmed) return
+  try {
+    await sessionStore.deleteSession(sessionId)
+    const deleted = new Set([sessionId])
+    sessions.value = removeSessionsByIds(sessions.value, deleted)
+    if (activeSessionId.value === sessionId) {
+      appServerStore.disconnect()
+      sessionStore.clearMessages()
+      const nextSession = sessions.value[0]
+      if (nextSession) {
+        await selectSession(nextSession.id)
+      } else {
+        sessionStore.selectSession(null)
+        await syncSessionUrl(null)
+      }
+    }
+  } catch (err) {
+    console.error('Failed to delete session:', err)
+    runtimeStatusText.value = '删除对话失败'
   }
 }
 
@@ -2477,17 +2504,19 @@ function resetNewProjectForm() {
 }
 
 async function browseProjectDirectory() {
-  if (!window.lamwriterDesktop?.selectDirectory) {
-    window.alert('当前环境不支持目录浏览，请手动输入绝对路径。')
-    return
-  }
   selectingProjectDirectory.value = true
   try {
-    const selected = await window.lamwriterDesktop.selectDirectory()
-    if (!selected) return
-    newProjectWorkRoot.value = selected
+    const selected = await pickProjectDirectory({
+      desktop: window.lamwriterDesktop,
+      appServerPickDirectory: api.pickProjectDirectory,
+    })
+    if (!selected.path) {
+      if (selected.message) window.alert(selected.message)
+      return
+    }
+    newProjectWorkRoot.value = selected.path
     if (!newProjectName.value.trim()) {
-      newProjectName.value = selected.split(/[/\\]/).filter(Boolean).pop() || ''
+      newProjectName.value = projectNameFromPath(selected.path)
     }
   } finally {
     selectingProjectDirectory.value = false
@@ -2587,11 +2616,13 @@ onMounted(async () => {
         :active-session-id="activeSessionId ?? undefined"
         :project-session-limit="8"
         :allow-project-delete="true"
+        :allow-session-delete="true"
         :allow-project-click="true"
         :allow-project-context-menu="true"
         @select-session="selectSession"
         @new-session="handleNewSession"
         @delete-project="handleDeleteProject"
+        @delete-session="handleDeleteSession"
         @select-project="(id) => { /* select first session in project */ }"
         @project-context-menu="handleProjectContextMenu"
         @rename-session="handleRenameSession"
