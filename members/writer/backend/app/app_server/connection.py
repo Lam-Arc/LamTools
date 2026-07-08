@@ -36,6 +36,7 @@ from .operations import (
     handle_approval_respond_operation,
     handle_command_catalog_operation,
     handle_command_execute_operation,
+    handle_plugin_catalog_operation,
     handle_project_create_operation,
     handle_project_agents_md_get_operation,
     handle_project_agents_md_update_operation,
@@ -269,6 +270,11 @@ class WriterAppServerConnection:
             config_runtime_capabilities_get=self._config_runtime_capabilities_get,
             config_subagent_upsert=self._config_subagent_upsert,
             config_subagent_delete=self._config_subagent_delete,
+            plugin_list=self._plugin_list,
+            plugin_enable=self._plugin_enable,
+            plugin_disable=self._plugin_disable,
+            hook_list=self._hook_list,
+            hook_trust=self._hook_trust,
         )
 
     async def _handle_client_response(self, raw: dict[str, Any]) -> None:
@@ -862,6 +868,29 @@ class WriterAppServerConnection:
         await self._send(outcome.response)
         for event in outcome.publish_events:
             await self._send(event_notification(event))
+
+    async def _plugin_list(self, request: JsonRpcRequest) -> None:
+        await self._send_plugin_operation(request, "plugin.list")
+
+    async def _plugin_enable(self, request: JsonRpcRequest) -> None:
+        await self._send_plugin_operation(request, "plugin.enable")
+
+    async def _plugin_disable(self, request: JsonRpcRequest) -> None:
+        await self._send_plugin_operation(request, "plugin.disable")
+
+    async def _hook_list(self, request: JsonRpcRequest) -> None:
+        await self._send_plugin_operation(request, "hook.list")
+
+    async def _hook_trust(self, request: JsonRpcRequest) -> None:
+        await self._send_plugin_operation(request, "hook.trust")
+
+    async def _send_plugin_operation(self, request: JsonRpcRequest, operation: str) -> None:
+        outcome = await handle_plugin_catalog_operation(
+            request_id=request.id,
+            params=request.params,
+            operation=operation,
+        )
+        await self._send(outcome.response)
 
     async def _dispatch_next_queue_item(self, *, thread_id: str, work_root: object = None) -> None:
         await self.runtime.dispatch_next_queue_item(thread_id=thread_id, work_root=work_root)

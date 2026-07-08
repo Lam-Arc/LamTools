@@ -73,6 +73,20 @@ def test_parser_accepts_project_pick_directory():
     assert args.project_command == "pick-directory"
 
 
+def test_parser_accepts_plugin_and_hook_commands():
+    parser = build_parser()
+
+    plugin = parser.parse_args(["plugin", "enable", "repo-policy"])
+    hook = parser.parse_args(["hook", "trust", "hook-1"])
+
+    assert plugin.command == "plugin"
+    assert plugin.plugin_command == "enable"
+    assert plugin.name == "repo-policy"
+    assert hook.command == "hook"
+    assert hook.hook_command == "trust"
+    assert hook.hook_id == "hook-1"
+
+
 def test_parser_accepts_shallow_thinking_for_run_and_resume():
     parser = build_parser()
 
@@ -750,6 +764,62 @@ def test_parser_accepts_result_command():
 
     assert args.command == "result"
     assert args.session_id == "sess-1"
+
+
+def test_cli_plugin_list_uses_app_server(monkeypatch, capsys):
+    calls = []
+
+    class FakeClient:
+        def __init__(self, base_url):
+            self.base_url = base_url
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def connect(self, thread_id=None):
+            return None
+
+        async def request(self, method, params=None):
+            calls.append((method, params or {}))
+            return {"plugins": [{"name": "repo-policy", "enabled": True}]}
+
+    monkeypatch.setattr("writer_cli.__main__.AppServerClient", FakeClient)
+    from writer_cli.__main__ import main
+
+    assert main(["plugin", "list"]) == 0
+    assert calls == [("plugin.list", {})]
+    assert "repo-policy" in capsys.readouterr().out
+
+
+def test_cli_hook_trust_uses_app_server(monkeypatch, capsys):
+    calls = []
+
+    class FakeClient:
+        def __init__(self, base_url):
+            self.base_url = base_url
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def connect(self, thread_id=None):
+            return None
+
+        async def request(self, method, params=None):
+            calls.append((method, params or {}))
+            return {"hook_id": "hook-1", "trusted": True}
+
+    monkeypatch.setattr("writer_cli.__main__.AppServerClient", FakeClient)
+    from writer_cli.__main__ import main
+
+    assert main(["hook", "trust", "hook-1"]) == 0
+    assert calls == [("hook.trust", {"hook_id": "hook-1"})]
+    assert "trusted" in capsys.readouterr().out
 
 
 def test_ping_event_is_hidden():

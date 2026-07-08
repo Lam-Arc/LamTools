@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 
 from app.core.writer.git import WriterGitManager
+from app.config import settings
 from app.database import async_session
 from app.models.app_server import WriterAppRequest
 from app.models.session import WriterSession
@@ -89,6 +90,15 @@ from app.services.subagent_config import delete_project_subagent_config, upsert_
 from lamtools_core.app import OperationCatalog, OperationRequest, OperationResult, normalize_operation_name
 from lamtools_core.context_compaction import ContextCompactionError
 from lamtools_core.event import RunItemEvent
+from lamtools_core.plugins import (
+    HookRegistry,
+    HookTrustStore,
+    PluginRegistry,
+    PluginStateStore,
+    build_plugin_operation_catalog,
+    default_project_plugin_root,
+    default_user_plugin_root,
+)
 from lamtools_core.runtime import default_runtime_task_registry
 
 from .approvals import respond_to_approval
@@ -237,7 +247,15 @@ def build_writer_operation_catalog(
     config_runtime_capabilities_get: OperationRpcHandler,
     config_subagent_upsert: OperationRpcHandler,
     config_subagent_delete: OperationRpcHandler,
+    plugin_list: OperationRpcHandler | None = None,
+    plugin_enable: OperationRpcHandler | None = None,
+    plugin_disable: OperationRpcHandler | None = None,
+    hook_list: OperationRpcHandler | None = None,
+    hook_trust: OperationRpcHandler | None = None,
 ) -> OperationCatalog:
+    async def noop_handler(request: JsonRpcRequest) -> None:
+        _ = request
+
     catalog = OperationCatalog()
     catalog.register("thread.read", _handler(thread_read))
     catalog.register("thread.resume", _handler(thread_resume))
@@ -303,6 +321,11 @@ def build_writer_operation_catalog(
     catalog.register("config.runtime_capabilities.get", _handler(config_runtime_capabilities_get))
     catalog.register("config.subagent.upsert", _handler(config_subagent_upsert))
     catalog.register("config.subagent.delete", _handler(config_subagent_delete))
+    catalog.register("plugin.list", _handler(plugin_list or noop_handler))
+    catalog.register("plugin.enable", _handler(plugin_enable or noop_handler))
+    catalog.register("plugin.disable", _handler(plugin_disable or noop_handler))
+    catalog.register("hook.list", _handler(hook_list or noop_handler))
+    catalog.register("hook.trust", _handler(hook_trust or noop_handler))
     return catalog
 
 
@@ -1739,6 +1762,58 @@ async def handle_command_catalog_operation(
     )
 
 
+async def handle_plugin_catalog_operation(
+    *,
+    request_id: int | str | None,
+    params: dict[str, Any],
+    operation: str,
+) -> WriterOperationOutcome:
+    data_dir = Path(settings.data_dir)
+    project_root = _plugin_project_root(params)
+    plugin_roots = [default_user_plugin_root()]
+    if project_root:
+        plugin_roots.insert(0, default_project_plugin_root(project_root))
+
+    plugin_state_store = PluginStateStore(data_dir / "core-plugin-state.json")
+    hook_trust_store = HookTrustStore(data_dir / "core-hook-trust.json")
+    plugin_registry = PluginRegistry(plugin_roots=plugin_roots, state_store=plugin_state_store)
+
+    def hook_registry_factory() -> HookRegistry:
+        return HookRegistry(
+            project_root=project_root or None,
+            plugins=plugin_registry.discover(),
+            trust_store=hook_trust_store,
+        )
+
+    catalog = build_plugin_operation_catalog(
+        plugin_registry=plugin_registry,
+        plugin_state_store=plugin_state_store,
+        hook_registry_factory=hook_registry_factory,
+        hook_trust_store=hook_trust_store,
+    )
+    result = await catalog.execute(operation, params)
+    if result.status != "ok":
+        return WriterOperationOutcome(
+            response=rpc_error(
+                request_id,
+                code=INVALID_REQUEST,
+                message=str(result.payload.get("error") or "plugin operation failed"),
+            )
+        )
+    return WriterOperationOutcome(response=rpc_result(request_id, result.payload))
+
+
+def _plugin_project_root(params: dict[str, Any]) -> str:
+    raw = (
+        params.get("project_root")
+        or params.get("projectRoot")
+        or params.get("work_root")
+        or params.get("workRoot")
+        or ""
+    )
+    return str(raw).strip() if isinstance(raw, (str, Path)) else ""
+
+
 async def handle_command_execute_operation(
     *,
     request_id: int | str | None,
@@ -2164,6 +2239,7 @@ __all__ = [
     "handle_config_runtime_capabilities_get_operation",
     "handle_config_subagent_delete_operation",
     "handle_config_subagent_upsert_operation",
+    "handle_plugin_catalog_operation",
     "handle_project_create_operation",
     "handle_project_agents_md_get_operation",
     "handle_project_agents_md_update_operation",

@@ -211,6 +211,11 @@ def test_connection_exposes_required_request_handlers():
         "_config_runtime_capabilities_get",
         "_config_subagent_upsert",
         "_config_subagent_delete",
+        "_plugin_list",
+        "_plugin_enable",
+        "_plugin_disable",
+        "_hook_list",
+        "_hook_trust",
     ):
         assert hasattr(WriterAppServerConnection, name)
 
@@ -314,6 +319,89 @@ async def test_writer_operation_catalog_wraps_rpc_handlers():
     assert called == ["turn.start"]
 
 
+def test_plugin_operations_are_registered_in_writer_catalog():
+    async def fake_handler(request):
+        return None
+
+    catalog = build_writer_operation_catalog(
+        thread_read=fake_handler,
+        thread_resume=fake_handler,
+        thread_start=fake_handler,
+        turn_start=fake_handler,
+        turn_steer=fake_handler,
+        turn_cancel=fake_handler,
+        approval_respond=fake_handler,
+        queue_create=fake_handler,
+        queue_update=fake_handler,
+        queue_delete=fake_handler,
+        project_create=fake_handler,
+        project_directory_pick=fake_handler,
+        project_get=fake_handler,
+        project_list=fake_handler,
+        project_update=fake_handler,
+        project_delete=fake_handler,
+        project_agents_md_get=fake_handler,
+        project_agents_md_update=fake_handler,
+        project_sessions_list=fake_handler,
+        attachment_list=fake_handler,
+        attachment_get=fake_handler,
+        attachment_preview=fake_handler,
+        attachment_open=fake_handler,
+        artifact_read=fake_handler,
+        artifact_open=fake_handler,
+        command_catalog=fake_handler,
+        command_execute=fake_handler,
+        session_create=fake_handler,
+        session_get=fake_handler,
+        session_list=fake_handler,
+        session_update=fake_handler,
+        session_delete=fake_handler,
+        session_fork=fake_handler,
+        session_git_graph=fake_handler,
+        session_changes_get=fake_handler,
+        session_checkpoints_list=fake_handler,
+        session_checkpoint_create=fake_handler,
+        session_checkpoint_restore=fake_handler,
+        session_commit_review_get=fake_handler,
+        session_commit_review_decide=fake_handler,
+        session_agent_branches_list=fake_handler,
+        session_agent_branch_diff=fake_handler,
+        session_agent_branch_merge=fake_handler,
+        session_agent_branch_abandon=fake_handler,
+        session_rollback_turn=fake_handler,
+        session_changes_undo=fake_handler,
+        session_change_file_open=fake_handler,
+        session_change_file_undo=fake_handler,
+        settings_get=fake_handler,
+        settings_update=fake_handler,
+        config_providers_list=fake_handler,
+        config_provider_create=fake_handler,
+        config_provider_update=fake_handler,
+        config_provider_delete=fake_handler,
+        config_models_list=fake_handler,
+        config_model_create=fake_handler,
+        config_model_update=fake_handler,
+        config_model_delete=fake_handler,
+        config_import_env=fake_handler,
+        config_resolved_get=fake_handler,
+        config_adapter_profiles_list=fake_handler,
+        config_runtime_capabilities_get=fake_handler,
+        config_subagent_upsert=fake_handler,
+        config_subagent_delete=fake_handler,
+        plugin_list=fake_handler,
+        plugin_enable=fake_handler,
+        plugin_disable=fake_handler,
+        hook_list=fake_handler,
+        hook_trust=fake_handler,
+    )
+
+    assert catalog.has("plugin.list")
+    assert catalog.has("plugin.enable")
+    assert catalog.has("plugin.disable")
+    assert catalog.has("hook.list")
+    assert catalog.has("hook.trust")
+
+
 def test_writer_operation_catalog_covers_app_server_rpc_methods():
     async def fake_handler(request):
         return None
@@ -409,6 +497,11 @@ def test_writer_operation_catalog_covers_app_server_rpc_methods():
         "config.runtime_capabilities.get",
         "config.subagent.delete",
         "config.subagent.upsert",
+        "hook.list",
+        "hook.trust",
+        "plugin.disable",
+        "plugin.enable",
+        "plugin.list",
         "project.agents_md.get",
         "project.agents_md.update",
         "project.create",

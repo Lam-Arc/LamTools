@@ -830,6 +830,50 @@ async def cmd_compact(args: argparse.Namespace) -> int:
     return 0
 
 
+async def cmd_plugin_list(args: argparse.Namespace) -> int:
+    async with AppServerClient(_base_url(args)) as client:
+        await client.connect()
+        result = await client.request("plugin.list", {})
+    for plugin in result.get("plugins", []):
+        if isinstance(plugin, dict):
+            print(f"{plugin.get('name')} enabled={plugin.get('enabled')}")
+    return 0
+
+
+async def cmd_plugin_enable(args: argparse.Namespace) -> int:
+    async with AppServerClient(_base_url(args)) as client:
+        await client.connect()
+        result = await client.request("plugin.enable", {"name": args.name})
+    print(f"{result.get('name')} enabled")
+    return 0
+
+
+async def cmd_plugin_disable(args: argparse.Namespace) -> int:
+    async with AppServerClient(_base_url(args)) as client:
+        await client.connect()
+        result = await client.request("plugin.disable", {"name": args.name})
+    print(f"{result.get('name')} disabled")
+    return 0
+
+
+async def cmd_hook_list(args: argparse.Namespace) -> int:
+    async with AppServerClient(_base_url(args)) as client:
+        await client.connect()
+        result = await client.request("hook.list", {})
+    for hook in result.get("hooks", []):
+        if isinstance(hook, dict):
+            print(f"{hook.get('id')} {hook.get('event')} {hook.get('matcher')} trusted={hook.get('trusted')}")
+    return 0
+
+
+async def cmd_hook_trust(args: argparse.Namespace) -> int:
+    async with AppServerClient(_base_url(args)) as client:
+        await client.connect()
+        result = await client.request("hook.trust", {"hook_id": args.hook_id})
+    print(f"{result.get('hook_id')} trusted")
+    return 0
+
+
 async def cmd_open_change_file(args: argparse.Namespace) -> int:
     async with AppServerClient(_base_url(args)) as client:
         await client.connect(thread_id=args.session_id)
@@ -967,6 +1011,23 @@ def build_parser() -> argparse.ArgumentParser:
     project_create.set_defaults(func=cmd_project_create)
     project_pick = project_sub.add_parser("pick-directory", help="Open the local directory picker")
     project_pick.set_defaults(func=cmd_pick_directory)
+
+    plugin_parser = sub.add_parser("plugin", help="Plugin utilities")
+    plugin_sub = plugin_parser.add_subparsers(dest="plugin_command", required=True)
+    plugin_sub.add_parser("list", help="List plugins").set_defaults(func=cmd_plugin_list)
+    plugin_enable = plugin_sub.add_parser("enable", help="Enable plugin")
+    plugin_enable.add_argument("name")
+    plugin_enable.set_defaults(func=cmd_plugin_enable)
+    plugin_disable = plugin_sub.add_parser("disable", help="Disable plugin")
+    plugin_disable.add_argument("name")
+    plugin_disable.set_defaults(func=cmd_plugin_disable)
+
+    hook_parser = sub.add_parser("hook", help="Hook utilities")
+    hook_sub = hook_parser.add_subparsers(dest="hook_command", required=True)
+    hook_sub.add_parser("list", help="List hooks").set_defaults(func=cmd_hook_list)
+    hook_trust = hook_sub.add_parser("trust", help="Trust hook by id")
+    hook_trust.add_argument("hook_id")
+    hook_trust.set_defaults(func=cmd_hook_trust)
 
     list_parser = sub.add_parser("list", help="List sessions")
     list_parser.add_argument("-n", "--limit", type=int, default=20)
