@@ -53,6 +53,13 @@ from lamtools_core.llm import (
 from lamtools_core.prompt import PromptContext
 from lamtools_core.runtime import RuntimeState, RuntimeToolStep, RuntimeTurnInput
 from lamtools_core.tool import ToolCall, ToolResult
+from lamtools_core.plugins import (
+    HookRegistry,
+    HookTrustStore,
+    PluginRegistry,
+    default_user_plugin_root,
+)
+from app.config import settings
 
 from app.core.writer.core_kernel_adapter import (
     ReadOnlyToolExecutor,
@@ -3832,6 +3839,85 @@ class TestCommandPermissionPolicy:
         assert tool_results[0].metadata["approval_policy"] == "auto_allow"
         assert not (work_root / "old.txt").exists()
         assert (work_root / "new.txt").read_text(encoding="utf-8") == "data"
+
+    @pytest.mark.asyncio
+    async def test_real_user_plugin_hook_blocks_command_before_execution(self, tmp_path, monkeypatch):
+        appdata = tmp_path / "appdata"
+        data_dir = tmp_path / "writer-data"
+        work_root = tmp_path / "project"
+        work_root.mkdir()
+        monkeypatch.setenv("APPDATA", str(appdata))
+        monkeypatch.setattr(settings, "data_dir", str(data_dir))
+
+        plugin_root = default_user_plugin_root() / "repo-policy"
+        hooks_dir = plugin_root / "hooks"
+        hooks_dir.mkdir(parents=True)
+        (plugin_root / "plugin.json").write_text(
+            json.dumps({"name": "repo-policy", "version": "0.1.0"}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        (hooks_dir / "hooks.json").write_text(
+            json.dumps({
+                "hooks": {
+                    "PreToolUse": [
+                        {
+                            "matcher": "run_command",
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": "py -3.14 ${PLUGIN_ROOT}/hooks/block.py",
+                                }
+                            ],
+                        }
+                    ]
+                }
+            }, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        (hooks_dir / "block.py").write_text(
+            "import json, sys\n"
+            "json.load(sys.stdin)\n"
+            "print(json.dumps({'decision': 'block', 'reason': 'blocked by repo-policy'}))\n",
+            encoding="utf-8",
+        )
+
+        trust = HookTrustStore(data_dir / "core-hook-trust.json")
+        plugins = PluginRegistry(plugin_roots=[default_user_plugin_root()]).discover()
+        hooks = HookRegistry(plugins=plugins, trust_store=trust).load()
+        assert hooks
+        trust.trust(hooks[0].definition_hash)
+
+        llm = FakeLLMClient()
+        llm.add_response(LLMResponse(
+            content="",
+            tool_calls=[
+                LLMToolCall(
+                    id="cmd-hook-block",
+                    name="run_command",
+                    arguments={"command": "echo should-not-run"},
+                )
+            ],
+            finish_reason="tool_calls",
+        ))
+        llm.add_response(LLMResponse(content="Done", finish_reason="stop"))
+
+        result = await run_core_kernel(
+            goal="Run command",
+            session_id="test-real-plugin-hook-blocks-command",
+            llm_client=llm,
+            work_root=str(work_root),
+            runtime_controls={"command_policies": {"regular": "auto_allow"}},
+        )
+
+        tool_results = [
+            tool_step.result
+            for step in result.steps
+            for tool_step in step.tool_steps
+            if tool_step.result and tool_step.result.name == "run_command"
+        ]
+        assert tool_results
+        assert tool_results[0].status == "blocked"
+        assert tool_results[0].error == "blocked by repo-policy"
 
     @pytest.mark.asyncio
     async def test_tool_exception_with_empty_message_keeps_error_type(self, tmp_path):

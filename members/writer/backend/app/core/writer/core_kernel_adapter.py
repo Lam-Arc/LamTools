@@ -93,6 +93,15 @@ from lamtools_core.llm import (
     LLMUsage,
 )
 from lamtools_core.mem import format_session_memory_summary
+from lamtools_core.plugins import (
+    HookEngine,
+    HookRegistry,
+    HookTrustStore,
+    PluginRegistry,
+    PluginStateStore,
+    default_project_plugin_root,
+    default_user_plugin_root,
+)
 from lamtools_core.prompt import PromptContext, format_prompt_sections
 from lamtools_core.runtime import InMemoryRuntimeStateStore, RuntimeState, RuntimeStateStore, RuntimeTurnInput
 from lamtools_core.tool import ToolCall, ToolResult
@@ -102,6 +111,7 @@ from lamtools_core.tool.verification import verify_written_tool_results
 from lamtools_core.tool.workspace import is_within_path as _is_within_path
 from lamtools_core.tool.workspace import validate_workspace_path as _validate_path
 
+from app.config import settings
 from app.core.prompt_assembler import WRITER_TOOLS, get_writer_execution_discipline
 from app.core.writer.agent_runtime import (
     AgentCall,
@@ -147,6 +157,23 @@ from app.core.writer.tool_feedback import (
 from app.core.writer.tool_outcomes import record_tool_outcomes
 from app.core.writer.tools import ReadWriteToolExecutor, resolve_tool_executor as _resolve_tool_executor
 logger = logging.getLogger(__name__)
+
+
+def _build_plugin_hook_engine(work_root: str | None) -> HookEngine | None:
+    data_dir = Path(settings.data_dir)
+    plugin_state_store = PluginStateStore(data_dir / "core-plugin-state.json")
+    hook_trust_store = HookTrustStore(data_dir / "core-hook-trust.json")
+    plugin_roots = [default_user_plugin_root()]
+    project_root = str(work_root or "").strip()
+    if project_root:
+        plugin_roots.insert(0, default_project_plugin_root(project_root))
+    plugin_registry = PluginRegistry(plugin_roots=plugin_roots, state_store=plugin_state_store)
+    hooks = HookRegistry(
+        project_root=project_root or None,
+        plugins=plugin_registry.discover(),
+        trust_store=hook_trust_store,
+    ).load()
+    return HookEngine(hooks) if hooks else None
 
 
 def _exception_summary(exc: BaseException) -> str:
@@ -423,6 +450,7 @@ class WriterKit:
             policy=LoopPolicy(
                 parallel_tool_names=(),
             ),
+            hook_engine=_build_plugin_hook_engine(work_root),
         )
         result = await kernel.run(RuntimeTurnInput(
             user_message=prompt,
@@ -1271,6 +1299,7 @@ async def run_core_kernel(
         state_store=effective_state_store,
         event_sink=_EventSink(),
         policy=policy,
+        hook_engine=_build_plugin_hook_engine(work_root),
     )
 
     # Wire cancel event: if provided, set it on the kernel so the loop
