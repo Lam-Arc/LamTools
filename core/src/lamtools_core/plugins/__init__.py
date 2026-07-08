@@ -1,3 +1,4 @@
+from .engine import HookEngine
 from .hook_config import HookRegistry, default_project_hooks_path, default_user_hooks_path
 from .models import (
     HookDecision,
@@ -18,6 +19,7 @@ from .trust import HookTrustStore
 __all__ = [
     "HookDecision",
     "HookDefinition",
+    "HookEngine",
     "HookEvent",
     "HookHandler",
     "HookRegistry",
