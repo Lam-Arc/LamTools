@@ -57,6 +57,7 @@ LamTools 支持插件式扩展包。一个插件安装并启用后，可以同�
 - Kit 管业务。
 - Hook Engine 是 Core 生命周期上的扩展执行器。
 - Plugin Registry 是配置和资源发现层。
+- 插件、hooks、信任、发现、加载和执行能力归属 Core；Writer 只能作为调用和展示入口，不拥有这套能力。
 
 ## 架构
 
@@ -371,6 +372,7 @@ CLI 需要同接口：
 ```
 
 GUI 和 CLI 都调用 `PluginOperationCatalog`，不能各自实现一套。
+Writer 里的 app-server 和 CLI 只桥接这些 Core 操作；不得在 Writer 内复制插件发现、hook 信任或 hook 执行逻辑。
 
 ## 与现有代码关系
 
@@ -404,10 +406,10 @@ GUI 和 CLI 都调用 `PluginOperationCatalog`，不能各自实现一套。
 第一步只把新能力接到 Core，不改 Writer 用户路径：
 
 1. Core 新增 PluginRegistry、HookRegistry、HookEngine。
-2. Writer 通过 Core registry 读取插件 skills，但保留现有 skill 加载行为作为兼容。
-3. Writer MCP 先支持插件声明的 MCP server，旧 `LAMWRITER_MCP_CONFIG` 继续保留。
+2. Writer 只通过 Core registry/operation 读取插件资源并暴露管理入口，保留现有 skill 加载行为作为兼容。
+3. 插件 MCP 声明先进入 Core 资源清单；Writer 后续只消费 Core 暴露的结果，旧 `LAMWRITER_MCP_CONFIG` 继续保留。
 4. Kernel 在工具调用前后触发 HookEngine。
-5. app-server 增加 plugin/hook 操作。
+5. app-server 增加 plugin/hook 桥接操作。
 6. GUI/CLI 增加管理入口。
 
 后续再把 Writer 专属 skill/MCP 发现逻辑下沉到 Core，减少重复。
