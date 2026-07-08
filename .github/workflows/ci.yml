@@ -10,8 +10,8 @@ jobs:
   backend:
     runs-on: ubuntu-latest
     env:
-      LAMWRITER_DATA_DIR: ${{ runner.temp }}/lamwriter-data
-      LAMWRITER_DATABASE_URL: sqlite+aiosqlite:///${{ runner.temp }}/lamwriter-data/lamwriter.db
+      LAMWRITER_DATA_DIR: "${{ runner.temp }}/lamwriter-data"
+      LAMWRITER_DATABASE_URL: "sqlite+aiosqlite:///${{ runner.temp }}/lamwriter-data/lamwriter.db"
 
     steps:
       - uses: actions/checkout@v4
