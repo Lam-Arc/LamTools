@@ -168,6 +168,20 @@ def test_extract_tool_input_preview_write_file_content():
     }
 
 
+def test_extract_tool_input_preview_edit_file_new_text():
+    preview = extract_tool_input_preview(
+        "edit_file",
+        '{"path":"main.py","old_text":"old","new_text":"new\\nvalue',
+    )
+
+    assert preview == {
+        "field": "new_text",
+        "content": "new\nvalue",
+        "chars": 9,
+        "truncated": False,
+    }
+
+
 def test_extract_tool_input_preview_ignores_read_tools():
     assert extract_tool_input_preview("read_file", '{"path":"a.py"}') is None
 
