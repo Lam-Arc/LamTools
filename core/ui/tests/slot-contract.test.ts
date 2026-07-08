@@ -187,4 +187,27 @@ describe('SessionSidebar numbering', () => {
     ]);
     expect(wrapper.findAll('.conversation-dot').map((item) => item.text())).toEqual(['4', '3', '2', '1']);
   });
+
+  it('emits delete-session from a single session row without selecting it', async () => {
+    const wrapper = mount(SessionSidebar, {
+      props: {
+        projectGroups: [{
+          id: 'project-1',
+          name: 'Project',
+          sessions: [
+            { id: 's1', title: 'Session 1' },
+            { id: 's2', title: 'Session 2' },
+          ],
+        }],
+        allowProjectNewSession: false,
+        allowRename: false,
+        allowSessionDelete: true,
+      },
+    });
+
+    await wrapper.find('[data-session-delete="s1"]').trigger('click');
+
+    expect(wrapper.emitted('delete-session')).toEqual([['s1']]);
+    expect(wrapper.emitted('select-session')).toBeUndefined();
+  });
 });

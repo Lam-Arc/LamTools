@@ -39,6 +39,7 @@ from app.app_server.operations import (
     handle_project_agents_md_update_operation,
     handle_project_create_operation,
     handle_project_delete_operation,
+    handle_project_directory_pick_operation,
     handle_project_get_operation,
     handle_project_list_operation,
     handle_project_sessions_list_operation,
@@ -86,7 +87,7 @@ from app.app_server.snapshot import apply_event_to_snapshot, load_snapshot, rebu
 from app.app_server.protocol import WriterAppEventEnvelope
 from app.database import Base
 from app.models.app_setting import AppSetting
-from app.models.app_server import WriterThreadSnapshot
+from app.models.app_server import WriterAppEvent, WriterThreadSnapshot
 from app.models.attachment import WriterAttachment
 from app.models.llm_config import LLMModel, LLMProvider
 from app.models.message import WriterMessage
@@ -250,6 +251,7 @@ async def test_writer_operation_catalog_wraps_rpc_handlers():
         queue_update=fake_handler,
         queue_delete=fake_handler,
         project_create=fake_handler,
+        project_directory_pick=fake_handler,
         project_get=fake_handler,
         project_list=fake_handler,
         project_update=fake_handler,
@@ -328,6 +330,7 @@ def test_writer_operation_catalog_covers_app_server_rpc_methods():
         queue_update=fake_handler,
         queue_delete=fake_handler,
         project_create=fake_handler,
+        project_directory_pick=fake_handler,
         project_get=fake_handler,
         project_list=fake_handler,
         project_update=fake_handler,
@@ -410,6 +413,7 @@ def test_writer_operation_catalog_covers_app_server_rpc_methods():
         "project.agents_md.update",
         "project.create",
         "project.delete",
+        "project.directory.pick",
         "project.get",
         "project.list",
         "project.sessions.list",
@@ -2020,6 +2024,22 @@ async def test_session_get_update_delete_operations_round_trip(tmp_path):
             )
             db.add(WriterMessage(id="message-crud", session_id="session-crud", role="user", content="hello"))
             db.add(
+                WriterAppEvent(
+                    event_id="event-crud",
+                    thread_id="session-crud",
+                    seq=1,
+                    method="thread/test",
+                    payload_json={"thread_id": "session-crud"},
+                )
+            )
+            db.add(
+                WriterThreadSnapshot(
+                    thread_id="session-crud",
+                    snapshot_seq=1,
+                    snapshot_json={"thread_id": "session-crud"},
+                )
+            )
+            db.add(
                 WriterAttachment(
                     id="attachment-crud",
                     session_id="session-crud",
@@ -2055,6 +2075,8 @@ async def test_session_get_update_delete_operations_round_trip(tmp_path):
         async with session_factory() as db:
             assert await db.get(WriterSession, "session-crud") is None
             assert await db.get(WriterMessage, "message-crud") is None
+            assert await db.get(WriterAppEvent, "event-crud") is None
+            assert await db.get(WriterThreadSnapshot, "session-crud") is None
             assert await db.get(WriterAttachment, "attachment-crud") is None
             assert await db.get(WriterQueuedInput, "queue-crud") is None
     finally:
@@ -2489,6 +2511,20 @@ async def test_project_operations_create_list_update_get_and_delete(tmp_path):
             assert await db.get(WriterSession, "project-session") is None
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_project_directory_pick_operation_returns_selected_path(tmp_path):
+    selected_dir = tmp_path / "picked"
+    selected_dir.mkdir()
+
+    outcome = await handle_project_directory_pick_operation(
+        request_id=1,
+        params={},
+        directory_picker=lambda: str(selected_dir),
+    )
+
+    assert outcome.response["result"] == {"path": str(selected_dir)}
 
 
 @pytest.mark.asyncio

@@ -65,6 +65,10 @@ from app.services.project_management import (
     update_writer_project,
     write_project_agents_md,
 )
+from app.services.project_directory_picker import (
+    ProjectDirectoryPickerUnavailable,
+    pick_project_directory,
+)
 from app.services.runtime_capabilities import runtime_capabilities_response
 from app.services.session_management import (
     create_writer_session,
@@ -180,6 +184,7 @@ def build_writer_operation_catalog(
     queue_update: OperationRpcHandler,
     queue_delete: OperationRpcHandler,
     project_create: OperationRpcHandler,
+    project_directory_pick: OperationRpcHandler,
     project_get: OperationRpcHandler,
     project_list: OperationRpcHandler,
     project_update: OperationRpcHandler,
@@ -245,6 +250,7 @@ def build_writer_operation_catalog(
     catalog.register("queue.update", _handler(queue_update))
     catalog.register("queue.delete", _handler(queue_delete))
     catalog.register("project.create", _handler(project_create))
+    catalog.register("project.directory.pick", _handler(project_directory_pick))
     catalog.register("project.get", _handler(project_get))
     catalog.register("project.list", _handler(project_list))
     catalog.register("project.update", _handler(project_update))
@@ -867,6 +873,22 @@ async def handle_project_create_operation(
     except HTTPException as exc:
         return WriterOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc.detail)))
     return WriterOperationOutcome(response=rpc_result(request_id, {"project": project}))
+
+
+async def handle_project_directory_pick_operation(
+    *,
+    request_id: int | str | None,
+    params: dict[str, Any],
+    directory_picker: Callable[[], str] = pick_project_directory,
+) -> WriterOperationOutcome:
+    _ = params
+    try:
+        selected = await asyncio.to_thread(directory_picker)
+    except ProjectDirectoryPickerUnavailable as exc:
+        return WriterOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
+    except OSError as exc:
+        return WriterOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
+    return WriterOperationOutcome(response=rpc_result(request_id, {"path": selected}))
 
 
 async def handle_project_get_operation(
@@ -2146,6 +2168,7 @@ __all__ = [
     "handle_project_agents_md_get_operation",
     "handle_project_agents_md_update_operation",
     "handle_project_delete_operation",
+    "handle_project_directory_pick_operation",
     "handle_project_get_operation",
     "handle_project_list_operation",
     "handle_project_sessions_list_operation",

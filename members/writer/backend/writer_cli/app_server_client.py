@@ -123,6 +123,15 @@ class AppServerClient:
         session = response.get("session")
         return session if isinstance(session, dict) else {}
 
+    async def create_project(self, *, work_root: str) -> dict[str, Any]:
+        response = await self.request("project.create", {"work_root": work_root})
+        project = response.get("project")
+        return project if isinstance(project, dict) else {}
+
+    async def pick_project_directory(self) -> str:
+        response = await self.request("project.directory.pick", {})
+        return str(response.get("path") or "")
+
     async def get_session(self, *, session_id: str) -> dict[str, Any]:
         response = await self.request("session.get", {"session_id": session_id})
         session = response.get("session")
