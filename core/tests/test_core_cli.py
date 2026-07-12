@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import sys
 from pathlib import Path
@@ -8,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from lamtools_core import cli as core_cli
-from lamtools_core.cli import CoreCliRunOptions, build_parser, load_llm_config, run_core_cli_task
+from lamtools_core.cli import CoreCliRunOptions, build_parser, load_llm_config, main, run_core_cli_task
 from lamtools_core.llm import LLMRequest, LLMResponse, LLMStreamEvent, LLMToolCall, LLMUsage
 from lamtools_core.llm.shallow_thinking import SHALLOW_THINKING_PROMPT
 
@@ -220,6 +221,46 @@ def test_core_cli_parser_exposes_session_query_commands(tmp_path: Path) -> None:
     assert show_args.raw is True
 
 
+def test_core_project_cli_creates_workspace_and_round_trips_agents(monkeypatch, tmp_path: Path, capsys) -> None:
+    core_db = tmp_path / "core.db"
+    workspace = tmp_path / "workspace"
+    rules = tmp_path / "rules.md"
+    rules.write_text("# Core rules\n", encoding="utf-8")
+    monkeypatch.setenv("LAMTOOLS_CORE_DB", str(core_db))
+
+    assert main(["project", "create", str(workspace), "--name", "Docs"]) == 0
+    created = json.loads(capsys.readouterr().out)
+    project_id = created["project"]["id"]
+    assert created["project"]["name"] == "Docs"
+    assert created["project"]["work_root"] == str(workspace.resolve())
+    assert created["session"]["metadata"] == {
+        "project_id": project_id,
+        "work_root": str(workspace.resolve()),
+    }
+
+    assert main(["project", "agents", "set", project_id, str(rules)]) == 0
+    assert json.loads(capsys.readouterr().out)["agents_md"] == {"content": "# Core rules\n", "exists": True}
+    assert main(["project", "agents", "get", project_id]) == 0
+    assert json.loads(capsys.readouterr().out)["agents_md"] == {"content": "# Core rules\n", "exists": True}
+
+
+def test_core_project_cli_lists_shows_renames_and_deletes(monkeypatch, tmp_path: Path, capsys) -> None:
+    core_db = tmp_path / "core.db"
+    monkeypatch.setenv("LAMTOOLS_CORE_DB", str(core_db))
+
+    assert main(["project", "create", str(tmp_path / "workspace"), "--name", "Docs"]) == 0
+    project_id = json.loads(capsys.readouterr().out)["project"]["id"]
+
+    assert main(["project", "list"]) == 0
+    assert [project["id"] for project in json.loads(capsys.readouterr().out)["projects"]] == [project_id]
+    assert main(["project", "show", project_id]) == 0
+    assert json.loads(capsys.readouterr().out)["project"]["name"] == "Docs"
+    assert main(["project", "rename", project_id, "Renamed"]) == 0
+    assert json.loads(capsys.readouterr().out)["project"]["name"] == "Renamed"
+    assert main(["project", "delete", project_id]) == 0
+    assert json.loads(capsys.readouterr().out) == {"deleted": True, "project_id": project_id}
+
+
 def test_core_cli_parser_exposes_live_control_commands(tmp_path: Path) -> None:
     parser = build_parser()
 
@@ -387,12 +428,15 @@ def test_core_cli_returns_nonzero_for_live_command_errors(monkeypatch, capsys) -
 
 
 def test_core_cli_wrapper_does_not_default_to_member_database() -> None:
-    wrapper = Path(__file__).resolve().parents[2] / "scripts" / "core.cmd"
+    root = Path(__file__).resolve().parents[2]
+    wrapper = root / "scripts" / "core.cmd"
 
     content = wrapper.read_text(encoding="utf-8").lower()
 
     assert "members\\writer\\data\\lamwriter.db" not in content
     assert "members/writer/data/lamwriter.db" not in content
+    assert "if not defined lamtools_core_db" in content
+    assert "if not defined lamtools_core_db" in (root / "core.cmd").read_text(encoding="utf-8").lower()
 
 
 def test_load_llm_config_can_read_shared_config_when_sqlite_is_locked(tmp_path: Path) -> None:

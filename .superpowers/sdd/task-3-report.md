@@ -214,3 +214,83 @@ Observed:
 ```text
 498 passed in 4.77s
 ```
+
+---
+
+# Task 3: Core Project CLI Report
+
+## Scope
+
+- Baseline: `10f38bcd70e3de638389f3371afe68440a96d81b`
+- Commands added: `core project list/create/show/rename/delete` and `core project agents get/set`.
+- The CLI resolves its database with the same `_resolve_core_db` path used by `serve`, opens it with `open_core_app_db`, and delegates all project and `AGENTS.md` behavior to `CoreProjectStore`.
+
+## TDD Evidence
+
+### RED
+
+Command:
+
+```powershell
+py -3.14 -m pytest tests/test_core_cli.py -q
+```
+
+Output before implementation:
+
+```text
+1 failed, 18 passed
+argparse.ArgumentError: argument command: invalid choice: 'project'
+```
+
+### GREEN
+
+Command:
+
+```powershell
+py -3.14 -m pytest tests/test_core_cli.py tests/test_core_project_store.py -q
+```
+
+Output:
+
+```text
+28 passed in 4.90s
+```
+
+## Real CLI Verification
+
+Commands executed against one temporary Core database:
+
+```powershell
+py -3.14 -m lamtools_core.cli project create <workspace> --name Docs --core-db <core.db>
+py -3.14 -m lamtools_core.cli project agents set <project-id> <rules.md> --core-db <core.db>
+py -3.14 -m lamtools_core.cli project agents get <project-id> --core-db <core.db>
+py -3.14 -m lamtools_core.cli project list --core-db <core.db>
+```
+
+Observed output excerpts:
+
+```json
+{"created": true, "project": {"id": "f969f686056d480bb5c34c0a3053b270", "name": "Docs", "work_root": "<workspace>"}, "session": {"metadata": {"project_id": "f969f686056d480bb5c34c0a3053b270", "work_root": "<workspace>"}, "status": "idle"}}
+{"agents_md": {"content": "# Core rules\n", "exists": true}}
+{"projects": [{"id": "f969f686056d480bb5c34c0a3053b270", "name": "Docs", "work_root": "<workspace>"}]}
+```
+
+## Files
+
+- `core/src/lamtools_core/cli.py`
+- `core.cmd`
+- `scripts/core.cmd`
+- `core/tests/test_core_cli.py`
+- `.superpowers/sdd/task-3-report.md`
+
+## Self Review
+
+- No SQL or filesystem behavior was added to the CLI. Project persistence, initial-session creation, deletion rules, and `AGENTS.md` writes remain owned by `CoreProjectStore`.
+- Each CLI command closes the Core DB handle in `finally`.
+- JSON output is one stable, parseable object per command. Create explicitly returns the initial session created by the public store API.
+- Both batch entry points default `LAMTOOLS_CORE_DB` to the same `data/core.db` selected by the shared resolver when no explicit path or environment value is supplied.
+- `git diff --check` passed.
+
+## Concerns
+
+- No unresolved implementation concern. Project deletion still follows the existing store rule and rejects a project with an active initial session; this CLI intentionally preserves that behavior.

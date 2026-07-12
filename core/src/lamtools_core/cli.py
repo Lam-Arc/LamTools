@@ -615,6 +615,41 @@ def build_parser() -> argparse.ArgumentParser:
     session_show.add_argument("--core-db", default="", help="Core-owned SQLite runtime database")
     session_show.add_argument("--raw", action="store_true")
     session_show.set_defaults(func=cmd_session_show)
+
+    project = sub.add_parser("project", help="Manage Core project workspaces")
+    project_sub = project.add_subparsers(dest="project_command", required=True)
+    project_list = project_sub.add_parser("list", help="List project workspaces")
+    project_list.add_argument("--core-db", default="", help="Core-owned SQLite runtime database")
+    project_list.set_defaults(func=cmd_project_list)
+    project_create = project_sub.add_parser("create", help="Create or reuse a project workspace")
+    project_create.add_argument("work_root")
+    project_create.add_argument("--name", default="")
+    project_create.add_argument("--core-db", default="", help="Core-owned SQLite runtime database")
+    project_create.set_defaults(func=cmd_project_create)
+    project_show = project_sub.add_parser("show", help="Show a project workspace")
+    project_show.add_argument("project_id")
+    project_show.add_argument("--core-db", default="", help="Core-owned SQLite runtime database")
+    project_show.set_defaults(func=cmd_project_show)
+    project_rename = project_sub.add_parser("rename", help="Rename a project workspace")
+    project_rename.add_argument("project_id")
+    project_rename.add_argument("name")
+    project_rename.add_argument("--core-db", default="", help="Core-owned SQLite runtime database")
+    project_rename.set_defaults(func=cmd_project_rename)
+    project_delete = project_sub.add_parser("delete", help="Delete a project record")
+    project_delete.add_argument("project_id")
+    project_delete.add_argument("--core-db", default="", help="Core-owned SQLite runtime database")
+    project_delete.set_defaults(func=cmd_project_delete)
+    project_agents = project_sub.add_parser("agents", help="Manage project AGENTS.md")
+    project_agents_sub = project_agents.add_subparsers(dest="project_agents_command", required=True)
+    project_agents_get = project_agents_sub.add_parser("get", help="Read project AGENTS.md")
+    project_agents_get.add_argument("project_id")
+    project_agents_get.add_argument("--core-db", default="", help="Core-owned SQLite runtime database")
+    project_agents_get.set_defaults(func=cmd_project_agents_get)
+    project_agents_set = project_agents_sub.add_parser("set", help="Set project AGENTS.md from a UTF-8 file")
+    project_agents_set.add_argument("project_id")
+    project_agents_set.add_argument("source_file")
+    project_agents_set.add_argument("--core-db", default="", help="Core-owned SQLite runtime database")
+    project_agents_set.set_defaults(func=cmd_project_agents_set)
     return parser
 
 
@@ -881,6 +916,89 @@ async def show_core_cli_session(thread_id: str, *, core_db: Path | str | None = 
         return await show_core_session(db, thread_id)
     finally:
         await db.close()
+
+
+def _print_project_result(payload: dict[str, Any]) -> None:
+    print(json.dumps(payload, ensure_ascii=False, sort_keys=True), flush=True)
+
+
+async def cmd_project_list(args: argparse.Namespace) -> int:
+    db = await open_core_app_db(_resolve_core_db(args.core_db or None))
+    try:
+        _print_project_result({"projects": [project.to_dict() for project in await db.project_store.list()]})
+    finally:
+        await db.close()
+    return 0
+
+
+async def cmd_project_create(args: argparse.Namespace) -> int:
+    db = await open_core_app_db(_resolve_core_db(args.core_db or None))
+    try:
+        project, session, created = await db.project_store.create_with_initial_session(args.work_root, name=args.name)
+        _print_project_result({"created": created, "project": project.to_dict(), "session": session.to_dict()})
+    finally:
+        await db.close()
+    return 0
+
+
+async def cmd_project_show(args: argparse.Namespace) -> int:
+    db = await open_core_app_db(_resolve_core_db(args.core_db or None))
+    try:
+        project = await db.project_store.get(args.project_id)
+        if project is None:
+            raise RuntimeError("Project not found")
+        _print_project_result({"project": project.to_dict()})
+    finally:
+        await db.close()
+    return 0
+
+
+async def cmd_project_rename(args: argparse.Namespace) -> int:
+    db = await open_core_app_db(_resolve_core_db(args.core_db or None))
+    try:
+        project = await db.project_store.rename(args.project_id, args.name)
+        if project is None:
+            raise RuntimeError("Project not found")
+        _print_project_result({"project": project.to_dict()})
+    finally:
+        await db.close()
+    return 0
+
+
+async def cmd_project_delete(args: argparse.Namespace) -> int:
+    db = await open_core_app_db(_resolve_core_db(args.core_db or None))
+    try:
+        if not await db.project_store.delete_with_sessions(args.project_id):
+            raise RuntimeError("Project not found")
+        _print_project_result({"deleted": True, "project_id": args.project_id})
+    finally:
+        await db.close()
+    return 0
+
+
+async def cmd_project_agents_get(args: argparse.Namespace) -> int:
+    db = await open_core_app_db(_resolve_core_db(args.core_db or None))
+    try:
+        agents_md = await db.project_store.read_agents_md(args.project_id)
+        if agents_md is None:
+            raise RuntimeError("Project not found")
+        _print_project_result({"agents_md": agents_md})
+    finally:
+        await db.close()
+    return 0
+
+
+async def cmd_project_agents_set(args: argparse.Namespace) -> int:
+    content = Path(args.source_file).read_text(encoding="utf-8")
+    db = await open_core_app_db(_resolve_core_db(args.core_db or None))
+    try:
+        agents_md = await db.project_store.write_agents_md(args.project_id, content)
+        if agents_md is None:
+            raise RuntimeError("Project not found")
+        _print_project_result({"agents_md": agents_md})
+    finally:
+        await db.close()
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
