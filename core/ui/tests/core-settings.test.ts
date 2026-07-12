@@ -139,6 +139,10 @@ describe('Core demo settings entry', () => {
 
     expect(source).toContain('@settings="showSettings = true"')
     expect(source).toContain('<CoreSettings')
+    expect(source).toContain('useCoreUiPreferences(settingsStorageKey)')
+    expect(source).toContain(':content-width="contentWidth"')
+    expect(source).toContain('@update:content-width="uiPreferences.setContentWidth"')
+    expect(source).toContain("@import '../styles/theme-editor.css';")
     expect(source).toContain("'config.provider.create'")
     expect(source).toContain("'config.provider.update'")
     expect(source).toContain("'config.provider.delete'")

@@ -5,17 +5,19 @@
     :providers="availableProviders"
     :density="density"
     :theme="theme"
+    :content-width="contentWidth"
     @close="showSettings = false"
-    @update:density="setDensity"
-    @reset-theme="resetTheme"
-    @apply-preset="applyThemePreset"
-    @update-stops="updateThemeStops"
-    @update-angle="updateThemeAngle"
-    @update-opacity="updateThemeOpacity"
-    @update-text-color="updateThemeTextColor"
-    @add-stop="addThemeStop"
-    @remove-stop="removeThemeStop"
-    @sort-stops="sortThemeStops"
+    @update:density="uiPreferences.setDensity"
+    @update:content-width="uiPreferences.setContentWidth"
+    @reset-theme="uiPreferences.resetTheme"
+    @apply-preset="uiPreferences.applyThemePreset"
+    @update-stops="uiPreferences.updateThemeStops"
+    @update-angle="uiPreferences.updateThemeAngle"
+    @update-opacity="uiPreferences.updateThemeOpacity"
+    @update-text-color="uiPreferences.updateThemeText"
+    @add-stop="uiPreferences.addStop"
+    @remove-stop="uiPreferences.removeStop"
+    @sort-stops="uiPreferences.sortStops"
     @create-provider="createProvider"
     @update-provider="updateProvider"
     @delete-provider="deleteProvider"
@@ -29,6 +31,7 @@
     :storage-key="settingsStorageKey"
     :density="density"
     :theme="theme"
+    :content-width="contentWidth"
     :composer-disabled="composerActionMode === 'send' && (!activeSessionId || !composerText.trim())"
     :composer-action-mode="composerActionMode"
     :error-text="workbenchErrorText"
@@ -195,17 +198,6 @@ import {
 import { createCoreProjectClient } from '../projects/client'
 import { createCoreProjectWorkspaceActions } from '../projects/workspace'
 import {
-  DEFAULT_THEME,
-  addGradientStop,
-  normalizeTheme,
-  removeGradientStop,
-  sortGradientStops,
-  type ThemeArea,
-  type ThemeData,
-  type ThemePreset,
-  type ThemeStop,
-} from '../helpers/theme'
-import {
   appServerUrl,
   CoreAppServerClient,
   createCoreAppServerRuntimeController,
@@ -225,6 +217,7 @@ import {
   useCoreExecutionControlsState,
   useCoreLiveComposerController,
   useCoreQueuedInputController,
+  useCoreUiPreferences,
   useCoreWorkbenchProjectionController,
 } from '../composables'
 
@@ -235,7 +228,6 @@ import CoreQueuedInputTray from '../components/CoreQueuedInputTray.vue'
 import CoreAgentsEditor from '../components/CoreAgentsEditor.vue'
 import CoreProjectCreate from '../components/CoreProjectCreate.vue'
 import CoreSettings, {
-  type CoreSettingsDensity,
   type CoreSettingsModelPayload,
   type CoreSettingsProviderPayload,
 } from '../components/CoreSettings.vue'
@@ -301,8 +293,8 @@ const agentsLoading = ref(false)
 const agentsError = ref('')
 const settingsStorageKey = 'lamtools.core.ui'
 const showSettings = ref(false)
-const density = ref<CoreSettingsDensity>('standard')
-const theme = ref<ThemeData>(normalizeTheme(DEFAULT_THEME))
+const uiPreferences = useCoreUiPreferences(settingsStorageKey)
+const { density, contentWidth, theme } = uiPreferences
 const availableModels = ref<RawModel[]>([])
 const availableProviders = ref<RawProvider[]>([])
 const emptyAttachments = computed<CoreInputItem[]>(() => [])
@@ -738,80 +730,6 @@ function setShallowThinking(enabled: boolean) {
   shallowThinkingEnabled.value = enabled
 }
 
-function loadSettings() {
-  try {
-    const saved = JSON.parse(localStorage.getItem(settingsStorageKey) || '{}') as {
-      density?: CoreSettingsDensity
-      theme?: Partial<ThemeData>
-    }
-    if (saved.density === 'compact' || saved.density === 'standard' || saved.density === 'loose') {
-      density.value = saved.density
-    }
-    if (saved.theme) theme.value = normalizeTheme({ ...DEFAULT_THEME, ...saved.theme })
-  } catch {
-    // Browser storage can be unavailable in desktop shells.
-  }
-}
-
-function persistSettings() {
-  try {
-    localStorage.setItem(settingsStorageKey, JSON.stringify({
-      density: density.value,
-      theme: theme.value,
-    }))
-  } catch {
-    // Browser storage can be unavailable in desktop shells.
-  }
-}
-
-function setDensity(value: CoreSettingsDensity) {
-  density.value = value
-  persistSettings()
-}
-
-function resetTheme() {
-  theme.value = normalizeTheme(DEFAULT_THEME)
-  persistSettings()
-}
-
-function applyThemePreset(preset: ThemePreset) {
-  theme.value = normalizeTheme({ ...DEFAULT_THEME, ...preset.theme })
-  persistSettings()
-}
-
-function updateThemeField(field: keyof ThemeData, value: ThemeData[keyof ThemeData]) {
-  theme.value = { ...theme.value, [field]: value } as ThemeData
-  persistSettings()
-}
-
-function updateThemeStops(area: ThemeArea, stops: ThemeStop[]) {
-  updateThemeField(`${area}Stops` as keyof ThemeData, stops)
-}
-
-function updateThemeAngle(area: ThemeArea, angle: number) {
-  updateThemeField(`${area}Angle` as keyof ThemeData, angle)
-}
-
-function updateThemeOpacity(area: ThemeArea, opacity: number) {
-  if (area !== 'backdrop') updateThemeField(`${area}Opacity` as keyof ThemeData, opacity)
-}
-
-function updateThemeTextColor(area: ThemeArea, color: string) {
-  updateThemeField(`${area}Text` as keyof ThemeData, color)
-}
-
-function addThemeStop(area: ThemeArea) {
-  updateThemeStops(area, addGradientStop(theme.value[`${area}Stops` as keyof ThemeData] as ThemeStop[]))
-}
-
-function removeThemeStop(area: ThemeArea, index: number) {
-  updateThemeStops(area, removeGradientStop(theme.value[`${area}Stops` as keyof ThemeData] as ThemeStop[], index))
-}
-
-function sortThemeStops(area: ThemeArea) {
-  updateThemeStops(area, sortGradientStops(theme.value[`${area}Stops` as keyof ThemeData] as ThemeStop[]))
-}
-
 async function createProvider(payload: CoreSettingsProviderPayload) {
   await mutateConfig('config.provider.create', payload, '供应商已添加')
 }
@@ -963,7 +881,7 @@ watch(messages, async () => {
 }, { deep: true })
 
 onMounted(() => {
-  loadSettings()
+  void uiPreferences.load()
   void loadInitialData()
 })
 
@@ -979,6 +897,7 @@ onUnmounted(() => {
 @import '../styles/variables.css';
 @import '../styles/base.css';
 @import '../styles/layout.css';
+@import '../styles/theme-editor.css';
 
 .core-project-header-action {
   position: relative;
