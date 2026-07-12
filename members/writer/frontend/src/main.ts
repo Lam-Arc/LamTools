@@ -1,6 +1,7 @@
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 import '@lamtools/ui'
+import '@lamtools/ui/styles.css'
 
 async function bootstrapDesktopBridge() {
   if (!('__TAURI_INTERNALS__' in window)) {

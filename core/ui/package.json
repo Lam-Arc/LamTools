@@ -17,6 +17,7 @@
       "types": "./dist/index.d.ts"
     },
     "./styles": "./dist/lamtools-ui.css",
+    "./styles.css": "./dist/lamtools-ui.css",
     "./helpers": {
       "import": "./dist/lamtools-ui.js",
       "types": "./dist/helpers/index.d.ts"

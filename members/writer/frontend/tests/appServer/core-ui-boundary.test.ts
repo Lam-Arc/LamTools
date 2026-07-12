@@ -28,6 +28,12 @@ test('Writer imports Core UI through its public package boundary', () => {
   assert.equal(packageLock.packages?.['']?.dependencies?.['@lamtools/ui'], 'file:../../../core/ui')
 })
 
+test('Writer loads the Core UI stylesheet from its public export', () => {
+  const entry = readFileSync(resolve(frontendRoot, 'src/main.ts'), 'utf8')
+
+  assert.match(entry, /import ['"]@lamtools\/ui\/styles\.css['"]/)
+})
+
 test('Core UI stays product-neutral and Writer avoids the legacy REST workbench name', () => {
   const coreSource = sourceFiles(resolve(repoRoot, 'core/ui/src'))
     .map((path) => readFileSync(path, 'utf8'))
