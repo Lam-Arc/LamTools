@@ -16,10 +16,14 @@
           <button
             v-if="allowProjectNewSession && group.canManage !== false"
             class="project-action add"
+            type="button"
             :title="`在 ${group.name} 中新建会话`"
             :aria-label="`在 ${group.name} 中新建会话`"
+            :aria-busy="isProjectBusy(group.id)"
+            :data-project-new="group.id"
+            :disabled="isProjectBusy(group.id)"
             @click.stop="emit('new-session', group.id)"
-          >+</button>
+          >{{ isProjectBusy(group.id) ? '…' : '+' }}</button>
           <!-- Fold / expand -->
           <button
             v-if="group.sessions.length > projectSessionLimit && projectSessionLimit > 0"
@@ -39,16 +43,21 @@
             @click.stop="emit('delete-project', group.id)"
           >×</button>
         </div>
-        <div
+        <button
+          type="button"
           class="project-name"
           :class="{ clickable: allowProjectClick && group.canManage !== false }"
-          @click="allowProjectClick && group.canManage !== false && emit('select-project', group.id)"
+          :data-project-entry="group.id"
+          :disabled="group.canManage === false"
+          @click="selectProject(group.id, group.canManage !== false)"
+          @keydown.enter.prevent="selectProject(group.id, group.canManage !== false)"
+          @keydown.space.prevent="selectProject(group.id, group.canManage !== false)"
           @contextmenu.prevent="allowProjectContextMenu && group.canManage !== false && emit('project-context-menu', group.id)"
         >
           <strong>{{ group.name }}</strong>
           <span v-if="group.workRoot" class="work-root">{{ group.workRoot }}</span>
           <span v-else class="work-root">{{ group.sessions.length }} 个会话</span>
-        </div>
+        </button>
       </div>
 
       <div class="conversation-list">
@@ -159,6 +168,8 @@ const props = withDefaults(
     allowProjectClick?: boolean
     /** Allow right-click on project name */
     allowProjectContextMenu?: boolean
+    /** Project ids with an in-flight new-session request. */
+    busyProjectIds?: readonly string[]
   }>(),
   {
     projectSessionLimit: 0,
@@ -168,6 +179,7 @@ const props = withDefaults(
     allowSessionDelete: false,
     allowProjectClick: false,
     allowProjectContextMenu: false,
+    busyProjectIds: () => [],
   },
 )
 
@@ -188,6 +200,14 @@ const groupExpanded = reactive<Record<string, boolean>>({})
 
 function toggleGroupExpand(groupId: string) {
   groupExpanded[groupId] = !groupExpanded[groupId]
+}
+
+function isProjectBusy(projectId: string): boolean {
+  return props.busyProjectIds.includes(projectId)
+}
+
+function selectProject(projectId: string, canManage: boolean) {
+  if (props.allowProjectClick && canManage) emit('select-project', projectId)
 }
 
 function visibleSessions(group: ProjectGroup): SessionItem[] {
@@ -303,5 +323,13 @@ function cancelRename() {
   padding: 2px 6px;
   font-size: 13px;
   outline: none;
+}
+.project-name {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: left;
 }
 </style>

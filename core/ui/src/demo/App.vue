@@ -55,6 +55,7 @@
       <SessionSidebar
         :project-groups="projectGroups"
         :active-session-id="activeSessionId || undefined"
+        :busy-project-ids="busyProjectIds"
         :allow-project-delete="true"
         :allow-project-click="true"
         :allow-project-context-menu="true"
@@ -192,6 +193,7 @@ import {
   type CoreProjectCreatePayload,
 } from '../projects/types'
 import { createCoreProjectClient } from '../projects/client'
+import { createCoreProjectWorkspaceActions, type CoreProjectSessionCreatePayload } from '../projects/workspace'
 import {
   DEFAULT_THEME,
   addGradientStop,
@@ -349,6 +351,15 @@ const projectGroups = computed(() => buildCoreProjectGroups(projects.value, sess
 const selectedProject = computed(() => (
   projects.value.find((project) => project.id === selectedProjectId.value) || null
 ))
+const projectWorkspace = createCoreProjectWorkspaceActions({
+  client: projectClient,
+  projects,
+  sessions,
+  activeSessionId,
+  selectSession,
+  createSession: createProjectSessionRecord,
+})
+const busyProjectIds = projectWorkspace.busyProjectIds
 
 const runtimeController = createCoreAppServerRuntimeController(runtime, {
   hydrateSnapshot,
@@ -505,23 +516,18 @@ async function refreshSessions() {
   ))
 }
 
-async function newSession(project?: CoreProject) {
+async function createProjectSessionRecord(payload: CoreProjectSessionCreatePayload): Promise<CoreSessionListItem> {
   const id = `core-ui-${Date.now().toString(36)}-${Math.random().toString(16).slice(2, 8)}`
-  const session = toSession(await requestJson<RawSession>('/sessions', {
+  return toSession(await requestJson<RawSession>('/sessions', {
     method: 'POST',
     body: {
       id,
       member_id: 'core',
-      title: '新会话',
+      title: payload.title,
       status: 'idle',
-      metadata: {
-        source: 'core-ui',
-        ...(project ? { project_id: project.id, work_root: project.workRoot } : {}),
-      },
+      metadata: payload.metadata,
     },
   }))
-  sessions.value = [session, ...sessions.value.filter((item) => item.id !== session.id)]
-  await selectSession(session.id)
 }
 
 function openProjectCreate() {
@@ -539,13 +545,9 @@ async function createProject(payload: CoreProjectCreatePayload) {
   projectCreateLoading.value = true
   projectCreateError.value = ''
   try {
-    const created = await projectClient.create(payload)
-    projects.value = [created.project, ...projects.value.filter((project) => project.id !== created.project.id)]
-    const session = toSession(created.session)
-    sessions.value = [session, ...sessions.value.filter((item) => item.id !== session.id)]
+    const created = await projectWorkspace.createProject(payload)
     selectedProjectId.value = created.project.id
     showProjectCreate.value = false
-    await selectSession(session.id)
   } catch (error) {
     projectCreateError.value = messageFromError(error)
   } finally {
@@ -554,10 +556,8 @@ async function createProject(payload: CoreProjectCreatePayload) {
 }
 
 async function createProjectSession(projectId: string) {
-  const project = projects.value.find((item) => item.id === projectId)
-  if (!project) return
   try {
-    await newSession(project)
+    await projectWorkspace.createProjectSession(projectId)
   } catch (error) {
     composerErrorText.value = messageFromError(error)
   }
@@ -578,8 +578,7 @@ async function renameProject() {
   projectActionLoading.value = true
   projectActionError.value = ''
   try {
-    const updated = await projectClient.rename(project.id, name)
-    projects.value = projects.value.map((item) => item.id === updated.id ? updated : item)
+    const updated = await projectWorkspace.renameProject(project.id, name)
     projectNameDraft.value = updated.name
   } catch (error) {
     projectActionError.value = messageFromError(error)
@@ -594,15 +593,11 @@ async function deleteProject(projectId: string) {
   projectActionLoading.value = true
   projectActionError.value = ''
   try {
-    const deletedSessionIds = new Set(sessions.value
-      .filter((session) => session.metadata?.project_id === project.id)
-      .map((session) => session.id))
-    await projectClient.delete(project.id)
-    projects.value = projects.value.filter((item) => item.id !== project.id)
-    sessions.value = sessions.value.filter((session) => !deletedSessionIds.has(session.id))
+    const deleted = await projectWorkspace.deleteProject(project.id)
+    if (!deleted) return
     if (selectedProjectId.value === project.id) selectedProjectId.value = null
     if (agentsProjectId.value === project.id) closeAgentsEditor()
-    if (activeSessionId.value && deletedSessionIds.has(activeSessionId.value)) {
+    if (deleted.wasActive) {
       runtimeController.disconnect()
       liveComposerController.resetForThreadChange()
       activeSessionId.value = null
@@ -623,7 +618,7 @@ async function openAgentsEditor() {
   agentsLoading.value = true
   agentsError.value = ''
   try {
-    const agents = await projectClient.readAgents(project.id)
+    const agents = await projectWorkspace.readAgents(project.id)
     agentsProjectId.value = project.id
     agentsContent.value = agents.content
   } catch (error) {
@@ -647,7 +642,7 @@ async function saveAgents(content: string) {
   agentsLoading.value = true
   agentsError.value = ''
   try {
-    const agents = await projectClient.writeAgents(projectId, content)
+    const agents = await projectWorkspace.writeAgents(projectId, content)
     agentsContent.value = agents.content
     runtimeStatusText.value = 'AGENTS.md 已保存'
     agentsProjectId.value = null
@@ -1009,6 +1004,8 @@ onUnmounted(() => {
   z-index: 4;
   top: calc(100% + 6px);
   right: 0;
+  width: min(340px, calc(var(--left-card-width) - 28px), calc(100vw - 48px));
+  max-width: 100%;
 }
 
 .core-project-management {
@@ -1042,10 +1039,4 @@ onUnmounted(() => {
   line-height: 1.35;
 }
 
-@media (max-width: 560px) {
-  .core-project-create-popover {
-    right: auto;
-    left: 0;
-  }
-}
 </style>

@@ -61,7 +61,9 @@ function submit() {
 .core-project-create {
   display: grid;
   gap: 8px;
-  min-width: min(300px, calc(100vw - 48px));
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   padding: 10px;
   border: 1px solid color-mix(in srgb, var(--theme-backdrop-text) 14%, transparent);
   border-radius: var(--radius-sm);

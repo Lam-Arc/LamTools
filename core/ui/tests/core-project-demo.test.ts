@@ -1,15 +1,59 @@
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { ref } from 'vue'
+import { describe, expect, it, vi } from 'vitest'
 
-import { buildCoreProjectGroups } from '../src/projects/types'
+import { createCoreProjectWorkspaceActions } from '../src/projects/workspace'
+import type { CoreProjectClient } from '../src/projects/client'
+import { buildCoreProjectGroups, type CoreProject, type CoreProjectSession } from '../src/projects/types'
+
+const project: CoreProject = { id: 'project-1', name: 'Docs', workRoot: 'E:\\docs' }
+const initialSession: CoreProjectSession = {
+  id: 'session-1',
+  title: 'Docs',
+  metadata: { project_id: 'project-1', work_root: 'E:\\docs' },
+}
+
+function createWorkspace() {
+  const client: CoreProjectClient = {
+    list: vi.fn(),
+    create: vi.fn().mockResolvedValue({ project, session: initialSession }),
+    get: vi.fn(),
+    rename: vi.fn().mockResolvedValue({ ...project, name: 'Documentation' }),
+    delete: vi.fn().mockResolvedValue(undefined),
+    listSessions: vi.fn(),
+    readAgents: vi.fn().mockResolvedValue({ content: '# Existing', exists: true }),
+    writeAgents: vi.fn().mockResolvedValue({ content: '# Updated', exists: true }),
+  }
+  const projects = ref<CoreProject[]>([])
+  const sessions = ref<CoreProjectSession[]>([])
+  const activeSessionId = ref<string | null>(null)
+  const selectSession = vi.fn().mockResolvedValue(undefined)
+  const createSession = vi.fn().mockResolvedValue({
+    id: 'session-2',
+    title: '新会话',
+    metadata: { project_id: 'project-1', work_root: 'E:\\docs' },
+  })
+
+  return {
+    client,
+    projects,
+    sessions,
+    activeSessionId,
+    selectSession,
+    createSession,
+    actions: createCoreProjectWorkspaceActions({
+      client,
+      projects,
+      sessions,
+      activeSessionId,
+      selectSession,
+      createSession,
+    }),
+  }
+}
 
 describe('Core project workspace grouping', () => {
   it('groups sessions by persisted project and displays its path', () => {
-    const groups = buildCoreProjectGroups(
-      [{ id: 'project-1', name: 'Docs', workRoot: 'E:\\docs' }],
-      [{ id: 'session-1', title: 'Write guide', metadata: { project_id: 'project-1', work_root: 'E:\\docs' } }],
-    )
+    const groups = buildCoreProjectGroups([project], [initialSession])
 
     expect(groups[0]).toMatchObject({ id: 'project-1', name: 'Docs', workRoot: 'E:\\docs' })
     expect(groups[0].sessions).toHaveLength(1)
@@ -26,15 +70,53 @@ describe('Core project workspace grouping', () => {
   })
 })
 
-describe('Core project demo wiring', () => {
-  it('replaces the synthetic group with project creation, project actions, and persisted session metadata', () => {
-    const source = readFileSync(resolve(process.cwd(), 'src/demo/App.vue'), 'utf8')
+describe('Core project demo workspace actions', () => {
+  it('creates a project and selects its returned initial session', async () => {
+    const workspace = createWorkspace()
 
-    expect(source).toContain('<CoreProjectCreate')
-    expect(source).toContain('<CoreAgentsEditor')
-    expect(source).toContain('createCoreProjectClient')
-    expect(source).toContain('buildCoreProjectGroups')
-    expect(source).toContain('project_id')
-    expect(source).not.toContain("name: 'Core Agent'")
+    await workspace.actions.createProject({ name: 'Docs', work_root: 'E:\\docs' })
+
+    expect(workspace.client.create).toHaveBeenCalledWith({ name: 'Docs', work_root: 'E:\\docs' })
+    expect(workspace.sessions.value).toEqual([expect.objectContaining({ id: 'session-1' })])
+    expect(workspace.activeSessionId.value).toBe('session-1')
+    expect(workspace.selectSession).toHaveBeenCalledWith('session-1')
+  })
+
+  it('creates project sessions with persisted project metadata and blocks duplicate work', async () => {
+    const workspace = createWorkspace()
+    workspace.projects.value = [project]
+    let release!: () => void
+    workspace.createSession.mockImplementationOnce(() => new Promise((resolve) => {
+      release = () => resolve({ id: 'session-2', title: '新会话', metadata: {} })
+    }))
+
+    const first = workspace.actions.createProjectSession('project-1')
+    const second = workspace.actions.createProjectSession('project-1')
+
+    expect(workspace.actions.busyProjectIds.value).toEqual(['project-1'])
+    expect(workspace.createSession).toHaveBeenCalledTimes(1)
+    expect(workspace.createSession).toHaveBeenCalledWith(expect.objectContaining({
+      metadata: { source: 'core-ui', project_id: 'project-1', work_root: 'E:\\docs' },
+    }))
+    release()
+    await Promise.all([first, second])
+    expect(workspace.actions.busyProjectIds.value).toEqual([])
+  })
+
+  it('routes rename, AGENTS.md reads and writes, and safe deletion through the project client', async () => {
+    const workspace = createWorkspace()
+    workspace.projects.value = [project]
+    workspace.sessions.value = [initialSession]
+    workspace.activeSessionId.value = 'session-1'
+
+    await expect(workspace.actions.renameProject('project-1', 'Documentation')).resolves.toMatchObject({ name: 'Documentation' })
+    await expect(workspace.actions.readAgents('project-1')).resolves.toEqual({ content: '# Existing', exists: true })
+    await expect(workspace.actions.writeAgents('project-1', '# Updated')).resolves.toEqual({ content: '# Updated', exists: true })
+    await expect(workspace.actions.deleteProject('project-1')).resolves.toMatchObject({ wasActive: true, deletedSessionIds: ['session-1'] })
+
+    expect(workspace.client.rename).toHaveBeenCalledWith('project-1', 'Documentation')
+    expect(workspace.client.readAgents).toHaveBeenCalledWith('project-1')
+    expect(workspace.client.writeAgents).toHaveBeenCalledWith('project-1', '# Updated')
+    expect(workspace.client.delete).toHaveBeenCalledWith('project-1')
   })
 })

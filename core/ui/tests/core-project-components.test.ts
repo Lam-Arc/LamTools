@@ -1,4 +1,6 @@
 import { mount } from '@vue/test-utils'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 import CoreAgentsEditor from '../src/components/CoreAgentsEditor.vue'
@@ -63,5 +65,42 @@ describe('SessionSidebar compatibility groups', () => {
     expect(wrapper.find('.project-action.add').exists()).toBe(false)
     expect(wrapper.find('.project-action.remove').exists()).toBe(false)
     expect(wrapper.find('.project-name').classes()).not.toContain('clickable')
+  })
+
+  it('provides keyboard project management and disables only busy project creation', async () => {
+    const wrapper = mount(SessionSidebar, {
+      props: {
+        allowProjectClick: true,
+        busyProjectIds: ['project-1'],
+        projectGroups: [{
+          id: 'project-1',
+          name: 'Docs',
+          workRoot: 'E:\\docs',
+          sessions: [{ id: 'session-1', title: 'Write guide' }],
+        }],
+      },
+    })
+
+    const entry = wrapper.get('[data-project-entry="project-1"]')
+    const create = wrapper.get('[data-project-new="project-1"]')
+    expect(entry.element.tagName).toBe('BUTTON')
+    expect(create.attributes('disabled')).toBeDefined()
+    await entry.trigger('keydown.enter')
+    await entry.trigger('keydown.space')
+    await create.trigger('click')
+
+    expect(wrapper.emitted('select-project')).toEqual([['project-1'], ['project-1']])
+    expect(wrapper.emitted('new-session')).toBeUndefined()
+  })
+})
+
+describe('Core project narrow layout contract', () => {
+  it('constrains the creation popover to the drawer width without moving it outside the drawer', () => {
+    const createSource = readFileSync(resolve(process.cwd(), 'src/components/CoreProjectCreate.vue'), 'utf8')
+    const demoSource = readFileSync(resolve(process.cwd(), 'src/demo/App.vue'), 'utf8')
+
+    expect(createSource).toMatch(/\.core-project-create\s*\{[\s\S]*?width:\s*100%;[\s\S]*?min-width:\s*0;/)
+    expect(demoSource).toMatch(/\.core-project-create-popover\s*\{[\s\S]*?right:\s*0;[\s\S]*?width:\s*min\(340px,\s*calc\(var\(--left-card-width\)\s*-\s*28px\),\s*calc\(100vw\s*-\s*48px\)\);/)
+    expect(demoSource).not.toContain('.core-project-create-popover {\n    right: auto;')
   })
 })
