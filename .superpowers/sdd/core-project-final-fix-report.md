@@ -56,3 +56,28 @@ Full verification was rerun after the final changes:
 ## Commit scope
 
 Core project service, HTTP/App Server contract, shared project UI client/actions, Writer adapter/routes/workbench state, and focused regression coverage. Existing unrelated workspace artifacts and `core/ui/src/types.ts` remain outside the commit.
+
+## Shared Agent frontend foundation follow-up
+
+The eight reported frontend gaps were re-audited before implementation. Composer send/stop/queue, skill input, thinking controls, attachment staging, approval control, and App Server projection were already Core-owned and reused by Writer, so they were not duplicated.
+
+The remaining duplicated foundations were moved into Core:
+
+- Project, session, and AGENTS.md state and actions.
+- Provider and model collection state and CRUD orchestration.
+- UI density, content width, theme, and persistence.
+- The complete shared settings surface, including provider presets, advanced adapter JSON, environment import, and command permission policies.
+
+Writer now keeps adapters and product-specific routing/capability behavior only. Its settings view delegates to `CoreSettings`; the former project/session stores were replaced by one thin workspace adapter.
+
+Follow-up verification:
+
+- Browser: Writer workbench rendered project/session groups, composer, model selector, thinking mode, Shallow, send action, settings entry, and runtime panel.
+- Core backend: 787 passed.
+- Writer backend: 758 passed.
+- Core UI contract: 163 passed.
+- Writer UI contract: 59 passed.
+- `scripts/build.ps1 all`: passed.
+- `git diff --check`: passed.
+
+Git/checkpoint/review/agent-branch capabilities remain outside this follow-up pending product-boundary decisions.

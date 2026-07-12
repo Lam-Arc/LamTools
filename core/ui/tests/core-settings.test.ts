@@ -61,6 +61,7 @@ describe('CoreSettings', () => {
         api_type: 'anthropic',
         base_url: 'https://api.anthropic.com/v1',
         api_key: 'new-secret',
+        extra: {},
       },
     ]])
 
@@ -75,6 +76,7 @@ describe('CoreSettings', () => {
         name: 'Renamed provider',
         api_type: 'openai',
         base_url: 'https://api.openai.com/v1',
+        extra: {},
       },
     ]])
   })
@@ -117,14 +119,17 @@ describe('CoreSettings', () => {
     expect(wrapper.emitted('update:density')).toEqual([['loose']])
   })
 
-  it('renders the Core permission policy without writable controls', async () => {
+  it('owns writable command permission policy controls', async () => {
     const wrapper = mountSettings()
 
     await wrapper.get('[data-settings-section="permissions"]').trigger('click')
 
     expect(wrapper.text()).toContain('权限策略')
-    expect(wrapper.text()).toContain('由运行时请求')
+    expect(wrapper.text()).toContain('常规命令')
     expect(wrapper.findAll('input, select, textarea').length).toBe(0)
+    const askButtons = wrapper.findAll('button').filter(button => button.text() === '需要审批')
+    await askButtons[0].trigger('click')
+    expect(wrapper.emitted('update-command-policy')).toEqual([['regular', 'ask_user']])
   })
 })
 

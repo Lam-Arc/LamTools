@@ -53,6 +53,26 @@ export {
 } from './useCoreQueuedInputController'
 
 export {
+  useCoreProjectSessionState,
+  type CoreOwnedProject,
+  type CoreOwnedSession,
+  type CoreProjectSessionAdapter,
+} from './useCoreProjectSessionState'
+
+export {
+  useCoreConfigState,
+  type CoreConfigAdapter,
+  type CoreConfigEntity,
+} from './useCoreConfigState'
+
+export {
+  useCoreUiPreferences,
+  type CoreUiDensity,
+  type CoreUiPreferencesAdapter,
+  type CoreUiPreferencesValue,
+} from './useCoreUiPreferences'
+
+export {
   CORE_SCROLL_BOTTOM_THRESHOLD_PX,
   coreIsScrollNearBottom,
   useCoreAutoFollowScroll,

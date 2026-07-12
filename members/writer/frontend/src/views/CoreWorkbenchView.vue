@@ -40,8 +40,7 @@ import {
   type CoreWorkbenchApi,
   type CoreSessionListItem,
 } from '@lamtools/ui'
-import { useProjectStore } from '@/stores/project'
-import { useSessionStore } from '@/stores/session'
+import { useWorkspaceStore } from '@/stores/workspace'
 import { useConfigStore } from '@/stores/config'
 import { useWriterAppServerStore } from '@/appServer/store'
 import { selectLatestTurnStatus } from '@/appServer/selectors'
@@ -64,8 +63,9 @@ import type { Project, Session, Model, SessionChanges, SessionCheckpoint, Commit
 
 const router = useRouter()
 const requestedSessionIdFromUrl = new URLSearchParams(window.location.search).get('session')
-const projectStore = useProjectStore()
-const sessionStore = useSessionStore()
+const workspaceStore = useWorkspaceStore()
+const projectStore = workspaceStore
+const sessionStore = workspaceStore
 const configStore = useConfigStore()
 const appServerStore = useWriterAppServerStore()
 const runtimeStatusText = ref('')
@@ -560,7 +560,6 @@ async function handleDeleteSession(sessionId: string) {
     sessions.value = removeSessionsByIds(sessions.value, deleted)
     if (activeSessionId.value === sessionId) {
       appServerStore.disconnect()
-      sessionStore.clearMessages()
       const nextSession = sessions.value[0]
       if (nextSession) {
         await selectSession(nextSession.id)
@@ -766,7 +765,6 @@ async function handleDeleteProject(projectGroupId: string) {
     sessionStore.removeSessions(deletedSessionIds)
     if (activeSessionId.value && deletedSessionIds.has(activeSessionId.value)) {
       appServerStore.disconnect()
-      sessionStore.clearMessages()
       const nextSession = sessions.value[0]
       if (nextSession) {
         await selectSession(nextSession.id)
@@ -795,7 +793,7 @@ async function handleProjectContextMenu(projectGroupId: string) {
   agentsLoading.value = true
   showAgentsMd.value = true
   try {
-    const agents = await projectStore.fetchAgentsMd(targetProjectId)
+    const agents = await projectStore.fetchAgents(targetProjectId)
     if (shouldApplyWriterProjectAgents(targetProjectId, requestToken, agentsMdProjectId.value, agentsRequestToken.value)) {
       agentsContent.value = agents.content
       agentsReadyToken.value = requestToken
@@ -1595,7 +1593,6 @@ watch(activeSessionId, (newId) => {
   if (newId) {
     appServerStore.disconnect()
     // Reset session store messages
-    sessionStore.clearMessages()
     // Reset step store
     void appServerStore.connect(api.API_BASE, newId)
       .then(() => liveComposerController.loadCommandCatalog(newId))
@@ -1683,7 +1680,7 @@ async function saveAgentsMdForProject(
   agentsLoading.value = true
   agentsError.value = ''
   try {
-    const saved = await projectStore.saveAgentsMd(projectId, content)
+    const saved = await projectStore.saveAgents(projectId, content)
     if (shouldApplyWriterProjectAgents(projectId, requestToken, agentsMdProjectId.value, agentsRequestToken.value)) {
       agentsContent.value = saved.content
       showAgentsMd.value = false

@@ -12,12 +12,20 @@
           <p>共享 Core 配置。更改会在所有接入 Core 的界面中生效。</p>
         </header>
 
+        <div v-if="noticeText" class="settings-notice">{{ noticeText }}</div>
+
         <article v-if="providerEditor" class="setting-card">
           <div class="subhead">
             <h3>{{ providerEditor.mode === 'create' ? '新增供应商' : '编辑供应商' }}</h3>
             <button type="button" class="small-btn" @click="providerEditor = null">取消</button>
           </div>
           <form :data-provider-form="providerEditor.mode" class="config-form" @submit.prevent="submitProvider">
+            <label v-if="providerEditor.mode === 'create'" class="field">官方模板
+              <select v-model="providerEditor.preset_id" @change="applyProviderPreset">
+                <option value="">自定义</option>
+                <option v-for="preset in providerPresets" :key="preset.id" :value="preset.id">{{ preset.label }}</option>
+              </select>
+            </label>
             <label class="field">名称
               <input v-model.trim="providerEditor.name" data-provider-name required />
             </label>
@@ -39,6 +47,9 @@
                 :required="providerEditor.mode === 'create'"
                 :placeholder="providerEditor.mode === 'update' ? '留空以保留现有密钥' : ''"
               />
+            </label>
+            <label class="field field-wide">高级适配 JSON
+              <textarea v-model="providerEditor.extra_json" rows="5" spellcheck="false" placeholder="{}"></textarea>
             </label>
             <button class="small-btn" type="submit">{{ providerEditor.mode === 'create' ? '添加供应商' : '保存供应商' }}</button>
           </form>
@@ -76,11 +87,15 @@
             <label class="field checkbox-field">
               <input v-model="modelEditor.thinking_supported" type="checkbox" /> 支持推理
             </label>
+            <label class="field field-wide">高级适配 JSON
+              <textarea v-model="modelEditor.extra_json" rows="5" spellcheck="false" placeholder="{}"></textarea>
+            </label>
             <button class="small-btn" type="submit">{{ modelEditor.mode === 'create' ? '添加模型' : '保存模型' }}</button>
           </form>
         </article>
 
         <div class="provider-actions">
+          <button v-if="allowEnvironmentImport" class="small-btn" type="button" @click="$emit('import-environment')">从当前环境导入</button>
           <button class="small-btn" type="button" data-provider-create @click="startProviderCreate">新增供应商</button>
           <button class="small-btn" type="button" data-model-create @click="startModelCreate">新增模型</button>
         </div>
@@ -151,6 +166,16 @@
               @click="$emit('update:density', option.value)"
             >{{ option.label }}</button>
           </div>
+          <label v-if="contentWidth" class="field">内容宽度
+            <input
+              :value="contentWidth"
+              type="range"
+              min="560"
+              max="1120"
+              step="20"
+              @input="$emit('update:content-width', Number(($event.target as HTMLInputElement).value))"
+            />
+          </label>
         </div>
 
         <ThemeEditor
@@ -181,11 +206,19 @@
       <section v-else class="settings-panel">
         <header class="settings-title">
           <h1>权限策略</h1>
-          <p>Core 在每次需要授权的操作前由运行时请求，不在此页面保存策略。</p>
+          <p>Core 统一管理常规命令与高危命令的授权策略。</p>
         </header>
         <article class="setting-card">
-          <h3>运行时授权</h3>
-          <p>文件修改、命令执行和外部访问由运行时按请求处理。此页只说明通用策略，不提供绕过授权的写入控制。</p>
+          <h3>命令执行策略</h3>
+          <div class="permission-list">
+            <div v-for="group in permissionGroups" :key="group.id" class="permission-row">
+              <div><strong>{{ group.label }}</strong><p>{{ group.description }}</p></div>
+              <div class="density-options" role="group" :aria-label="group.label">
+                <button type="button" :class="{ active: commandPolicies[group.id] === 'auto_allow' }" @click="$emit('update-command-policy', group.id, 'auto_allow')">自动放行</button>
+                <button type="button" :class="{ active: commandPolicies[group.id] === 'ask_user' }" @click="$emit('update-command-policy', group.id, 'ask_user')">需要审批</button>
+              </div>
+            </div>
+          </div>
         </article>
       </section>
     </template>
@@ -194,6 +227,7 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { PROVIDER_PRESETS } from '../data/provider-presets'
 import { THEME_PRESETS } from '../data/theme-presets'
 import {
   gradientFromStops,
@@ -217,6 +251,7 @@ export interface CoreSettingsModel {
   thinking_supported?: boolean
   thinking_budget?: number
   temperature?: number
+  extra?: Record<string, unknown> | null
 }
 
 export interface CoreSettingsProvider {
@@ -225,14 +260,17 @@ export interface CoreSettingsProvider {
   api_type?: string
   base_url?: string
   has_api_key?: boolean
+  extra?: Record<string, unknown> | null
 }
 
 export interface CoreSettingsProviderPayload {
   provider_id?: string
+  preset_id?: string
   name: string
   api_type: string
   base_url: string
   api_key?: string
+  extra?: Record<string, unknown>
 }
 
 export interface CoreSettingsModelPayload {
@@ -245,6 +283,7 @@ export interface CoreSettingsModelPayload {
   thinking_supported: boolean
   thinking_budget: number
   temperature: number
+  extra?: Record<string, unknown>
 }
 
 const props = defineProps<{
@@ -252,11 +291,17 @@ const props = defineProps<{
   providers: CoreSettingsProvider[]
   density: CoreSettingsDensity
   theme: ThemeData
+  contentWidth?: number
+  allowEnvironmentImport?: boolean
+  commandPolicies?: Record<'regular' | 'dangerous', 'auto_allow' | 'ask_user'>
 }>()
 
 const emit = defineEmits<{
   close: []
   'update:density': [density: CoreSettingsDensity]
+  'update:content-width': [width: number]
+  'import-environment': []
+  'update-command-policy': [group: 'regular' | 'dangerous', policy: 'auto_allow' | 'ask_user']
   'reset-theme': []
   'apply-preset': [preset: ThemePreset]
   'update-stops': [area: ThemeArea, stops: ThemeStop[]]
@@ -290,12 +335,20 @@ type ProviderEditor = Required<Omit<CoreSettingsProviderPayload, 'provider_id'>>
   mode: 'create' | 'update'
   provider_id?: string
   api_key: string
+  extra_json: string
 }
 
-type ModelEditor = CoreSettingsModelPayload & { mode: 'create' | 'update' }
+type ModelEditor = CoreSettingsModelPayload & { mode: 'create' | 'update'; extra_json: string }
 
 const providerEditor = ref<ProviderEditor | null>(null)
 const modelEditor = ref<ModelEditor | null>(null)
+const noticeText = ref('')
+const commandPolicies = computed(() => props.commandPolicies || { regular: 'auto_allow', dangerous: 'ask_user' })
+const permissionGroups = [
+  { id: 'regular' as const, label: '常规命令', description: '读取、搜索、测试、构建和状态查看。' },
+  { id: 'dangerous' as const, label: '高危命令', description: '删除、移动、重命名、重置和权限变更。' },
+]
+const providerPresets = PROVIDER_PRESETS
 
 const settingsThemeStyle = computed(() => ({
   '--settings-backdrop-background': gradientFromStops(
@@ -342,37 +395,59 @@ function modelsForProvider(providerId: string): CoreSettingsModel[] {
 function startProviderCreate() {
   providerEditor.value = {
     mode: 'create',
+    preset_id: '',
     name: '',
     api_type: 'openai',
     base_url: '',
     api_key: '',
+    extra: {},
+    extra_json: '{}',
   }
 }
 
 function startProviderUpdate(provider: CoreSettingsProvider) {
   providerEditor.value = {
     mode: 'update',
+    preset_id: '',
     provider_id: provider.id,
     name: provider.name || '',
     api_type: provider.api_type || 'openai',
     base_url: provider.base_url || '',
     api_key: '',
+    extra: provider.extra || {},
+    extra_json: JSON.stringify(provider.extra || {}, null, 2),
   }
 }
 
 function submitProvider() {
   const editor = providerEditor.value
   if (!editor) return
+  const extra = parseExtraJson(editor.extra_json)
+  if (!extra) return
   const payload: CoreSettingsProviderPayload = {
     ...(editor.provider_id ? { provider_id: editor.provider_id } : {}),
+    ...(editor.preset_id ? { preset_id: editor.preset_id } : {}),
     name: editor.name,
     api_type: editor.api_type,
     base_url: editor.base_url,
     ...(editor.api_key.trim() ? { api_key: editor.api_key.trim() } : {}),
+    extra,
   }
   if (editor.mode === 'create') emit('create-provider', payload)
   else emit('update-provider', payload)
   providerEditor.value = null
+}
+
+function applyProviderPreset() {
+  const editor = providerEditor.value
+  if (!editor) return
+  const preset = providerPresets.find(candidate => candidate.id === editor.preset_id)
+  if (!preset) return
+  editor.name = preset.name
+  editor.api_type = preset.apiType
+  editor.base_url = preset.baseUrl
+  editor.extra = { ...(preset.extra || {}), adapter_profile_id: preset.adapterProfile }
+  editor.extra_json = JSON.stringify(editor.extra, null, 2)
 }
 
 function startModelCreate() {
@@ -386,6 +461,8 @@ function startModelCreate() {
     thinking_supported: false,
     thinking_budget: 10000,
     temperature: 0.7,
+    extra: {},
+    extra_json: '{}',
   }
 }
 
@@ -401,16 +478,33 @@ function startModelUpdate(model: CoreSettingsModel) {
     thinking_supported: model.thinking_supported === true,
     thinking_budget: model.thinking_budget || 10000,
     temperature: model.temperature ?? 0.7,
+    extra: model.extra || {},
+    extra_json: JSON.stringify(model.extra || {}, null, 2),
   }
 }
 
 function submitModel() {
   const editor = modelEditor.value
   if (!editor) return
-  const { mode: _mode, ...payload } = editor
+  const extra = parseExtraJson(editor.extra_json)
+  if (!extra) return
+  const { mode: _mode, extra_json: _extraJson, ...rest } = editor
+  const payload = { ...rest, extra }
   if (editor.mode === 'create') emit('create-model', payload)
   else emit('update-model', payload)
   modelEditor.value = null
+}
+
+function parseExtraJson(value: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(value || '{}')
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error()
+    noticeText.value = ''
+    return parsed as Record<string, unknown>
+  } catch {
+    noticeText.value = '高级适配 JSON 必须是对象'
+    return null
+  }
 }
 
 function getStops(area: ThemeArea): ThemeStop[] {
@@ -472,7 +566,8 @@ const presets = THEME_PRESETS
 }
 
 .config-form input,
-.config-form select {
+.config-form select,
+.config-form textarea {
   min-width: 0;
   min-height: 36px;
   border: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 18%, transparent);
@@ -480,6 +575,39 @@ const presets = THEME_PRESETS
   background: color-mix(in srgb, var(--settings-main-text, #fff) 6%, transparent);
   color: inherit;
   padding: 0 9px;
+}
+
+.config-form textarea {
+  min-height: 104px;
+  padding: 9px;
+  resize: vertical;
+}
+
+.config-form .field-wide {
+  grid-column: 1 / -1;
+}
+
+.permission-list {
+  display: grid;
+  gap: 12px;
+}
+
+.permission-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.permission-row p {
+  margin: 4px 0 0;
+}
+
+@media (max-width: 720px) {
+  .permission-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
 }
 
 .config-form .checkbox-field {
