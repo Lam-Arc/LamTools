@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.writer.core_kernel_adapter import schedule_writer_startup_prewarm
 from app.models.project import WriterProject
 from app.models.session import WriterSession
-from app.routers.path_utils import ensure_work_root
+from app.routers.path_utils import ensure_work_root, normalize_work_root
 from app.services.session_deletion import delete_writer_session_records
 from app.services.session_projection import session_response_projected
 
@@ -33,8 +33,10 @@ async def create_writer_session(
         project = await db.get(WriterProject, effective_project_id)
         if project is None:
             raise HTTPException(status_code=400, detail="Project not found")
-        if not normalized_root:
-            normalized_root = ensure_work_root(project.work_root)
+        project_root = ensure_work_root(project.work_root)
+        if normalized_root and normalized_root != project_root:
+            raise ValueError("Project work_root is immutable")
+        normalized_root = project_root
     elif normalized_root:
         from app.services.project_management import ensure_writer_project
 
@@ -60,13 +62,16 @@ async def resolve_writer_session_work_root(
     work_root: str,
     project_id: str | None,
 ) -> str:
-    normalized_root = ensure_work_root(work_root)
-    if project_id and not normalized_root:
+    requested_root = normalize_work_root(work_root)
+    if project_id:
         project = await db.get(WriterProject, project_id)
         if project is None:
             raise HTTPException(status_code=400, detail="Project not found")
-        normalized_root = ensure_work_root(project.work_root)
-    return normalized_root
+        project_root = ensure_work_root(project.work_root)
+        if requested_root and requested_root != project_root:
+            raise ValueError("Project work_root is immutable")
+        return project_root
+    return ensure_work_root(requested_root)
 
 
 async def get_writer_session_response(
@@ -97,13 +102,17 @@ async def update_writer_session(
     if "mode" in normalized_update:
         normalized_update["mode"] = normalize_session_mode(normalized_update["mode"])
     if "work_root" in normalized_update:
-        normalized_update["work_root"] = ensure_work_root(normalized_update["work_root"])
-    if "project_id" in normalized_update and normalized_update["project_id"]:
-        project = await db.get(WriterProject, normalized_update["project_id"])
-        if project is None:
-            raise ValueError("Project not found")
-        if "work_root" not in normalized_update or not normalized_update.get("work_root"):
-            normalized_update["work_root"] = ensure_work_root(project.work_root)
+        normalized_update["work_root"] = await resolve_writer_session_work_root(
+            db,
+            work_root=str(normalized_update["work_root"] or ""),
+            project_id=session.project_id,
+        )
+        if not session.project_id and normalized_update["work_root"]:
+            from app.services.project_management import ensure_writer_project
+
+            project = await ensure_writer_project(db, work_root=normalized_update["work_root"])
+            await db.flush()
+            session.project_id = project.id
     for key, value in normalized_update.items():
         setattr(session, key, value)
 

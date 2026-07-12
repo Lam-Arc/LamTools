@@ -4,6 +4,8 @@ from typing import Any, Callable
 
 from app.models.session import WriterSession
 from app.services.composer_input_service import prepare_composer_input
+from app.services.project_management import ensure_writer_project
+from app.services.session_management import resolve_writer_session_work_root
 from app.services.session_projection import session_response_projected
 from app.services.transcript_service import create_user_message_turn
 from lamtools_core.app.live_member import (
@@ -27,10 +29,15 @@ class WriterLiveMemberAdapter:
     async def materialize_thread(self, *, db, thread_id, params):
         session = await db.get(WriterSession, thread_id)
         if session is None:
+            requested_root = str(params.get("work_root") or params.get("workRoot") or "")
+            project = await ensure_writer_project(db, work_root=requested_root) if requested_root.strip() else None
+            if project is not None:
+                await db.flush()
             session = WriterSession(
                 id=thread_id,
                 title=str(params.get("title") or "Untitled"),
-                work_root=str(params.get("work_root") or params.get("workRoot") or ""),
+                work_root=project.work_root if project is not None else "",
+                project_id=project.id if project is not None else None,
                 status="active",
                 phase="idle",
             )
@@ -43,7 +50,13 @@ class WriterLiveMemberAdapter:
             session = await db.get(WriterSession, thread_id)
         if session is None:
             raise ValueError("Thread/session not found")
-        work_root = params.get("work_root") or params.get("workRoot") or session.work_root
+        requested_root = str(params.get("work_root") or params.get("workRoot") or session.work_root or "")
+        async with self._session_factory() as db:
+            work_root = await resolve_writer_session_work_root(
+                db,
+                work_root=requested_root,
+                project_id=session.project_id,
+            )
         prepared = prepare_composer_input(work_root=work_root, input_items=input_items)
         return PreparedLiveInput(
             visible_input=prepared.visible_items,

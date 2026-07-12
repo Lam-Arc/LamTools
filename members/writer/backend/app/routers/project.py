@@ -11,7 +11,7 @@ from lamtools_core.app.project_store import ActiveProjectSessionsError
 from app.database import execute_writer_write, get_db, get_writer_write
 from app.models.project import WriterProject
 from app.services.project_management import (
-    create_writer_project_response,
+    create_writer_project_with_initial_session_response,
     create_writer_project_session,
     delete_writer_project,
     get_writer_project_response,
@@ -83,9 +83,9 @@ async def create_project(
     db: AsyncSession = Depends(get_db),
     write_transaction=Depends(get_writer_write),
 ):
-    project = await execute_writer_write(
+    project, _session = await execute_writer_write(
         db,
-        lambda write_db: create_writer_project_response(
+        lambda write_db: create_writer_project_with_initial_session_response(
             write_db,
             work_root=body.work_root,
             name=body.name,

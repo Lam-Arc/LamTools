@@ -60,13 +60,13 @@ class WriterRuntimeLifecycle:
         if session is None:
             raise RuntimeError("Thread/session not found")
         if isinstance(work_root, str) and work_root:
-            from app.routers.path_utils import normalize_work_root
+            from app.services.session_management import update_writer_session
 
             async def update_work_root(db):
-                persisted_session = await db.get(WriterSession, thread_id)
-                if persisted_session is None:
-                    raise RuntimeError("Thread/session not found")
-                persisted_session.work_root = normalize_work_root(work_root)
+                try:
+                    await update_writer_session(db, thread_id, {"work_root": work_root})
+                except LookupError as exc:
+                    raise RuntimeError("Thread/session not found") from exc
 
             await self._write_coordinator.run(update_work_root)
         await service["run_turn"](

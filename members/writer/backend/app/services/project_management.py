@@ -41,8 +41,11 @@ async def ensure_writer_project(
     existing_projects = existing.scalars().all()
     if existing_projects:
         if len(existing_projects) == 1:
-            return existing_projects[0]
-        return await merge_duplicate_projects(db, normalized_root, existing_projects)
+            project = existing_projects[0]
+        else:
+            project = await merge_duplicate_projects(db, normalized_root, existing_projects)
+        _migrate_legacy_agents_md(project)
+        return project
 
     project = WriterProject(
         name=str(name or '').strip() or project_name_from_work_root(normalized_root),
@@ -91,17 +94,27 @@ async def migrate_writer_project_duplicates(db: AsyncSession) -> None:
 
     for work_root, projects in by_root.items():
         if len(projects) <= 1:
-            continue
-        await merge_duplicate_projects(db, work_root, projects)
+            project = projects[0]
+        else:
+            project = await merge_duplicate_projects(db, work_root, projects)
+        _migrate_legacy_agents_md(project)
     await db.flush()
 
 
 def project_response(project: WriterProject) -> dict[str, Any]:
+    agents_md = project.agents_md
+    if project.work_root:
+        try:
+            disk_agents = read_workspace_agents_md(project.work_root)
+            if disk_agents["exists"]:
+                agents_md = str(disk_agents["content"])
+        except (OSError, ValueError):
+            pass
     return {
         "id": project.id,
         "name": project.name,
         "work_root": project.work_root,
-        "agents_md": project.agents_md,
+        "agents_md": agents_md,
         "config": project.config,
         "created_at": project.created_at,
         "updated_at": project.updated_at,
@@ -118,6 +131,28 @@ async def create_writer_project_response(
     await db.flush()
     await db.refresh(project)
     return project_response(project)
+
+
+async def create_writer_project_with_initial_session_response(
+    db: AsyncSession,
+    *,
+    work_root: str,
+    name: str | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    project = await ensure_writer_project(db, work_root=work_root, name=name)
+    await db.flush()
+    await db.refresh(project)
+    existing_session = await db.scalar(
+        select(WriterSession)
+        .where(WriterSession.project_id == project.id)
+        .order_by(WriterSession.created_at.asc(), WriterSession.id.asc())
+    )
+    session = (
+        project_session_summary(existing_session)
+        if existing_session is not None
+        else await create_writer_project_session(db, project.id, title=project.name)
+    )
+    return project_response(project), session
 
 
 async def list_writer_project_responses(
@@ -162,11 +197,12 @@ async def update_writer_project(
     if "work_root" in normalized_update:
         raw_root = str(normalized_update["work_root"]).strip()
         try:
-            normalized_update["work_root"] = str(ensure_workspace_root(raw_root)) if raw_root else ""
+            requested_root = str(normalize_workspace_root(raw_root)) if raw_root else ""
         except (OSError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if normalized_update["work_root"] and "name" not in normalized_update:
-            normalized_update["name"] = project_name_from_work_root(normalized_update["work_root"])
+        if requested_root != project.work_root:
+            raise ValueError("Project work_root relocation is not supported")
+        normalized_update.pop("work_root")
     for key, value in normalized_update.items():
         if hasattr(project, key):
             setattr(project, key, value)
@@ -218,6 +254,8 @@ async def read_project_agents_md(db: AsyncSession, project_id: str) -> dict[str,
         raise ValueError("Project has no work_root set")
 
     result = read_workspace_agents_md(project.work_root)
+    if not result["exists"] and project.agents_md:
+        return write_workspace_agents_md(project.work_root, project.agents_md)
     return result
 
 
@@ -267,8 +305,21 @@ async def list_project_session_summaries(
     return [project_session_summary(session) for session in result.scalars().all()]
 
 
+def _migrate_legacy_agents_md(project: WriterProject) -> None:
+    if not project.work_root or not project.agents_md:
+        return
+    try:
+        disk_agents = read_workspace_agents_md(project.work_root)
+        if not disk_agents["exists"]:
+            write_workspace_agents_md(project.work_root, project.agents_md)
+    except (OSError, ValueError):
+        # Legacy cache remains a read fallback when the workspace is unavailable.
+        return
+
+
 __all__ = [
     "create_writer_project_response",
+    "create_writer_project_with_initial_session_response",
     "create_writer_project_session",
     "migrate_writer_project_duplicates",
     "delete_writer_project",

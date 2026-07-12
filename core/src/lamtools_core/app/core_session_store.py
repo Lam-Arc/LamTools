@@ -62,6 +62,8 @@ class CoreDbSessionStore:
             row = await connection.get(CoreThreadSnapshot, session.id)
             if row is None:
                 raise KeyError(session.id)
+            existing = session_record_from_snapshot(row)
+            session.metadata = _canonicalize_project_metadata(existing.metadata, session.metadata)
             state = dict(row.snapshot_json or {})
             state.update(_session_state(session, messages=state.get("messages")))
             row.snapshot_json = state
@@ -162,6 +164,8 @@ def _session_state(session: SessionRecord, *, messages=None) -> dict:
 def _canonicalize_project_metadata(existing: dict, requested: dict) -> dict:
     project_id = existing.get("project_id")
     if not isinstance(project_id, str) or not project_id:
+        if "project_id" in requested or "work_root" in requested:
+            raise ValueError("Use the project session endpoint for project-owned sessions")
         return dict(requested)
     metadata = dict(requested)
     metadata["project_id"] = project_id

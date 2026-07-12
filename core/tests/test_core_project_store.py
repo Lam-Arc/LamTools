@@ -15,6 +15,7 @@ from lamtools_core.app.project_store import (
     read_workspace_agents_md,
     write_workspace_agents_md,
 )
+from lamtools_core.session import SessionRecord
 
 
 def test_workspace_helpers_normalize_create_and_round_trip_utf8_agents(tmp_path: Path) -> None:
@@ -203,5 +204,56 @@ async def test_public_delete_rejects_active_linked_sessions(tmp_path: Path, stat
         with pytest.raises(ActiveProjectSessionsError, match="active session"):
             await db.project_store.delete(project.id)
         assert await db.project_store.get(project.id) is not None
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_session_store_enforces_project_metadata_without_http_guards(tmp_path: Path) -> None:
+    db = await open_core_app_db(tmp_path / "core.db")
+    store = CoreDbSessionStore(lambda: db)
+    try:
+        unassigned = SessionRecord(
+            id="unassigned",
+            member_id="core",
+            title="Unassigned",
+            status="idle",
+            metadata={"source": "test"},
+        )
+        await store.create(unassigned)
+        with pytest.raises(ValueError, match="project session endpoint"):
+            await store.patch("unassigned", metadata={"project_id": "forged", "work_root": "E:\\forged"})
+
+        project, _ = await db.project_store.create(tmp_path / "workspace")
+        [owned] = await db.project_store.list_sessions(project.id)
+        owned.metadata = {"source": "updated"}
+        await store.update(owned)
+
+        persisted = await store.get(owned.id)
+        assert persisted is not None
+        assert persisted.metadata == {
+            "source": "updated",
+            "project_id": project.id,
+            "work_root": project.work_root,
+        }
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_duplicate_project_create_returns_original_session(tmp_path: Path) -> None:
+    db = await open_core_app_db(tmp_path / "core.db")
+    try:
+        project, original, created = await db.project_store.create_with_initial_session(tmp_path / "workspace")
+        assert created is True
+        await db.project_store.create_session(project.id, title="Later")
+
+        same_project, same_session, created = await db.project_store.create_with_initial_session(
+            tmp_path / "workspace"
+        )
+
+        assert created is False
+        assert same_project.id == project.id
+        assert same_session.id == original.id
     finally:
         await db.close()

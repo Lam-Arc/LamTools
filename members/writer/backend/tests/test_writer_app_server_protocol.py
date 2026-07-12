@@ -1883,8 +1883,14 @@ async def test_session_get_update_delete_operations_round_trip(tmp_path):
         )
         assert updated.response["result"]["session"]["title"] == "Renamed"
         assert updated.response["result"]["session"]["mode"] == "PLAN"
+        assert updated.response["result"]["session"]["project_id"]
         assert updated_root.is_dir()
         assert not (updated_root / ".git").exists()
+
+        async with session_factory() as db:
+            project = await db.get(WriterProject, updated.response["result"]["session"]["project_id"])
+            assert project is not None
+            assert project.work_root == str(updated_root.resolve())
 
         deleted = await handle_session_delete_operation(
             request_id=3,
@@ -2505,6 +2511,44 @@ async def test_settings_operations_round_trip_app_setting(tmp_path):
     finally:
         await engine.dispose()
         await shared_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_project_owned_session_update_rejects_work_root_drift(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'session-project-root.db'}", future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    project_root = tmp_path / "project"
+    other_root = tmp_path / "other"
+    try:
+        async with session_factory() as db:
+            project = WriterProject(id="project-owned", name="Owned", work_root=str(project_root.resolve()))
+            db.add(project)
+            db.add(WriterSession(
+                id="session-owned",
+                title="Owned",
+                work_root=str(project_root.resolve()),
+                project_id=project.id,
+            ))
+            await db.commit()
+
+        updated = await handle_session_update_operation(
+            request_id=1,
+            params={"session_id": "session-owned", "work_root": str(other_root)},
+            session_factory=session_factory,
+        )
+        assert updated.response["error"]["message"] == "Project work_root is immutable"
+        assert not other_root.exists()
+
+        async with session_factory() as db:
+            session = await db.get(WriterSession, "session-owned")
+            assert session is not None
+            assert session.work_root == str(project_root.resolve())
+            assert session.project_id == "project-owned"
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.asyncio

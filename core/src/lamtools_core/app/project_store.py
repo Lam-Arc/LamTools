@@ -270,7 +270,8 @@ async def _project_sessions(db: Any, project_id: str) -> list[SessionRecord]:
         await db.execute(select(CoreThreadSnapshot).order_by(CoreThreadSnapshot.updated_at.desc()))
     ).scalars().all()
     sessions = [session_record_from_snapshot(row) for row in rows]
-    return [session for session in sessions if session.metadata.get("project_id") == project_id]
+    owned = [session for session in sessions if session.metadata.get("project_id") == project_id]
+    return sorted(owned, key=lambda session: (session.created_at, session.id))
 
 
 __all__ = [

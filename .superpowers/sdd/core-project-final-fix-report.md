@@ -2,7 +2,7 @@
 
 Baseline: `0d5ecd5`
 
-Status: DONE (second final-fix wave)
+Status: DONE (main-agent audit wave)
 
 ## Completed fixes
 
@@ -19,6 +19,17 @@ Status: DONE (second final-fix wave)
 - AGENTS.md reads now return disk-backed project-local data without mutating the database cache. The workbench uses target ID plus request token to discard stale reads, and each editor save handler captures its opening project ID.
 - Core rejects blank project names and blank work roots. HTTP returns 4xx, App Server returns a validation error, and CLI exits nonzero.
 
+## Main-agent audit fixes
+
+- Core persistence itself now protects canonical project metadata, including callers that bypass HTTP and App Server guards.
+- Recreating a Core project returns its original initial session deterministically instead of whichever session was most recently updated.
+- Writer project paths are immutable at the REST, App Server, runtime, and service boundaries. A project-owned session cannot drift away from its canonical workspace.
+- Assigning a workspace to an unassigned Writer session creates or reuses the matching project and records the ownership relationship.
+- Direct Writer `thread.start` materialization with a workspace now creates the same project association as REST and project creation.
+- Writer REST session writes now use the shared write coordinator, avoiding transaction rollback or closed-session persistence gaps.
+- Writer REST and App Server project creation use one service and create exactly one stable initial session.
+- Legacy Writer `agents_md` values migrate once to the real workspace `AGENTS.md` when absent. Existing disk content wins, and inaccessible workspaces no longer break project loading.
+
 ## Verification
 
 Targeted final checks:
@@ -30,9 +41,9 @@ Targeted final checks:
 
 Full verification was rerun after the final changes:
 
-- Core backend: 785 passed.
+- Core backend: 787 passed.
 - Core UI contract: 161 passed.
-- Writer backend: 754 passed.
+- Writer backend: 758 passed.
 - Writer frontend: 60 passed.
 - `scripts/build.ps1 all`: passed.
 - `git diff --check`: passed.

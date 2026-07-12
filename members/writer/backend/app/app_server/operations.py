@@ -64,7 +64,7 @@ from app.services.config_write import (
     update_provider_config,
 )
 from app.services.project_management import (
-    create_writer_project_response,
+    create_writer_project_with_initial_session_response,
     create_writer_project_session,
     delete_writer_project,
     get_writer_project_response,
@@ -983,19 +983,11 @@ async def handle_project_create_operation(
     try:
         persistence = writer_persistence_host(session_factory)
         async def create_project(db):
-            project = await create_writer_project_response(
+            return await create_writer_project_with_initial_session_response(
                 db,
                 work_root=str(params.get("work_root") or params.get("workRoot") or ""),
                 name=params.get("name"),
             )
-            sessions = await list_project_session_summaries(db, project["id"], limit=1)
-            session = sessions[0] if sessions else await create_writer_session(
-                db,
-                title=project["name"],
-                work_root=project["work_root"],
-                project_id=project["id"],
-            )
-            return project, session
 
         project, session = await persistence.write(create_project)
     except HTTPException as exc:

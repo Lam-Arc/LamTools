@@ -204,14 +204,22 @@ class AgentBranchActionResponse(BaseModel):
 # --- Session CRUD ---
 
 @router.post("/sessions", response_model=SessionResponse)
-async def create_session(body: SessionCreate, db: AsyncSession = Depends(get_db)):
+async def create_session(
+    body: SessionCreate,
+    db: AsyncSession = Depends(get_db),
+    write_transaction=Depends(get_writer_write),
+):
     if body.project_id is not None:
         raise HTTPException(status_code=422, detail="Use the project session endpoint for project-owned sessions")
-    return await create_writer_session(
+    return await execute_writer_write(
         db,
-        title=body.title,
-        work_root=body.work_root,
-        mode=body.mode,
+        lambda write_db: create_writer_session(
+            write_db,
+            title=body.title,
+            work_root=body.work_root,
+            mode=body.mode,
+        ),
+        write_transaction,
     )
 
 
@@ -241,15 +249,22 @@ async def get_session(session_id: str, db: AsyncSession = Depends(get_db)):
 
 @router.patch("/sessions/{session_id}", response_model=SessionResponse)
 async def update_session(
-    session_id: str, body: SessionUpdate, db: AsyncSession = Depends(get_db)
+    session_id: str,
+    body: SessionUpdate,
+    db: AsyncSession = Depends(get_db),
+    write_transaction=Depends(get_writer_write),
 ):
     if body.project_id is not None:
         raise HTTPException(status_code=422, detail="Use the project session endpoint for project-owned sessions")
     try:
-        return await update_writer_session(
+        return await execute_writer_write(
             db,
-            session_id,
-            body.model_dump(exclude_unset=True),
+            lambda write_db: update_writer_session(
+                write_db,
+                session_id,
+                body.model_dump(exclude_unset=True),
+            ),
+            write_transaction,
         )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -258,9 +273,17 @@ async def update_session(
 
 
 @router.delete("/sessions/{session_id}", status_code=204)
-async def delete_session(session_id: str, db: AsyncSession = Depends(get_db)):
+async def delete_session(
+    session_id: str,
+    db: AsyncSession = Depends(get_db),
+    write_transaction=Depends(get_writer_write),
+):
     try:
-        await delete_writer_session(db, session_id)
+        await execute_writer_write(
+            db,
+            lambda write_db: delete_writer_session(write_db, session_id),
+            write_transaction,
+        )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail="Session not found") from exc
 
