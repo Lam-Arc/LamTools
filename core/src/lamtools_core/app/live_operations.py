@@ -1,0 +1,1344 @@
+from __future__ import annotations
+
+import asyncio
+import uuid
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from typing import Any
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from lamtools_core.event import RunItemEvent
+from lamtools_core.runtime import default_runtime_task_registry
+
+from .event_store import AppEventEnvelope, AppEventInput, CORE_RUN_ITEM_METHOD, SqlAlchemyAppEventStore
+from .live_approval import normalize_approval_request
+from .live_hub import CoreAppEventHub, hub as default_hub
+from .live_member import DefaultCoreLiveMemberHooks, PreparedLiveInput
+from .live_protocol import INVALID_REQUEST, rpc_error, rpc_result
+from .operation_catalog import OperationCatalog, OperationHandler, OperationRequest, OperationResult
+from .operation_groups import CORE_WORKBENCH_OPERATION_NAMES
+from .persistence_host import AppPersistenceHost
+from .queue_state import (
+    build_queue_guidance_plan,
+    build_queue_update_plan,
+    input_items_text,
+    next_dispatchable_queue_item,
+    queue_delete_payload,
+    queue_dispatch_payload,
+    queue_item_payload,
+)
+from .snapshot_store import SqlAlchemyThreadSnapshotStore
+from .turn_acceptance import (
+    TURN_ACCEPT_DEDUPE_METHODS,
+    CoreAppEventSpec,
+    build_cancelled_turn_event,
+    build_turn_acceptance_plan,
+)
+
+
+TERMINAL_TURN_STATUSES = {"completed", "failed", "cancelled", "skipped"}
+
+
+@dataclass
+class CoreLiveOperationHost:
+    """Owns reusable live-operation dependencies and catalog handlers."""
+
+    session_factory: Callable[[], Any]
+    persistence: AppPersistenceHost
+    hub: CoreAppEventHub = field(default_factory=lambda: default_hub)
+    runtime_task_registry: Any = field(default_factory=default_runtime_task_registry)
+    product_operation_executors: dict[str, Any] = field(default_factory=dict)
+    operation_executors: dict[str, Any] = field(default_factory=dict)
+    member_hooks: Any = field(default_factory=DefaultCoreLiveMemberHooks)
+    _handlers: dict[str, OperationHandler] = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        product_executors = {**self.operation_executors, **self.product_operation_executors}
+        forbidden = sorted(set(product_executors).intersection(CORE_WORKBENCH_OPERATION_NAMES))
+        if forbidden:
+            raise ValueError(f"base live operation executors cannot be overridden: {', '.join(forbidden)}")
+        self.product_operation_executors = product_executors
+        self.persistence.bind_session_factory(self.session_factory)
+        names = {*CORE_WORKBENCH_OPERATION_NAMES, *self.product_operation_executors}
+        self._handlers = {name: self._build_catalog_handler(name) for name in names}
+
+    @property
+    def event_store(self) -> SqlAlchemyAppEventStore:
+        return self.persistence.event_store
+
+    @property
+    def snapshot_store(self) -> SqlAlchemyThreadSnapshotStore:
+        return self.persistence.snapshot_store
+
+    def operation_handlers(self) -> dict[str, OperationHandler]:
+        return dict(self._handlers)
+
+    async def execute(
+        self,
+        name: str,
+        *,
+        request_id: int | str | None,
+        params: dict[str, Any],
+        context: "CoreLiveContext",
+    ) -> "CoreLiveOperationOutcome":
+        if name == "approval.respond":
+            try:
+                params = (await normalize_approval_request(params)).to_dict()
+            except ValueError as exc:
+                return CoreLiveOperationOutcome(
+                    response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc))
+                )
+        handler = _CORE_LIVE_OPERATION_EXECUTORS.get(name)
+        if handler is not None:
+            return await handler(request_id=request_id, params=params, context=context)
+        handler = self.product_operation_executors.get(name)
+        if handler is not None:
+            return await handler(request_id=request_id, params=params, context=context)
+        if not context.operations.has(name):
+            raise KeyError(f"Unsupported core live operation: {name}")
+        result = await context.operations.execute(name, params, metadata={"source": "core_live"})
+        payload = dict(result.payload or {})
+        if result.status != "ok":
+            return CoreLiveOperationOutcome(
+                response=rpc_error(
+                    request_id,
+                    code=INVALID_REQUEST,
+                    message=str(payload.get("error") or result.status),
+                    data=payload,
+                )
+            )
+        return CoreLiveOperationOutcome(response=rpc_result(request_id, payload))
+
+    def _build_catalog_handler(self, name: str) -> OperationHandler:
+        async def handle(request: OperationRequest) -> OperationResult:
+            connection = request.metadata.get("connection")
+            rpc_request = request.metadata.get("rpc_request")
+            params = dict(request.payload)
+            if not _thread_id_from_params(params) and connection is not None:
+                thread_id = getattr(connection, "thread_id", None)
+                if thread_id:
+                    params["thread_id"] = thread_id
+            if connection is not None:
+                thread_id = _thread_id_from_params(params)
+                switch_subscription = getattr(connection, "switch_thread_subscription", None)
+                if thread_id and callable(switch_subscription):
+                    switch_subscription(thread_id)
+            request_id = getattr(rpc_request, "id", None)
+            context = getattr(connection, "context", None)
+            if not isinstance(context, CoreLiveContext):
+                raise TypeError("core live connection context is required")
+            outcome = await self.execute(name, request_id=request_id, params=params, context=context)
+            await connection.send_operation_outcome(outcome, publish_events=False)
+            return OperationResult(name=request.name, metadata={"live_response_sent": True})
+
+        return handle
+
+
+@dataclass(frozen=True)
+class CoreLiveContext:
+    operations: OperationCatalog
+    session_factory: Callable[[], Any] | None = None
+    event_store: SqlAlchemyAppEventStore | None = None
+    snapshot_store: SqlAlchemyThreadSnapshotStore | None = None
+    hub: CoreAppEventHub = field(default_factory=lambda: default_hub)
+    persistence: AppPersistenceHost | None = None
+    runtime_task_registry: Any = field(default_factory=default_runtime_task_registry)
+    host: CoreLiveOperationHost | None = None
+
+    def __post_init__(self) -> None:
+        if self.host is not None:
+            object.__setattr__(self, "session_factory", self.host.session_factory)
+            object.__setattr__(self, "persistence", self.host.persistence)
+            object.__setattr__(self, "event_store", self.host.event_store)
+            object.__setattr__(self, "snapshot_store", self.host.snapshot_store)
+            object.__setattr__(self, "hub", self.host.hub)
+            object.__setattr__(self, "runtime_task_registry", self.host.runtime_task_registry)
+            return
+        persistence = self.persistence
+        if persistence is None:
+            if self.event_store is None or self.snapshot_store is None:
+                raise ValueError("event_store and snapshot_store are required when persistence is not provided")
+            persistence = AppPersistenceHost(self.event_store, self.snapshot_store)
+        if self.session_factory is None:
+            raise ValueError("session_factory is required when host is not provided")
+        object.__setattr__(self, "persistence", persistence)
+        object.__setattr__(self, "event_store", persistence.event_store)
+        object.__setattr__(self, "snapshot_store", persistence.snapshot_store)
+        object.__setattr__(
+            self,
+            "host",
+            CoreLiveOperationHost(
+                session_factory=self.session_factory,
+                persistence=persistence,
+                hub=self.hub,
+                runtime_task_registry=self.runtime_task_registry,
+            ),
+        )
+
+
+@dataclass
+class CoreLiveOperationOutcome:
+    response: dict[str, Any]
+    notify_events: list[AppEventEnvelope] = field(default_factory=list)
+    publish_events: list[AppEventEnvelope] = field(default_factory=list)
+    runtime_start: dict[str, Any] | None = None
+
+
+async def handle_thread_resume_operation(
+    *,
+    request_id: int | str | None,
+    params: dict[str, Any],
+    context: CoreLiveContext,
+) -> CoreLiveOperationOutcome:
+    thread_id = str(params.get("thread_id") or params.get("threadId") or "")
+    if not thread_id:
+        return CoreLiveOperationOutcome(
+            response=rpc_error(request_id, code=INVALID_REQUEST, message="thread_id is required")
+        )
+    after_seq = _int_param(params.get("last_seen_seq") or params.get("lastSeenSeq"), default=0)
+    page_limit = max(1, min(_int_param(params.get("limit"), default=500), 500))
+    async with context.session_factory() as db:
+        events = await context.persistence.list_after(db, thread_id=thread_id, after_seq=after_seq, limit=page_limit)
+        snapshot = await context.persistence.load(db, thread_id)
+    last_event_seq = max((event.seq for event in events), default=after_seq)
+    snapshot_seq = _int_param(snapshot.get("snapshot_seq") if isinstance(snapshot, dict) else None, default=last_event_seq)
+    has_more = bool(events) and last_event_seq < snapshot_seq
+    return CoreLiveOperationOutcome(
+        response=rpc_result(
+            request_id,
+            {
+                "thread": {"id": thread_id},
+                "events": [event.to_dict() for event in events],
+                "snapshot": snapshot,
+                "has_more": has_more,
+                "next_after_seq": last_event_seq,
+            },
+        )
+    )
+
+
+async def handle_thread_read_operation(
+    *,
+    request_id: int | str | None,
+    params: dict[str, Any],
+    context: CoreLiveContext,
+) -> CoreLiveOperationOutcome:
+    thread_id = str(params.get("thread_id") or params.get("threadId") or "")
+    if not thread_id:
+        return CoreLiveOperationOutcome(
+            response=rpc_error(request_id, code=INVALID_REQUEST, message="thread_id is required")
+        )
+    async with context.session_factory() as db:
+        snapshot = await context.persistence.load(db, thread_id)
+        events = await context.persistence.list_thread(db, thread_id=thread_id)
+        member_payload = await context.host.member_hooks.augment_thread_read(
+            db=db,
+            thread_id=thread_id,
+            result={"snapshot": snapshot, "events": events},
+        )
+    return CoreLiveOperationOutcome(
+        response=rpc_result(
+            request_id,
+            {
+                "thread": {"id": thread_id},
+                "events": [event.to_dict() for event in events],
+                "snapshot": snapshot,
+                **member_payload,
+            },
+        )
+    )
+
+
+async def handle_thread_start_operation(
+    *,
+    request_id: int | str | None,
+    params: dict[str, Any],
+    context: CoreLiveContext,
+) -> CoreLiveOperationOutcome:
+    thread_id = _thread_id_from_params(params)
+    if not thread_id:
+        return CoreLiveOperationOutcome(
+            response=rpc_error(request_id, code=INVALID_REQUEST, message="thread_id is required")
+        )
+
+    async def write(db: AsyncSession):
+        member_payload = await context.host.member_hooks.materialize_thread(
+            db=db,
+            thread_id=thread_id,
+            params=params,
+        )
+        event = await _append_app_event(
+            db,
+            context=context,
+            event=AppEventInput(
+                thread_id=thread_id,
+                method="thread/started",
+                payload={"type": "thread", "status": "idle", **params, **member_payload},
+            ),
+        )
+        return event, await context.persistence.load(db, thread_id)
+
+    event, snapshot = await context.persistence.write(write)
+    await context.hub.publish(event)
+    return CoreLiveOperationOutcome(
+        response=rpc_result(
+            request_id,
+            {"thread": {"id": thread_id}, "event": event.to_dict(), "snapshot": snapshot},
+        ),
+        publish_events=[event],
+    )
+
+
+async def handle_turn_start_operation(
+    *,
+    request_id: int | str | None,
+    params: dict[str, Any],
+    context: CoreLiveContext,
+) -> CoreLiveOperationOutcome:
+    thread_id = str(params.get("thread_id") or params.get("threadId") or params.get("session_id") or "").strip()
+    client_message_id = str(params.get("client_message_id") or params.get("clientMessageId") or uuid.uuid4().hex)
+    input_items = params.get("input")
+    if not thread_id or not isinstance(input_items, list):
+        return CoreLiveOperationOutcome(
+            response=rpc_error(request_id, code=INVALID_REQUEST, message="thread_id and input are required")
+        )
+
+    try:
+        prepared = await context.host.member_hooks.prepare_turn_input(
+            thread_id=thread_id,
+            params=params,
+            input_items=input_items,
+        )
+    except ValueError as exc:
+        return CoreLiveOperationOutcome(
+            response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc))
+        )
+    turn_id = str(params.get("turn_id") or params.get("turnId") or f"{thread_id}:turn:{uuid.uuid4().hex[:12]}")
+    user_item_id = str(params.get("user_item_id") or params.get("userItemId") or f"{turn_id}:user")
+    run_claimed = False
+
+    async def write(db):
+        nonlocal run_claimed
+        existing = await context.persistence.find_client_event(
+            db,
+            thread_id=thread_id,
+            client_message_id=client_message_id,
+            methods=TURN_ACCEPT_DEDUPE_METHODS,
+        )
+        if existing is not None:
+            snapshot = await context.persistence.load(db, thread_id)
+            return CoreLiveOperationOutcome(
+                response=rpc_result(
+                    request_id,
+                    {
+                        "events": [existing.to_dict()],
+                        "snapshot": snapshot,
+                    },
+                ),
+                notify_events=[existing],
+            )
+
+        snapshot = await context.persistence.load(db, thread_id)
+        active_run_id = _latest_active_turn_id(snapshot) or context.host.runtime_task_registry.active_run_id(thread_id)
+        if active_run_id:
+            return CoreLiveOperationOutcome(
+                response=rpc_error(
+                    request_id,
+                    code=INVALID_REQUEST,
+                    message="active turn already exists",
+                    data={"reason": "active_turn_exists", "active_run_id": active_run_id},
+                )
+            )
+        if not context.host.runtime_task_registry.accept_run(thread_id, turn_id):
+            return CoreLiveOperationOutcome(
+                response=rpc_error(
+                    request_id,
+                    code=INVALID_REQUEST,
+                    message="active turn already exists",
+                    data={
+                        "reason": "active_turn_exists",
+                        "active_run_id": context.host.runtime_task_registry.active_run_id(thread_id),
+                    },
+                )
+            )
+
+        run_claimed = True
+        try:
+            materialized = await context.host.member_hooks.materialize_turn(
+                db=db,
+                thread_id=thread_id,
+                turn_id=turn_id,
+                user_item_id=user_item_id,
+                client_message_id=client_message_id,
+                prepared=prepared,
+                params=params,
+            )
+            if materialized.turn_id != turn_id or materialized.user_item_id != user_item_id:
+                raise ValueError("member turn materialization must preserve Core acceptance ids")
+            plan = build_turn_acceptance_plan(
+                thread_id=thread_id,
+                turn_id=turn_id,
+                user_item_id=user_item_id,
+                client_message_id=client_message_id,
+                input_items=prepared.visible_input,
+                work_root=prepared.work_root,
+                turn_payload_extra=materialized.turn_payload_extra,
+                user_payload_extra=materialized.user_payload_extra,
+                include_turn_status=materialized.include_turn_status,
+            )
+            accepted = await _append_app_event(db, context=context, event=_app_event_input(plan.turn_accepted))
+            user = await _append_app_event(db, context=context, event=_app_event_input(plan.user_item))
+            running = await _append_run_item(db, context=context, event=plan.running_status)
+            snapshot = await context.persistence.load(db, thread_id)
+            return accepted, user, running, snapshot, materialized
+        except BaseException:
+            context.host.runtime_task_registry.release_run(thread_id, run_id=turn_id)
+            run_claimed = False
+            raise
+
+    try:
+        write_result = await context.persistence.write(write)
+    except BaseException:
+        if run_claimed:
+            context.host.runtime_task_registry.release_run(thread_id, run_id=turn_id)
+        raise
+    if isinstance(write_result, CoreLiveOperationOutcome):
+        return write_result
+    accepted, user, running, snapshot, materialized = write_result
+
+    runtime_start = {
+        "thread_id": thread_id,
+        "turn_id": turn_id,
+        "user_message_id": user_item_id,
+        "text": prepared.runtime_text,
+        "input": prepared.runtime_input,
+        "work_root": prepared.work_root,
+        "approval_policy": params.get("approval_policy") or params.get("approvalPolicy") or "require",
+        "model_id": str(params.get("model_id") or params.get("modelId") or ""),
+        "thinking_enabled": params.get("thinking_enabled") if isinstance(params.get("thinking_enabled"), bool) else None,
+        "thinking_budget": params.get("thinking_budget") if isinstance(params.get("thinking_budget"), int) else None,
+        "shallow_thinking_enabled": (
+            params.get("shallow_thinking_enabled")
+            if isinstance(params.get("shallow_thinking_enabled"), bool)
+            else None
+        ),
+        **prepared.runtime_extras,
+        **materialized.runtime_extras,
+    }
+    events = [accepted, user, running]
+    for event in events:
+        await context.hub.publish(event)
+    start_failure = await _start_runtime_task(context=context, runtime_start=runtime_start)
+    if start_failure is not None:
+        failure_event, snapshot = start_failure
+        events.append(failure_event)
+    return CoreLiveOperationOutcome(
+        response=rpc_result(
+            request_id,
+            {
+                "events": [event.to_dict() for event in events],
+                "snapshot": snapshot,
+                "runtime_start": runtime_start,
+            },
+        ),
+        notify_events=events,
+        runtime_start=runtime_start,
+    )
+
+
+async def handle_turn_cancel_operation(
+    *,
+    request_id: int | str | None,
+    params: dict[str, Any],
+    context: CoreLiveContext,
+) -> CoreLiveOperationOutcome:
+    thread_id = str(params.get("thread_id") or params.get("threadId") or params.get("session_id") or "").strip()
+    if not thread_id:
+        return CoreLiveOperationOutcome(
+            response=rpc_error(request_id, code=INVALID_REQUEST, message="thread_id is required")
+        )
+    async def write(db):
+        snapshot = await context.persistence.load(db, thread_id)
+        requested_turn_id = str(params.get("turn_id") or params.get("turnId") or "")
+        turn_id = requested_turn_id or _latest_active_turn_id(snapshot) or ""
+        if requested_turn_id and not _is_active_turn(snapshot, requested_turn_id):
+            turn_id = ""
+        if not turn_id:
+            return CoreLiveOperationOutcome(
+                response=rpc_result(request_id, {"status": "idle", "event": None, "snapshot": snapshot})
+            )
+        interrupted = await _append_app_event(
+            db,
+            context=context,
+            event=AppEventInput(
+                thread_id=thread_id,
+                method="turn/interrupted",
+                turn_id=turn_id,
+                payload={"type": "turn", "reason": "user_interrupt"},
+            ),
+        )
+        status = await _append_run_item(
+            db,
+            context=context,
+            event=RunItemEvent(
+                kind="status",
+                thread_id=thread_id,
+                event_id=f"{turn_id}:interrupting",
+                run_id=turn_id,
+                turn_id=turn_id,
+                item_id=f"{turn_id}:interrupting",
+                status="interrupting",
+                payload={"type": "turn", "status": "interrupting", "raw_end_reason": "user_interrupt"},
+            ),
+        )
+        snapshot = await context.persistence.load(db, thread_id)
+        return interrupted, status, snapshot, turn_id
+
+    write_result = await context.persistence.write(write)
+    if isinstance(write_result, CoreLiveOperationOutcome):
+        return write_result
+    interrupted, status, snapshot, turn_id = write_result
+    context.host.runtime_task_registry.cancel(thread_id, run_id=turn_id or None, force=True)
+    events = [interrupted, status]
+    for event in events:
+        await context.hub.publish(event)
+    return CoreLiveOperationOutcome(
+        response=rpc_result(
+            request_id,
+            {
+                "events": [event.to_dict() for event in events],
+                "snapshot": snapshot,
+            },
+        ),
+        publish_events=events,
+    )
+
+
+async def handle_turn_steer_operation(
+    *,
+    request_id: int | str | None,
+    params: dict[str, Any],
+    context: CoreLiveContext,
+) -> CoreLiveOperationOutcome:
+    thread_id = _thread_id_from_params(params)
+    turn_id = str(params.get("turn_id") or params.get("turnId") or "").strip()
+    client_message_id = str(params.get("client_message_id") or params.get("clientMessageId") or uuid.uuid4().hex)
+    input_items = params.get("input") if isinstance(params.get("input"), list) else params.get("input_items")
+    if not thread_id or not turn_id or not isinstance(input_items, list):
+        return CoreLiveOperationOutcome(
+            response=rpc_error(request_id, code=INVALID_REQUEST, message="thread_id, turn_id and input are required")
+        )
+    text = input_items_text(input_items)
+    if not text:
+        return CoreLiveOperationOutcome(
+            response=rpc_error(request_id, code=INVALID_REQUEST, message="steer input must include text")
+        )
+    guidance_accepted = False
+
+    async def write(db):
+        nonlocal guidance_accepted
+        existing = await context.persistence.find_client_event(
+            db,
+            thread_id=thread_id,
+            client_message_id=client_message_id,
+            methods={"turn/steered"},
+        )
+        if existing is not None:
+            snapshot = await context.persistence.load(db, thread_id)
+            return CoreLiveOperationOutcome(
+                response=rpc_result(
+                    request_id,
+                    {"applied": True, "reason": "already_applied", "events": [existing.to_dict()], "snapshot": snapshot},
+                )
+            )
+        snapshot = await context.persistence.load(db, thread_id)
+        registry_run_id = context.host.runtime_task_registry.active_run_id(thread_id)
+        if not _is_active_turn(snapshot, turn_id) and registry_run_id != turn_id:
+            return CoreLiveOperationOutcome(
+                response=rpc_result(request_id, {"applied": False, "reason": "active_turn_mismatch", "events": [], "snapshot": snapshot})
+            )
+        guidance_status = context.host.runtime_task_registry.accept_guidance(
+            thread_id,
+            text,
+            run_id=turn_id,
+            guidance_id=client_message_id,
+        )
+        if guidance_status not in {"accepted", "duplicate"}:
+            return CoreLiveOperationOutcome(
+                response=rpc_result(request_id, {"applied": False, "reason": "run_not_active", "events": [], "snapshot": snapshot})
+            )
+        if guidance_status == "accepted":
+            guidance_accepted = True
+        try:
+            event = await _append_app_event(
+                db,
+                context=context,
+                event=AppEventInput(
+                    thread_id=thread_id,
+                    method="turn/steered",
+                    turn_id=turn_id,
+                    client_message_id=client_message_id,
+                    payload={"type": "turn", "input": input_items},
+                ),
+            )
+            snapshot = await context.persistence.load(db, thread_id)
+            return event, snapshot
+        except BaseException:
+            context.host.runtime_task_registry.retract_guidance(
+                thread_id, run_id=turn_id, guidance_id=client_message_id
+            )
+            guidance_accepted = False
+            raise
+
+    try:
+        write_result = await context.persistence.write(write)
+    except BaseException:
+        if guidance_accepted:
+            context.host.runtime_task_registry.retract_guidance(
+                thread_id, run_id=turn_id, guidance_id=client_message_id
+            )
+        raise
+    if isinstance(write_result, CoreLiveOperationOutcome):
+        return write_result
+    event, snapshot = write_result
+    await context.hub.publish(event)
+    return CoreLiveOperationOutcome(
+        response=rpc_result(
+            request_id,
+            {"applied": True, "reason": "", "events": [event.to_dict()], "snapshot": snapshot},
+        ),
+        publish_events=[event],
+    )
+
+
+async def handle_approval_respond_operation(
+    *,
+    request_id: int | str | None,
+    params: dict[str, Any],
+    context: CoreLiveContext,
+) -> CoreLiveOperationOutcome:
+    if not context.operations.has("approval.respond"):
+        return CoreLiveOperationOutcome(
+            response=rpc_error(request_id, code=INVALID_REQUEST, message="approval.respond operation is unavailable")
+        )
+    result = await context.operations.execute("approval.respond", params, metadata={"source": "core_live"})
+    payload = dict(result.payload or {})
+    if result.status != "ok":
+        return CoreLiveOperationOutcome(
+            response=rpc_error(request_id, code=INVALID_REQUEST, message=str(payload.get("error") or result.status), data=payload)
+        )
+    return CoreLiveOperationOutcome(response=rpc_result(request_id, payload))
+
+
+async def handle_queue_create_operation(
+    *,
+    request_id: int | str | None,
+    params: dict[str, Any],
+    context: CoreLiveContext,
+) -> CoreLiveOperationOutcome:
+    thread_id = str(params.get("thread_id") or params.get("threadId") or params.get("session_id") or "").strip()
+    input_items = params.get("input")
+    if not thread_id or not isinstance(input_items, list):
+        return CoreLiveOperationOutcome(
+            response=rpc_error(request_id, code=INVALID_REQUEST, message="thread_id and input are required")
+        )
+    try:
+        prepared = await context.host.member_hooks.prepare_queue_input(
+            thread_id=thread_id, params=params, input_items=input_items
+        )
+    except ValueError as exc:
+        return CoreLiveOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
+    queue_item_id = str(params.get("queue_item_id") or params.get("queueItemId") or f"queue:{uuid.uuid4().hex[:12]}")
+    client_message_id = str(params.get("client_message_id") or params.get("clientMessageId") or uuid.uuid4().hex)
+    payload = queue_item_payload(
+        queue_item_id=queue_item_id,
+        input_items=prepared.visible_input,
+        runtime_input_items=prepared.runtime_input,
+        mode=str(params.get("mode") or "next_turn"),
+    )
+    async def write(db: AsyncSession):
+        existing = await context.persistence.find_client_event(
+            db,
+            thread_id=thread_id,
+            client_message_id=client_message_id,
+            methods=TURN_ACCEPT_DEDUPE_METHODS,
+        )
+        if existing is not None:
+            snapshot = await context.persistence.load(db, thread_id)
+            return existing, snapshot
+        materialized = await context.host.member_hooks.materialize_queue(
+            db=db,
+            thread_id=thread_id,
+            queue_item_id=queue_item_id,
+            client_message_id=client_message_id,
+            prepared=prepared,
+            params=params,
+        )
+        event = await _append_app_event(
+            db,
+            context=context,
+            event=AppEventInput(
+                thread_id=thread_id,
+                method="queue/itemAccepted",
+                item_id=queue_item_id,
+                client_message_id=client_message_id,
+                payload={**payload, **materialized.payload_extra},
+            ),
+        )
+        snapshot = await context.persistence.load(db, thread_id)
+        return event, snapshot
+
+    event, snapshot = await context.persistence.write(write)
+    await context.hub.publish(event)
+    queue_item = next(
+        (item for item in snapshot.get("queue", []) if isinstance(item, dict) and item.get("queue_item_id") == queue_item_id),
+        {"queue_item_id": queue_item_id, "status": "queued", "input": input_items},
+    )
+    return CoreLiveOperationOutcome(
+        response=rpc_result(request_id, {"queue_item": queue_item, "events": [event.to_dict()], "snapshot": snapshot}),
+        publish_events=[event],
+    )
+
+
+async def handle_queue_update_operation(
+    *,
+    request_id: int | str | None,
+    params: dict[str, Any],
+    context: CoreLiveContext,
+) -> CoreLiveOperationOutcome:
+    thread_id = str(params.get("thread_id") or params.get("threadId") or params.get("session_id") or "").strip()
+    queue_item_id = str(params.get("queue_item_id") or params.get("queueItemId") or "").strip()
+    if not thread_id or not queue_item_id:
+        return CoreLiveOperationOutcome(
+            response=rpc_error(
+                request_id,
+                code=INVALID_REQUEST,
+                message="thread_id, queue_item_id and text are required",
+            )
+        )
+    input_items = params.get("input")
+    if not isinstance(input_items, list):
+        text = str(params.get("text") or "").strip()
+        if not text:
+            return CoreLiveOperationOutcome(
+                response=rpc_error(
+                    request_id,
+                    code=INVALID_REQUEST,
+                    message="thread_id, queue_item_id and text are required",
+                )
+            )
+        input_items = [{"type": "text", "text": text}]
+    try:
+        prepared = await context.host.member_hooks.prepare_queue_input(
+            thread_id=thread_id,
+            params=params,
+            input_items=input_items,
+        )
+    except ValueError as exc:
+        return CoreLiveOperationOutcome(
+            response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc))
+        )
+    async def write(
+        db: AsyncSession,
+    ) -> CoreLiveOperationOutcome | tuple[AppEventEnvelope, dict[str, Any]]:
+        snapshot = await context.persistence.load(db, thread_id)
+        plan = build_queue_update_plan(
+            snapshot,
+            queue_item_id=queue_item_id,
+            input_items=prepared.visible_input,
+            runtime_input_items=prepared.runtime_input,
+            mode=str(params.get("mode") or "").strip() or None,
+        )
+        if not plan.applied:
+            return CoreLiveOperationOutcome(
+                response=rpc_result(
+                    request_id,
+                    {
+                        "applied": False,
+                        "reason": plan.reason,
+                        "events": [],
+                        "snapshot": snapshot,
+                    },
+                )
+            )
+        event = await _append_app_event(
+            db,
+            context=context,
+            event=AppEventInput(
+                thread_id=thread_id,
+                method="queue/itemUpdated",
+                item_id=queue_item_id,
+                payload=plan.payload or {},
+            ),
+        )
+        snapshot = await context.persistence.load(db, thread_id)
+        return event, snapshot
+
+    write_result = await context.persistence.write(write)
+    if isinstance(write_result, CoreLiveOperationOutcome):
+        return write_result
+    event, snapshot = write_result
+    await context.hub.publish(event)
+    return CoreLiveOperationOutcome(
+        response=rpc_result(request_id, {"events": [event.to_dict()], "snapshot": snapshot}),
+        publish_events=[event],
+    )
+
+
+async def handle_queue_delete_operation(
+    *,
+    request_id: int | str | None,
+    params: dict[str, Any],
+    context: CoreLiveContext,
+) -> CoreLiveOperationOutcome:
+    thread_id = str(params.get("thread_id") or params.get("threadId") or params.get("session_id") or "").strip()
+    queue_item_id = str(params.get("queue_item_id") or params.get("queueItemId") or "").strip()
+    if not thread_id or not queue_item_id:
+        return CoreLiveOperationOutcome(
+            response=rpc_error(request_id, code=INVALID_REQUEST, message="thread_id and queue_item_id are required")
+        )
+    async def write(db: AsyncSession) -> tuple[AppEventEnvelope, dict[str, Any]]:
+        event = await _append_app_event(
+            db,
+            context=context,
+            event=AppEventInput(
+                thread_id=thread_id,
+                method="queue/itemDeleted",
+                item_id=queue_item_id,
+                payload=queue_delete_payload(queue_item_id=queue_item_id, status="deleted"),
+            ),
+        )
+        snapshot = await context.persistence.load(db, thread_id)
+        return event, snapshot
+
+    event, snapshot = await context.persistence.write(write)
+    await context.hub.publish(event)
+    return CoreLiveOperationOutcome(
+        response=rpc_result(request_id, {"events": [event.to_dict()], "snapshot": snapshot}),
+        publish_events=[event],
+    )
+
+
+async def handle_queue_guidance_operation(
+    *,
+    request_id: int | str | None,
+    params: dict[str, Any],
+    context: CoreLiveContext,
+) -> CoreLiveOperationOutcome:
+    thread_id = str(params.get("thread_id") or params.get("threadId") or params.get("session_id") or "").strip()
+    turn_id = str(params.get("turn_id") or params.get("turnId") or "").strip()
+    queue_item_id = str(params.get("queue_item_id") or params.get("queueItemId") or "").strip()
+    if not thread_id or not turn_id or not queue_item_id:
+        return CoreLiveOperationOutcome(
+            response=rpc_error(
+                request_id,
+                code=INVALID_REQUEST,
+                message="thread_id, turn_id and queue_item_id are required",
+            )
+        )
+    client_message_id = str(
+        params.get("client_message_id") or params.get("clientMessageId") or f"queue-guide:{queue_item_id}"
+    )
+    replacement_text = params.get("text") if isinstance(params.get("text"), str) else None
+    guidance_accepted = False
+
+    async def write(
+        db: AsyncSession,
+    ) -> CoreLiveOperationOutcome | tuple[list[AppEventEnvelope], dict[str, Any], Any]:
+        nonlocal guidance_accepted
+        existing = await context.persistence.find_client_event(
+            db,
+            thread_id=thread_id,
+            client_message_id=client_message_id,
+            methods={"turn/steered"},
+        )
+        if existing is not None:
+            snapshot = await context.persistence.load(db, thread_id)
+            return CoreLiveOperationOutcome(
+                response=rpc_result(
+                    request_id,
+                    {"applied": True, "reason": "already_applied", "events": [existing.to_dict()], "snapshot": snapshot},
+                )
+            )
+        snapshot = await context.persistence.load(db, thread_id)
+        plan = build_queue_guidance_plan(
+            snapshot,
+            thread_id=thread_id,
+            turn_id=turn_id,
+            queue_item_id=queue_item_id,
+            client_message_id=client_message_id,
+            replacement_text=replacement_text,
+        )
+        if plan.applied:
+            guidance_text = input_items_text(plan.runtime_input_items)
+            guidance_status = context.host.runtime_task_registry.accept_guidance(
+                thread_id,
+                guidance_text,
+                run_id=turn_id,
+                guidance_id=client_message_id,
+            )
+            if guidance_status not in {"accepted", "duplicate"}:
+                return CoreLiveOperationOutcome(
+                    response=rpc_result(
+                        request_id,
+                        {"applied": False, "reason": "run_not_active", "events": [], "snapshot": snapshot},
+                    )
+                )
+            if guidance_status == "accepted":
+                guidance_accepted = True
+            events: list[AppEventEnvelope] = []
+            try:
+                for spec in plan.events:
+                    events.append(await _append_app_event(db, context=context, event=_app_event_input(spec)))
+                snapshot = await context.persistence.load(db, thread_id)
+            except BaseException:
+                context.host.runtime_task_registry.retract_guidance(
+                    thread_id, run_id=turn_id, guidance_id=client_message_id
+                )
+                guidance_accepted = False
+                raise
+            return events, snapshot, plan
+        return [], snapshot, plan
+
+    try:
+        write_result = await context.persistence.write(write)
+    except BaseException:
+        if guidance_accepted:
+            context.host.runtime_task_registry.retract_guidance(
+                thread_id, run_id=turn_id, guidance_id=client_message_id
+            )
+        raise
+    if isinstance(write_result, CoreLiveOperationOutcome):
+        return write_result
+    events, snapshot, plan = write_result
+    for event in events:
+        await context.hub.publish(event)
+    return CoreLiveOperationOutcome(
+        response=rpc_result(
+            request_id,
+            {
+                "applied": plan.applied,
+                "reason": plan.reason,
+                "events": [event.to_dict() for event in events],
+                "snapshot": snapshot,
+            },
+        ),
+        publish_events=events,
+    )
+
+
+async def _append_app_event(
+    db: AsyncSession,
+    *,
+    context: CoreLiveContext,
+    event: AppEventInput,
+) -> AppEventEnvelope:
+    return await context.persistence.append(db, event)
+
+
+def _app_event_input(spec: CoreAppEventSpec) -> AppEventInput:
+    return AppEventInput(
+        event_id=spec.event_id,
+        thread_id=spec.thread_id,
+        method=spec.method,
+        payload=spec.payload,
+        turn_id=spec.turn_id,
+        item_id=spec.item_id,
+        parent_item_id=spec.parent_item_id,
+        client_message_id=spec.client_message_id,
+    )
+
+
+async def _append_run_item(
+    db: AsyncSession,
+    *,
+    context: CoreLiveContext,
+    event: RunItemEvent,
+) -> AppEventEnvelope:
+    return await context.persistence.append_run_item(db, event)
+
+
+def _get_running_loop() -> asyncio.AbstractEventLoop:
+    return asyncio.get_running_loop()
+
+
+async def _start_runtime_task(
+    *, context: CoreLiveContext, runtime_start: dict[str, Any]
+) -> tuple[AppEventEnvelope, dict[str, Any]] | None:
+    thread_id = str(runtime_start.get("thread_id") or "")
+    turn_id = str(runtime_start.get("turn_id") or "")
+    if isinstance(context.host.member_hooks, DefaultCoreLiveMemberHooks) and not context.operations.has("turn.start"):
+        return await _fail_runtime_start(
+            context=context,
+            thread_id=thread_id,
+            turn_id=turn_id,
+            message="turn.start operation is unavailable",
+        )
+    message = str(runtime_start.get("text") or "")
+    if not thread_id or not message:
+        return await _fail_runtime_start(
+            context=context,
+            thread_id=thread_id,
+            turn_id=turn_id,
+            message="runtime input is empty",
+        )
+
+    try:
+        loop = _get_running_loop()
+    except RuntimeError as exc:
+        return await _fail_runtime_start(
+            context=context,
+            thread_id=thread_id,
+            turn_id=turn_id,
+            message=str(exc) or "no running event loop",
+        )
+    coroutine = _run_core_turn(context=context, runtime_start=runtime_start)
+    try:
+        task = loop.create_task(coroutine)
+    except BaseException as exc:
+        coroutine.close()
+        return await _fail_runtime_start(
+            context=context,
+            thread_id=thread_id,
+            turn_id=turn_id,
+            message=str(exc) or "runtime task creation failed",
+        )
+    if task.done() or not context.host.runtime_task_registry.register(thread_id, task, run_id=turn_id):
+        return await _fail_runtime_start(
+            context=context,
+            thread_id=thread_id,
+            turn_id=turn_id,
+            message="runtime task registration failed",
+            task=task,
+        )
+    return None
+
+
+async def _fail_runtime_start(
+    *,
+    context: CoreLiveContext,
+    thread_id: str,
+    turn_id: str,
+    message: str,
+    task: asyncio.Future[Any] | None = None,
+) -> tuple[AppEventEnvelope, dict[str, Any]]:
+    if task is not None:
+        if not task.done():
+            task.cancel()
+        try:
+            await task
+        except BaseException:
+            pass
+    context.host.runtime_task_registry.release_run(thread_id, run_id=turn_id)
+    async def write(
+        db: AsyncSession,
+    ) -> tuple[AppEventEnvelope, dict[str, Any]]:
+        snapshot = await context.persistence.load(db, thread_id)
+        if _turn_is_terminal(snapshot, turn_id):
+            terminal_events = await context.persistence.list_after(db, thread_id=thread_id, after_seq=0)
+            event = next(
+                event
+                for event in reversed(terminal_events)
+                if event.turn_id == turn_id and event.method == CORE_RUN_ITEM_METHOD
+            )
+            return event, snapshot
+        event = await _append_run_item(
+            db,
+            context=context,
+            event=RunItemEvent(
+                kind="status",
+                thread_id=thread_id,
+                event_id=f"{turn_id}:runtime-start-failed",
+                run_id=turn_id,
+                turn_id=turn_id,
+                item_id=f"{turn_id}:runtime-start-failed",
+                status="failed",
+                payload={
+                    "type": "turn",
+                    "status": "failed",
+                    "raw_end_reason": "runtime_start_failed",
+                    "message": message,
+                },
+            ),
+        )
+        snapshot = await context.persistence.load(db, thread_id)
+        return event, snapshot
+
+    event, snapshot = await context.persistence.write(write)
+    await context.hub.publish(event)
+    return event, snapshot
+
+
+async def _run_core_turn(*, context: CoreLiveContext, runtime_start: dict[str, Any]) -> None:
+    thread_id = str(runtime_start.get("thread_id") or "")
+    turn_id = str(runtime_start.get("turn_id") or "")
+    try:
+        payload = {
+            **runtime_start,
+            "session_id": thread_id,
+            "message": str(runtime_start.get("text") or ""),
+        }
+
+        async def execute_core_operation(operation_payload: dict[str, Any]) -> OperationResult:
+            return await context.operations.execute(
+                "turn.start", operation_payload, metadata={"source": "core_live"}
+            )
+
+        if isinstance(context.host.member_hooks, DefaultCoreLiveMemberHooks):
+            payload["_core_operation"] = execute_core_operation
+        result = await context.host.member_hooks.start_runtime(
+            runtime_start=payload,
+        )
+        if isinstance(result, OperationResult):
+            await _persist_operation_result(context=context, thread_id=thread_id, turn_id=turn_id, result=result)
+        context.host.runtime_task_registry.release_run(thread_id, run_id=turn_id)
+        await _dispatch_next_queue_item(
+            context=context,
+            thread_id=thread_id,
+            work_root=str(runtime_start.get("work_root") or ""),
+        )
+    except BaseException as exc:
+        cancel_requested = context.host.runtime_task_registry.get_cancel_event(thread_id).is_set()
+        if isinstance(exc, asyncio.CancelledError) or cancel_requested:
+            await asyncio.shield(
+                _persist_cancelled_terminal(
+                    context=context,
+                    thread_id=thread_id,
+                    turn_id=turn_id,
+                )
+            )
+            raise
+        await asyncio.shield(
+            _fail_runtime_start(
+                context=context,
+                thread_id=thread_id,
+                turn_id=turn_id,
+                message=str(exc) or "member runtime failed",
+            )
+        )
+
+
+async def _dispatch_next_queue_item(*, context: CoreLiveContext, thread_id: str, work_root: str) -> None:
+    async with context.session_factory() as db:
+        current_snapshot = await context.persistence.load(db, thread_id)
+    if next_dispatchable_queue_item(current_snapshot) is None:
+        return
+    claimed_turn_id = ""
+
+    async def write(db: AsyncSession):
+        nonlocal claimed_turn_id
+        snapshot = await context.persistence.load(db, thread_id)
+        queued = next_dispatchable_queue_item(snapshot)
+        dispatch = queue_dispatch_payload(queued) if queued is not None else None
+        if dispatch is None:
+            return None
+        queue_item_id, visible_input, runtime_input, dispatch_payload = dispatch
+        turn_id = f"{thread_id}:turn:{uuid.uuid4().hex[:12]}"
+        user_item_id = f"{turn_id}:user"
+        if not context.host.runtime_task_registry.accept_run(thread_id, turn_id):
+            return None
+        claimed_turn_id = turn_id
+        try:
+            queued_work_root = str(queued.get("work_root") or work_root)
+            prepared = PreparedLiveInput(
+                visible_input=visible_input,
+                runtime_input=runtime_input,
+                visible_text=input_items_text(visible_input),
+                runtime_text=input_items_text(runtime_input),
+                work_root=queued_work_root,
+            )
+            materialized = await context.host.member_hooks.materialize_turn(
+                db=db,
+                thread_id=thread_id,
+                turn_id=turn_id,
+                user_item_id=user_item_id,
+                client_message_id=f"dispatch:{queue_item_id}",
+                prepared=prepared,
+                params={"work_root": work_root},
+            )
+            dispatched = await _append_app_event(
+                db,
+                context=context,
+                event=AppEventInput(
+                    thread_id=thread_id,
+                    method="queue/itemDispatched",
+                    item_id=queue_item_id,
+                    client_message_id=f"dispatch:{queue_item_id}",
+                    payload=dispatch_payload,
+                ),
+            )
+            plan = build_turn_acceptance_plan(
+                thread_id=thread_id,
+                turn_id=turn_id,
+                user_item_id=user_item_id,
+                client_message_id=f"dispatch:{queue_item_id}",
+                input_items=prepared.visible_input,
+                work_root=prepared.work_root,
+                turn_payload_extra=materialized.turn_payload_extra,
+                user_payload_extra=materialized.user_payload_extra,
+                include_turn_status=materialized.include_turn_status,
+            )
+            accepted = await _append_app_event(db, context=context, event=_app_event_input(plan.turn_accepted))
+            user = await _append_app_event(db, context=context, event=_app_event_input(plan.user_item))
+            running = await _append_run_item(db, context=context, event=plan.running_status)
+            runtime_start = {
+                "thread_id": thread_id,
+                "turn_id": turn_id,
+                "user_message_id": user_item_id,
+                "text": prepared.runtime_text,
+                "input": prepared.runtime_input,
+                "work_root": prepared.work_root,
+                **prepared.runtime_extras,
+                **materialized.runtime_extras,
+            }
+            return [dispatched, accepted, user, running], runtime_start
+        except BaseException:
+            context.host.runtime_task_registry.release_run(thread_id, run_id=turn_id)
+            claimed_turn_id = ""
+            raise
+
+    try:
+        result = await context.persistence.write(write)
+    except BaseException:
+        if claimed_turn_id:
+            context.host.runtime_task_registry.release_run(thread_id, run_id=claimed_turn_id)
+        raise
+    if result is None:
+        return
+    events, next_runtime_start = result
+    for event in events:
+        await context.hub.publish(event)
+    await _start_runtime_task(context=context, runtime_start=next_runtime_start)
+
+
+async def _persist_cancelled_terminal(
+    *,
+    context: CoreLiveContext,
+    thread_id: str,
+    turn_id: str,
+) -> AppEventEnvelope | None:
+    async def write(db: AsyncSession) -> AppEventEnvelope | None:
+        snapshot = await context.persistence.load(db, thread_id)
+        if _turn_is_terminal(snapshot, turn_id):
+            return None
+        event = await _append_run_item(
+            db,
+            context=context,
+            event=build_cancelled_turn_event(thread_id=thread_id, turn_id=turn_id),
+        )
+        return event
+
+    event = await context.persistence.write(write)
+    if event is None:
+        return None
+    await context.hub.publish(event)
+    return event
+
+
+def _turn_is_terminal(snapshot: dict[str, Any], turn_id: str) -> bool:
+    core = snapshot.get("core")
+    core_turns = core.get("turns") if isinstance(core, dict) else None
+    core_turn = core_turns.get(turn_id) if isinstance(core_turns, dict) else None
+    if isinstance(core_turn, dict) and str(core_turn.get("status") or "") in TERMINAL_TURN_STATUSES:
+        return True
+    turns = snapshot.get("turns")
+    turn = turns.get(turn_id) if isinstance(turns, dict) else None
+    return isinstance(turn, dict) and str(turn.get("status") or "") in TERMINAL_TURN_STATUSES
+
+
+async def _persist_operation_result(
+    *,
+    context: CoreLiveContext,
+    thread_id: str,
+    turn_id: str,
+    result: Any,
+) -> None:
+    payload = dict(getattr(result, "payload", {}) or {})
+    if payload.get("events_persisted_live") is True:
+        return
+    raw_items = payload.get("run_items")
+    if not isinstance(raw_items, list):
+        return
+    async def write(db: AsyncSession) -> list[AppEventEnvelope]:
+        events: list[AppEventEnvelope] = []
+        for raw in raw_items:
+            if not isinstance(raw, dict):
+                continue
+            item = RunItemEvent.from_dict({**raw, "thread_id": raw.get("thread_id") or thread_id, "turn_id": raw.get("turn_id") or turn_id})
+            event = await _append_run_item(db, context=context, event=item)
+            events.append(event)
+        return events
+
+    events = await context.persistence.write(write)
+    for event in events:
+        await context.hub.publish(event)
+
+
+def _latest_active_turn_id(snapshot: dict[str, Any]) -> str | None:
+    core = snapshot.get("core")
+    turns = core.get("turns") if isinstance(core, dict) else snapshot.get("turns")
+    if not isinstance(turns, dict):
+        return None
+    active: list[dict[str, Any]] = []
+    for turn_id, turn in turns.items():
+        if not isinstance(turn, dict):
+            continue
+        status = str(turn.get("status") or "")
+        if status in {"running", "waiting", "interrupting"}:
+            active.append({**turn, "turn_id": turn.get("turn_id") or turn_id})
+    if not active:
+        return None
+    active.sort(key=lambda item: int(item.get("last_seq") or item.get("seq") or 0), reverse=True)
+    return str(active[0].get("turn_id") or "") or None
+
+
+def _is_active_turn(snapshot: dict[str, Any], turn_id: str) -> bool:
+    core = snapshot.get("core")
+    turns = core.get("turns") if isinstance(core, dict) else snapshot.get("turns")
+    turn = turns.get(turn_id) if isinstance(turns, dict) else None
+    return isinstance(turn, dict) and str(turn.get("status") or "") in {"running", "waiting", "interrupting"}
+
+
+def _thread_id_from_params(params: dict[str, Any]) -> str:
+    return str(params.get("thread_id") or params.get("threadId") or params.get("session_id") or "").strip()
+
+
+def _int_param(value: Any, *, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+_CORE_LIVE_OPERATION_EXECUTORS = {
+    "thread.start": handle_thread_start_operation,
+    "thread.read": handle_thread_read_operation,
+    "thread.resume": handle_thread_resume_operation,
+    "turn.start": handle_turn_start_operation,
+    "turn.cancel": handle_turn_cancel_operation,
+    "turn.steer": handle_turn_steer_operation,
+    "approval.respond": handle_approval_respond_operation,
+    "queue.create": handle_queue_create_operation,
+    "queue.update": handle_queue_update_operation,
+    "queue.delete": handle_queue_delete_operation,
+    "queue.guide": handle_queue_guidance_operation,
+}
+
+
+__all__ = [
+    "CoreLiveContext",
+    "CoreLiveOperationHost",
+    "CoreLiveOperationOutcome",
+    "handle_queue_create_operation",
+    "handle_queue_delete_operation",
+    "handle_queue_guidance_operation",
+    "handle_queue_update_operation",
+    "handle_approval_respond_operation",
+    "handle_thread_read_operation",
+    "handle_thread_start_operation",
+    "handle_thread_resume_operation",
+    "handle_turn_cancel_operation",
+    "handle_turn_start_operation",
+    "handle_turn_steer_operation",
+]

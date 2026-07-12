@@ -2,7 +2,6 @@
  * Theme helpers — gradient generation, normalization, preset utilities
  *
  * Shared theme helpers for member settings and workbench views.
- * Writer had more robust normalization; that version is kept here.
  */
 
 // ---------------------------------------------------------------------------

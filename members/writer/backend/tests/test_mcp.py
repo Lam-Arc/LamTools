@@ -155,7 +155,7 @@ async def test_stdio_mcp_client_lists_and_calls_tool(tmp_path: Path):
     try:
         await client.start()
         tools = await client.list_tools()
-        assert [tool.writer_name for tool in tools] == ["mcp__local__echo"]
+        assert [tool.function_name for tool in tools] == ["mcp__local__echo"]
 
         result = await client.call_tool("echo", {"text": "ok"})
         assert result["content"][0]["text"] == "echo:ok"
@@ -176,7 +176,7 @@ async def test_json_lines_mcp_client_lists_and_calls_tool(tmp_path: Path):
     try:
         await client.start()
         tools = await client.list_tools()
-        assert [tool.writer_name for tool in tools] == ["mcp__lines__ping"]
+        assert [tool.function_name for tool in tools] == ["mcp__lines__ping"]
 
         result = await client.call_tool("ping", {})
         assert result["content"][0]["text"] == "pong"
@@ -233,6 +233,13 @@ def test_builtin_playwright_mcp_config_is_available(tmp_path: Path):
     assert playwright[0].permission == "ask_user"
     assert playwright[0].transport == "json_lines"
     assert "--headless" in playwright[0].args
+
+
+def test_writer_mcp_config_delegates_parsing_to_core():
+    source = (Path(__file__).resolve().parents[1] / "app/core/mcp/config.py").read_text(encoding="utf-8")
+
+    assert "load_core_mcp_server_configs" in source
+    assert "MCPServerConfig(" not in source
 
 
 def test_mcp_action_permission_requires_user_confirmation():

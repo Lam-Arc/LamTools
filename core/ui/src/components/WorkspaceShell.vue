@@ -1,5 +1,5 @@
 <template>
-  <div class="workspace-shell writer-shell" :class="shellClass" :style="shellStyle">
+  <div class="workspace-shell" :class="shellClass" :style="shellStyle">
     <!-- Notifications -->
     <div v-if="errorText" class="error-toast">{{ errorText }}</div>
     <div v-if="noticeText" class="notice-toast">{{ noticeText }}</div>
@@ -64,7 +64,7 @@
     </aside>
 
     <!-- ===== Main Area ===== -->
-    <main class="workspace-main writer-main">
+    <main class="workspace-main">
       <slot name="main-header" />
       <slot name="main-content">
         <section class="thread">
@@ -96,11 +96,12 @@
           <slot name="composer-action">
             <button
               class="send"
+              :class="{ 'send--stop': composerActionMode === 'stop' }"
               type="submit"
-              :disabled="composerDisabled"
-              title="发送"
-              aria-label="发送"
-            >↑</button>
+              :disabled="composerActionMode === 'send' && composerDisabled"
+              :title="composerActionMode === 'stop' ? composerStopTitle : composerSendTitle"
+              :aria-label="composerActionMode === 'stop' ? composerStopTitle : composerSendTitle"
+            >{{ composerActionMode === 'stop' ? composerStopLabel : composerSendLabel }}</button>
           </slot>
         </div>
       </div>
@@ -159,6 +160,11 @@ const props = withDefaults(
     rightPanelTitle?: string
     composerPlaceholder?: string
     composerDisabled?: boolean
+    composerActionMode?: 'send' | 'stop'
+    composerSendLabel?: string
+    composerStopLabel?: string
+    composerSendTitle?: string
+    composerStopTitle?: string
     errorText?: string
     noticeText?: string
     showRightPanel?: boolean
@@ -170,6 +176,11 @@ const props = withDefaults(
     rightPanelTitle: '运行状态',
     composerPlaceholder: '输入内容...',
     composerDisabled: false,
+    composerActionMode: 'send',
+    composerSendLabel: 'send',
+    composerStopLabel: 'stop',
+    composerSendTitle: '发送',
+    composerStopTitle: '停止运行',
     errorText: '',
     noticeText: '',
     showRightPanel: true,

@@ -53,21 +53,33 @@ class RuntimeFactRecorder:
     def __init__(
         self,
         *,
-        db: AsyncSession,
+        db: AsyncSession | None = None,
         session_id: str,
-        turn: WriterTranscriptTurn,
+        turn: WriterTranscriptTurn | None = None,
+        turn_id: str | None = None,
         app_projection_sink: AppProjectionSink,
         model_context: dict[str, Any] | None = None,
+        write_coordinator: Any | None = None,
     ) -> None:
         self._db = db
         self._session_id = session_id
         self._turn = turn
+        self._turn_id = str(turn_id or (turn.id if turn is not None else ""))
+        if not self._turn_id:
+            raise ValueError("turn_id is required")
         self._app_projection_sink = app_projection_sink
+        self._model_context = model_context
+        self._write_coordinator = write_coordinator
         self._lock = asyncio.Lock()
         self._projection_buffer = RuntimeProjectionBuffer()
         self._sequence = 0
         self._seen_terminal_core_event = False
-        self.transcript_sink = RuntimeTranscriptSink(db=db, turn=turn, model_context=model_context)
+        self._seen_core_event_ids: set[str] = set()
+        self.transcript_sink = (
+            RuntimeTranscriptSink(db=db, turn=turn, model_context=model_context)
+            if db is not None and turn is not None
+            else None
+        )
 
     @property
     def sequence(self) -> int:
@@ -81,22 +93,41 @@ class RuntimeFactRecorder:
     def seen_terminal_core_event(self, value: bool) -> None:
         self._seen_terminal_core_event = value
 
+    @property
+    def has_recorded_core_events(self) -> bool:
+        return bool(self._seen_core_event_ids)
+
     async def start_runtime_producer(self) -> None:
+        if self._write_coordinator is not None:
+            async def write(db: AsyncSession) -> None:
+                turn = await db.get(WriterTranscriptTurn, self._turn_id)
+                if turn is None:
+                    raise RuntimeError("Transcript turn was not created")
+                await ensure_active_producer(
+                    db,
+                    turn=turn,
+                    producer_id=f"{self._turn_id}:runtime",
+                    kind="runtime",
+                )
+
+            await self._write_coordinator.run(write)
+            return
         await ensure_active_producer(
             self._db,
             turn=self._turn,
-            producer_id=f"{self._turn.id}:runtime",
+            producer_id=f"{self._turn_id}:runtime",
             kind="runtime",
         )
-        await self._db.commit()
+        await self._db.flush()
 
     async def record_core_event(self, event: CoreEvent) -> None:
+        if event.event_id in self._seen_core_event_ids:
+            return
+        self._seen_core_event_ids.add(event.event_id)
         payload = event.payload or {}
         event_name = event.name
-        if event_name in {"runtime.done", "runtime.failed", "runtime.waiting"}:
+        if event_name in {"runtime.done", "runtime.failed", "runtime.cancelled", "runtime.waiting"}:
             self._seen_terminal_core_event = True
-        if event_name == "runtime.context_compacted":
-            await self._persist_context_compaction(payload)
         await self.record(
             group=runtime_group_from_event_name(event_name),
             source="core",
@@ -115,13 +146,14 @@ class RuntimeFactRecorder:
                     "run_id": event.run_id,
                 },
             },
+            context_compaction_payload=payload if event_name == "runtime.context_compacted" else None,
         )
 
-    async def _persist_context_compaction(self, payload: dict[str, Any]) -> None:
+    async def _persist_context_compaction(self, db: AsyncSession, payload: dict[str, Any]) -> None:
         summary = str(payload.get("summary") or payload.get("content") or "").strip()
         if not summary:
             return
-        session = await self._db.get(WriterSession, self._session_id)
+        session = await db.get(WriterSession, self._session_id)
         if session is None:
             return
 
@@ -160,25 +192,17 @@ class RuntimeFactRecorder:
         preview: str = "",
         full_text: str = "",
         metadata: dict[str, Any] | None = None,
+        context_compaction_payload: dict[str, Any] | None = None,
     ) -> None:
         metadata = dict(metadata or {})
-        metadata.setdefault("turn_id", self._turn.id)
+        metadata.setdefault("turn_id", self._turn_id)
         payload_for_turn = metadata.get("payload")
         if isinstance(payload_for_turn, dict):
-            payload_for_turn.setdefault("turn_id", self._turn.id)
+            payload_for_turn.setdefault("turn_id", self._turn_id)
 
         async with self._lock:
             sequence = self._next_sequence(metadata.get("sequence"))
             if phase == "runtime.reply_delta":
-                await self.transcript_sink.sync_fact(
-                    phase=phase,
-                    status=status,
-                    summary=summary,
-                    preview=preview,
-                    full_text=full_text,
-                    sequence=sequence,
-                    metadata=metadata,
-                )
                 bridge_event = self._projection_fact(
                     fact_id=f"{self._session_id}:runtime:{sequence}:reply_delta",
                     group=group,
@@ -191,8 +215,17 @@ class RuntimeFactRecorder:
                     full_text=full_text,
                     metadata=metadata,
                 )
-                await self._db.commit()
-                await self._publish_run_item_projection(bridge_event)
+                await self._persist_fact_and_projection(
+                    fact=bridge_event,
+                    phase=phase,
+                    status=status,
+                    summary=summary,
+                    preview=preview,
+                    full_text=full_text,
+                    sequence=sequence,
+                    metadata=metadata,
+                    context_compaction_payload=context_compaction_payload,
+                )
                 return
 
             event = self._projection_fact(
@@ -208,6 +241,35 @@ class RuntimeFactRecorder:
                 metadata=metadata,
             )
             projection_fact = self._projection_buffer.merge_part_growth(event)
+            await self._persist_fact_and_projection(
+                fact=projection_fact,
+                phase=phase,
+                status=status,
+                summary=summary,
+                preview=preview,
+                full_text=full_text,
+                sequence=sequence,
+                metadata=metadata,
+                context_compaction_payload=context_compaction_payload,
+            )
+
+    async def _persist_fact_and_projection(
+        self,
+        *,
+        fact: RuntimeProjectionInput,
+        phase: str | None,
+        status: str | None,
+        summary: str,
+        preview: str,
+        full_text: str,
+        sequence: int,
+        metadata: dict[str, Any],
+        context_compaction_payload: dict[str, Any] | None,
+    ) -> None:
+        events = runtime_projection_to_run_item_events(fact)
+        if self._write_coordinator is None:
+            if context_compaction_payload is not None:
+                await self._persist_context_compaction(self._db, context_compaction_payload)
             await self.transcript_sink.sync_fact(
                 phase=phase,
                 status=status,
@@ -217,8 +279,34 @@ class RuntimeFactRecorder:
                 sequence=sequence,
                 metadata=metadata,
             )
-            await self._db.commit()
-            await self._publish_run_item_projection(projection_fact)
+            await self._db.flush()
+            await self._publish_run_items(events, source_event_id=fact.id)
+            return
+
+        async def write(db: AsyncSession):
+            turn = await db.get(WriterTranscriptTurn, self._turn_id)
+            if turn is None:
+                raise RuntimeError("Transcript turn was not created")
+            if context_compaction_payload is not None:
+                await self._persist_context_compaction(db, context_compaction_payload)
+            transcript_sink = RuntimeTranscriptSink(
+                db=db,
+                turn=turn,
+                model_context=self._model_context,
+            )
+            await transcript_sink.sync_fact(
+                phase=phase,
+                status=status,
+                summary=summary,
+                preview=preview,
+                full_text=full_text,
+                sequence=sequence,
+                metadata=metadata,
+            )
+            return await self._app_projection_sink.persist_in_transaction(db, events)
+
+        envelopes = await self._write_coordinator.run(write)
+        await self._app_projection_sink.broadcast(envelopes)
 
     def _next_sequence(self, raw_sequence: Any) -> int:
         sequence: int | None = None
@@ -259,12 +347,6 @@ class RuntimeFactRecorder:
             full_text=full_text[:RUNTIME_VISIBLE_TEXT_CHARS],
             metadata=metadata or None,
             created_at=datetime.now(timezone.utc),
-        )
-
-    async def _publish_run_item_projection(self, fact: RuntimeProjectionInput) -> None:
-        await self._publish_run_items(
-            runtime_projection_to_run_item_events(fact),
-            source_event_id=fact.id,
         )
 
     async def _publish_run_items(self, events: list[RunItemEvent], *, source_event_id: str) -> None:

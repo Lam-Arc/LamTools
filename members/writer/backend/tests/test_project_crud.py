@@ -77,10 +77,11 @@ async def test_create_project_creates_missing_work_root():
             await conn.run_sync(Base.metadata.create_all)
 
         async with session_factory() as db:
-            project = await create_project(ProjectCreate(work_root=str(work_root)), db)
+            project = await create_project(ProjectCreate(work_root=str(work_root), name="Custom REST Project"), db)
 
             assert work_root.is_dir()
             assert project.work_root == str(work_root.resolve())
+            assert project.name == "Custom REST Project"
 
         await engine.dispose()
 

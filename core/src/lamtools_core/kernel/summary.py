@@ -87,6 +87,7 @@ def core_event_to_progress_dict(event: CoreEvent) -> dict[str, Any]:
     """Convert a CoreEvent into a lightweight progress dict for rendering."""
     d: dict[str, Any] = {
         "run_id": event.run_id or "",
+        "turn_id": event.turn_id or "",
         "event_name": event.name,
         "category": event.category,
     }

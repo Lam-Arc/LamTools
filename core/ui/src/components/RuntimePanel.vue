@@ -12,6 +12,14 @@
       </div>
     </section>
 
+    <section v-if="events.length > 0" class="side-section">
+      <h3>Events</h3>
+      <div class="activity-item" v-for="event in recentEvents" :key="event.id">
+        <span class="activity-kind">{{ event.type }}</span>
+        <span class="activity-text">{{ formatPanelValue(event.data) }}</span>
+      </div>
+    </section>
+
     <!-- Step groups (collapsible runtime steps) -->
     <template v-if="stepGroups && stepGroups.length > 0">
       <section class="side-section">
@@ -39,6 +47,7 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import type { CoreRuntimeEvent, CoreRuntimeStepGroup } from '../types'
 
 export interface PanelInfoItem {
@@ -52,7 +61,7 @@ export interface PanelGroup {
   items: PanelInfoItem[]
 }
 
-withDefaults(
+const props = withDefaults(
   defineProps<{
     panelGroups?: PanelGroup[]
     events?: CoreRuntimeEvent[]
@@ -64,6 +73,8 @@ withDefaults(
     stepGroups: () => [],
   },
 )
+
+const recentEvents = computed(() => props.events.slice(-12).reverse())
 
 function formatPanelValue(value: unknown): string {
   if (value === null || value === undefined) return ''

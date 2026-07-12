@@ -224,7 +224,8 @@ async def test_run_turn_keeps_internal_checkpoints_for_do_not_commit_task(monkey
             metadata={"core_events": [], "steps_count": 0, "tool_results_summary": [], "verification_summaries": []},
         )
 
-    async def _fake_checkpoint_if_dirty(self, db, session, *, reason, turn_id=None, stage=None):
+    async def _fake_checkpoint_if_dirty(self, *, session_id, work_root, reason, turn_id=None, stage=None):
+        del session_id, work_root
         checkpoint_reasons.append(reason)
         return {"commit": "internal-checkpoint"}
 
@@ -233,7 +234,7 @@ async def test_run_turn_keeps_internal_checkpoints_for_do_not_commit_task(monkey
     monkeypatch.setattr(writer_service_module, "run_core_kernel", _fake_run_core_kernel)
     monkeypatch.setattr(
         writer_service_module.WriterCheckpointService,
-        "checkpoint_if_dirty",
+        "create_checkpoint_if_dirty",
         _fake_checkpoint_if_dirty,
     )
 
@@ -286,7 +287,8 @@ async def test_run_turn_binds_post_run_checkpoint_to_app_server_turn(monkeypatch
             metadata={"core_events": [], "steps_count": 0, "tool_results_summary": [], "verification_summaries": []},
         )
 
-    async def _fake_checkpoint_if_dirty(self, db, session, *, reason, turn_id=None, stage=None):
+    async def _fake_checkpoint_if_dirty(self, *, session_id, work_root, reason, turn_id=None, stage=None):
+        del session_id, work_root
         checkpoint_calls.append({"reason": reason, "turn_id": turn_id, "stage": stage})
         return {"commit": "internal-checkpoint"}
 
@@ -295,7 +297,7 @@ async def test_run_turn_binds_post_run_checkpoint_to_app_server_turn(monkeypatch
     monkeypatch.setattr(writer_service_module, "run_core_kernel", _fake_run_core_kernel)
     monkeypatch.setattr(
         writer_service_module.WriterCheckpointService,
-        "checkpoint_if_dirty",
+        "create_checkpoint_if_dirty",
         _fake_checkpoint_if_dirty,
     )
 
@@ -541,6 +543,16 @@ async def test_failed_core_kernel_reply_is_still_persisted(monkeypatch, tmp_path
         return object()
 
     async def _fake_run_core_kernel(**kwargs):
+        await kwargs["live_event_callback"](CoreEvent(
+            name="runtime.failed",
+            category="error",
+            payload={
+                "error": "artifact_scan: No project files found",
+                "message": "你好！有什么我可以帮你的吗？",
+            },
+            session_id=kwargs["session_id"],
+            run_id="run-failed-visible-reply",
+        ))
         return KernelResult(
             session_id=kwargs["session_id"],
             run_id="run-failed-visible-reply",
@@ -605,8 +617,7 @@ async def test_failed_core_kernel_reply_is_still_persisted(monkeypatch, tmp_path
 
 
 @pytest.mark.asyncio
-async def test_core_kernel_exception_persists_visible_error(monkeypatch, tmp_path):
-    """Service-level failures must leave a visible assistant message."""
+async def test_core_kernel_exception_is_recorded_and_propagated(monkeypatch, tmp_path):
 
     async def _fake_resolve_llm_config(db, route, model_id=None):
         return {"provider": "test", "model": "test-model"}
@@ -644,7 +655,8 @@ async def test_core_kernel_exception_persists_visible_error(monkeypatch, tmp_pat
             ))
             await db.commit()
 
-            await run_turn(db, session_id, "hello")
+            with pytest.raises(RuntimeError, match="model transport closed"):
+                await run_turn(db, session_id, "hello")
 
             result = await db.execute(
                 select(WriterMessage)
@@ -652,12 +664,17 @@ async def test_core_kernel_exception_persists_visible_error(monkeypatch, tmp_pat
                 .order_by(WriterMessage.created_at)
             )
             messages = result.scalars().all()
-            assert [m.role for m in messages] == ["user", "assistant"]
-            assert messages[1].content == "model transport closed"
+            assert [m.role for m in messages] == ["user"]
 
             refreshed = await db.get(WriterSession, session_id)
             assert refreshed is not None
-            assert refreshed.status == "failed"
+            assert refreshed.status == "active"
+            assert refreshed.phase == "executing"
+            turn = (
+                await db.execute(select(WriterTranscriptTurn).where(WriterTranscriptTurn.session_id == session_id))
+            ).scalar_one()
+            assert turn.error is None
+            assert turn.terminal_at is None
     finally:
         await engine.dispose()
 
@@ -911,7 +928,7 @@ async def test_core_app_projection_is_persisted_before_stream_returns(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_app_projection_failure_does_not_fail_core_run(monkeypatch, tmp_path):
+async def test_app_projection_failure_propagates_without_writer_terminal_fallback(monkeypatch, tmp_path):
     async def _fake_resolve_llm_config(db, route, model_id=None):
         return {"provider": "test", "model": "test-model"}
 
@@ -977,18 +994,87 @@ async def test_app_projection_failure_does_not_fail_core_run(monkeypatch, tmp_pa
             ))
             await db.commit()
 
-            await run_turn(db, session_id, "run")
+            with pytest.raises(RuntimeError, match="projection database transaction failed"):
+                await run_turn(db, session_id, "run")
 
             refreshed = await db.get(WriterSession, session_id)
-            assert refreshed.status != "failed"
-            assert refreshed.phase != "failed"
+            assert refreshed.status == "active"
+            assert refreshed.phase == "executing"
 
             blocks = await _transcript_blocks(db, session_id)
-            assert any(
-                block.type == "tool_result" and block.content == "large display projection payload"
-                for block in blocks
-            )
-            assert not any(block.type == "error" or block.status == "failed" for block in blocks)
+            assert not any(block.type == "tool_result" for block in blocks)
+            turn = (
+                await db.execute(select(WriterTranscriptTurn).where(WriterTranscriptTurn.session_id == session_id))
+            ).scalar_one()
+            assert turn.terminal_at is None
+            assert turn.error is None
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_final_answer_without_core_terminal_event_does_not_own_lifecycle(monkeypatch, tmp_path):
+    async def _fake_resolve_llm_config(db, route, model_id=None):
+        return {"provider": "test", "model": "test-model"}
+
+    def _fake_build_llm_client(resolved, thinking_enabled=None, thinking_budget=None):
+        return object()
+
+    async def _fake_run_core_kernel(**kwargs):
+        return KernelResult(
+            session_id=kwargs["session_id"],
+            run_id="run-answer-without-terminal",
+            decision="done",
+            message="Final answer survives.",
+            metadata={
+                "core_events": [],
+                "steps_count": 0,
+                "tool_results_summary": [],
+                "verification_summaries": [],
+            },
+        )
+
+    monkeypatch.setattr(writer_service_module, "resolve_llm_config", _fake_resolve_llm_config)
+    monkeypatch.setattr(writer_service_module, "build_llm_client", _fake_build_llm_client)
+    monkeypatch.setattr(writer_service_module, "run_core_kernel", _fake_run_core_kernel)
+
+    settings = Settings(
+        data_dir=str(tmp_path / "data"),
+        database_url=f"sqlite+aiosqlite:///{tmp_path / 'answer-without-terminal.db'}",
+        llm_api_key="test",
+    )
+    engine = create_async_engine(settings.database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+        services = writer_orchestrate(settings)
+        run_turn = services["run_turn"]
+        session_id = "session-answer-without-terminal"
+        async with session_factory() as db:
+            db.add(WriterSession(id=session_id, title="test", work_root=str(tmp_path / "workspace")))
+            await db.commit()
+
+            await run_turn(db, session_id, "run")
+
+            messages = list((await db.execute(
+                select(WriterMessage)
+                .where(WriterMessage.session_id == session_id)
+                .order_by(WriterMessage.created_at)
+            )).scalars())
+            assert [message.role for message in messages] == ["user", "assistant"]
+            assert messages[-1].content == "Final answer survives."
+
+            session = await db.get(WriterSession, session_id)
+            assert session.status == "active"
+            assert session.phase == "executing"
+            turn = (
+                await db.execute(select(WriterTranscriptTurn).where(WriterTranscriptTurn.session_id == session_id))
+            ).scalar_one()
+            assert turn.status_cache == "running"
+            assert turn.terminal_at is None
+            assert turn.terminal_reason is None
     finally:
         await engine.dispose()
 
@@ -1009,6 +1095,13 @@ async def test_failed_session_resume_marks_running_then_persists_terminal_event(
         async with session_factory_holder["factory"]() as check_db:
             refreshed = await check_db.get(WriterSession, session_id)
             observed_statuses.append((refreshed.status, refreshed.phase))
+        await kwargs["live_event_callback"](CoreEvent(
+            name="runtime.failed",
+            category="error",
+            payload={"error": "Max steps reached", "message": "我发现了一个语法错误，准备修复。"},
+            session_id=session_id,
+            run_id="run-failed-resume",
+        ))
         return KernelResult(
             session_id=session_id,
             run_id="run-failed-resume",
@@ -1078,10 +1171,10 @@ async def test_failed_session_resume_marks_running_then_persists_terminal_event(
                 and event.payload.get("kind") == "status"
                 and event.payload.get("status") == "failed"
             ]
-            snapshot = await load_snapshot(db, session_id)
-            assert failed_turns
-            assert any("Max steps reached" in str((event.payload.get("payload") or {}).get("message") or "") for event in failed_turns)
-            assert snapshot["core"]["status"] == "failed"
+            assert len(failed_turns) == 1
+            assert "Max steps reached" in str(
+                (failed_turns[0].payload.get("payload") or {}).get("message") or ""
+            )
 
         assert observed_statuses == [("active", "executing")]
     finally:
@@ -1097,6 +1190,13 @@ async def test_cancelled_core_kernel_result_persists_failed_session(monkeypatch,
         return object()
 
     async def _fake_run_core_kernel(**kwargs):
+        await kwargs["live_event_callback"](CoreEvent(
+            name="runtime.failed",
+            category="error",
+            payload={"error": "cancelled"},
+            session_id=kwargs["session_id"],
+            run_id="run-cancelled",
+        ))
         return KernelResult(
             session_id=kwargs["session_id"],
             run_id="run-cancelled",
@@ -1172,6 +1272,13 @@ async def test_continue_after_failed_session_with_stale_core_state_starts_new_ru
             metadata=dict(before.metadata if before else {}),
         )
         await state_store.save(fresh_state)
+        await kwargs["live_event_callback"](CoreEvent(
+            name="runtime.done",
+            category="lifecycle",
+            payload={"message": "继续后的任务已完成。"},
+            session_id=kwargs["session_id"],
+            run_id="fresh-run-after-continue",
+        ))
         return KernelResult(
             session_id=kwargs["session_id"],
             run_id="fresh-run-after-continue",
@@ -1470,7 +1577,7 @@ async def test_waiting_request_denial_closes_gate_and_fails_turn(tmp_path):
             await conn.run_sync(Base.metadata.create_all)
 
         services = writer_orchestrate(settings)
-        respond_waiting_request = services["respond_waiting_request"]
+        create_approval_coordinator = services["create_approval_coordinator"]
         session_id = "session-deny-waiting-test"
 
         async with session_factory() as db:
@@ -1481,6 +1588,7 @@ async def test_waiting_request_denial_closes_gate_and_fails_turn(tmp_path):
             ))
             await db.commit()
             turn = await create_turn(db, session_id=session_id, user_text="删文件", user_message_id=None)
+            turn_id = turn.id
             call = await ensure_model_call(db, turn=turn, run_id="run-deny:response-0")
             await upsert_block(
                 db,
@@ -1497,14 +1605,23 @@ async def test_waiting_request_denial_closes_gate_and_fails_turn(tmp_path):
                 tool_call_id="cmd-danger",
                 tool_args_json={"command": "del README.md"},
             )
+            session = await db.get(WriterSession, session_id)
+            session.runtime_state = {"session_memory": {"_core_runtime_state": {
+                "session_id": session_id, "run_id": turn.id, "status": "waiting",
+                "loop_state": "wait", "turn_count": 1,
+                "metadata": {"pending_approval": {
+                    "request_id": "cmd-danger",
+                    "tool_call": {"id": "cmd-danger", "name": "run_command", "arguments": {"command": "del README.md"}},
+                }},
+            }}}
             await db.commit()
 
-            result = await respond_waiting_request(
-                db=db,
-                session_id=session_id,
-                block_id="cmd-danger:waiting",
-                action="deny",
-                response="deny",
+            coordinator = await create_approval_coordinator(session_id)
+            result = await coordinator.respond(
+                thread_id=session_id,
+                request_id="cmd-danger",
+                decision="deny",
+                guidance="deny",
             )
             await db.commit()
 
@@ -1513,6 +1630,7 @@ async def test_waiting_request_denial_closes_gate_and_fails_turn(tmp_path):
             assert waiting is not None
             assert waiting.completed_at is not None
             assert waiting.response_json["action"] == "deny"
+            turn = await db.get(WriterTranscriptTurn, turn_id)
             assert await derive_turn_status(db, turn) == "failed"
     finally:
         await engine.dispose()
@@ -1551,7 +1669,7 @@ async def test_waiting_request_approval_executes_tool_and_continues_turn(monkeyp
             await conn.run_sync(Base.metadata.create_all)
 
         services = writer_orchestrate(settings)
-        respond_waiting_request = services["respond_waiting_request"]
+        create_approval_coordinator = services["create_approval_coordinator"]
         session_id = "session-approve-waiting-test"
         work_root = tmp_path / "workspace"
         work_root.mkdir()
@@ -1580,14 +1698,23 @@ async def test_waiting_request_approval_executes_tool_and_continues_turn(monkeyp
                 tool_call_id="cmd-approve",
                 tool_args_json={"command": "cmd /c echo approved"},
             )
+            session = await db.get(WriterSession, session_id)
+            session.runtime_state = {"session_memory": {"_core_runtime_state": {
+                "session_id": session_id, "run_id": turn.id, "status": "waiting",
+                "loop_state": "wait", "turn_count": 1,
+                "metadata": {"pending_approval": {
+                    "request_id": "cmd-approve",
+                    "tool_call": {"id": "cmd-approve", "name": "run_command", "arguments": {"command": "cmd /c echo approved"}},
+                }},
+            }}}
             await db.commit()
 
-            result = await respond_waiting_request(
-                db=db,
-                session_id=session_id,
-                block_id="cmd-approve:waiting",
-                action="approve",
-                response="approve",
+            coordinator = await create_approval_coordinator(session_id)
+            result = await coordinator.respond(
+                thread_id=session_id,
+                request_id="cmd-approve",
+                decision="approve",
+                guidance="approve",
             )
             await db.commit()
 
@@ -1643,7 +1770,7 @@ async def test_waiting_request_guidance_continues_without_executing_waiting_tool
             await conn.run_sync(Base.metadata.create_all)
 
         services = writer_orchestrate(settings)
-        respond_waiting_request = services["respond_waiting_request"]
+        create_approval_coordinator = services["create_approval_coordinator"]
         session_id = "session-guide-waiting-test"
         work_root = tmp_path / "workspace"
         work_root.mkdir()
@@ -1674,14 +1801,23 @@ async def test_waiting_request_guidance_continues_without_executing_waiting_tool
                 tool_call_id="cmd-guide",
                 tool_args_json={"command": "del README.md"},
             )
+            session = await db.get(WriterSession, session_id)
+            session.runtime_state = {"session_memory": {"_core_runtime_state": {
+                "session_id": session_id, "run_id": turn.id, "status": "waiting",
+                "loop_state": "wait", "turn_count": 1,
+                "metadata": {"pending_approval": {
+                    "request_id": "cmd-guide",
+                    "tool_call": {"id": "cmd-guide", "name": "run_command", "arguments": {"command": "del README.md"}},
+                }},
+            }}}
             await db.commit()
 
-            result = await respond_waiting_request(
-                db=db,
-                session_id=session_id,
-                block_id="cmd-guide:waiting",
-                action="guide",
-                response="不要删除，改为重命名。",
+            coordinator = await create_approval_coordinator(session_id)
+            result = await coordinator.respond(
+                thread_id=session_id,
+                request_id="cmd-guide",
+                decision="guide",
+                guidance="不要删除，改为重命名。",
             )
             await db.commit()
 
@@ -2250,7 +2386,6 @@ async def test_core_kernel_wait_question_fallback_priority(monkeypatch):
         async with session_factory() as db:
             blocks = await _transcript_blocks(db, "session-wait-fallback-test")
         wait_blocks = [block for block in blocks if block.type == "waiting_request"]
-        assert wait_blocks
-        assert wait_blocks[0].content == "wait"
+        assert wait_blocks == []
 
         await engine.dispose()

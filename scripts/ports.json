@@ -1,5 +1,6 @@
 ﻿{
   "core": {
+    "backend": 5172,
     "frontend_dev": 5173
   },
   "writer": {

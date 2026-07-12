@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable
@@ -10,6 +11,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.writer.git import GitCommandResult, WriterGitManager
 from app.models.message import WriterMessage
 from app.models.session import WriterSession
+from app.services.session_git_operation import (
+    SessionGitClaim,
+    claim_session_git_operation,
+    clear_session_git_claim,
+    require_session_git_claim,
+)
 
 
 EnsureRepo = Callable[[str], Awaitable[bool]]
@@ -85,7 +92,6 @@ class WriterCommitReviewService:
         runtime_state["pending_commit_review"] = review
         session.runtime_state = runtime_state
         session.updated_at = datetime.now(timezone.utc)
-        await db.commit()
         return review
 
     async def _collect_changes(self, session: WriterSession) -> dict[str, Any]:
@@ -180,6 +186,96 @@ class WriterCommitReviewService:
 _default_git_manager = WriterGitManager()
 
 
+@dataclass(frozen=True)
+class CommitReviewClaim:
+    session: SessionGitClaim
+    review_id: str
+    expected_head: str
+    expected_hashes: dict[str, str]
+    paths: list[str]
+    commit_message: str
+    feedback: str
+
+
+async def claim_commit_review_approval(
+    db: AsyncSession,
+    session_id: str,
+    *,
+    feedback: str = "",
+    commit_message: str | None = None,
+) -> CommitReviewClaim:
+    session = await _get_session(db, session_id)
+    runtime_state = _runtime_state_dict(session)
+    review = runtime_state.get("pending_commit_review")
+    if not isinstance(review, dict) or review.get("status") not in {"pending", "changes_requested", "postponed"}:
+        raise ValueError("No pending commit review")
+    return CommitReviewClaim(
+        session=claim_session_git_operation(session, "commit_review.approve"),
+        review_id=str(review.get("id") or ""),
+        expected_head=str(review.get("head") or ""),
+        expected_hashes=dict(review.get("dirty_hashes") or {}),
+        paths=[
+            str(item.get("path"))
+            for item in review.get("files", [])
+            if isinstance(item, dict) and item.get("path")
+        ],
+        commit_message=(commit_message or review.get("commit_message") or "").strip(),
+        feedback=feedback.strip(),
+    )
+
+
+async def execute_commit_review_approval(claim: CommitReviewClaim):
+    if not await _default_git_manager.is_repo(claim.session.work_root):
+        raise ValueError("Not a git repository")
+    snapshot = await _default_git_manager.status_snapshot(claim.session.work_root)
+    if snapshot is None:
+        raise ValueError("Could not read git status")
+    current_hashes = {path: snapshot.dirty_hashes.get(path, "") for path in claim.expected_hashes}
+    if claim.expected_head != str(snapshot.head or ""):
+        raise WorktreeChangedError("Worktree changed after review request; request review again")
+    if claim.expected_hashes and current_hashes != claim.expected_hashes:
+        raise WorktreeChangedError("Worktree changed after review request; request review again")
+    if snapshot.dirty_files:
+        committed = await _default_git_manager.commit_paths(
+            claim.session.work_root,
+            claim.paths,
+            message=claim.commit_message,
+        )
+    else:
+        committed = await _default_git_manager.checkpoint_all(
+            claim.session.work_root,
+            label="commit",
+            reason=claim.commit_message,
+            allow_empty=True,
+        )
+    if committed is None:
+        raise ValueError("Git commit failed")
+    return committed
+
+
+async def persist_commit_review_approval(db: AsyncSession, claim: CommitReviewClaim, committed) -> dict[str, Any]:
+    session = await _get_session(db, claim.session.session_id)
+    runtime_state = require_session_git_claim(session, claim.session)
+    review = runtime_state.get("pending_commit_review")
+    if not isinstance(review, dict) or str(review.get("id") or "") != claim.review_id:
+        raise RuntimeError("Commit review changed while Git operation was running")
+    review = dict(review)
+    review["status"] = "approved"
+    review["commit"] = committed.commit
+    review["commit_message"] = claim.commit_message
+    review["feedback"] = claim.feedback
+    review["updated_at"] = datetime.now(timezone.utc).isoformat()
+    runtime_state["pending_commit_review"] = review
+    git_state = _git_state_dict(runtime_state)
+    git_state["last_formal_commit"] = committed.model_dump(mode="json")
+    runtime_state["git_state"] = git_state
+    clear_session_git_claim(runtime_state, claim.session)
+    session.runtime_state = runtime_state
+    session.branch = committed.branch
+    session.updated_at = datetime.now(timezone.utc)
+    return _commit_review_response(review)
+
+
 async def get_commit_review_response(db: AsyncSession, session_id: str) -> dict[str, Any]:
     session = await _get_session(db, session_id)
     review = _runtime_state_dict(session).get("pending_commit_review")
@@ -216,7 +312,6 @@ async def decide_commit_review_response(
                 content=f"验收反馈：{clean_feedback}",
                 parts={"commit_review_feedback": {"review_id": review.get("id"), "feedback": clean_feedback}},
             ))
-        await db.commit()
         return _commit_review_response(review)
 
     if decision in {"postpone", "skip", "archive_only"}:
@@ -225,7 +320,6 @@ async def decide_commit_review_response(
         review["updated_at"] = now
         runtime_state["pending_commit_review"] = review
         session.runtime_state = runtime_state
-        await db.commit()
         return _commit_review_response(review)
 
     if decision != "approve":
@@ -282,7 +376,6 @@ async def decide_commit_review_response(
     session.runtime_state = runtime_state
     session.branch = committed.branch
     session.updated_at = datetime.now(timezone.utc)
-    await db.commit()
     return _commit_review_response(review)
 
 

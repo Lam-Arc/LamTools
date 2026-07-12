@@ -5,6 +5,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.session import WriterSession
 from app.models.transcript import WriterTranscriptBlock, WriterTranscriptModelCall, WriterTranscriptTurn
 from lamtools_core.event.runtime_projection import (
     event_model_call_id,
@@ -85,6 +86,14 @@ class RuntimeTranscriptSink:
         if changed:
             await bump_transcript_revision(self._db, self._turn.session_id)
 
+    async def _project_session_status(self, status: str) -> None:
+        session = await self._db.get(WriterSession, self._turn.session_id)
+        if session is None:
+            return
+        session.status = status
+        session.phase = status
+        session.updated_at = utc_now()
+
     async def sync_fact(
         self,
         *,
@@ -102,9 +111,16 @@ class RuntimeTranscriptSink:
         if event_name == "runtime.metrics":
             return
         if event_name == "runtime.done":
+            terminal_at = utc_now()
+            self._turn.terminal_at = terminal_at
+            self._turn.last_state_changed_at = terminal_at
+            self._turn.terminal_reason = "completed"
+            self._turn.error = None
+            self._turn.status_cache = "completed"
             await self._close_running_model_calls("completed")
             await close_open_blocks(self._db, turn=self._turn, status="completed")
             await close_active_producers(self._db, turn_id=self._turn.id, reason="completed")
+            await self._project_session_status("completed")
             await bump_transcript_revision(self._db, self._turn.session_id)
             return
         if event_name == "runtime.failed":
@@ -116,6 +132,52 @@ class RuntimeTranscriptSink:
                 reason=str(payload.get("reason") or "runtime_error"),
                 error=error,
             )
+            await self._project_session_status("failed")
+            return
+        if event_name == "runtime.cancelled":
+            await self._close_running_model_calls("cancelled")
+            await mark_turn_terminal(
+                self._db,
+                turn=self._turn,
+                reason="cancelled",
+                error=str(payload.get("message") or "任务已取消"),
+            )
+            await self._project_session_status("failed")
+            return
+        if event_name == "runtime.waiting":
+            self._turn.status_cache = "waiting"
+            self._turn.last_state_changed_at = utc_now()
+            await self._project_session_status("waiting")
+            await bump_transcript_revision(self._db, self._turn.session_id)
+            return
+        if event_name == "runtime.approval_response":
+            request_id = str(payload.get("tool_call_id") or payload.get("request_id") or "").strip()
+            block = await self._db.get(WriterTranscriptBlock, f"{request_id}:waiting") if request_id else None
+            if block is not None and block.type == "waiting_request":
+                block.status = "completed"
+                block.completed_at = block.completed_at or utc_now()
+                block.response_json = {
+                    "action": str(payload.get("decision") or payload.get("action") or ""),
+                    "response": str(payload.get("guidance") or ""),
+                }
+                block.metadata_ = {
+                    **(block.metadata_ if isinstance(block.metadata_, dict) else {}),
+                    "approval_response": {
+                        "request_id": str(payload.get("request_id") or request_id),
+                        "decision": str(payload.get("decision") or payload.get("action") or ""),
+                        "guidance": str(payload.get("guidance") or ""),
+                    },
+                }
+                await close_active_producers(
+                    self._db,
+                    turn_id=self._turn.id,
+                    reason="resolved",
+                    producer_id=f"{request_id}:tool",
+                )
+            self._turn.status_cache = "running"
+            self._turn.last_state_changed_at = utc_now()
+            await self._project_session_status("running")
+            await bump_transcript_revision(self._db, self._turn.session_id)
             return
 
         fallback_model_call_id = f"{self._turn.id}:model-call-1"

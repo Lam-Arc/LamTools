@@ -1,94 +1,792 @@
 <template>
-  <WorkspaceShell product-name="LamTools Demo">
+  <CoreSettings
+    v-if="showSettings"
+    :models="availableModels"
+    :providers="availableProviders"
+    :density="density"
+    :theme="theme"
+    @close="showSettings = false"
+    @update:density="setDensity"
+    @reset-theme="resetTheme"
+    @apply-preset="applyThemePreset"
+    @update-stops="updateThemeStops"
+    @update-angle="updateThemeAngle"
+    @update-opacity="updateThemeOpacity"
+    @update-text-color="updateThemeTextColor"
+    @add-stop="addThemeStop"
+    @remove-stop="removeThemeStop"
+    @sort-stops="sortThemeStops"
+    @create-provider="createProvider"
+    @update-provider="updateProvider"
+    @delete-provider="deleteProvider"
+    @create-model="createModel"
+    @update-model="updateModel"
+    @delete-model="deleteModel"
+  />
+  <WorkspaceShell
+    v-else
+    product-name="LamTools Core"
+    :storage-key="settingsStorageKey"
+    :density="density"
+    :theme="theme"
+    :composer-disabled="composerActionMode === 'send' && (!activeSessionId || !composerText.trim())"
+    :composer-action-mode="composerActionMode"
+    :error-text="workbenchErrorText"
+    :notice-text="runtimeStatusText"
+    @new-session="newSession"
+    @settings="showSettings = true"
+    @composer-submit="submitComposer"
+  >
     <template #sidebar-body>
       <SessionSidebar
         :project-groups="projectGroups"
-        :active-session-id="activeSessionId"
-        @select-session="handleSelectSession"
+        :active-session-id="activeSessionId || undefined"
+        :allow-session-delete="true"
+        @select-session="selectSession"
+        @new-session="newSession"
+        @rename-session="renameSession"
+        @delete-session="deleteSession"
       />
     </template>
 
     <template #main-content>
-      <ChatThread :messages="activeMessages" />
+      <section
+        ref="threadScrollEl"
+        class="thread"
+        @scroll.passive="threadScroll.handleScroll"
+        @wheel.passive="threadScroll.handleWheel"
+      >
+        <ChatThread
+          :messages="messages"
+          :process-expanded-ids="processExpandedIds"
+          @toggle-process="toggleProcess"
+          @decision-select="approvalController.handleDecision"
+        />
+      </section>
     </template>
 
     <template #composer-textarea>
-      <ComposerBar
-        v-model="composerText"
-        placeholder="Type a message..."
-        @submit="handleSubmit"
+      <CoreQueuedInputTray
+        v-model:draft="queuedInputDraft"
+        :items="queuedInputs"
+        :editing-id="editingQueuedInputId"
+        :can-guide="canGuideQueuedInput"
+        :submitting-ids="queueController.submittingItemIds.value"
+        @edit="(item) => queueController.beginEdit(item as CoreQueuedInput)"
+        @save="(item) => queueController.save(item as CoreQueuedInput)"
+        @cancel="queueController.cancelEdit"
+        @delete="(item) => queueController.remove(item as CoreQueuedInput)"
+        @guide="(item) => queueController.guide(item as CoreQueuedInput)"
+      />
+      <div class="composer-input-wrap" :class="{ 'has-command-tokens': hasComposerCommandTokens }">
+        <CommandPalette
+          v-if="commandPaletteVisible"
+          :commands="commandPalette.filteredCommands.value"
+          :active-index="commandPalette.activeIndex.value"
+          @select="liveComposerController.selectCommand"
+        />
+        <div v-if="hasComposerCommandTokens" class="composer-syntax-overlay" aria-hidden="true">
+          <span
+            v-for="(segment, index) in composerHighlightSegments"
+            :key="index"
+            :class="{ 'composer-skill-token': segment.command }"
+          >{{ segment.text }}</span>
+        </div>
+        <textarea
+          ref="composerTextareaEl"
+          v-model="composerText"
+          :disabled="!activeSessionId"
+          placeholder="给 Core Agent 发送任务..."
+          rows="1"
+          @input="handleComposerInput"
+          @click="updateComposerCursor"
+          @keyup="handleComposerKeyup"
+          @keydown="handleComposerKeydown"
+        />
+      </div>
+    </template>
+
+    <template #composer-tools>
+      <CoreExecutionControls
+        :model-value="selectedModelId"
+        :thinking-mode="selectedThinkingMode"
+        :shallow-thinking-enabled="shallowThinkingEnabled"
+        :model-options="modelOptions"
+        :thinking-mode-options="thinkingModeOptions"
+        shallow-label="Shallow"
+        @update:model-value="executionControls.selectModel"
+        @update:thinking-mode="executionControls.selectThinkingMode"
+        @update:shallow-thinking-enabled="setShallowThinking"
       />
     </template>
 
     <template #right-panel>
-      <RuntimePanel :events="runtimeEvents" />
+      <RuntimePanel :events="events" :step-groups="stepGroups" />
     </template>
   </WorkspaceShell>
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue';
-import type { CoreSessionListItem, CoreMessage, CoreRuntimeEvent } from '../types';
+import {
+  computed,
+  nextTick,
+  onMounted,
+  onUnmounted,
+  reactive,
+  ref,
+  shallowRef,
+  watch,
+} from 'vue'
+import type {
+  CoreInputItem,
+  CoreRuntimeEvent,
+  CoreRuntimeStepGroup,
+  CoreSessionListItem,
+} from '../types'
+import {
+  DEFAULT_THEME,
+  addGradientStop,
+  normalizeTheme,
+  removeGradientStop,
+  sortGradientStops,
+  type ThemeArea,
+  type ThemeData,
+  type ThemePreset,
+  type ThemeStop,
+} from '../helpers/theme'
+import {
+  appServerUrl,
+  CoreAppServerClient,
+  createCoreAppServerRuntimeController,
+  createCoreAppServerRuntimeState,
+  hydrateSnapshot,
+  selectCoreQueuedInputs,
+  selectLatestActiveTurnId,
+  selectLatestTurnStatus,
+  type CoreAppEvent,
+  type CoreAppSnapshot,
+  type CoreQueuedInput,
+} from '../appServer'
+import { buildCoreComposerHighlightSegments } from '../composer/inputItems'
+import {
+  useCoreApprovalController,
+  useCoreAutoFollowScroll,
+  useCoreExecutionControlsState,
+  useCoreLiveComposerController,
+  useCoreQueuedInputController,
+  useCoreWorkbenchProjectionController,
+} from '../composables'
 
-import WorkspaceShell from '../components/WorkspaceShell.vue';
-import SessionSidebar from '../components/SessionSidebar.vue';
-import ChatThread from '../components/ChatThread.vue';
-import ComposerBar from '../components/ComposerBar.vue';
-import RuntimePanel from '../components/RuntimePanel.vue';
+import ChatThread from '../components/ChatThread.vue'
+import CommandPalette from '../components/CommandPalette.vue'
+import CoreExecutionControls from '../components/CoreExecutionControls.vue'
+import CoreQueuedInputTray from '../components/CoreQueuedInputTray.vue'
+import CoreSettings, {
+  type CoreSettingsDensity,
+  type CoreSettingsModelPayload,
+  type CoreSettingsProviderPayload,
+} from '../components/CoreSettings.vue'
+import RuntimePanel from '../components/RuntimePanel.vue'
+import SessionSidebar from '../components/SessionSidebar.vue'
+import WorkspaceShell from '../components/WorkspaceShell.vue'
 
-// --- Neutral sample data ---
-const sessions = ref<CoreSessionListItem[]>([
-  { id: 's1', title: 'First session', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T12:00:00Z' },
-  { id: 's2', title: 'Second session', createdAt: '2026-02-01T00:00:00Z' },
-  { id: 's3', title: 'Third session', createdAt: '2026-03-01T00:00:00Z', updatedAt: '2026-03-15T09:30:00Z' },
-]);
+type RawSession = {
+  id: string
+  title: string
+  status?: string
+  created_at?: string
+  updated_at?: string
+  metadata?: Record<string, unknown>
+}
 
-const projectGroups = computed(() => [
-  {
-    id: 'demo',
-    name: 'Demo Project',
-    sessions: sessions.value,
+type RawModel = {
+  id: string
+  provider_id?: string
+  model_id?: string
+  display_name?: string
+  context_window?: number
+  max_output_tokens?: number
+  thinking_supported?: boolean
+  thinking_budget?: number
+  temperature?: number
+}
+
+type RawProvider = {
+  id: string
+  name: string
+  api_type?: string
+  base_url?: string
+  has_api_key?: boolean
+}
+
+const apiBase = (import.meta.env.VITE_CORE_API_BASE || '/api/core').replace(/\/$/, '')
+const sessions = ref<CoreSessionListItem[]>([])
+const activeSessionId = ref<string | null>(null)
+const runtime = reactive(createCoreAppServerRuntimeState<CoreAppSnapshot, CoreAppServerClient>())
+const snapshot = computed(() => runtime.state)
+const events = ref<CoreRuntimeEvent[]>([])
+const composerText = ref('')
+const composerCursor = ref(0)
+const composerTextareaEl = ref<HTMLTextAreaElement | null>(null)
+const composerErrorText = ref('')
+const runtimeStatusText = ref('')
+const loadError = ref<string | null>(null)
+const settingsStorageKey = 'lamtools.core.ui'
+const showSettings = ref(false)
+const density = ref<CoreSettingsDensity>('standard')
+const theme = ref<ThemeData>(normalizeTheme(DEFAULT_THEME))
+const availableModels = ref<RawModel[]>([])
+const availableProviders = ref<RawProvider[]>([])
+const emptyAttachments = computed<CoreInputItem[]>(() => [])
+const threadScrollEl = ref<HTMLElement | null>(null)
+const threadScroll = useCoreAutoFollowScroll(threadScrollEl)
+const COMPOSER_MAX_ROWS = 5
+let threadResizeObserver: ResizeObserver | null = null
+let configClient: CoreAppServerClient | null = null
+
+const defaultModel = computed(() => availableModels.value[0] || null)
+const executionControls = useCoreExecutionControlsState({
+  models: availableModels,
+  providers: availableProviders,
+  defaultModel,
+  storage: window.localStorage,
+  initial: { thinkingMode: 'medium' },
+})
+const {
+  modelOptions,
+  selectedModelId,
+  selectedThinkingMode,
+  shallowThinkingEnabled,
+  thinkingModeOptions,
+} = executionControls
+
+const latestStatus = computed(() => snapshot.value ? selectLatestTurnStatus(snapshot.value) : 'idle')
+
+const stepGroups = computed<CoreRuntimeStepGroup[]>(() => {
+  if (!snapshot.value || latestStatus.value === 'idle') return []
+  const active = latestStatus.value === 'running' || latestStatus.value === 'waiting'
+  return [{
+    id: 'core-live',
+    label: 'Core',
+    status: active ? 'running' : latestStatus.value === 'failed' ? 'failed' : 'completed',
+    steps: events.value.slice(-20).map((event) => ({
+      id: event.id,
+      title: event.type,
+      status: event.type.includes('interrupted') ? 'failed' : active ? 'running' : 'completed',
+      timestamp: event.timestamp,
+      metadata: { event },
+    })),
+  }]
+})
+
+const projectGroups = computed(() => [{
+  id: 'core',
+  name: 'Core Agent',
+  sessions: sessions.value,
+}])
+
+const runtimeController = createCoreAppServerRuntimeController(runtime, {
+  hydrateSnapshot,
+  createClient: ({ apiBase: frontendBase, onSnapshot, onConnectionState }) => new CoreAppServerClient({
+    url: appServerUrl(frontendBase, { path: '/api/core/app-server' }),
+    clientInfo: { name: 'lamtools_core_frontend', title: 'LamTools Core Frontend', version: '0.1.0' },
+    onSnapshot,
+    onEvent: appendLiveEvent,
+    onConnectionState: (state) => {
+      onConnectionState(state)
+      if (state === 'error') {
+        loadError.value = 'Core App Server 连接失败'
+      } else if (state === 'open' && loadError.value === 'Core App Server 连接失败') {
+        loadError.value = null
+      }
+    },
+  }),
+})
+
+const liveComposerController = useCoreLiveComposerController({
+  activeThreadId: activeSessionId,
+  connectedThreadId: computed(() => runtime.activeThreadId),
+  connectionState: computed(() => runtime.connectionState),
+  text: composerText,
+  cursor: composerCursor,
+  status: latestStatus,
+  attachments: emptyAttachments,
+  connect: connectLive,
+  startTurn: (threadId, input, workRoot, options) => runtimeController.startTurn(threadId, input, workRoot, options),
+  interruptTurn: (threadId) => runtimeController.interruptTurn(threadId),
+  queueInput: (threadId, input) => runtimeController.queueInput(threadId, input),
+  listCommands: (workRoot) => runtimeController.listCommands(workRoot),
+  getWorkRoot: currentWorkRoot,
+  executeCommand: async (threadId, command, workRoot) => {
+    await runtimeController.executeCommand(threadId, command, workRoot)
+    return true
   },
-]);
+  canExecuteCommand: () => latestStatus.value !== 'running' && latestStatus.value !== 'waiting',
+  turnOptions: () => ({
+    ...(selectedModelId.value ? { model_id: selectedModelId.value } : {}),
+    ...executionControls.turnOptions(),
+  }),
+  clearComposer: clearComposerAfterPersisted,
+  focusComposer,
+  setStatusText: (text) => {
+    runtimeStatusText.value = text
+  },
+  onError: (text) => {
+    composerErrorText.value = text
+  },
+  onTurnStarted: refreshSessions,
+  messages: {
+    commandCatalogLoadFailed: (error) => `命令列表加载失败：${error}`,
+    noActiveThread: '请先选择会话',
+    queued: '已加入待发送',
+    sent: '已发送',
+    stopping: '正在停止',
+    stopFailed: '停止失败',
+    sendFailed: '发送失败',
+  },
+})
+const {
+  actionMode: composerActionMode,
+  commandCatalog,
+  commandPalette,
+  paletteVisible: commandPaletteVisible,
+} = liveComposerController
+const composerHighlightSegments = computed(() => (
+  buildCoreComposerHighlightSegments(composerText.value, commandCatalog.value)
+))
+const hasComposerCommandTokens = computed(() => (
+  composerHighlightSegments.value.some((segment) => segment.command)
+))
 
-const messagesBySession: Record<string, CoreMessage[]> = {
-  s1: [
-    { id: 'm1', role: 'user', content: 'Hello, this is a sample message.', timestamp: '2026-01-01T10:00:00Z' },
-    { id: 'm2', role: 'assistant', content: 'This is a sample response.', timestamp: '2026-01-01T10:00:05Z' },
-  ],
-  s2: [
-    { id: 'm3', role: 'user', content: 'Another session, another message.', timestamp: '2026-02-01T08:00:00Z' },
-  ],
-  s3: [
-    { id: 'm4', role: 'user', content: 'Third session message.', timestamp: '2026-03-01T14:00:00Z' },
-    { id: 'm5', role: 'assistant', content: 'Third session response.', timestamp: '2026-03-01T14:00:10Z' },
-  ],
-};
+const approvalControllerRef = shallowRef<ReturnType<typeof useCoreApprovalController>>()
+const projectionController = useCoreWorkbenchProjectionController({
+  snapshot,
+  activeThreadId: activeSessionId,
+  status: latestStatus,
+  submittingApprovalRequestIds: computed(() => (
+    approvalControllerRef.value?.submittingRequestIds.value ?? new Set<string>()
+  )),
+  shallowThinkingPending: shallowThinkingEnabled,
+  source: 'core_app_server',
+  onStatusChange: ({ status }) => syncActiveSessionStatus(status),
+})
+const { messages, processExpandedIds, toggleProcess } = projectionController
 
-const runtimeEvents = ref<CoreRuntimeEvent[]>([
-  { id: 'e1', type: 'start', timestamp: '2026-01-01T10:00:00Z' },
-  { id: 'e2', type: 'tool_call', timestamp: '2026-01-01T10:00:02Z', data: { name: 'read_file' } },
-  { id: 'e3', type: 'complete', timestamp: '2026-01-01T10:00:05Z' },
-]);
+const approvalController = useCoreApprovalController({
+  messages,
+  hasActiveThread: computed(() => Boolean(activeSessionId.value)),
+  canRespondApproval: computed(() => runtime.connectionState === 'open'),
+  ensureApprovalChannel: () => liveComposerController.ensureConnected(activeSessionId.value || ''),
+  respondApproval: (requestId, decision, guidance) => (
+    runtimeController.respondApproval(requestId, decision, guidance)
+  ),
+  submitText: async (text) => {
+    composerText.value = text
+    await liveComposerController.submit({ clearComposer: true })
+  },
+  deferText: (text) => {
+    composerText.value = text
+  },
+})
+approvalControllerRef.value = approvalController
+const workbenchErrorText = computed(() => (
+  loadError.value || composerErrorText.value || approvalController.lastError.value
+))
 
-const activeSessionId = ref('s1');
-const composerText = ref('');
+const queuedInputs = computed<CoreQueuedInput[]>(() => {
+  if (!snapshot.value || snapshot.value.thread_id !== activeSessionId.value) return []
+  return selectCoreQueuedInputs(snapshot.value)
+})
+const activeTurnId = computed(() => snapshot.value ? selectLatestActiveTurnId(snapshot.value) : '')
+const queueController = useCoreQueuedInputController({
+  activeTurnId,
+  ensureConnected: async (threadId) => {
+    if (!await liveComposerController.ensureConnected(threadId)) {
+      throw new Error(liveComposerController.lastError.value)
+    }
+  },
+  updateQueueInput: (threadId, itemId, text) => runtimeController.updateQueueInput(threadId, itemId, text),
+  deleteQueueInput: (threadId, itemId) => runtimeController.deleteQueueInput(threadId, itemId),
+  guideQueueInput: (threadId, turnId, itemId, text) => (
+    runtimeController.guideQueueInput(threadId, turnId, itemId, text)
+  ),
+  onError: (error) => {
+    composerErrorText.value = error instanceof Error ? error.message : String(error)
+  },
+})
+const editingQueuedInputId = queueController.editingId
+const queuedInputDraft = queueController.draft
+const canGuideQueuedInput = queueController.canGuide
 
-const activeMessages = computed(() => messagesBySession[activeSessionId.value] ?? []);
-
-function handleSelectSession(id: string) {
-  activeSessionId.value = id;
+async function loadInitialData() {
+  try {
+    loadError.value = null
+    await Promise.all([loadModelOptions(), refreshSessions()])
+    if (sessions.value[0]) await selectSession(sessions.value[0].id)
+  } catch (error) {
+    loadError.value = error instanceof Error ? error.message : String(error)
+  }
 }
 
-function handleSubmit() {
-  if (!composerText.value.trim()) return;
-  // In a real app, this would emit to a parent or store.
-  // For demo, we just clear the input.
-  composerText.value = '';
+async function refreshSessions() {
+  const loaded = (await requestJson<RawSession[]>('/sessions')).map(toSession)
+  const currentId = activeSessionId.value
+  sessions.value = loaded.map((session) => (
+    session.id === currentId ? { ...session, status: latestStatus.value } : session
+  ))
 }
+
+async function newSession() {
+  const id = `core-ui-${Date.now().toString(36)}-${Math.random().toString(16).slice(2, 8)}`
+  const session = toSession(await requestJson<RawSession>('/sessions', {
+    method: 'POST',
+    body: {
+      id,
+      member_id: 'core',
+      title: '新会话',
+      status: 'idle',
+      metadata: { source: 'core-ui' },
+    },
+  }))
+  sessions.value = [session, ...sessions.value.filter((item) => item.id !== session.id)]
+  await selectSession(session.id)
+}
+
+async function renameSession(sessionId: string, title: string) {
+  const updated = toSession(await requestJson<RawSession>(`/sessions/${encodeURIComponent(sessionId)}`, {
+    method: 'PATCH',
+    body: { title },
+  }))
+  sessions.value = sessions.value.map((session) => session.id === sessionId ? updated : session)
+}
+
+async function deleteSession(sessionId: string) {
+  try {
+    await requestJson(`/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' })
+  } catch (error) {
+    composerErrorText.value = error instanceof Error ? error.message : String(error)
+    return
+  }
+  const deletedActiveSession = activeSessionId.value === sessionId
+  if (deletedActiveSession) {
+    runtimeController.disconnect()
+    liveComposerController.resetForThreadChange()
+    activeSessionId.value = null
+    events.value = []
+  }
+  await refreshSessions()
+  if (deletedActiveSession && sessions.value[0]) await selectSession(sessions.value[0].id)
+}
+
+async function selectSession(id: string) {
+  activeSessionId.value = id
+  runtimeController.disconnect()
+  liveComposerController.resetForThreadChange()
+  events.value = []
+  composerErrorText.value = ''
+  runtimeStatusText.value = ''
+  await connectLive(id)
+  await liveComposerController.loadCommandCatalog(id)
+  await threadScroll.scrollToBottom(true)
+}
+
+async function connectLive(threadId: string) {
+  await runtimeController.connect(window.location.origin, threadId)
+}
+
+async function submitComposer() {
+  composerErrorText.value = ''
+  await liveComposerController.submit({ clearComposer: true })
+}
+
+async function handleComposerKeydown(event: KeyboardEvent) {
+  updateComposerCursor()
+  await liveComposerController.handleKeydown(event)
+}
+
+async function handleComposerKeyup(event: KeyboardEvent) {
+  updateComposerCursor()
+  await liveComposerController.handleKeyup(event)
+}
+
+function handleComposerInput() {
+  composerErrorText.value = ''
+  resizeComposerTextarea()
+  updateComposerCursor()
+}
+
+function updateComposerCursor() {
+  composerCursor.value = composerTextareaEl.value?.selectionStart ?? composerText.value.length
+}
+
+function focusComposer(cursor: number) {
+  void nextTick(() => {
+    const textarea = composerTextareaEl.value
+    if (!textarea) return
+    textarea.focus()
+    textarea.setSelectionRange(cursor, cursor)
+  })
+}
+
+function clearComposerAfterPersisted(expectedText: string) {
+  if (composerText.value.trim() !== expectedText) return
+  composerText.value = ''
+  void nextTick(resizeComposerTextarea)
+}
+
+function resizeComposerTextarea() {
+  const element = composerTextareaEl.value
+  if (!element) return
+  element.style.height = 'auto'
+  const style = window.getComputedStyle(element)
+  const lineHeight = Number.parseFloat(style.lineHeight) || 22
+  const paddingTop = Number.parseFloat(style.paddingTop) || 0
+  const paddingBottom = Number.parseFloat(style.paddingBottom) || 0
+  const maxHeight = lineHeight * COMPOSER_MAX_ROWS + paddingTop + paddingBottom
+  element.style.height = `${Math.min(element.scrollHeight, maxHeight)}px`
+  element.style.overflowY = element.scrollHeight > maxHeight ? 'auto' : 'hidden'
+}
+
+function setShallowThinking(enabled: boolean) {
+  shallowThinkingEnabled.value = enabled
+}
+
+function loadSettings() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(settingsStorageKey) || '{}') as {
+      density?: CoreSettingsDensity
+      theme?: Partial<ThemeData>
+    }
+    if (saved.density === 'compact' || saved.density === 'standard' || saved.density === 'loose') {
+      density.value = saved.density
+    }
+    if (saved.theme) theme.value = normalizeTheme({ ...DEFAULT_THEME, ...saved.theme })
+  } catch {
+    // Browser storage can be unavailable in desktop shells.
+  }
+}
+
+function persistSettings() {
+  try {
+    localStorage.setItem(settingsStorageKey, JSON.stringify({
+      density: density.value,
+      theme: theme.value,
+    }))
+  } catch {
+    // Browser storage can be unavailable in desktop shells.
+  }
+}
+
+function setDensity(value: CoreSettingsDensity) {
+  density.value = value
+  persistSettings()
+}
+
+function resetTheme() {
+  theme.value = normalizeTheme(DEFAULT_THEME)
+  persistSettings()
+}
+
+function applyThemePreset(preset: ThemePreset) {
+  theme.value = normalizeTheme({ ...DEFAULT_THEME, ...preset.theme })
+  persistSettings()
+}
+
+function updateThemeField(field: keyof ThemeData, value: ThemeData[keyof ThemeData]) {
+  theme.value = { ...theme.value, [field]: value } as ThemeData
+  persistSettings()
+}
+
+function updateThemeStops(area: ThemeArea, stops: ThemeStop[]) {
+  updateThemeField(`${area}Stops` as keyof ThemeData, stops)
+}
+
+function updateThemeAngle(area: ThemeArea, angle: number) {
+  updateThemeField(`${area}Angle` as keyof ThemeData, angle)
+}
+
+function updateThemeOpacity(area: ThemeArea, opacity: number) {
+  if (area !== 'backdrop') updateThemeField(`${area}Opacity` as keyof ThemeData, opacity)
+}
+
+function updateThemeTextColor(area: ThemeArea, color: string) {
+  updateThemeField(`${area}Text` as keyof ThemeData, color)
+}
+
+function addThemeStop(area: ThemeArea) {
+  updateThemeStops(area, addGradientStop(theme.value[`${area}Stops` as keyof ThemeData] as ThemeStop[]))
+}
+
+function removeThemeStop(area: ThemeArea, index: number) {
+  updateThemeStops(area, removeGradientStop(theme.value[`${area}Stops` as keyof ThemeData] as ThemeStop[], index))
+}
+
+function sortThemeStops(area: ThemeArea) {
+  updateThemeStops(area, sortGradientStops(theme.value[`${area}Stops` as keyof ThemeData] as ThemeStop[]))
+}
+
+async function createProvider(payload: CoreSettingsProviderPayload) {
+  await mutateConfig('config.provider.create', payload, '供应商已添加')
+}
+
+async function updateProvider(payload: CoreSettingsProviderPayload) {
+  await mutateConfig('config.provider.update', payload, '供应商已更新')
+}
+
+async function deleteProvider(providerId: string) {
+  if (!window.confirm('删除供应商会同时移除其模型配置，是否继续？')) return
+  await mutateConfig('config.provider.delete', { provider_id: providerId }, '供应商已删除')
+}
+
+async function createModel(payload: CoreSettingsModelPayload) {
+  await mutateConfig('config.model.create', payload, '模型已添加')
+}
+
+async function updateModel(payload: CoreSettingsModelPayload) {
+  await mutateConfig('config.model.update', payload, '模型已更新')
+}
+
+async function deleteModel(modelRecordId: string) {
+  if (!window.confirm('删除此模型配置，是否继续？')) return
+  await mutateConfig('config.model.delete', { model_record_id: modelRecordId }, '模型已删除')
+}
+
+async function mutateConfig(method: string, params: object, successText: string) {
+  try {
+    loadError.value = null
+    await requestConfigOperation(method, params as Record<string, unknown>)
+    await loadModelOptions()
+    runtimeStatusText.value = successText
+  } catch (error) {
+    loadError.value = error instanceof Error ? error.message : String(error)
+  }
+}
+
+async function requestConfigOperation(method: string, params: Record<string, unknown> = {}) {
+  if (!configClient) {
+    const client = new CoreAppServerClient({
+      url: appServerUrl(window.location.origin, { path: '/api/core/app-server' }),
+      clientInfo: { name: 'lamtools_core_settings', title: 'LamTools Core Settings', version: '0.1.0' },
+      onConnectionState: (state) => {
+        if (state === 'closed' || state === 'error') configClient = null
+      },
+    })
+    await client.connect()
+    configClient = client
+  }
+  return await configClient.request(method, params)
+}
+
+function currentWorkRoot(): string {
+  const session = sessions.value.find((item) => item.id === activeSessionId.value)
+  const workRoot = session?.metadata?.work_root
+  return typeof workRoot === 'string' ? workRoot : ''
+}
+
+function syncActiveSessionStatus(status: string) {
+  const sessionId = activeSessionId.value
+  if (!sessionId) return
+  const index = sessions.value.findIndex((item) => item.id === sessionId)
+  if (index < 0) return
+  const next = [...sessions.value]
+  next[index] = { ...next[index], status, updatedAt: new Date().toISOString() }
+  sessions.value = next
+}
+
+async function loadModelOptions() {
+  try {
+    const providersResponse = await requestConfigOperation('config.providers.list')
+    const modelsResponse = await requestConfigOperation('config.models.list')
+    availableProviders.value = Array.isArray(providersResponse.providers)
+      ? providersResponse.providers as RawProvider[]
+      : []
+    availableModels.value = Array.isArray(modelsResponse.models)
+      ? modelsResponse.models as RawModel[]
+      : []
+  } catch {
+    availableModels.value = []
+    availableProviders.value = []
+  }
+}
+
+function appendLiveEvent(event: CoreAppEvent) {
+  const runtimeEvent: CoreRuntimeEvent = {
+    id: event.event_id,
+    type: event.method,
+    timestamp: event.created_at,
+    data: event.payload,
+  }
+  if (events.value.some((item) => item.id === runtimeEvent.id)) return
+  events.value = [...events.value, runtimeEvent].sort((a, b) => a.timestamp.localeCompare(b.timestamp))
+}
+
+function syncThreadResizeObserver() {
+  if (typeof ResizeObserver === 'undefined') return
+  threadResizeObserver?.disconnect()
+  threadResizeObserver = new ResizeObserver(() => {
+    void threadScroll.scrollToBottom()
+  })
+  const element = threadScrollEl.value
+  if (!element) return
+  threadResizeObserver.observe(element)
+  for (const child of Array.from(element.children)) {
+    if (child instanceof HTMLElement) threadResizeObserver.observe(child)
+  }
+}
+
+async function requestJson<T = unknown>(
+  path: string,
+  options: { method?: string; body?: unknown } = {},
+): Promise<T> {
+  const response = await fetch(`${apiBase}${path}`, {
+    method: options.method || 'GET',
+    headers: options.body === undefined ? undefined : { 'Content-Type': 'application/json' },
+    body: options.body === undefined ? undefined : JSON.stringify(options.body),
+  })
+  if (!response.ok) {
+    const text = await response.text()
+    throw new Error(text || `${response.status} ${response.statusText}`)
+  }
+  return await response.json() as T
+}
+
+function toSession(raw: RawSession): CoreSessionListItem {
+  return {
+    id: raw.id,
+    title: raw.title || raw.id,
+    createdAt: raw.created_at || '',
+    updatedAt: raw.updated_at,
+    groupId: 'core',
+    status: raw.status,
+    metadata: raw.metadata,
+  }
+}
+
+watch(composerText, () => {
+  void nextTick(resizeComposerTextarea)
+})
+
+watch(messages, async () => {
+  await nextTick()
+  syncThreadResizeObserver()
+  await threadScroll.scrollToBottom()
+}, { deep: true })
+
+onMounted(() => {
+  loadSettings()
+  void loadInitialData()
+})
+
+onUnmounted(() => {
+  threadResizeObserver?.disconnect()
+  runtimeController.disconnect()
+  configClient?.close()
+  configClient = null
+})
 </script>
 
 <style>
+@import '../styles/variables.css';
 @import '../styles/base.css';
-@import '../styles/workspace.css';
+@import '../styles/layout.css';
 </style>

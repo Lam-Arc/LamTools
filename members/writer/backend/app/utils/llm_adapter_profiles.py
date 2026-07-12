@@ -10,20 +10,36 @@ from lamtools_core.llm.profiles import (
     resolve_adapter_profile_from_profiles,
 )
 
-from app.core.resource_dirs import appdata_writer_dir, writer_resource_roots
+from app.core.resource_dirs import appdata_writer_dir, core_resource_roots, writer_resource_roots
 
 
-def _builtin_profile_dir() -> Path:
+def _writer_source_profile_dir() -> Path:
     return Path(__file__).resolve().parents[1] / "llm_adapters"
 
 
-def _default_profile_dirs() -> list[Path]:
-    dirs: list[Path] = [_builtin_profile_dir()]
+def _core_builtin_profile_dirs() -> list[Path]:
+    return _dedupe_dirs([root / "llm_adapters" for root in core_resource_roots()])
+
+
+def _writer_builtin_profile_dirs() -> list[Path]:
+    return [_writer_source_profile_dir()]
+
+
+def _runtime_profile_dirs() -> list[Path]:
+    dirs: list[Path] = []
     for root in writer_resource_roots():
         dirs.extend([
             root / "llm_adapters",
             root / "backend" / "app" / "llm_adapters",
         ])
+    return _dedupe_dirs(dirs)
+
+
+def _default_profile_dirs() -> list[Path]:
+    dirs: list[Path] = []
+    dirs.extend(_core_builtin_profile_dirs())
+    dirs.extend(_writer_builtin_profile_dirs())
+    dirs.extend(_runtime_profile_dirs())
     return _dedupe_dirs(dirs)
 
 

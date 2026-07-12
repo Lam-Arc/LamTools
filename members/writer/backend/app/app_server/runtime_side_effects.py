@@ -9,13 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.app_server import WriterArtifact
 from lamtools_core.event import RunItemEvent
 
-from .approvals import create_server_request
-
-
 async def persist_run_item_side_effects(db: AsyncSession, event: RunItemEvent) -> None:
     await _persist_run_item_artifacts(db, event)
-    if event.kind == "approval_request":
-        await _persist_run_item_request(db, event)
 
 
 def _artifact_id(thread_id: str, turn_id: str, item_id: str, artifact: dict[str, Any]) -> str:
@@ -78,22 +73,6 @@ async def _persist_writer_artifact(
             content_hash=payload.get("content_hash") or payload.get("contentHash"),
             metadata_=payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {},
         )
-    )
-
-
-async def _persist_run_item_request(db: AsyncSession, event: RunItemEvent) -> None:
-    payload = event.payload or {}
-    request_id = str(payload.get("request_id") or event.item_id or event.event_id)
-    if not request_id:
-        return
-    await create_server_request(
-        db,
-        request_id=request_id,
-        thread_id=event.thread_id,
-        turn_id=event.turn_id or None,
-        item_id=event.item_id or None,
-        kind=str(payload.get("kind") or "approval"),
-        options=payload.get("options") if isinstance(payload.get("options"), list) else [],
     )
 
 

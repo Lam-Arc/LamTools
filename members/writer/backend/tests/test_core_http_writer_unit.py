@@ -24,12 +24,14 @@ import pytest
 from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.database import Base, get_db
+from app.database import Base, get_db, writer_write_coordinator
 from app.models.llm_config import LLMProvider, LLMModel
+from app.shared_config_database import get_shared_config_db
 from app.routers.config import router as config_router
 from app.routers.session import router as session_router
-from app.routers.core_http import router as core_http_router
+from app.routers.core_http import get_writer_write, router as core_http_router
 from lamtools_core.app import create_app
+from lamtools_core.config.shared_database import init_shared_config_schema
 from lamtools_core.member import MemberManifest
 from fastapi.testclient import TestClient
 
@@ -46,18 +48,25 @@ def test_app_and_client():
     # while SQLite still holds the file.
     tmp_dir = tempfile.mkdtemp()
     db_path = Path(tmp_dir) / "test.db"
+    shared_db_path = Path(tmp_dir) / "shared.db"
 
     engine = create_async_engine(
         f"sqlite+aiosqlite:///{db_path}",
         future=True,
     )
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    shared_engine = create_async_engine(
+        f"sqlite+aiosqlite:///{shared_db_path}",
+        future=True,
+    )
+    shared_session_factory = async_sessionmaker(shared_engine, expire_on_commit=False)
 
     # Create tables via a dedicated event loop (then close it)
     init_loop = asyncio.new_event_loop()
     async def _init():
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+        await init_shared_config_schema(shared_engine)
     init_loop.run_until_complete(_init())
     init_loop.close()
 
@@ -90,7 +99,13 @@ def test_app_and_client():
         async with session_factory() as db:
             yield db
 
+    async def _override_get_shared_config_db():
+        async with shared_session_factory() as db:
+            yield db
+
     app.dependency_overrides[get_db] = _override_get_db
+    app.dependency_overrides[get_shared_config_db] = _override_get_shared_config_db
+    app.dependency_overrides[get_writer_write] = lambda: writer_write_coordinator(session_factory).run
 
     # Mount Writer routers
     app.include_router(session_router, prefix="/api")
@@ -103,6 +118,7 @@ def test_app_and_client():
     # Cleanup: dispose engine first, then remove temp dir
     cleanup_loop = asyncio.new_event_loop()
     cleanup_loop.run_until_complete(engine.dispose())
+    cleanup_loop.run_until_complete(shared_engine.dispose())
     cleanup_loop.close()
     shutil.rmtree(tmp_dir, ignore_errors=True)
 

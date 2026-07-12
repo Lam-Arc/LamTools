@@ -2,9 +2,15 @@ from __future__ import annotations
 
 import os
 import platform
+import sqlite3
 from pathlib import Path
 
 from pydantic_settings import BaseSettings
+
+
+SHARED_CONFIG_TABLES = ("llm_models", "llm_providers")
+SHARED_SETTING_NAMESPACES = {"lamwriter.modelRouting"}
+SHARED_SETTING_PREFIXES = ("core.", "lamtools.")
 
 
 def _default_project_data_dir() -> Path:
@@ -28,8 +34,31 @@ def _migrate_legacy_database(target_dir: Path, legacy_dir: Path | None = None) -
     if target.exists() or not source.exists():
         return False
     target_dir.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(source.read_bytes())
+    with sqlite3.connect(source) as source_conn, sqlite3.connect(target) as target_conn:
+        source_conn.backup(target_conn)
+    _strip_shared_config_from_writer_db(target)
     return True
+
+
+def _strip_shared_config_from_writer_db(path: Path) -> None:
+    with sqlite3.connect(path) as conn:
+        conn.execute("PRAGMA foreign_keys=OFF")
+        for table in SHARED_CONFIG_TABLES:
+            conn.execute(f"DROP TABLE IF EXISTS {table}")
+        if _sqlite_table_exists(conn, "app_settings"):
+            for namespace in SHARED_SETTING_NAMESPACES:
+                conn.execute("DELETE FROM app_settings WHERE namespace = ?", (namespace,))
+            for prefix in SHARED_SETTING_PREFIXES:
+                conn.execute("DELETE FROM app_settings WHERE namespace LIKE ?", (f"{prefix}%",))
+        conn.commit()
+
+
+def _sqlite_table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    row = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+        (table,),
+    ).fetchone()
+    return row is not None
 
 
 class Settings(BaseSettings):
@@ -73,12 +102,15 @@ class Settings(BaseSettings):
     model_config = {"env_file": ".env", "env_prefix": "LAMWRITER_"}
 
     def model_post_init(self, __context) -> None:
+        explicit_database_url = bool(self.database_url)
+
         # Data directory
         if not self.data_dir:
             self.data_dir = str(_default_project_data_dir())
         data_dir = Path(self.data_dir)
         data_dir.mkdir(parents=True, exist_ok=True)
-        _migrate_legacy_database(data_dir)
+        if not explicit_database_url:
+            _migrate_legacy_database(data_dir)
 
         # Database URL
         if not self.database_url:

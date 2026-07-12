@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.llm_config import LLMProvider, LLMModel
+from app.shared_config_database import get_shared_config_db
 from app.services.app_settings import get_app_setting_value, update_app_setting_value
 from app.services.config_read import (
     list_adapter_profile_configs,
@@ -221,7 +222,7 @@ class SettingUpdate(BaseModel):
 # --- Provider CRUD ---
 
 @router.post("/config/providers", response_model=ProviderResponse)
-async def create_provider(body: ProviderCreate, db: AsyncSession = Depends(get_db)):
+async def create_provider(body: ProviderCreate, db: AsyncSession = Depends(get_shared_config_db)):
     return ProviderResponse(**await create_provider_config(db, body.model_dump()))
 
 
@@ -229,13 +230,13 @@ async def create_provider(body: ProviderCreate, db: AsyncSession = Depends(get_d
 async def list_providers(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_shared_config_db),
 ):
     return [ProviderResponse(**row) for row in await list_provider_configs(db, limit=limit, offset=offset)]
 
 
 @router.get("/config/providers/{provider_id}", response_model=ProviderResponse)
-async def get_provider(provider_id: str, db: AsyncSession = Depends(get_db)):
+async def get_provider(provider_id: str, db: AsyncSession = Depends(get_shared_config_db)):
     provider = await db.get(LLMProvider, provider_id)
     if provider is None:
         raise HTTPException(status_code=404, detail="Provider not found")
@@ -244,7 +245,7 @@ async def get_provider(provider_id: str, db: AsyncSession = Depends(get_db)):
 
 @router.patch("/config/providers/{provider_id}", response_model=ProviderResponse)
 async def update_provider(
-    provider_id: str, body: ProviderUpdate, db: AsyncSession = Depends(get_db)
+    provider_id: str, body: ProviderUpdate, db: AsyncSession = Depends(get_shared_config_db)
 ):
     try:
         return ProviderResponse(**await update_provider_config(db, provider_id, body.model_dump(exclude_unset=True)))
@@ -253,7 +254,7 @@ async def update_provider(
 
 
 @router.delete("/config/providers/{provider_id}", status_code=204)
-async def delete_provider(provider_id: str, db: AsyncSession = Depends(get_db)):
+async def delete_provider(provider_id: str, db: AsyncSession = Depends(get_shared_config_db)):
     try:
         await delete_provider_config(db, provider_id)
     except LookupError as exc:
@@ -261,7 +262,7 @@ async def delete_provider(provider_id: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/config/import-env", response_model=ImportEnvResponse)
-async def import_env_config(db: AsyncSession = Depends(get_db)):
+async def import_env_config(db: AsyncSession = Depends(get_shared_config_db)):
     """Import current process LLM settings into DB and route Writer to it."""
     try:
         imported = await import_env_provider_model_config(db)
@@ -278,9 +279,12 @@ async def import_env_config(db: AsyncSession = Depends(get_db)):
 async def get_runtime_capabilities(
     work_root: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
+    shared_db: AsyncSession = Depends(get_shared_config_db),
 ):
     """Expose registered Writer agents and tools for settings UI."""
-    return RuntimeCapabilitiesResponse(**await runtime_capabilities_response(db, work_root=work_root))
+    return RuntimeCapabilitiesResponse(
+        **await runtime_capabilities_response(db, work_root=work_root, shared_db=shared_db)
+    )
 
 
 @router.put("/config/subagents/{name}", response_model=SubAgentDefinitionResponse)
@@ -325,14 +329,25 @@ async def list_adapter_profiles():
 
 
 @router.get("/config/settings/{namespace}", response_model=SettingResponse)
-async def get_app_setting(namespace: str, db: AsyncSession = Depends(get_db)):
-    return SettingResponse(**await get_app_setting_value(db, namespace))
+async def get_app_setting(
+    namespace: str,
+    db: AsyncSession = Depends(get_db),
+    shared_db: AsyncSession = Depends(get_shared_config_db),
+):
+    return SettingResponse(**await get_app_setting_value(db, namespace, shared_db=shared_db))
 
 
 @router.put("/config/settings/{namespace}", response_model=SettingResponse)
-async def put_app_setting(namespace: str, body: SettingUpdate, db: AsyncSession = Depends(get_db)):
+async def put_app_setting(
+    namespace: str,
+    body: SettingUpdate,
+    db: AsyncSession = Depends(get_db),
+    shared_db: AsyncSession = Depends(get_shared_config_db),
+):
     try:
-        return SettingResponse(**await update_app_setting_value(db, namespace, body.value))
+        return SettingResponse(
+            **await update_app_setting_value(db, namespace, body.value, shared_db=shared_db)
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -340,7 +355,7 @@ async def put_app_setting(namespace: str, body: SettingUpdate, db: AsyncSession 
 # --- Model CRUD ---
 
 @router.post("/config/models", response_model=ModelResponse)
-async def create_model(body: ModelCreate, db: AsyncSession = Depends(get_db)):
+async def create_model(body: ModelCreate, db: AsyncSession = Depends(get_shared_config_db)):
     try:
         return ModelResponse(**await create_model_config(db, body.model_dump()))
     except LookupError as exc:
@@ -352,7 +367,7 @@ async def list_models(
     provider_id: str | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_shared_config_db),
 ):
     return [
         ModelResponse(**row)
@@ -361,7 +376,7 @@ async def list_models(
 
 
 @router.get("/config/models/{model_id}", response_model=ModelResponse)
-async def get_model(model_id: str, db: AsyncSession = Depends(get_db)):
+async def get_model(model_id: str, db: AsyncSession = Depends(get_shared_config_db)):
     model = await db.get(LLMModel, model_id)
     if model is None:
         raise HTTPException(status_code=404, detail="Model not found")
@@ -370,7 +385,7 @@ async def get_model(model_id: str, db: AsyncSession = Depends(get_db)):
 
 @router.patch("/config/models/{model_id}", response_model=ModelResponse)
 async def update_model(
-    model_id: str, body: ModelUpdate, db: AsyncSession = Depends(get_db)
+    model_id: str, body: ModelUpdate, db: AsyncSession = Depends(get_shared_config_db)
 ):
     try:
         return ModelResponse(**await update_model_config(db, model_id, body.model_dump(exclude_unset=True)))
@@ -381,7 +396,7 @@ async def update_model(
 
 
 @router.delete("/config/models/{model_id}", status_code=204)
-async def delete_model(model_id: str, db: AsyncSession = Depends(get_db)):
+async def delete_model(model_id: str, db: AsyncSession = Depends(get_shared_config_db)):
     try:
         await delete_model_config(db, model_id)
     except LookupError as exc:
@@ -393,7 +408,7 @@ async def delete_model(model_id: str, db: AsyncSession = Depends(get_db)):
 @router.get("/config/resolved", response_model=ResolvedConfig)
 async def resolve_config(
     task_type: str = Query("default"),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_shared_config_db),
 ):
     """Resolve provider + model from DB.
 

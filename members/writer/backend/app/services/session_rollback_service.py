@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -11,10 +12,133 @@ from app.models.message import WriterMessage
 from app.models.session import WriterSession
 from app.models.transcript import WriterTranscriptBlock, WriterTranscriptTurn
 from app.services.session_rollback_markers import is_rolled_back_metadata, with_rolled_back_metadata
+from app.services.session_git_operation import (
+    SessionGitClaim,
+    claim_session_git_operation,
+    clear_session_git_claim,
+    require_session_git_claim,
+)
 from app.services.transcript_service import bump_transcript_revision
 
 
 _git_manager = WriterGitManager()
+
+
+@dataclass(frozen=True)
+class SessionRollbackClaim:
+    session: SessionGitClaim
+    target_turn_id: str
+    target_sequence: int
+    affected_turn_ids: list[str]
+    restore_ref: str
+    checkpoint_commit: str | None
+    reason: str
+
+
+async def claim_session_rollback(
+    db: AsyncSession,
+    session_id: str,
+    *,
+    turn_id: str | None = None,
+    reason: str = "",
+) -> SessionRollbackClaim:
+    session = await db.get(WriterSession, session_id)
+    if session is None:
+        raise LookupError("Session not found")
+    turns = (
+        await db.execute(
+            select(WriterTranscriptTurn)
+            .where(WriterTranscriptTurn.session_id == session_id)
+            .order_by(WriterTranscriptTurn.sequence.asc())
+        )
+    ).scalars().all()
+    target = _target_turn(turns, turn_id=turn_id)
+    if target is None:
+        raise LookupError("Turn not found")
+    affected = [
+        turn for turn in turns
+        if turn.sequence >= target.sequence and not is_rolled_back_metadata(turn.metadata_)
+    ]
+    checkpoint = _select_bound_checkpoint(session, target.id)
+    return SessionRollbackClaim(
+        session=claim_session_git_operation(session, "session.rollback"),
+        target_turn_id=target.id,
+        target_sequence=target.sequence,
+        affected_turn_ids=[turn.id for turn in affected],
+        restore_ref=_checkpoint_restore_ref(checkpoint) if checkpoint else "",
+        checkpoint_commit=str(checkpoint.get("commit") or "") if checkpoint else None,
+        reason=reason,
+    )
+
+
+async def execute_session_rollback(claim: SessionRollbackClaim) -> dict[str, Any]:
+    if not claim.restore_ref:
+        return {"status": "skipped", "source": "checkpoint", "ref": None, "message": "No checkpoint bound to turn"}
+    if not claim.session.work_root:
+        return {"status": "skipped", "source": "checkpoint", "ref": None, "message": "Session has no work_root set"}
+    if not await _git_manager.is_repo(claim.session.work_root):
+        return {"status": "skipped", "source": "checkpoint", "ref": None, "message": "Not a git repository"}
+    if not await _git_manager.restore_checkpoint(claim.session.work_root, claim.restore_ref):
+        raise ValueError("Failed to restore checkpoint")
+    return {
+        "status": "restored",
+        "source": "checkpoint",
+        "ref": claim.restore_ref,
+        "checkpoint": claim.checkpoint_commit,
+        "message": "已恢复到该任务前的检查点",
+    }
+
+
+async def persist_session_rollback(
+    db: AsyncSession,
+    claim: SessionRollbackClaim,
+    restore: dict[str, Any],
+) -> dict[str, Any]:
+    session = await db.get(WriterSession, claim.session.session_id)
+    if session is None:
+        raise LookupError("Session not found")
+    runtime_state = require_session_git_claim(session, claim.session)
+    turns = list(
+        (
+            await db.execute(
+                select(WriterTranscriptTurn)
+                .where(WriterTranscriptTurn.id.in_(claim.affected_turn_ids))
+                .order_by(WriterTranscriptTurn.sequence.asc())
+            )
+        ).scalars()
+    )
+    if [turn.id for turn in turns] != claim.affected_turn_ids:
+        raise RuntimeError("Session turns changed while Git operation was running")
+    target = next((turn for turn in turns if turn.id == claim.target_turn_id), None)
+    if target is None or target.sequence != claim.target_sequence:
+        raise RuntimeError("Rollback target changed while Git operation was running")
+    marker = {
+        "reason": claim.reason,
+        "rolled_back_at": datetime.now(timezone.utc).isoformat(),
+        "target_turn_id": target.id,
+    }
+    for turn in turns:
+        turn.metadata_ = with_rolled_back_metadata(turn.metadata_, marker)
+    await _mark_messages_rolled_back(
+        db,
+        session_id=claim.session.session_id,
+        turns=turns,
+        marker=marker,
+    )
+    session.runtime_state = runtime_state
+    _append_session_rollback_marker(session, target=target, affected_turns=turns, marker=marker, restore=restore)
+    runtime_state = dict(session.runtime_state or {})
+    clear_session_git_claim(runtime_state, claim.session)
+    session.runtime_state = runtime_state
+    await bump_transcript_revision(db, claim.session.session_id)
+    return {
+        "status": "rolled_back",
+        "session_id": claim.session.session_id,
+        "target_turn_id": target.id,
+        "rolled_back_turn_ids": [turn.id for turn in turns],
+        "restore": restore,
+        "message": "已回退到所选任务之前",
+    }
 
 
 async def rollback_session_turn_response(
@@ -57,8 +181,6 @@ async def rollback_session_turn_response(
     await _mark_messages_rolled_back(db, session_id=session_id, turns=affected_turns, marker=marker)
     _append_session_rollback_marker(session, target=target, affected_turns=affected_turns, marker=marker, restore=restore)
     await bump_transcript_revision(db, session_id)
-    await db.commit()
-
     return {
         "status": "rolled_back",
         "session_id": session_id,

@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import get_db
+from app.database import execute_writer_write, get_db, get_writer_write
 from app.models.project import WriterProject
 from app.core.writer.git import WriterGitManager
 from app.services.project_management import (
@@ -32,6 +32,7 @@ _git_manager = WriterGitManager()
 
 class ProjectCreate(BaseModel):
     work_root: str = ""
+    name: str | None = None
 
 
 class ProjectUpdate(BaseModel):
@@ -74,10 +75,27 @@ class SessionSummary(BaseModel):
 # --- Project CRUD ---
 
 @router.post("/projects", response_model=ProjectResponse)
-async def create_project(body: ProjectCreate, db: AsyncSession = Depends(get_db)):
-    return ProjectResponse(
-        **await create_writer_project_response(db, work_root=body.work_root, git_manager=_git_manager)
+async def create_project(
+    body: ProjectCreate,
+    db: AsyncSession = Depends(get_db),
+    write_transaction=Depends(get_writer_write),
+):
+    project = await execute_writer_write(
+        db,
+        lambda write_db: create_writer_project_response(
+            write_db,
+            work_root=body.work_root,
+            name=body.name,
+            git_manager=None,
+        ),
+        write_transaction,
     )
+    if project.get("work_root"):
+        try:
+            await _git_manager.init_repo(str(project["work_root"]))
+        except Exception:
+            logger.debug("Unexpected error during project Git init", exc_info=True)
+    return ProjectResponse(**project)
 
 
 @router.get("/projects", response_model=list[ProjectResponse])
@@ -102,18 +120,25 @@ async def get_project(project_id: str, db: AsyncSession = Depends(get_db)):
 
 @router.patch("/projects/{project_id}", response_model=ProjectResponse)
 async def update_project(
-    project_id: str, body: ProjectUpdate, db: AsyncSession = Depends(get_db)
+    project_id: str, body: ProjectUpdate, db: AsyncSession = Depends(get_db),
+    write_transaction=Depends(get_writer_write),
 ):
     try:
-        return ProjectResponse(**await update_writer_project(db, project_id, body.model_dump(exclude_unset=True)))
+        return ProjectResponse(**await execute_writer_write(
+            db,
+            lambda write_db: update_writer_project(write_db, project_id, body.model_dump(exclude_unset=True)),
+            write_transaction,
+        ))
     except LookupError as exc:
         raise HTTPException(status_code=404, detail="Project not found") from exc
 
 
 @router.delete("/projects/{project_id}", status_code=204)
-async def delete_project(project_id: str, db: AsyncSession = Depends(get_db)):
+async def delete_project(
+    project_id: str, db: AsyncSession = Depends(get_db), write_transaction=Depends(get_writer_write)
+):
     try:
-        await delete_writer_project(db, project_id)
+        await execute_writer_write(db, lambda write_db: delete_writer_project(write_db, project_id), write_transaction)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail="Project not found") from exc
 
@@ -132,10 +157,15 @@ async def read_agents_md(project_id: str, db: AsyncSession = Depends(get_db)):
 
 @router.put("/projects/{project_id}/agents-md", response_model=AgentsMdResponse)
 async def write_agents_md(
-    project_id: str, body: AgentsMdUpdate, db: AsyncSession = Depends(get_db)
+    project_id: str, body: AgentsMdUpdate, db: AsyncSession = Depends(get_db),
+    write_transaction=Depends(get_writer_write),
 ):
     try:
-        return AgentsMdResponse(**await write_project_agents_md(db, project_id, body.content))
+        return AgentsMdResponse(**await execute_writer_write(
+            db,
+            lambda write_db: write_project_agents_md(write_db, project_id, body.content),
+            write_transaction,
+        ))
     except LookupError as exc:
         raise HTTPException(status_code=404, detail="Project not found") from exc
     except ValueError as exc:

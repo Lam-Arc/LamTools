@@ -77,7 +77,7 @@ def runtime_group_from_event_name(event_name: str) -> str:
         return "verification"
     if event_name.startswith("runtime.repair"):
         return "verification"
-    if event_name in {"runtime.done", "runtime.failed", "runtime.waiting", "runtime.started"}:
+    if event_name in {"runtime.done", "runtime.failed", "runtime.cancelled", "runtime.waiting", "runtime.started"}:
         return "system"
     return "plan"
 
@@ -97,6 +97,8 @@ def runtime_summary_from_event_name(event_name: str, payload: dict[str, Any]) ->
         return str(payload.get("message") or "任务已完成。")
     if event_name == "runtime.failed":
         return str(payload.get("error") or payload.get("message") or "任务失败。")
+    if event_name == "runtime.cancelled":
+        return str(payload.get("message") or "任务已取消。")
     if event_name == "runtime.reply":
         return "生成最终回复。"
     if event_name == "runtime.reply_delta":
@@ -252,10 +254,12 @@ def runtime_fact_to_run_item_events(
         return []
     phase = str(fact.phase or "")
     status = str(fact.status or "")
+    run_id = event_run_id(fact.metadata, fallback_run_id="")
     turn_id = _turn_id(fact, payload)
     base = {
         "thread_id": fact.thread_id,
         "event_id": fact.id,
+        "run_id": run_id,
         "turn_id": turn_id,
         "seq": int(fact.sequence or 0),
         "source": fact.source,
@@ -263,6 +267,8 @@ def runtime_fact_to_run_item_events(
         "metadata": {
             "runtime_phase": phase,
             "runtime_group": fact.group,
+            "run_id": run_id,
+            "turn_id": turn_id,
         },
     }
 
@@ -347,6 +353,29 @@ def runtime_fact_to_run_item_events(
                     "options": _request_options(payload),
                     "metadata": payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {},
                 },
+                **base,
+            )
+        ]
+
+    if phase == "runtime.approval_response":
+        request_id = str(payload.get("request_id") or payload.get("tool_call_id") or fact.id)
+        response_payload = {
+            "type": "serverRequest",
+            "request_id": request_id,
+            "status": "resolved",
+            "decision": str(payload.get("decision") or ""),
+            "action": str(payload.get("action") or payload.get("decision") or ""),
+            "guidance": str(payload.get("guidance") or ""),
+        }
+        failure_reason = str(payload.get("failure_reason") or "")
+        if failure_reason:
+            response_payload["failure_reason"] = failure_reason
+        return [
+            RunItemEvent(
+                kind="approval_response",
+                item_id=request_id,
+                status="completed",
+                payload=response_payload,
                 **base,
             )
         ]
@@ -512,8 +541,12 @@ def runtime_fact_to_run_item_events(
             )
         ]
 
-    if phase in {"runtime.done", "runtime.failed"}:
-        completed_status = "completed" if phase == "runtime.done" else "failed"
+    if phase in {"runtime.done", "runtime.failed", "runtime.cancelled"}:
+        completed_status = {
+            "runtime.done": "completed",
+            "runtime.failed": "failed",
+            "runtime.cancelled": "cancelled",
+        }[phase]
         message = max(
             [text for text in [str(fact.summary or ""), str(fact.preview or ""), str(fact.full_text or "")] if text],
             key=len,
@@ -531,6 +564,7 @@ def runtime_fact_to_run_item_events(
         return [
             RunItemEvent(
                 kind="status",
+                item_id=f"{run_id}:terminal" if run_id else f"{turn_id}:terminal",
                 status=completed_status,
                 payload=completed_payload,
                 **base,
@@ -552,10 +586,12 @@ def _metadata(fact: RuntimeProjectionInput) -> dict[str, Any]:
 
 def _turn_id(fact: RuntimeProjectionInput, payload: dict[str, Any]) -> str:
     metadata = _metadata(fact)
+    run_id = event_run_id(metadata, fallback_run_id="")
     return str(
         payload.get("turn_id")
         or metadata.get("turn_id")
         or metadata.get("turnId")
+        or run_id
         or f"{fact.thread_id}:turn:unknown"
     )
 
@@ -755,10 +791,10 @@ def _complete_text_from_event(fact: RuntimeProjectionInput, payload: dict[str, A
     candidates: list[str] = []
     for key in ("content", "tool_result", "detail"):
         value = payload.get(key)
-        if isinstance(value, str) and value:
+        if isinstance(value, str) and value and value != "runtime.part":
             candidates.append(value)
     for value in (fact.full_text, fact.preview, fact.summary):
-        if isinstance(value, str) and value:
+        if isinstance(value, str) and value and value != "runtime.part":
             candidates.append(value)
     if not candidates:
         return ""

@@ -3,19 +3,23 @@ from __future__ import annotations
 import logging
 from typing import Any, Awaitable, Callable
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.writer.llm_bridge import WriterLLMClientAdapter
 from app.models.session import WriterSession
-from app.models.transcript import WriterTranscriptBlock, WriterTranscriptTurn
+from app.models.transcript import WriterTranscriptTurn
 from app.services.app_projection_sink import AppProjectionSink
 from app.services.checkpoint_service import WriterCheckpointService
 from app.services.commit_review_service import WriterCommitReviewService
 from app.services.runtime_fact_recorder import RuntimeFactRecorder
 from app.services.runtime_finalization_sink import RuntimeFinalizationSink
 from app.services.runtime_input_context import prepare_runtime_input_context
-from app.services.session_compaction_service import compact_session_context_response, session_needs_context_compaction
+from app.services.session_compaction_service import (
+    apply_session_context_compaction,
+    execute_session_context_compaction,
+    prepare_session_context_compaction,
+    session_needs_context_compaction,
+)
 from lamtools_core.event import CoreEvent
 from lamtools_core.event.runtime_projection import runtime_group_from_event_name
 from lamtools_core.kernel import KernelResult, LoopPolicy
@@ -75,6 +79,7 @@ class WriterRuntimeRunner:
         summarize_result: SummarizeKernelResult,
         schedule_prewarm: SchedulePrewarm,
         runtime_task_registry: RuntimeTaskRegistryFactory,
+        write_coordinator: Any | None = None,
     ) -> None:
         self._app_projection_sink = app_projection_sink
         self._state_store = state_store
@@ -84,6 +89,7 @@ class WriterRuntimeRunner:
         self._summarize_result = summarize_result
         self._schedule_prewarm = schedule_prewarm
         self._runtime_task_registry = runtime_task_registry
+        self._write_coordinator = write_coordinator
 
     async def run(
         self,
@@ -106,13 +112,20 @@ class WriterRuntimeRunner:
             llm_client=llm_client,
             model_context=model_context,
         )
-        input_context = await prepare_runtime_input_context(
-            db,
-            session_id=session_id,
-            transcript_turn_id=transcript_turn_id,
-            user_message=user_message,
-            raw_user_message=raw_user_message,
-        )
+        async def load_input(read_db: AsyncSession):
+            return await prepare_runtime_input_context(
+                read_db,
+                session_id=session_id,
+                transcript_turn_id=transcript_turn_id,
+                user_message=user_message,
+                raw_user_message=raw_user_message,
+            )
+
+        if self._write_coordinator is not None:
+            async with self._write_coordinator.session_factory() as read_db:
+                input_context = await load_input(read_db)
+        else:
+            input_context = await load_input(db)
         turn = input_context.turn
         logger.info(
             "Session %s: using core kernel path with %d history entries",
@@ -121,11 +134,13 @@ class WriterRuntimeRunner:
         )
 
         recorder = RuntimeFactRecorder(
-            db=db,
+            db=db if self._write_coordinator is None else None,
             session_id=session_id,
-            turn=turn,
+            turn=turn if self._write_coordinator is None else None,
+            turn_id=turn.id,
             app_projection_sink=self._app_projection_sink,
             model_context=model_context,
+            write_coordinator=self._write_coordinator,
         )
         await recorder.start_runtime_producer()
         if pre_run_compaction is not None:
@@ -142,6 +157,19 @@ class WriterRuntimeRunner:
                     exc_info=True,
                 )
 
+        runtime_task_registry = self._runtime_task_registry()
+        guidance_source_factory = getattr(runtime_task_registry, "guidance_source", None)
+        guidance_source = (
+            guidance_source_factory(session_id, run_id=turn.id)
+            if callable(guidance_source_factory)
+            else None
+        )
+        guidance_finalizer_factory = getattr(runtime_task_registry, "guidance_finalizer", None)
+        guidance_finalizer = (
+            guidance_finalizer_factory(session_id, run_id=turn.id)
+            if callable(guidance_finalizer_factory)
+            else None
+        )
         try:
             result = await self._run_core_kernel(
                 goal=input_context.goal,
@@ -154,10 +182,39 @@ class WriterRuntimeRunner:
                 live_event_callback=recorder.record_core_event,
                 runtime_controls=runtime_controls,
                 sub_agent_llm_client_factory=sub_agent_llm_client_factory,
-                cancel_event=self._runtime_task_registry().get_cancel_event(session_id),
+                cancel_event=runtime_task_registry.get_cancel_event(session_id),
+                run_id=turn.id,
+                turn_id=turn.id,
+                guidance_source=guidance_source,
+                guidance_finalizer=guidance_finalizer,
             )
-        except Exception as exc:
-            return await self._record_failure(db, session_id=session_id, recorder=recorder, exc=exc)
+        except BaseException:
+            raise
+
+        replay_events = (
+            []
+            if recorder.has_recorded_core_events
+            else list((getattr(result, "metadata", {}) or {}).get("core_events") or [])
+        )
+        for raw in replay_events:
+            if not isinstance(raw, dict):
+                continue
+            event_name = str(raw.get("name") or raw.get("event_name") or "")
+            if not event_name:
+                continue
+            await recorder.record_core_event(CoreEvent(
+                name=event_name,
+                category=str(raw.get("category") or "progress"),
+                payload=dict(raw.get("payload") or {
+                    "summary": raw.get("summary") or "",
+                    "status": raw.get("status") or "",
+                }),
+                event_id=str(raw.get("event_id") or f"{turn.id}:{event_name}:{raw.get('sequence', '')}"),
+                session_id=session_id,
+                run_id=str(raw.get("run_id") or turn.id),
+                turn_id=str(raw.get("turn_id") or turn.id),
+                sequence=raw.get("sequence") if isinstance(raw.get("sequence"), int) else None,
+            ))
 
         summary = await self._finalize_run(
             db,
@@ -173,13 +230,6 @@ class WriterRuntimeRunner:
             summary=summary,
             result=result,
         )
-        await self._record_terminal_fallback(
-            db,
-            turn=turn,
-            result=result,
-            summary=summary,
-            recorder=recorder,
-        )
         self._schedule_prewarm(work_root)
         return summary
 
@@ -192,24 +242,37 @@ class WriterRuntimeRunner:
         model_context: dict[str, Any] | None,
     ) -> dict[str, Any] | None:
         try:
-            should_compact = await session_needs_context_compaction(db, session_id=session_id)
+            read_db = db
+            if self._write_coordinator is not None:
+                async with self._write_coordinator.session_factory() as candidate:
+                    should_compact = await session_needs_context_compaction(candidate, session_id=session_id)
+                    plan = (
+                        await prepare_session_context_compaction(candidate, session_id=session_id, trigger="auto")
+                        if should_compact else None
+                    )
+            else:
+                should_compact = await session_needs_context_compaction(read_db, session_id=session_id)
+                plan = (
+                    await prepare_session_context_compaction(read_db, session_id=session_id, trigger="auto")
+                    if should_compact else None
+                )
             if not should_compact:
                 return None
             loop_policy = LoopPolicy()
-            result = await compact_session_context_response(
-                db,
-                session_id=session_id,
+            _result, payload = await execute_session_context_compaction(
+                plan,
                 llm_client=self._compaction_llm_client(llm_client),
                 model=str((model_context or {}).get("model") or ""),
                 model_retries=loop_policy.model_retries,
                 model_timeout_seconds=loop_policy.model_timeout_seconds,
                 retry_policy=RetryPolicy(),
-                trigger="auto",
             )
-            await db.commit()
-            return result
+            if self._write_coordinator is not None:
+                return await self._write_coordinator.run(
+                    lambda write_db: apply_session_context_compaction(write_db, plan=plan, payload=payload)
+                )
+            return await apply_session_context_compaction(db, plan=plan, payload=payload)
         except Exception:
-            await db.rollback()
             logger.warning(
                 "Session %s: context pre-compaction failed; falling back to recent-history cap",
                 session_id,
@@ -289,34 +352,6 @@ class WriterRuntimeRunner:
             )
         )
 
-    async def _record_failure(
-        self,
-        db: AsyncSession,
-        *,
-        session_id: str,
-        recorder: RuntimeFactRecorder,
-        exc: Exception,
-    ) -> dict[str, Any]:
-        logger.error("Core kernel path failed for session %s: %s", session_id, exc, exc_info=True)
-        try:
-            await db.rollback()
-        except Exception:
-            logger.debug(
-                "Unexpected error rolling back failed Writer runtime DB session for %s",
-                session_id,
-                exc_info=True,
-            )
-        await recorder.record(
-            group="system",
-            source="core",
-            phase="runtime.failed",
-            status="failed",
-            summary=str(exc) or "运行失败",
-            preview=str(exc),
-            metadata={"payload": {"error": str(exc), "source": "service_exception"}},
-        )
-        return {"decision": "failed", "error": str(exc)}
-
     async def _finalize_run(
         self,
         db: AsyncSession,
@@ -327,25 +362,36 @@ class WriterRuntimeRunner:
         recorder: RuntimeFactRecorder,
     ) -> dict[str, Any]:
         summary = self._summarize_result(result)
-        finalization_sink = RuntimeFinalizationSink(
-            db=db,
-            session_id=session_id,
-            turn=turn,
-            transcript_sink=recorder.transcript_sink,
+        async def write(write_db: AsyncSession):
+            persisted_turn = await write_db.get(WriterTranscriptTurn, turn.id)
+            if persisted_turn is None:
+                raise RuntimeError("Transcript turn was not created")
+            from app.services.runtime_transcript_sink import RuntimeTranscriptSink
+            sink = RuntimeFinalizationSink(
+                db=write_db,
+                session_id=session_id,
+                turn=persisted_turn,
+                transcript_sink=RuntimeTranscriptSink(db=write_db, turn=persisted_turn),
+            )
+            finalized = await sink.persist_result(result, runtime_fact_sequence=recorder.sequence)
+            if finalized.final_answer:
+                summary["message"] = finalized.final_answer
+                summary["final_answer"] = finalized.final_answer
+            elif finalized.failure_summary:
+                summary["message"] = finalized.failure_summary
+                summary["failure_summary"] = finalized.failure_summary
+            if finalized.message is not None:
+                finalized.message.parts = {
+                    **(finalized.message.parts or {}),
+                    "core_kernel_summary": summary,
+                }
+            return finalized
+
+        finalized = (
+            await self._write_coordinator.run(write)
+            if self._write_coordinator is not None
+            else await write(db)
         )
-        finalized = await finalization_sink.persist_result(result, runtime_fact_sequence=recorder.sequence)
-        if finalized.final_answer:
-            summary["message"] = finalized.final_answer
-            summary["final_answer"] = finalized.final_answer
-        elif finalized.failure_summary:
-            summary["message"] = finalized.failure_summary
-            summary["failure_summary"] = finalized.failure_summary
-        if finalized.message is not None:
-            finalized.message.parts = {
-                **(finalized.message.parts or {}),
-                "core_kernel_summary": summary,
-            }
-            await db.commit()
         runtime_metrics = summary.get("runtime_metrics")
         if isinstance(runtime_metrics, dict) and runtime_metrics:
             await recorder.record(
@@ -373,6 +419,35 @@ class WriterRuntimeRunner:
         summary: dict[str, Any],
         result: KernelResult,
     ) -> None:
+        if self._write_coordinator is not None:
+            async with self._write_coordinator.session_factory() as read_db:
+                session = await read_db.get(WriterSession, session_id)
+                session_info = (
+                    {"id": session.id, "work_root": session.work_root or ""}
+                    if session is not None else None
+                )
+            if session_info is None:
+                return
+            checkpoint_reason = "本轮完成自动存档" if result.decision == "done" else "本轮结束自动存档"
+            create_checkpoint = getattr(self._checkpoint_service, "create_checkpoint_if_dirty", None)
+            persist_checkpoint = getattr(self._checkpoint_service, "persist_checkpoint", None)
+            if not callable(create_checkpoint) or not callable(persist_checkpoint):
+                return
+            record = await create_checkpoint(
+                session_id=session_id,
+                work_root=session_info["work_root"],
+                reason=checkpoint_reason,
+                turn_id=turn.id,
+                stage="after_turn",
+            )
+            if record is not None:
+                await self._write_coordinator.run(
+                    lambda write_db: persist_checkpoint(
+                        write_db, session_id=session_id, record=record,
+                    )
+                )
+            return
+
         session = await db.get(WriterSession, session_id)
         if session is None:
             return
@@ -396,65 +471,3 @@ class WriterRuntimeRunner:
             await self._commit_review_service.persist_request(db, session, review_request)
         except Exception:
             logger.debug("Unexpected error while recording commit review for session %s", session_id, exc_info=True)
-
-    async def _record_terminal_fallback(
-        self,
-        db: AsyncSession,
-        *,
-        turn: WriterTranscriptTurn,
-        result: KernelResult,
-        summary: dict[str, Any],
-        recorder: RuntimeFactRecorder,
-    ) -> None:
-        final_decision = str(result.decision or "")
-        if not recorder.seen_terminal_core_event and final_decision == "wait":
-            if await self._has_open_waiting_request(db, turn):
-                recorder.seen_terminal_core_event = True
-        if recorder.seen_terminal_core_event:
-            return
-
-        terminal_phase = {
-            "done": "runtime.done",
-            "failed": "runtime.failed",
-            "wait": "runtime.waiting",
-        }.get(final_decision, "runtime.done")
-        terminal_status = {
-            "done": "completed",
-            "failed": "failed",
-            "wait": "waiting",
-        }.get(final_decision, "completed")
-        terminal_summary = (
-            str(result.error or "").strip()
-            or str(summary.get("message") or "").strip()
-            or str(summary.get("decision") or "").strip()
-            or "本轮运行结束"
-        )
-        await recorder.record(
-            group=runtime_group_from_event_name(terminal_phase),
-            source="core",
-            phase=terminal_phase,
-            status=terminal_status,
-            summary=terminal_summary,
-            preview=terminal_summary,
-            metadata={
-                "payload": {
-                    "decision": final_decision,
-                    "message": str(summary.get("message") or ""),
-                    "error": str(result.error or ""),
-                    "runtime_metrics": summary.get("runtime_metrics")
-                    if isinstance(summary.get("runtime_metrics"), dict)
-                    else {},
-                    "source": "service_terminal_fallback",
-                }
-            },
-        )
-
-    async def _has_open_waiting_request(self, db: AsyncSession, turn: WriterTranscriptTurn) -> bool:
-        result = await db.execute(
-            select(WriterTranscriptBlock.id)
-            .where(WriterTranscriptBlock.turn_id == turn.id)
-            .where(WriterTranscriptBlock.type == "waiting_request")
-            .where(WriterTranscriptBlock.completed_at.is_(None))
-            .limit(1)
-        )
-        return result.scalar_one_or_none() is not None

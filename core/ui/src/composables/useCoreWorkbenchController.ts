@@ -7,11 +7,19 @@ import { createLoadingStepGroup } from '../helpers'
 // ---------------------------------------------------------------------------
 
 /** API surface that the host application must provide. */
+export interface CoreTurnStartResult {
+  messages?: CoreMessage[]
+  events?: CoreRuntimeEvent[]
+  userMessage?: CoreMessage
+  assistantMessage?: CoreMessage
+}
+
 export interface CoreWorkbenchApi {
   listSessions(): Promise<CoreSessionListItem[]>
   createSession(): Promise<CoreSessionListItem>
   getMessages?(sessionId: string): Promise<CoreMessage[]>
   createMessage?(sessionId: string, content: string, role?: string): Promise<CoreMessage>
+  startTurn?(sessionId: string, content: string): Promise<CoreTurnStartResult | void>
   getEvents?(sessionId: string): Promise<CoreRuntimeEvent[]>
   listProviders?(): Promise<unknown[]>
 }
@@ -89,14 +97,56 @@ export function useCoreWorkbenchController(options: UseCoreWorkbenchControllerOp
   async function sendMessage() {
     const text = composerText.value.trim()
     if (!text || !activeSessionId.value) return
-    if (!api.createMessage) return
+    if (!api.startTurn && !api.createMessage) return
 
+    const sessionId = activeSessionId.value
     composerText.value = ''
+    loading.value = true
+    const timestamp = new Date().toISOString()
+    const optimisticId = `optimistic-${timestamp}-${Math.random().toString(16).slice(2, 8)}`
+    messages.value = [
+      ...messages.value,
+      {
+        id: `${optimisticId}:user`,
+        role: 'user',
+        content: text,
+        timestamp,
+        metadata: { optimistic: true },
+      },
+      {
+        id: `${optimisticId}:assistant`,
+        role: 'assistant',
+        content: '',
+        timestamp,
+        parts: [],
+        metadata: { optimistic: true, live: true, initialWaiting: true },
+      },
+    ]
     try {
-      await api.createMessage(activeSessionId.value, text, 'user')
-      messages.value = await (api.getMessages?.(activeSessionId.value) ?? Promise.resolve([]))
+      if (api.startTurn) {
+        const result = await api.startTurn(sessionId, text)
+        if (activeSessionId.value !== sessionId) return
+        if (result?.messages) {
+          messages.value = result.messages
+        } else {
+          messages.value = await (api.getMessages?.(sessionId) ?? Promise.resolve([]))
+        }
+        if (result?.events) {
+          events.value = result.events
+        } else {
+          events.value = await (api.getEvents?.(sessionId) ?? Promise.resolve([]))
+        }
+        return
+      }
+      await api.createMessage?.(sessionId, text, 'user')
+      if (activeSessionId.value !== sessionId) return
+      messages.value = await (api.getMessages?.(sessionId) ?? Promise.resolve([]))
     } catch (err) {
       console.error('Failed to send message:', err)
+    } finally {
+      if (activeSessionId.value === sessionId) {
+        loading.value = false
+      }
     }
   }
 

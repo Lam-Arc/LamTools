@@ -1,9 +1,9 @@
 ﻿/**
  * Core API mappers — factory functions for mapping raw API shapes to Core UI types.
  *
- * Products (Writer, Artist, …) share the same mapping structure but differ in:
+ * Products share the same mapping structure but differ in:
  *   - groupId (product-specific)
- *   - nullFallback (Artist backend returns nullable fields; Writer does not)
+ *   - nullable backend fields
  *
  * These factories let each product create a mapper with its own groupId and
  * null-handling strategy without duplicating the mapping logic.
@@ -12,7 +12,7 @@
 import type { CoreApiMapper, CoreSessionListItem, CoreMessage } from '../types';
 
 // ---------------------------------------------------------------------------
-// Raw-like types (loose shapes that both Writer & Artist backends satisfy)
+// Raw-like types shared by product backends
 // ---------------------------------------------------------------------------
 
 /** Minimal shape a raw session object must satisfy for the session mapper. */

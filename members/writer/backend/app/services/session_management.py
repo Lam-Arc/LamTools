@@ -44,15 +44,9 @@ async def create_writer_session(
         if not normalized_root:
             normalized_root = ensure_work_root(project.work_root)
     elif normalized_root:
-        project = await ensure_writer_project(db, work_root=normalized_root, git_manager=git_manager)
+        project = await ensure_writer_project(db, work_root=normalized_root, git_manager=None)
         await db.flush()
         effective_project_id = project.id
-
-    if normalized_root and git_manager is not None:
-        try:
-            await git_manager.init_repo(normalized_root)
-        except Exception:
-            logger.debug("Unexpected error during git init at %s", normalized_root, exc_info=True)
 
     session = WriterSession(
         title=title,
@@ -61,10 +55,24 @@ async def create_writer_session(
         project_id=effective_project_id,
     )
     db.add(session)
-    await db.commit()
-    await db.refresh(session)
+    await db.flush()
     schedule_prewarm(session.work_root)
     return await session_response_projected(db, session)
+
+
+async def resolve_writer_session_work_root(
+    db: AsyncSession,
+    *,
+    work_root: str,
+    project_id: str | None,
+) -> str:
+    normalized_root = ensure_work_root(work_root)
+    if project_id and not normalized_root:
+        project = await db.get(WriterProject, project_id)
+        if project is None:
+            raise HTTPException(status_code=400, detail="Project not found")
+        normalized_root = ensure_work_root(project.work_root)
+    return normalized_root
 
 
 async def get_writer_session_response(
@@ -111,14 +119,12 @@ async def update_writer_session(
     for key, value in normalized_update.items():
         setattr(session, key, value)
 
-    await db.commit()
-    await db.refresh(session)
+    await db.flush()
     return await session_response_projected(db, session)
 
 
 async def delete_writer_session(db: AsyncSession, session_id: str) -> None:
     await delete_writer_session_records(db, session_id)
-    await db.commit()
 
 
 __all__ = [
@@ -126,5 +132,6 @@ __all__ = [
     "delete_writer_session",
     "get_writer_session_response",
     "normalize_session_mode",
+    "resolve_writer_session_work_root",
     "update_writer_session",
 ]

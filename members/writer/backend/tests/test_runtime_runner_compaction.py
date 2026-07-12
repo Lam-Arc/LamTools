@@ -12,6 +12,7 @@ from app.models.message import WriterMessage
 from app.models.session import WriterSession
 from app.models.transcript import WriterTranscriptTurn
 from app.services.runtime_runner import WriterRuntimeRunner
+from app.database import writer_write_coordinator
 from lamtools_core.kernel import KernelResult
 from lamtools_core.llm import LLMResponse
 
@@ -23,6 +24,13 @@ class _ProjectionSink:
     async def publish(self, events, *, session_id: str, source_event_id: str) -> None:
         self.events.extend(events)
         return None
+
+    async def persist_in_transaction(self, db, events):
+        del db
+        return list(events)
+
+    async def broadcast(self, events):
+        self.events.extend(events)
 
 
 class _NoopCheckpointService:
@@ -126,6 +134,7 @@ async def test_runtime_runner_compacts_long_history_before_recent_history_cap(tm
                 summarize_result=lambda result: dict(result.metadata),
                 schedule_prewarm=lambda work_root: None,
                 runtime_task_registry=lambda: _RuntimeTaskRegistry(),
+                write_coordinator=writer_write_coordinator(session_factory),
             )
             await runner.run(
                 db=db,

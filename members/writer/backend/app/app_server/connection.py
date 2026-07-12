@@ -1,42 +1,29 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from typing import Any
 
-from fastapi import WebSocket, WebSocketDisconnect
-from pydantic import ValidationError
+from fastapi import WebSocket
 
 from app.database import async_session
-from lamtools_core.app import OperationCatalog
+from app.shared_config_database import shared_config_session
+from lamtools_core.app import (
+    CoreLiveConnection,
+    CoreLiveConnectionAdapter,
+    CoreLiveContext,
+    CoreLiveOperationHost,
+    OperationCatalog,
+)
+from lamtools_core.runtime import default_runtime_task_registry
 
 from .hub import hub
 from .operations import (
+    build_writer_core_operation_adapter_catalog,
     build_writer_operation_catalog,
-    handle_config_adapter_profiles_list_operation,
-    handle_config_provider_create_operation,
-    handle_config_provider_delete_operation,
-    handle_config_provider_update_operation,
-    handle_config_runtime_capabilities_get_operation,
-    handle_config_subagent_delete_operation,
-    handle_config_subagent_upsert_operation,
-    handle_config_model_create_operation,
-    handle_config_model_delete_operation,
-    handle_config_model_update_operation,
-    handle_config_models_list_operation,
-    handle_config_import_env_operation,
-    handle_config_providers_list_operation,
-    handle_config_resolved_get_operation,
     handle_attachment_get_operation,
     handle_attachment_list_operation,
     handle_attachment_open_operation,
     handle_attachment_preview_operation,
-    handle_artifact_open_operation,
-    handle_artifact_read_operation,
-    handle_approval_respond_operation,
-    handle_command_catalog_operation,
-    handle_command_execute_operation,
-    handle_plugin_catalog_operation,
     handle_project_create_operation,
     handle_project_agents_md_get_operation,
     handle_project_agents_md_update_operation,
@@ -46,9 +33,6 @@ from .operations import (
     handle_project_list_operation,
     handle_project_sessions_list_operation,
     handle_project_update_operation,
-    handle_queue_create_operation,
-    handle_queue_delete_operation,
-    handle_queue_update_operation,
     handle_session_create_operation,
     handle_session_delete_operation,
     handle_session_changes_get_operation,
@@ -70,31 +54,46 @@ from .operations import (
     handle_session_list_operation,
     handle_session_rollback_turn_operation,
     handle_session_update_operation,
-    handle_settings_get_operation,
-    handle_settings_update_operation,
-    handle_thread_read_operation,
-    handle_thread_resume_operation,
-    handle_thread_start_operation,
-    handle_turn_cancel_operation,
-    handle_turn_start_operation,
-    handle_turn_steer_operation,
     operation_name,
-    resolve_approval_request,
 )
-from .protocol import InitializeParams, JsonRpcRequest, event_notification, rpc_error, rpc_result
+from .protocol import PROTOCOL_VERSION, JsonRpcRequest
 from .runtime import WriterRuntimeLifecycle
-from .snapshot import load_snapshot
+from .member_adapter import WriterLiveMemberAdapter
+from .persistence import _PERSISTENCE_HOST
 
 
 NOT_INITIALIZED = -32002
-OVERLOADED = -32001
 SERVER_ERROR = -32000
-INVALID_REQUEST = -32600
 METHOD_NOT_FOUND = -32601
-logger = logging.getLogger(__name__)
 
 
-class WriterAppServerConnection:
+def _writer_live_operation_host(*, member_hooks: WriterLiveMemberAdapter, runtime_task_registry: Any) -> CoreLiveOperationHost:
+    return CoreLiveOperationHost(
+        session_factory=async_session,
+        persistence=_PERSISTENCE_HOST,
+        hub=hub,
+        runtime_task_registry=runtime_task_registry,
+        member_hooks=member_hooks,
+    )
+
+
+async def _writer_handle_client_response(connection: CoreLiveConnection, raw: dict[str, Any]) -> bool:
+    if (
+        isinstance(raw, dict)
+        and "method" not in raw
+        and "id" in raw
+        and ("result" in raw or "error" in raw)
+    ):
+        await connection._resolve_client_response(raw)
+        return True
+    return False
+
+
+def _writer_after_initialize(connection: CoreLiveConnection, params: Any) -> None:
+    connection.last_seen_seq = params.lastSeenSeq or 0
+
+
+class WriterAppServerConnection(CoreLiveConnection):
     def __init__(
         self,
         websocket: WebSocket,
@@ -102,120 +101,52 @@ class WriterAppServerConnection:
         outbound_limit: int = 256,
         runtime: WriterRuntimeLifecycle | None = None,
     ) -> None:
-        self.websocket = websocket
-        self.initialized = False
-        self.thread_id: str | None = None
+        runtime_lifecycle = runtime or WriterRuntimeLifecycle(session_factory=async_session)
+        member_hooks = WriterLiveMemberAdapter(
+            session_factory=lambda: async_session(),
+            runtime=runtime_lifecycle,
+        )
+        core_operation_adapters = build_writer_core_operation_adapter_catalog(
+            session_factory=async_session,
+            config_session_factory=shared_config_session,
+            runtime=runtime_lifecycle,
+            emit_event=hub.publish,
+        )
+        super().__init__(
+            websocket,
+            context=CoreLiveContext(
+                operations=core_operation_adapters,
+                host=_writer_live_operation_host(
+                    member_hooks=member_hooks,
+                    runtime_task_registry=getattr(
+                        runtime_lifecycle, "runtime_task_registry", default_runtime_task_registry()
+                    ),
+                ),
+            ),
+            outbound_limit=outbound_limit,
+            adapter=CoreLiveConnectionAdapter(
+                protocol_version=PROTOCOL_VERSION,
+                server_name="writer_app_server",
+                server_title="Writer App Server",
+                accept_initialized_ack=True,
+                invalid_request_message="Invalid request",
+                not_initialized_code=NOT_INITIALIZED,
+                not_initialized_message="Not initialized",
+                handle_client_response=_writer_handle_client_response,
+                after_initialize=_writer_after_initialize,
+                operation_catalog_factory=lambda connection: connection._operation_catalog(),
+                normalize_operation_name=operation_name,
+                handle_unknown_operations=True,
+                operation_error_code=SERVER_ERROR,
+                method_not_found_code=METHOD_NOT_FOUND,
+            ),
+        )
         self.last_seen_seq = 0
-        self.outbound: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=outbound_limit)
-        self.subscription: asyncio.Queue | None = None
-        self.runtime = runtime or WriterRuntimeLifecycle(session_factory=async_session)
-
-    async def run(self) -> None:
-        await self.websocket.accept()
-        sender = asyncio.create_task(self._sender())
-        hub_reader = asyncio.create_task(self._hub_reader())
-        try:
-            while True:
-                try:
-                    raw = await self.websocket.receive_json()
-                except WebSocketDisconnect:
-                    break
-                await self._handle_raw(raw)
-        finally:
-            sender.cancel()
-            hub_reader.cancel()
-            self._unsubscribe()
-
-    async def _sender(self) -> None:
-        while True:
-            message = await self.outbound.get()
-            await self.websocket.send_json(message)
-
-    async def _send(self, message: dict[str, Any]) -> None:
-        try:
-            self.outbound.put_nowait(message)
-        except asyncio.QueueFull:
-            await self.websocket.close(code=1013, reason="Server overloaded; retry later.")
-
-    async def _send_snapshot(self, thread_id: str) -> None:
-        async with async_session() as db:
-            snapshot = await load_snapshot(db, thread_id)
-        await self._send({"method": "thread/snapshot", "params": snapshot})
-
-    async def _hub_reader(self) -> None:
-        while True:
-            if self.subscription is None:
-                await asyncio.sleep(0.05)
-                continue
-            event = await self.subscription.get()
-            if event is not None:
-                await self._send(event_notification(event))
-                await self._send_snapshot(event.thread_id)
-
-    def _subscribe(self, thread_id: str) -> None:
-        if self.thread_id == thread_id and self.subscription is not None:
-            return
-        self._unsubscribe()
-        self.thread_id = thread_id
-        self.subscription = hub.subscribe(thread_id)
-
-    def _unsubscribe(self) -> None:
-        if self.thread_id and self.subscription is not None:
-            hub.unsubscribe(self.thread_id, self.subscription)
-        self.subscription = None
-
-    async def _handle_raw(self, raw: dict[str, Any]) -> None:
-        if (
-            isinstance(raw, dict)
-            and "method" not in raw
-            and "id" in raw
-            and ("result" in raw or "error" in raw)
-        ):
-            await self._handle_client_response(raw)
-            return
-
-        try:
-            request = JsonRpcRequest.model_validate(raw)
-        except ValidationError as exc:
-            await self._send(rpc_error(raw.get("id") if isinstance(raw, dict) else None, code=INVALID_REQUEST, message="Invalid request", data={"errors": exc.errors()}))
-            return
-
-        if request.method == "initialized":
-            await self._send(rpc_result(request.id, {"ok": True}))
-            return
-
-        if request.method == "initialize":
-            await self._initialize(request)
-            return
-
-        if not self.initialized:
-            await self._send(rpc_error(request.id, code=NOT_INITIALIZED, message="Not initialized"))
-            return
-
-        operation = self._operation_catalog()
-        normalized_operation_name = operation_name(request.method)
-        if operation.has(normalized_operation_name):
-            try:
-                await operation.execute(normalized_operation_name, metadata={"rpc_request": request})
-            except Exception as exc:
-                logger.exception("Writer app-server operation failed: %s", normalized_operation_name)
-                await self._send(rpc_error(request.id, code=SERVER_ERROR, message=str(exc)))
-            return
-
-        await self._send(rpc_error(request.id, code=METHOD_NOT_FOUND, message=f"Unsupported method: {request.method}"))
+        self.runtime = runtime_lifecycle
 
     def _operation_catalog(self) -> OperationCatalog:
+        core_handlers = self.context.host.operation_handlers()
         return build_writer_operation_catalog(
-            thread_read=self._thread_read,
-            thread_resume=self._thread_resume,
-            thread_start=self._thread_start,
-            turn_start=self._turn_start,
-            turn_steer=self._turn_steer,
-            turn_cancel=self._turn_interrupt,
-            approval_respond=self._approval_respond,
-            queue_create=self._queue_create,
-            queue_update=self._queue_update,
-            queue_delete=self._queue_delete,
             project_create=self._project_create,
             project_directory_pick=self._project_directory_pick,
             project_get=self._project_get,
@@ -229,10 +160,6 @@ class WriterAppServerConnection:
             attachment_get=self._attachment_get,
             attachment_preview=self._attachment_preview,
             attachment_open=self._attachment_open,
-            artifact_read=self._artifact_read,
-            artifact_open=self._artifact_open,
-            command_catalog=self._command_catalog,
-            command_execute=self._command_execute,
             session_create=self._session_create,
             session_get=self._session_get,
             session_list=self._session_list,
@@ -254,115 +181,28 @@ class WriterAppServerConnection:
             session_changes_undo=self._session_changes_undo,
             session_change_file_open=self._session_change_file_open,
             session_change_file_undo=self._session_change_file_undo,
-            settings_get=self._settings_get,
-            settings_update=self._settings_update,
-            config_providers_list=self._config_providers_list,
-            config_provider_create=self._config_provider_create,
-            config_provider_update=self._config_provider_update,
-            config_provider_delete=self._config_provider_delete,
-            config_models_list=self._config_models_list,
-            config_model_create=self._config_model_create,
-            config_model_update=self._config_model_update,
-            config_model_delete=self._config_model_delete,
-            config_import_env=self._config_import_env,
-            config_resolved_get=self._config_resolved_get,
-            config_adapter_profiles_list=self._config_adapter_profiles_list,
-            config_runtime_capabilities_get=self._config_runtime_capabilities_get,
-            config_subagent_upsert=self._config_subagent_upsert,
-            config_subagent_delete=self._config_subagent_delete,
-            plugin_list=self._plugin_list,
-            plugin_enable=self._plugin_enable,
-            plugin_disable=self._plugin_disable,
-            hook_list=self._hook_list,
-            hook_trust=self._hook_trust,
+            core_handlers=core_handlers,
         )
 
-    async def _handle_client_response(self, raw: dict[str, Any]) -> None:
+    async def _resolve_client_response(self, raw: dict[str, Any]) -> None:
         request_id = str(raw.get("id") or "")
         result = raw.get("result") if isinstance(raw.get("result"), dict) else {}
-        decision = str(result.get("decision") or "")
-        if not request_id or not decision:
+        if not request_id:
             return
-        guidance = result.get("guidance") if isinstance(result.get("guidance"), str) else None
-        try:
-            resolution = await resolve_approval_request(
-                request_id=request_id,
-                decision=decision,
-                guidance=guidance,
-                session_factory=async_session,
-            )
-        except (LookupError, ValueError):
-            return
-        event = resolution.event
-        await self._send(event_notification(event))
-        await self._send_snapshot(event.thread_id)
-        if resolution.was_open:
-            asyncio.create_task(
-                self._continue_resolved_approval(
-                    request_id=request_id,
-                    thread_id=event.thread_id,
-                    decision=decision,
-                    guidance=guidance or "",
-                )
-            )
-
-    async def _initialize(self, request: JsonRpcRequest) -> None:
-        if self.initialized:
-            await self._send(rpc_error(request.id, code=INVALID_REQUEST, message="Already initialized"))
-            return
-        try:
-            params = InitializeParams.model_validate(request.params)
-        except ValidationError as exc:
-            await self._send(rpc_error(request.id, code=INVALID_REQUEST, message="Invalid initialize params", data={"errors": exc.errors()}))
-            return
-        self.initialized = True
-        if params.threadId:
-            self._subscribe(params.threadId)
-        self.last_seen_seq = params.lastSeenSeq or 0
-        await self._send(
-            rpc_result(
-                request.id,
-                {
-                    "protocolVersion": "writer.app_server.v1",
-                    "serverInfo": {"name": "writer_app_server", "title": "Writer App Server"},
-                },
-            )
+        params = dict(result)
+        params.setdefault("request_id", request_id)
+        outcome = await self.context.host.execute(
+            "approval.respond",
+            request_id=None,
+            params=params,
+            context=self.context,
         )
-
-    async def _thread_start(self, request: JsonRpcRequest) -> None:
-        thread_id = str(request.params.get("thread_id") or request.params.get("threadId") or "")
-        outcome = await handle_thread_start_operation(
-            request_id=request.id,
-            params=request.params,
-            session_factory=async_session,
+        await self.send_operation_outcome(
+            outcome,
+            send_response="error" in outcome.response,
+            publish_events=False,
+            send_snapshot=True,
         )
-        await self._send(outcome.response)
-        if not outcome.publish_events:
-            return
-        self._subscribe(thread_id)
-        for event in outcome.publish_events:
-            await hub.publish(event)
-
-    async def _thread_resume(self, request: JsonRpcRequest) -> None:
-        thread_id = str(request.params.get("thread_id") or request.params.get("threadId") or self.thread_id or "")
-        outcome = await handle_thread_resume_operation(
-            request_id=request.id,
-            params=request.params,
-            current_thread_id=self.thread_id,
-            session_factory=async_session,
-        )
-        if thread_id:
-            self._subscribe(thread_id)
-        await self._send(outcome.response)
-
-    async def _thread_read(self, request: JsonRpcRequest) -> None:
-        outcome = await handle_thread_read_operation(
-            request_id=request.id,
-            params=request.params,
-            current_thread_id=self.thread_id,
-            session_factory=async_session,
-        )
-        await self._send(outcome.response)
 
     async def _session_list(self, request: JsonRpcRequest) -> None:
         outcome = await handle_session_list_operation(
@@ -371,7 +211,6 @@ class WriterAppServerConnection:
             session_factory=async_session,
         )
         await self._send(outcome.response)
-
     async def _session_create(self, request: JsonRpcRequest) -> None:
         outcome = await handle_session_create_operation(
             request_id=request.id,
@@ -636,331 +475,3 @@ class WriterAppServerConnection:
             session_factory=async_session,
         )
         await self._send(outcome.response)
-
-    async def _settings_get(self, request: JsonRpcRequest) -> None:
-        outcome = await handle_settings_get_operation(
-            request_id=request.id,
-            params=request.params,
-            session_factory=async_session,
-        )
-        await self._send(outcome.response)
-
-    async def _settings_update(self, request: JsonRpcRequest) -> None:
-        outcome = await handle_settings_update_operation(
-            request_id=request.id,
-            params=request.params,
-            session_factory=async_session,
-        )
-        await self._send(outcome.response)
-
-    async def _config_providers_list(self, request: JsonRpcRequest) -> None:
-        outcome = await handle_config_providers_list_operation(
-            request_id=request.id,
-            params=request.params,
-            session_factory=async_session,
-        )
-        await self._send(outcome.response)
-
-    async def _config_provider_create(self, request: JsonRpcRequest) -> None:
-        outcome = await handle_config_provider_create_operation(
-            request_id=request.id,
-            params=request.params,
-            session_factory=async_session,
-        )
-        await self._send(outcome.response)
-
-    async def _config_provider_update(self, request: JsonRpcRequest) -> None:
-        outcome = await handle_config_provider_update_operation(
-            request_id=request.id,
-            params=request.params,
-            session_factory=async_session,
-        )
-        await self._send(outcome.response)
-
-    async def _config_provider_delete(self, request: JsonRpcRequest) -> None:
-        outcome = await handle_config_provider_delete_operation(
-            request_id=request.id,
-            params=request.params,
-            session_factory=async_session,
-        )
-        await self._send(outcome.response)
-
-    async def _config_models_list(self, request: JsonRpcRequest) -> None:
-        outcome = await handle_config_models_list_operation(
-            request_id=request.id,
-            params=request.params,
-            session_factory=async_session,
-        )
-        await self._send(outcome.response)
-
-    async def _config_model_create(self, request: JsonRpcRequest) -> None:
-        outcome = await handle_config_model_create_operation(
-            request_id=request.id,
-            params=request.params,
-            session_factory=async_session,
-        )
-        await self._send(outcome.response)
-
-    async def _config_model_update(self, request: JsonRpcRequest) -> None:
-        outcome = await handle_config_model_update_operation(
-            request_id=request.id,
-            params=request.params,
-            session_factory=async_session,
-        )
-        await self._send(outcome.response)
-
-    async def _config_model_delete(self, request: JsonRpcRequest) -> None:
-        outcome = await handle_config_model_delete_operation(
-            request_id=request.id,
-            params=request.params,
-            session_factory=async_session,
-        )
-        await self._send(outcome.response)
-
-    async def _config_import_env(self, request: JsonRpcRequest) -> None:
-        outcome = await handle_config_import_env_operation(
-            request_id=request.id,
-            params=request.params,
-            session_factory=async_session,
-        )
-        await self._send(outcome.response)
-
-    async def _config_resolved_get(self, request: JsonRpcRequest) -> None:
-        outcome = await handle_config_resolved_get_operation(
-            request_id=request.id,
-            params=request.params,
-            session_factory=async_session,
-        )
-        await self._send(outcome.response)
-
-    async def _config_adapter_profiles_list(self, request: JsonRpcRequest) -> None:
-        outcome = await handle_config_adapter_profiles_list_operation(
-            request_id=request.id,
-            params=request.params,
-        )
-        await self._send(outcome.response)
-
-    async def _config_runtime_capabilities_get(self, request: JsonRpcRequest) -> None:
-        outcome = await handle_config_runtime_capabilities_get_operation(
-            request_id=request.id,
-            params=request.params,
-            session_factory=async_session,
-        )
-        await self._send(outcome.response)
-
-    async def _config_subagent_upsert(self, request: JsonRpcRequest) -> None:
-        outcome = await handle_config_subagent_upsert_operation(
-            request_id=request.id,
-            params=request.params,
-            session_factory=async_session,
-        )
-        await self._send(outcome.response)
-
-    async def _config_subagent_delete(self, request: JsonRpcRequest) -> None:
-        outcome = await handle_config_subagent_delete_operation(
-            request_id=request.id,
-            params=request.params,
-        )
-        await self._send(outcome.response)
-
-    async def _turn_start(self, request: JsonRpcRequest) -> None:
-        outcome = await handle_turn_start_operation(
-            request_id=request.id,
-            params=request.params,
-            current_thread_id=self.thread_id,
-            session_factory=async_session,
-        )
-        await self._send(outcome.response)
-        for event in outcome.notify_events:
-            await self._send(event_notification(event))
-        if outcome.runtime_start:
-            self._start_writer_runtime(**outcome.runtime_start)
-
-    def _start_writer_runtime(
-        self,
-        *,
-        thread_id: str,
-        turn_id: str,
-        user_message_id: str,
-        text: str,
-        work_root: object = None,
-        thinking_enabled: bool | None = None,
-        thinking_budget: int | None = None,
-        shallow_thinking_enabled: bool | None = None,
-        model_id: str | None = None,
-        attachment_ids: list[str] | None = None,
-    ) -> None:
-        self.runtime.start(
-            thread_id=thread_id,
-            turn_id=turn_id,
-            user_message_id=user_message_id,
-            text=text,
-            work_root=work_root,
-            thinking_enabled=thinking_enabled,
-            thinking_budget=thinking_budget,
-            shallow_thinking_enabled=shallow_thinking_enabled,
-            model_id=model_id,
-            attachment_ids=attachment_ids,
-        )
-
-    async def _approval_respond(self, request: JsonRpcRequest) -> None:
-        outcome = await handle_approval_respond_operation(
-            request_id=request.id,
-            params=request.params,
-            session_factory=async_session,
-        )
-        await self._send(outcome.response)
-        for event in outcome.notify_events:
-            await self._send(event_notification(event))
-        if outcome.continuation:
-            asyncio.create_task(
-                self._continue_resolved_approval(
-                    request_id=outcome.continuation["request_id"],
-                    thread_id=outcome.continuation["thread_id"],
-                    decision=outcome.continuation["decision"],
-                    guidance=outcome.continuation["guidance"],
-                )
-            )
-
-    async def _artifact_read(self, request: JsonRpcRequest) -> None:
-        outcome = await handle_artifact_read_operation(
-            request_id=request.id,
-            params=request.params,
-            current_thread_id=self.thread_id,
-            session_factory=async_session,
-        )
-        await self._send(outcome.response)
-
-    async def _artifact_open(self, request: JsonRpcRequest) -> None:
-        outcome = await handle_artifact_open_operation(
-            request_id=request.id,
-            params=request.params,
-            current_thread_id=self.thread_id,
-            session_factory=async_session,
-        )
-        await self._send(outcome.response)
-
-    async def _command_catalog(self, request: JsonRpcRequest) -> None:
-        outcome = await handle_command_catalog_operation(
-            request_id=request.id,
-            params=request.params,
-        )
-        await self._send(outcome.response)
-
-    async def _command_execute(self, request: JsonRpcRequest) -> None:
-        thread_id = str(
-            request.params.get("thread_id")
-            or request.params.get("threadId")
-            or request.params.get("session_id")
-            or request.params.get("sessionId")
-            or self.thread_id
-            or ""
-        )
-        if thread_id:
-            self._subscribe(thread_id)
-        outcome = await handle_command_execute_operation(
-            request_id=request.id,
-            params=request.params,
-            session_factory=async_session,
-            writer_service=self.runtime.writer_service_or_none(),
-            emit_event=hub.publish,
-        )
-        await self._send(outcome.response)
-        for event in outcome.publish_events:
-            await self._send(event_notification(event))
-
-    async def _plugin_list(self, request: JsonRpcRequest) -> None:
-        await self._send_plugin_operation(request, "plugin.list")
-
-    async def _plugin_enable(self, request: JsonRpcRequest) -> None:
-        await self._send_plugin_operation(request, "plugin.enable")
-
-    async def _plugin_disable(self, request: JsonRpcRequest) -> None:
-        await self._send_plugin_operation(request, "plugin.disable")
-
-    async def _hook_list(self, request: JsonRpcRequest) -> None:
-        await self._send_plugin_operation(request, "hook.list")
-
-    async def _hook_trust(self, request: JsonRpcRequest) -> None:
-        await self._send_plugin_operation(request, "hook.trust")
-
-    async def _send_plugin_operation(self, request: JsonRpcRequest, operation: str) -> None:
-        outcome = await handle_plugin_catalog_operation(
-            request_id=request.id,
-            params=request.params,
-            operation=operation,
-        )
-        await self._send(outcome.response)
-
-    async def _dispatch_next_queue_item(self, *, thread_id: str, work_root: object = None) -> None:
-        await self.runtime.dispatch_next_queue_item(thread_id=thread_id, work_root=work_root)
-
-    async def _continue_resolved_approval(
-        self,
-        *,
-        request_id: str,
-        thread_id: str,
-        decision: str,
-        guidance: str = "",
-    ) -> None:
-        await self.runtime.continue_resolved_approval(
-            request_id=request_id,
-            thread_id=thread_id,
-            decision=decision,
-            guidance=guidance,
-        )
-
-    async def _queue_create(self, request: JsonRpcRequest) -> None:
-        outcome = await handle_queue_create_operation(
-            request_id=request.id,
-            params=request.params,
-            current_thread_id=self.thread_id,
-            session_factory=async_session,
-        )
-        await self._send(outcome.response)
-        for event in outcome.notify_events:
-            await self._send(event_notification(event))
-
-    async def _turn_steer(self, request: JsonRpcRequest) -> None:
-        outcome = await handle_turn_steer_operation(
-            request_id=request.id,
-            params=request.params,
-            current_thread_id=self.thread_id,
-            session_factory=async_session,
-        )
-        await self._send(outcome.response)
-        for event in outcome.notify_events:
-            await self._send(event_notification(event))
-
-    async def _turn_interrupt(self, request: JsonRpcRequest) -> None:
-        outcome = await handle_turn_cancel_operation(
-            request_id=request.id,
-            params=request.params,
-            current_thread_id=self.thread_id,
-            session_factory=async_session,
-        )
-        await self._send(outcome.response)
-        for event in outcome.publish_events:
-            await hub.publish(event)
-
-    async def _queue_update(self, request: JsonRpcRequest) -> None:
-        outcome = await handle_queue_update_operation(
-            request_id=request.id,
-            params=request.params,
-            current_thread_id=self.thread_id,
-            session_factory=async_session,
-        )
-        await self._send(outcome.response)
-        for event in outcome.notify_events:
-            await self._send(event_notification(event))
-
-    async def _queue_delete(self, request: JsonRpcRequest) -> None:
-        outcome = await handle_queue_delete_operation(
-            request_id=request.id,
-            params=request.params,
-            current_thread_id=self.thread_id,
-            session_factory=async_session,
-        )
-        await self._send(outcome.response)
-        for event in outcome.notify_events:
-            await self._send(event_notification(event))

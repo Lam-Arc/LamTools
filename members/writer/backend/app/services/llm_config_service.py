@@ -184,15 +184,17 @@ async def resolve_llm_config(db: AsyncSession, task_type: str = "default", *, mo
     # ── Direct model override (per-request switching) ──
     if model_id:
         model = await _model_exists(db, model_id)
-        if model is not None:
-            provider = await db.get(LLMProvider, model.provider_id)
-            if provider is not None:
-                return ResolvedLLMConfig(
-                    provider=provider,
-                    model=model,
-                    task_type=normalized,
-                    matched_rule=False,
-                )
+        if model is None:
+            raise ValueError("Model not found")
+        provider = await db.get(LLMProvider, model.provider_id)
+        if provider is None:
+            raise ValueError("Model provider not found")
+        return ResolvedLLMConfig(
+            provider=provider,
+            model=model,
+            task_type=normalized,
+            matched_rule=False,
+        )
 
     routing_state = await ensure_model_routing_state(db)
     routes = routing_state.get("routes") if isinstance(routing_state.get("routes"), dict) else {}
@@ -224,14 +226,7 @@ async def resolve_llm_config(db: AsyncSession, task_type: str = "default", *, mo
                 matched_rule=normalized not in EXECUTION_ROUTE_TASK_TYPES and model.id != writer_model_id,
             )
 
-    model = await _fallback_model(db)
-    if model is None:
-        return None
-
-    provider = await db.get(LLMProvider, model.provider_id)
-    if provider is None:
-        return None
-    return ResolvedLLMConfig(provider=provider, model=model, task_type=normalized, matched_rule=False)
+    return None
 
 
 def build_llm_client(

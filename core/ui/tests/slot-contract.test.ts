@@ -12,6 +12,7 @@ import {
 } from '../src/helpers/slotValidation';
 import WorkspaceShell from '../src/components/WorkspaceShell.vue';
 import SessionSidebar from '../src/components/SessionSidebar.vue';
+import CoreExecutionControls from '../src/components/CoreExecutionControls.vue';
 
 function mountShell(options: Parameters<typeof mount>[1] = {}) {
   return mount(WorkspaceShell, {
@@ -113,9 +114,9 @@ describe('WorkspaceShell rendering', () => {
   it('renders the current shell frame with required product name', () => {
     const wrapper = mountShell();
 
-    expect(wrapper.find('.writer-shell').exists()).toBe(true);
+    expect(wrapper.find('.workspace-shell').exists()).toBe(true);
     expect(wrapper.find('.drawer-left').exists()).toBe(true);
-    expect(wrapper.find('.writer-main').exists()).toBe(true);
+    expect(wrapper.find('.workspace-main').exists()).toBe(true);
     expect(wrapper.find('.floating-composer').exists()).toBe(true);
     expect(wrapper.find('.drawer-right').exists()).toBe(true);
     expect(wrapper.text()).toContain('LamTools');
@@ -157,6 +158,50 @@ describe('WorkspaceShell rendering', () => {
     expect(wrapper.emitted('new-session')).toHaveLength(1);
     expect(wrapper.emitted('settings')).toHaveLength(1);
     expect(wrapper.emitted('composer-submit')).toHaveLength(1);
+  });
+
+  it('renders default composer action as stop while running', () => {
+    const wrapper = mountShell({
+      props: {
+        composerActionMode: 'stop',
+      },
+    });
+
+    const button = wrapper.find('.floating-composer .send');
+    expect(button.text()).toBe('stop');
+    expect(button.classes()).toContain('send--stop');
+    expect(button.attributes('aria-label')).toBe('停止运行');
+  });
+});
+
+describe('CoreExecutionControls', () => {
+  it('emits model, thinking, and shallow changes from the shared composer controls', async () => {
+    const wrapper = mount(CoreExecutionControls, {
+      props: {
+        modelValue: '',
+        thinkingMode: 'medium',
+        shallowThinkingEnabled: false,
+        modelOptions: [
+          { value: '', label: 'Default' },
+          { value: 'model-1', label: 'Model 1' },
+        ],
+        thinkingModeOptions: [
+          { value: 'medium', label: 'Medium' },
+          { value: 'max', label: 'Max' },
+        ],
+      },
+    });
+
+    const triggers = wrapper.findAll('.ui-select-trigger');
+    await triggers[0].trigger('click');
+    await wrapper.findAll('.ui-select-option')[1].trigger('click');
+    await triggers[1].trigger('click');
+    await wrapper.findAll('.ui-select-option')[1].trigger('click');
+    await wrapper.find('.composer-shallow-toggle').trigger('click');
+
+    expect(wrapper.emitted('update:modelValue')?.[0]).toEqual(['model-1']);
+    expect(wrapper.emitted('update:thinkingMode')?.[0]).toEqual(['max']);
+    expect(wrapper.emitted('update:shallowThinkingEnabled')?.[0]).toEqual([true]);
   });
 });
 

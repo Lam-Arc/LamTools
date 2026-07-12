@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import get_db
+from app.database import execute_writer_write, get_db, get_writer_write
 from app.models.base import gen_uuid
 from app.models.session import WriterSession
 from app.services.session_management import (
@@ -20,9 +20,13 @@ from app.services.session_management import (
     update_writer_session,
 )
 from app.services.checkpoint_service import (
-    create_session_checkpoint_response,
+    claim_checkpoint_create,
+    claim_checkpoint_restore,
+    execute_checkpoint_create,
+    execute_checkpoint_restore,
     list_session_checkpoint_responses,
-    restore_session_checkpoint_response,
+    persist_checkpoint_create,
+    persist_checkpoint_restore,
 )
 from app.services.agent_branch_service import (
     abandon_agent_branch_response,
@@ -32,8 +36,11 @@ from app.services.agent_branch_service import (
 )
 from app.services.commit_review_service import (
     WorktreeChangedError,
+    claim_commit_review_approval,
     decide_commit_review_response,
+    execute_commit_review_approval,
     get_commit_review_response,
+    persist_commit_review_approval,
 )
 from app.services.session_git_queries import get_git_graph_response, get_session_changes_response
 from app.services.session_undo_service import (
@@ -420,14 +427,18 @@ async def create_session_checkpoint(
     session_id: str,
     body: SessionCheckpointCreate,
     db: AsyncSession = Depends(get_db),
+    write_transaction=Depends(get_writer_write),
 ):
     try:
-        checkpoint = await create_session_checkpoint_response(
-            db,
-            session_id,
+        claim = await execute_writer_write(db, lambda write_db: claim_checkpoint_create(
+            write_db, session_id,
             label=body.label or "checkpoint",
             reason=body.reason or "手动保存检查点",
             allow_empty=body.allow_empty,
+        ), write_transaction)
+        record = await execute_checkpoint_create(claim)
+        checkpoint = await execute_writer_write(
+            db, lambda write_db: persist_checkpoint_create(write_db, claim, record), write_transaction
         )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -443,10 +454,17 @@ async def restore_session_checkpoint(
     session_id: str,
     body: SessionCheckpointRestoreRequest,
     db: AsyncSession = Depends(get_db),
+    write_transaction=Depends(get_writer_write),
 ):
     try:
+        claim = await execute_writer_write(
+            db, lambda write_db: claim_checkpoint_restore(write_db, session_id, commit=body.commit), write_transaction
+        )
+        execution = await execute_checkpoint_restore(claim)
         return SessionUndoChangesResponse.model_validate(
-            await restore_session_checkpoint_response(db, session_id, commit=body.commit)
+            await execute_writer_write(
+                db, lambda write_db: persist_checkpoint_restore(write_db, claim, execution), write_transaction
+            )
         )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -467,6 +485,7 @@ async def request_commit_review(
     session_id: str,
     body: CommitReviewCreate,
     db: AsyncSession = Depends(get_db),
+    write_transaction=Depends(get_writer_write),
 ):
     result = await db.execute(
         select(WriterSession).where(WriterSession.id == session_id)
@@ -502,11 +521,15 @@ async def request_commit_review(
         "created_at": now,
         "updated_at": now,
     }
-    runtime_state = _runtime_state(session)
-    runtime_state["pending_commit_review"] = review
-    session.runtime_state = runtime_state
-    session.updated_at = datetime.now(timezone.utc)
-    await db.commit()
+    async def write(write_db):
+        persisted = await write_db.get(WriterSession, session_id)
+        if persisted is None:
+            raise HTTPException(status_code=404, detail="Session not found")
+        runtime_state = _runtime_state(persisted)
+        runtime_state["pending_commit_review"] = review
+        persisted.runtime_state = runtime_state
+        persisted.updated_at = datetime.now(timezone.utc)
+    await execute_writer_write(db, write, write_transaction)
     return _commit_review_response(review)
 
 
@@ -515,16 +538,40 @@ async def decide_commit_review(
     session_id: str,
     body: CommitReviewDecision,
     db: AsyncSession = Depends(get_db),
+    write_transaction=Depends(get_writer_write),
 ):
     try:
-        return CommitReviewResponse.model_validate(
-            await decide_commit_review_response(
+        if body.action.strip().lower() in {"approve", "accept", "commit"}:
+            claim = await execute_writer_write(
                 db,
-                session_id,
-                action=body.action,
-                feedback=body.feedback,
-                commit_message=body.commit_message,
+                lambda write_db: claim_commit_review_approval(
+                    write_db,
+                    session_id,
+                    feedback=body.feedback,
+                    commit_message=body.commit_message,
+                ),
+                write_transaction,
             )
+            committed = await execute_commit_review_approval(claim)
+            result = await execute_writer_write(
+                db,
+                lambda write_db: persist_commit_review_approval(write_db, claim, committed),
+                write_transaction,
+            )
+        else:
+            result = await execute_writer_write(
+                db,
+                lambda write_db: decide_commit_review_response(
+                    write_db,
+                    session_id,
+                    action=body.action,
+                    feedback=body.feedback,
+                    commit_message=body.commit_message,
+                ),
+                write_transaction,
+            )
+        return CommitReviewResponse.model_validate(
+            result
         )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

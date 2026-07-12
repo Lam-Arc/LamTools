@@ -1,0 +1,203 @@
+from __future__ import annotations
+
+import asyncio
+import socket
+import sqlite3
+from pathlib import Path
+
+import pytest
+import uvicorn
+
+from lamtools_core.app import CoreAppServerClient
+from lamtools_core.app.http_agent_app import CoreConfigRoutingLLMClient, create_core_agent_http_app
+from lamtools_core.llm import LLMStreamEvent, LLMToolCall
+from lamtools_core.runtime import default_runtime_task_registry
+
+
+def _write_config_db(path: Path) -> None:
+    connection = sqlite3.connect(path)
+    try:
+        connection.executescript(
+            """
+            create table llm_providers (id text primary key, name text, api_type text, base_url text, api_key text, extra text, created_at text);
+            create table llm_models (id text primary key, provider_id text, model_id text, display_name text, context_window integer, max_output_tokens integer, thinking_supported integer, thinking_budget integer, temperature real, extra text, created_at text);
+            insert into llm_providers values ('provider-1', 'Provider', 'openai', 'https://example.test/v1', 'secret', '{}', '2026-01-01');
+            insert into llm_models values ('model-record', 'provider-1', 'model-name', 'Model Name', 128000, 4096, 1, 10000, 0.2, '{}', '2026-01-01');
+            """
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+async def _wait_for_waiting(client: CoreAppServerClient, thread_id: str) -> None:
+    for _ in range(100):
+        snapshot = (await client.read_thread(thread_id=thread_id)).get("snapshot") or {}
+        if snapshot.get("core", {}).get("status") == "waiting":
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("approval request did not become pending")
+
+
+async def _wait_for_terminal(client: CoreAppServerClient, thread_id: str) -> None:
+    last_snapshot: dict = {}
+    for _ in range(100):
+        snapshot = (await client.read_thread(thread_id=thread_id)).get("snapshot") or {}
+        last_snapshot = snapshot
+        if snapshot.get("core", {}).get("status") in {"completed", "cancelled", "failed"}:
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"{thread_id} did not reach a terminal state: {last_snapshot}")
+
+
+async def _wait_for_runtime_release(thread_id: str) -> None:
+    registry = default_runtime_task_registry()
+    for _ in range(100):
+        if registry.active_run_id(thread_id) is None:
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"{thread_id} runtime task did not release")
+
+
+@pytest.mark.asyncio
+async def test_core_app_server_client_runs_live_operation_matrix_against_real_websocket_server(tmp_path, monkeypatch) -> None:
+    config_db = tmp_path / "config.db"
+    _write_config_db(config_db)
+    release_steered_turn = asyncio.Event()
+    release_cancelled_turn = asyncio.Event()
+    steered_stream_started = asyncio.Event()
+    cancelled_stream_started = asyncio.Event()
+
+    async def stream(self, request):
+        user_text = "\n".join(str(message.content or "") for message in request.messages if message.role == "user")
+        if "approval" in user_text:
+            yield LLMStreamEvent(
+                kind="done",
+                tool_calls=[
+                    LLMToolCall(
+                        id="call-approval",
+                        name="write_file",
+                        arguments={"path": "approved.md", "content": "approved\n"},
+                    )
+                ],
+            )
+            return
+        if "hold-steer" in user_text:
+            steered_stream_started.set()
+            while not release_steered_turn.is_set():
+                await asyncio.sleep(0.01)
+        elif "hold-cancel" in user_text:
+            cancelled_stream_started.set()
+            while not release_cancelled_turn.is_set():
+                await asyncio.sleep(0.01)
+        yield LLMStreamEvent(kind="content_delta", content="done")
+        yield LLMStreamEvent(kind="done")
+
+    monkeypatch.setattr(CoreConfigRoutingLLMClient, "stream", stream)
+    app = create_core_agent_http_app(
+        model_id="model-record",
+        config_db=config_db,
+        core_db=tmp_path / "core.db",
+        data_dir=tmp_path / "data",
+        work_root=tmp_path / "work",
+    )
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = int(listener.getsockname()[1])
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error"))
+    server_task = asyncio.create_task(server.serve())
+    try:
+        for _ in range(100):
+            if server.started:
+                break
+            await asyncio.sleep(0.01)
+        assert server.started
+        client = CoreAppServerClient(f"http://127.0.0.1:{port}")
+        try:
+            await client.connect()
+            started = await client.start_turn(
+                thread_id="thread-running",
+                client_message_id="start-running",
+                input_items=[{"type": "text", "text": "hold-steer"}],
+            )
+            turn_id = started["runtime_start"]["turn_id"]
+            await asyncio.wait_for(steered_stream_started.wait(), timeout=1)
+            queue_tasks = [
+                asyncio.create_task(
+                    client.create_queue_input(
+                        thread_id="thread-running",
+                        client_message_id=f"queue-running-{index}",
+                        input_items=[{"type": "text", "text": f"queued-{index}"}],
+                    )
+                )
+                for index in range(8)
+            ]
+            steer_task = asyncio.create_task(
+                client.steer_turn(
+                    thread_id="thread-running",
+                    turn_id=turn_id,
+                    input_items=[{"type": "text", "text": "steer"}],
+                )
+            )
+            *queued_items, steered = await asyncio.wait_for(
+                asyncio.gather(*queue_tasks, steer_task),
+                timeout=5,
+            )
+            release_steered_turn.set()
+            resumed = await client.request("thread.resume", {"thread_id": "thread-running", "last_seen_seq": 0})
+            read = await client.read_thread(thread_id="thread-running")
+
+            assert all(result["queue_item"]["status"] == "queued" for result in queued_items)
+            assert steered["applied"] is True
+            assert resumed["events"]
+            resumed_sequences = [event["seq"] for event in resumed["events"]]
+            assert resumed_sequences == list(range(1, len(resumed_sequences) + 1))
+            assert read["snapshot"]["thread_id"] == "thread-running"
+            await _wait_for_terminal(client, "thread-running")
+
+            cancelling = await client.start_turn(
+                thread_id="thread-cancel",
+                client_message_id="start-cancel",
+                input_items=[{"type": "text", "text": "hold-cancel"}],
+            )
+            await asyncio.wait_for(cancelled_stream_started.wait(), timeout=1)
+            cancelled, next_started = await asyncio.wait_for(
+                asyncio.gather(
+                    client.cancel_turn(
+                        thread_id="thread-cancel",
+                        turn_id=cancelling["runtime_start"]["turn_id"],
+                    ),
+                    client.start_turn(
+                        thread_id="thread-next",
+                        client_message_id="start-next",
+                        input_items=[{"type": "text", "text": "next"}],
+                    ),
+                ),
+                timeout=5,
+            )
+            assert [event["method"] for event in cancelled["events"]] == ["turn/interrupted", "core/runItem"]
+            assert next_started["runtime_start"]["thread_id"] == "thread-next"
+
+            await client.start_turn(
+                thread_id="thread-approval",
+                client_message_id="start-approval",
+                input_items=[{"type": "text", "text": "approval"}],
+            )
+            await _wait_for_waiting(client, "thread-approval")
+            await _wait_for_runtime_release("thread-approval")
+            approval = await client.request(
+                "approval.respond",
+                {
+                    "thread_id": "thread-approval", "request_id": "call-approval",
+                    "action": "deny", "response": "no",
+                },
+            )
+            assert approval["snapshot"]["core"]["requests"]["call-approval"]["status"] == "resolved"
+            assert approval["snapshot"]["core"]["status"] == "cancelled"
+        finally:
+            await asyncio.wait_for(client.close(), timeout=1)
+    finally:
+        release_steered_turn.set()
+        release_cancelled_turn.set()
+        server.should_exit = True
+        await server_task

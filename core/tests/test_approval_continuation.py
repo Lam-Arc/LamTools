@@ -2,55 +2,92 @@ from __future__ import annotations
 
 import pytest
 
-from lamtools_core.tool.approval_continuation import (
-    ApprovedToolExecution,
-    approved_tool_continuation_prompt,
-    guidance_continuation_prompt,
-    normalize_waiting_action,
-    resolve_waiting_decision,
-)
+from lamtools_core.app.approval_continuation import CoreApprovalContinuationCoordinator
+from lamtools_core.runtime import RuntimeState
+from lamtools_core.tool.approval_continuation import ApprovedToolExecution
 
 
-def test_normalize_waiting_action_aliases():
-    assert normalize_waiting_action("confirm") == "approve"
-    assert normalize_waiting_action("guidance") == "guide"
+class StateStore:
+    def __init__(self, state: RuntimeState):
+        self.state = state
+
+    async def get(self, session_id: str):
+        return self.state if self.state.session_id == session_id else None
+
+    async def save(self, state: RuntimeState):
+        self.state = state
 
 
-def test_resolve_waiting_decision_requires_guidance_text():
-    with pytest.raises(ValueError, match="Guidance decision requires response text"):
-        resolve_waiting_decision("guide")
-
-
-def test_approved_tool_execution_completed_property():
-    assert ApprovedToolExecution("run_tests", {}, "ok", "completed").completed is True
-    assert ApprovedToolExecution("run_tests", {}, "bad", "failed").completed is False
-
-
-def test_guidance_continuation_prompt_includes_original_tool_and_guidance():
-    prompt = guidance_continuation_prompt(
-        original_task="fix tests",
-        tool_name="run_command",
-        tool_args={"command": "rm -rf tmp"},
-        guidance_text="use a safer command",
+def pending_state() -> RuntimeState:
+    return RuntimeState(
+        session_id="thread-1",
+        run_id="turn-1",
+        status="waiting",
+        loop_state="wait",
+        metadata={
+            "original_user_message": "do it",
+            "pending_approval": {
+                "request_id": "call-1",
+                "tool_call": {"id": "call-1", "name": "run_tests", "arguments": {"command": "echo ok"}},
+            },
+        },
     )
 
-    assert "fix tests" in prompt
-    assert "run_command" in prompt
-    assert "use a safer command" in prompt
-    assert "不要默认执行" in prompt
 
+@pytest.mark.asyncio
+async def test_core_approval_continuation_owns_tool_execution_and_resume():
+    store = StateStore(pending_state())
+    events = []
+    prompts = []
 
-def test_approved_tool_continuation_prompt_includes_real_result():
-    prompt = approved_tool_continuation_prompt(
-        original_task="fix tests",
-        approved_tool=ApprovedToolExecution(
-            tool_name="run_tests",
-            tool_args={"command": "pytest"},
-            tool_content="2 passed",
-            tool_status="completed",
-        ),
+    async def execute(tool_call):
+        assert tool_call["id"] == "call-1"
+        return ApprovedToolExecution("run_tests", tool_call["arguments"], "ok", "completed")
+
+    coordinator = CoreApprovalContinuationCoordinator(
+        state_store=store,
+        emit_event=events.append,
+        execute_tool=execute,
+        continue_turn=lambda prompt, state: prompts.append((prompt, state.run_id)),
+    )
+    result = await coordinator.respond(
+        thread_id="thread-1", request_id="call-1", decision="approve"
     )
 
-    assert "用户已经批准" in prompt
-    assert "run_tests" in prompt
-    assert "2 passed" in prompt
+    assert result["decision"] == "approve"
+    assert "pending_approval" not in store.state.metadata
+    assert [event.name for event in events] == ["runtime.approval_response", "runtime.tool.finished"]
+    assert prompts and prompts[0][1] == "turn-1"
+
+
+@pytest.mark.asyncio
+async def test_core_approval_continuation_rejects_wrong_request_id():
+    coordinator = CoreApprovalContinuationCoordinator(
+        state_store=StateStore(pending_state()),
+        emit_event=lambda _event: None,
+        execute_tool=lambda _call: None,
+        continue_turn=lambda _prompt, _state: None,
+    )
+
+    with pytest.raises(ValueError, match="does not match"):
+        await coordinator.respond(thread_id="thread-1", request_id="wrong", decision="approve")
+
+
+@pytest.mark.asyncio
+async def test_core_approval_continuation_denial_is_terminal_without_member_resume():
+    store = StateStore(pending_state())
+    events = []
+    coordinator = CoreApprovalContinuationCoordinator(
+        state_store=store,
+        emit_event=events.append,
+        execute_tool=lambda _call: None,
+        continue_turn=lambda _prompt, _state: None,
+    )
+
+    result = await coordinator.respond(
+        thread_id="thread-1", request_id="call-1", decision="deny"
+    )
+
+    assert result["decision"] == "deny"
+    assert store.state.status == "cancelled"
+    assert [event.name for event in events] == ["runtime.approval_response", "runtime.cancelled"]

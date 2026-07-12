@@ -8,7 +8,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.message import WriterMessage
 from app.models.session import WriterSession
 from app.models.transcript import WriterTranscriptTurn
-from app.services.queued_input_service import consume_guidance_for_turn
 from app.services.session_rollback_markers import is_rolled_back_metadata
 
 
@@ -31,46 +30,12 @@ async def prepare_runtime_input_context(
     if turn is None:
         raise RuntimeError("Transcript turn was not created")
 
-    user_message, raw_user_message = await _merge_queued_guidance(
-        db,
-        turn_id=turn.id,
-        user_message=user_message,
-        raw_user_message=raw_user_message,
-    )
     history = await _load_recent_history(
         db,
         session_id=session_id,
         raw_user_message=raw_user_message,
     )
     return RuntimeInputContext(turn=turn, goal=user_message, history=history)
-
-
-async def _merge_queued_guidance(
-    db: AsyncSession,
-    *,
-    turn_id: str,
-    user_message: str,
-    raw_user_message: str,
-) -> tuple[str, str]:
-    guidance_items = await consume_guidance_for_turn(db, turn_id=turn_id)
-    if not guidance_items:
-        return user_message, raw_user_message
-
-    guidance_text = "\n".join(
-        f"- {item.text.strip()}" for item in guidance_items if item.text.strip()
-    )
-    if guidance_text:
-        suffix = (
-            "\n\n"
-            "用户在本轮运行中补充了以下引导，请在后续处理时纳入：\n"
-            f"{guidance_text}"
-        )
-        user_message = f"{user_message}{suffix}"
-        raw_user_message = f"{raw_user_message}{suffix}"
-    await db.commit()
-    return user_message, raw_user_message
-
-
 async def _load_recent_history(
     db: AsyncSession,
     *,

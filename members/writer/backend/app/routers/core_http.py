@@ -2,7 +2,7 @@
 
 Maps Writer DB models to neutral Core-shaped JSON records under /api/core.
 Does NOT use the generic in-memory Core skeleton -- all data comes from
-Writer's real SQLite database.
+the appropriate SQLite database for each domain.
 """
 
 from __future__ import annotations
@@ -15,9 +15,10 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import get_db
+from app.database import execute_writer_write, get_db, get_writer_write
 from app.models.session import WriterSession
 from app.models.llm_config import LLMProvider, LLMModel
+from app.shared_config_database import get_shared_config_db
 from app.routers.path_utils import ensure_work_root
 from app.core.writer.core_kernel_adapter import schedule_writer_startup_prewarm
 from app.services.llm_config_service import resolve_llm_config
@@ -131,18 +132,21 @@ async def list_sessions(
 async def create_session(
     body: CoreSessionCreate,
     db: AsyncSession = Depends(get_db),
+    write_transaction: Any = Depends(get_writer_write),
 ):
-    session = WriterSession(
-        title=body.title,
-        work_root=ensure_work_root(body.work_root),
-        mode=body.mode,
-        project_id=body.project_id,
-    )
-    db.add(session)
-    await db.commit()
-    await db.refresh(session)
-    schedule_writer_startup_prewarm(session.work_root)
-    return await _session_to_core_projected(db, session)
+    async def write(write_db):
+        session = WriterSession(
+            title=body.title,
+            work_root=ensure_work_root(body.work_root),
+            mode=body.mode,
+            project_id=body.project_id,
+        )
+        write_db.add(session)
+        await write_db.flush()
+        return await _session_to_core_projected(write_db, session)
+    result = await execute_writer_write(db, write, write_transaction)
+    schedule_writer_startup_prewarm(result.get("work_root") or "")
+    return result
 
 
 @router.get("/sessions/{session_id}")
@@ -162,31 +166,25 @@ async def update_session(
     session_id: str,
     body: CoreSessionUpdate,
     db: AsyncSession = Depends(get_db),
+    write_transaction: Any = Depends(get_writer_write),
 ):
-    result = await db.execute(
-        select(WriterSession).where(WriterSession.id == session_id)
-    )
-    session = result.scalar_one_or_none()
-    if session is None:
-        raise HTTPException(status_code=404, detail="Session not found")
-
-    if body.title is not None:
-        session.title = body.title
-    if body.status is not None:
-        session.status = body.status
-    if body.mode is not None:
-        session.mode = body.mode
-    if body.phase is not None:
-        session.phase = body.phase
-    if body.metadata is not None:
-        # Merge metadata into existing metadata_
-        existing = dict(session.metadata_ or {})
-        existing.update(body.metadata)
-        session.metadata_ = existing
-
-    await db.commit()
-    await db.refresh(session)
-    return await _session_to_core_projected(db, session)
+    async def write(write_db):
+        session = await write_db.get(WriterSession, session_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="Session not found")
+        if body.title is not None:
+            session.title = body.title
+        if body.status is not None:
+            session.status = body.status
+        if body.mode is not None:
+            session.mode = body.mode
+        if body.phase is not None:
+            session.phase = body.phase
+        if body.metadata is not None:
+            session.metadata_ = {**dict(session.metadata_ or {}), **body.metadata}
+        await write_db.flush()
+        return await _session_to_core_projected(write_db, session)
+    return await execute_writer_write(db, write, write_transaction)
 
 
 # ---------------------------------------------------------------------------
@@ -197,16 +195,16 @@ async def update_session(
 async def list_providers(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
-    db: AsyncSession = Depends(get_db),
+    config_db: AsyncSession = Depends(get_shared_config_db),
 ):
-    result = await db.execute(
+    result = await config_db.execute(
         select(LLMProvider)
         .order_by(LLMProvider.name.asc())
         .offset(offset)
         .limit(limit)
     )
     providers = result.scalars().all()
-    writer_config = await resolve_llm_config(db, "writer")
+    writer_config = await resolve_llm_config(config_db, "writer")
 
     out = []
     for p in providers:
@@ -217,7 +215,7 @@ async def list_providers(
         )
 
         # Collect all model IDs for this provider
-        models_result = await db.execute(
+        models_result = await config_db.execute(
             select(LLMModel.model_id)
             .where(LLMModel.provider_id == p.id)
         )
@@ -233,10 +231,10 @@ async def list_providers(
 @router.get("/providers/default")
 async def get_default_provider(
     kind: str | None = Query(None),
-    db: AsyncSession = Depends(get_db),
+    config_db: AsyncSession = Depends(get_shared_config_db),
 ):
     """Return the Writer primary provider, optionally filtered by kind (api_type)."""
-    writer_config = await resolve_llm_config(db, "writer")
+    writer_config = await resolve_llm_config(config_db, "writer")
     provider = writer_config.provider if writer_config is not None else None
     default_model_id = writer_config.model.model_id if writer_config is not None else None
     if provider is not None and kind is not None and provider.api_type != kind:
@@ -247,14 +245,14 @@ async def get_default_provider(
         stmt2 = select(LLMProvider).order_by(LLMProvider.name.asc()).limit(1)
         if kind is not None:
             stmt2 = stmt2.where(LLMProvider.api_type == kind)
-        result2 = await db.execute(stmt2)
+        result2 = await config_db.execute(stmt2)
         provider = result2.scalar_one_or_none()
 
     if provider is None:
         raise HTTPException(status_code=404, detail="No provider found")
 
     if default_model_id is None:
-        model_result = await db.execute(
+        model_result = await config_db.execute(
             select(LLMModel)
             .where(LLMModel.provider_id == provider.id)
             .order_by(LLMModel.display_name.asc(), LLMModel.model_id.asc())
@@ -264,7 +262,7 @@ async def get_default_provider(
         default_model_id = model.model_id if model else None
 
     # Collect all model IDs
-    models_result = await db.execute(
+    models_result = await config_db.execute(
         select(LLMModel.model_id)
         .where(LLMModel.provider_id == provider.id)
     )

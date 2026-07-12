@@ -1,7 +1,14 @@
 from lamtools_core.tool.permission import AUTO_ALLOW, ASK_USER, HARD_BLOCK, is_auto_allow
+from lamtools_core.tool.default_toolbox import (
+    DEFAULT_OUTPUT_SCHEMA as CORE_DEFAULT_OUTPUT_SCHEMA,
+    DEFAULT_TOOL_ORDER as CORE_DEFAULT_TOOL_ORDER,
+    default_core_tool_specs,
+)
 
 from app.core.writer.permission import TOOL_PERMISSIONS
+from app.core.writer import tool_specs
 from app.core.writer.tool_specs import (
+    DEFAULT_OUTPUT_SCHEMA,
     WRITER_TOOL_PERMISSIONS,
     WRITER_TOOL_SPECS,
     writer_tool_spec,
@@ -65,6 +72,24 @@ def test_each_spec_has_required_fields():
     for spec in WRITER_TOOL_SPECS:
         missing = required - set(spec.keys())
         assert not missing, f"{spec.get('name')} missing {missing}"
+
+
+def test_writer_tool_specs_reuse_core_schema_helpers():
+    assert DEFAULT_OUTPUT_SCHEMA is CORE_DEFAULT_OUTPUT_SCHEMA
+    assert not hasattr(tool_specs, "_strict_schema")
+
+
+def test_writer_common_tool_specs_are_sourced_from_core():
+    writer_specs = {str(spec["name"]): spec for spec in WRITER_TOOL_SPECS}
+    core_specs = {spec.name: spec for spec in default_core_tool_specs()}
+
+    for name in CORE_DEFAULT_TOOL_ORDER:
+        writer_spec = writer_specs[name]
+        core_spec = core_specs[name]
+        assert writer_spec["description"] == core_spec.description
+        assert writer_spec["input_schema"] == core_spec.input_schema
+        assert writer_spec["permission"] == core_spec.permission
+        assert writer_spec["output_schema"] == core_spec.output_schema
 
 
 def test_write_file_has_path_bounds_failure():

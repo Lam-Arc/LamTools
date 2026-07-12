@@ -10,6 +10,7 @@ from lamtools_core.member import MemberManifest
 
 from app.config import settings
 from app.database import init_db
+from app.shared_config_database import init_shared_config_db
 from app.routers.session import router as session_router
 from app.routers.project import router as project_router
 from app.routers.config import router as config_router
@@ -57,11 +58,20 @@ async def _on_startup():
     """Initialize database and Writer service on startup."""
     global _writer_service_healthy
     await init_db()
-    # Seed default LLM config from .env if DB is empty
+    await init_shared_config_db()
     try:
         from app.database import async_session
+        from app.shared_config_database import shared_config_session
+        from app.services.app_settings import move_writer_settings_from_shared_to_writer
+        async with async_session() as writer_db, shared_config_session() as shared_db:
+            await move_writer_settings_from_shared_to_writer(writer_db, shared_db)
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"Writer setting migration failed: {e}")
+    # Seed default LLM config from .env if DB is empty
+    try:
         from app.routers.config import seed_default_config
-        async with async_session() as seed_db:
+        from app.shared_config_database import shared_config_session
+        async with shared_config_session() as seed_db:
             await seed_default_config(seed_db)
     except Exception as e:
         logging.getLogger(__name__).warning(f"Config seed failed: {e}")
@@ -88,6 +98,14 @@ async def _on_shutdown():
     except Exception as e:
         logging.getLogger(__name__).error(f"Error closing HTTP session: {e}")
     try:
+        from app.routers import session as session_mod
+        service = session_mod._service
+        if isinstance(service, dict) and callable(service.get("close")):
+            await service["close"]()
+            session_mod._service = None
+    except Exception as e:
+        logging.getLogger(__name__).error(f"Error closing Writer service: {e}")
+    try:
         from app.core.writer.core_kernel_adapter import close_writer_runtime_resources
         await close_writer_runtime_resources()
     except Exception as e:
@@ -97,6 +115,11 @@ async def _on_shutdown():
         await engine.dispose()
     except Exception as e:
         logging.getLogger(__name__).error(f"Error disposing DB engine: {e}")
+    try:
+        from app.shared_config_database import shared_config_engine
+        await shared_config_engine.dispose()
+    except Exception as e:
+        logging.getLogger(__name__).error(f"Error disposing shared config DB engine: {e}")
     try:
         root_logger = logging.getLogger()
         for handler in list(root_logger.handlers):

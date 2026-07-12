@@ -4,14 +4,24 @@ import asyncio
 import json
 import os
 from dataclasses import replace
-from typing import Any
+from typing import Any, Protocol
+
+import httpx
 
 from .models import HookDecision, HookDefinition, HookEvent
 
 
+class MCPHookCaller(Protocol):
+    async def call(self, tool_name: str, arguments: dict[str, Any]) -> str: ...
+
+
 class HookEngine:
-    def __init__(self, hooks: list[HookDefinition]) -> None:
+    def __init__(self, hooks: list[HookDefinition], *, mcp_caller: MCPHookCaller | None = None) -> None:
         self.hooks = list(hooks)
+        self.mcp_caller = mcp_caller
+
+    def set_mcp_caller(self, mcp_caller: MCPHookCaller | None) -> None:
+        self.mcp_caller = mcp_caller
 
     async def run(self, event: HookEvent) -> HookDecision:
         decision = HookDecision()
@@ -51,6 +61,12 @@ class HookEngine:
         ]
 
     async def _run_hook(self, hook: HookDefinition, event: HookEvent) -> tuple[HookDecision, dict[str, Any]]:
+        if hook.handler.type == "http":
+            return await self._run_http_hook(hook, event)
+        if hook.handler.type == "mcp":
+            return await self._run_mcp_hook(hook, event)
+        if hook.handler.type == "prompt":
+            return self._run_prompt_hook(hook, event)
         if hook.handler.type != "command":
             return HookDecision(), {"hook_id": hook.id, "status": "skipped_unsupported"}
         payload = self._payload(hook, event)
@@ -92,19 +108,78 @@ class HookEngine:
         text = stdout.decode("utf-8", errors="replace").strip()
         if not text:
             return HookDecision(), audit
+        return self._decision_from_text(text), audit
+
+    async def _run_http_hook(self, hook: HookDefinition, event: HookEvent) -> tuple[HookDecision, dict[str, Any]]:
+        if not hook.handler.url:
+            audit = {"hook_id": hook.id, "status": "failed", "error": "missing url"}
+            if hook.handler.required:
+                return HookDecision(decision="block", reason="required http hook missing url"), audit
+            return HookDecision(), audit
+        payload = self._payload(hook, event)
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(hook.handler.timeout)) as client:
+                response = await client.post(hook.handler.url, json=payload)
+            audit = {
+                "hook_id": hook.id,
+                "status": "completed" if response.status_code < 400 else "failed",
+                "status_code": response.status_code,
+            }
+            if response.status_code >= 400:
+                if hook.handler.required:
+                    return HookDecision(decision="block", reason="required http hook failed"), audit
+                return HookDecision(), audit
+            text = response.text.strip()
+            return (self._decision_from_text(text) if text else HookDecision()), audit
+        except Exception as exc:
+            audit = {"hook_id": hook.id, "status": "failed", "error": str(exc)[:200]}
+            if hook.handler.required:
+                return HookDecision(decision="block", reason="required http hook failed"), audit
+            return HookDecision(), audit
+
+    async def _run_mcp_hook(self, hook: HookDefinition, event: HookEvent) -> tuple[HookDecision, dict[str, Any]]:
+        if self.mcp_caller is None:
+            audit = {"hook_id": hook.id, "status": "skipped_unavailable"}
+            if hook.handler.required:
+                return HookDecision(decision="block", reason="required mcp hook unavailable"), audit
+            return HookDecision(), audit
+        if not hook.handler.tool:
+            audit = {"hook_id": hook.id, "status": "failed", "error": "missing tool"}
+            if hook.handler.required:
+                return HookDecision(decision="block", reason="required mcp hook missing tool"), audit
+            return HookDecision(), audit
+        payload = self._payload(hook, event)
+        try:
+            text = await asyncio.wait_for(self.mcp_caller.call(hook.handler.tool, payload), timeout=hook.handler.timeout)
+        except asyncio.TimeoutError:
+            audit = {"hook_id": hook.id, "status": "timeout"}
+            if hook.handler.required:
+                return HookDecision(decision="block", reason="required mcp hook timed out"), audit
+            return HookDecision(), audit
+        except Exception as exc:
+            audit = {"hook_id": hook.id, "status": "failed", "error": str(exc)[:200]}
+            if hook.handler.required:
+                return HookDecision(decision="block", reason="required mcp hook failed"), audit
+            return HookDecision(), audit
+        audit = {"hook_id": hook.id, "status": "completed"}
+        return self._decision_from_text(str(text)) if text else HookDecision(), audit
+
+    def _run_prompt_hook(self, hook: HookDefinition, event: HookEvent) -> tuple[HookDecision, dict[str, Any]]:
+        prompt = self._expanded_prompt(hook, event)
+        audit = {"hook_id": hook.id, "status": "completed"}
+        return HookDecision(additional_context=prompt), audit
+
+    def _decision_from_text(self, text: str) -> HookDecision:
         data = json.loads(text)
-        return (
-            HookDecision(
-                decision="block" if data.get("decision") == "block" else "allow",
-                reason=str(data.get("reason") or ""),
-                additional_context=str(data.get("additionalContext") or data.get("additional_context") or ""),
-                updated_input=data.get("updatedInput") if isinstance(data.get("updatedInput"), dict) else None,
-                permission_decision=str(data.get("permissionDecision") or data.get("permission_decision") or ""),
-                permission_decision_reason=str(
-                    data.get("permissionDecisionReason") or data.get("permission_decision_reason") or ""
-                ),
+        return HookDecision(
+            decision="block" if data.get("decision") == "block" else "allow",
+            reason=str(data.get("reason") or ""),
+            additional_context=str(data.get("additionalContext") or data.get("additional_context") or ""),
+            updated_input=data.get("updatedInput") if isinstance(data.get("updatedInput"), dict) else None,
+            permission_decision=str(data.get("permissionDecision") or data.get("permission_decision") or ""),
+            permission_decision_reason=str(
+                data.get("permissionDecisionReason") or data.get("permission_decision_reason") or ""
             ),
-            audit,
         )
 
     def _payload(self, hook: HookDefinition, event: HookEvent) -> dict[str, Any]:
@@ -131,4 +206,14 @@ class HookEngine:
             .replace("${PLUGIN_ROOT}", plugin_root)
             .replace("${PLUGIN_DATA}", event.plugin_data)
             .replace("${PROJECT_ROOT}", event.project_root)
+        )
+
+    def _expanded_prompt(self, hook: HookDefinition, event: HookEvent) -> str:
+        plugin_root = str(hook.plugin_root or event.plugin_root or "")
+        return (
+            hook.handler.prompt
+            .replace("${PLUGIN_ROOT}", plugin_root)
+            .replace("${PLUGIN_DATA}", event.plugin_data)
+            .replace("${PROJECT_ROOT}", event.project_root)
+            .replace("${TOOL_NAME}", event.tool_name)
         )

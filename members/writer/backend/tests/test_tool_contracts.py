@@ -187,6 +187,17 @@ def test_writer_tool_specs_are_the_single_schema_source():
     assert "MODEL_TOOL_FUNCTIONS" not in source
 
 
+def test_writer_default_executor_reuses_core_toolbox_for_base_tools():
+    source = (Path(__file__).resolve().parents[1] / "app/core/writer/tools.py").read_text(encoding="utf-8")
+
+    assert "build_core_toolbox" in source
+    assert "make_write_file_handler" not in source
+    assert "make_edit_file_handler" not in source
+    assert "CommandToolHandlers" not in source
+    assert "make_git_status_handler" not in source
+    assert "make_web_search_handler" not in source
+
+
 def test_advertised_tool_input_schemas_match_declarative_specs():
     specs = {str(spec["name"]): spec for spec in WRITER_TOOL_SPECS}
     for tool in WRITER_TOOLS:

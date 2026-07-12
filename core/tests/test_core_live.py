@@ -1,0 +1,1477 @@
+from __future__ import annotations
+
+import asyncio
+from datetime import datetime
+from types import SimpleNamespace
+
+import pytest
+from sqlalchemy import DateTime, Integer, JSON, String, UniqueConstraint, text
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+from lamtools_core.app import (
+    AppPersistenceHost,
+    CORE_WORKBENCH_OPERATION_NAMES,
+    CoreAppSnapshotProjector,
+    CoreLiveOperationHost,
+    OperationCatalog,
+    OperationResult,
+)
+from lamtools_core.app.default_agent import CoreAgentPaths, create_core_agent_operations
+from lamtools_core.app.event_store import SqlAlchemyAppEventStore
+from lamtools_core.app.live_hub import CoreAppEventHub
+from lamtools_core.app.live_operations import (
+    CoreLiveContext,
+    handle_queue_create_operation,
+    handle_queue_delete_operation,
+    handle_queue_guidance_operation,
+    handle_queue_update_operation,
+    handle_thread_resume_operation,
+    handle_thread_start_operation,
+    handle_turn_cancel_operation,
+    handle_turn_start_operation,
+    handle_turn_steer_operation,
+)
+from lamtools_core.event import RunItemEvent
+from lamtools_core.app.snapshot_store import SqlAlchemyThreadSnapshotStore
+import lamtools_core.app.live_operations as live_operations_module
+from lamtools_core.llm import LLMRequest, LLMResponse, LLMStreamEvent
+from lamtools_core.runtime import RuntimeTaskRegistry
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class AppEventRow(Base):
+    __tablename__ = "test_core_live_app_events"
+    __table_args__ = (
+        UniqueConstraint("thread_id", "seq", name="uq_test_core_live_app_events_thread_seq"),
+    )
+
+    event_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    thread_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    turn_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    item_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    parent_item_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    client_message_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    method: Mapped[str] = mapped_column(String(100), nullable=False)
+    payload_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+
+
+class ThreadSnapshotRow(Base):
+    __tablename__ = "test_core_live_thread_snapshots"
+
+    thread_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    snapshot_seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    snapshot_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+
+
+async def _context(tmp_path) -> tuple[object, CoreLiveContext]:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'core-live.db'}", future=True)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    event_store = SqlAlchemyAppEventStore(AppEventRow, protocol_version="core.app_server.v1")
+    snapshot_store = SqlAlchemyThreadSnapshotStore(ThreadSnapshotRow, projector=CoreAppSnapshotProjector(member_defaults={"queue": []}))
+    return engine, CoreLiveContext(
+        session_factory=session_factory,
+        event_store=event_store,
+        snapshot_store=snapshot_store,
+        operations=OperationCatalog(),
+        hub=CoreAppEventHub(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_thread_start_uses_core_transaction_and_member_materialization(tmp_path):
+    engine, context = await _context(tmp_path)
+
+    class MemberHooks:
+        async def materialize_thread(self, *, db, thread_id, params):
+            del db, params
+            return {"member_session_id": thread_id}
+
+    context.host.member_hooks = MemberHooks()
+    try:
+        outcome = await handle_thread_start_operation(
+            request_id=1,
+            params={"thread_id": "thread-start", "title": "Atomic"},
+            context=context,
+        )
+
+        assert outcome.response["result"]["snapshot"]["snapshot_seq"] == 1
+        assert outcome.response["result"]["event"]["method"] == "thread/started"
+        assert outcome.response["result"]["event"]["payload"]["member_session_id"] == "thread-start"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_approval_respond_uses_operation_catalog_without_member_lifecycle_hook(tmp_path):
+    engine, context = await _context(tmp_path)
+    calls = []
+
+    async def respond(request):
+        calls.append(request.payload)
+        return OperationResult(name=request.name, payload={"decision": "approve"})
+
+    context.operations.register("approval.respond", respond)
+    try:
+        outcome = await context.host.execute(
+            "approval.respond",
+            request_id=1,
+            params={"thread_id": "thread-1", "request_id": "request-1", "decision": "approve"},
+            context=context,
+        )
+        assert outcome.response["result"]["decision"] == "approve"
+        assert calls == [{
+            "thread_id": "thread-1", "request_id": "request-1",
+            "decision": "approve", "guidance": "",
+        }]
+        assert not hasattr(context.host.member_hooks, "continue_approval")
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_thread_start_retries_whole_member_event_snapshot_transaction(tmp_path):
+    engine, context = await _context(tmp_path)
+    async with engine.begin() as conn:
+        await conn.execute(text("CREATE TABLE member_threads (id TEXT PRIMARY KEY)"))
+    attempts = 0
+
+    class RetryThreadHooks:
+        async def materialize_thread(self, *, db, thread_id, params):
+            nonlocal attempts
+            del params
+            attempts += 1
+            await db.execute(text("INSERT INTO member_threads(id) VALUES (:id)"), {"id": thread_id})
+            if attempts == 1:
+                raise OperationalError("member", {}, Exception("database is locked"))
+            return {}
+
+    context.host.member_hooks = RetryThreadHooks()
+    try:
+        outcome = await handle_thread_start_operation(
+            request_id=1, params={"thread_id": "retry-thread"}, context=context,
+        )
+        async with context.session_factory() as db:
+            member_count = (await db.execute(text("SELECT COUNT(*) FROM member_threads"))).scalar_one()
+            events = await context.persistence.list_thread(db, thread_id="retry-thread")
+        assert attempts == 2
+        assert member_count == 1
+        assert len(events) == 1
+        assert outcome.response["result"]["snapshot"]["snapshot_seq"] == 1
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.parametrize("operation_name", ["turn.start", "command.catalog", "config.models.list"])
+def test_core_live_host_rejects_base_operation_executor_override(tmp_path, operation_name):
+    async def forbidden_override(**_kwargs):
+        raise AssertionError("base lifecycle override must never run")
+
+    with pytest.raises(ValueError, match="base live operation"):
+        CoreLiveOperationHost(
+            session_factory=lambda: None,
+            persistence=SimpleNamespace(bind_session_factory=lambda _factory: None),
+            product_operation_executors={operation_name: forbidden_override},
+        )
+
+
+@pytest.mark.asyncio
+async def test_turn_start_orders_member_prepare_transaction_commit_then_runtime_start(tmp_path):
+    engine, context = await _context(tmp_path)
+    order: list[str] = []
+
+    class MemberHooks:
+        async def prepare_turn_input(self, **kwargs):
+            order.append("prepare")
+            return SimpleNamespace(
+                visible_input=kwargs["input_items"],
+                runtime_input=kwargs["input_items"],
+                visible_text="hello",
+                runtime_text="hello",
+                work_root="",
+                runtime_extras={},
+            )
+
+        async def materialize_turn(self, **kwargs):
+            order.append("materialize")
+            return SimpleNamespace(
+                turn_id=kwargs["turn_id"],
+                user_item_id=kwargs["user_item_id"],
+                turn_payload_extra={},
+                user_payload_extra={},
+                include_turn_status=True,
+                runtime_extras={},
+            )
+
+        async def start_runtime(self, **_kwargs):
+            order.append("runtime_start")
+
+    context.host.member_hooks = MemberHooks()
+    real_write = context.persistence.write
+
+    async def recording_write(callback):
+        result = await real_write(callback)
+        order.append("commit")
+        return result
+
+    context.persistence.write = recording_write
+    try:
+        outcome = await handle_turn_start_operation(
+            request_id=1,
+            params={
+                "thread_id": "thread-hook-order",
+                "client_message_id": "client-hook-order",
+                "input": [{"type": "text", "text": "hello"}],
+            },
+            context=context,
+        )
+        await asyncio.sleep(0)
+
+        assert "result" in outcome.response
+        assert order == ["prepare", "materialize", "commit", "runtime_start"]
+    finally:
+        context.runtime_task_registry.clear()
+        await engine.dispose()
+
+
+def _register_blocking_turn_start(context: CoreLiveContext) -> asyncio.Event:
+    release = asyncio.Event()
+
+    async def turn_start(_request):
+        await release.wait()
+        return OperationResult(name="turn.start")
+
+    context.operations.register("turn.start", turn_start)
+    return release
+
+
+class BlockingCoreLLM:
+    def __init__(self) -> None:
+        import asyncio
+
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.requests: list[LLMRequest] = []
+
+    async def complete(self, request: LLMRequest) -> LLMResponse:
+        raise AssertionError("live Core run should stream when available")
+
+    async def stream(self, request: LLMRequest):
+        self.requests.append(request)
+        self.started.set()
+        await self.release.wait()
+        yield LLMStreamEvent(kind="content_delta", content="completed")
+        yield LLMStreamEvent(kind="done")
+
+
+class GuidedCoreLLM(BlockingCoreLLM):
+    async def stream(self, request: LLMRequest):
+        self.requests.append(request)
+        if len(self.requests) == 1:
+            self.started.set()
+            await self.release.wait()
+            yield LLMStreamEvent(kind="content_delta", content="first final")
+            yield LLMStreamEvent(kind="done")
+            return
+        yield LLMStreamEvent(kind="content_delta", content="guided final")
+        yield LLMStreamEvent(kind="done")
+
+
+async def _live_core_context(tmp_path, llm: BlockingCoreLLM) -> tuple[object, CoreLiveContext]:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'core-live-kernel.db'}", future=True)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    event_store = SqlAlchemyAppEventStore(AppEventRow, protocol_version="core.app_server.v1")
+    snapshot_store = SqlAlchemyThreadSnapshotStore(
+        ThreadSnapshotRow,
+        projector=CoreAppSnapshotProjector(member_defaults={"queue": []}),
+    )
+    hub = CoreAppEventHub()
+    runtime_task_registry = RuntimeTaskRegistry()
+    operations = create_core_agent_operations(
+        paths=CoreAgentPaths(data_dir=tmp_path / "data", work_root=tmp_path / "work"),
+        model_provider=llm,
+        db_session_factory=session_factory,
+        app_event_store=event_store,
+        thread_snapshot_store=snapshot_store,
+        app_event_hub=hub,
+        runtime_task_registry=runtime_task_registry,
+    )
+    return engine, CoreLiveContext(
+        session_factory=session_factory,
+        event_store=event_store,
+        snapshot_store=snapshot_store,
+        operations=operations,
+        hub=hub,
+        runtime_task_registry=runtime_task_registry,
+    )
+
+
+@pytest.mark.asyncio
+async def test_core_live_turn_start_accepts_input_before_runtime_completion(tmp_path):
+    engine, context = await _context(tmp_path)
+    release = _register_blocking_turn_start(context)
+    try:
+        outcome = await handle_turn_start_operation(
+            request_id=1,
+            params={
+                "thread_id": "thread-1",
+                "client_message_id": "client-1",
+                "input": [{"type": "text", "text": "hello"}],
+                "thinking_enabled": True,
+                "thinking_budget": 6000,
+                "shallow_thinking_enabled": True,
+                "model_id": "xopkimik26",
+            },
+            context=context,
+        )
+
+        result = outcome.response["result"]
+        assert result["snapshot"]["status"] == "running"
+        assert result["snapshot"]["turns"][result["runtime_start"]["turn_id"]]["status"] == "running"
+        assert result["snapshot"]["items"][result["runtime_start"]["user_message_id"]]["type"] == "userMessage"
+        assert result["snapshot"]["item_order"] == [result["runtime_start"]["user_message_id"]]
+        assert result["events"][0]["method"] == "turn/accepted"
+        assert result["runtime_start"]["thinking_enabled"] is True
+        assert result["runtime_start"]["thinking_budget"] == 6000
+        assert result["runtime_start"]["shallow_thinking_enabled"] is True
+        assert result["runtime_start"]["model_id"] == "xopkimik26"
+
+        resumed = await handle_thread_resume_operation(
+            request_id=2,
+            params={"thread_id": "thread-1", "last_seen_seq": 0},
+            context=context,
+        )
+        methods = [event["method"] for event in resumed.response["result"]["events"]]
+        assert methods == ["turn/accepted", "item/started", "core/runItem"]
+    finally:
+        task = context.runtime_task_registry.task("thread-1")
+        release.set()
+        if task is not None:
+            await task
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_turn_start_releases_runtime_claim_before_retrying_locked_transaction(tmp_path, monkeypatch):
+    engine, context = await _context(tmp_path)
+    release = _register_blocking_turn_start(context)
+    original_append = live_operations_module._append_app_event
+    append_calls = 0
+
+    async def locked_once(*args, **kwargs):
+        nonlocal append_calls
+        event = await original_append(*args, **kwargs)
+        append_calls += 1
+        if append_calls == 1:
+            raise OperationalError("INSERT core_app_events", {}, Exception("database is locked"))
+        return event
+
+    monkeypatch.setattr(live_operations_module, "_append_app_event", locked_once)
+    try:
+        outcome = await handle_turn_start_operation(
+            request_id=1,
+            params={"thread_id": "thread-start-retry", "input": [{"type": "text", "text": "start"}]},
+            context=context,
+        )
+
+        assert outcome.response["result"]["runtime_start"]["thread_id"] == "thread-start-retry"
+        assert [event["method"] for event in outcome.response["result"]["events"]] == [
+            "turn/accepted",
+            "item/started",
+            "core/runItem",
+        ]
+    finally:
+        task = context.runtime_task_registry.task("thread-start-retry")
+        release.set()
+        if task is not None:
+            await task
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_turn_steer_retracts_guidance_before_retrying_locked_transaction(tmp_path, monkeypatch):
+    engine, context = await _context(tmp_path)
+    release = _register_blocking_turn_start(context)
+    try:
+        started = await handle_turn_start_operation(
+            request_id=1,
+            params={"thread_id": "thread-steer-retry", "input": [{"type": "text", "text": "start"}]},
+            context=context,
+        )
+        turn_id = started.response["result"]["runtime_start"]["turn_id"]
+        original_append = live_operations_module._append_app_event
+        append_calls = 0
+
+        async def locked_once(*args, **kwargs):
+            nonlocal append_calls
+            event = await original_append(*args, **kwargs)
+            append_calls += 1
+            if append_calls == 1:
+                raise OperationalError("INSERT core_app_events", {}, Exception("database is locked"))
+            return event
+
+        monkeypatch.setattr(live_operations_module, "_append_app_event", locked_once)
+        outcome = await handle_turn_steer_operation(
+            request_id=2,
+            params={
+                "thread_id": "thread-steer-retry",
+                "turn_id": turn_id,
+                "client_message_id": "steer-retry",
+                "input": [{"type": "text", "text": "guide"}],
+            },
+            context=context,
+        )
+
+        assert [event["method"] for event in outcome.response["result"]["events"]] == ["turn/steered"]
+    finally:
+        task = context.runtime_task_registry.task("thread-steer-retry")
+        release.set()
+        if task is not None:
+            await task
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_turn_steer_persists_consumed_guidance_after_locked_commit_retry(tmp_path, monkeypatch):
+    engine, context = await _context(tmp_path)
+    release = _register_blocking_turn_start(context)
+    failure_injected = False
+    consumed: list[str] = []
+    accepted_statuses: list[str] = []
+    try:
+        started = await handle_turn_start_operation(
+            request_id=1,
+            params={
+                "thread_id": "thread-steer-consumed-retry",
+                "client_message_id": "start-steer-consumed-retry",
+                "input": [{"type": "text", "text": "complete this"}],
+            },
+            context=context,
+        )
+        turn_id = started.response["result"]["runtime_start"]["turn_id"]
+        task = context.runtime_task_registry.task("thread-steer-consumed-retry", run_id=turn_id)
+        assert task is not None
+
+        original_accept = context.runtime_task_registry.accept_guidance
+        original_commit = AsyncSession.commit
+
+        def record_accept(*args, **kwargs):
+            status = original_accept(*args, **kwargs)
+            accepted_statuses.append(status)
+            return status
+
+        async def fail_commit_after_runtime_consumes(db):
+            nonlocal failure_injected
+            if not failure_injected:
+                failure_injected = True
+                consumed.extend(context.runtime_task_registry.consume_guidance(
+                    "thread-steer-consumed-retry", run_id=turn_id
+                ))
+                raise OperationalError("COMMIT core_app_events", {}, Exception("database is locked"))
+            return await original_commit(db)
+
+        monkeypatch.setattr(context.runtime_task_registry, "accept_guidance", record_accept)
+        monkeypatch.setattr(AsyncSession, "commit", fail_commit_after_runtime_consumes)
+        steered = await handle_turn_steer_operation(
+            request_id=2,
+            params={
+                "thread_id": "thread-steer-consumed-retry",
+                "turn_id": turn_id,
+                "client_message_id": "steer-consumed-retry",
+                "input": [{"type": "text", "text": "use the safer path"}],
+            },
+            context=context,
+        )
+
+        result = steered.response["result"]
+        assert result["applied"] is True
+        assert result["reason"] == ""
+        assert [event["method"] for event in result["events"]] == ["turn/steered"]
+        assert accepted_statuses == ["accepted", "duplicate"]
+        assert consumed == ["use the safer path"]
+
+        async with context.session_factory() as db:
+            events = await context.persistence.list_thread(db, thread_id="thread-steer-consumed-retry")
+            snapshot = await context.persistence.load(db, "thread-steer-consumed-retry")
+        assert [event.method for event in events].count("turn/steered") == 1
+        assert snapshot["snapshot_seq"] == events[-1].seq
+    finally:
+        task = context.runtime_task_registry.task("thread-steer-consumed-retry")
+        release.set()
+        if task is not None:
+            await task
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_queue_guidance_persists_consumed_guidance_after_locked_commit_retry(tmp_path, monkeypatch):
+    engine, context = await _context(tmp_path)
+    release = _register_blocking_turn_start(context)
+    failure_injected = False
+    consumed: list[str] = []
+    accepted_statuses: list[str] = []
+    try:
+        started = await handle_turn_start_operation(
+            request_id=1,
+            params={
+                "thread_id": "thread-queue-consumed-retry",
+                "client_message_id": "start-queue-consumed-retry",
+                "input": [{"type": "text", "text": "complete this"}],
+            },
+            context=context,
+        )
+        turn_id = started.response["result"]["runtime_start"]["turn_id"]
+        task = context.runtime_task_registry.task("thread-queue-consumed-retry", run_id=turn_id)
+        assert task is not None
+        queued = await handle_queue_create_operation(
+            request_id=2,
+            params={
+                "thread_id": "thread-queue-consumed-retry",
+                "client_message_id": "queue-consumed-retry",
+                "input": [{"type": "text", "text": "queued guidance"}],
+            },
+            context=context,
+        )
+        queue_item_id = queued.response["result"]["queue_item"]["queue_item_id"]
+
+        original_accept = context.runtime_task_registry.accept_guidance
+        original_commit = AsyncSession.commit
+
+        def record_accept(*args, **kwargs):
+            status = original_accept(*args, **kwargs)
+            accepted_statuses.append(status)
+            return status
+
+        async def fail_commit_after_runtime_consumes(db):
+            nonlocal failure_injected
+            if not failure_injected:
+                failure_injected = True
+                consumed.extend(context.runtime_task_registry.consume_guidance(
+                    "thread-queue-consumed-retry", run_id=turn_id
+                ))
+                raise OperationalError("COMMIT core_app_events", {}, Exception("database is locked"))
+            return await original_commit(db)
+
+        monkeypatch.setattr(context.runtime_task_registry, "accept_guidance", record_accept)
+        monkeypatch.setattr(AsyncSession, "commit", fail_commit_after_runtime_consumes)
+        guided = await handle_queue_guidance_operation(
+            request_id=3,
+            params={
+                "thread_id": "thread-queue-consumed-retry",
+                "turn_id": turn_id,
+                "queue_item_id": queue_item_id,
+                "client_message_id": "queue-guide-consumed-retry",
+            },
+            context=context,
+        )
+
+        result = guided.response["result"]
+        assert result["applied"] is True
+        assert result["reason"] == ""
+        assert [event["method"] for event in result["events"]] == ["turn/steered", "queue/itemDeleted"]
+        assert accepted_statuses == ["accepted", "duplicate"]
+        assert consumed == ["queued guidance"]
+
+        async with context.session_factory() as db:
+            events = await context.persistence.list_thread(db, thread_id="thread-queue-consumed-retry")
+            snapshot = await context.persistence.load(db, "thread-queue-consumed-retry")
+        assert [event.method for event in events].count("turn/steered") == 1
+        assert [event.method for event in events].count("queue/itemDeleted") == 1
+        assert snapshot["queue"] == []
+    finally:
+        task = context.runtime_task_registry.task("thread-queue-consumed-retry")
+        release.set()
+        if task is not None:
+            await task
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation_name", ["turn.steer", "queue.guide"])
+async def test_consumed_guidance_survives_exhausted_commit_retries_for_client_retry(
+    tmp_path, monkeypatch, operation_name
+):
+    engine, context = await _context(tmp_path)
+    release = _register_blocking_turn_start(context)
+    thread_id = f"thread-client-retry-{operation_name}"
+    client_message_id = f"client-retry-{operation_name}"
+    try:
+        started = await handle_turn_start_operation(
+            request_id=1,
+            params={"thread_id": thread_id, "input": [{"type": "text", "text": "start"}]},
+            context=context,
+        )
+        turn_id = started.response["result"]["runtime_start"]["turn_id"]
+        params = {
+            "thread_id": thread_id,
+            "turn_id": turn_id,
+            "client_message_id": client_message_id,
+        }
+        handler = handle_turn_steer_operation
+        if operation_name == "turn.steer":
+            params["input"] = [{"type": "text", "text": "retry guidance"}]
+        else:
+            queued = await handle_queue_create_operation(
+                request_id=2,
+                params={"thread_id": thread_id, "input": [{"type": "text", "text": "queued guidance"}]},
+                context=context,
+            )
+            params["queue_item_id"] = queued.response["result"]["queue_item"]["queue_item_id"]
+            handler = handle_queue_guidance_operation
+
+        original_commit = AsyncSession.commit
+        consumed = False
+
+        async def fail_every_commit_after_consumption(db):
+            nonlocal consumed
+            if not consumed:
+                consumed = True
+                context.runtime_task_registry.consume_guidance(thread_id, run_id=turn_id)
+            raise OperationalError("COMMIT core_app_events", {}, Exception("database is locked"))
+
+        monkeypatch.setattr(AsyncSession, "commit", fail_every_commit_after_consumption)
+        with pytest.raises(OperationalError, match="database is locked"):
+            await handler(request_id=3, params=params, context=context)
+
+        monkeypatch.setattr(AsyncSession, "commit", original_commit)
+        retried = await handler(request_id=4, params=params, context=context)
+        result = retried.response["result"]
+        assert result["applied"] is True
+        assert result["reason"] == ""
+        expected_methods = ["turn/steered"]
+        if operation_name == "queue.guide":
+            expected_methods.append("queue/itemDeleted")
+        assert [event["method"] for event in result["events"]] == expected_methods
+
+        async with context.session_factory() as db:
+            events = await context.persistence.list_thread(db, thread_id=thread_id)
+            snapshot = await context.persistence.load(db, thread_id)
+        assert [event.method for event in events].count("turn/steered") == 1
+        if operation_name == "queue.guide":
+            assert snapshot["queue"] == []
+    finally:
+        task = context.runtime_task_registry.task(thread_id)
+        release.set()
+        if task is not None:
+            await task
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_queue_guidance_retracts_pending_guidance_after_exhausted_commit_retries(tmp_path, monkeypatch):
+    engine, context = await _context(tmp_path)
+    release = _register_blocking_turn_start(context)
+    accepted_statuses: list[str] = []
+    try:
+        started = await handle_turn_start_operation(
+            request_id=1,
+            params={"thread_id": "thread-queue-pending-retry", "input": [{"type": "text", "text": "start"}]},
+            context=context,
+        )
+        turn_id = started.response["result"]["runtime_start"]["turn_id"]
+        queued = await handle_queue_create_operation(
+            request_id=2,
+            params={"thread_id": "thread-queue-pending-retry", "input": [{"type": "text", "text": "queued"}]},
+            context=context,
+        )
+        queue_item_id = queued.response["result"]["queue_item"]["queue_item_id"]
+        params = {
+            "thread_id": "thread-queue-pending-retry",
+            "turn_id": turn_id,
+            "queue_item_id": queue_item_id,
+            "client_message_id": "queue-pending-retry",
+        }
+        original_accept = context.runtime_task_registry.accept_guidance
+        original_commit = AsyncSession.commit
+
+        def record_accept(*args, **kwargs):
+            status = original_accept(*args, **kwargs)
+            accepted_statuses.append(status)
+            return status
+
+        async def fail_every_commit(_db):
+            raise OperationalError("COMMIT core_app_events", {}, Exception("database is locked"))
+
+        monkeypatch.setattr(context.runtime_task_registry, "accept_guidance", record_accept)
+        monkeypatch.setattr(AsyncSession, "commit", fail_every_commit)
+        with pytest.raises(OperationalError, match="database is locked"):
+            await handle_queue_guidance_operation(request_id=3, params=params, context=context)
+
+        monkeypatch.setattr(AsyncSession, "commit", original_commit)
+        retried = await handle_queue_guidance_operation(request_id=4, params=params, context=context)
+        result = retried.response["result"]
+        assert result["applied"] is True
+        assert result["reason"] == ""
+        assert [event["method"] for event in result["events"]] == ["turn/steered", "queue/itemDeleted"]
+        assert accepted_statuses[0] == "accepted"
+        assert accepted_statuses[-1] == "accepted"
+    finally:
+        task = context.runtime_task_registry.task("thread-queue-pending-retry")
+        release.set()
+        if task is not None:
+            await task
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_live_turn_reuses_accepted_id_for_core_events_terminal_and_task_registry(tmp_path):
+    llm = BlockingCoreLLM()
+    engine, context = await _live_core_context(tmp_path, llm)
+    try:
+        outcome = await handle_turn_start_operation(
+            request_id=1,
+            params={
+                "thread_id": "thread-live-id",
+                "client_message_id": "client-live-id",
+                "input": [{"type": "text", "text": "finish this"}],
+            },
+            context=context,
+        )
+        accepted_turn_id = outcome.response["result"]["events"][0]["turn_id"]
+        await llm.started.wait()
+        task = context.runtime_task_registry.task("thread-live-id", run_id=accepted_turn_id)
+        assert task is not None
+
+        llm.release.set()
+        await task
+        assert len(llm.requests) == 1
+
+        resumed = await handle_thread_resume_operation(
+            request_id=2,
+            params={"thread_id": "thread-live-id", "last_seen_seq": 0},
+            context=context,
+        )
+        result = resumed.response["result"]
+        core_events = [event for event in result["events"] if event["method"] == "core/runItem"]
+
+        assert core_events
+        assert {event["turn_id"] for event in core_events} == {accepted_turn_id}
+        assert {event["payload"].get("run_id") for event in core_events} == {accepted_turn_id}
+        assert result["snapshot"]["status"] == "completed"
+        assert result["snapshot"]["core"]["status"] == "completed"
+        assert set(result["snapshot"]["core"]["turns"]) == {accepted_turn_id}
+        assert result["snapshot"]["core"]["turns"][accepted_turn_id]["status"] == "completed"
+        assert not any(
+            turn["status"] == "running"
+            for turn in result["snapshot"]["core"]["turns"].values()
+        )
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_live_turn_steer_reaches_the_next_model_call_before_a_no_tool_final(tmp_path):
+    llm = GuidedCoreLLM()
+    engine, context = await _live_core_context(tmp_path, llm)
+    try:
+        started = await handle_turn_start_operation(
+            request_id=1,
+            params={
+                "thread_id": "thread-steer-live",
+                "client_message_id": "client-steer-live",
+                "input": [{"type": "text", "text": "complete this"}],
+            },
+            context=context,
+        )
+        turn_id = started.response["result"]["events"][0]["turn_id"]
+        task = context.runtime_task_registry.task("thread-steer-live", run_id=turn_id)
+        assert task is not None
+        await llm.started.wait()
+
+        steered = await handle_turn_steer_operation(
+            request_id=2,
+            params={
+                "thread_id": "thread-steer-live",
+                "turn_id": turn_id,
+                "client_message_id": "client-steer-now",
+                "input": [{"type": "text", "text": "use the safer path"}],
+            },
+            context=context,
+        )
+        assert steered.response["result"]["applied"] is True
+        assert steered.response["result"]["events"][0]["method"] == "turn/steered"
+
+        llm.release.set()
+        await task
+
+        assert len(llm.requests) == 2
+        assert any(message.content == "use the safer path" for message in llm.requests[1].messages)
+        resumed = await handle_thread_resume_operation(
+            request_id=3,
+            params={"thread_id": "thread-steer-live", "last_seen_seq": 0},
+            context=context,
+        )
+        assert any(event["method"] == "turn/steered" for event in resumed.response["result"]["events"])
+        assert context.runtime_task_registry.inject_guidance(
+            "thread-steer-live", "late", run_id=turn_id
+        ) is False
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_live_queue_guidance_reaches_the_next_model_call(tmp_path):
+    llm = GuidedCoreLLM()
+    engine, context = await _live_core_context(tmp_path, llm)
+    try:
+        started = await handle_turn_start_operation(
+            request_id=1,
+            params={
+                "thread_id": "thread-queue-guide-live",
+                "client_message_id": "client-queue-guide-live",
+                "input": [{"type": "text", "text": "complete this"}],
+            },
+            context=context,
+        )
+        turn_id = started.response["result"]["events"][0]["turn_id"]
+        task = context.runtime_task_registry.task("thread-queue-guide-live", run_id=turn_id)
+        assert task is not None
+        await llm.started.wait()
+        queued = await handle_queue_create_operation(
+            request_id=2,
+            params={
+                "thread_id": "thread-queue-guide-live",
+                "input": [{"type": "text", "text": "queued guidance"}],
+            },
+            context=context,
+        )
+        queue_item_id = queued.response["result"]["queue_item"]["queue_item_id"]
+        guided = await handle_queue_guidance_operation(
+            request_id=3,
+            params={
+                "thread_id": "thread-queue-guide-live",
+                "turn_id": turn_id,
+                "queue_item_id": queue_item_id,
+            },
+            context=context,
+        )
+        assert guided.response["result"]["applied"] is True
+
+        llm.release.set()
+        await task
+
+        assert len(llm.requests) == 2
+        assert any(message.content == "queued guidance" for message in llm.requests[1].messages)
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_live_turn_duplicate_client_message_returns_accepted_turn_without_second_runtime_task(tmp_path):
+    engine, context = await _context(tmp_path)
+    try:
+        first = await handle_turn_start_operation(
+            request_id=1,
+            params={
+                "thread_id": "thread-dedup",
+                "client_message_id": "client-dedup",
+                "input": [{"type": "text", "text": "once"}],
+            },
+            context=context,
+        )
+        duplicate = await handle_turn_start_operation(
+            request_id=2,
+            params={
+                "thread_id": "thread-dedup",
+                "client_message_id": "client-dedup",
+                "input": [{"type": "text", "text": "once"}],
+            },
+            context=context,
+        )
+
+        assert duplicate.runtime_start is None
+        assert duplicate.response["result"]["events"][0]["turn_id"] == first.response["result"]["events"][0]["turn_id"]
+        assert duplicate.response["result"]["snapshot"]["snapshot_seq"] == first.response["result"]["snapshot"]["snapshot_seq"]
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_live_turn_rejects_second_active_start_without_overwriting_registry(tmp_path):
+    llm = BlockingCoreLLM()
+    engine, context = await _live_core_context(tmp_path, llm)
+    try:
+        first = await handle_turn_start_operation(
+            request_id=1,
+            params={
+                "thread_id": "thread-active-start",
+                "client_message_id": "client-first",
+                "input": [{"type": "text", "text": "first"}],
+            },
+            context=context,
+        )
+        first_turn_id = first.response["result"]["runtime_start"]["turn_id"]
+        await llm.started.wait()
+        first_task = context.runtime_task_registry.task("thread-active-start", run_id=first_turn_id)
+        assert first_task is not None
+
+        second = await handle_turn_start_operation(
+            request_id=2,
+            params={
+                "thread_id": "thread-active-start",
+                "client_message_id": "client-second",
+                "input": [{"type": "text", "text": "second"}],
+            },
+            context=context,
+        )
+        duplicate = await handle_turn_start_operation(
+            request_id=3,
+            params={
+                "thread_id": "thread-active-start",
+                "client_message_id": "client-first",
+                "input": [{"type": "text", "text": "first"}],
+            },
+            context=context,
+        )
+
+        assert second.response["error"]["data"]["reason"] == "active_turn_exists"
+        assert duplicate.response["result"]["events"][0]["turn_id"] == first_turn_id
+        assert context.runtime_task_registry.active_run_id("thread-active-start") == first_turn_id
+        assert context.runtime_task_registry.task("thread-active-start", run_id=first_turn_id) is first_task
+    finally:
+        llm.release.set()
+        if 'first_task' in locals() and first_task is not None:
+            await first_task
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_sealed_active_snapshot_rejects_steer_and_queue_guidance_without_events(tmp_path):
+    engine, context = await _context(tmp_path)
+    release = _register_blocking_turn_start(context)
+    try:
+        started = await handle_turn_start_operation(
+            request_id=1,
+            params={
+                "thread_id": "thread-sealed-window",
+                "client_message_id": "client-start",
+                "input": [{"type": "text", "text": "start"}],
+            },
+            context=context,
+        )
+        turn_id = started.response["result"]["runtime_start"]["turn_id"]
+        assert context.runtime_task_registry.close_guidance_if_empty(
+            "thread-sealed-window", run_id=turn_id
+        ) == []
+        queued = await handle_queue_create_operation(
+            request_id=2,
+            params={
+                "thread_id": "thread-sealed-window",
+                "input": [{"type": "text", "text": "queued"}],
+            },
+            context=context,
+        )
+        queue_item_id = queued.response["result"]["queue_item"]["queue_item_id"]
+
+        steered = await handle_turn_steer_operation(
+            request_id=3,
+            params={
+                "thread_id": "thread-sealed-window",
+                "turn_id": turn_id,
+                "client_message_id": "client-late-steer",
+                "input": [{"type": "text", "text": "late steer"}],
+            },
+            context=context,
+        )
+        guided = await handle_queue_guidance_operation(
+            request_id=4,
+            params={
+                "thread_id": "thread-sealed-window",
+                "turn_id": turn_id,
+                "queue_item_id": queue_item_id,
+                "client_message_id": "client-late-queue",
+            },
+            context=context,
+        )
+
+        assert steered.response["result"]["applied"] is False
+        assert steered.response["result"]["reason"] == "run_not_active"
+        assert guided.response["result"]["applied"] is False
+        assert guided.response["result"]["reason"] == "run_not_active"
+        resumed = await handle_thread_resume_operation(
+            request_id=5,
+            params={"thread_id": "thread-sealed-window", "last_seen_seq": 0},
+            context=context,
+        )
+        events = resumed.response["result"]["events"]
+        assert not any(event["method"] == "turn/steered" for event in events)
+        assert [item["queue_item_id"] for item in resumed.response["result"]["snapshot"]["queue"]] == [queue_item_id]
+    finally:
+        task = context.runtime_task_registry.task("thread-sealed-window")
+        release.set()
+        if task is not None:
+            await task
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_core_live_turn_cancel_publishes_interrupting_status(tmp_path):
+    engine, context = await _context(tmp_path)
+    _register_blocking_turn_start(context)
+    task = None
+    try:
+        started = await handle_turn_start_operation(
+            request_id=1,
+            params={
+                "thread_id": "thread-1",
+                "client_message_id": "client-1",
+                "input": [{"type": "text", "text": "hello"}],
+            },
+            context=context,
+        )
+        turn_id = started.response["result"]["runtime_start"]["turn_id"]
+        task = context.runtime_task_registry.task("thread-1", run_id=turn_id)
+
+        outcome = await handle_turn_cancel_operation(
+            request_id=2,
+            params={"thread_id": "thread-1"},
+            context=context,
+        )
+
+        result = outcome.response["result"]
+        assert result["snapshot"]["status"] == "running"
+        assert [event["method"] for event in result["events"]] == ["turn/interrupted", "core/runItem"]
+        assert result["events"][1]["payload"]["status"] == "interrupting"
+    finally:
+        if task is not None:
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_force_cancel_persists_and_publishes_cancelled_terminal(tmp_path):
+    llm = BlockingCoreLLM()
+    engine, context = await _live_core_context(tmp_path, llm)
+    thread_id = "thread-force-cancel"
+    subscription = context.hub.subscribe(thread_id)
+    try:
+        started = await handle_turn_start_operation(
+            request_id=1,
+            params={
+                "thread_id": thread_id,
+                "client_message_id": "client-force-cancel",
+                "input": [{"type": "text", "text": "block until cancelled"}],
+            },
+            context=context,
+        )
+        turn_id = started.response["result"]["runtime_start"]["turn_id"]
+        await asyncio.wait_for(llm.started.wait(), timeout=1)
+        task = context.runtime_task_registry.task(thread_id, run_id=turn_id)
+        assert task is not None
+        while not subscription.empty():
+            subscription.get_nowait()
+
+        interrupt = await handle_turn_cancel_operation(
+            request_id=2,
+            params={"thread_id": thread_id, "turn_id": turn_id},
+            context=context,
+        )
+        assert interrupt.response["result"]["snapshot"]["core"]["turns"][turn_id]["status"] == "interrupting"
+
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await asyncio.sleep(0)
+
+        resumed = await handle_thread_resume_operation(
+            request_id=3,
+            params={"thread_id": thread_id, "last_seen_seq": 0},
+            context=context,
+        )
+        result = resumed.response["result"]
+        cancelled_events = [
+            event
+            for event in result["events"]
+            if event["method"] == "core/runItem"
+            and event["payload"].get("kind") == "status"
+            and event["payload"].get("status") == "cancelled"
+        ]
+        published = []
+        while not subscription.empty():
+            published.append(subscription.get_nowait())
+
+        assert len(cancelled_events) == 1
+        assert cancelled_events[0]["turn_id"] == turn_id
+        assert result["snapshot"]["turns"][turn_id]["status"] == "cancelled"
+        assert result["snapshot"]["core"]["turns"][turn_id]["status"] == "cancelled"
+        assert result["snapshot"]["status"] == "cancelled"
+        assert result["snapshot"]["core"]["status"] == "cancelled"
+        assert any(
+            event.method == "core/runItem"
+            and event.payload.get("status") == "cancelled"
+            for event in published
+        )
+        assert context.runtime_task_registry.task(thread_id, run_id=turn_id) is None
+    finally:
+        context.hub.unsubscribe(thread_id, subscription)
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_terminal_fallback_is_idempotent(tmp_path):
+    engine, context = await _context(tmp_path)
+    release = _register_blocking_turn_start(context)
+    thread_id = "thread-cancel-idempotent"
+    try:
+        started = await handle_turn_start_operation(
+            request_id=1,
+            params={
+                "thread_id": thread_id,
+                "client_message_id": "client-cancel-idempotent",
+                "input": [{"type": "text", "text": "cancel once"}],
+            },
+            context=context,
+        )
+        turn_id = started.response["result"]["runtime_start"]["turn_id"]
+
+        await live_operations_module._persist_cancelled_terminal(
+            context=context,
+            thread_id=thread_id,
+            turn_id=turn_id,
+        )
+        first = await handle_thread_resume_operation(
+            request_id=2,
+            params={"thread_id": thread_id, "last_seen_seq": 0},
+            context=context,
+        )
+        await live_operations_module._persist_cancelled_terminal(
+            context=context,
+            thread_id=thread_id,
+            turn_id=turn_id,
+        )
+        second = await handle_thread_resume_operation(
+            request_id=3,
+            params={"thread_id": thread_id, "last_seen_seq": 0},
+            context=context,
+        )
+
+        cancelled_events = [
+            event
+            for event in second.response["result"]["events"]
+            if event["method"] == "core/runItem" and event["payload"].get("status") == "cancelled"
+        ]
+        assert len(cancelled_events) == 1
+        assert second.response["result"]["snapshot"]["snapshot_seq"] == first.response["result"]["snapshot"]["snapshot_seq"]
+    finally:
+        task = context.runtime_task_registry.task(thread_id)
+        release.set()
+        if task is not None:
+            await task
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_core_live_operation_host_uses_injected_persistence_and_runtime_registry(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'core-live-operation-host.db'}", future=True)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    event_store = SqlAlchemyAppEventStore(AppEventRow, protocol_version="core.app_server.v1")
+    snapshot_store = SqlAlchemyThreadSnapshotStore(
+        ThreadSnapshotRow,
+        projector=CoreAppSnapshotProjector(member_defaults={"queue": []}),
+    )
+
+    class RuntimeRegistry:
+        def __init__(self) -> None:
+            self.cancel_calls: list[tuple[str, str | None, bool]] = []
+            self.run_id: str | None = None
+
+        def active_run_id(self, thread_id):
+            _ = thread_id
+            return self.run_id
+
+        def accept_run(self, thread_id, run_id):
+            _ = thread_id
+            if self.run_id not in {None, run_id}:
+                return False
+            self.run_id = run_id
+            return True
+
+        def release_run(self, thread_id, *, run_id):
+            _ = thread_id
+            if self.run_id == run_id:
+                self.run_id = None
+
+        def register(self, thread_id, task, *, run_id=None) -> bool:
+            _ = (thread_id, task, run_id)
+            return True
+
+        def cancel(self, thread_id, *, run_id=None, force=False) -> None:
+            self.cancel_calls.append((thread_id, run_id, force))
+
+    runtime_registry = RuntimeRegistry()
+    persistence = AppPersistenceHost(event_store, snapshot_store)
+    host = CoreLiveOperationHost(
+        session_factory=session_factory,
+        persistence=persistence,
+        hub=CoreAppEventHub(),
+        runtime_task_registry=runtime_registry,
+    )
+    context = CoreLiveContext(host=host, operations=OperationCatalog())
+
+    async def turn_start(_request):
+        return OperationResult(name="turn.start")
+
+    context.operations.register("turn.start", turn_start)
+    try:
+        assert context.persistence is persistence
+        assert set(host.operation_handlers()) == set(CORE_WORKBENCH_OPERATION_NAMES)
+
+        started = await handle_turn_start_operation(
+            request_id=1,
+            params={
+                "thread_id": "thread-host",
+                "client_message_id": "client-host",
+                "input": [{"type": "text", "text": "hello"}],
+            },
+            context=context,
+        )
+        turn_id = started.response["result"]["runtime_start"]["turn_id"]
+        await handle_turn_cancel_operation(
+            request_id=2,
+            params={"thread_id": "thread-host", "turn_id": turn_id},
+            context=context,
+        )
+
+        assert runtime_registry.cancel_calls == [("thread-host", turn_id, True)]
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure_mode",
+    ["empty_message", "no_running_loop", "create_task_error", "register_rejected", "task_done"],
+)
+async def test_core_live_runtime_start_failure_releases_run_and_persists_failed_terminal(
+    tmp_path, monkeypatch, failure_mode
+):
+    engine, context = await _context(tmp_path)
+
+    async def turn_start(_request):
+        return OperationResult(name="turn.start")
+
+    context.operations.register("turn.start", turn_start)
+    real_loop = asyncio.get_running_loop()
+    input_items = [] if failure_mode == "empty_message" else [{"type": "text", "text": "start"}]
+
+    if failure_mode == "no_running_loop":
+        monkeypatch.setattr(live_operations_module, "_get_running_loop", lambda: (_ for _ in ()).throw(RuntimeError("no loop")))
+    elif failure_mode == "create_task_error":
+        class RaisingLoop:
+            def create_task(self, coroutine):
+                coroutine.close()
+                raise RuntimeError("create task failed")
+
+        monkeypatch.setattr(live_operations_module, "_get_running_loop", lambda: RaisingLoop())
+    elif failure_mode == "register_rejected":
+        monkeypatch.setattr(context.runtime_task_registry, "register", lambda *_args, **_kwargs: False)
+    elif failure_mode == "task_done":
+        class CompletedTaskLoop:
+            def create_task(self, coroutine):
+                coroutine.close()
+                task = real_loop.create_future()
+                task.set_result(None)
+                return task
+
+        monkeypatch.setattr(live_operations_module, "_get_running_loop", lambda: CompletedTaskLoop())
+
+    thread_id = f"core-start-failure-{failure_mode}"
+    try:
+        failed = await handle_turn_start_operation(
+            request_id=1,
+            params={
+                "thread_id": thread_id,
+                "client_message_id": f"client-{failure_mode}",
+                "input": input_items,
+            },
+            context=context,
+        )
+        turn_id = failed.response["result"]["runtime_start"]["turn_id"]
+
+        assert context.runtime_task_registry.active_run_id(thread_id) is None
+        assert failed.response["result"]["snapshot"]["status"] == "failed"
+        assert failed.response["result"]["snapshot"]["turns"][turn_id]["status"] == "failed"
+
+        monkeypatch.undo()
+        retried = await handle_turn_start_operation(
+            request_id=2,
+            params={
+                "thread_id": thread_id,
+                "client_message_id": f"client-{failure_mode}-retry",
+                "input": [{"type": "text", "text": "retry"}],
+            },
+            context=context,
+        )
+        assert "result" in retried.response
+    finally:
+        context.runtime_task_registry.clear()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_core_live_queue_operations_project_snapshot(tmp_path):
+    engine, context = await _context(tmp_path)
+    try:
+        created = await handle_queue_create_operation(
+            request_id=1,
+            params={
+                "thread_id": "thread-queue",
+                "client_message_id": "client-queue",
+                "input": [
+                    {"type": "text", "text": "继续补充"},
+                    {"type": "attachment", "attachment_id": "att-queue", "name": "draft.md"},
+                ],
+            },
+            context=context,
+        )
+        queue_item = created.response["result"]["queue_item"]
+        assert queue_item["status"] == "queued"
+        assert created.response["result"]["snapshot"]["queue"][0]["queue_item_id"] == queue_item["queue_item_id"]
+        assert created.response["result"]["snapshot"]["queue"][0]["input"][1]["attachment_id"] == "att-queue"
+
+        updated = await handle_queue_update_operation(
+            request_id=2,
+            params={
+                "thread_id": "thread-queue",
+                "queue_item_id": queue_item["queue_item_id"],
+                "text": "改成这个",
+            },
+            context=context,
+        )
+        assert updated.response["result"]["snapshot"]["queue"][0]["input"] == [{"type": "text", "text": "改成这个"}]
+
+        deleted = await handle_queue_delete_operation(
+            request_id=3,
+            params={
+                "thread_id": "thread-queue",
+                "queue_item_id": queue_item["queue_item_id"],
+            },
+            context=context,
+        )
+        assert deleted.response["result"]["snapshot"]["queue"] == []
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_core_live_queue_update_rejects_unavailable_item_without_writing_event(tmp_path):
+    engine, context = await _context(tmp_path)
+    try:
+        created = await handle_queue_create_operation(
+            request_id=1,
+            params={
+                "thread_id": "thread-queue-stale",
+                "client_message_id": "client-queue-stale",
+                "input": [{"type": "text", "text": "before"}],
+            },
+            context=context,
+        )
+        queue_item_id = created.response["result"]["queue_item"]["queue_item_id"]
+        await handle_queue_delete_operation(
+            request_id=2,
+            params={"thread_id": "thread-queue-stale", "queue_item_id": queue_item_id},
+            context=context,
+        )
+        async with context.session_factory() as db:
+            before_events = await context.persistence.list_thread(db, thread_id="thread-queue-stale")
+            before_snapshot = await context.persistence.load(db, "thread-queue-stale")
+
+        stale = await handle_queue_update_operation(
+            request_id=3,
+            params={
+                "thread_id": "thread-queue-stale",
+                "queue_item_id": queue_item_id,
+                "text": "after",
+            },
+            context=context,
+        )
+
+        result = stale.response["result"]
+        assert result["applied"] is False
+        assert result["reason"] == "queue_item_unavailable"
+        assert result["events"] == []
+        assert result["snapshot"] == before_snapshot
+        async with context.session_factory() as db:
+            after_events = await context.persistence.list_thread(db, thread_id="thread-queue-stale")
+        assert [event.event_id for event in after_events] == [event.event_id for event in before_events]
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_core_live_queue_guidance_does_not_consume_when_the_runtime_task_is_not_active(tmp_path):
+    engine, context = await _context(tmp_path)
+    release = _register_blocking_turn_start(context)
+    task = None
+    try:
+        started = await handle_turn_start_operation(
+            request_id=1,
+            params={"thread_id": "thread-guide", "input": [{"type": "text", "text": "start"}]},
+            context=context,
+        )
+        turn_id = started.response["result"]["events"][0]["turn_id"]
+        task = context.runtime_task_registry.task("thread-guide", run_id=turn_id)
+        context.runtime_task_registry.release_run("thread-guide", run_id=turn_id)
+        created = await handle_queue_create_operation(
+            request_id=2,
+            params={"thread_id": "thread-guide", "input": [{"type": "text", "text": "queued"}]},
+            context=context,
+        )
+        queue_item_id = created.response["result"]["queue_item"]["queue_item_id"]
+
+        guided = await handle_queue_guidance_operation(
+            request_id=3,
+            params={
+                "thread_id": "thread-guide",
+                "turn_id": turn_id,
+                "queue_item_id": queue_item_id,
+                "text": "edited guidance",
+            },
+            context=context,
+        )
+
+        assert guided.response["result"]["applied"] is False
+        assert guided.response["result"]["reason"] == "run_not_active"
+        assert guided.response["result"]["events"] == []
+        assert [item["queue_item_id"] for item in guided.response["result"]["snapshot"]["queue"]] == [queue_item_id]
+
+        created_again = await handle_queue_create_operation(
+            request_id=4,
+            params={"thread_id": "thread-guide", "input": [{"type": "text", "text": "keep me"}]},
+            context=context,
+        )
+        queue_item_id_2 = created_again.response["result"]["queue_item"]["queue_item_id"]
+        rejected = await handle_queue_guidance_operation(
+            request_id=5,
+            params={
+                "thread_id": "thread-guide",
+                "turn_id": "wrong-turn",
+                "queue_item_id": queue_item_id_2,
+            },
+            context=context,
+        )
+
+        assert rejected.response["result"]["applied"] is False
+        assert rejected.response["result"]["reason"] == "active_turn_mismatch"
+        assert [item["queue_item_id"] for item in rejected.response["result"]["snapshot"]["queue"]] == [
+            queue_item_id,
+            queue_item_id_2,
+        ]
+    finally:
+        release.set()
+        if task is not None:
+            await task
+        await engine.dispose()

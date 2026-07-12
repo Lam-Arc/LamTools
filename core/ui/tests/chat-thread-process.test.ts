@@ -10,6 +10,23 @@ import type { CoreMessage } from '../src/types';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 describe('ChatThread process cards', () => {
+  it('renders assistant Markdown through the shared default renderer', () => {
+    const wrapper = mount(ChatThread, {
+      props: {
+        messages: [{
+          id: 'markdown-answer',
+          role: 'assistant',
+          content: '最终 **正文**',
+          timestamp: '',
+          parts: [],
+        }],
+      },
+    });
+
+    expect(wrapper.find('.markdown-body strong').text()).toBe('正文');
+    expect(wrapper.text()).not.toContain('**正文**');
+  });
+
   it('renders a tool part as one process step only', () => {
     const messages: CoreMessage[] = [{
       id: 'm-tool',

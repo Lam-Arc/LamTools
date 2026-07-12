@@ -26,6 +26,7 @@ async def ensure_writer_project(
     db: AsyncSession,
     *,
     work_root: str,
+    name: str | None = None,
     git_manager: WriterGitManager | None = None,
 ) -> WriterProject:
     normalized_root = ensure_work_root(work_root)
@@ -44,7 +45,7 @@ async def ensure_writer_project(
             logger.debug("Unexpected error during git init at %s", normalized_root, exc_info=True)
 
     project = WriterProject(
-        name=project_name_from_work_root(normalized_root),
+        name=str(name or '').strip() or project_name_from_work_root(normalized_root),
         work_root=normalized_root,
     )
     agents_path = Path(normalized_root) / "AGENTS.md"
@@ -114,10 +115,11 @@ async def create_writer_project_response(
     db: AsyncSession,
     *,
     work_root: str,
+    name: str | None = None,
     git_manager: WriterGitManager | None = None,
 ) -> dict[str, Any]:
-    project = await ensure_writer_project(db, work_root=work_root, git_manager=git_manager)
-    await db.commit()
+    project = await ensure_writer_project(db, work_root=work_root, name=name, git_manager=git_manager)
+    await db.flush()
     await db.refresh(project)
     return project_response(project)
 
@@ -129,7 +131,7 @@ async def list_writer_project_responses(
     offset: int = 0,
 ) -> list[dict[str, Any]]:
     await dedupe_writer_projects(db)
-    await db.commit()
+    await db.flush()
     result = await db.execute(
         select(WriterProject)
         .order_by(WriterProject.updated_at.desc())
@@ -156,7 +158,6 @@ async def update_writer_project(
         raise LookupError("Project not found")
 
     normalized_update = {key: value for key, value in update_data.items() if value is not None}
-    normalized_update.pop("name", None)
     if "work_root" in normalized_update:
         normalized_update["work_root"] = ensure_work_root(str(normalized_update["work_root"]))
         if normalized_update["work_root"] and "name" not in normalized_update:
@@ -165,7 +166,7 @@ async def update_writer_project(
         if hasattr(project, key):
             setattr(project, key, value)
 
-    await db.commit()
+    await db.flush()
     await db.refresh(project)
     return project_response(project)
 
@@ -178,7 +179,7 @@ async def delete_writer_project(db: AsyncSession, project_id: str) -> None:
     for session_id in result.scalars().all():
         await delete_writer_session_records(db, session_id)
     await db.delete(project)
-    await db.commit()
+    await db.flush()
 
 
 async def read_project_agents_md(db: AsyncSession, project_id: str) -> dict[str, str]:
@@ -194,7 +195,7 @@ async def read_project_agents_md(db: AsyncSession, project_id: str) -> dict[str,
 
     content = agents_path.read_text(encoding="utf-8")
     project.agents_md = content
-    await db.commit()
+    await db.flush()
     return {"content": content}
 
 
@@ -210,7 +211,7 @@ async def write_project_agents_md(db: AsyncSession, project_id: str, content: st
     agents_path.write_text(content, encoding="utf-8")
 
     project.agents_md = content
-    await db.commit()
+    await db.flush()
     return {"content": content}
 
 

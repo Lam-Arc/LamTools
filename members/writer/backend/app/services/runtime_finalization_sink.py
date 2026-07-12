@@ -9,13 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.base import gen_uuid
 from app.models.message import WriterMessage
 from app.models.transcript import WriterTranscriptBlock, WriterTranscriptModelCall, WriterTranscriptTurn
-from app.services.queued_input_service import expire_guidance_for_turn
 from app.services.runtime_transcript_sink import RuntimeTranscriptSink
 from app.services.transcript_service import (
     bump_transcript_revision,
-    close_active_producers,
-    close_open_blocks,
-    mark_turn_terminal,
     upsert_block,
     utc_now,
 )
@@ -93,15 +89,8 @@ class RuntimeFinalizationSink:
                 metadata={"source": "final_reply_fallback"},
             )
         self._turn.final_reply_block_id = final_block.id
-        self._turn.terminal_at = utc_now()
-        self._turn.terminal_reason = "completed"
-        self._turn.status_cache = "completed"
-        self._turn.last_state_changed_at = self._turn.terminal_at
         final_call.status = "completed"
-        final_call.completed_at = final_call.completed_at or self._turn.terminal_at
-        await close_open_blocks(self._db, turn=self._turn, status="completed")
-        await close_active_producers(self._db, turn_id=self._turn.id, reason="completed")
-        await expire_guidance_for_turn(self._db, turn_id=self._turn.id)
+        final_call.completed_at = final_call.completed_at or utc_now()
         await bump_transcript_revision(self._db, self._turn.session_id)
         message = WriterMessage(
             id=gen_uuid(),
@@ -114,12 +103,9 @@ class RuntimeFinalizationSink:
             },
         )
         self._db.add(message)
-        await self._db.commit()
         return message
 
     async def _persist_failure_summary(self, failure_summary: str, turn_number: int) -> WriterMessage:
-        await mark_turn_terminal(self._db, turn=self._turn, reason="runtime_error", error=failure_summary)
-        await expire_guidance_for_turn(self._db, turn_id=self._turn.id)
         message = WriterMessage(
             id=gen_uuid(),
             session_id=self._session_id,
@@ -131,7 +117,6 @@ class RuntimeFinalizationSink:
             },
         )
         self._db.add(message)
-        await self._db.commit()
         return message
 
     async def _find_final_reply_block(self, final_answer: str) -> WriterTranscriptBlock | None:

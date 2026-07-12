@@ -25,9 +25,11 @@ class ApprovedToolExecution:
 
 def normalize_waiting_action(value: str) -> str:
     normalized_action = (value or "").strip().lower()
+    if normalized_action in {"approve_once", "approve_for_session"}:
+        normalized_action = "approve"
     if normalized_action in {"confirm", "continue", "yes"}:
         normalized_action = "approve"
-    if normalized_action in {"other", "guidance"}:
+    if normalized_action in {"other", "guidance", "other_guidance"}:
         normalized_action = "guide"
     if normalized_action not in {"approve", "deny", "guide"}:
         raise ValueError("Unsupported waiting request decision")

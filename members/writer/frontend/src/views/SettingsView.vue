@@ -1,17 +1,23 @@
 ﻿<script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import UiSelect from '@/components/UiSelect.vue'
+import {
+  PROVIDER_PRESETS,
+  SettingsShell,
+  ThemeEditor,
+  UiSelect,
+  type ProviderPreset,
+  type ThemeArea,
+  type ThemePreset,
+  type ThemeStop,
+} from '@lamtools/ui'
 import { useConfigStore } from '@/stores/config'
 import type { AgentCapability, SubAgentDefinition, ToolCapability, ProviderUpdate } from '@/types'
 import { defaultTheme, normalizeColor, clampNumber, normalizeGradientStops, gradientFromStops } from '@/lib/theme'
-import type { ThemeStop } from '@/lib/theme'
-import { PROVIDER_PRESETS, type ProviderPreset } from '@lamtools/ui'
 
 const router = useRouter()
 const configStore = useConfigStore()
 
-type SettingsSection = 'model-api' | 'writer' | 'project' | 'agents' | 'permissions' | 'ui-system'
 type AgentSetting = {
   name: string
   label: string
@@ -56,18 +62,8 @@ type ToolSetting = {
   enabled: boolean
 }
 type CommandPolicy = 'auto_allow' | 'ask_user'
-type ThemeArea = 'backdrop' | 'main' | 'composer' | 'control'
-type ThemePreset = {
-  id: string
-  group: 'solid'
-  name: string
-  note: string
-  method: string
-  rationale: string
-  theme: Partial<typeof defaultTheme>
-}
+type WriterThemePreset = ThemePreset & { theme: Partial<typeof defaultTheme> }
 
-const activeSection = ref<SettingsSection>('model-api')
 const selectedProviderId = ref('')
 const selectedModelId = ref('')
 const noticeText = ref('')
@@ -131,6 +127,12 @@ const baseRoutePurposes = [
   { taskType: 'sub_agent', label: 'Sub Agent 通用模型', note: '所有子代理的通用配置；留空则跟随 Writer 主模型' },
 ]
 
+const settingsSections = [
+  { id: 'model-api', label: '模型与供应商', icon: '◇' },
+  { id: 'ui-system', label: '界面外观', icon: '▯' },
+  { id: 'permissions', label: '权限状态', icon: '✓' },
+]
+
 const baselineAgents: AgentCapability[] = [
   {
     name: 'architecture',
@@ -185,11 +187,7 @@ const commandPolicies = ref<Record<'regular' | 'dangerous', CommandPolicy>>({
   dangerous: 'auto_allow',
 })
 
-const themePresetGroups: Array<{ id: ThemePreset['group']; label: string }> = [
-  { id: 'solid', label: '默认' },
-]
-
-const writerThemePresets: ThemePreset[] = [
+const writerThemePresets: WriterThemePreset[] = [
   {
     id: 'writer-default-light',
     group: 'solid',
@@ -282,10 +280,6 @@ const writerThemePresets: ThemePreset[] = [
   },
 ]
 
-const visibleThemePresetGroups = computed(() => (
-  themePresetGroups.filter((group) => writerThemePresets.some((preset) => preset.group === group.id))
-))
-
 const uiSystem = ref({
   density: 'standard',
   contentWidth: 780,
@@ -295,9 +289,6 @@ const uiSystem = ref({
 })
 
 const contentWidthText = computed(() => `${uiSystem.value.contentWidth}px`)
-const mainOpacityText = computed(() => `${Math.round(uiSystem.value.theme.mainOpacity * 100)}%`)
-const composerOpacityText = computed(() => `${Math.round(uiSystem.value.theme.composerOpacity * 100)}%`)
-const controlOpacityText = computed(() => `${Math.round(uiSystem.value.theme.controlOpacity * 100)}%`)
 const themePreviewStyle = computed(() => ({
   background: gradientFromStops(uiSystem.value.theme.backdropAngle, uiSystem.value.theme.backdropStops, 1),
   color: uiSystem.value.theme.backdropText,
@@ -665,13 +656,6 @@ function migrateLegacyDefaultTheme() {
   }
 }
 
-function gradientFromTheme(angle: number, start: string, end: string, opacity: number) {
-  return gradientFromStops(angle, [
-    { color: start, position: 0 },
-    { color: end, position: 100 },
-  ], opacity)
-}
-
 function resetTheme() {
   uiSystem.value.theme = { ...defaultTheme }
   flash('主题已恢复默认')
@@ -700,8 +684,47 @@ function swapBackdropAndMainTheme() {
   flash('主界面与背景板已互换')
 }
 
+const themeAreaFields = {
+  backdrop: { stops: 'backdropStops', angle: 'backdropAngle', text: 'backdropText' },
+  main: { stops: 'mainStops', angle: 'mainAngle', text: 'mainText' },
+  composer: { stops: 'composerStops', angle: 'composerAngle', text: 'composerText' },
+  control: { stops: 'controlStops', angle: 'controlAngle', text: 'controlText' },
+} as const
+
 function gradientStops(area: ThemeArea): ThemeStop[] {
-  return uiSystem.value.theme[`${area}Stops` as const] as ThemeStop[]
+  return uiSystem.value.theme[themeAreaFields[area].stops]
+}
+
+function themeAngle(area: ThemeArea): number {
+  return uiSystem.value.theme[themeAreaFields[area].angle]
+}
+
+function themeOpacity(area: ThemeArea): number {
+  if (area === 'backdrop') return 1
+  return uiSystem.value.theme[`${area}Opacity` as 'mainOpacity' | 'composerOpacity' | 'controlOpacity']
+}
+
+function themeTextColor(area: ThemeArea): string {
+  return uiSystem.value.theme[themeAreaFields[area].text]
+}
+
+function updateThemeStops(area: ThemeArea, stops: ThemeStop[]) {
+  const currentStops = gradientStops(area)
+  const normalized = normalizeGradientStops(stops, currentStops[0]?.color || '#000000', currentStops.at(-1)?.color || '#000000')
+  currentStops.splice(0, currentStops.length, ...normalized)
+}
+
+function updateThemeAngle(area: ThemeArea, angle: number) {
+  uiSystem.value.theme[themeAreaFields[area].angle] = clampNumber(angle, 0, 360, themeAngle(area))
+}
+
+function updateThemeOpacity(area: ThemeArea, opacity: number) {
+  if (area === 'backdrop') return
+  uiSystem.value.theme[`${area}Opacity` as 'mainOpacity' | 'composerOpacity' | 'controlOpacity'] = clampNumber(opacity, 0.1, 1, themeOpacity(area))
+}
+
+function updateThemeTextColor(area: ThemeArea, color: string) {
+  uiSystem.value.theme[themeAreaFields[area].text] = normalizeColor(color, themeTextColor(area))
 }
 
 function addGradientStop(area: ThemeArea) {
@@ -735,14 +758,15 @@ function presetsByGroup(group: ThemePreset['group']) {
 }
 
 async function applyThemePreset(preset: ThemePreset) {
+  const writerPreset = preset as WriterThemePreset
   uiSystem.value.theme = {
     ...defaultTheme,
-    ...preset.theme,
-    controlSurface: preset.theme.controlSurface || preset.theme.composerSurface || defaultTheme.controlSurface,
-    controlSurfaceEnd: preset.theme.controlSurfaceEnd || preset.theme.composerSurfaceEnd || preset.theme.composerSurface || defaultTheme.controlSurfaceEnd,
-    controlAngle: preset.theme.controlAngle ?? preset.theme.composerAngle ?? defaultTheme.controlAngle,
-    controlText: preset.theme.controlText || preset.theme.composerText || defaultTheme.controlText,
-    controlOpacity: preset.theme.controlOpacity ?? preset.theme.composerOpacity ?? defaultTheme.controlOpacity,
+    ...writerPreset.theme,
+    controlSurface: writerPreset.theme.controlSurface || writerPreset.theme.composerSurface || defaultTheme.controlSurface,
+    controlSurfaceEnd: writerPreset.theme.controlSurfaceEnd || writerPreset.theme.composerSurfaceEnd || writerPreset.theme.composerSurface || defaultTheme.controlSurfaceEnd,
+    controlAngle: writerPreset.theme.controlAngle ?? writerPreset.theme.composerAngle ?? defaultTheme.controlAngle,
+    controlText: writerPreset.theme.controlText || writerPreset.theme.composerText || defaultTheme.controlText,
+    controlOpacity: writerPreset.theme.controlOpacity ?? writerPreset.theme.composerOpacity ?? defaultTheme.controlOpacity,
   }
   normalizeThemeSettings()
   const storage = getLocalStorage()
@@ -1420,26 +1444,18 @@ async function onDeleteModel(id: string) {
 </script>
 
 <template>
-  <div class="settings-page" :style="settingsThemeStyle">
-    <aside class="settings-sidebar">
-      <div class="settings-brand">
-        <strong>设置</strong>
-        <button class="icon-btn" title="返回" @click="goBack">×</button>
-      </div>
-
-      <nav class="settings-nav">
-        <button :class="{ active: activeSection === 'model-api' }" @click="activeSection = 'model-api'"><span>◇</span><span>模型与供应商</span></button>
-        <button :class="{ active: activeSection === 'ui-system' }" @click="activeSection = 'ui-system'"><span>▯</span><span>界面外观</span></button>
-        <button :class="{ active: activeSection === 'permissions' }" @click="activeSection = 'permissions'"><span>✓</span><span>权限状态</span></button>
-      </nav>
-
-      <button class="settings-entry" @click="goBack"><span>←</span><span>返回主界面</span></button>
-    </aside>
-
-    <main class="settings-main">
+  <SettingsShell
+    :sections="settingsSections"
+    title="设置"
+    :settings-theme-style="settingsThemeStyle"
+    @close="goBack"
+  >
+    <template #notice>
       <div v-if="noticeText" class="settings-notice">{{ noticeText }}</div>
+    </template>
 
-      <section v-if="activeSection === 'model-api'" class="settings-content">
+    <template #default="{ activeSection: shellActiveSection }">
+      <section v-if="shellActiveSection === 'model-api'">
         <div class="settings-title">
           <h1>模型与供应商</h1>
           <p>Provider 管 API Key 和 Base URL；Model 管上下文、输出、思考参数。</p>
@@ -1501,7 +1517,7 @@ async function onDeleteModel(id: string) {
         </div>
       </section>
 
-      <section v-if="false && activeSection === 'writer'" class="settings-content">
+      <section v-if="false && shellActiveSection === 'writer'">
         <div class="settings-title">
           <h1>Writer 行为</h1>
           <p>控制新会话和主界面输入区的默认质量档位。这里和模型 thinking 参数不是一回事。</p>
@@ -1516,7 +1532,7 @@ async function onDeleteModel(id: string) {
         </div>
       </section>
 
-      <section v-if="false && activeSection === 'project'" class="settings-content">
+      <section v-if="false && shellActiveSection === 'project'">
         <div class="settings-title">
           <h1>项目默认值</h1>
           <p>配置新项目创建时默认填入的 work root。</p>
@@ -1529,7 +1545,7 @@ async function onDeleteModel(id: string) {
         </div>
       </section>
 
-      <section v-if="false && activeSection === 'agents'" class="settings-content">
+      <section v-if="false && shellActiveSection === 'agents'">
         <div class="settings-title">
           <h1>工具与 Agent</h1>
           <p>自动读取后端当前注册的 Agent 和 Tool，并在这里统一控制启用状态与模型分配。</p>
@@ -1798,7 +1814,7 @@ async function onDeleteModel(id: string) {
         </div>
       </section>
 
-      <section v-if="activeSection === 'permissions'" class="settings-content">
+      <section v-if="shellActiveSection === 'permissions'">
         <div class="settings-title">
           <h1>权限状态</h1>
           <p>控制 Writer 命令执行策略。默认自动放行；敏感文件边界仍由后端硬拦截。</p>
@@ -1851,7 +1867,7 @@ async function onDeleteModel(id: string) {
         </div>
       </section>
 
-      <section v-if="activeSection === 'ui-system'" class="settings-content">
+      <section v-if="shellActiveSection === 'ui-system'">
         <div class="settings-title">
           <h1>界面外观</h1>
           <p>控制界面密度、三块主区域配色、透明度和运行面板信息。</p>
@@ -1868,178 +1884,37 @@ async function onDeleteModel(id: string) {
               </div>
             </label>
           </div>
-          <div class="setting-card">
-            <div class="subhead">
-              <strong>主题</strong>
-              <div class="subhead-actions">
-                <button class="small-btn" type="button" @click="swapBackdropAndMainTheme">互换背景/主界面</button>
-                <button class="small-btn" type="button" @click="resetTheme">恢复默认</button>
-              </div>
-            </div>
-            <div class="theme-preview" :style="themePreviewStyle">
-              <aside>
-                <strong>LamWriter</strong>
-                <span>背景板</span>
-              </aside>
-              <main :style="themePreviewMainStyle">
-                <strong>主界面</strong>
-                <span>任务内容 / 时间线 / 状态</span>
-                <div :style="themePreviewComposerStyle">输入栏</div>
-                <button type="button" :style="themePreviewControlStyle">控件</button>
-              </main>
-            </div>
-            <div class="theme-presets">
-              <section v-for="group in visibleThemePresetGroups" :key="group.id" class="theme-preset-group">
-                <h4>{{ group.label }}</h4>
-                <div class="theme-preset-list">
-                  <button
-                    v-for="preset in presetsByGroup(group.id)"
-                    :key="preset.id"
-                    class="theme-preset"
-                    type="button"
-                    @click="applyThemePreset(preset)"
-                  >
-                    <span
-                      class="preset-swatch"
-                      :style="{ background: gradientFromTheme(preset.theme.backdropAngle ?? defaultTheme.backdropAngle, preset.theme.backdropStart || defaultTheme.backdropStart, preset.theme.backdropEnd || preset.theme.backdropStart || defaultTheme.backdropEnd, 1) }"
-                    >
-                      <i :style="{ background: gradientFromTheme(preset.theme.mainAngle ?? defaultTheme.mainAngle, preset.theme.mainSurface || defaultTheme.mainSurface, preset.theme.mainSurfaceEnd || preset.theme.mainSurface || defaultTheme.mainSurfaceEnd, preset.theme.mainOpacity ?? defaultTheme.mainOpacity) }"></i>
-                      <b :style="{ background: gradientFromTheme(preset.theme.composerAngle ?? defaultTheme.composerAngle, preset.theme.composerSurface || defaultTheme.composerSurface, preset.theme.composerSurfaceEnd || preset.theme.composerSurface || defaultTheme.composerSurfaceEnd, preset.theme.composerOpacity ?? defaultTheme.composerOpacity) }"></b>
-                    </span>
-                    <strong>{{ preset.name }}</strong>
-                    <small>{{ preset.note }}</small>
-                  </button>
-                </div>
-              </section>
-            </div>
-            <details class="theme-advanced">
-              <summary>
-                <span>高级自定义</span>
-                <small>颜色节点、角度、透明度和文字颜色</small>
-              </summary>
-            <div class="theme-settings-grid">
-              <section class="theme-area-card">
-                <h4>背景板 / 侧边栏</h4>
-                <div class="gradient-stop-list">
-                  <div v-for="(stop, index) in uiSystem.theme.backdropStops" :key="`backdrop-${index}`" class="gradient-stop-row">
-                    <span>{{ index + 1 }}</span>
-                    <input v-model="stop.color" type="color" />
-                    <input v-model="stop.color" />
-                    <input v-model.number="stop.position" type="number" min="0" max="100" step="1" @change="sortGradientStops('backdrop')" />
-                    <button type="button" :disabled="uiSystem.theme.backdropStops.length <= 2" @click="removeGradientStop('backdrop', index)">删</button>
-                  </div>
-                  <button class="small-btn" type="button" :disabled="uiSystem.theme.backdropStops.length >= 8" @click="addGradientStop('backdrop')">+ 添加节点</button>
-                </div>
-                <label class="field width-field">
-                  <span>渐变角度 <em>{{ uiSystem.theme.backdropAngle }}deg</em></span>
-                  <div class="width-control">
-                    <input v-model.number="uiSystem.theme.backdropAngle" type="range" min="0" max="360" step="5" />
-                    <input v-model.number="uiSystem.theme.backdropAngle" type="number" min="0" max="360" step="5" />
-                  </div>
-                </label>
-                <label class="field color-field">文本颜色
-                  <span><input v-model="uiSystem.theme.backdropText" type="color" /><input v-model="uiSystem.theme.backdropText" /></span>
-                </label>
-              </section>
-
-              <section class="theme-area-card">
-                <h4>主界面</h4>
-                <div class="gradient-stop-list">
-                  <div v-for="(stop, index) in uiSystem.theme.mainStops" :key="`main-${index}`" class="gradient-stop-row">
-                    <span>{{ index + 1 }}</span>
-                    <input v-model="stop.color" type="color" />
-                    <input v-model="stop.color" />
-                    <input v-model.number="stop.position" type="number" min="0" max="100" step="1" @change="sortGradientStops('main')" />
-                    <button type="button" :disabled="uiSystem.theme.mainStops.length <= 2" @click="removeGradientStop('main', index)">删</button>
-                  </div>
-                  <button class="small-btn" type="button" :disabled="uiSystem.theme.mainStops.length >= 8" @click="addGradientStop('main')">+ 添加节点</button>
-                </div>
-                <label class="field width-field">
-                  <span>渐变角度 <em>{{ uiSystem.theme.mainAngle }}deg</em></span>
-                  <div class="width-control">
-                    <input v-model.number="uiSystem.theme.mainAngle" type="range" min="0" max="360" step="5" />
-                    <input v-model.number="uiSystem.theme.mainAngle" type="number" min="0" max="360" step="5" />
-                  </div>
-                </label>
-                <label class="field width-field">
-                  <span>透明度 <em>{{ mainOpacityText }}</em></span>
-                  <div class="width-control">
-                    <input v-model.number="uiSystem.theme.mainOpacity" type="range" min="0.1" max="1" step="0.05" />
-                    <input v-model.number="uiSystem.theme.mainOpacity" type="number" min="0.1" max="1" step="0.05" />
-                  </div>
-                </label>
-                <label class="field color-field">文本颜色
-                  <span><input v-model="uiSystem.theme.mainText" type="color" /><input v-model="uiSystem.theme.mainText" /></span>
-                </label>
-              </section>
-
-              <section class="theme-area-card">
-                <h4>输入栏</h4>
-                <div class="gradient-stop-list">
-                  <div v-for="(stop, index) in uiSystem.theme.composerStops" :key="`composer-${index}`" class="gradient-stop-row">
-                    <span>{{ index + 1 }}</span>
-                    <input v-model="stop.color" type="color" />
-                    <input v-model="stop.color" />
-                    <input v-model.number="stop.position" type="number" min="0" max="100" step="1" @change="sortGradientStops('composer')" />
-                    <button type="button" :disabled="uiSystem.theme.composerStops.length <= 2" @click="removeGradientStop('composer', index)">删</button>
-                  </div>
-                  <button class="small-btn" type="button" :disabled="uiSystem.theme.composerStops.length >= 8" @click="addGradientStop('composer')">+ 添加节点</button>
-                </div>
-                <label class="field width-field">
-                  <span>渐变角度 <em>{{ uiSystem.theme.composerAngle }}deg</em></span>
-                  <div class="width-control">
-                    <input v-model.number="uiSystem.theme.composerAngle" type="range" min="0" max="360" step="5" />
-                    <input v-model.number="uiSystem.theme.composerAngle" type="number" min="0" max="360" step="5" />
-                  </div>
-                </label>
-                <label class="field width-field">
-                  <span>透明度 <em>{{ composerOpacityText }}</em></span>
-                  <div class="width-control">
-                    <input v-model.number="uiSystem.theme.composerOpacity" type="range" min="0.1" max="1" step="0.05" />
-                    <input v-model.number="uiSystem.theme.composerOpacity" type="number" min="0.1" max="1" step="0.05" />
-                  </div>
-                </label>
-                <label class="field color-field">文本颜色
-                  <span><input v-model="uiSystem.theme.composerText" type="color" /><input v-model="uiSystem.theme.composerText" /></span>
-                </label>
-              </section>
-
-              <section class="theme-area-card">
-                <h4>控件</h4>
-                <div class="gradient-stop-list">
-                  <div v-for="(stop, index) in uiSystem.theme.controlStops" :key="`control-${index}`" class="gradient-stop-row">
-                    <span>{{ index + 1 }}</span>
-                    <input v-model="stop.color" type="color" />
-                    <input v-model="stop.color" />
-                    <input v-model.number="stop.position" type="number" min="0" max="100" step="1" @change="sortGradientStops('control')" />
-                    <button type="button" :disabled="uiSystem.theme.controlStops.length <= 2" @click="removeGradientStop('control', index)">删</button>
-                  </div>
-                  <button class="small-btn" type="button" :disabled="uiSystem.theme.controlStops.length >= 8" @click="addGradientStop('control')">+ 添加节点</button>
-                </div>
-                <label class="field width-field">
-                  <span>渐变角度 <em>{{ uiSystem.theme.controlAngle }}deg</em></span>
-                  <div class="width-control">
-                    <input v-model.number="uiSystem.theme.controlAngle" type="range" min="0" max="360" step="5" />
-                    <input v-model.number="uiSystem.theme.controlAngle" type="number" min="0" max="360" step="5" />
-                  </div>
-                </label>
-                <label class="field width-field">
-                  <span>透明度 <em>{{ controlOpacityText }}</em></span>
-                  <div class="width-control">
-                    <input v-model.number="uiSystem.theme.controlOpacity" type="range" min="0.1" max="1" step="0.05" />
-                    <input v-model.number="uiSystem.theme.controlOpacity" type="number" min="0.1" max="1" step="0.05" />
-                  </div>
-                </label>
-                <label class="field color-field">文本颜色
-                  <span><input v-model="uiSystem.theme.controlText" type="color" /><input v-model="uiSystem.theme.controlText" /></span>
-                </label>
-              </section>
-            </div>
-            </details>
+          <div class="subhead">
+            <strong>主题布局</strong>
+            <button class="small-btn" type="button" @click="swapBackdropAndMainTheme">互换背景/主界面</button>
           </div>
+          <ThemeEditor
+            product-name="LamWriter"
+            content-description="任务内容 / 时间线 / 状态"
+            :get-stops="gradientStops"
+            :get-angle="themeAngle"
+            :get-opacity="themeOpacity"
+            :get-text-color="themeTextColor"
+            :presets="writerThemePresets"
+            :presets-by-group="presetsByGroup"
+            :theme-preview-style="themePreviewStyle"
+            :theme-preview-main-style="themePreviewMainStyle"
+            :theme-preview-composer-style="themePreviewComposerStyle"
+            :theme-preview-control-style="themePreviewControlStyle"
+            @reset-theme="resetTheme"
+            @apply-preset="applyThemePreset"
+            @update-stops="updateThemeStops"
+            @update-angle="updateThemeAngle"
+            @update-opacity="updateThemeOpacity"
+            @update-text-color="updateThemeTextColor"
+            @add-stop="addGradientStop"
+            @remove-stop="removeGradientStop"
+            @sort-stops="sortGradientStops"
+          />
         </div>
       </section>
-    </main>
+    </template>
+  </SettingsShell>
 
     <div v-if="showProviderForm" class="modal-overlay" @click.self="resetProviderForm">
       <div class="modal-card">
@@ -2112,7 +1987,6 @@ async function onDeleteModel(id: string) {
       </div>
     </div>
 
-  </div>
 </template>
 
 <style scoped>

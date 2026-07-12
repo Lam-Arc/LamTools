@@ -24,11 +24,12 @@
         </div>
         <button
           class="send"
+          :class="{ 'send--stop': actionMode === 'stop' }"
           type="submit"
-          :disabled="disabled || !(modelValue || '').trim()"
-          title="发送"
-          aria-label="发送"
-        >↑</button>
+          :disabled="actionMode === 'send' && (disabled || !(modelValue || '').trim())"
+          :title="actionMode === 'stop' ? stopTitle : sendTitle"
+          :aria-label="actionMode === 'stop' ? stopTitle : sendTitle"
+        >{{ actionMode === 'stop' ? stopLabel : sendLabel }}</button>
       </div>
       <div class="drop-hint">拖拽到这里上传</div>
     </form>
@@ -45,11 +46,22 @@
  */
 import { ref } from 'vue'
 
-defineProps<{
+withDefaults(defineProps<{
   modelValue: string
   placeholder?: string
   disabled?: boolean
-}>()
+  actionMode?: 'send' | 'stop'
+  sendLabel?: string
+  stopLabel?: string
+  sendTitle?: string
+  stopTitle?: string
+}>(), {
+  actionMode: 'send',
+  sendLabel: 'send',
+  stopLabel: 'stop',
+  sendTitle: '发送',
+  stopTitle: '停止运行',
+})
 
 defineEmits<{
   'update:modelValue': [value: string]

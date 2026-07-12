@@ -27,7 +27,9 @@ function Start-Dev {
                 Start-Process -FilePath "npm.cmd" -ArgumentList "run","dev" -WorkingDirectory "$Root\core\ui"
             }
             if ($Lyr -eq "all" -or $Lyr -eq "backend") {
-                Write-Host "[core] pytest watch — no persistent backend; run manually: py -3.14 -m pytest" -ForegroundColor Yellow
+                $bPort = $Ports.core.backend
+                Write-Host "[core/backend] core serve --port $bPort" -ForegroundColor Cyan
+                Start-Process -FilePath "py" -ArgumentList "-3.14","-m","lamtools_core.cli","serve","--port",$bPort -WorkingDirectory "$Root\core"
             }
         }
         "writer" {

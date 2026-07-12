@@ -50,12 +50,24 @@ export { default as WorkspaceShell } from './components/WorkspaceShell.vue';
 export { default as SessionSidebar } from './components/SessionSidebar.vue';
 export { default as ChatThread } from './components/ChatThread.vue';
 export { default as ComposerBar } from './components/ComposerBar.vue';
+export { default as CoreExecutionControls } from './components/CoreExecutionControls.vue';
+export { default as MarkdownRenderer } from './components/MarkdownRenderer.vue';
+export { default as UiSelect } from './components/UiSelect.vue';
+export { default as CoreQueuedInputTray } from './components/CoreQueuedInputTray.vue';
 export { default as CommandPalette } from './components/CommandPalette.vue';
 export { default as AttachmentTray } from './components/AttachmentTray.vue';
 export { default as RuntimePanel } from './components/RuntimePanel.vue';
 export { default as SettingsShell } from './components/SettingsShell.vue';
 export { default as ThemeEditor } from './components/ThemeEditor.vue';
 export { default as ThemeAreaEditor } from './components/ThemeAreaEditor.vue';
+export { default as CoreSettings } from './components/CoreSettings.vue';
+export type {
+  CoreSettingsDensity,
+  CoreSettingsModel,
+  CoreSettingsModelPayload,
+  CoreSettingsProvider,
+  CoreSettingsProviderPayload,
+} from './components/CoreSettings.vue';
 
 // Helpers
 export {
@@ -92,11 +104,41 @@ export type { ProviderPreset, ProviderPresetModel } from './data/provider-preset
 
 // Composables
 export {
+  CORE_SCROLL_BOTTOM_THRESHOLD_PX,
+  coreIsScrollNearBottom,
+  useCoreAutoFollowScroll,
+  useCoreExecutionControlsState,
+  useCoreApprovalController,
+  useCoreLiveComposerController,
+  useCoreLiveTurnController,
+  useCoreWorkbenchProjectionController,
+  useCoreQueuedInputController,
   useCoreWorkbenchController,
+  type CoreAutoFollowScrollController,
+  type CoreExecutionControlsStorage,
+  type CoreExecutionControlsState,
+  type CoreExecutionControlsStateInitial,
+  type CoreExecutionControlsStateLabels,
+  type CoreApprovalHandlingResult,
+  type CoreLiveComposerMessages,
+  type CoreLiveConnectionState,
+  type CoreWorkbenchProjectionStatusChange,
+  type CoreTurnStartResult,
+  type CoreScrollableElement,
+  type CoreQueuedInputControllerItem,
+  type UseCoreAutoFollowScrollOptions,
+  type UseCoreExecutionControlsStateOptions,
+  type UseCoreApprovalControllerOptions,
+  type UseCoreLiveComposerControllerOptions,
+  type UseCoreLiveTurnControllerOptions,
+  type UseCoreWorkbenchProjectionControllerOptions,
+  type UseCoreQueuedInputControllerOptions,
   type CoreWorkbenchApi,
   type UseCoreWorkbenchControllerContext,
   type UseCoreWorkbenchControllerOptions,
 } from './composables';
+
+export { CORE_EXECUTION_CONTROLS_STORAGE_KEYS } from './composables';
 
 export { usePendingAttachments } from './composables/usePendingAttachments';
 export { useComposerCommandPalette } from './composables/useComposerCommandPalette';
@@ -115,6 +157,104 @@ export {
   type ComposerSyntaxKind,
   type ComposerSyntaxSpan,
 } from './composer/syntax';
+
+export {
+  buildCoreComposerHighlightSegments,
+  buildCoreComposerInputItems,
+  coreStandaloneActionCommand,
+  type CoreComposerHighlightSegment,
+} from './composer/inputItems';
+
+export {
+  CORE_THINKING_BUDGETS,
+  CORE_THINKING_LABELS,
+  coreModelDisplayLabel,
+  coreModelSelectOptions,
+  coreThinkingModeOptions,
+  coreThinkingPayload,
+  normalizeCoreThinkingMode,
+  readStoredCoreShallowThinking,
+  readStoredCoreThinkingMode,
+  selectCoreExecutionModel,
+  writeStoredCoreShallowThinking,
+  writeStoredCoreThinkingMode,
+  type CoreExecutionModelSource,
+  type CoreExecutionProviderSource,
+  type CoreSelectOption,
+  type CoreThinkingLabels,
+  type CoreThinkingMode,
+  type CoreThinkingModeOption,
+  type CoreThinkingPayload,
+} from './composer/execution';
+
+export {
+  appServerUrl,
+  CoreAppServerClient,
+  CoreAppServerClosedError,
+  fetchAppServerToken,
+  hydrateSnapshot,
+  coreAppItemInputPreview,
+  coreAppItemPartLabel,
+  coreAppItemPartStatus,
+  coreAppItemPartType,
+  coreAppItemToMessagePart,
+  coreAppItemToWorkbenchPart,
+  coreInputToText,
+  coreMessageHasProcessParts,
+  normalizeCoreSessionStatus,
+  nextCoreProcessExpandedIds,
+  selectApprovalCards,
+  selectChatMessages,
+  selectCoreQueuedInputs,
+  selectCoreWorkbenchMessages,
+  selectLatestTurnStatus,
+  selectLatestActiveTurnId,
+  updateCoreSessionListStatus,
+  selectQueueTray,
+  createCoreAppServerRuntimeController,
+  createCoreAppServerRuntimeState,
+  coreAppServerDecision,
+  coreDecisionSelectionPlan,
+  coreComposerActionMode,
+  coreComposerSubmissionEffects,
+  isCoreActiveTurnStatus,
+  isCoreGuidableTurnStatus,
+  normalizeCoreCommandCatalogItem,
+  submitCoreComposerTask,
+  CORE_APP_SERVER_PROTOCOL_VERSION,
+  type CoreAppEvent,
+  type CoreAppInputItem,
+  type CoreAppItem,
+  type CoreAppQueueItem,
+  type CoreAppRequestState,
+  type CoreAppServerChatMessage,
+  type CoreAppServerClientOptions,
+  type JsonRpcClientResponse,
+  type JsonRpcRequest,
+  type JsonRpcResponse,
+  type CoreAppSnapshot,
+  type CoreAppThreadStatus,
+  type CoreAppTurn,
+  type CoreTextInputItem,
+  type CoreQueuedInput,
+  type CoreAppCommandCatalogItem,
+  type CoreAppItemPartOptions,
+  type CoreAppServerRuntimeClient,
+  type CoreAppServerRuntimeControllerOptions,
+  type CoreComposerSubmissionEffectOptions,
+  type CoreComposerSubmissionEffectPlan,
+  type CoreDecisionSelectionPayload,
+  type CoreDecisionSelectionPlan,
+  type CoreAppServerRuntimeState,
+  type CoreComposerActionMode,
+  type CoreWorkbenchMessageOptions,
+  type CoreWorkbenchTurnStatus,
+  type CoreRuntimeItem,
+  type CoreRuntimeSnapshot,
+  type CoreRuntimeTurn,
+  type SubmitCoreComposerTaskOptions,
+  type SubmitCoreComposerTaskResult,
+} from './appServer';
 
 // Styles
 import './styles/variables.css';

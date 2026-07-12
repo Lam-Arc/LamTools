@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import asyncio
+import json
 from types import SimpleNamespace
 
 import pytest
 
+from writer_cli.app_server_client import AppServerClient
+from lamtools_core.app.live_client import CoreAppServerClient
+from lamtools_core.app.cli_live import OutputChunk
 from writer_cli.__main__ import (
     CLI_DISPLAY_TAGS,
     TAG_TO_DISPLAY_GROUP,
@@ -12,10 +17,13 @@ from writer_cli.__main__ import (
     _format_event,
     _event_request_id,
     _is_done_event,
+    _stream_chat,
     _is_waiting_event,
     build_parser,
     cmd_delete,
     cmd_compact,
+    cmd_run,
+    cmd_watch,
     cmd_open_change_file,
     cmd_list,
     cmd_messages,
@@ -45,6 +53,10 @@ def test_parser_accepts_forced_interactive_decisions():
 
     assert args.interactive_decisions is True
     assert args.no_interactive_decisions is False
+
+
+def test_writer_cli_app_server_client_reuses_core_live_client():
+    assert issubclass(AppServerClient, CoreAppServerClient)
 
 
 def test_parser_accepts_run_command_with_project_alias():
@@ -122,6 +134,86 @@ def test_parser_accepts_watch_command():
     assert args.command == "watch"
     assert args.session_id == "sess-1"
     assert args.verbose is True
+
+
+def test_parser_accepts_raw_machine_approval_decision():
+    args = build_parser().parse_args(["watch", "sess-1", "--raw", "--approval-decision", "approve_once"])
+
+    assert args.raw is True
+    assert args.approval_decision == "approve_once"
+
+
+@pytest.mark.asyncio
+async def test_raw_run_does_not_print_a_session_label(monkeypatch, capsys):
+    async def create_session(*_args, **_kwargs):
+        return {"id": "session-1"}
+
+    async def stream(*_args, **_kwargs):
+        return 0
+
+    monkeypatch.setattr("writer_cli.__main__._create_visible_session", create_session)
+    monkeypatch.setattr("writer_cli.__main__._stream_chat", stream)
+
+    result = await cmd_run(SimpleNamespace(raw=True, message=["hello"], title="", work_root="", mode="EXECUTE"))
+
+    assert result == 0
+    assert capsys.readouterr().out == ""
+
+
+@pytest.mark.asyncio
+async def test_raw_watch_stdout_is_jsonl_without_a_watch_label(monkeypatch, capsys):
+    async def watch(**kwargs):
+        kwargs["output"](OutputChunk('{"event":"app_server_event"}'))
+        return SimpleNamespace(exit_code=0)
+
+    monkeypatch.setattr("writer_cli.__main__.watch_live_events", watch)
+    args = SimpleNamespace(
+        raw=True,
+        session_id="session-1",
+        verbose=False,
+        heartbeat_interval=30,
+        approval_decision=None,
+        interactive_decisions=False,
+        base_url="http://writer.test",
+    )
+
+    assert await cmd_watch(args) == 0
+    assert [json.loads(line) for line in capsys.readouterr().out.splitlines() if line] == [{"event": "app_server_event"}]
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_reuses_one_client_message_id_when_connect_callback_retries(monkeypatch):
+    client_message_ids: list[str | None] = []
+
+    class FakeClient:
+        async def start_turn(self, **kwargs):
+            client_message_ids.append(kwargs.get("client_message_id"))
+
+    async def retry_connect_callback(**kwargs):
+        client = FakeClient()
+        await kwargs["on_connected"](client)
+        await kwargs["on_connected"](client)
+        return SimpleNamespace(exit_code=0)
+
+    monkeypatch.setattr("writer_cli.__main__.watch_live_events", retry_connect_callback)
+    args = SimpleNamespace(
+        raw=False,
+        interactive_decisions=False,
+        no_interactive_decisions=True,
+        verbose=False,
+        heartbeat_interval=30,
+        work_root="",
+        mode="EXECUTE",
+        model_id=None,
+        shallow_thinking=False,
+        approval_decision=None,
+        base_url="http://writer.test",
+    )
+
+    assert await _stream_chat(args, "session-1", "hello") == 0
+    assert len(client_message_ids) == 2
+    assert client_message_ids[0] == client_message_ids[1]
+    assert client_message_ids[0]
 
 
 def test_parser_accepts_status_command():
@@ -969,6 +1061,14 @@ def test_cli_run_formatter_ignores_legacy_writer_event_when_verbose():
     assert lines == []
 
 
+def test_cli_run_formatter_keeps_legacy_writer_error_output():
+    formatter = CliRunFormatter()
+
+    assert formatter.format({"event": "writer_error", "data": {"error": "cannot continue"}}) == [
+        "[00:00] error cannot continue"
+    ]
+
+
 def test_cli_run_formatter_formats_core_tool_call_event():
     formatter = CliRunFormatter()
     event = core_run_item(
@@ -997,7 +1097,35 @@ def test_cli_run_formatter_formats_core_completed_status():
     formatter = CliRunFormatter()
     lines = formatter.format(core_run_item("status", {"type": "turn"}, status="completed"))
 
-    assert lines == ["[00:00] done 模型调用 0 次"]
+    assert lines == ["[00:00] done"]
+
+
+def test_cli_run_formatter_formats_core_completed_status_with_usage_count():
+    formatter = CliRunFormatter()
+
+    formatter.format(core_run_item("usage", {"type": "turn", "runtime_metrics": {"total_tokens": 12}}))
+    lines = formatter.format(core_run_item("status", {"type": "turn"}, status="completed"))
+
+    assert lines == ["[00:00] done 模型调用 1 次"]
+
+
+@pytest.mark.asyncio
+async def test_app_server_client_deduplicates_response_and_socket_events():
+    client = AppServerClient("http://writer.test")
+    event = {
+        "event_id": "event-1",
+        "seq": 1,
+        "thread_id": "thread-1",
+        "method": "item/started",
+        "payload": {"type": "userMessage"},
+    }
+
+    await client.put_app_server_event(event)
+    await client.put_app_server_event(dict(event))
+
+    queued = await asyncio.wait_for(client._events.get(), timeout=1)
+    assert queued == {"event": "app_server_event", "data": event}
+    assert client._events.empty()
 
 
 def test_cli_run_formatter_formats_core_failed_status():

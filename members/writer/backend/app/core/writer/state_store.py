@@ -6,9 +6,9 @@ from typing import Any, Optional
 
 from sqlalchemy import select
 from sqlalchemy.pool import NullPool
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.database import Base, _migrate_sqlite_schema
+from app.database import Base, _migrate_sqlite_schema, create_writer_engine, writer_write_coordinator
 from .schemas import (
     WriterSessionState,
     WriterPhase,
@@ -32,7 +32,7 @@ class WriterStateStore:
     but all persistence goes through the DB.
     """
 
-    def __init__(self, db_factory=None):
+    def __init__(self, db_factory=None, *, write_coordinator=None):
         """Initialize with an async session factory.
 
         Args:
@@ -46,13 +46,19 @@ class WriterStateStore:
             data_dir = Path(db_factory)
             data_dir.mkdir(parents=True, exist_ok=True)
             db_url = f"sqlite+aiosqlite:///{data_dir / 'lamwriter.db'}"
-            self._engine = create_async_engine(db_url, echo=False, poolclass=NullPool)
+            self._engine = create_writer_engine(db_url, debug=False, poolclass=NullPool)
             self._db_factory = async_sessionmaker(
                 self._engine, class_=AsyncSession, expire_on_commit=False
             )
         else:
-            self._db_factory = db_factory
-            self._initialized = db_factory is None
+            if db_factory is None:
+                from app.database import async_session
+
+                self._db_factory = async_session
+                self._initialized = True
+            else:
+                self._db_factory = db_factory
+        self._write_coordinator = write_coordinator or writer_write_coordinator(self._db_factory)
         self._cache: dict[str, WriterSessionState] = {}
 
     async def get(self, session_id: str, db: AsyncSession | None = None) -> WriterSessionState | None:
@@ -73,10 +79,13 @@ class WriterStateStore:
         """Persist WriterSessionState to DB."""
         self._cache[state.session_id] = state
 
-        own_db = db is None
-        if own_db:
-            db = await self._get_db()
+        if db is not None:
+            await self._save_in_transaction(db, state)
+            return
+        await self._ensure_initialized()
+        await self._write_coordinator.run(lambda write_db: self._save_in_transaction(write_db, state))
 
+    async def _save_in_transaction(self, db: AsyncSession, state: WriterSessionState) -> None:
         session = await db.get(WriterSession, state.session_id)
         if session is None:
             session = WriterSession(id=state.session_id)
@@ -97,35 +106,20 @@ class WriterStateStore:
             if hasattr(session, key):
                 setattr(session, key, value)
 
-        try:
-            await db.commit()
-        except Exception:
-            if own_db:
-                await db.rollback()
-            raise
-        finally:
-            if own_db and db:
-                await db.close()
-
     async def delete(self, session_id: str, db: AsyncSession | None = None) -> None:
         """Delete session from DB and clear cache."""
         self._cache.pop(session_id, None)
 
-        own_db = db is None
-        if own_db:
-            db = await self._get_db()
-        try:
-            session = await db.get(WriterSession, session_id)
-            if session is not None:
-                await db.delete(session)
-                await db.commit()
-        except Exception:
-            if own_db:
-                await db.rollback()
-            raise
-        finally:
-            if own_db and db:
-                await db.close()
+        if db is not None:
+            await self._delete_in_transaction(db, session_id)
+            return
+        await self._ensure_initialized()
+        await self._write_coordinator.run(lambda write_db: self._delete_in_transaction(write_db, session_id))
+
+    async def _delete_in_transaction(self, db: AsyncSession, session_id: str) -> None:
+        session = await db.get(WriterSession, session_id)
+        if session is not None:
+            await db.delete(session)
 
     async def create(
         self,
@@ -139,33 +133,28 @@ class WriterStateStore:
             work_root=work_root,
         )
 
-        own_db = db is None
-        if own_db:
-            db = await self._get_db()
-        try:
-            session = WriterSession(
-                id=session_id,
-                work_root=work_root,
-                phase="idle",
-                status="active",
-                loop_position="execute",
-                task_complexity="simple",
-                turn_count=0,
-                error_count=0,
-                runtime_state=state._runtime_state_dict(),
-            )
-            db.add(session)
-            await db.commit()
-        except Exception:
-            if own_db:
-                await db.rollback()
-            raise
-        finally:
-            if own_db and db:
-                await db.close()
+        if db is not None:
+            await self._create_in_transaction(db, state)
+        else:
+            await self._ensure_initialized()
+            await self._write_coordinator.run(lambda write_db: self._create_in_transaction(write_db, state))
 
         self._cache[session_id] = state
         return state
+
+    async def _create_in_transaction(self, db: AsyncSession, state: WriterSessionState) -> None:
+        session = WriterSession(
+            id=state.session_id,
+            work_root=state.work_root,
+            phase="idle",
+            status="active",
+            loop_position="execute",
+            task_complexity="simple",
+            turn_count=0,
+            error_count=0,
+            runtime_state=state._runtime_state_dict(),
+        )
+        db.add(session)
 
     async def list_sessions(self, db: AsyncSession | None = None) -> list[WriterSessionState]:
         """List all sessions from DB."""

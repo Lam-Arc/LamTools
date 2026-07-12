@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 
 from lamtools_core.event import CollectingEventSink, CoreEvent, EventSink
+from lamtools_core.app.base_agent import core_events_to_run_items
 from lamtools_core.kernel import (
     CoreLoopKernel,
     KernelError,
@@ -27,7 +28,7 @@ from lamtools_core.kernel import (
 from lamtools_core.llm import ChatMessage, LLMClient, LLMRequest, LLMResponse, LLMStreamEvent, LLMToolCall
 from lamtools_core.llm.policy import BackoffStrategy, RetryPolicy
 from lamtools_core.prompt import PromptContext
-from lamtools_core.runtime import RuntimeState, RuntimeStateStore, RuntimeToolStep, RuntimeTurnInput
+from lamtools_core.runtime import RuntimeState, RuntimeStateStore, RuntimeTaskRegistry, RuntimeToolStep, RuntimeTurnInput
 from lamtools_core.tool import ToolCall, ToolResult
 
 
@@ -790,6 +791,135 @@ class TestKernelVerification:
 
 class TestKernelUnboundedLoop:
     @pytest.mark.asyncio
+    async def test_no_tool_final_atomically_seals_guidance_before_task_done(self):
+        registry = RuntimeTaskRegistry()
+        current_task = asyncio.current_task()
+        assert current_task is not None
+        assert registry.accept_run("sealed-thread", "sealed-run") is True
+        assert registry.register("sealed-thread", current_task, run_id="sealed-run") is True
+        llm = MockLLMClient()
+        kernel = _make_kernel(MockRuntimeKit([MockKitStep(reply="Final", decision="done")]), llm_client=llm)
+
+        result = await kernel.run(RuntimeTurnInput(
+            user_message="finish",
+            run_id="sealed-run",
+            turn_id="sealed-run",
+            metadata={"session_id": "sealed-thread"},
+            guidance_source=registry.guidance_source("sealed-thread", run_id="sealed-run"),
+            guidance_finalizer=registry.guidance_finalizer("sealed-thread", run_id="sealed-run"),
+        ))
+
+        assert result.decision == "done"
+        assert llm.call_count == 1
+        assert registry.accept_guidance(
+            "sealed-thread",
+            "too late",
+            run_id="sealed-run",
+            guidance_id="late-guidance",
+        ) == "closed"
+
+    @pytest.mark.asyncio
+    async def test_guidance_present_at_final_check_is_consumed_before_sealing(self):
+        registry = RuntimeTaskRegistry()
+        current_task = asyncio.current_task()
+        assert current_task is not None
+        assert registry.accept_run("race-thread", "race-run") is True
+        assert registry.register("race-thread", current_task, run_id="race-run") is True
+
+        class InjectingLLM:
+            def __init__(self) -> None:
+                self.call_count = 0
+
+            async def stream(self, request):
+                if False:
+                    yield request
+                raise NotImplementedError
+
+            async def complete(self, request):
+                self.call_count += 1
+                if self.call_count == 1:
+                    assert registry.accept_guidance(
+                        "race-thread",
+                        "new direction",
+                        run_id="race-run",
+                        guidance_id="guidance-1",
+                    ) == "accepted"
+                return LLMResponse(content="Final")
+
+        llm = InjectingLLM()
+        sink = CollectingEventSink()
+        kernel = _make_kernel(
+            MockRuntimeKit([
+                MockKitStep(reply="First final", decision="done"),
+                MockKitStep(reply="Guided final", decision="done"),
+            ]),
+            llm_client=llm,
+            event_sink=sink,
+        )
+
+        result = await kernel.run(RuntimeTurnInput(
+            user_message="finish",
+            run_id="race-run",
+            turn_id="race-run",
+            metadata={"session_id": "race-thread"},
+            guidance_source=registry.guidance_source("race-thread", run_id="race-run"),
+            guidance_finalizer=registry.guidance_finalizer("race-thread", run_id="race-run"),
+        ))
+
+        assert result.decision == "done"
+        assert llm.call_count == 2
+        assert [event.payload["content"] for event in sink.events if event.name == "runtime.guidance_received"] == [
+            "new direction"
+        ]
+
+    @pytest.mark.asyncio
+    async def test_registry_rejects_run_overwrite_and_deduplicates_guidance_ids(self):
+        registry = RuntimeTaskRegistry()
+        current_task = asyncio.current_task()
+        assert current_task is not None
+
+        assert registry.accept_run("thread-1", "run-1") is True
+        assert registry.accept_run("thread-1", "run-2") is False
+        assert registry.register("thread-1", current_task, run_id="run-2") is False
+        assert registry.register("thread-1", current_task, run_id="run-1") is True
+        assert registry.active_run_id("thread-1") == "run-1"
+        assert registry.accept_guidance(
+            "thread-1", "once", run_id="run-1", guidance_id="client-1"
+        ) == "accepted"
+        assert registry.accept_guidance(
+            "thread-1", "twice", run_id="run-1", guidance_id="client-1"
+        ) == "duplicate"
+        assert registry.consume_guidance("thread-1", run_id="run-1") == ["once"]
+
+    @pytest.mark.asyncio
+    async def test_retract_keeps_seen_id_after_kernel_consumed_guidance(self):
+        registry = RuntimeTaskRegistry()
+        current_task = asyncio.current_task()
+        assert current_task is not None
+        assert registry.accept_run("thread-consumed", "run-consumed") is True
+        assert registry.register("thread-consumed", current_task, run_id="run-consumed") is True
+        assert registry.accept_guidance(
+            "thread-consumed",
+            "consume once",
+            run_id="run-consumed",
+            guidance_id="client-consumed",
+        ) == "accepted"
+        assert registry.consume_guidance("thread-consumed", run_id="run-consumed") == ["consume once"]
+
+        registry.retract_guidance(
+            "thread-consumed",
+            run_id="run-consumed",
+            guidance_id="client-consumed",
+        )
+
+        assert registry.accept_guidance(
+            "thread-consumed",
+            "must not re-inject",
+            run_id="run-consumed",
+            guidance_id="client-consumed",
+        ) == "duplicate"
+
+    @pytest.mark.asyncio
     async def test_many_tool_rounds_continue_until_final_text(self):
         """Tool rounds continue until the model returns no-tool final text."""
         steps = [
@@ -974,6 +1104,50 @@ class TestKernelEvents:
         assert final_part["final_response"] is True
 
     @pytest.mark.asyncio
+    async def test_stream_timeout_falls_back_to_non_streaming_completion(self):
+        """A stalled stream uses the model timeout and falls back to complete()."""
+
+        class ResponseEchoKit(MockRuntimeKit):
+            async def parse_model_output(self, state: RuntimeState, response: LLMResponse) -> KernelTurn:
+                return KernelTurn(reply=response.content)
+
+            async def decide_next(self, state, turn, verification, step):
+                return "done" if turn.reply else "failed"
+
+        class SlowStreamFastCompleteLLM:
+            def __init__(self) -> None:
+                self.stream_calls = 0
+                self.complete_calls = 0
+
+            async def stream(self, request: LLMRequest):
+                self.stream_calls += 1
+                await asyncio.sleep(0.05)
+                yield LLMStreamEvent(kind="content_delta", content="late stream text")
+                yield LLMStreamEvent(kind="done")
+
+            async def complete(self, request: LLMRequest) -> LLMResponse:
+                self.complete_calls += 1
+                return LLMResponse(content="fallback final text")
+
+        llm = SlowStreamFastCompleteLLM()
+        kernel = _make_kernel(
+            ResponseEchoKit(),
+            llm_client=llm,
+            policy=LoopPolicy(
+                model_timeout_seconds=1,
+                model_retries=1,
+                model_stream_idle_timeout_seconds=0.01,
+            ),
+        )
+
+        result = await kernel.run(_make_turn_input())
+
+        assert result.decision == "done"
+        assert result.message == "fallback final text"
+        assert llm.stream_calls == 1
+        assert llm.complete_calls == 1
+
+    @pytest.mark.asyncio
     async def test_tool_events_emitted(self):
         """Kernel emits tool started and finished events."""
         call = ToolCall(id="c1", name="search", arguments={"q": "test"})
@@ -1105,7 +1279,7 @@ class TestKernelStateSave:
             loop_state="continue",
             position="tool",
             turn_count=5,
-            metadata={"max_steps_reached": True},
+            metadata={"existing": True},
         )
         store = InMemoryStateStore()
         await store.save(existing_state)
@@ -1125,7 +1299,7 @@ class TestKernelStateSave:
         assert result.state.turn_count == 6
         assert result.state.loop_state == "done"
         assert result.state.position == ""
-        assert result.state.metadata.get("max_steps_reached") is True
+        assert result.state.metadata.get("existing") is True
 
     @pytest.mark.asyncio
     async def test_state_from_turn_input(self):
@@ -1373,6 +1547,28 @@ class TestKernelNoBusinessPollution:
 
 class TestKernelRunId:
     @pytest.mark.asyncio
+    async def test_supplied_live_run_id_prefixes_projected_item_ids_and_metadata(self):
+        accepted_turn_id = "thread-1:turn:accepted-run"
+        kit = MockRuntimeKit(steps=[MockKitStep(reply="done", decision="done")])
+        sink = CollectingEventSink()
+        kernel = _make_kernel(kit, event_sink=sink)
+
+        result = await kernel.run(RuntimeTurnInput(
+            user_message="start",
+            run_id=accepted_turn_id,
+            turn_id=accepted_turn_id,
+            metadata={"session_id": "thread-1"},
+        ))
+        items = core_events_to_run_items(sink.events, thread_id="thread-1")
+
+        assert result.run_id == accepted_turn_id
+        assert items
+        assert {item.run_id for item in items} == {accepted_turn_id}
+        assert {item.turn_id for item in items} == {accepted_turn_id}
+        assert all(item.item_id.startswith(accepted_turn_id) for item in items)
+        assert {item.metadata["run_id"] for item in items} == {accepted_turn_id}
+
+    @pytest.mark.asyncio
     async def test_run_id_generated_when_missing(self):
         """Kernel generates a run_id if state doesn't have one."""
         kit = MockRuntimeKit(steps=[MockKitStep(decision="done")])
@@ -1610,12 +1806,12 @@ class TestKernelContextCompaction:
                     messages.append(ChatMessage(
                         role="user",
                         content=f"old user {i} " + ("x" * 500),
-                        metadata={"writer_message_id": f"user-{i}"},
+                        metadata={"message_id": f"user-{i}"},
                     ))
                     messages.append(ChatMessage(
                         role="assistant",
                         content=f"old assistant {i} " + ("y" * 500),
-                        metadata={"writer_message_id": f"assistant-{i}"},
+                        metadata={"message_id": f"assistant-{i}"},
                     ))
                 messages.append(ChatMessage(role="user", content="current task"))
                 return LLMRequest(messages=messages, model="mock-model")

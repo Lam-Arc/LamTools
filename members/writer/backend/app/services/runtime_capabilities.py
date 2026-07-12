@@ -5,21 +5,65 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.app_setting import AppSetting
+from lamtools_core.tool.approval import DEFAULT_COMMAND_POLICIES
 
 
-RUNTIME_CONTROLS_NAMESPACE = "lamwriter.runtimeControls"
-WRITER_DEFAULT_COMMAND_POLICIES = {
-    "regular": "auto_allow",
-    "dangerous": "auto_allow",
-}
+CORE_RUNTIME_CONTROLS_NAMESPACE = "core.runtimeControls"
+WRITER_RUNTIME_CONTROLS_NAMESPACE = "writer.runtimeControls"
+LEGACY_RUNTIME_CONTROLS_NAMESPACE = "lamwriter.runtimeControls"
+RUNTIME_CONTROLS_NAMESPACE = LEGACY_RUNTIME_CONTROLS_NAMESPACE
+WRITER_DEFAULT_COMMAND_POLICIES = dict(DEFAULT_COMMAND_POLICIES)
 
 
-async def runtime_controls(db: AsyncSession) -> dict[str, dict[str, Any]]:
-    setting = await db.get(AppSetting, RUNTIME_CONTROLS_NAMESPACE)
+def _merge_dicts(*values: dict[str, Any]) -> dict[str, Any]:
+    merged: dict[str, Any] = {}
+    for value in values:
+        merged.update(value)
+    return merged
+
+
+def _section(value: dict[str, Any], key: str) -> dict[str, Any]:
+    section = value.get(key)
+    return section if isinstance(section, dict) else {}
+
+
+async def _setting_value(db: AsyncSession | None, namespace: str) -> dict[str, Any]:
+    if db is None:
+        return {}
+    setting = await db.get(AppSetting, namespace)
     value = setting.value if setting is not None and isinstance(setting.value, dict) else {}
-    agents = value.get("agents") if isinstance(value.get("agents"), dict) else {}
-    tools = value.get("tools") if isinstance(value.get("tools"), dict) else {}
-    command_policies = value.get("command_policies") if isinstance(value.get("command_policies"), dict) else {}
+    return value
+
+
+async def runtime_controls(
+    db: AsyncSession,
+    *,
+    shared_db: AsyncSession | None = None,
+) -> dict[str, dict[str, Any]]:
+    shared_legacy = await _setting_value(shared_db, LEGACY_RUNTIME_CONTROLS_NAMESPACE)
+    shared_core = await _setting_value(shared_db, CORE_RUNTIME_CONTROLS_NAMESPACE)
+    writer_legacy = await _setting_value(db, LEGACY_RUNTIME_CONTROLS_NAMESPACE)
+    writer_overlay = await _setting_value(db, WRITER_RUNTIME_CONTROLS_NAMESPACE)
+
+    agents = _merge_dicts(
+        _section(shared_legacy, "agents"),
+        _section(shared_core, "agents"),
+        _section(writer_legacy, "agents"),
+        _section(writer_overlay, "agents"),
+    )
+    tools = _merge_dicts(
+        _section(shared_legacy, "tools"),
+        _section(shared_core, "tools"),
+        _section(writer_legacy, "tools"),
+        _section(writer_overlay, "tools"),
+    )
+    command_policies = _merge_dicts(
+        dict(WRITER_DEFAULT_COMMAND_POLICIES),
+        _section(shared_legacy, "command_policies"),
+        _section(shared_core, "command_policies"),
+        _section(writer_legacy, "command_policies"),
+        _section(writer_overlay, "command_policies"),
+    )
     return {"agents": agents, "tools": tools, "command_policies": command_policies}
 
 
@@ -27,13 +71,14 @@ async def runtime_capabilities_response(
     db: AsyncSession,
     *,
     work_root: str | None = None,
+    shared_db: AsyncSession | None = None,
 ) -> dict[str, Any]:
     from app.config import settings
     from app.core.prompt_assembler import WRITER_TOOLS
     from app.core.writer.agent_runtime import default_agent_registry, load_sub_agent_definitions
     from app.core.writer.permission import TOOL_PERMISSIONS
 
-    controls = await runtime_controls(db)
+    controls = await runtime_controls(db, shared_db=shared_db)
     agent_controls = controls["agents"]
     tool_controls = controls["tools"]
     command_policy_controls = controls["command_policies"]
@@ -101,7 +146,10 @@ async def runtime_capabilities_response(
 
 
 __all__ = [
+    "CORE_RUNTIME_CONTROLS_NAMESPACE",
+    "LEGACY_RUNTIME_CONTROLS_NAMESPACE",
     "RUNTIME_CONTROLS_NAMESPACE",
+    "WRITER_RUNTIME_CONTROLS_NAMESPACE",
     "runtime_capabilities_response",
     "runtime_controls",
 ]

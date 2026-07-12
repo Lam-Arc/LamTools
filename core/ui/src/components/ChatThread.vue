@@ -88,7 +88,12 @@
                   <div v-if="part.partType === 'text' && part.content" class="assistant-answer">
                     <AnimatedStreamText :text-key="part.id" :text="part.content" :active="true" v-slot="{ text, animating }">
                       <slot name="assistant-content" :content="text">
-                        <div class="part-text-content" :class="{ 'part-text-content--streaming': animating }">{{ text }}</div>
+                        <MarkdownRenderer
+                          class="part-text-content"
+                          :class="{ 'part-text-content--streaming': animating }"
+                          :content="text"
+                          :streaming="animating"
+                        />
                       </slot>
                     </AnimatedStreamText>
                   </div>
@@ -96,7 +101,12 @@
                   <div v-else-if="part.partType === 'model_text' && part.content" class="assistant-answer assistant-answer--process">
                     <AnimatedStreamText :text-key="part.id" :text="part.content" :active="true" v-slot="{ text, animating }">
                       <slot name="assistant-content" :content="text">
-                        <div class="part-text-content" :class="{ 'part-text-content--streaming': animating }">{{ text }}</div>
+                        <MarkdownRenderer
+                          class="part-text-content"
+                          :class="{ 'part-text-content--streaming': animating }"
+                          :content="text"
+                          :streaming="animating"
+                        />
                       </slot>
                     </AnimatedStreamText>
                   </div>
@@ -118,7 +128,12 @@
                     <div v-if="isPartExpanded(part, true)" class="reasoning-body">
                       <AnimatedStreamText :text-key="part.id" :text="part.content" :active="true" v-slot="{ text, animating }">
                         <slot name="reasoning-content" :content="text" :live="true">
-                          <span class="process-step-detail" :class="{ 'part-text-content--streaming': animating }">{{ text }}</span>
+                          <MarkdownRenderer
+                            class="process-step-detail"
+                            :class="{ 'part-text-content--streaming': animating }"
+                            :content="text"
+                            :streaming="animating"
+                          />
                         </slot>
                       </AnimatedStreamText>
                     </div>
@@ -398,7 +413,7 @@
                         </button>
                         <div v-if="isPartExpanded(group.part, false)" class="reasoning-body">
                           <slot name="reasoning-content" :content="group.part.content" :live="false">
-                            <span class="process-step-detail">{{ group.part.content }}</span>
+                            <MarkdownRenderer class="process-step-detail" :content="group.part.content" />
                           </slot>
                         </div>
                       </div>
@@ -413,7 +428,7 @@
                           <span class="process-step-title">{{ modelTextTitle(group.part) }}</span>
                         </div>
                         <slot name="assistant-content" :content="group.part.content">
-                          <div class="part-text-content process-text-content">{{ group.part.content }}</div>
+                          <MarkdownRenderer class="part-text-content process-text-content" :content="group.part.content" />
                         </slot>
                       </div>
 
@@ -484,12 +499,20 @@
                           >
                             <template #assistant-content="slotProps">
                               <slot name="assistant-content" v-bind="slotProps">
-                                <div class="part-text-content">{{ slotProps.content }}</div>
+                                <MarkdownRenderer
+                                  class="part-text-content"
+                                  :content="slotProps.content"
+                                  :streaming="Boolean(slotProps.live)"
+                                />
                               </slot>
                             </template>
                             <template #reasoning-content="slotProps">
                               <slot name="reasoning-content" v-bind="slotProps">
-                                <span class="process-step-detail">{{ slotProps.content }}</span>
+                                <MarkdownRenderer
+                                  class="process-step-detail"
+                                  :content="slotProps.content"
+                                  :streaming="Boolean(slotProps.live)"
+                                />
                               </slot>
                             </template>
                           </ChatThread>
@@ -564,7 +587,7 @@
 
                 <div v-if="answerContent(msg)" class="assistant-answer">
                   <slot name="assistant-content" :content="answerContent(msg)">
-                    <div class="part-text-content">{{ answerContent(msg) }}</div>
+                    <MarkdownRenderer class="part-text-content" :content="answerContent(msg)" />
                   </slot>
                 </div>
                 <template v-else>
@@ -574,7 +597,7 @@
                     class="assistant-answer"
                   >
                     <slot name="assistant-content" :content="group.content">
-                      <div class="part-text-content">{{ group.content }}</div>
+                      <MarkdownRenderer class="part-text-content" :content="group.content" />
                     </slot>
                   </div>
                 </template>
@@ -614,7 +637,12 @@
               <div v-if="msg.content" class="assistant-answer">
                 <AnimatedStreamText :text-key="msg.id" :text="msg.content" :active="true" v-slot="{ text, animating }">
                   <slot name="assistant-content" :content="text">
-                    <div class="part-text-content" :class="{ 'part-text-content--streaming': animating }">{{ text }}</div>
+                    <MarkdownRenderer
+                      class="part-text-content"
+                      :class="{ 'part-text-content--streaming': animating }"
+                      :content="text"
+                      :streaming="animating"
+                    />
                   </slot>
                 </AnimatedStreamText>
               </div>
@@ -626,7 +654,12 @@
                 >
                   <AnimatedStreamText :text-key="`group-${msg.id}-${gi}`" :text="group.content" :active="true" v-slot="{ text, animating }">
                     <slot name="assistant-content" :content="text">
-                      <div class="part-text-content" :class="{ 'part-text-content--streaming': animating }">{{ text }}</div>
+                      <MarkdownRenderer
+                        class="part-text-content"
+                        :class="{ 'part-text-content--streaming': animating }"
+                        :content="text"
+                        :streaming="animating"
+                      />
                     </slot>
                   </AnimatedStreamText>
                 </div>
@@ -702,7 +735,7 @@
                     </button>
                     <div v-if="isPartExpanded(group.part, false)" class="reasoning-body">
                       <slot name="reasoning-content" :content="group.part.content" :live="false">
-                        <span class="process-step-detail">{{ group.part.content }}</span>
+                        <MarkdownRenderer class="process-step-detail" :content="group.part.content" />
                       </slot>
                     </div>
                   </div>
@@ -791,7 +824,11 @@
                       <span class="process-step-marker" />
                       <span class="process-step-title">{{ modelTextTitle(group.part) }}</span>
                     </div>
-                    <div v-if="group.part.content" class="part-text-content process-text-content">{{ group.part.content }}</div>
+                    <MarkdownRenderer
+                      v-if="group.part.content"
+                      class="part-text-content process-text-content"
+                      :content="group.part.content"
+                    />
                   </div>
 
                   <div v-else-if="group.part.partType === 'error'" class="process-step process-step--error">
@@ -901,12 +938,20 @@
                           >
                             <template #assistant-content="slotProps">
                               <slot name="assistant-content" v-bind="slotProps">
-                                <div class="part-text-content">{{ slotProps.content }}</div>
+                                <MarkdownRenderer
+                                  class="part-text-content"
+                                  :content="slotProps.content"
+                                  :streaming="Boolean(slotProps.live)"
+                                />
                               </slot>
                             </template>
                             <template #reasoning-content="slotProps">
                               <slot name="reasoning-content" v-bind="slotProps">
-                                <span class="process-step-detail">{{ slotProps.content }}</span>
+                                <MarkdownRenderer
+                                  class="process-step-detail"
+                                  :content="slotProps.content"
+                                  :streaming="Boolean(slotProps.live)"
+                                />
                               </slot>
                             </template>
                           </ChatThread>
@@ -967,7 +1012,7 @@
             <!-- Reply text BELOW process (process happens first, then reply) -->
             <div v-if="!isTimelineMessage(msg) && !isLiveMessage(msg) && answerContent(msg)" class="assistant-answer">
               <slot name="assistant-content" :content="answerContent(msg)">
-                <div class="part-text-content">{{ answerContent(msg) }}</div>
+                <MarkdownRenderer class="part-text-content" :content="answerContent(msg)" />
               </slot>
             </div>
             <template v-else-if="!isTimelineMessage(msg) && !isLiveMessage(msg)">
@@ -977,7 +1022,7 @@
                 class="assistant-answer"
               >
                 <slot name="assistant-content" :content="group.content">
-                  <div class="part-text-content">{{ group.content }}</div>
+                  <MarkdownRenderer class="part-text-content" :content="group.content" />
                 </slot>
               </div>
             </template>
@@ -985,7 +1030,7 @@
 
           <!-- Fallback: no parts → render flat content -->
           <slot v-else name="assistant-content" :content="answerContent(msg)">
-            <div class="assistant-answer">{{ answerContent(msg) }}</div>
+            <MarkdownRenderer class="assistant-answer" :content="answerContent(msg)" />
           </slot>
 
           <!-- Message footer slot (for global stats line etc.) -->
@@ -1001,6 +1046,7 @@
 <script setup lang="ts">
 import type { CoreAttachment, CoreMessage, MessagePart, MessagePartStatus } from '../types'
 import { computed, defineComponent, h, onBeforeUnmount, ref, watch } from 'vue'
+import MarkdownRenderer from './MarkdownRenderer.vue'
 
 defineOptions({ name: 'ChatThread' })
 

@@ -90,6 +90,24 @@ async def test_writer_kit_resets_original_task_for_each_turn():
     assert state.metadata["original_task"] == "new queued task"
 
 
+@pytest.mark.asyncio
+async def test_writer_kernel_adapter_preserves_supplied_transcript_turn_identity():
+    llm = FakeLLMClient()
+    llm.add_response(LLMResponse(content="done", finish_reason="stop"))
+
+    result = await run_core_kernel(
+        goal="finish",
+        session_id="writer-turn-session",
+        llm_client=llm,
+        run_id="writer-transcript-turn",
+        turn_id="writer-transcript-turn",
+    )
+
+    assert result.run_id == "writer-transcript-turn"
+    assert {event["run_id"] for event in result.metadata["core_events"]} == {"writer-transcript-turn"}
+    assert {event["turn_id"] for event in result.metadata["core_events"]} == {"writer-transcript-turn"}
+
+
 # ---------------------------------------------------------------------------
 # Helpers — fake LLMClient for testing
 # ---------------------------------------------------------------------------
@@ -3881,7 +3899,7 @@ class TestCommandPermissionPolicy:
             encoding="utf-8",
         )
 
-        trust = HookTrustStore(data_dir / "core-hook-trust.json")
+        trust = HookTrustStore(data_dir / "hook_trust.json")
         plugins = PluginRegistry(plugin_roots=[default_user_plugin_root()]).discover()
         hooks = HookRegistry(plugins=plugins, trust_store=trust).load()
         assert hooks

@@ -5,14 +5,28 @@ import asyncio
 import json
 import os
 import sys
-import time
+import uuid
 from dataclasses import dataclass
 from typing import Any
 
-from lamtools_core.kernel.display import CoreDisplayEvent, CoreDisplayFormatter
-
 import aiohttp
 
+from lamtools_core.app.cli_live import (
+    CliLiveFormatter as CoreCliLiveFormatter,
+    OutputChunk,
+    approval_decision_from_reply as _approval_decision_from_reply,
+    default_input_text as _input_text,
+    default_label,
+    event_request_id as _event_request_id,
+    format_compaction_result as _format_compaction_result,
+    format_event as _format_event,
+    is_done_event as _is_done_event,
+    is_failed_event as _is_failed_event,
+    is_resumed_event as _is_resumed_event,
+    is_waiting_event as _is_waiting_event,
+    shorten as _shorten,
+    watch_live_events,
+)
 from writer_cli.app_server_client import AppServerClient
 
 DEFAULT_BASE_URL = "http://127.0.0.1:6173"
@@ -57,212 +71,33 @@ class CliError(RuntimeError):
     """A user-facing CLI failure."""
 
 
-def _elapsed_label(started_at: float) -> str:
-    elapsed = max(0, int(time.monotonic() - started_at))
-    minutes, seconds = divmod(elapsed, 60)
-    hours, minutes = divmod(minutes, 60)
-    if hours:
-        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-    return f"{minutes:02d}:{seconds:02d}"
+def _writer_label(tag: str, text: str, started_at: float) -> str:
+    _ = TAG_TO_DISPLAY_GROUP.get(tag, "processed_flow")
+    return default_label(tag, text, started_at)
 
 
-def _shorten(text: str, max_chars: int = 180) -> str:
-    clean = " ".join(str(text or "").split())
-    if len(clean) <= max_chars:
-        return clean
-    return clean[: max_chars - 3].rstrip() + "..."
-
-
-def _tool_output_id(data: dict[str, Any]) -> str:
-    metadata = data.get("metadata", {})
-    if not isinstance(metadata, dict):
-        return ""
-    session_memory = metadata.get("session_memory", {})
-    if not isinstance(session_memory, dict):
-        return ""
-    return str(session_memory.get("output_id") or "")
-
-
-def _action_path(params: dict[str, Any]) -> str:
-    for key in ("path", "file_path", "url", "command"):
-        value = params.get(key)
-        if value:
-            return _shorten(str(value), 120)
-    return ""
-
-
-def _tool_tag(tool_name: str) -> str:
-    normalized = str(tool_name or "").lower()
-    if any(marker in normalized for marker in ("file", "dir", "path", "write", "edit", "read")):
-        return "file"
-    return "tool"
-
-
-class CliRunFormatter:
-    """Stateful human formatter for long Writer runs."""
+class CliRunFormatter(CoreCliLiveFormatter):
+    """Writer's display-group callback around the shared live formatter."""
 
     def __init__(self, *, verbose: bool = False, heartbeat_interval: int = 30) -> None:
-        self.verbose = verbose
-        self.heartbeat_interval = heartbeat_interval
-        self.started_at = time.monotonic()
-        self.last_heartbeat_at = self.started_at
-        self.last_status = "started"
-        self.llm_call_count = 0
-        self._counted_usage_event_ids: set[str] = set()
-        self._seen_running_compactions: set[str] = set()
+        super().__init__(verbose=verbose, heartbeat_interval=heartbeat_interval, label=_writer_label)
 
     def _line(self, label: str, text: str = "") -> str:
-        suffix = f" {text}" if text else ""
-        return f"[{_elapsed_label(self.started_at)}] {label}{suffix}"
-
-    def _tagged_line(self, tag: str, text: str = "") -> str:
-        # The display group is intentionally resolved here so future show/hide
-        # rules can be driven by group without changing event-specific branches.
-        _ = TAG_TO_DISPLAY_GROUP.get(tag, "processed_flow")
-        return self._line(tag, text)
+        return self.line(label, text)
 
     def format(self, event: dict[str, Any]) -> list[str]:
-        event_type = str(event.get("event", "message"))
-        data = _event_data(event)
+        if str(event.get("event") or "") == "writer_error":
+            return super().format({"event": "live_error", "data": event.get("data") or {}})
+        return super().format(event)
 
-        if event_type == "ping":
-            now = time.monotonic()
-            if now - self.last_heartbeat_at >= self.heartbeat_interval:
-                self.last_heartbeat_at = now
-                return [self._tagged_line("wait", f"still running; last={self.last_status}")]
-            return []
+    def format_chunks(self, event: dict[str, Any]) -> list[OutputChunk]:
+        if str(event.get("event") or "") == "writer_error":
+            return super().format_chunks({"event": "live_error", "data": event.get("data") or {}})
+        return super().format_chunks(event)
 
-        if event_type == "app_server_event":
-            return self._format_app_server_event(data)
 
-        if event_type == "writer_error":
-            self.last_status = "error"
-            return [self._tagged_line("error", _shorten(str(data.get("error") or data.get("message") or event), 300))]
-
-        if event_type == "display":
-            return self._format_display(data)
-
-        return []
-
-    def _format_app_server_event(self, data: dict[str, Any]) -> list[str]:
-        method, payload = _app_server_method_payload(data)
-        if method == "core/runItem":
-            return self._format_core_run_item(payload)
-
-        item_type = str(payload.get("type") or "item")
-
-        if method in {"turn/accepted", "turn/started", "turn/steered", "turn/interrupted"}:
-            return []
-        if method == "item/started":
-            if item_type == "userMessage":
-                text = _shorten(_input_text(payload.get("content")), 160)
-                return [self._tagged_line("message:user", text)] if text else [self._tagged_line("message:user")]
-        if method == "serverRequest/resolved":
-            self.last_status = "resumed"
-            return [self._tagged_line("resumed")]
-        if method == "queue/itemAccepted":
-            self.last_status = "queued"
-            return [self._tagged_line("phase", "queued")]
-        if method == "queue/itemDispatched":
-            self.last_status = "queue_dispatched"
-            return [self._tagged_line("phase", "queue_dispatched")]
-        if method == "queue/itemUpdated":
-            phase = str(payload.get("status") or "queue_updated")
-            self.last_status = phase
-            return [self._tagged_line("phase", phase)]
-        if self.verbose:
-            return [self._tagged_line("runtime_event", f"{method} {json.dumps(payload, ensure_ascii=False)}")]
-        return []
-
-    def _format_core_run_item(self, run_item: dict[str, Any]) -> list[str]:
-        kind = str(run_item.get("kind") or "")
-        payload = _run_item_payload(run_item)
-
-        if payload.get("type") == "compaction":
-            return self._format_compaction_run_item(run_item, payload)
-        if kind == "message":
-            text = _run_item_text(payload)
-            return [self._tagged_line("reply", _shorten(text, 300 if self.verbose else 180))] if text else []
-        if kind == "thinking":
-            text = _run_item_text(payload)
-            return [self._tagged_line("think", _shorten(text, 220))] if self.verbose and text else []
-        if kind == "tool_call":
-            tool_name = _app_server_tool_name(payload)
-            detail = _app_server_tool_detail(payload)
-            self.last_status = f"tool:{tool_name}:running"
-            return [self._tagged_line(_tool_tag(tool_name), detail or tool_name)]
-        if kind == "tool_result":
-            tool_name = _app_server_tool_name(payload)
-            detail = _app_server_tool_detail(payload, _run_item_text(payload))
-            self.last_status = f"tool:{tool_name}:completed"
-            return [self._tagged_line(_tool_tag(tool_name), detail or tool_name)]
-        if kind == "approval_request":
-            self.last_status = "waiting_for_user"
-            text = str(payload.get("message") or payload.get("summary") or "waiting")
-            return [self._tagged_line("waiting_for_user", _shorten(text, 220))]
-        if kind == "artifact":
-            artifact = _run_item_artifact(run_item, payload)
-            detail = _shorten(str(artifact.get("title") or artifact.get("path") or artifact.get("artifact_id") or "artifact"), 180)
-            return [self._tagged_line("file", detail)]
-        if kind == "usage":
-            usage_event_id = str(run_item.get("event_id") or run_item.get("item_id") or id(run_item))
-            if usage_event_id not in self._counted_usage_event_ids:
-                self.llm_call_count += 1
-                self._counted_usage_event_ids.add(usage_event_id)
-            return [self._tagged_line("debug", json.dumps(run_item.get("usage") or payload, ensure_ascii=False))] if self.verbose else []
-        if kind == "status":
-            status = _run_item_status(run_item, payload)
-            if status == "completed":
-                self.last_status = "done"
-                return [self._tagged_line("done", f"模型调用 {self.llm_call_count} 次")]
-            if status in {"failed", "cancelled", "error"}:
-                reason = str(payload.get("raw_end_reason") or payload.get("reason") or status)
-                self.last_status = f"failed:{reason}"
-                return [self._tagged_line("failed", reason)]
-            if status:
-                self.last_status = status
-                return [self._tagged_line("phase", status)]
-        if kind == "error":
-            self.last_status = "error"
-            text = str(payload.get("message") or payload.get("error") or payload or "error")
-            return [self._tagged_line("error", _shorten(text, 300))]
-
-        if self.verbose:
-            return [self._tagged_line("runtime_event", f"core/runItem {json.dumps(run_item, ensure_ascii=False)}")]
-        return []
-
-    def _format_compaction_run_item(self, run_item: dict[str, Any], payload: dict[str, Any]) -> list[str]:
-        status = _run_item_status(run_item, payload)
-        if status == "running":
-            item_id = str(run_item.get("item_id") or run_item.get("event_id") or "")
-            if item_id and item_id in self._seen_running_compactions:
-                return [self._tagged_line("debug", _shorten(str(payload.get("delta") or ""), 220))] if self.verbose and payload.get("delta") else []
-            if item_id:
-                self._seen_running_compactions.add(item_id)
-            self.last_status = "compacting"
-            return [self._tagged_line("phase", "正在压缩上下文...")]
-        if status in {"failed", "error", "cancelled"}:
-            self.last_status = "compaction_failed"
-            return [self._tagged_line("failed", _format_compaction_failure(payload))]
-        self.last_status = "compacted"
-        lines = [self._tagged_line("done", _format_compaction_result(payload))]
-        if self.verbose and payload.get("content"):
-            lines.append(str(payload.get("content")))
-        return lines
-
-    def _format_display(self, data: dict[str, Any]) -> list[str]:
-        """Format a ``display`` event through CoreDisplayFormatter."""
-        de = CoreDisplayEvent.from_dict(data)
-        # Stream deltas inline — no line prefix, just the text
-        if de.metadata.get("delta") and de.content:
-            print(de.content, end="", flush=True)
-            return []
-        # Full reply: prefix a newline before starting (close the inline stream)
-        if de.kind == "reply" and de.content:
-            print(flush=True)  # flush any pending inline text
-        fmt = CoreDisplayFormatter(verbose=self.verbose)
-        fmt.started_at = self.started_at
-        return fmt.format(de)
+def _write_live_chunk(chunk: OutputChunk) -> None:
+    print(str(chunk), end=chunk.end, flush=chunk.flush)
 
 
 def _base_url(args: argparse.Namespace) -> str:
@@ -298,262 +133,6 @@ async def _create_visible_session(
     if not isinstance(created, dict):
         raise CliError("Session creation returned an invalid response")
     return created
-
-
-def _event_data(event: dict[str, Any]) -> dict[str, Any]:
-    top_level = {
-        key: value
-        for key, value in event.items()
-        if key not in {"event", "data"} and value is not None
-    }
-    data = event.get("data", {})
-    if isinstance(data, dict):
-        return {**top_level, **data}
-    if top_level:
-        top_level["value"] = data
-        return top_level
-    return {"value": data}
-
-
-def _app_server_method_payload(data: dict[str, Any]) -> tuple[str, dict[str, Any]]:
-    method = str(data.get("method") or "")
-    payload = data.get("payload")
-    return method, payload if isinstance(payload, dict) else {}
-
-
-def _run_item_payload(run_item: dict[str, Any]) -> dict[str, Any]:
-    payload = run_item.get("payload")
-    return payload if isinstance(payload, dict) else {}
-
-
-def _run_item_text(payload: dict[str, Any]) -> str:
-    return _app_server_payload_text(payload)
-
-
-def _run_item_status(run_item: dict[str, Any], payload: dict[str, Any]) -> str:
-    return str(run_item.get("status") or payload.get("status") or "")
-
-
-def _run_item_artifact(run_item: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
-    artifacts = run_item.get("artifacts")
-    if isinstance(artifacts, list):
-        first = next((item for item in artifacts if isinstance(item, dict)), None)
-        if first is not None:
-            return first
-    artifact = payload.get("artifact")
-    if isinstance(artifact, dict):
-        return artifact
-    return payload
-
-
-def _input_text(value: Any) -> str:
-    if isinstance(value, str):
-        return value
-    if isinstance(value, list):
-        return "".join(str(item.get("text") or "") for item in value if isinstance(item, dict))
-    return ""
-
-
-def _app_server_payload_text(payload: dict[str, Any]) -> str:
-    for key in ("delta", "content", "message", "summary"):
-        value = payload.get(key)
-        text = _input_text(value) if key == "content" else str(value or "")
-        text = text.strip()
-        if text:
-            return text
-    return ""
-
-
-def _format_compaction_failure(payload: dict[str, Any]) -> str:
-    message = str(payload.get("error") or payload.get("message") or payload.get("reason") or "压缩失败").strip()
-    return f"压缩失败：{message}" if not message.startswith("压缩失败") else message
-
-
-def _format_compaction_result(payload: dict[str, Any]) -> str:
-    status = str(payload.get("compaction_status") or payload.get("compactionStatus") or payload.get("status") or "")
-    if status == "skipped":
-        return str(payload.get("message") or payload.get("reason") or "暂无可压缩上下文")
-    label = str(payload.get("label") or "上下文已压缩").strip() or "上下文已压缩"
-    before = payload.get("before_tokens")
-    after = payload.get("after_tokens")
-    count = payload.get("compacted_messages")
-    if count is None:
-        count = payload.get("removed_messages")
-    pieces: list[str] = []
-    if isinstance(before, int) and isinstance(after, int):
-        pieces.append(f"{before} -> {after} tokens")
-    if isinstance(count, int):
-        pieces.append(f"压缩 {count} 条消息")
-    if pieces:
-        return f"{label}：" + "，".join(pieces) + "。"
-    return label
-
-
-def _app_server_tool_name(payload: dict[str, Any]) -> str:
-    return str(payload.get("tool_name") or payload.get("kind") or payload.get("type") or "tool")
-
-
-def _app_server_tool_detail(payload: dict[str, Any], fallback: str = "") -> str:
-    tool_name = _app_server_tool_name(payload)
-    args = payload.get("arguments")
-    if not isinstance(args, dict):
-        args = payload.get("tool_args")
-    path = _action_path(args) if isinstance(args, dict) else ""
-    text = str(
-        payload.get("message")
-        or payload.get("summary")
-        or payload.get("error")
-        or fallback
-        or ""
-    ).strip()
-    bits = [tool_name, path, _shorten(text, 180)]
-    return " ".join(bit for bit in bits if bit)
-
-
-def _is_failed_event(event: dict[str, Any]) -> bool:
-    event_type = str(event.get("event", ""))
-    data = _event_data(event)
-    if event_type == "app_server_event":
-        method, payload = _app_server_method_payload(data)
-        if method == "core/runItem":
-            kind = str(payload.get("kind") or "")
-            run_payload = _run_item_payload(payload)
-            status = _run_item_status(payload, run_payload)
-            return kind == "error" or (kind == "status" and status in {"failed", "cancelled", "error"})
-        return False
-    return False
-
-
-def _is_done_event(event: dict[str, Any]) -> bool:
-    event_type = str(event.get("event", ""))
-    data = _event_data(event)
-    if event_type == "app_server_event":
-        method, payload = _app_server_method_payload(data)
-        if method == "core/runItem":
-            kind = str(payload.get("kind") or "")
-            run_payload = _run_item_payload(payload)
-            status = _run_item_status(payload, run_payload)
-            return kind in {"error", "status"} and status in {"completed", "failed", "cancelled", "error"}
-        return False
-    return False
-
-
-def _is_decision_event(event: dict[str, Any]) -> bool:
-    event_type = str(event.get("event", ""))
-    if event_type != "app_server_event":
-        return False
-    method, payload = _app_server_method_payload(_event_data(event))
-    return method == "core/runItem" and str(payload.get("kind") or "") == "approval_request"
-
-
-def _is_waiting_event(event: dict[str, Any]) -> bool:
-    event_type = str(event.get("event", ""))
-    if event_type == "app_server_event":
-        method, payload = _app_server_method_payload(_event_data(event))
-        return method == "core/runItem" and str(payload.get("kind") or "") == "approval_request"
-    return False
-
-
-def _is_resumed_event(event: dict[str, Any]) -> bool:
-    event_type = str(event.get("event", ""))
-    if event_type == "app_server_event":
-        method, _payload = _app_server_method_payload(_event_data(event))
-        return method == "serverRequest/resolved"
-    return False
-
-
-def _event_request_id(event: dict[str, Any]) -> str:
-    data = _event_data(event)
-    if str(event.get("event") or "") == "app_server_event":
-        method, payload = _app_server_method_payload(data)
-        if method == "core/runItem":
-            run_payload = _run_item_payload(payload)
-            return str(run_payload.get("request_id") or payload.get("item_id") or "")
-        return str(payload.get("request_id") or "")
-    return ""
-
-
-def _approval_decision_from_reply(reply: str) -> str:
-    normalized = reply.strip().lower()
-    if normalized in {"y", "yes", "ok", "approve", "approved", "同意", "批准"}:
-        return "approve_once"
-    if normalized in {"n", "no", "deny", "decline", "reject", "拒绝"}:
-        return "deny"
-    return "other_guidance"
-
-
-def _format_event(event: dict[str, Any]) -> str | None:
-    event_type = str(event.get("event", "message"))
-    data = _event_data(event)
-
-    if event_type == "ping":
-        return None
-    if event_type == "app_server_event":
-        return _format_app_server_event(data)
-    return None
-
-
-def _format_app_server_event(data: dict[str, Any]) -> str | None:
-    method, payload = _app_server_method_payload(data)
-    if method == "core/runItem":
-        return _format_core_run_item_event(payload)
-
-    item_type = str(payload.get("type") or "item")
-    if method in {"turn/accepted", "turn/started", "turn/steered", "turn/interrupted"}:
-        return None
-    if method == "item/started":
-        if item_type == "userMessage":
-            text = _input_text(payload.get("content"))
-            return f"[user] {text}" if text else "[user]"
-    if method == "serverRequest/resolved":
-        return "[resumed]"
-    if method == "queue/itemAccepted":
-        return "[phase] queued"
-    if method == "queue/itemDispatched":
-        return "[phase] queue_dispatched"
-    if method == "queue/itemUpdated":
-        return f"[phase] {payload.get('status') or 'queue_updated'}"
-    return f"[{method}] {json.dumps(payload, ensure_ascii=False)}" if method else None
-
-
-def _format_core_run_item_event(run_item: dict[str, Any]) -> str | None:
-    kind = str(run_item.get("kind") or "")
-    payload = _run_item_payload(run_item)
-    if payload.get("type") == "compaction":
-        status = _run_item_status(run_item, payload)
-        if status == "running":
-            return "正在压缩上下文..."
-        if status in {"failed", "error", "cancelled"}:
-            return _format_compaction_failure(payload)
-        return _format_compaction_result(payload)
-    if kind == "message":
-        return _run_item_text(payload) or None
-    if kind == "thinking":
-        text = _run_item_text(payload)
-        return f"[thinking] {text}" if text else None
-    if kind == "tool_call":
-        return f"[tool] {_app_server_tool_detail(payload)}".rstrip()
-    if kind == "tool_result":
-        return f"[tool] {_app_server_tool_detail(payload, _run_item_text(payload))}".rstrip()
-    if kind == "approval_request":
-        text = str(payload.get("message") or payload.get("summary") or "")
-        return f"[waiting] {text}" if text else "[waiting for user]"
-    if kind == "approval_response":
-        return "[resumed]"
-    if kind == "artifact":
-        artifact = _run_item_artifact(run_item, payload)
-        text = str(artifact.get("title") or artifact.get("path") or artifact.get("artifact_id") or "")
-        return f"[artifact] {text}" if text else "[artifact]"
-    if kind == "status":
-        status = _run_item_status(run_item, payload)
-        if status == "completed":
-            return "[done]"
-        if status in {"failed", "cancelled", "error"}:
-            return f"[failed] {payload.get('raw_end_reason') or payload.get('reason') or status}"
-        return f"[phase] {status}" if status else None
-    if kind == "error":
-        return f"[error] {payload.get('message') or payload.get('error') or payload}"
-    return None
 
 
 async def cmd_health(args: argparse.Namespace) -> int:
@@ -895,7 +474,7 @@ async def _stream_chat(
     session_id: str,
     message: str,
 ) -> int:
-    failed = False
+    client_message_id = str(uuid.uuid4())
     interactive = (
         not args.raw
         and (
@@ -906,13 +485,12 @@ async def _stream_chat(
             )
         )
     )
-    decision_prompted = False
     formatter = CliRunFormatter(
         verbose=bool(getattr(args, "verbose", False)),
         heartbeat_interval=int(getattr(args, "heartbeat_interval", 30) or 30),
     )
-    async with AppServerClient(_base_url(args)) as client:
-        await client.connect(thread_id=session_id)
+
+    async def start_turn(client: AppServerClient) -> None:
         await client.start_turn(
             thread_id=session_id,
             message=message,
@@ -920,32 +498,29 @@ async def _stream_chat(
             mode=args.mode,
             model_id=getattr(args, "model_id", None),
             shallow_thinking_enabled=bool(getattr(args, "shallow_thinking", False)),
+            client_message_id=client_message_id,
         )
-        async for event in client.events():
-            if _is_failed_event(event):
-                failed = True
-            if args.raw:
-                print(json.dumps(event, ensure_ascii=False), flush=True)
-                if _is_done_event(event):
-                    break
-                continue
-            for line in formatter.format(event):
-                print(line, flush=True)
-            if _is_done_event(event):
-                break
-            if interactive and (_is_decision_event(event) or _is_waiting_event(event)) and not decision_prompted:
-                reply = await _prompt_reply(args)
-                request_id = _event_request_id(event)
-                if request_id:
-                    await client.respond_approval(
-                        request_id=request_id,
-                        decision=_approval_decision_from_reply(reply),
-                        guidance=reply,
-                    )
-                decision_prompted = True
-            elif _is_resumed_event(event):
-                decision_prompted = False
-    return 2 if failed else 0
+
+    approval = None
+    approval_decision = None
+    if getattr(args, "approval_decision", None):
+        approval = lambda: args.approval_decision
+        approval_decision = lambda value: value
+    elif interactive:
+        approval = lambda: _prompt_reply(args)
+        approval_decision = _approval_decision_from_reply
+
+    result = await watch_live_events(
+        client_factory=lambda: AppServerClient(_base_url(args)),
+        thread_id=session_id,
+        formatter=formatter,
+        output=_write_live_chunk,
+        raw=bool(args.raw),
+        approval=approval,
+        approval_decision=approval_decision,
+        on_connected=start_turn,
+    )
+    return result.exit_code
 
 
 async def _prompt_reply(args: argparse.Namespace) -> str:
@@ -963,7 +538,8 @@ async def cmd_run(args: argparse.Namespace) -> int:
         work_root=args.work_root or "",
         mode=args.mode,
     )
-    print(f"[session] {created['id']}")
+    if not args.raw:
+        print(f"[session] {created['id']}")
     return await _stream_chat(args, created["id"], message)
 
 
@@ -976,22 +552,26 @@ async def cmd_watch(args: argparse.Namespace) -> int:
         verbose=bool(getattr(args, "verbose", False)),
         heartbeat_interval=int(getattr(args, "heartbeat_interval", 30) or 30),
     )
-    failed = False
-    async with AppServerClient(_base_url(args)) as client:
-        await client.connect(thread_id=args.session_id)
-        for line in [formatter._line("watch", args.session_id)]:
-            print(line, flush=True)
-        async for event in client.events():
-            if _is_failed_event(event):
-                failed = True
-            if args.raw:
-                print(json.dumps(event, ensure_ascii=False), flush=True)
-            else:
-                for line in formatter.format(event):
-                    print(line, flush=True)
-            if _is_done_event(event):
-                break
-    return 2 if failed else 0
+    if not args.raw:
+        _write_live_chunk(OutputChunk(formatter.line("watch", args.session_id)))
+    approval = None
+    approval_decision = None
+    if getattr(args, "approval_decision", None):
+        approval = lambda: args.approval_decision
+        approval_decision = lambda value: value
+    elif getattr(args, "interactive_decisions", False) or (not args.raw and sys.stdin.isatty()):
+        approval = lambda: _prompt_reply(args)
+        approval_decision = _approval_decision_from_reply
+    result = await watch_live_events(
+        client_factory=lambda: AppServerClient(_base_url(args)),
+        thread_id=args.session_id,
+        formatter=formatter,
+        output=_write_live_chunk,
+        raw=bool(args.raw),
+        approval=approval,
+        approval_decision=approval_decision,
+    )
+    return result.exit_code
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1077,6 +657,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--heartbeat-interval", type=int, default=30, help="Seconds between wait heartbeat lines")
     run_parser.add_argument("--interactive-decisions", action="store_true")
     run_parser.add_argument("--no-interactive-decisions", action="store_true")
+    run_parser.add_argument("--approval-decision", choices=("approve_once", "deny", "other_guidance"))
     run_parser.set_defaults(func=cmd_run)
 
     resume_parser = sub.add_parser("resume", help="Send a follow-up to an existing task")
@@ -1090,6 +671,7 @@ def build_parser() -> argparse.ArgumentParser:
     resume_parser.add_argument("--heartbeat-interval", type=int, default=30, help="Seconds between wait heartbeat lines")
     resume_parser.add_argument("--interactive-decisions", action="store_true")
     resume_parser.add_argument("--no-interactive-decisions", action="store_true")
+    resume_parser.add_argument("--approval-decision", choices=("approve_once", "deny", "other_guidance"))
     resume_parser.set_defaults(func=cmd_resume)
 
     watch_parser = sub.add_parser("watch", help="Watch a running task without sending a message")
@@ -1097,6 +679,8 @@ def build_parser() -> argparse.ArgumentParser:
     watch_parser.add_argument("--raw", action="store_true")
     watch_parser.add_argument("--verbose", action="store_true", help="Show additional app-server details")
     watch_parser.add_argument("--heartbeat-interval", type=int, default=30, help="Seconds between wait heartbeat lines")
+    watch_parser.add_argument("--interactive-decisions", action="store_true")
+    watch_parser.add_argument("--approval-decision", choices=("approve_once", "deny", "other_guidance"))
     watch_parser.set_defaults(func=cmd_watch)
 
     cancel_parser = sub.add_parser("cancel", help="Cancel a running session")

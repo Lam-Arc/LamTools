@@ -5,7 +5,6 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import app.models  # noqa: F401
-from app.app_server.queue import accept_turn_start
 from app.app_server.ledger import list_events_after
 from app.app_server.runtime_bridge import (
     persist_run_item_events_as_app_events,
@@ -19,6 +18,7 @@ from app.models.session import WriterSession
 from app.models.transcript import WriterTranscriptTurn
 import app.services.writer_service as writer_service_module
 from app.services.writer_service import writer_orchestrate
+from app.services.transcript_service import create_user_message_turn
 from lamtools_core.event import RunItemEvent
 from lamtools_core.event.runtime_projection import runtime_fact_to_run_item_events
 from lamtools_core.kernel import KernelResult
@@ -634,7 +634,15 @@ async def test_runtime_bridge_persists_usage_as_core_facts(tmp_path):
             snapshot = await load_snapshot(db, "thread-1")
 
             assert [item.method for item in usage_envelopes + metric_envelopes] == ["core/runItem", "core/runItem"]
-            assert snapshot["turns"] == {}
+            assert snapshot["turns"]["turn-1"] == {
+                "turn_id": "turn-1",
+                "status": "running",
+                "last_seq": 2,
+                "items": [],
+            }
+            assert "usage" not in snapshot["turns"]["turn-1"]
+            assert "metrics" not in snapshot["turns"]["turn-1"]
+            assert snapshot["core"]["turns"]["turn-1"]["status"] == "running"
             assert snapshot["core"]["turns"]["turn-1"]["usage"] == {
                 "duration_ms": 12_300,
                 "input_tokens": 12,
@@ -669,7 +677,12 @@ async def test_runtime_bridge_persists_status_as_core_fact(tmp_path):
 
             assert [item.method for item in envelopes] == ["core/runItem"]
             assert snapshot["status"] == "completed"
-            assert snapshot["turns"] == {}
+            assert snapshot["turns"]["turn-1"] == {
+                "turn_id": "turn-1",
+                "status": "completed",
+                "last_seq": 1,
+                "items": [],
+            }
             assert snapshot["core"]["status"] == "completed"
             assert snapshot["core"]["turns"]["turn-1"]["status"] == "completed"
     finally:
@@ -831,15 +844,15 @@ async def test_writer_service_reuses_app_server_message_and_turn(monkeypatch, tm
             db.add(WriterSession(id="thread-1", title="Test", work_root=str(tmp_path / "workspace")))
             await db.commit()
 
-            events = await accept_turn_start(
+            transcript_turn, user_message = await create_user_message_turn(
                 db,
-                thread_id="thread-1",
-                client_message_id="client-1",
-                input_items=[{"type": "text", "text": "hello"}],
+                session_id="thread-1",
+                user_text="hello",
+                message_parts={"app_server_input": [{"type": "text", "text": "hello"}]},
             )
             await db.commit()
-            turn_id = events[0].turn_id
-            user_message_id = events[0].payload["user_message_id"]
+            turn_id = transcript_turn.id
+            user_message_id = user_message.id
 
             await services["run_turn"](
                 db=db,

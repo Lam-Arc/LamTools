@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from lamtools_core.http import create_core_router
+from lamtools_core.app.operation_catalog import OperationCatalog, OperationRequest, OperationResult
 from lamtools_core.app.factory import create_app
 from lamtools_core.member.manifest import MemberManifest
 from lamtools_core.provider import ProviderRegistry
@@ -102,6 +103,21 @@ class TestSessionRoutes:
         )
         assert resp.status_code == 404
 
+    def test_delete_rejects_active_session_until_stopped(self):
+        client = _make_app_with_core()
+        client.post(
+            "/api/core/sessions",
+            json={"id": "s1", "member_id": "core", "title": "Active", "status": "running"},
+        )
+
+        blocked = client.delete("/api/core/sessions/s1")
+        assert blocked.status_code == 409
+        assert client.get("/api/core/sessions/s1").status_code == 200
+
+        client.patch("/api/core/sessions/s1", json={"status": "cancelled"})
+        deleted = client.delete("/api/core/sessions/s1")
+        assert deleted.status_code == 204
+
 
 # ------------------------------------------------------------------
 # Session message routes
@@ -168,6 +184,214 @@ class TestSessionMessageRoutes:
         assert msgs[0]["content"] == "First"
         assert msgs[1]["content"] == "Second"
         assert msgs[2]["content"] == "Third"
+
+
+# ------------------------------------------------------------------
+# Agent turn routes
+# ------------------------------------------------------------------
+
+
+class TestAgentTurnRoutes:
+    def test_turn_start_executes_operation_and_projects_messages(self):
+        catalog = OperationCatalog()
+        seen: list[OperationRequest] = []
+
+        async def turn_start(request: OperationRequest) -> OperationResult:
+            seen.append(request)
+            return OperationResult(
+                name=request.name,
+                payload={
+                    "run_id": "run-1",
+                    "message": "已写入 inspiration.md",
+                    "run_items": [
+                        {
+                            "kind": "thinking",
+                            "thread_id": "s1",
+                            "event_id": "evt-thinking",
+                            "turn_id": "s1:turn:run-1",
+                            "item_id": "thinking-1",
+                            "seq": 1,
+                            "status": "completed",
+                            "payload": {"type": "reasoning", "content": "先分析任务，再调用工具。"},
+                        },
+                        {
+                            "kind": "tool_call",
+                            "thread_id": "s1",
+                            "event_id": "evt-tool",
+                            "turn_id": "s1:turn:run-1",
+                            "item_id": "tool-1",
+                            "seq": 2,
+                            "status": "running",
+                            "payload": {
+                                "type": "dynamicToolCall",
+                                "tool_name": "sub_agent",
+                                "arguments": {"task": "调查前端设计教程与技巧"},
+                                "summary": "调用 sub agent",
+                            },
+                        },
+                        {
+                            "kind": "message",
+                            "thread_id": "s1",
+                            "event_id": "evt-text",
+                            "turn_id": "s1:turn:run-1",
+                            "item_id": "text-1",
+                            "seq": 3,
+                            "status": "completed",
+                            "payload": {"type": "agentMessage", "content": "已写入 inspiration.md"},
+                        },
+                    ],
+                },
+            )
+
+        catalog.register("turn.start", turn_start)
+        client = _make_app_with_core(operations=catalog)
+        client.post(
+            "/api/core/sessions",
+            json={"id": "s1", "member_id": "core", "title": "Core", "status": "idle"},
+        )
+
+        response = client.post(
+            "/api/core/sessions/s1/turns",
+            json={"message": "写一个文档", "approval_policy": "auto_approve"},
+        )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "ok"
+        assert payload["assistant_message"]["content"] == "已写入 inspiration.md"
+        assert seen[0].name == "turn.start"
+        assert seen[0].payload["thread_id"] == "s1"
+        assert seen[0].payload["message"] == "写一个文档"
+        assert seen[0].payload["approval_policy"] == "auto_approve"
+
+        messages = client.get("/api/core/sessions/s1/messages").json()
+        assert [message["role"] for message in messages] == ["user", "assistant"]
+        assistant = messages[1]
+        assert {part["partType"] for part in assistant["parts"]} >= {
+            "reasoning",
+            "tool_call",
+            "model_text",
+        }
+        assert any(part.get("toolName") == "sub_agent" for part in assistant["parts"])
+
+        events = client.get("/api/core/sessions/s1/events").json()
+        assert [event["name"] for event in events] == ["core.run_item", "core.run_item", "core.run_item"]
+
+    def test_turn_start_requires_registered_operation(self):
+        client = _make_app_with_core()
+        client.post(
+            "/api/core/sessions",
+            json={"id": "s1", "member_id": "core", "title": "Core", "status": "idle"},
+        )
+
+        response = client.post("/api/core/sessions/s1/turns", json={"message": "hello"})
+
+        assert response.status_code == 503
+
+    def test_turn_start_projects_message_parts_from_snapshot_when_available(self):
+        catalog = OperationCatalog()
+
+        async def turn_start(request: OperationRequest) -> OperationResult:
+            del request
+            noisy_items = [
+                {
+                    "kind": "thinking",
+                    "thread_id": "s1",
+                    "event_id": f"evt-thinking-{index}",
+                    "turn_id": "s1:turn:run-1",
+                    "item_id": "thinking-1",
+                    "seq": index,
+                    "status": "running",
+                    "payload": {"type": "reasoning", "content": f"累计思考 {index}"},
+                }
+                for index in range(1, 40)
+            ]
+            return OperationResult(
+                name="turn.start",
+                payload={
+                    "run_id": "run-1",
+                    "message": "已完成",
+                    "run_items": noisy_items,
+                    "snapshot": {
+                        "core": {
+                            "thread_id": "s1",
+                            "item_order": ["thinking-1", "tool-1", "finish-1", "text-1"],
+                            "items": {
+                                "thinking-1": {
+                                    "item_id": "thinking-1",
+                                    "turn_id": "s1:turn:run-1",
+                                    "kind": "thinking",
+                                    "status": "running",
+                                    "last_seq": 39,
+                                    "payload": {"type": "reasoning", "content": "最终思考"},
+                                },
+                                "tool-1": {
+                                    "item_id": "tool-1",
+                                    "turn_id": "s1:turn:run-1",
+                                    "kind": "tool_result",
+                                    "status": "completed",
+                                    "last_seq": 40,
+                                    "content": (
+                                        '{"tool_name":"sub_agent","status":"ok",'
+                                        '"content":"调查完成","error":""}'
+                                    ),
+                                    "payload": {
+                                        "type": "dynamicToolCall",
+                                        "tool_name": "sub_agent",
+                                        "arguments": {"task": "调查前端设计教程"},
+                                    },
+                                },
+                                "text-1": {
+                                    "item_id": "text-1",
+                                    "turn_id": "s1:turn:run-1",
+                                    "kind": "message",
+                                    "status": "completed",
+                                    "last_seq": 41,
+                                    "payload": {
+                                        "type": "agentMessage",
+                                        "content": (
+                                            '{"part_type":"text","status":"completed",'
+                                            '"content":"最终正文","label":"Reply"}'
+                                        ),
+                                    },
+                                },
+                                "finish-1": {
+                                    "item_id": "finish-1",
+                                    "turn_id": "s1:turn:run-1",
+                                    "kind": "message",
+                                    "status": "running",
+                                    "last_seq": 40,
+                                    "payload": {
+                                        "type": "agentMessage",
+                                        "delta": (
+                                            '{"content":"","finish_reason":"tool_calls",'
+                                            '"usage":{"prompt_tokens":1,"completion_tokens":2}}'
+                                        ),
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+            )
+
+        catalog.register("turn.start", turn_start)
+        client = _make_app_with_core(operations=catalog)
+        client.post(
+            "/api/core/sessions",
+            json={"id": "s1", "member_id": "core", "title": "Core", "status": "idle"},
+        )
+
+        response = client.post("/api/core/sessions/s1/turns", json={"message": "做任务"})
+
+        assert response.status_code == 200
+        assistant = response.json()["assistant_message"]
+        assert len(assistant["parts"]) == 3
+        assert [part["partType"] for part in assistant["parts"]] == ["reasoning", "tool_call", "model_text"]
+        assert assistant["parts"][0]["content"] == "最终思考"
+        assert assistant["parts"][1]["toolName"] == "sub_agent"
+        assert assistant["parts"][1]["toolResult"] == "调查完成"
+        assert assistant["parts"][2]["content"] == "最终正文"
 
 
 # ------------------------------------------------------------------

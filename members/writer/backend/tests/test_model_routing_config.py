@@ -3,7 +3,6 @@ from __future__ import annotations
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.database import Base
 from app.models.app_setting import AppSetting
 from app.models.llm_config import LLMModel, LLMProvider
 from app.services.llm_config_service import (
@@ -12,6 +11,7 @@ from app.services.llm_config_service import (
     resolve_llm_config,
     set_route_model,
 )
+from lamtools_core.config.shared_database import init_shared_config_schema
 
 
 @pytest.mark.asyncio
@@ -19,8 +19,7 @@ async def test_model_routing_state_initializes_and_preserves_sub_agent_model(tmp
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'test.db'}", future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
+        await init_shared_config_schema(engine)
 
         async with session_factory() as db:
             provider = LLMProvider(
@@ -86,8 +85,7 @@ async def test_sub_agent_named_route_overrides_general_sub_agent_route(tmp_path)
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'test.db'}", future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
+        await init_shared_config_schema(engine)
 
         async with session_factory() as db:
             provider = LLMProvider(
@@ -126,8 +124,7 @@ async def test_direct_model_override_accepts_model_identifier(tmp_path):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'test.db'}", future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
+        await init_shared_config_schema(engine)
 
         async with session_factory() as db:
             provider = LLMProvider(
@@ -156,12 +153,24 @@ async def test_direct_model_override_accepts_model_identifier(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_direct_model_override_rejects_unknown_model_instead_of_routing_elsewhere(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'test.db'}", future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        await init_shared_config_schema(engine)
+        async with session_factory() as db:
+            with pytest.raises(ValueError, match="Model not found"):
+                await resolve_llm_config(db, "sub_agent", model_id="missing-model")
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_legacy_default_model_id_migrates_to_writer_route(tmp_path):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'test.db'}", future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
+        await init_shared_config_schema(engine)
 
         async with session_factory() as db:
             provider = LLMProvider(
@@ -200,8 +209,7 @@ async def test_model_routing_setting_is_the_only_runtime_route_source(tmp_path):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'test.db'}", future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
+        await init_shared_config_schema(engine)
 
         async with session_factory() as db:
             provider = LLMProvider(

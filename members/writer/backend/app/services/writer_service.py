@@ -15,12 +15,16 @@ from typing import Any
 
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
 from lamtools_core.kernel import LoopPolicy, summarize_kernel_result
 from lamtools_core.llm.shallow_thinking import ShallowThinkingClient
 from lamtools_core.llm.policy import RetryPolicy
 
 from app.config import Settings
+from app.database import writer_write_coordinator
+from lamtools_core.app.sqlite_write import configure_sqlite_engine
+from lamtools_core.app.approval_continuation import CoreApprovalContinuationCoordinator
 from app.core.writer.state_store import WriterStateStore
 from app.core.writer.core_kernel_adapter import (
     run_core_kernel,
@@ -33,36 +37,28 @@ from app.models.base import gen_uuid
 from app.models.session import WriterSession
 from app.models.message import WriterMessage
 from app.models.attachment import WriterAttachment
-from app.models.app_setting import AppSetting
-from app.models.transcript import WriterTranscriptBlock, WriterTranscriptTurn
+from app.models.transcript import WriterTranscriptTurn
+from app.shared_config_database import shared_config_session
 from app.services.app_projection_sink import AppProjectionSink
 from app.services.attachment_service import read_text_preview
 from app.services.checkpoint_service import WriterCheckpointService
 from app.services.commit_review_service import WriterCommitReviewService
-from app.services.runtime_approved_tool import APPROVABLE_TOOL_NAMES, execute_approved_waiting_tool
-from app.services.runtime_continuation_prompts import (
-    approved_tool_continuation_prompt,
-    guidance_continuation_prompt,
+from app.services.runtime_approved_tool import (
+    execute_approved_tool,
 )
-from app.services.runtime_capabilities import WRITER_DEFAULT_COMMAND_POLICIES
+from app.services.runtime_capabilities import runtime_controls
+from app.services.runtime_fact_recorder import RuntimeFactRecorder
 from app.services.runtime_runner import WriterRuntimeRunner
-from app.services.runtime_waiting_request import resolve_waiting_request_response
-from app.services.session_compaction_service import compact_session_context_response
-from app.services.llm_config_service import build_llm_client, resolve_llm_config
-from app.services.transcript_service import (
-    close_open_blocks,
-    create_user_message_turn,
-    bump_transcript_revision,
-    mark_turn_terminal,
+from app.services.session_compaction_service import (
+    apply_session_context_compaction,
+    execute_session_context_compaction,
+    prepare_session_context_compaction,
 )
+from app.services.llm_config_service import build_llm_client, resolve_llm_config
+from app.services.transcript_service import create_user_message_turn
 from lamtools_core.runtime import RuntimeState, default_runtime_task_registry
 
 logger = logging.getLogger(__name__)
-
-def _is_llm_auth_error(exc: BaseException) -> bool:
-    text = str(exc).lower()
-    return "401" in text or "authentication" in text or "api key" in text or "unauthorized" in text
-
 
 def _with_shallow_thinking_client(client: Any, enabled: bool | None) -> Any:
     if not enabled:
@@ -119,52 +115,6 @@ def _model_context_from_resolved(
     return {key: value for key, value in context.items() if value not in {"", None}}
 
 
-class _FallbackLLMClient:
-    """Use an agent-specific model first, then fall back to Writer's model on auth/config failure."""
-
-    def __init__(self, primary: Any, fallback: Any) -> None:
-        self._primary = primary
-        self._fallback = fallback
-        for attr in (
-            "api_type",
-            "base_url",
-            "model_id",
-            "temperature",
-            "max_tokens",
-            "adapter_profile",
-            "api_key",
-        ):
-            if hasattr(primary, attr):
-                setattr(self, attr, getattr(primary, attr))
-
-    async def chat_full(self, *args: Any, **kwargs: Any) -> Any:
-        try:
-            return await self._primary.chat_full(*args, **kwargs)
-        except Exception as exc:
-            if not _is_llm_auth_error(exc):
-                raise
-            logger.warning("SubAgent primary LLM failed authentication; falling back to Writer model: %s", exc)
-            return await self._fallback.chat_full(*args, **kwargs)
-
-    async def complete(self, *args: Any, **kwargs: Any) -> Any:
-        try:
-            return await self._primary.complete(*args, **kwargs)
-        except Exception as exc:
-            if not _is_llm_auth_error(exc):
-                raise
-            logger.warning("SubAgent primary Core LLM failed authentication; falling back to Writer model: %s", exc)
-            return await self._fallback.complete(*args, **kwargs)
-
-    def stream(self, *args: Any, **kwargs: Any) -> Any:
-        try:
-            return self._primary.stream(*args, **kwargs)
-        except Exception as exc:
-            if not _is_llm_auth_error(exc):
-                raise
-            logger.warning("SubAgent primary LLM stream failed authentication; falling back to Writer model: %s", exc)
-            return self._fallback.stream(*args, **kwargs)
-
-
 class _WriterCoreStateStore:
     """Persist Core runtime state inside the existing Writer session state."""
 
@@ -195,7 +145,11 @@ class _WriterCoreStateStore:
         await self._store.save(writer_state)
 
 
-def writer_orchestrate(settings: Settings) -> dict[str, Any]:
+def writer_orchestrate(
+    settings: Settings,
+    *,
+    config_session_factory: Any | None = None,
+) -> dict[str, Any]:
     """Create the Writer service with closure-based DI.
 
     Returns a dict of async service functions:
@@ -208,11 +162,20 @@ def writer_orchestrate(settings: Settings) -> dict[str, Any]:
     # Keep runtime state in the same database selected by this service's
     # settings. Tests and alternate Writer instances pass their own DB URL; the
     # state store must not fall back to the desktop default database.
-    state_engine = create_async_engine(settings.database_url, echo=settings.debug)
+    state_engine = create_async_engine(settings.database_url, echo=settings.debug, poolclass=NullPool)
+    if state_engine.url.get_backend_name().startswith("sqlite"):
+        configure_sqlite_engine(state_engine)
     state_session_factory = async_sessionmaker(state_engine, expire_on_commit=False)
-    app_projection_sink = AppProjectionSink(database_url=settings.database_url, debug=settings.debug)
-    state_store = WriterStateStore(state_session_factory)
+    writer_coordinator = writer_write_coordinator(state_session_factory)
+    app_projection_sink = AppProjectionSink(
+        database_url=settings.database_url,
+        debug=settings.debug,
+        session_factory=state_session_factory,
+        write_coordinator=writer_coordinator,
+    )
+    state_store = WriterStateStore(state_session_factory, write_coordinator=writer_coordinator)
     core_state_store = _WriterCoreStateStore(state_store)
+    effective_config_session_factory = config_session_factory or shared_config_session
     git_manager = WriterGitManager()
     checkpoint_service = WriterCheckpointService(
         git_manager=git_manager,
@@ -229,10 +192,12 @@ def writer_orchestrate(settings: Settings) -> dict[str, Any]:
         db: AsyncSession,
         model_id: str | None = None,
     ):
-        if model_id is None:
-            resolved = await resolve_llm_config(db, "writer")
-        else:
-            resolved = await resolve_llm_config(db, "writer", model_id=model_id)
+        _ = db
+        async with effective_config_session_factory() as config_db:
+            if model_id is None:
+                resolved = await resolve_llm_config(config_db, "writer")
+            else:
+                resolved = await resolve_llm_config(config_db, "writer", model_id=model_id)
         if resolved is None:
             raise RuntimeError("No LLM provider/model configured in DB")
         return resolved
@@ -272,15 +237,16 @@ def writer_orchestrate(settings: Settings) -> dict[str, Any]:
         shallow_thinking_enabled: bool | None = None,
     ):
         model_override = str(call.options.get("model") or definition.model or "").strip()
-        if model_override:
-            resolved = await resolve_llm_config(db, "sub_agent", model_id=model_override)
-        else:
-            resolved = await resolve_llm_config(db, "sub_agent")
-        if resolved is None:
-            resolved = await resolve_llm_config(db, "sub_agent")
-        if resolved is None:
-            raise RuntimeError("No LLM provider/model configured in DB")
-        primary = _with_shallow_thinking_client(
+        async with effective_config_session_factory() as config_db:
+            if model_override:
+                resolved = await resolve_llm_config(config_db, "sub_agent", model_id=model_override)
+            else:
+                resolved = await resolve_llm_config(config_db, "sub_agent")
+            if resolved is None:
+                resolved = await resolve_llm_config(config_db, "sub_agent")
+            if resolved is None:
+                raise RuntimeError("No LLM provider/model configured in DB")
+        return _with_shallow_thinking_client(
             build_llm_client(
                 resolved,
                 thinking_enabled=thinking_enabled,
@@ -288,38 +254,12 @@ def writer_orchestrate(settings: Settings) -> dict[str, Any]:
             ),
             shallow_thinking_enabled,
         )
-        writer_resolved = await resolve_llm_config(db, "writer")
-        if writer_resolved is None or writer_resolved.model.id == resolved.model.id:
-            return primary
-        fallback = _with_shallow_thinking_client(
-            build_llm_client(
-                writer_resolved,
-                thinking_enabled=thinking_enabled,
-                thinking_budget=thinking_budget,
-            ),
-            shallow_thinking_enabled,
-        )
-        return _FallbackLLMClient(primary, fallback)
 
     # --- Service functions ---
 
     async def _runtime_controls(db: AsyncSession) -> dict[str, dict[str, Any]]:
-        setting = await db.get(AppSetting, "lamwriter.runtimeControls")
-        value = setting.value if setting is not None and isinstance(setting.value, dict) else {}
-        agents = value.get("agents") if isinstance(value.get("agents"), dict) else {}
-        tools = value.get("tools") if isinstance(value.get("tools"), dict) else {}
-        command_policies = value.get("command_policies") if isinstance(value.get("command_policies"), dict) else {}
-        normalized_command_policies = dict(WRITER_DEFAULT_COMMAND_POLICIES)
-        normalized_command_policies.update({
-            str(k): str(v)
-            for k, v in command_policies.items()
-            if k in {"regular", "dangerous"} and v in {"auto_allow", "ask_user"}
-        })
-        return {
-            "agents": {str(k): bool(v) for k, v in agents.items()},
-            "tools": {str(k): bool(v) for k, v in tools.items()},
-            "command_policies": normalized_command_policies,
-        }
+        async with effective_config_session_factory() as shared_db:
+            return await runtime_controls(db, shared_db=shared_db)
 
     runtime_runner = WriterRuntimeRunner(
         app_projection_sink=app_projection_sink,
@@ -330,6 +270,7 @@ def writer_orchestrate(settings: Settings) -> dict[str, Any]:
         summarize_result=summarize_kernel_result,
         schedule_prewarm=schedule_writer_startup_prewarm,
         runtime_task_registry=default_runtime_task_registry,
+        write_coordinator=writer_coordinator,
     )
 
     async def create_session(
@@ -351,10 +292,11 @@ def writer_orchestrate(settings: Settings) -> dict[str, Any]:
             open_loops=[],
             context_summary="",
         )
-        db.add(session)
-        await db.commit()
-        await db.refresh(session)
-        return _session_to_dict(session)
+        async def write(write_db: AsyncSession):
+            write_db.add(session)
+            await write_db.flush()
+            return _session_to_dict(session)
+        return await writer_coordinator.run(write)
 
     async def list_sessions(
         db: AsyncSession,
@@ -394,58 +336,34 @@ def writer_orchestrate(settings: Settings) -> dict[str, Any]:
         **kwargs: Any,
     ) -> dict[str, Any] | None:
         """Update a session."""
-        session = await db.get(WriterSession, session_id)
-        if session is None:
-            return None
-
-        for key, value in kwargs.items():
-            if value is not None and hasattr(session, key):
-                setattr(session, key, value)
-
-        session.updated_at = datetime.now(timezone.utc)
-        await db.commit()
-        await db.refresh(session)
-        return _session_to_dict(session)
+        async def write(write_db: AsyncSession):
+            session = await write_db.get(WriterSession, session_id)
+            if session is None:
+                return None
+            for key, value in kwargs.items():
+                if value is not None and hasattr(session, key):
+                    setattr(session, key, value)
+            session.updated_at = datetime.now(timezone.utc)
+            await write_db.flush()
+            return _session_to_dict(session)
+        return await writer_coordinator.run(write)
 
     async def delete_session(db: AsyncSession, session_id: str) -> None:
         """Delete a session and its messages."""
-        session = await db.get(WriterSession, session_id)
-        if session is not None:
-            await db.delete(session)
-            await db.commit()
-        # Also clean up state store
-        await state_store.delete(session_id)
-
-    def _core_kernel_session_status(decision: str) -> str:
-        if decision == "done":
-            return "completed"
-        if decision == "wait":
-            return "waiting"
-        if decision == "failed":
-            return "failed"
-        return "active"
+        async def write(write_db: AsyncSession):
+            session = await write_db.get(WriterSession, session_id)
+            if session is not None:
+                await write_db.delete(session)
+        await writer_coordinator.run(write)
+        state_store._cache.pop(session_id, None)
 
     def _mark_session_executing(session: WriterSession) -> None:
         session.status = "active"
         session.phase = "executing"
         session.updated_at = datetime.now(timezone.utc)
 
-    def _apply_kernel_summary_to_session(session: WriterSession, summary: dict[str, Any]) -> str:
-        decision = str(summary.get("decision") or "")
-        session.status = "failed" if summary.get("error") == "cancelled" else _core_kernel_session_status(decision)
-        if decision == "done":
-            session.phase = "completed"
-        elif decision == "failed":
-            session.phase = "failed"
-        elif decision == "wait":
-            session.phase = "waiting"
-        else:
-            session.phase = "executing"
-        session.updated_at = datetime.now(timezone.utc)
-        return decision
-
     async def _run_core_kernel_path(
-        db: AsyncSession,
+        db: AsyncSession | None,
         session_id: str,
         transcript_turn_id: str,
         user_message: str,
@@ -486,10 +404,8 @@ def writer_orchestrate(settings: Settings) -> dict[str, Any]:
             llm_client=llm_client,
             work_root=work_root,
             runtime_controls=runtime_controls,
-            sub_agent_llm_client_factory=lambda definition, call: _resolve_sub_agent_llm_client(
-                db,
-                definition,
-                call,
+            sub_agent_llm_client_factory=lambda definition, call: _resolve_sub_agent_for_runtime(
+                definition, call,
                 thinking_enabled=thinking_enabled,
                 thinking_budget=thinking_budget,
                 shallow_thinking_enabled=shallow_thinking_enabled,
@@ -497,10 +413,14 @@ def writer_orchestrate(settings: Settings) -> dict[str, Any]:
             model_context=model_context,
         )
 
+    async def _resolve_sub_agent_for_runtime(definition, call, **options):
+        async with state_session_factory() as read_db:
+            return await _resolve_sub_agent_llm_client(read_db, definition, call, **options)
+
     async def run_turn(
-        db: AsyncSession,
-        session_id: str,
-        user_message: str,
+        db: AsyncSession | None = None,
+        session_id: str = "",
+        user_message: str = "",
         thinking_enabled: bool | None = None,
         thinking_budget: int | None = None,
         shallow_thinking_enabled: bool | None = None,
@@ -510,59 +430,65 @@ def writer_orchestrate(settings: Settings) -> dict[str, Any]:
         transcript_turn_id: str | None = None,
     ) -> None:
         """Run Writer for one transcript turn."""
-        # 0. Load session
-        session = await db.get(WriterSession, session_id)
-        if session is None:
-            raise ValueError("Session not found")
-
-        work_root = session.work_root or settings.writer_work_root
-        _mark_session_executing(session)
-        await db.commit()
-        try:
+        caller_db = db
+        async def prepare(write_db: AsyncSession):
+            session = await write_db.get(WriterSession, session_id)
+            if session is None:
+                raise ValueError("Session not found")
+            _mark_session_executing(session)
+            transcript_turn = await write_db.get(WriterTranscriptTurn, transcript_turn_id) if transcript_turn_id else None
+            actual_user_message_id = user_message_id
             if transcript_turn_id:
-                await checkpoint_service.checkpoint_if_dirty(
-                    db,
-                    session,
-                    reason="本轮开始前自动存档",
-                    turn_id=transcript_turn_id,
-                    stage="before_turn",
-                )
+                if transcript_turn is None or transcript_turn.session_id != session_id:
+                    raise RuntimeError("App-server transcript turn does not exist for this session")
+                if actual_user_message_id:
+                    existing = await write_db.get(WriterMessage, actual_user_message_id)
+                    if existing is None or existing.session_id != session_id or existing.role != "user":
+                        raise RuntimeError("App-server user message does not exist for this session")
+                    if transcript_turn.user_message_id != actual_user_message_id:
+                        raise RuntimeError("App-server user message does not match transcript turn")
+                else:
+                    actual_user_message_id = transcript_turn.user_message_id
             else:
-                await checkpoint_service.checkpoint_if_dirty(db, session, reason="本轮开始前自动存档")
-            await db.refresh(session)
+                transcript_turn, message = await create_user_message_turn(
+                    write_db,
+                    session_id=session_id,
+                    user_text=user_message,
+                    message_id=actual_user_message_id,
+                    message_parts={"attachments": attachment_ids} if attachment_ids else None,
+                    attachment_ids=attachment_ids,
+                )
+                actual_user_message_id = message.id
+            return {
+                "turn_id": transcript_turn.id,
+                "work_root": session.work_root or settings.writer_work_root,
+                "user_message_id": actual_user_message_id,
+            }
+
+        prepared = await writer_coordinator.run(prepare)
+        work_root = prepared["work_root"]
+        try:
+            checkpoint = await checkpoint_service.create_checkpoint_if_dirty(
+                session_id=session_id,
+                work_root=work_root,
+                reason="本轮开始前自动存档",
+                turn_id=prepared["turn_id"],
+                stage="before_turn",
+            )
+            if checkpoint is not None:
+                await writer_coordinator.run(
+                    lambda write_db: checkpoint_service.persist_checkpoint(
+                        write_db, session_id=session_id, record=checkpoint,
+                    )
+                )
         except Exception:
             logger.debug("Unexpected error during pre-run Writer checkpoint for session %s", session_id, exc_info=True)
-
-        transcript_turn = await db.get(WriterTranscriptTurn, transcript_turn_id) if transcript_turn_id else None
-        if transcript_turn_id:
-            if transcript_turn is None or transcript_turn.session_id != session_id:
-                raise RuntimeError("App-server transcript turn does not exist for this session")
-            if user_message_id:
-                existing_user_msg = await db.get(WriterMessage, user_message_id)
-                if (
-                    existing_user_msg is None
-                    or existing_user_msg.session_id != session_id
-                    or existing_user_msg.role != "user"
-                ):
-                    raise RuntimeError("App-server user message does not exist for this session")
-                if transcript_turn.user_message_id != user_message_id:
-                    raise RuntimeError("App-server user message does not match transcript turn")
-            elif transcript_turn.user_message_id:
-                user_message_id = transcript_turn.user_message_id
-            else:
-                raise RuntimeError("App-server transcript turn is missing its user message")
-        else:
-            transcript_turn, _user_msg = await create_user_message_turn(
-                db,
-                session_id=session_id,
-                user_text=user_message,
-                message_id=user_message_id,
-                message_parts={"attachments": attachment_ids} if attachment_ids else None,
-                attachment_ids=attachment_ids,
+        async with state_session_factory() as read_db:
+            resolved_config = await _resolve_writer_llm_config(read_db, model_id=model_id)
+            attachment_context, user_content_blocks = await _session_attachment_input(
+                read_db, session_id, attachment_ids or [],
             )
-            await db.commit()
-
-        resolved_config = await _resolve_writer_llm_config(db, model_id=model_id)
+            controls = await _runtime_controls(read_db)
         resolved_client = build_llm_client(
             resolved_config,
             thinking_enabled=thinking_enabled,
@@ -575,28 +501,27 @@ def writer_orchestrate(settings: Settings) -> dict[str, Any]:
             thinking_budget=thinking_budget,
             shallow_thinking_enabled=shallow_thinking_enabled,
         )
-        attachment_context, user_content_blocks = await _session_attachment_input(
-            db,
-            session_id,
-            attachment_ids or [],
-        )
         runtime_user_message = user_message + attachment_context
-
-        summary = await _run_core_kernel_path(
-            db=db,
-            session_id=session_id,
-            transcript_turn_id=transcript_turn.id,
-            user_message=runtime_user_message,
-            raw_user_message=user_message,
-            user_content_blocks=user_content_blocks,
-            llm_client=resolved_client,
-            work_root=work_root,
-            runtime_controls=await _runtime_controls(db),
-            thinking_enabled=thinking_enabled,
-            thinking_budget=thinking_budget,
-            shallow_thinking_enabled=shallow_thinking_enabled,
-            model_context=model_context,
-        )
+        try:
+            summary = await _run_core_kernel_path(
+                db=None,
+                session_id=session_id,
+                transcript_turn_id=prepared["turn_id"],
+                user_message=runtime_user_message,
+                raw_user_message=user_message,
+                user_content_blocks=user_content_blocks,
+                llm_client=resolved_client,
+                work_root=work_root,
+                runtime_controls=controls,
+                thinking_enabled=thinking_enabled,
+                thinking_budget=thinking_budget,
+                shallow_thinking_enabled=shallow_thinking_enabled,
+                model_context=model_context,
+            )
+        except BaseException:
+            if caller_db is not None:
+                caller_db.expire_all()
+            raise
         # _run_core_kernel_path stores the final visible assistant message
         # when the kernel returns one. If it fails before that point, persist
         # the visible error here so the user is not left with a silent run.
@@ -608,147 +533,80 @@ def writer_orchestrate(settings: Settings) -> dict[str, Any]:
             decision = str(summary.get("decision") or "")
             if decision != "done":
                 standalone_content = str(summary.get("message") or summary.get("error") or "").strip()
-        if standalone_content:
-            assistant_msg = WriterMessage(
-                id=gen_uuid(),
-                session_id=session_id,
-                role="assistant",
-                content=standalone_content,
-                parts={"core_kernel_summary": summary},
-            )
-            db.add(assistant_msg)
-        _apply_kernel_summary_to_session(session, summary)
-        await db.commit()
+        async def finish(write_db: AsyncSession):
+            session = await write_db.get(WriterSession, session_id)
+            if session is None:
+                raise ValueError("Session not found")
+            if standalone_content:
+                write_db.add(WriterMessage(
+                    id=gen_uuid(), session_id=session_id, role="assistant",
+                    content=standalone_content, parts={"core_kernel_summary": summary},
+                ))
+        await writer_coordinator.run(finish)
+        if caller_db is not None:
+            caller_db.expire_all()
 
-    async def respond_waiting_request(
-        db: AsyncSession,
-        session_id: str,
-        block_id: str,
-        action: str,
-        response: str = "",
-    ) -> dict[str, Any]:
-        """Resolve a persisted user gate and continue the same transcript turn."""
-        session = await db.get(WriterSession, session_id)
-        if session is None:
-            raise ValueError("Session not found")
-        block = await db.get(WriterTranscriptBlock, block_id)
-        if block is None or block.turn_id is None:
-            raise ValueError("Waiting request not found")
-        turn = await db.get(WriterTranscriptTurn, block.turn_id)
-        if turn is None or turn.session_id != session_id:
-            raise ValueError("Waiting request does not belong to this session")
-        if block.type != "waiting_request" or block.completed_at is not None:
-            raise ValueError("Waiting request is not open")
-
-        resolved_request = await resolve_waiting_request_response(
-            db,
+    async def create_approval_coordinator(session_id: str) -> CoreApprovalContinuationCoordinator:
+        """Supply Writer-specific adapters to Core's approval operation."""
+        state = await core_state_store.get(session_id)
+        if state is None or not state.run_id:
+            raise ValueError("Runtime state not found")
+        async with state_session_factory() as read_db:
+            session = await read_db.get(WriterSession, session_id)
+            turn = await read_db.get(WriterTranscriptTurn, state.run_id)
+        if session is None or turn is None or turn.session_id != session_id:
+            raise ValueError("Approval turn not found")
+        state.metadata.setdefault("original_user_message", turn.user_text)
+        await core_state_store.save(state)
+        recorder = RuntimeFactRecorder(
             session_id=session_id,
-            turn=turn,
-            block=block,
-            action=action,
-            response=response,
-            state_store=core_state_store,
+            turn_id=turn.id,
+            app_projection_sink=app_projection_sink,
+            write_coordinator=writer_coordinator,
         )
-        normalized_action = resolved_request.action
-        guidance_text = resolved_request.guidance_text
+        work_root = session.work_root or settings.writer_work_root
 
-        if normalized_action == "deny":
-            await mark_turn_terminal(
-                db,
-                turn=turn,
-                reason="user_denied_permission",
-                error="用户拒绝执行需要授权的工具调用。",
-            )
-            session.status = "failed"
-            session.phase = "failed"
-            session.updated_at = datetime.now(timezone.utc)
-            await db.commit()
-            return {"status": "failed", "decision": "deny"}
-
-        if normalized_action == "guide":
-            resolved_client = await _resolve_llm_client(db)
-            work_root = session.work_root or settings.writer_work_root
-            continuation = guidance_continuation_prompt(
-                turn=turn,
-                block=block,
-                guidance_text=guidance_text,
-            )
-            _mark_session_executing(session)
-            await db.commit()
-            summary = await _run_core_kernel_path(
-                db=db,
+        async def continue_turn(prompt: str, _state: RuntimeState) -> None:
+            async with state_session_factory() as read_db:
+                resolved_client = await _resolve_llm_client(read_db)
+                controls = await _runtime_controls(read_db)
+            await _run_core_kernel_path(
+                db=None,
                 session_id=session_id,
                 transcript_turn_id=turn.id,
-                user_message=continuation,
+                user_message=prompt,
                 raw_user_message=turn.user_text,
                 llm_client=resolved_client,
                 work_root=work_root,
-                runtime_controls=await _runtime_controls(db),
+                runtime_controls=controls,
             )
-            decision = _apply_kernel_summary_to_session(session, summary)
-            await db.commit()
-            return {"status": session.status, "decision": normalized_action, "run_decision": decision}
 
-        if block.request_kind != "permission":
-            return {"status": "recorded", "decision": normalized_action}
-
-        if (block.tool_name or "") not in APPROVABLE_TOOL_NAMES:
-            return {"status": "recorded", "decision": normalized_action}
-
-        work_root = session.work_root or settings.writer_work_root
-        approved_tool = await execute_approved_waiting_tool(db, turn=turn, block=block, work_root=work_root)
-
-        if not approved_tool.completed:
-            await mark_turn_terminal(
-                db,
-                turn=turn,
-                reason="approved_tool_failed",
-                error=approved_tool.tool_content or "已批准的工具执行失败。",
-            )
-            session.status = "failed"
-            session.phase = "failed"
-            session.updated_at = datetime.now(timezone.utc)
-            await db.commit()
-            return {"status": "failed", "decision": "approve"}
-
-        resolved_client = await _resolve_llm_client(db)
-        continuation = approved_tool_continuation_prompt(
-            turn=turn,
-            approved_tool=approved_tool,
+        return CoreApprovalContinuationCoordinator(
+            state_store=core_state_store,
+            emit_event=recorder.record_core_event,
+            execute_tool=lambda tool_call: execute_approved_tool(tool_call, work_root=work_root),
+            continue_turn=continue_turn,
         )
-        _mark_session_executing(session)
-        await db.commit()
-        summary = await _run_core_kernel_path(
-            db=db,
-            session_id=session_id,
-            transcript_turn_id=turn.id,
-            user_message=continuation,
-            raw_user_message=turn.user_text,
-            llm_client=resolved_client,
-            work_root=work_root,
-            runtime_controls=await _runtime_controls(db),
-        )
-        decision = _apply_kernel_summary_to_session(session, summary)
-        await db.commit()
-        return {"status": session.status, "decision": normalized_action, "run_decision": decision}
 
     async def compact_session_context(
-        db: AsyncSession,
+        db: AsyncSession | None = None,
         *,
         session_id: str,
         on_summary_delta: Any | None = None,
     ) -> dict[str, Any]:
+        del db
         loop_policy = LoopPolicy()
-        resolved_config = await _resolve_writer_llm_config(db)
+        async with state_session_factory() as read_db:
+            resolved_config = await _resolve_writer_llm_config(read_db)
+            plan = await prepare_session_context_compaction(read_db, session_id=session_id)
         resolved_client = WriterLLMClientAdapter(writer_client=build_llm_client(resolved_config))
         model_context = _model_context_from_resolved(
             resolved_config,
             thinking_enabled=None,
             thinking_budget=None,
         )
-        return await compact_session_context_response(
-            db,
-            session_id=session_id,
+        _result, payload = await execute_session_context_compaction(
+            plan,
             llm_client=resolved_client,
             model=str(model_context.get("model") or ""),
             on_summary_delta=on_summary_delta,
@@ -756,6 +614,13 @@ def writer_orchestrate(settings: Settings) -> dict[str, Any]:
             model_timeout_seconds=loop_policy.model_timeout_seconds,
             retry_policy=RetryPolicy(),
         )
+        return await writer_coordinator.run(
+            lambda write_db: apply_session_context_compaction(write_db, plan=plan, payload=payload)
+        )
+
+    async def close() -> None:
+        await app_projection_sink.close()
+        await state_engine.dispose()
 
     # --- Return service dict ---
 
@@ -766,8 +631,9 @@ def writer_orchestrate(settings: Settings) -> dict[str, Any]:
         "update_session": update_session,
         "delete_session": delete_session,
         "run_turn": run_turn,
-        "respond_waiting_request": respond_waiting_request,
+        "create_approval_coordinator": create_approval_coordinator,
         "compact_session_context": compact_session_context,
+        "close": close,
     }
 
 

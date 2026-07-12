@@ -42,7 +42,7 @@ test('startTurn sends text plus attachment input items', async () => {
   const store = useWriterAppServerStore()
   const calls: Array<{ method: string; params: Record<string, unknown> }> = []
 
-  store.client = {
+  store.runtime.client = {
     request: async (method: string, params: Record<string, unknown>) => {
       calls.push({ method, params })
       return { snapshot: snapshot(1, 'running') }
@@ -66,7 +66,7 @@ test('startTurn transports shallow thinking mode separately from native thinking
   const store = useWriterAppServerStore()
   const calls: Array<{ method: string; params: Record<string, unknown> }> = []
 
-  store.client = {
+  store.runtime.client = {
     request: async (method: string, params: Record<string, unknown>) => {
       calls.push({ method, params })
       return { snapshot: snapshot(1, 'running') }
@@ -90,7 +90,7 @@ test('store transports skill input items and command operations', async () => {
   const store = useWriterAppServerStore()
   const calls: Array<{ method: string; params: Record<string, unknown> }> = []
 
-  store.client = {
+  store.runtime.client = {
     request: async (method: string, params: Record<string, unknown>) => {
       calls.push({ method, params })
       if (method === 'command.catalog') return { commands: [{ name: 'compact', action: 'run_action' }] }
@@ -122,7 +122,7 @@ test('queueInput transports skill input items without flattening them to text', 
   const store = useWriterAppServerStore()
   const calls: Array<{ method: string; params: Record<string, unknown> }> = []
 
-  store.client = {
+  store.runtime.client = {
     request: async (method: string, params: Record<string, unknown>) => {
       calls.push({ method, params })
       return { snapshot: snapshot(3, 'running') }

@@ -1,16 +1,77 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+from typing import Any, TypeVar
+from weakref import WeakValueDictionary
+
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
-from .config import settings
-
-engine = create_async_engine(
-    settings.database_url,
-    echo=settings.debug,
+from lamtools_core.app.sqlite_write import (
+    SQLiteWriteCoordinator,
+    configure_sqlite_engine,
+    database_identity,
 )
+
+from .config import SHARED_CONFIG_TABLES, SHARED_SETTING_NAMESPACES, SHARED_SETTING_PREFIXES, settings
+
+T = TypeVar("T")
+WriterWriteAction = Callable[[AsyncSession], Awaitable[T]]
+
+
+def create_writer_engine(
+    database_url: str,
+    *,
+    debug: bool = False,
+    poolclass: type | None = None,
+) -> AsyncEngine:
+    options: dict[str, Any] = {"echo": debug}
+    if poolclass is not None:
+        options["poolclass"] = poolclass
+    engine = create_async_engine(database_url, **options)
+    if engine.url.get_backend_name().startswith("sqlite"):
+        configure_sqlite_engine(engine)
+    return engine
+
+
+engine = create_writer_engine(settings.database_url, debug=settings.debug)
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+_WRITER_WRITE_COORDINATORS: WeakValueDictionary[str, SQLiteWriteCoordinator] = WeakValueDictionary()
+
+
+def writer_write_coordinator(session_factory: Any = async_session) -> SQLiteWriteCoordinator:
+    identity = database_identity(session_factory)
+    coordinator = _WRITER_WRITE_COORDINATORS.get(identity)
+    if coordinator is None:
+        coordinator = SQLiteWriteCoordinator(session_factory, identity=identity)
+        _WRITER_WRITE_COORDINATORS[identity] = coordinator
+    return coordinator
+
+
+async def writer_write(
+    action: WriterWriteAction[T],
+    *,
+    session_factory: Any = async_session,
+) -> T:
+    return await writer_write_coordinator(session_factory).run(action)
+
+
+def get_writer_write():
+    return writer_write
+
+
+async def execute_writer_write(
+    db: AsyncSession,
+    action: WriterWriteAction[T],
+    write_transaction: Any = None,
+) -> T:
+    if callable(write_transaction):
+        return await write_transaction(action)
+    result = await action(db)
+    await db.commit()
+    return result
 
 
 class Base(DeclarativeBase):
@@ -192,27 +253,6 @@ async def _migrate_sqlite_schema(conn) -> None:
         """,
     )
     await create_table(
-        "writer_queued_inputs",
-        """
-        CREATE TABLE writer_queued_inputs (
-            id VARCHAR(36) PRIMARY KEY,
-            session_id VARCHAR(36) NOT NULL,
-            text TEXT DEFAULT '',
-            mode VARCHAR(50) DEFAULT 'next_turn',
-            status VARCHAR(50) DEFAULT 'queued',
-            position INTEGER NOT NULL,
-            target_turn_id VARCHAR(36),
-            created_at DATETIME,
-            updated_at DATETIME,
-            dispatching_at DATETIME,
-            dispatched_at DATETIME,
-            consumed_at DATETIME,
-            error TEXT,
-            metadata JSON
-        )
-        """,
-    )
-    await create_table(
         "writer_app_events",
         """
         CREATE TABLE writer_app_events (
@@ -239,23 +279,6 @@ async def _migrate_sqlite_schema(conn) -> None:
             snapshot_seq INTEGER NOT NULL DEFAULT 0,
             snapshot_json JSON NOT NULL,
             updated_at DATETIME NOT NULL
-        )
-        """,
-    )
-    await create_table(
-        "writer_app_requests",
-        """
-        CREATE TABLE writer_app_requests (
-            request_id VARCHAR(64) PRIMARY KEY,
-            thread_id VARCHAR(36) NOT NULL,
-            turn_id VARCHAR(64),
-            item_id VARCHAR(128),
-            kind VARCHAR(50) NOT NULL,
-            status VARCHAR(50) NOT NULL DEFAULT 'open',
-            options_json JSON,
-            response_json JSON,
-            created_at DATETIME NOT NULL,
-            resolved_at DATETIME
         )
         """,
     )
@@ -288,15 +311,25 @@ async def _migrate_sqlite_schema(conn) -> None:
         "CREATE INDEX IF NOT EXISTS idx_writer_active_producers_turn_closed ON writer_active_producers(turn_id, closed_at)",
         "CREATE INDEX IF NOT EXISTS idx_writer_transcript_artifacts_turn ON writer_transcript_artifacts(turn_id)",
         "CREATE INDEX IF NOT EXISTS idx_writer_transcript_artifacts_block ON writer_transcript_artifacts(block_id)",
-        "CREATE INDEX IF NOT EXISTS idx_writer_queued_inputs_session_status_position ON writer_queued_inputs(session_id, status, position)",
-        "CREATE INDEX IF NOT EXISTS idx_writer_queued_inputs_target_status ON writer_queued_inputs(target_turn_id, status)",
-        "CREATE INDEX IF NOT EXISTS idx_writer_queued_inputs_session_mode_status ON writer_queued_inputs(session_id, mode, status)",
         "CREATE INDEX IF NOT EXISTS idx_writer_app_events_thread_seq ON writer_app_events(thread_id, seq)",
         "CREATE INDEX IF NOT EXISTS idx_writer_app_events_thread_turn_seq ON writer_app_events(thread_id, turn_id, seq)",
         "CREATE INDEX IF NOT EXISTS idx_writer_app_events_thread_item_seq ON writer_app_events(thread_id, item_id, seq)",
         "CREATE INDEX IF NOT EXISTS idx_writer_app_events_client_message ON writer_app_events(client_message_id)",
-        "CREATE INDEX IF NOT EXISTS idx_writer_app_requests_thread_status ON writer_app_requests(thread_id, status)",
         "CREATE INDEX IF NOT EXISTS idx_writer_artifacts_thread_item ON writer_artifacts(thread_id, item_id)",
     ]
     for statement in transcript_indexes:
         await conn.execute(text(statement))
+
+    for table in SHARED_CONFIG_TABLES:
+        await conn.execute(text(f"DROP TABLE IF EXISTS {table}"))
+    if await table_exists("app_settings"):
+        for namespace in SHARED_SETTING_NAMESPACES:
+            await conn.execute(
+                text("DELETE FROM app_settings WHERE namespace = :namespace"),
+                {"namespace": namespace},
+            )
+        for prefix in SHARED_SETTING_PREFIXES:
+            await conn.execute(
+                text("DELETE FROM app_settings WHERE namespace LIKE :prefix"),
+                {"prefix": f"{prefix}%"},
+            )

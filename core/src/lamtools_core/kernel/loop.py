@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import copy
 import asyncio
-import inspect
 import json
 import re
 import uuid
@@ -36,9 +35,16 @@ from lamtools_core.llm.retry import (
     ModelRetryExhausted,
     classify_model_error,
     complete_with_retry,
+    stream_with_retry,
 )
 from lamtools_core.plugins import HookEvent
-from lamtools_core.runtime import RuntimeState, RuntimeStateStore, RuntimeToolStep, RuntimeTurnInput
+from lamtools_core.runtime import (
+    RuntimeCheckpointStore,
+    RuntimeState,
+    RuntimeStateStore,
+    RuntimeToolStep,
+    RuntimeTurnInput,
+)
 from lamtools_core.tokens import estimate_message_tokens, estimate_text_tokens
 from lamtools_core.tool import ToolCall, ToolResult
 
@@ -57,8 +63,7 @@ def _message_reference_ids(messages: list[ChatMessage]) -> list[str]:
     for message in messages:
         metadata = message.metadata if isinstance(message.metadata, dict) else {}
         raw_id = (
-            metadata.get("writer_message_id")
-            or metadata.get("message_id")
+            metadata.get("message_id")
             or metadata.get("id")
         )
         message_id = str(raw_id or "").strip()
@@ -79,6 +84,49 @@ def _status_from_decision(decision: LoopDecision) -> str:
         "failed": "failed",
     }
     return mapping.get(decision, "failed")
+
+
+def _chat_message_from_dict(value: Any) -> ChatMessage | None:
+    if not isinstance(value, dict):
+        return None
+    role = str(value.get("role") or "")
+    if role not in {"system", "user", "assistant", "tool"}:
+        return None
+    raw_tool_calls = value.get("tool_calls") if isinstance(value.get("tool_calls"), list) else []
+    tool_calls = []
+    for raw in raw_tool_calls:
+        if not isinstance(raw, dict):
+            continue
+        tool_calls.append(
+            LLMToolCall(
+                id=str(raw.get("id") or ""),
+                name=str(raw.get("name") or ""),
+                arguments=raw.get("arguments") if isinstance(raw.get("arguments"), (dict, str)) else {},
+                metadata=dict(raw.get("metadata") or {}),
+            )
+        )
+    content = value.get("content")
+    if not isinstance(content, (str, list)):
+        content = ""
+    return ChatMessage(
+        role=role,  # type: ignore[arg-type]
+        content=content,
+        name=str(value.get("name") or ""),
+        tool_call_id=str(value.get("tool_call_id") or ""),
+        tool_calls=tool_calls,
+        metadata=dict(value.get("metadata") or {}),
+    )
+
+
+@dataclass
+class _TurnScopedEventSink:
+    delegate: EventSink
+    turn_id: str
+
+    async def emit(self, event: CoreEvent) -> None:
+        if not event.turn_id:
+            event.turn_id = self.turn_id
+        await self.delegate.emit(event)
 
 
 @dataclass
@@ -116,6 +164,10 @@ class CoreLoopKernel:
     tracer: Tracer = field(default_factory=NoopTracer)
     hook_engine: Any | None = None
     _cancel_event: asyncio.Event = field(default_factory=asyncio.Event, init=False, repr=False)
+    _base_event_sink: EventSink = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self._base_event_sink = self.event_sink
 
     def cancel(self) -> None:
         """Signal the kernel to stop at the next loop iteration.
@@ -172,10 +224,15 @@ class CoreLoopKernel:
             else:
                 state = RuntimeState(session_id=session_id or _new_run_id())
 
+        history = await self._load_history(state.session_id)
+
         # Each user turn is a new run inside the same session. Persisted state
         # carries session memory and turn_count, but a stale run_id/status from
         # a crashed or failed prior run must not leak into the next run.
-        state.run_id = _new_run_id()
+        state.run_id = str(turn_input.run_id or "").strip() or _new_run_id()
+        turn_id = str(turn_input.turn_id or "").strip() or f"{state.session_id}:turn:{state.run_id}"
+        state.metadata["turn_id"] = turn_id
+        self.event_sink = _TurnScopedEventSink(self._base_event_sink, turn_id)
         state.loop_state = "continue"
         state.position = ""
 
@@ -191,8 +248,7 @@ class CoreLoopKernel:
         # 3. Kit on_run_start
         await self.kit.on_run_start(state, turn_input)
 
-        # 4. Initialize history with user input
-        history: list[ChatMessage] = []
+        # 4. Extend persisted conversation history with this user input.
         current_user_content = (
             turn_input.user_content
             if turn_input.user_content is not None
@@ -200,6 +256,7 @@ class CoreLoopKernel:
         )
         if current_user_content:
             history.append(ChatMessage(role="user", content=current_user_content))
+        await self._save_checkpoint(state, history)
 
         steps: list[KernelStep] = []
         latest_message = ""
@@ -228,6 +285,8 @@ class CoreLoopKernel:
                     final_decision = "failed"
                     break
 
+                await self._consume_guidance(state, turn_input, history, index)
+
                 # 5.2 Build context
                 # Pre-sampling history compaction (OpenAI-style): trim history
                 # to max_history_messages before build_context. Preserves
@@ -240,6 +299,7 @@ class CoreLoopKernel:
                     if cut > 0:
                         trimmed = len(history) - cut
                         del history[:cut]
+                        await self._save_checkpoint(state, history)
                         await self._emit_history_compacted(state, trimmed, len(history))
 
                 context = await self.kit.build_context(state, turn_input, history, index)
@@ -323,6 +383,7 @@ class CoreLoopKernel:
                             for call in turn.tool_calls
                         ],
                     ))
+                    await self._save_checkpoint(state, history)
 
                 # 5.8 Execute tool calls
                 tool_results: list[ToolResult] = []
@@ -338,13 +399,8 @@ class CoreLoopKernel:
                 ]
                 if approval_calls:
                     approval_call = approval_calls[0]
-                    await self._emit_tool_waiting_for_approval(
-                        state,
-                        approval_call,
-                        response_index=index,
-                    )
-                    await self._emit_approval_request(state, approval_call, response_index=index)
                     state.metadata["pending_approval"] = {
+                        "request_id": approval_call.id,
                         "tool_call": approval_call.to_dict(),
                         "response_index": index,
                     }
@@ -357,6 +413,13 @@ class CoreLoopKernel:
                         "message": self._approval_request_message(approval_call),
                     }
                     step.metadata["pending_approval"] = state.metadata["pending_approval"]
+                    await self._save_checkpoint(state, history)
+                    await self._emit_tool_waiting_for_approval(
+                        state,
+                        approval_call,
+                        response_index=index,
+                    )
+                    await self._emit_approval_request(state, approval_call, response_index=index)
                     decision = "wait"
                     step.decision = decision
                     final_decision = decision
@@ -366,7 +429,7 @@ class CoreLoopKernel:
                     if self.policy.persist_steps:
                         steps_log = state.metadata.setdefault("kernel_steps", [])
                         steps_log.append(self._summarize_step(step))
-                    await self.state_store.save(state)
+                    await self._save_checkpoint(state, history)
                     break
                 parallel_names = set(self.policy.parallel_tool_names)
                 can_parallelize_named_tools = (
@@ -401,6 +464,7 @@ class CoreLoopKernel:
                         await self._emit_tool_finished(state, call, result, response_index=index)
                         tool_message = await self.kit.format_tool_result_for_model(state, call, result)
                         history.append(tool_message)
+                        await self._save_checkpoint(state, history)
                 else:
                     # Sequential execution (OpenAI Codex default for shell-safety)
                     for call in turn.tool_calls:
@@ -415,6 +479,7 @@ class CoreLoopKernel:
                         # 5.9 Append formatted tool result to history
                         tool_message = await self.kit.format_tool_result_for_model(state, call, result)
                         history.append(tool_message)
+                        await self._save_checkpoint(state, history)
 
                 # 5.10 Verify (non-blocking: verification failure does NOT
                 #     trigger automatic repair retry. The model receives tool
@@ -444,6 +509,11 @@ class CoreLoopKernel:
                     step.metadata["done_without_final_text"] = True
                     state.metadata["done_without_final_text"] = True
 
+                if decision == "done" and not turn.tool_calls:
+                    if await self._consume_guidance(state, turn_input, history, index, finalize=True):
+                        decision = "continue"
+                        step.metadata["guidance_force_continue"] = True
+
                 step.decision = decision
                 final_decision = decision
 
@@ -463,7 +533,7 @@ class CoreLoopKernel:
                     steps_log.append(self._summarize_step(step))
 
                 # 5.13 Save state
-                await self.state_store.save(state)
+                await self._save_checkpoint(state, history)
 
                 # 5.14 Break on terminal decisions
                 if decision != "continue":
@@ -500,7 +570,7 @@ class CoreLoopKernel:
         if error_msg == "cancelled":
             state.status = "cancelled"
         state.loop_state = final_decision
-        await self.state_store.save(state)
+        await self._save_checkpoint(state, history)
 
         # Build result
         result = KernelResult(
@@ -538,6 +608,18 @@ class CoreLoopKernel:
 
         return result
 
+    async def _load_history(self, session_id: str) -> list[ChatMessage]:
+        if not isinstance(self.state_store, RuntimeCheckpointStore):
+            return []
+        raw_history = await self.state_store.get_history(session_id)
+        return [message for item in raw_history if (message := _chat_message_from_dict(item)) is not None]
+
+    async def _save_checkpoint(self, state: RuntimeState, history: list[ChatMessage]) -> None:
+        if isinstance(self.state_store, RuntimeCheckpointStore):
+            await self.state_store.save_checkpoint(state, [message.to_dict() for message in history])
+            return
+        await self.state_store.save(state)
+
     async def _stream_model(
         self,
         request: LLMRequest,
@@ -547,14 +629,19 @@ class CoreLoopKernel:
     ) -> LLMResponse | None:
         """Try streaming model call.  Returns a complete LLMResponse on success,
         or None when streaming is not available so the caller can fall back."""
-        try:
-            stream = self.llm_client.stream(request)
-            if inspect.isawaitable(stream):
-                stream = await stream
-        except NotImplementedError:
-            return None
-        except Exception:
-            return None  # fall back to non-streaming on any error
+        stream = stream_with_retry(
+            self.llm_client,
+            request,
+            max_attempts=1,
+            timeout_seconds=self.policy.model_timeout_seconds,
+            retry_policy=self.retry_policy,
+            on_retry=lambda retry: self._emit_model_retry_from_event(
+                retry,
+                state=state,
+                response_index=response_index,
+            ),
+            sleep=asyncio.sleep,
+        )
 
         accumulated = ""
         thinking = ""
@@ -562,7 +649,12 @@ class CoreLoopKernel:
         emitted_tool_call_indexes: set[int] = set()
         emitted_tool_input_arguments: dict[int, str] = {}
         try:
-            async for event in stream:
+            stream_iterator = stream.__aiter__()
+            while True:
+                try:
+                    event = await self._next_stream_event(stream_iterator)
+                except StopAsyncIteration:
+                    break
                 if event.kind == "content_delta" and event.content:
                     accumulated += event.content
                     await self._emit_stream_part(
@@ -594,7 +686,6 @@ class CoreLoopKernel:
                         payload={
                             "content": "",
                             "refusal": event.refusal,
-                            "raw": event.raw,
                         },
                         session_id=state.session_id,
                         run_id=state.run_id,
@@ -668,7 +759,6 @@ class CoreLoopKernel:
                             "content": "",
                             "finish_reason": finish_reason,
                             "usage": usage_dict,
-                            "raw": event.raw,
                             "response_index": response_index,
                         },
                         session_id=state.session_id,
@@ -686,6 +776,11 @@ class CoreLoopKernel:
                 elif event.kind == "error":
                     await self._emit_stream_fallback(state, event.error or "stream error")
                     return None  # fall back to non-streaming
+        except (AttributeError, NotImplementedError):
+            return None
+        except ModelRetryExhausted as exc:
+            await self._emit_stream_fallback(state, str(exc))
+            return None
         except Exception as exc:
             await self._emit_stream_fallback(state, str(exc) or exc.__class__.__name__)
             return None  # fall back to non-streaming
@@ -706,6 +801,42 @@ class CoreLoopKernel:
             thinking=thinking,
             tool_calls=merged_tool_calls,
         )
+
+    async def _consume_guidance(
+        self,
+        state: RuntimeState,
+        turn_input: RuntimeTurnInput,
+        history: list[ChatMessage],
+        response_index: int,
+        *,
+        finalize: bool = False,
+    ) -> bool:
+        if finalize and turn_input.guidance_finalizer is not None:
+            guidance_items = turn_input.guidance_finalizer() or []
+        else:
+            source = turn_input.guidance_source
+            guidance_items = source() if source is not None else []
+        guidance = [str(item).strip() for item in guidance_items if str(item).strip()]
+        if not guidance:
+            return False
+        for item in guidance:
+            history.append(ChatMessage(role="user", content=item))
+            await self.event_sink.emit(CoreEvent(
+                name="runtime.guidance_received",
+                category="message",
+                payload={"content": item, "response_index": response_index},
+                session_id=state.session_id,
+                run_id=state.run_id,
+                tags=["guidance"],
+            ))
+        await self._save_checkpoint(state, history)
+        return True
+
+    async def _next_stream_event(self, stream_iterator: Any) -> LLMStreamEvent:
+        timeout = self.policy.model_stream_idle_timeout_seconds
+        if timeout is not None and timeout > 0:
+            return await asyncio.wait_for(stream_iterator.__anext__(), timeout=timeout)
+        return await stream_iterator.__anext__()
 
     async def _emit_stream_part(
         self,
@@ -746,8 +877,6 @@ class CoreLoopKernel:
             payload["delta"] = delta
         if arguments_text is not None:
             payload["arguments_text"] = arguments_text
-        if raw is not None:
-            payload["raw"] = raw
         await self.event_sink.emit(CoreEvent(
             name="runtime.part",
             category="message",
@@ -1355,7 +1484,7 @@ class CoreLoopKernel:
                 "part_id": (
                     f"{state.run_id}:response-{response_index}:text"
                     if response_index is not None
-                    else f"part-text-{state.run_id}"
+                    else f"{state.run_id}:response-text"
                 ),
                 "message_id": state.run_id or "",
                 **({"response_index": response_index} if response_index is not None else {}),
@@ -1624,6 +1753,7 @@ class CoreLoopKernel:
             category="decision",
             payload={
                 "tool_call_id": call.id,
+                "request_id": call.id,
                 "tool_name": call.name,
                 "arguments": call.arguments,
                 "reason": call.reason,

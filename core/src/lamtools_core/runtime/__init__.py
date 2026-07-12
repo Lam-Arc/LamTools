@@ -1,8 +1,9 @@
 """Runtime protocol types and interfaces."""
 
 import asyncio
+from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Any, Literal, Protocol, runtime_checkable
+from typing import Any, Callable, Literal, Protocol, runtime_checkable
 
 from lamtools_core.llm import LLMResponse
 from lamtools_core.tool import ToolCall, ToolResult
@@ -10,6 +11,10 @@ from lamtools_core.event import CoreEvent
 
 RuntimeStatus = Literal["idle", "running", "waiting", "completed", "failed", "cancelled"]
 RuntimeLoopState = Literal["continue", "wait", "done", "failed"]
+
+
+class RuntimeStateConflictError(RuntimeError):
+    pass
 
 
 @dataclass
@@ -57,7 +62,11 @@ class RuntimeTurnInput:
     user_message: str = ""
     user_content: str | list[dict[str, Any]] | None = None
     state: RuntimeState | None = None
+    run_id: str = ""
+    turn_id: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
+    guidance_source: Callable[[], list[str]] | None = field(default=None, repr=False, compare=False)
+    guidance_finalizer: Callable[[], list[str] | None] | None = field(default=None, repr=False, compare=False)
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {"user_message": self.user_message}
@@ -65,6 +74,10 @@ class RuntimeTurnInput:
             d["user_content"] = self.user_content
         if self.state is not None:
             d["state"] = self.state.to_dict()
+        if self.run_id:
+            d["run_id"] = self.run_id
+        if self.turn_id:
+            d["turn_id"] = self.turn_id
         return d
 
 
@@ -135,11 +148,23 @@ class RuntimeStateStore(Protocol):
     async def save(self, state: RuntimeState) -> None: ...
 
 
+@runtime_checkable
+class RuntimeCheckpointStore(RuntimeStateStore, Protocol):
+    async def get_history(self, session_id: str) -> list[dict[str, Any]]: ...
+    async def save_checkpoint(self, state: RuntimeState, history: list[dict[str, Any]]) -> None: ...
+
+
+@runtime_checkable
+class RuntimeApprovalStore(RuntimeStateStore, Protocol):
+    async def find_pending_approval(self, request_id: str) -> RuntimeState | None: ...
+
+
 class InMemoryRuntimeStateStore:
     """Simple in-memory ``RuntimeStateStore`` implementation."""
 
     def __init__(self) -> None:
         self._states: dict[str, RuntimeState] = {}
+        self._history: dict[str, list[dict[str, Any]]] = {}
 
     async def get(self, session_id: str) -> RuntimeState | None:
         return self._states.get(session_id)
@@ -147,15 +172,42 @@ class InMemoryRuntimeStateStore:
     async def save(self, state: RuntimeState) -> None:
         self._states[state.session_id] = state
 
+    async def get_history(self, session_id: str) -> list[dict[str, Any]]:
+        return deepcopy(self._history.get(session_id, []))
+
+    async def save_checkpoint(self, state: RuntimeState, history: list[dict[str, Any]]) -> None:
+        self._states[state.session_id] = state
+        self._history[state.session_id] = deepcopy(history)
+
+    async def find_pending_approval(self, request_id: str) -> RuntimeState | None:
+        for state in self._states.values():
+            pending = state.metadata.get("pending_approval") if isinstance(state.metadata, dict) else None
+            tool_call = pending.get("tool_call") if isinstance(pending, dict) else None
+            pending_request_id = pending.get("request_id") if isinstance(pending, dict) else None
+            tool_call_id = tool_call.get("id") if isinstance(tool_call, dict) else None
+            if request_id in {str(pending_request_id or ""), str(tool_call_id or "")}:
+                return state
+        return None
+
     def clear(self) -> None:
         self._states.clear()
+        self._history.clear()
+
+
+@dataclass
+class _RuntimeTaskEntry:
+    run_id: str
+    task: asyncio.Task[Any] | None = None
+    guidance_open: bool = True
+    guidance: list[tuple[str, str]] = field(default_factory=list)
+    guidance_ids: set[str] = field(default_factory=set)
 
 
 class RuntimeTaskRegistry:
-    """Track active runtime tasks and cooperative cancellation signals."""
+    """Track active runtime tasks, cancellation signals, and transient guidance."""
 
     def __init__(self) -> None:
-        self._tasks: dict[str, tuple[str, asyncio.Task[Any]]] = {}
+        self._entries: dict[str, _RuntimeTaskEntry] = {}
         self._cancel_events: dict[str, asyncio.Event] = {}
 
     def get_cancel_event(self, thread_id: str) -> asyncio.Event:
@@ -168,33 +220,71 @@ class RuntimeTaskRegistry:
         event.clear()
         return event
 
-    def register(self, thread_id: str, task: asyncio.Task[Any], *, run_id: str = "") -> None:
-        self._tasks[thread_id] = (run_id, task)
+    def accept_run(self, thread_id: str, run_id: str) -> bool:
+        thread_id = str(thread_id or "").strip()
+        run_id = str(run_id or "").strip()
+        if not thread_id or not run_id:
+            return False
+        self._drop_done_entry(thread_id)
+        entry = self._entries.get(thread_id)
+        if entry is not None:
+            return entry.run_id == run_id
+        self._entries[thread_id] = _RuntimeTaskEntry(run_id=run_id)
+        return True
+
+    def active_run_id(self, thread_id: str) -> str | None:
+        self._drop_done_entry(thread_id)
+        entry = self._entries.get(thread_id)
+        return entry.run_id if entry is not None else None
+
+    def register(self, thread_id: str, task: asyncio.Task[Any], *, run_id: str = "") -> bool:
+        self._drop_done_entry(thread_id)
+        entry = self._entries.get(thread_id)
+        if entry is None:
+            if not self.accept_run(thread_id, run_id):
+                return False
+            entry = self._entries[thread_id]
+        if entry.run_id != run_id:
+            return False
+        if entry.task is not None and entry.task is not task and not entry.task.done():
+            return False
+        entry.task = task
 
         def _cleanup(done_task: asyncio.Task[Any]) -> None:
-            entry = self._tasks.get(thread_id)
-            if entry is not None and entry[0] == run_id and entry[1] is done_task:
-                self._tasks.pop(thread_id, None)
+            current = self._entries.get(thread_id)
+            if current is not None and current.run_id == run_id and current.task is done_task:
+                self._entries.pop(thread_id, None)
 
         task.add_done_callback(_cleanup)
+        return True
 
     def task(self, thread_id: str, *, run_id: str | None = None) -> asyncio.Task[Any] | None:
-        entry = self._tasks.get(thread_id)
+        self._drop_done_entry(thread_id)
+        entry = self._entries.get(thread_id)
         if entry is None:
             return None
-        active_run_id, task = entry
-        if task.done():
-            self._tasks.pop(thread_id, None)
+        task = entry.task
+        if task is None:
             return None
-        if run_id is not None and active_run_id != run_id:
+        if run_id is not None and entry.run_id != run_id:
             return None
         return task
 
     def cancel(self, thread_id: str, *, run_id: str | None = None, force: bool = False) -> None:
-        task = self.task(thread_id, run_id=run_id)
-        if run_id is not None and task is None:
+        self._drop_done_entry(thread_id)
+        entry = self._entries.get(thread_id)
+        if entry is None:
+            if run_id is None:
+                self.get_cancel_event(thread_id).set()
             return
+        if run_id is not None and entry.run_id != run_id:
+            return
+        task = entry.task
         self.get_cancel_event(thread_id).set()
+        entry.guidance_open = False
+        entry.guidance.clear()
+        entry.guidance_ids.clear()
+        self._entries.pop(thread_id, None)
         if not force:
             return
         if task is not None and not task.done():
@@ -203,8 +293,97 @@ class RuntimeTaskRegistry:
     def is_running(self, thread_id: str, *, run_id: str | None = None) -> bool:
         return self.task(thread_id, run_id=run_id) is not None
 
+    def accept_guidance(
+        self,
+        thread_id: str,
+        text: str,
+        *,
+        run_id: str,
+        guidance_id: str,
+    ) -> Literal["accepted", "duplicate", "closed", "not_active"]:
+        self._drop_done_entry(thread_id)
+        entry = self._entries.get(thread_id)
+        guidance = str(text or "").strip()
+        if entry is None or entry.run_id != run_id or entry.task is None or not guidance:
+            return "not_active"
+        if not entry.guidance_open:
+            return "closed"
+        normalized_id = str(guidance_id or "").strip()
+        if normalized_id and normalized_id in entry.guidance_ids:
+            return "duplicate"
+        entry.guidance.append((normalized_id, guidance))
+        if normalized_id:
+            entry.guidance_ids.add(normalized_id)
+        return "accepted"
+
+    def inject_guidance(
+        self,
+        thread_id: str,
+        text: str,
+        *,
+        run_id: str = "",
+        guidance_id: str = "",
+    ) -> bool:
+        """Queue one transient instruction for the matching active runtime task."""
+        return self.accept_guidance(
+            thread_id,
+            text,
+            run_id=run_id,
+            guidance_id=guidance_id,
+        ) in {"accepted", "duplicate"}
+
+    def consume_guidance(self, thread_id: str, *, run_id: str = "") -> list[str]:
+        self._drop_done_entry(thread_id)
+        entry = self._entries.get(thread_id)
+        if entry is None or entry.run_id != run_id or entry.task is None:
+            return []
+        guidance = [text for _guidance_id, text in entry.guidance]
+        entry.guidance.clear()
+        return guidance
+
+    def close_guidance_if_empty(self, thread_id: str, *, run_id: str) -> list[str] | None:
+        """Atomically consume pending guidance or seal an empty run."""
+        self._drop_done_entry(thread_id)
+        entry = self._entries.get(thread_id)
+        if entry is None or entry.run_id != run_id or entry.task is None:
+            return None
+        if not entry.guidance_open:
+            return []
+        if entry.guidance:
+            guidance = [text for _guidance_id, text in entry.guidance]
+            entry.guidance.clear()
+            return guidance
+        entry.guidance_open = False
+        return []
+
+    def guidance_source(self, thread_id: str, *, run_id: str = "") -> Callable[[], list[str]]:
+        return lambda: self.consume_guidance(thread_id, run_id=run_id)
+
+    def guidance_finalizer(self, thread_id: str, *, run_id: str) -> Callable[[], list[str] | None]:
+        return lambda: self.close_guidance_if_empty(thread_id, run_id=run_id)
+
+    def retract_guidance(self, thread_id: str, *, run_id: str, guidance_id: str) -> None:
+        entry = self._entries.get(thread_id)
+        if entry is None or entry.run_id != run_id or not guidance_id:
+            return
+        pending = [(item_id, text) for item_id, text in entry.guidance if item_id == guidance_id]
+        if not pending:
+            return
+        entry.guidance = [(item_id, text) for item_id, text in entry.guidance if item_id != guidance_id]
+        entry.guidance_ids.discard(guidance_id)
+
+    def release_run(self, thread_id: str, *, run_id: str) -> None:
+        entry = self._entries.get(thread_id)
+        if entry is not None and entry.run_id == run_id:
+            self._entries.pop(thread_id, None)
+
+    def _drop_done_entry(self, thread_id: str) -> None:
+        entry = self._entries.get(thread_id)
+        if entry is not None and entry.task is not None and entry.task.done():
+            self._entries.pop(thread_id, None)
+
     def clear(self) -> None:
-        self._tasks.clear()
+        self._entries.clear()
         self._cancel_events.clear()
 
 
@@ -235,6 +414,9 @@ __all__ = [
     "CompletionCheck",
     "CompletionResult",
     "RuntimeStateStore",
+    "RuntimeCheckpointStore",
+    "RuntimeApprovalStore",
+    "RuntimeStateConflictError",
     "InMemoryRuntimeStateStore",
     "RuntimeTaskRegistry",
     "default_runtime_task_registry",

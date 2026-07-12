@@ -1,16 +1,22 @@
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import asyncio
 import subprocess
+from time import perf_counter
 
 import pytest
+import lamtools_core.app.live_operations as core_live_operations_module
 from sqlalchemy import func, select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import app.app_server.connection as connection_module
 import app.app_server.operations as operations_module
-from app.app_server.approvals import create_server_request
+import app.app_server.reducer as reducer_module
+from app.app_server.runtime_bridge import persist_run_item_events_as_app_events
 from app.app_server.operations import (
+    WRITER_OVERLAY_OPERATION_NAMES,
     build_writer_operation_catalog,
     handle_config_adapter_profiles_list_operation,
     handle_config_provider_create_operation,
@@ -32,7 +38,6 @@ from app.app_server.operations import (
     handle_attachment_preview_operation,
     handle_artifact_open_operation,
     handle_artifact_read_operation,
-    handle_approval_respond_operation,
     handle_command_catalog_operation,
     handle_command_execute_operation,
     handle_project_agents_md_get_operation,
@@ -44,9 +49,6 @@ from app.app_server.operations import (
     handle_project_list_operation,
     handle_project_sessions_list_operation,
     handle_project_update_operation,
-    handle_queue_create_operation,
-    handle_queue_delete_operation,
-    handle_queue_update_operation,
     handle_session_create_operation,
     handle_session_checkpoint_create_operation,
     handle_session_checkpoint_restore_operation,
@@ -69,35 +71,45 @@ from app.app_server.operations import (
     handle_session_update_operation,
     handle_settings_get_operation,
     handle_settings_update_operation,
-    handle_thread_read_operation,
-    handle_thread_resume_operation,
-    handle_thread_start_operation,
-    handle_turn_cancel_operation,
-    handle_turn_start_operation,
-    handle_turn_steer_operation,
     operation_name,
 )
 from app.app_server.protocol import AppendEventInput, InitializeParams, rpc_error, rpc_result
 from app.app_server.connection import WriterAppServerConnection
-from app.app_server.ledger import append_event, append_run_item_event, list_events_after
-from app.app_server.queue import dispatch_next_queue_item
-from app.app_server.reducer import apply_event, empty_thread_state
+from app.app_server.ledger import _EVENT_STORE, _to_writer_envelope, _to_writer_event_input, list_events_after
+from app.app_server.persistence import _PERSISTENCE_HOST
+from app.app_server.reducer import apply_event, apply_event_in_place, empty_thread_state, reduce_events
 from app.app_server.runtime import WriterRuntimeLifecycle
 from app.app_server.snapshot import apply_event_to_snapshot, load_snapshot, rebuild_snapshot
 from app.app_server.protocol import WriterAppEventEnvelope
-from app.database import Base
+from app.database import Base, async_session
 from app.models.app_setting import AppSetting
 from app.models.app_server import WriterAppEvent, WriterThreadSnapshot
 from app.models.attachment import WriterAttachment
 from app.models.llm_config import LLMModel, LLMProvider
 from app.models.message import WriterMessage
-from app.models.queued_input import WriterQueuedInput
 from app.models.project import WriterProject
 from app.models.session import WriterSession
 from app.models.transcript import WriterTranscriptBlock, WriterTranscriptTurn
 from app.services.runtime_input_context import prepare_runtime_input_context
 from app.services.transcript_service import project_transcript
+from lamtools_core.app import CORE_WORKBENCH_OPERATION_NAMES, CoreLiveContext, OperationCatalog, OperationResult
+from lamtools_core.app.live_operations import (
+    handle_queue_delete_operation as handle_core_queue_delete_operation,
+    handle_queue_update_operation as handle_core_queue_update_operation,
+    handle_thread_read_operation as handle_core_thread_read_operation,
+    handle_thread_resume_operation as handle_core_thread_resume_operation,
+    handle_thread_start_operation as handle_core_thread_start_operation,
+    handle_turn_cancel_operation as handle_core_turn_cancel_operation,
+)
+from lamtools_core.app.live_router import CoreLiveConnection
+from lamtools_core.config.shared_database import init_shared_config_schema
 from lamtools_core.event import RunItemEvent
+from lamtools_core.runtime import RuntimeTaskRegistry
+
+
+@asynccontextmanager
+async def dummy_shared_config_session():
+    yield object()
 
 
 class DummyWebSocket:
@@ -109,6 +121,22 @@ class DummyWebSocket:
 
     async def close(self, code=1000, reason=""):
         return None
+
+
+async def _append_event_without_projection(db, event: AppendEventInput):
+    return _to_writer_envelope(await _EVENT_STORE.append(db, _to_writer_event_input(event)))
+
+
+async def _append_run_item_without_projection(db, event: RunItemEvent):
+    return _to_writer_envelope(await _EVENT_STORE.append_run_item_event(db, event))
+
+
+def _core_live_context(session_factory=async_session) -> CoreLiveContext:
+    return CoreLiveContext(
+        session_factory=session_factory,
+        persistence=_PERSISTENCE_HOST,
+        operations=OperationCatalog(),
+    )
 
 
 def app_event(event_id, seq, method, payload, **extra):
@@ -152,13 +180,6 @@ def test_initialize_params_reject_missing_client_info():
 
 def test_connection_exposes_required_request_handlers():
     for name in (
-        "_turn_start",
-        "_turn_interrupt",
-        "_queue_create",
-        "_queue_update",
-        "_queue_delete",
-        "_turn_steer",
-        "_approval_respond",
         "_project_create",
         "_project_get",
         "_project_list",
@@ -171,10 +192,6 @@ def test_connection_exposes_required_request_handlers():
         "_attachment_get",
         "_attachment_preview",
         "_attachment_open",
-        "_artifact_read",
-        "_artifact_open",
-        "_command_catalog",
-        "_command_execute",
         "_session_create",
         "_session_get",
         "_session_list",
@@ -195,34 +212,231 @@ def test_connection_exposes_required_request_handlers():
         "_session_rollback_turn",
         "_session_changes_undo",
         "_session_change_file_undo",
+    ):
+        assert hasattr(WriterAppServerConnection, name)
+    for core_owned_name in (
+        "_turn_start",
+        "_turn_steer",
+        "_approval_respond",
+        "_queue_create",
+        "_queue_guidance",
+        "_artifact_read",
+        "_artifact_open",
+        "_command_catalog",
+        "_command_execute",
         "_settings_get",
         "_settings_update",
         "_config_providers_list",
-        "_config_provider_create",
-        "_config_provider_update",
-        "_config_provider_delete",
-        "_config_models_list",
-        "_config_model_create",
-        "_config_model_update",
-        "_config_model_delete",
-        "_config_import_env",
-        "_config_resolved_get",
-        "_config_adapter_profiles_list",
-        "_config_runtime_capabilities_get",
-        "_config_subagent_upsert",
-        "_config_subagent_delete",
         "_plugin_list",
-        "_plugin_enable",
-        "_plugin_disable",
         "_hook_list",
-        "_hook_trust",
     ):
-        assert hasattr(WriterAppServerConnection, name)
+        assert not hasattr(WriterAppServerConnection, core_owned_name)
 
+
+def test_writer_reuses_all_core_live_handlers_and_augments_thread_read_with_hook():
+    connection = WriterAppServerConnection(DummyWebSocket())
+    catalog = connection._operation_catalog()
+    host = connection.context.host
+
+    assert connection.context.persistence is connection_module._PERSISTENCE_HOST
+    assert "event_store=object()" not in Path(connection_module.__file__).read_text(encoding="utf-8")
+    for name in (
+        "thread.resume",
+        "turn.start",
+        "turn.steer",
+        "turn.cancel",
+        "approval.respond",
+        "queue.create",
+        "queue.update",
+        "queue.delete",
+        "queue.guide",
+    ):
+        assert catalog._handlers[name] is host.operation_handlers()[name]
+    assert catalog._handlers["thread.read"] is host.operation_handlers()["thread.read"]
+    assert hasattr(host.member_hooks, "augment_thread_read")
+
+
+def test_writer_connection_has_no_generic_lifecycle_executors():
+    source = Path(connection_module.__file__).read_text(encoding="utf-8")
+    for name in (
+        "_writer_turn_start_executor",
+        "_writer_turn_steer_executor",
+        "_writer_queue_create_executor",
+        "_writer_queue_guidance_executor",
+        "_writer_approval_respond_executor",
+    ):
+        assert name not in source
+    assert "operation_executors=" not in source
+
+
+def test_writer_catalog_has_no_core_fallback_or_legacy_thread_start():
+    source = Path(operations_module.__file__).read_text(encoding="utf-8")
+
+    assert "fallback_handlers" not in source
+    assert "def handle_thread_start_operation" not in source
+    assert "thread_start:" not in source
+
+
+def test_writer_service_has_no_member_owned_llm_fallback():
+    service_path = Path(connection_module.__file__).parents[1] / "services" / "writer_service.py"
+    source = service_path.read_text(encoding="utf-8")
+
+    assert "_FallbackLLMClient" not in source
+    assert "falling back to Writer model" not in source
+
+
+def test_writer_approval_uses_core_operation_without_member_lifecycle_hook():
+    runtime_path = Path(connection_module.__file__).with_name("runtime.py")
+    adapter_path = Path(connection_module.__file__).with_name("member_adapter.py")
+    runtime_source = runtime_path.read_text(encoding="utf-8")
+    adapter_source = adapter_path.read_text(encoding="utf-8")
+
+    assert "_find_single_open_waiting_block" not in runtime_source
+    assert "continue_approval" not in adapter_source
+    assert "approval.respond" in connection_module.build_writer_core_operation_adapter_catalog(
+        session_factory=lambda: None,
+        config_session_factory=lambda: None,
+        runtime=type("Runtime", (), {
+            "writer_service_or_none": lambda self: None,
+            "approval_coordinator": lambda self, _thread_id: None,
+        })(),
+        emit_event=lambda _event: None,
+    ).list()
+
+
+def test_writer_member_modules_do_not_reimplement_core_lifecycle_plans():
+    operations_source = Path(operations_module.__file__).read_text(encoding="utf-8")
+    approvals_path = Path(connection_module.__file__).with_name("approvals.py")
+    queue_path = Path(connection_module.__file__).with_name("queue.py")
+
+    for handler_name in (
+        "handle_turn_start_operation",
+        "handle_turn_steer_operation",
+        "handle_queue_create_operation",
+        "handle_queue_guidance_operation",
+        "handle_approval_respond_operation",
+    ):
+        assert f"def {handler_name}" not in operations_source
+    assert not approvals_path.exists()
+    assert not queue_path.exists()
+
+
+def test_writer_connection_reuses_core_live_connection_loop():
+    for name in (
+        "_hub_reader",
+        "_subscribe",
+        "_unsubscribe",
+        "_handle_client_response",
+        "_handle_control_request",
+        "_handle_operation_request",
+        "_initialize",
+    ):
+        assert getattr(WriterAppServerConnection, name) is getattr(CoreLiveConnection, name)
+
+
+def test_writer_connection_uses_core_operation_dispatch_adapter():
+    connection = WriterAppServerConnection(DummyWebSocket())
+
+    assert connection.adapter.handle_operation_request is None
+    assert connection.adapter.operation_catalog_factory is not None
+    assert connection.adapter.handle_unknown_operations is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("operation_name", "wire_method", "params"),
+    [
+        ("turn.start", "turn/start", {"input": [{"type": "text", "text": "hello"}]}),
+        (
+            "turn.steer",
+            "turn/steer",
+            {"turn_id": "turn-core-spy", "input": [{"type": "text", "text": "guide"}]},
+        ),
+        (
+            "queue.guide",
+            "queue/guide",
+            {"turn_id": "turn-core-spy", "queue_item_id": "queue-core-spy"},
+        ),
+    ],
+)
+async def test_writer_websocket_base_operations_enter_core_handler(
+    monkeypatch, operation_name, wire_method, params
+):
+    connection = WriterAppServerConnection(DummyWebSocket())
+    connection.initialized = True
+    entered = asyncio.Event()
+
+    async def core_base_spy(*, request_id, params, context):
+        entered.set()
+        return core_live_operations_module.CoreLiveOperationOutcome(
+            response=rpc_result(request_id, {"trace": "core-base", "thread_id": params["thread_id"]})
+        )
+
+    monkeypatch.setitem(
+        core_live_operations_module._CORE_LIVE_OPERATION_EXECUTORS,
+        operation_name,
+        core_base_spy,
+    )
+    await connection._handle_raw(
+        {
+            "id": 11,
+            "method": wire_method,
+            "params": {"thread_id": "thread-core-spy", **params},
+        }
+    )
+
+    response = await asyncio.wait_for(connection.outbound.get(), timeout=0.5)
+    assert entered.is_set()
+    assert response["result"]["trace"] == "core-base"
+
+
+@pytest.mark.parametrize(
+    ("run_status", "thread_status"),
+    [
+        ("running", "running"),
+        ("waiting", "waiting"),
+        ("completed", "completed"),
+        ("failed", "failed"),
+    ],
+)
+def test_writer_replay_syncs_outer_turn_status_from_core_run_item(run_status, thread_status):
+    turn_id = "writer-turn-1"
+    events = [
+        app_event("accepted", 1, "turn/accepted", {"type": "turn", "status": "running"}, turn_id=turn_id),
+        app_event(
+            f"core-{run_status}",
+            2,
+            "core/runItem",
+            RunItemEvent(
+                event_id=f"core-item-{run_status}",
+                kind="status",
+                thread_id="thread-1",
+                run_id=turn_id,
+                turn_id=turn_id,
+                item_id=f"{turn_id}:{run_status}",
+                status=run_status,
+                payload={"type": "turn", "status": run_status},
+            ).to_dict(),
+            turn_id=turn_id,
+        ),
+    ]
+
+    state = reduce_events("thread-1", events)
+
+    assert state["core"]["turns"][turn_id]["status"] == run_status
+    assert state["turns"][turn_id]["status"] == run_status
+    assert state["core"]["turns"][turn_id]["last_seq"] == 2
+    assert state["turns"][turn_id]["last_seq"] == 2
+    assert state["core"]["status"] == thread_status
+    assert state["status"] == thread_status
 
 def test_connection_accepts_runtime_lifecycle_dependency():
     class FakeRuntime:
-        pass
+        def writer_service_or_none(self):
+            return None
+
+        async def approval_coordinator(self, _thread_id):
+            return None
 
     runtime = FakeRuntime()
     connection = WriterAppServerConnection(DummyWebSocket(), runtime=runtime)
@@ -237,6 +451,30 @@ def test_operation_names_normalize_transport_aliases():
     assert operation_name("approval/respond") == "approval.respond"
 
 
+def _build_test_writer_catalog(handler):
+    overlay_arguments = (
+        "project_create", "project_directory_pick", "project_get", "project_list",
+        "project_update", "project_delete", "project_agents_md_get",
+        "project_agents_md_update", "project_sessions_list", "attachment_list",
+        "attachment_get", "attachment_preview", "attachment_open", "session_create",
+        "session_get", "session_list", "session_update", "session_delete", "session_fork",
+        "session_git_graph", "session_changes_get", "session_checkpoints_list",
+        "session_checkpoint_create", "session_checkpoint_restore", "session_commit_review_get",
+        "session_commit_review_decide", "session_agent_branches_list",
+        "session_agent_branch_diff", "session_agent_branch_merge",
+        "session_agent_branch_abandon", "session_rollback_turn", "session_changes_undo",
+        "session_change_file_open", "session_change_file_undo",
+    )
+
+    async def core_handler(request):
+        return OperationResult(name=request.name)
+
+    return build_writer_operation_catalog(
+        core_handlers={name: core_handler for name in CORE_WORKBENCH_OPERATION_NAMES},
+        **{name: handler for name in overlay_arguments},
+    )
+
+
 @pytest.mark.asyncio
 async def test_writer_operation_catalog_wraps_rpc_handlers():
     called = []
@@ -244,156 +482,21 @@ async def test_writer_operation_catalog_wraps_rpc_handlers():
     async def fake_handler(request):
         called.append(request.method)
 
-    catalog = build_writer_operation_catalog(
-        thread_read=fake_handler,
-        thread_resume=fake_handler,
-        thread_start=fake_handler,
-        turn_start=fake_handler,
-        turn_steer=fake_handler,
-        turn_cancel=fake_handler,
-        approval_respond=fake_handler,
-        queue_create=fake_handler,
-        queue_update=fake_handler,
-        queue_delete=fake_handler,
-        project_create=fake_handler,
-        project_directory_pick=fake_handler,
-        project_get=fake_handler,
-        project_list=fake_handler,
-        project_update=fake_handler,
-        project_delete=fake_handler,
-        project_agents_md_get=fake_handler,
-        project_agents_md_update=fake_handler,
-        project_sessions_list=fake_handler,
-        attachment_list=fake_handler,
-        attachment_get=fake_handler,
-        attachment_preview=fake_handler,
-        attachment_open=fake_handler,
-        artifact_read=fake_handler,
-        artifact_open=fake_handler,
-        command_catalog=fake_handler,
-        command_execute=fake_handler,
-        session_create=fake_handler,
-        session_get=fake_handler,
-        session_list=fake_handler,
-        session_update=fake_handler,
-        session_delete=fake_handler,
-        session_fork=fake_handler,
-        session_git_graph=fake_handler,
-        session_changes_get=fake_handler,
-        session_checkpoints_list=fake_handler,
-        session_checkpoint_create=fake_handler,
-        session_checkpoint_restore=fake_handler,
-        session_commit_review_get=fake_handler,
-        session_commit_review_decide=fake_handler,
-        session_agent_branches_list=fake_handler,
-        session_agent_branch_diff=fake_handler,
-        session_agent_branch_merge=fake_handler,
-        session_agent_branch_abandon=fake_handler,
-        session_rollback_turn=fake_handler,
-        session_changes_undo=fake_handler,
-        session_change_file_open=fake_handler,
-        session_change_file_undo=fake_handler,
-        settings_get=fake_handler,
-        settings_update=fake_handler,
-        config_providers_list=fake_handler,
-        config_provider_create=fake_handler,
-        config_provider_update=fake_handler,
-        config_provider_delete=fake_handler,
-        config_models_list=fake_handler,
-        config_model_create=fake_handler,
-        config_model_update=fake_handler,
-        config_model_delete=fake_handler,
-        config_import_env=fake_handler,
-        config_resolved_get=fake_handler,
-        config_adapter_profiles_list=fake_handler,
-        config_runtime_capabilities_get=fake_handler,
-        config_subagent_upsert=fake_handler,
-        config_subagent_delete=fake_handler,
-    )
+    catalog = _build_test_writer_catalog(fake_handler)
 
     await catalog.execute(
-        "turn.start",
-        metadata={"rpc_request": connection_module.JsonRpcRequest(id=1, method="turn.start", params={})},
+        "project.create",
+        metadata={"rpc_request": connection_module.JsonRpcRequest(id=1, method="project.create", params={})},
     )
 
-    assert called == ["turn.start"]
+    assert called == ["project.create"]
 
 
 def test_plugin_operations_are_registered_in_writer_catalog():
     async def fake_handler(request):
         return None
 
-    catalog = build_writer_operation_catalog(
-        thread_read=fake_handler,
-        thread_resume=fake_handler,
-        thread_start=fake_handler,
-        turn_start=fake_handler,
-        turn_steer=fake_handler,
-        turn_cancel=fake_handler,
-        approval_respond=fake_handler,
-        queue_create=fake_handler,
-        queue_update=fake_handler,
-        queue_delete=fake_handler,
-        project_create=fake_handler,
-        project_directory_pick=fake_handler,
-        project_get=fake_handler,
-        project_list=fake_handler,
-        project_update=fake_handler,
-        project_delete=fake_handler,
-        project_agents_md_get=fake_handler,
-        project_agents_md_update=fake_handler,
-        project_sessions_list=fake_handler,
-        attachment_list=fake_handler,
-        attachment_get=fake_handler,
-        attachment_preview=fake_handler,
-        attachment_open=fake_handler,
-        artifact_read=fake_handler,
-        artifact_open=fake_handler,
-        command_catalog=fake_handler,
-        command_execute=fake_handler,
-        session_create=fake_handler,
-        session_get=fake_handler,
-        session_list=fake_handler,
-        session_update=fake_handler,
-        session_delete=fake_handler,
-        session_fork=fake_handler,
-        session_git_graph=fake_handler,
-        session_changes_get=fake_handler,
-        session_checkpoints_list=fake_handler,
-        session_checkpoint_create=fake_handler,
-        session_checkpoint_restore=fake_handler,
-        session_commit_review_get=fake_handler,
-        session_commit_review_decide=fake_handler,
-        session_agent_branches_list=fake_handler,
-        session_agent_branch_diff=fake_handler,
-        session_agent_branch_merge=fake_handler,
-        session_agent_branch_abandon=fake_handler,
-        session_rollback_turn=fake_handler,
-        session_changes_undo=fake_handler,
-        session_change_file_open=fake_handler,
-        session_change_file_undo=fake_handler,
-        settings_get=fake_handler,
-        settings_update=fake_handler,
-        config_providers_list=fake_handler,
-        config_provider_create=fake_handler,
-        config_provider_update=fake_handler,
-        config_provider_delete=fake_handler,
-        config_models_list=fake_handler,
-        config_model_create=fake_handler,
-        config_model_update=fake_handler,
-        config_model_delete=fake_handler,
-        config_import_env=fake_handler,
-        config_resolved_get=fake_handler,
-        config_adapter_profiles_list=fake_handler,
-        config_runtime_capabilities_get=fake_handler,
-        config_subagent_upsert=fake_handler,
-        config_subagent_delete=fake_handler,
-        plugin_list=fake_handler,
-        plugin_enable=fake_handler,
-        plugin_disable=fake_handler,
-        hook_list=fake_handler,
-        hook_trust=fake_handler,
-    )
+    catalog = _build_test_writer_catalog(fake_handler)
 
     assert catalog.has("plugin.list")
     assert catalog.has("plugin.enable")
@@ -402,76 +505,24 @@ def test_plugin_operations_are_registered_in_writer_catalog():
     assert catalog.has("hook.trust")
 
 
+def test_writer_plugin_hook_wiring_uses_core_helpers():
+    app_root = Path(__file__).resolve().parents[1] / "app"
+    operations_source = (app_root / "app_server/operations.py").read_text(encoding="utf-8")
+    kernel_source = (app_root / "core/writer/core_kernel_adapter.py").read_text(encoding="utf-8")
+
+    assert "build_core_plugin_operation_catalog" in operations_source
+    assert "assemble_core_agent_plugins" in kernel_source
+    assert "core-plugin-state.json" not in operations_source + kernel_source
+    assert "core-hook-trust.json" not in operations_source + kernel_source
+    assert "PluginRegistry" not in operations_source
+    assert "HookTrustStore" not in operations_source
+
+
 def test_writer_operation_catalog_covers_app_server_rpc_methods():
     async def fake_handler(request):
         return None
 
-    catalog = build_writer_operation_catalog(
-        thread_read=fake_handler,
-        thread_resume=fake_handler,
-        thread_start=fake_handler,
-        turn_start=fake_handler,
-        turn_steer=fake_handler,
-        turn_cancel=fake_handler,
-        approval_respond=fake_handler,
-        queue_create=fake_handler,
-        queue_update=fake_handler,
-        queue_delete=fake_handler,
-        project_create=fake_handler,
-        project_directory_pick=fake_handler,
-        project_get=fake_handler,
-        project_list=fake_handler,
-        project_update=fake_handler,
-        project_delete=fake_handler,
-        project_agents_md_get=fake_handler,
-        project_agents_md_update=fake_handler,
-        project_sessions_list=fake_handler,
-        attachment_list=fake_handler,
-        attachment_get=fake_handler,
-        attachment_preview=fake_handler,
-        attachment_open=fake_handler,
-        artifact_read=fake_handler,
-        artifact_open=fake_handler,
-        command_catalog=fake_handler,
-        command_execute=fake_handler,
-        session_create=fake_handler,
-        session_get=fake_handler,
-        session_list=fake_handler,
-        session_update=fake_handler,
-        session_delete=fake_handler,
-        session_fork=fake_handler,
-        session_git_graph=fake_handler,
-        session_changes_get=fake_handler,
-        session_checkpoints_list=fake_handler,
-        session_checkpoint_create=fake_handler,
-        session_checkpoint_restore=fake_handler,
-        session_commit_review_get=fake_handler,
-        session_commit_review_decide=fake_handler,
-        session_agent_branches_list=fake_handler,
-        session_agent_branch_diff=fake_handler,
-        session_agent_branch_merge=fake_handler,
-        session_agent_branch_abandon=fake_handler,
-        session_rollback_turn=fake_handler,
-        session_changes_undo=fake_handler,
-        session_change_file_open=fake_handler,
-        session_change_file_undo=fake_handler,
-        settings_get=fake_handler,
-        settings_update=fake_handler,
-        config_providers_list=fake_handler,
-        config_provider_create=fake_handler,
-        config_provider_update=fake_handler,
-        config_provider_delete=fake_handler,
-        config_models_list=fake_handler,
-        config_model_create=fake_handler,
-        config_model_update=fake_handler,
-        config_model_delete=fake_handler,
-        config_import_env=fake_handler,
-        config_resolved_get=fake_handler,
-        config_adapter_profiles_list=fake_handler,
-        config_runtime_capabilities_get=fake_handler,
-        config_subagent_upsert=fake_handler,
-        config_subagent_delete=fake_handler,
-    )
+    catalog = _build_test_writer_catalog(fake_handler)
 
     assert catalog.list() == [
         "approval.respond",
@@ -511,9 +562,10 @@ def test_writer_operation_catalog_covers_app_server_rpc_methods():
         "project.list",
         "project.sessions.list",
         "project.update",
-        "queue.create",
-        "queue.delete",
-        "queue.update",
+            "queue.create",
+            "queue.delete",
+            "queue.guide",
+            "queue.update",
         "session.agent_branch.abandon",
         "session.agent_branch.diff",
         "session.agent_branch.merge",
@@ -546,73 +598,24 @@ def test_writer_operation_catalog_covers_app_server_rpc_methods():
     ]
 
 
+def test_writer_operation_catalog_is_core_workbench_plus_writer_overlay():
+    async def fake_handler(request):
+        return None
+
+    catalog = _build_test_writer_catalog(fake_handler)
+
+    assert set(catalog.list()) == set(CORE_WORKBENCH_OPERATION_NAMES) | set(WRITER_OVERLAY_OPERATION_NAMES)
+    assert not (set(CORE_WORKBENCH_OPERATION_NAMES) & set(WRITER_OVERLAY_OPERATION_NAMES))
+
+
 @pytest.mark.asyncio
 async def test_turn_cancel_operation_returns_error_without_thread_id():
-    outcome = await handle_turn_cancel_operation(request_id=1, params={})
+    outcome = await handle_core_turn_cancel_operation(request_id=1, params={}, context=_core_live_context())
 
     assert outcome.response["error"]["message"] == "thread_id is required"
     assert outcome.publish_events == []
 
 
-@pytest.mark.asyncio
-async def test_turn_start_operation_returns_error_without_required_fields():
-    outcome = await handle_turn_start_operation(request_id=1, params={})
-
-    assert outcome.response["error"]["message"] == "thread_id, client_message_id and input are required"
-    assert outcome.runtime_start is None
-
-
-@pytest.mark.asyncio
-async def test_turn_steer_operation_returns_error_without_required_fields():
-    outcome = await handle_turn_steer_operation(request_id=1, params={})
-
-    assert outcome.response["error"]["message"] == "thread_id, turn_id, client_message_id and input are required"
-    assert outcome.notify_events == []
-
-
-@pytest.mark.asyncio
-async def test_approval_respond_operation_returns_error_without_required_fields():
-    outcome = await handle_approval_respond_operation(request_id=1, params={})
-
-    assert outcome.response["error"]["message"] == "request_id and decision are required"
-    assert outcome.notify_events == []
-
-
-@pytest.mark.asyncio
-async def test_queue_operations_return_validation_errors():
-    create = await handle_queue_create_operation(request_id=1, params={})
-    update = await handle_queue_update_operation(request_id=2, params={})
-    delete = await handle_queue_delete_operation(request_id=3, params={})
-
-    assert create.response["error"]["message"] == "thread_id, client_message_id and input are required"
-    assert update.response["error"]["message"] == "thread_id, queue_item_id and text are required"
-    assert delete.response["error"]["message"] == "thread_id and queue_item_id are required"
-
-
-@pytest.mark.asyncio
-async def test_queue_create_rejects_attachment_input(tmp_path):
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'queue-attachment.db'}", future=True)
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    try:
-        outcome = await handle_queue_create_operation(
-            request_id=1,
-            params={
-                "thread_id": "thread-1",
-                "client_message_id": "client-1",
-                "input": [
-                    {"type": "text", "text": "看附件"},
-                    {"type": "attachment", "attachment_id": "att-1", "filename": "note.md"},
-                ],
-            },
-            session_factory=session_factory,
-        )
-
-        assert outcome.response["error"]["message"] == "Attachment messages cannot be queued"
-    finally:
-        await engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -708,315 +711,6 @@ async def test_command_catalog_hides_mixed_case_skill_names_that_collide_with_co
     assert matching[0]["action"] == "run_action"
 
 
-@pytest.mark.asyncio
-async def test_turn_start_expands_selected_skill_without_changing_visible_message(tmp_path):
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'skill-turn.db'}", future=True)
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    skill_dir = tmp_path / ".codex" / "skills" / "reviewer"
-    skill_dir.mkdir(parents=True)
-    (skill_dir / "SKILL.md").write_text(
-        "---\nname: reviewer\ndescription: Review code\n---\nREVIEW BODY\n",
-        encoding="utf-8",
-    )
-
-    try:
-        async with session_factory() as db:
-            db.add(WriterSession(id="thread-skill", title="Skill", work_root=str(tmp_path)))
-            await db.commit()
-
-        outcome = await handle_turn_start_operation(
-            request_id=1,
-            params={
-                "thread_id": "thread-skill",
-                "client_message_id": "client-skill",
-                "work_root": str(tmp_path),
-                "input": [
-                    {"type": "text", "text": "请 "},
-                    {"type": "skill", "name": "reviewer", "source_text": "/reviewer"},
-                    {"type": "text", "text": " 这个改动"},
-                ],
-            },
-            session_factory=session_factory,
-        )
-
-        assert "error" not in outcome.response
-        assert outcome.runtime_start is not None
-        assert "REVIEW BODY" in outcome.runtime_start["text"]
-        async with session_factory() as db:
-            message = (await db.execute(select(WriterMessage))).scalar_one()
-            assert message.content == "请 /reviewer 这个改动"
-    finally:
-        await engine.dispose()
-
-
-@pytest.mark.asyncio
-async def test_turn_start_passes_shallow_thinking_mode_to_runtime(tmp_path):
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'shallow-thinking-turn.db'}", future=True)
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    try:
-        async with session_factory() as db:
-            db.add(WriterSession(id="thread-shallow", title="Shallow", work_root=str(tmp_path)))
-            await db.commit()
-
-        outcome = await handle_turn_start_operation(
-            request_id=1,
-            params={
-                "thread_id": "thread-shallow",
-                "client_message_id": "client-shallow",
-                "work_root": str(tmp_path),
-                "shallow_thinking_enabled": True,
-                "input": [{"type": "text", "text": "解释这个问题"}],
-            },
-            session_factory=session_factory,
-        )
-
-        assert "error" not in outcome.response
-        assert outcome.runtime_start is not None
-        assert outcome.runtime_start["shallow_thinking_enabled"] is True
-    finally:
-        await engine.dispose()
-
-
-@pytest.mark.asyncio
-async def test_turn_start_expands_normalized_mixed_case_skill_command_name(tmp_path):
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'skill-turn-normalized.db'}", future=True)
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    skill_dir = tmp_path / ".codex" / "skills" / "review-mixed"
-    skill_dir.mkdir(parents=True)
-    (skill_dir / "SKILL.md").write_text(
-        "---\nname: /Review Mixed\ndescription: Review code\n---\nREVIEW MIXED BODY\n",
-        encoding="utf-8",
-    )
-
-    try:
-        catalog = await handle_command_catalog_operation(
-            request_id=1,
-            params={"work_root": str(tmp_path)},
-        )
-        names = [item["name"] for item in catalog.response["result"]["commands"]]
-        assert "review mixed" in names
-
-        async with session_factory() as db:
-            db.add(WriterSession(id="thread-skill-normalized", title="Skill", work_root=str(tmp_path)))
-            await db.commit()
-
-        outcome = await handle_turn_start_operation(
-            request_id=2,
-            params={
-                "thread_id": "thread-skill-normalized",
-                "client_message_id": "client-skill-normalized",
-                "work_root": str(tmp_path),
-                "input": [
-                    {"type": "text", "text": "请 "},
-                    {"type": "skill", "name": "review mixed", "source_text": "/review mixed"},
-                    {"type": "text", "text": " 这个改动"},
-                ],
-            },
-            session_factory=session_factory,
-        )
-
-        assert "error" not in outcome.response
-        assert outcome.runtime_start is not None
-        assert "REVIEW MIXED BODY" in outcome.runtime_start["text"]
-        async with session_factory() as db:
-            message = (await db.execute(select(WriterMessage))).scalar_one()
-            assert message.content == "请 /review mixed 这个改动"
-    finally:
-        await engine.dispose()
-
-
-@pytest.mark.asyncio
-async def test_queue_create_rejects_missing_skill_before_acceptance(tmp_path):
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'queue-missing-skill.db'}", future=True)
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    try:
-        async with session_factory() as db:
-            db.add(WriterSession(id="thread-missing-skill", title="Skill", work_root=str(tmp_path)))
-            await db.commit()
-
-        outcome = await handle_queue_create_operation(
-            request_id=1,
-            params={
-                "thread_id": "thread-missing-skill",
-                "client_message_id": "client-missing-skill",
-                "input": [{"type": "skill", "name": "reviewer", "source_text": "/reviewer"}],
-            },
-            session_factory=session_factory,
-        )
-
-        assert outcome.response["error"]["message"].startswith('Skill "reviewer" not found.')
-        assert outcome.notify_events == []
-        async with session_factory() as db:
-            events = await list_events_after(db, thread_id="thread-missing-skill")
-        assert events == []
-    finally:
-        await engine.dispose()
-
-
-@pytest.mark.asyncio
-async def test_queue_create_expands_selected_skill_before_accepting(tmp_path):
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'queue-skill.db'}", future=True)
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    skill_dir = tmp_path / ".codex" / "skills" / "reviewer"
-    skill_dir.mkdir(parents=True)
-    (skill_dir / "SKILL.md").write_text(
-        "---\nname: reviewer\ndescription: Review code\n---\nREVIEW BODY\n",
-        encoding="utf-8",
-    )
-
-    try:
-        async with session_factory() as db:
-            db.add(WriterSession(id="thread-queue-skill", title="Skill", work_root=str(tmp_path)))
-            await db.commit()
-
-        outcome = await handle_queue_create_operation(
-            request_id=1,
-            params={
-                "thread_id": "thread-queue-skill",
-                "client_message_id": "client-queue-skill",
-                "input": [
-                    {"type": "text", "text": "请 "},
-                    {"type": "skill", "name": "reviewer", "source_text": "/reviewer"},
-                ],
-            },
-            session_factory=session_factory,
-        )
-
-        assert "error" not in outcome.response
-        accepted = outcome.response["result"]["events"][0]
-        queue_input = accepted["payload"]["input"]
-        runtime_input = accepted["payload"]["runtime_input"]
-        assert queue_input[0] == {"type": "text", "text": "请 "}
-        assert queue_input[1] == {"type": "text", "text": "/reviewer"}
-        assert runtime_input[0] == {"type": "text", "text": "请 "}
-        assert runtime_input[1]["type"] == "text"
-        assert "REVIEW BODY" in runtime_input[1]["text"]
-    finally:
-        await engine.dispose()
-
-
-@pytest.mark.asyncio
-async def test_queue_dispatch_preserves_visible_skill_message_and_runtime_expansion(tmp_path):
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'queue-dispatch-skill.db'}", future=True)
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    skill_dir = tmp_path / ".codex" / "skills" / "reviewer"
-    skill_dir.mkdir(parents=True)
-    (skill_dir / "SKILL.md").write_text(
-        "---\nname: reviewer\ndescription: Review code\n---\nREVIEW BODY\n",
-        encoding="utf-8",
-    )
-
-    try:
-        async with session_factory() as db:
-            db.add(WriterSession(id="thread-queue-dispatch-skill", title="Skill", work_root=str(tmp_path)))
-            await db.commit()
-
-        await handle_queue_create_operation(
-            request_id=1,
-            params={
-                "thread_id": "thread-queue-dispatch-skill",
-                "client_message_id": "client-queue-dispatch-skill",
-                "input": [
-                    {"type": "text", "text": "请 "},
-                    {"type": "skill", "name": "reviewer", "source_text": "/reviewer"},
-                    {"type": "text", "text": " 这个改动"},
-                ],
-            },
-            session_factory=session_factory,
-        )
-
-        async with session_factory() as db:
-            dispatched = await dispatch_next_queue_item(db, thread_id="thread-queue-dispatch-skill")
-            await db.commit()
-
-        assert dispatched is not None
-        _queue_item_id, runtime_input, _events = dispatched
-        assert runtime_input[1]["type"] == "text"
-        assert "REVIEW BODY" in runtime_input[1]["text"]
-
-        async with session_factory() as db:
-            message = (await db.execute(select(WriterMessage))).scalar_one()
-            assert message.content == "请 /reviewer 这个改动"
-    finally:
-        await engine.dispose()
-
-
-@pytest.mark.asyncio
-async def test_queue_update_replaces_stale_runtime_input_before_dispatch(tmp_path):
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'queue-update-runtime-input.db'}", future=True)
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    skill_dir = tmp_path / ".codex" / "skills" / "reviewer"
-    skill_dir.mkdir(parents=True)
-    (skill_dir / "SKILL.md").write_text(
-        "---\nname: reviewer\ndescription: Review code\n---\nREVIEW BODY\n",
-        encoding="utf-8",
-    )
-
-    try:
-        async with session_factory() as db:
-            db.add(WriterSession(id="thread-queue-update-skill", title="Skill", work_root=str(tmp_path)))
-            await db.commit()
-
-        created = await handle_queue_create_operation(
-            request_id=1,
-            params={
-                "thread_id": "thread-queue-update-skill",
-                "client_message_id": "client-queue-update-skill",
-                "input": [
-                    {"type": "text", "text": "请 "},
-                    {"type": "skill", "name": "reviewer", "source_text": "/reviewer"},
-                ],
-            },
-            session_factory=session_factory,
-        )
-        queue_item_id = created.response["result"]["events"][0]["payload"]["queue_item_id"]
-
-        updated = await handle_queue_update_operation(
-            request_id=2,
-            params={
-                "thread_id": "thread-queue-update-skill",
-                "queue_item_id": queue_item_id,
-                "text": "改成普通文本",
-            },
-            session_factory=session_factory,
-        )
-
-        assert "error" not in updated.response
-
-        async with session_factory() as db:
-            dispatched = await dispatch_next_queue_item(db, thread_id="thread-queue-update-skill")
-            await db.commit()
-
-        assert dispatched is not None
-        _queue_item_id, runtime_input, _events = dispatched
-        assert runtime_input == [{"type": "text", "text": "改成普通文本"}]
-
-        async with session_factory() as db:
-            message = (await db.execute(select(WriterMessage))).scalar_one()
-            assert message.content == "改成普通文本"
-    finally:
-        await engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -1111,18 +805,17 @@ async def test_command_execute_compact_uses_injected_core_compaction_interface(t
 
     calls: list[str] = []
 
-    async def compact_session_context(db, *, session_id: str):
+    async def compact_session_context(*, session_id: str, on_summary_delta=None):
+        del on_summary_delta
         calls.append(session_id)
-        session = await db.get(WriterSession, session_id)
-        assert session is not None
-        session.context_summary = "[Compacted Context]\n1. Current Goal\n- From injected interface."
+        summary = "[Compacted Context]\n1. Current Goal\n- From injected interface."
         return {
             "status": "compacted",
             "session_id": session_id,
             "compacted_at": datetime.now(timezone.utc).isoformat(),
             "compacted_messages": 7,
             "retained_messages": 6,
-            "summary": session.context_summary,
+            "summary": summary,
         }
 
     try:
@@ -1160,20 +853,17 @@ async def test_command_execute_compact_emits_running_delta_and_completed_events(
     emitted = []
     summary = "[Compacted Context]\n1. Current Goal\n- streamed compact summary"
 
-    async def compact_session_context(db, *, session_id: str, on_summary_delta=None):
-        session = await db.get(WriterSession, session_id)
-        assert session is not None
+    async def compact_session_context(*, session_id: str, on_summary_delta=None):
         if on_summary_delta is not None:
             await on_summary_delta("[Compacted Context]\n")
             await on_summary_delta("1. Current Goal\n- streamed compact summary")
-        session.context_summary = summary
         return {
             "status": "compacted",
             "session_id": session_id,
             "compacted_at": datetime.now(timezone.utc).isoformat(),
             "compacted_messages": 4,
             "retained_messages": 6,
-            "summary": session.context_summary,
+            "summary": summary,
         }
 
     async def emit_event(event):
@@ -1222,7 +912,7 @@ async def test_command_execute_compact_failure_marks_thread_terminal(tmp_path):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-    async def compact_session_context(db, *, session_id: str, on_summary_delta=None):
+    async def compact_session_context(*, session_id: str, on_summary_delta=None):
         raise ValueError("forced compaction failure")
 
     try:
@@ -1240,10 +930,10 @@ async def test_command_execute_compact_failure_marks_thread_terminal(tmp_path):
         async with session_factory() as db:
             after_failure = await load_snapshot(db, "thread-failing-compact")
 
-        stop = await handle_turn_cancel_operation(
+        stop = await handle_core_turn_cancel_operation(
             request_id=2,
             params={"thread_id": "thread-failing-compact"},
-            session_factory=session_factory,
+            context=_core_live_context(session_factory),
         )
 
         async with session_factory() as db:
@@ -1357,6 +1047,7 @@ async def test_provider_create_retries_when_sqlite_database_is_locked(monkeypatc
             "base_url": "https://api.retry.test/v1",
             "api_key": "sk-retry-secret",
         },
+        config_session_factory=dummy_shared_config_session,
     )
 
     assert attempts == 3
@@ -1382,6 +1073,7 @@ async def test_provider_create_returns_clear_error_when_sqlite_database_stays_lo
             "base_url": "https://api.locked.test/v1",
             "api_key": "sk-locked-secret",
         },
+        config_session_factory=dummy_shared_config_session,
     )
 
     assert attempts == 3
@@ -1449,9 +1141,9 @@ async def test_attachment_operations_return_validation_errors():
 
 @pytest.mark.asyncio
 async def test_thread_operations_return_validation_errors_without_thread_id():
-    start = await handle_thread_start_operation(request_id=1, params={})
-    resume = await handle_thread_resume_operation(request_id=2, params={})
-    read = await handle_thread_read_operation(request_id=3, params={})
+    start = await handle_core_thread_start_operation(request_id=1, params={}, context=_core_live_context())
+    resume = await handle_core_thread_resume_operation(request_id=2, params={}, context=_core_live_context())
+    read = await handle_core_thread_read_operation(request_id=3, params={}, context=_core_live_context())
 
     assert start.response["error"]["message"] == "thread_id is required"
     assert resume.response["error"]["message"] == "thread_id is required"
@@ -1500,7 +1192,7 @@ async def test_session_get_update_delete_operations_return_validation_errors():
 
 
 @pytest.mark.asyncio
-async def test_thread_read_operation_returns_session_projection(tmp_path):
+async def test_thread_read_operation_returns_session_projection(monkeypatch, tmp_path):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'thread-read.db'}", future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with engine.begin() as conn:
@@ -1520,13 +1212,14 @@ async def test_thread_read_operation_returns_session_projection(tmp_path):
             )
             await db.commit()
 
-        outcome = await handle_thread_read_operation(
-            request_id=1,
-            params={"thread_id": "session-1"},
-            session_factory=session_factory,
+        monkeypatch.setattr(connection_module, "async_session", session_factory)
+        connection = WriterAppServerConnection(DummyWebSocket())
+        connection.initialized = True
+        await connection._handle_raw(
+            {"id": 1, "method": "thread.read", "params": {"thread_id": "session-1"}}
         )
 
-        result = outcome.response["result"]
+        result = (await connection.outbound.get())["result"]
         assert result["thread"] == {"id": "session-1"}
         assert result["session"]["id"] == "session-1"
         assert result["session"]["mode"] == "PLAN"
@@ -1638,6 +1331,14 @@ async def test_session_rollback_turn_updates_app_server_snapshot(tmp_path):
                         user_text="第二轮",
                         user_message_id="user-snap-2",
                         status_cache="completed",
+                    ),
+                    WriterAppEvent(
+                        event_id="snapshot-history-7",
+                        thread_id="session-snapshot",
+                        seq=7,
+                        method="turn/accepted",
+                        turn_id="turn-snap-2",
+                        payload_json={"type": "turn", "status": "completed"},
                     ),
                     WriterThreadSnapshot(
                         thread_id="session-snapshot",
@@ -2140,7 +1841,6 @@ async def test_session_get_update_delete_operations_round_trip(tmp_path):
                     storage_path=str(tmp_path / "note.txt"),
                 )
             )
-            db.add(WriterQueuedInput(id="queue-crud", session_id="session-crud", text="next", position=1))
             await db.commit()
 
         read = await handle_session_get_operation(
@@ -2171,7 +1871,6 @@ async def test_session_get_update_delete_operations_round_trip(tmp_path):
             assert await db.get(WriterAppEvent, "event-crud") is None
             assert await db.get(WriterThreadSnapshot, "session-crud") is None
             assert await db.get(WriterAttachment, "attachment-crud") is None
-            assert await db.get(WriterQueuedInput, "queue-crud") is None
     finally:
         await engine.dispose()
 
@@ -2555,29 +2254,45 @@ async def test_project_operations_create_list_update_get_and_delete(tmp_path):
         work_root = tmp_path / "project-a"
         created = await handle_project_create_operation(
             request_id=1,
-            params={"work_root": str(work_root)},
+            params={"work_root": str(work_root), "name": "Custom Project"},
             session_factory=session_factory,
         )
         project = created.response["result"]["project"]
-        assert project["name"] == "project-a"
+        assert project["name"] == "Custom Project"
         assert project["work_root"] == str(work_root.resolve())
 
-        listed = await handle_project_list_operation(
+        default_root = tmp_path / "default-project"
+        default_created = await handle_project_create_operation(
             request_id=2,
+            params={"work_root": str(default_root)},
+            session_factory=session_factory,
+        )
+        assert default_created.response["result"]["project"]["name"] == "default-project"
+
+        listed = await handle_project_list_operation(
+            request_id=3,
             params={},
             session_factory=session_factory,
         )
-        assert [row["id"] for row in listed.response["result"]["projects"]] == [project["id"]]
+        assert {row["id"] for row in listed.response["result"]["projects"]} == {
+            project["id"],
+            default_created.response["result"]["project"]["id"],
+        }
 
         updated = await handle_project_update_operation(
-            request_id=3,
-            params={"project_id": project["id"], "config": {"defaultMode": "plan"}},
+            request_id=4,
+            params={
+                "project_id": project["id"],
+                "name": "Renamed Project",
+                "config": {"defaultMode": "plan"},
+            },
             session_factory=session_factory,
         )
         assert updated.response["result"]["project"]["config"] == {"defaultMode": "plan"}
+        assert updated.response["result"]["project"]["name"] == "Renamed Project"
 
         read = await handle_project_get_operation(
-            request_id=4,
+            request_id=5,
             params={"project_id": project["id"]},
             session_factory=session_factory,
         )
@@ -2594,7 +2309,7 @@ async def test_project_operations_create_list_update_get_and_delete(tmp_path):
             await db.commit()
 
         deleted = await handle_project_delete_operation(
-            request_id=5,
+            request_id=6,
             params={"project_id": project["id"]},
             session_factory=session_factory,
         )
@@ -2717,15 +2432,19 @@ async def test_project_sessions_list_operation_returns_recent_project_sessions(t
 @pytest.mark.asyncio
 async def test_settings_operations_round_trip_app_setting(tmp_path):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'settings.db'}", future=True)
+    shared_engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'settings-shared.db'}", future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    shared_session = async_sessionmaker(shared_engine, expire_on_commit=False)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    await init_shared_config_schema(shared_engine)
 
     try:
         missing = await handle_settings_get_operation(
             request_id=1,
             params={"namespace": "lamwriter.test"},
             session_factory=session_factory,
+            config_session_factory=shared_session,
         )
         assert missing.response["result"]["setting"]["value"] == {}
 
@@ -2733,6 +2452,7 @@ async def test_settings_operations_round_trip_app_setting(tmp_path):
             request_id=2,
             params={"namespace": "lamwriter.test", "value": {"enabled": True}},
             session_factory=session_factory,
+            config_session_factory=shared_session,
         )
         assert updated.response["result"]["setting"]["value"] == {"enabled": True}
 
@@ -2740,18 +2460,23 @@ async def test_settings_operations_round_trip_app_setting(tmp_path):
             request_id=3,
             params={"namespace": "lamwriter.test"},
             session_factory=session_factory,
+            config_session_factory=shared_session,
         )
         assert read.response["result"]["setting"]["value"] == {"enabled": True}
     finally:
         await engine.dispose()
+        await shared_engine.dispose()
 
 
 @pytest.mark.asyncio
 async def test_runtime_capabilities_operation_returns_settings_payload(tmp_path):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'runtime-capabilities.db'}", future=True)
+    shared_engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'runtime-capabilities-shared.db'}", future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    shared_session = async_sessionmaker(shared_engine, expire_on_commit=False)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    await init_shared_config_schema(shared_engine)
 
     try:
         async with session_factory() as db:
@@ -2770,6 +2495,7 @@ async def test_runtime_capabilities_operation_returns_settings_payload(tmp_path)
             request_id=1,
             params={"work_root": str(tmp_path)},
             session_factory=session_factory,
+            config_session_factory=shared_session,
         )
 
         capabilities = outcome.response["result"]["runtime_capabilities"]
@@ -2781,6 +2507,7 @@ async def test_runtime_capabilities_operation_returns_settings_payload(tmp_path)
         assert run_command["permission_group"] == "command"
     finally:
         await engine.dispose()
+        await shared_engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -2830,12 +2557,15 @@ async def test_subagent_operations_create_update_and_delete_project_definition(t
 @pytest.mark.asyncio
 async def test_config_read_operations_return_provider_model_and_resolution(tmp_path):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'config-read.db'}", future=True)
+    shared_engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'config-read-shared.db'}", future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    shared_session = async_sessionmaker(shared_engine, expire_on_commit=False)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    await init_shared_config_schema(shared_engine)
 
     try:
-        async with session_factory() as db:
+        async with shared_session() as db:
             provider = LLMProvider(
                 id="provider-1",
                 name="OpenAI",
@@ -2858,16 +2588,18 @@ async def test_config_read_operations_return_provider_model_and_resolution(tmp_p
             request_id=1,
             params={},
             session_factory=session_factory,
+            config_session_factory=shared_session,
         )
         provider_rows = providers.response["result"]["providers"]
         assert provider_rows[0]["id"] == "provider-1"
-        assert provider_rows[0]["api_key"] == "sk-1...7890"
+        assert provider_rows[0]["api_key"] == "********"
         assert provider_rows[0]["has_api_key"] is True
 
         models = await handle_config_models_list_operation(
             request_id=2,
             params={"provider_id": "provider-1"},
             session_factory=session_factory,
+            config_session_factory=shared_session,
         )
         model_rows = models.response["result"]["models"]
         assert [row["id"] for row in model_rows] == ["model-1"]
@@ -2876,6 +2608,7 @@ async def test_config_read_operations_return_provider_model_and_resolution(tmp_p
             request_id=3,
             params={"task_type": "writer"},
             session_factory=session_factory,
+            config_session_factory=shared_session,
         )
         payload = resolved.response["result"]["resolved"]
         assert payload["provider"]["id"] == "provider-1"
@@ -2883,14 +2616,18 @@ async def test_config_read_operations_return_provider_model_and_resolution(tmp_p
         assert payload["task_type"] == "writer"
     finally:
         await engine.dispose()
+        await shared_engine.dispose()
 
 
 @pytest.mark.asyncio
 async def test_provider_write_operations_create_update_and_delete_provider(tmp_path):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'provider-write.db'}", future=True)
+    shared_engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'provider-write-shared.db'}", future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    shared_session = async_sessionmaker(shared_engine, expire_on_commit=False)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    await init_shared_config_schema(shared_engine)
 
     try:
         created = await handle_config_provider_create_operation(
@@ -2902,12 +2639,13 @@ async def test_provider_write_operations_create_update_and_delete_provider(tmp_p
                 "api_key": "sk-provider-secret",
             },
             session_factory=session_factory,
+            config_session_factory=shared_session,
         )
         provider = created.response["result"]["provider"]
         assert provider["name"] == "Provider"
-        assert provider["api_key"] == "sk-p...cret"
+        assert provider["api_key"] == "********"
 
-        async with session_factory() as db:
+        async with shared_session() as db:
             db.add(
                 LLMModel(
                     id="model-to-delete",
@@ -2926,10 +2664,11 @@ async def test_provider_write_operations_create_update_and_delete_provider(tmp_p
                 "api_key": "********",
             },
             session_factory=session_factory,
+            config_session_factory=shared_session,
         )
         assert updated.response["result"]["provider"]["name"] == "Renamed"
 
-        async with session_factory() as db:
+        async with shared_session() as db:
             row = await db.get(LLMProvider, provider["id"])
             assert row is not None
             assert row.api_key == "sk-provider-secret"
@@ -2938,25 +2677,30 @@ async def test_provider_write_operations_create_update_and_delete_provider(tmp_p
             request_id=3,
             params={"provider_id": provider["id"]},
             session_factory=session_factory,
+            config_session_factory=shared_session,
         )
         assert deleted.response["result"] == {"ok": True}
 
-        async with session_factory() as db:
+        async with shared_session() as db:
             assert await db.get(LLMProvider, provider["id"]) is None
             assert await db.get(LLMModel, "model-to-delete") is None
     finally:
         await engine.dispose()
+        await shared_engine.dispose()
 
 
 @pytest.mark.asyncio
 async def test_model_write_operations_create_update_and_delete_model(tmp_path):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'model-write.db'}", future=True)
+    shared_engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'model-write-shared.db'}", future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    shared_session = async_sessionmaker(shared_engine, expire_on_commit=False)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    await init_shared_config_schema(shared_engine)
 
     try:
-        async with session_factory() as db:
+        async with shared_session() as db:
             db.add(
                 LLMProvider(
                     id="provider-1",
@@ -2978,6 +2722,7 @@ async def test_model_write_operations_create_update_and_delete_model(tmp_path):
                 "max_output_tokens": 16000,
             },
             session_factory=session_factory,
+            config_session_factory=shared_session,
         )
         model = created.response["result"]["model"]
         assert model["model_id"] == "gpt-test"
@@ -2991,6 +2736,7 @@ async def test_model_write_operations_create_update_and_delete_model(tmp_path):
                 "thinking_supported": True,
             },
             session_factory=session_factory,
+            config_session_factory=shared_session,
         )
         assert updated.response["result"]["model"]["display_name"] == "GPT Updated"
         assert updated.response["result"]["model"]["thinking_supported"] is True
@@ -2999,13 +2745,15 @@ async def test_model_write_operations_create_update_and_delete_model(tmp_path):
             request_id=3,
             params={"model_record_id": model["id"]},
             session_factory=session_factory,
+            config_session_factory=shared_session,
         )
         assert deleted.response["result"] == {"ok": True}
 
-        async with session_factory() as db:
+        async with shared_session() as db:
             assert await db.get(LLMModel, model["id"]) is None
     finally:
         await engine.dispose()
+        await shared_engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -3014,9 +2762,12 @@ async def test_import_env_operation_creates_provider_model_and_writer_route(tmp_
     from app.models.app_setting import AppSetting
 
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'import-env.db'}", future=True)
+    shared_engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'import-env-shared.db'}", future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    shared_session = async_sessionmaker(shared_engine, expire_on_commit=False)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    await init_shared_config_schema(shared_engine)
 
     monkeypatch.setattr(settings, "llm_api_key", "sk-env-secret")
     monkeypatch.setattr(settings, "llm_base_url", "https://api.env.test/v1")
@@ -3033,16 +2784,17 @@ async def test_import_env_operation_creates_provider_model_and_writer_route(tmp_
             request_id=1,
             params={},
             session_factory=session_factory,
+            config_session_factory=shared_session,
         )
 
         result = outcome.response["result"]
         assert result["provider"]["base_url"] == "https://api.env.test/v1"
-        assert result["provider"]["api_key"] == "sk-e...cret"
+        assert result["provider"]["api_key"] == "********"
         assert result["model"]["model_id"] == "gpt-env"
         assert result["model"]["thinking_supported"] is True
         assert result["route_updated"] is True
 
-        async with session_factory() as db:
+        async with shared_session() as db:
             setting = await db.get(AppSetting, "lamwriter.modelRouting")
             assert setting is not None
             writer_route = setting.value["routes"]["writer"]
@@ -3050,6 +2802,7 @@ async def test_import_env_operation_creates_provider_model_and_writer_route(tmp_
             assert writer_route["model_id"] == result["model"]["id"]
     finally:
         await engine.dispose()
+        await shared_engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -3061,26 +2814,23 @@ async def test_config_adapter_profiles_operation_returns_profiles():
     assert {"id", "label", "protocol", "match_base_url", "endpoint"} <= set(profiles[0])
 
 
-@pytest.mark.asyncio
-async def test_connection_routes_dot_operations_through_core_catalog(monkeypatch):
+def test_connection_routes_dot_operations_through_core_catalog():
     connection = WriterAppServerConnection(DummyWebSocket())
-    connection.initialized = True
-    called = []
+    catalog = connection._operation_catalog()
+    host_handlers = connection.context.host.operation_handlers()
+    for operation in CORE_WORKBENCH_OPERATION_NAMES:
+        assert catalog._handlers[operation] is host_handlers[operation]
 
-    async def fake_turn_cancel(request):
-        called.append((request.method, request.params))
 
-    monkeypatch.setattr(connection, "_turn_interrupt", fake_turn_cancel)
+def test_writer_injects_only_non_lifecycle_core_operation_adapters():
+    connection = WriterAppServerConnection(DummyWebSocket())
+    lifecycle_names = {
+        "thread.start", "thread.read", "thread.resume", "turn.start", "turn.steer",
+        "turn.cancel", "queue.create", "queue.update", "queue.delete",
+        "queue.guide",
+    }
 
-    await connection._handle_raw(
-        {
-            "id": 1,
-            "method": "turn.cancel",
-            "params": {"thread_id": "thread-1"},
-        }
-    )
-
-    assert called == [("turn.cancel", {"thread_id": "thread-1"})]
+    assert set(connection.context.operations.list()) == set(CORE_WORKBENCH_OPERATION_NAMES) - lifecycle_names
 
 
 def test_backend_reducer_resolves_core_approval_request():
@@ -3184,6 +2934,40 @@ def test_backend_reducer_replays_legacy_turn_started_as_running():
     assert state["turns"]["turn-1"]["last_method"] == "turn/started"
 
 
+@pytest.mark.parametrize(
+    "method",
+    [
+        "thread/started",
+        "turn/accepted",
+        "turn/started",
+        "item/started",
+        "turn/interrupted",
+        "turn/steered",
+        "serverRequest/resolved",
+        "queue/itemAccepted",
+        "queue/itemUpdated",
+        "queue/itemDispatched",
+        "queue/itemDeleted",
+        "core/runItem",
+    ],
+)
+def test_backend_reducer_delegates_generic_events_to_core_projector(monkeypatch, method):
+    delegated = []
+
+    def apply_in_place(state, event):
+        delegated.append(event)
+        return state
+
+    monkeypatch.setattr(reducer_module._CORE_PROJECTOR, "apply_in_place", apply_in_place)
+
+    apply_event_in_place(
+        empty_thread_state("thread-1"),
+        app_event("event-1", 1, method, {"request_id": "request-1"}, turn_id="turn-1", item_id="item-1"),
+    )
+
+    assert [event.method for event in delegated] == [method]
+
+
 def test_backend_reducer_late_interrupt_does_not_resurrect_completed_turn():
     state = empty_thread_state("thread-1")
     state = apply_event(
@@ -3216,6 +3000,61 @@ def test_backend_reducer_late_interrupt_does_not_resurrect_completed_turn():
     assert state["status"] == "failed"
 
 
+def test_backend_reducer_preserves_cancelled_status():
+    state = apply_event(
+        empty_thread_state("thread-1"),
+        app_event(
+            "event-1",
+            1,
+            "core/runItem",
+            RunItemEvent(
+                kind="status",
+                thread_id="thread-1",
+                event_id="turn-1:cancelled",
+                run_id="turn-1",
+                turn_id="turn-1",
+                item_id="turn-1:cancelled",
+                status="cancelled",
+                payload={"type": "turn", "status": "cancelled"},
+            ).to_dict(),
+            turn_id="turn-1",
+        ),
+    )
+
+    assert state["core"]["status"] == "cancelled"
+    assert state["status"] == "cancelled"
+    assert state["turns"]["turn-1"]["status"] == "cancelled"
+
+
+def test_backend_reducer_in_place_replay_matches_copying_apply():
+    events = [
+        app_event("event-1", 1, "turn/accepted", {"type": "turn"}, turn_id="turn-1"),
+        app_event("event-2", 2, "item/started", {"type": "agentMessage"}, turn_id="turn-1", item_id="item-1"),
+        app_event(
+            "event-3",
+            3,
+            "core/runItem",
+            RunItemEvent(
+                event_id="core-1",
+                kind="message",
+                thread_id="thread-1",
+                turn_id="turn-1",
+                item_id="item-1",
+                payload={"delta": "done"},
+            ).to_dict(),
+        ),
+    ]
+    copied = empty_thread_state("thread-1")
+    for event in events:
+        copied = apply_event(copied, event)
+
+    in_place = empty_thread_state("thread-1")
+    for event in events:
+        apply_event_in_place(in_place, event)
+
+    assert in_place == copied == reduce_events("thread-1", events)
+
+
 @pytest.mark.asyncio
 async def test_snapshot_rebuild_includes_events_after_five_thousand(tmp_path):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'snapshot-rebuild.db'}", future=True)
@@ -3225,38 +3064,50 @@ async def test_snapshot_rebuild_includes_events_after_five_thousand(tmp_path):
 
     try:
         async with session_factory() as db:
-            await append_event(
-                db,
-                AppendEventInput(
-                    thread_id="thread-1",
-                    turn_id="turn-1",
-                    method="turn/accepted",
-                    payload={"type": "turn"},
-                ),
-            )
-            for index in range(5000):
-                await append_event(
-                    db,
-                    AppendEventInput(
+            db.add_all(
+                [
+                    WriterAppEvent(
+                        event_id="turn-accepted",
                         thread_id="thread-1",
+                        seq=1,
                         turn_id="turn-1",
-                        item_id=f"item-{index}",
-                        method="item/started",
-                        payload={"type": "reasoning", "status": "running"},
+                        method="turn/accepted",
+                        payload_json={"type": "turn"},
                     ),
-                )
-            await append_run_item_event(
-                db,
-                RunItemEvent(
-                    kind="status",
-                    thread_id="thread-1",
-                    event_id="core-failed",
-                    turn_id="turn-1",
-                    status="failed",
-                    payload={"type": "turn", "status": "failed"},
-                ),
+                    *[
+                        WriterAppEvent(
+                            event_id=f"item-{index}",
+                            thread_id="thread-1",
+                            seq=index + 2,
+                            turn_id="turn-1",
+                            item_id=f"item-{index}",
+                            method="item/started",
+                            payload_json={"type": "reasoning", "status": "running"},
+                        )
+                        for index in range(5000)
+                    ],
+                    WriterAppEvent(
+                        event_id="core-failed",
+                        thread_id="thread-1",
+                        seq=5002,
+                        turn_id="turn-1",
+                        method="core/runItem",
+                        payload_json=RunItemEvent(
+                            kind="status",
+                            thread_id="thread-1",
+                            event_id="core-failed",
+                            turn_id="turn-1",
+                            status="failed",
+                            payload={"type": "turn", "status": "failed"},
+                        ).to_dict(),
+                    ),
+                ]
             )
+            await db.flush()
+            started = perf_counter()
             state = await rebuild_snapshot(db, "thread-1")
+            elapsed = perf_counter() - started
+            print(f"5002 snapshot rebuild: {elapsed:.3f}s")
 
             assert state["snapshot_seq"] == 5002
             assert state["status"] == "failed"
@@ -3292,16 +3143,16 @@ async def test_turn_start_passes_existing_app_server_message_and_turn_to_runtime
         connection.initialized = True
         connection.thread_id = "thread-1"
 
-        await connection._turn_start(
-            connection_module.JsonRpcRequest(
-                id=1,
-                method="turn/start",
-                params={
+        await connection._handle_raw(
+            {
+                "id": 1,
+                "method": "turn/start",
+                "params": {
                     "thread_id": "thread-1",
                     "client_message_id": "client-1",
                     "input": [{"type": "text", "text": "hello"}],
                 },
-            )
+            }
         )
 
         for _ in range(30):
@@ -3367,11 +3218,11 @@ async def test_turn_start_binds_attachment_ids_and_passes_them_to_runtime(monkey
         connection.initialized = True
         connection.thread_id = "thread-1"
 
-        await connection._turn_start(
-            connection_module.JsonRpcRequest(
-                id=1,
-                method="turn/start",
-                params={
+        await connection._handle_raw(
+            {
+                "id": 1,
+                "method": "turn/start",
+                "params": {
                     "thread_id": "thread-1",
                     "client_message_id": "client-attachment-1",
                     "input": [
@@ -3385,7 +3236,7 @@ async def test_turn_start_binds_attachment_ids_and_passes_them_to_runtime(monkey
                         },
                     ],
                 },
-            )
+            }
         )
 
         for _ in range(30):
@@ -3424,7 +3275,7 @@ async def test_runtime_lifecycle_accepts_injected_writer_service(tmp_path):
             session_factory=session_factory,
             service_provider=lambda: {"run_turn": fake_run_turn},
         )
-        await runtime._run(
+        await runtime.run_accepted_turn(
             thread_id="thread-1",
             turn_id="turn-1",
             user_message_id="message-1",
@@ -3437,6 +3288,8 @@ async def test_runtime_lifecycle_accepts_injected_writer_service(tmp_path):
         assert captured["user_message"] == "hello"
     finally:
         await engine.dispose()
+
+
 
 
 @pytest.mark.asyncio
@@ -3479,16 +3332,16 @@ async def test_turn_interrupt_cancels_app_server_runtime_task(monkeypatch, tmp_p
         connection.initialized = True
         connection.thread_id = "thread-1"
 
-        await connection._turn_start(
-            connection_module.JsonRpcRequest(
-                id=1,
-                method="turn/start",
-                params={
+        await connection._handle_raw(
+            {
+                "id": 1,
+                "method": "turn/start",
+                "params": {
                     "thread_id": "thread-1",
                     "client_message_id": "client-1",
                     "input": [{"type": "text", "text": "long run"}],
                 },
-            )
+            }
         )
         await connection_module.asyncio.wait_for(started.wait(), timeout=1)
         start_response = await connection.outbound.get()
@@ -3496,12 +3349,12 @@ async def test_turn_interrupt_cancels_app_server_runtime_task(monkeypatch, tmp_p
         while not connection.outbound.empty():
             await connection.outbound.get()
 
-        await connection._turn_interrupt(
-            connection_module.JsonRpcRequest(
-                id=2,
-                method="turn/interrupt",
-                params={"thread_id": "thread-1", "turn_id": turn_id},
-            )
+        await connection._handle_raw(
+            {
+                "id": 2,
+                "method": "turn/interrupt",
+                "params": {"thread_id": "thread-1", "turn_id": turn_id},
+            }
         )
         interrupt_response = await connection.outbound.get()
         assert interrupt_response["result"]["snapshot"]["core"]["status"] == "interrupting"
@@ -3509,7 +3362,7 @@ async def test_turn_interrupt_cancels_app_server_runtime_task(monkeypatch, tmp_p
 
         await connection_module.asyncio.wait_for(cancelled.wait(), timeout=1)
 
-        completed = []
+        cancelled_events = []
         interrupting = []
         for _ in range(30):
             async with session_factory() as db:
@@ -3521,21 +3374,28 @@ async def test_turn_interrupt_cancels_app_server_runtime_task(monkeypatch, tmp_p
                     and event.payload.get("kind") == "status"
                     and event.payload.get("status") == "interrupting"
                 ]
-                completed = [
+                cancelled_events = [
                     event
                     for event in events
                     if event.method == "core/runItem"
                     and event.payload.get("kind") == "status"
-                    and event.payload.get("status") == "failed"
+                    and event.payload.get("status") == "cancelled"
                 ]
-            if completed:
+            if cancelled_events:
                 break
             await connection_module.asyncio.sleep(0.01)
 
         assert interrupting
-        assert completed
-        assert completed[-1].payload["payload"]["raw_end_reason"] == "user_interrupt"
-        assert all(event.payload.get("status") != "completed" for event in completed)
+        assert len(cancelled_events) == 1
+        assert cancelled_events[0].turn_id == turn_id
+        assert cancelled_events[0].payload["run_id"] == turn_id
+        assert cancelled_events[0].payload["turn_id"] == turn_id
+        assert cancelled_events[0].payload["payload"]["raw_end_reason"] == "user_interrupt"
+        async with session_factory() as db:
+            snapshot = await load_snapshot(db, "thread-1")
+        assert snapshot["status"] == "cancelled"
+        assert snapshot["core"]["status"] == "cancelled"
+        assert snapshot["turns"][turn_id]["status"] == "cancelled"
     finally:
         for task in captured_tasks:
             if not task.done():
@@ -3555,7 +3415,7 @@ async def test_turn_interrupt_ignores_core_terminal_turn(monkeypatch, tmp_path):
 
     try:
         async with session_factory() as db:
-            turn = await append_event(
+            turn = await _append_event_without_projection(
                 db,
                 AppendEventInput(
                     thread_id="thread-1",
@@ -3565,7 +3425,7 @@ async def test_turn_interrupt_ignores_core_terminal_turn(monkeypatch, tmp_path):
                 ),
             )
             await apply_event_to_snapshot(db, turn)
-            completed = await append_run_item_event(
+            completed = await _append_run_item_without_projection(
                 db,
                 RunItemEvent(
                     kind="status",
@@ -3583,12 +3443,12 @@ async def test_turn_interrupt_ignores_core_terminal_turn(monkeypatch, tmp_path):
         connection.initialized = True
         connection.thread_id = "thread-1"
 
-        await connection._turn_interrupt(
-            connection_module.JsonRpcRequest(
-                id=2,
-                method="turn/interrupt",
-                params={"thread_id": "thread-1", "turn_id": "turn-1"},
-            )
+        await connection._handle_raw(
+            {
+                "id": 2,
+                "method": "turn/interrupt",
+                "params": {"thread_id": "thread-1", "turn_id": "turn-1"},
+            }
         )
 
         response = await connection.outbound.get()
@@ -3604,52 +3464,51 @@ async def test_turn_interrupt_ignores_core_terminal_turn(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_client_json_rpc_response_resolves_server_request(monkeypatch, tmp_path):
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'connection-server-response.db'}", future=True)
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+async def test_writer_ws_approval_delegates_to_core_operation(monkeypatch):
+    connection = WriterAppServerConnection(DummyWebSocket())
+    connection.initialized = True
+    calls = []
 
-    monkeypatch.setattr(connection_module, "async_session", session_factory)
+    async def respond(request):
+        calls.append(dict(request.payload))
+        return OperationResult(name=request.name, payload={"decision": "approve"})
 
-    try:
-        async with session_factory() as db:
-            await create_server_request(
-                db,
-                request_id="request-1",
-                thread_id="thread-1",
-                turn_id="turn-1",
-                item_id="item-1",
-                kind="approval",
-            )
-            await db.commit()
+    monkeypatch.setitem(connection.context.operations._handlers, "approval.respond", respond)
+    await connection._handle_raw({
+        "id": 9,
+        "method": "approval.respond",
+        "params": {"thread_id": "thread-1", "request_id": "request-1", "decision": "approve_once"},
+    })
 
-        connection = WriterAppServerConnection(DummyWebSocket())
-        connection.initialized = True
-        connection.thread_id = "thread-1"
+    response = await connection.outbound.get()
+    assert response == {"id": 9, "result": {"decision": "approve"}}
+    assert calls == [{
+        "request_id": "request-1", "thread_id": "thread-1",
+        "decision": "approve", "guidance": "",
+    }]
 
-        async def noop_continue(**kwargs):
-            return None
 
-        monkeypatch.setattr(connection, "_continue_resolved_approval", noop_continue)
+@pytest.mark.asyncio
+async def test_writer_ws_approval_does_not_lookup_missing_request_id(monkeypatch):
+    connection = WriterAppServerConnection(DummyWebSocket())
+    connection.initialized = True
+    calls = []
 
-        await connection._handle_raw(
-            {
-                "id": "request-1",
-                "result": {"decision": "approve_once"},
-            }
-        )
+    async def respond(request):
+        calls.append(dict(request.payload))
+        return OperationResult(name=request.name, status="error", payload={"error": "request_id is required"})
 
-        message = await connection.outbound.get()
-        assert message["method"] == "serverRequest/resolved"
-        assert message["params"]["payload"]["decision"] == "approve_once"
-        snapshot = await connection.outbound.get()
-        assert snapshot["method"] == "thread/snapshot"
-        assert snapshot["params"]["snapshot_seq"] == 2
-        assert snapshot["params"]["requests"]["request-1"]["status"] == "resolved"
-        assert snapshot["params"]["core"]["requests"]["request-1"]["status"] == "resolved"
-    finally:
-        await engine.dispose()
+    monkeypatch.setitem(connection.context.operations._handlers, "approval.respond", respond)
+    await connection._handle_raw({
+        "id": 10,
+        "method": "approval.respond",
+        "params": {"thread_id": "thread-1", "decision": "approve"},
+    })
+
+    response = await connection.outbound.get()
+    assert response["id"] == 10
+    assert response["error"]["message"] == "request_id and decision are required"
+    assert calls == []
 
 
 @pytest.mark.asyncio
@@ -3661,7 +3520,7 @@ async def test_connection_returns_rpc_error_when_operation_handler_raises(monkey
     async def failing_command_execute(request):
         raise RuntimeError("compact failed")
 
-    monkeypatch.setattr(connection, "_command_execute", failing_command_execute)
+    monkeypatch.setitem(connection.context.operations._handlers, "command.execute", failing_command_execute)
 
     await connection._handle_raw(
         {
@@ -3724,34 +3583,17 @@ async def test_connection_returns_compacted_result_when_compact_history_is_short
 
 
 @pytest.mark.asyncio
-async def test_approval_continuation_failure_persists_core_error(monkeypatch, tmp_path):
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'connection-approval-error.db'}", future=True)
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+async def test_approval_operation_failure_returns_rpc_error(monkeypatch):
+    connection = WriterAppServerConnection(DummyWebSocket())
 
-    monkeypatch.setattr(connection_module, "async_session", session_factory)
+    async def fail(request):
+        return OperationResult(name=request.name, status="error", payload={"error": "approval failed"})
 
-    try:
-        connection = WriterAppServerConnection(DummyWebSocket())
-        await connection._continue_resolved_approval(
-            request_id="request-1",
-            thread_id="thread-1",
-            decision="approve_once",
-        )
-
-        async with session_factory() as db:
-            events = await list_events_after(db, thread_id="thread-1")
-            snapshot = await rebuild_snapshot(db, "thread-1")
-
-        assert [event.method for event in events] == ["core/runItem", "core/runItem"]
-        assert events[0].payload["kind"] == "error"
-        assert events[0].payload["payload"]["request_id"] == "request-1"
-        assert events[1].payload["kind"] == "status"
-        assert events[1].payload["status"] == "failed"
-        assert snapshot["status"] == "failed"
-        assert snapshot["core"]["status"] == "failed"
-        assert snapshot["core"]["last_error"]["request_id"] == "request-1"
-        assert "last_error" not in snapshot
-    finally:
-        await engine.dispose()
+    monkeypatch.setitem(connection.context.operations._handlers, "approval.respond", fail)
+    outcome = await connection.context.host.execute(
+        "approval.respond",
+        request_id=1,
+        params={"thread_id": "thread-1", "request_id": "request-1", "decision": "approve"},
+        context=connection.context,
+    )
+    assert outcome.response["error"]["message"] == "approval failed"

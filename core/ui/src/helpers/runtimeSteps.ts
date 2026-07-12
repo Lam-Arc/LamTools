@@ -1,8 +1,8 @@
 ﻿/**
  * Runtime step helpers — shared step-group factories used by all products.
  *
- * Both Writer and Artist display an identical loading step-group while
- * fetching session data.  This factory avoids duplicating that structure.
+ * Products display this loading step-group while fetching session data.
+ * This factory avoids duplicating that structure.
  */
 
 import type { CoreRuntimeStepGroup } from '../types';

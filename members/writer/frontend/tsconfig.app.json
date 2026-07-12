@@ -13,11 +13,9 @@
     "skipLibCheck": true,
     "noEmit": true,
     "paths": {
-      "@/*": ["./src/*"],
-      "@lamtools/ui": ["../../../core/ui/src/index.ts"],
-      "@lamtools/ui/*": ["../../../core/ui/src/*"]
+      "@/*": ["./src/*"]
     },
     "types": ["vite/client"]
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.vue", "../../../core/ui/src/**/*.ts", "../../../core/ui/src/**/*.vue"]
+  "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.vue"]
 }

@@ -1,0 +1,690 @@
+from __future__ import annotations
+
+from copy import deepcopy
+from dataclasses import replace
+from pathlib import Path
+from typing import Any, Awaitable, Callable, Literal, Protocol, runtime_checkable
+
+from lamtools_core.event import CoreEvent
+from lamtools_core.agent import SUB_AGENT_TOOL_NAME, SUB_AGENT_TOOL_SPEC
+from lamtools_core.skills import SkillRegistry
+from lamtools_core.tool import ToolCall, ToolResult, ToolSpec
+from lamtools_core.tool.approval import ApprovalGate
+from lamtools_core.tool.command import run_subprocess
+from lamtools_core.tool.command_tools import CommandToolHandlers
+from lamtools_core.tool.git_tools import make_git_diff_handler, make_git_status_handler
+from lamtools_core.tool.mcp_tools import MCPToolCaller, execute_mcp_tool_call
+from lamtools_core.tool.permission import ASK_USER, AUTO_ALLOW, HARD_BLOCK, PermissionTier
+from lamtools_core.tool.web_tools import (
+    make_browser_check_handler,
+    make_web_fetch_handler,
+    make_web_search_handler,
+)
+from lamtools_core.tool.workspace_files import (
+    DEFAULT_MAX_LIST_ITEMS,
+    DEFAULT_MAX_SEARCH_RESULTS,
+    DEFAULT_MAX_TEXT_LENGTH,
+    make_edit_file_handler,
+    make_write_file_handler,
+    WorkspaceReadOnlyTools,
+)
+
+ToolHandler = Callable[[ToolCall], Awaitable[ToolResult]]
+ApprovalPolicy = Literal["require", "auto_approve"]
+
+
+@runtime_checkable
+class SubAgentRunner(Protocol):
+    async def run(
+        self,
+        *,
+        task: str,
+        agent: str = "",
+        model: str = "",
+        expected_output: str = "",
+        context: Any = None,
+    ) -> str: ...
+
+DEFAULT_MAX_WRITE_LENGTH = 500_000
+DEFAULT_COMMAND_TIMEOUT = 120
+
+
+DEFAULT_TOOL_PERMISSIONS: dict[str, PermissionTier] = {
+    "read_file": AUTO_ALLOW,
+    "list_dir": AUTO_ALLOW,
+    "search_files": AUTO_ALLOW,
+    "search_content": AUTO_ALLOW,
+    "load_skill": AUTO_ALLOW,
+    "write_file": ASK_USER,
+    "edit_file": ASK_USER,
+    "run_command": ASK_USER,
+    "run_tests": ASK_USER,
+    "git_status": AUTO_ALLOW,
+    "git_diff": AUTO_ALLOW,
+    "web_search": AUTO_ALLOW,
+    "web_fetch": ASK_USER,
+    "browser_check": AUTO_ALLOW,
+    "mcp_tool": ASK_USER,
+    SUB_AGENT_TOOL_NAME: AUTO_ALLOW,
+}
+
+
+DEFAULT_TOOL_ORDER: tuple[str, ...] = (
+    "read_file",
+    "list_dir",
+    "search_files",
+    "search_content",
+    "load_skill",
+    "write_file",
+    "edit_file",
+    "run_command",
+    "run_tests",
+    "git_status",
+    "git_diff",
+    "web_search",
+    "web_fetch",
+    "browser_check",
+    "mcp_tool",
+    SUB_AGENT_TOOL_NAME,
+)
+
+
+DEFAULT_TOOL_CATEGORIES: dict[str, str] = {
+    "read_file": "file_read",
+    "list_dir": "file_read",
+    "search_files": "file_read",
+    "search_content": "file_read",
+    "load_skill": "skill",
+    "write_file": "file_write",
+    "edit_file": "file_write",
+    "run_command": "command",
+    "run_tests": "command",
+    "git_status": "git",
+    "git_diff": "git",
+    "web_search": "web",
+    "web_fetch": "web",
+    "browser_check": "browser",
+    "mcp_tool": "mcp",
+    SUB_AGENT_TOOL_NAME: "agent",
+}
+
+
+DEFAULT_TOOL_FAILURE_MODES: dict[str, list[dict[str, str]]] = {
+    "read_file": [
+        {"type": "path_outside_root", "message": "Blocked: path is outside work_root"},
+        {"type": "file_not_found", "message": "File not found"},
+        {"type": "read_error", "message": "Error reading file"},
+    ],
+    "write_file": [
+        {"type": "path_outside_root", "message": "Blocked: path is outside work_root"},
+        {"type": "sensitive_pattern", "message": "Blocked: path contains sensitive pattern"},
+        {"type": "write_rejected", "message": "WRITE REJECTED: {reason}"},
+    ],
+    "edit_file": [
+        {"type": "old_string_empty", "message": "old_string is empty"},
+        {"type": "old_string_not_found", "message": "old_string not found in file"},
+        {"type": "path_outside_root", "message": "Blocked: path is outside work_root"},
+        {"type": "sensitive_pattern", "message": "Blocked: path contains sensitive pattern"},
+        {"type": "edit_rejected", "message": "EDIT REJECTED: {reason}"},
+    ],
+    "run_command": [
+        {"type": "command_rejected", "message": "Command rejected: {reason}"},
+        {"type": "command_failed", "message": "Command failed with exit code {code}"},
+        {"type": "command_timeout", "message": "Command timed out after {timeout}s"},
+        {"type": "incompatible_shell", "message": "Incompatible shell command on Windows"},
+        {"type": "port_in_use", "message": "Requested local port is already listening"},
+        {"type": "wrong_server", "message": "HTTP probe reached a server that is not serving the current work_root"},
+        {"type": "probe_unreachable", "message": "Background process did not become reachable at the probe URL"},
+        {"type": "probe_http_error", "message": "Readiness URL returned a non-success HTTP status"},
+        {"type": "readiness_text_missing", "message": "Readiness response did not contain readiness_text"},
+    ],
+    "run_tests": [
+        {"type": "no_test_command", "message": "No test command detected"},
+        {"type": "test_failed", "message": "Tests failed"},
+        {"type": "command_timeout", "message": "Test command timed out"},
+    ],
+    "web_search": [{"type": "search_failed", "message": "Web search failed"}],
+    "web_fetch": [
+        {"type": "fetch_failed", "message": "Failed to fetch URL"},
+        {"type": "invalid_url", "message": "Invalid URL"},
+    ],
+    "browser_check": [
+        {"type": "file_protocol_blocked", "message": "Access to file: protocol is blocked"},
+        {"type": "fetch_failed", "message": "Failed to fetch URL"},
+    ],
+    "mcp_tool": [
+        {"type": "mcp_error", "message": "MCP TOOL ERROR: {reason}"},
+        {"type": "tool_not_found", "message": "MCP tool not found"},
+    ],
+}
+
+
+DEFAULT_TOOL_RECOVERY: dict[str, str] = {
+    "read_file": "Check path exists, use list_dir to find correct path",
+    "write_file": "Check path bounds, avoid sensitive patterns, ensure content is valid",
+    "edit_file": "Read file first to get exact content, use precise old_string match",
+    "search_content": "Use an exact substring from the file or narrow the search path",
+    "run_command": (
+        "Fix command syntax, check platform compatibility, or increase timeout. For local preview servers, use "
+        "recommended_action from tool metadata; for port_in_use choose a free port instead of retrying the same command."
+    ),
+    "run_tests": (
+        "If assertions fail, fix production code before rerunning equivalent tests. If the command itself is "
+        "invalid, pass an explicit command, create a test script, or use alternative verification."
+    ),
+    "web_search": "Retry with simpler query, try different search terms",
+    "web_fetch": "Check URL validity, try alternative URL",
+    "browser_check": "Use local static server with http://127.0.0.1:<port>/ instead of file://",
+    "mcp_tool": "Check tool name and arguments, verify MCP server status",
+}
+
+
+DEFAULT_OUTPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "status": {"type": "string", "enum": ["ok", "failed", "skipped", "blocked"]},
+        "content": {"type": "string"},
+        "error": {"type": "string"},
+        "metadata": {"type": "object"},
+        "artifacts": {"type": "array", "items": {"type": "object"}},
+    },
+    "required": ["status", "content", "error", "metadata", "artifacts"],
+}
+
+
+def _schema(properties: dict[str, Any], required: list[str] | None = None) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": properties,
+        "required": required or [],
+    }
+
+
+DEFAULT_TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
+    {
+        "name": "read_file",
+        "description": "Read file content within the workspace.",
+        "input_schema": _schema(
+            {"path": {"type": "string", "description": "File path relative to the workspace"}},
+            ["path"],
+        ),
+    },
+    {
+        "name": "list_dir",
+        "description": "List directory contents within the workspace.",
+        "input_schema": _schema({"path": {"type": "string", "description": "Directory path"}}),
+    },
+    {
+        "name": "search_files",
+        "description": "Find files by glob pattern within the workspace.",
+        "input_schema": _schema(
+            {
+                "pattern": {"type": "string", "description": "Glob pattern"},
+                "path": {"type": "string", "description": "Search path"},
+            },
+            ["pattern"],
+        ),
+    },
+    {
+        "name": "search_content",
+        "description": "Search file contents with a literal text pattern.",
+        "input_schema": _schema(
+            {
+                "pattern": {"type": "string", "description": "Literal text pattern"},
+                "path": {"type": "string", "description": "File or directory search path"},
+            },
+            ["pattern"],
+        ),
+    },
+    {
+        "name": "load_skill",
+        "description": "Load a local skill's instructions when the task matches that skill.",
+        "input_schema": _schema(
+            {"name": {"type": "string", "description": "Skill name from the available skills index"}},
+            ["name"],
+        ),
+    },
+    {
+        "name": "write_file",
+        "description": (
+            "Write content to a file. Use for creating files or full rewrites; prefer edit_file "
+            "for small changes to existing files."
+        ),
+        "input_schema": _schema(
+            {
+                "path": {"type": "string", "description": "File path relative to the workspace"},
+                "content": {"type": "string", "description": "File content to write"},
+            },
+            ["path", "content"],
+        ),
+    },
+    {
+        "name": "edit_file",
+        "description": "Replace one exact text segment in an existing file.",
+        "input_schema": _schema(
+            {
+                "path": {"type": "string", "description": "File path relative to the workspace"},
+                "old_string": {"type": "string", "description": "Exact text to replace"},
+                "new_string": {"type": "string", "description": "Replacement text"},
+            },
+            ["path", "old_string", "new_string"],
+        ),
+    },
+    {
+        "name": "run_command",
+        "description": "Run a shell command inside the workspace.",
+        "input_schema": _schema(
+            {
+                "command": {"type": "string", "description": "Command to run"},
+                "timeout": {"type": "integer", "description": "Timeout in seconds"},
+                "background": {"type": "boolean", "description": "Start a long-running background process"},
+                "readiness_url": {"type": "string", "description": "HTTP URL to check when background=true"},
+                "readiness_text": {"type": "string", "description": "Optional text expected at readiness_url"},
+            },
+            ["command"],
+        ),
+    },
+    {
+        "name": "run_tests",
+        "description": "Run the detected or specified test command inside the workspace.",
+        "input_schema": _schema(
+            {
+                "command": {"type": "string", "description": "Test command; auto-detected when omitted"},
+                "timeout": {"type": "integer", "description": "Timeout in seconds"},
+            }
+        ),
+    },
+    {
+        "name": "git_status",
+        "description": "Run git status in the workspace.",
+        "input_schema": _schema({}),
+    },
+    {
+        "name": "git_diff",
+        "description": "Run git diff in the workspace.",
+        "input_schema": _schema({"path": {"type": "string", "description": "Optional path filter"}}),
+    },
+    {
+        "name": "web_search",
+        "description": "Search the web.",
+        "input_schema": _schema(
+            {
+                "query": {"type": "string", "description": "Search query"},
+                "limit": {"type": "integer", "description": "Maximum result count"},
+                "domains": {"type": "array", "items": {"type": "string"}, "description": "Domain filter"},
+            },
+            ["query"],
+        ),
+    },
+    {
+        "name": "web_fetch",
+        "description": "Fetch content from a URL.",
+        "input_schema": _schema({"url": {"type": "string", "description": "URL to fetch"}}, ["url"]),
+    },
+    {
+        "name": "browser_check",
+        "description": "Fetch a URL and optionally check expected text.",
+        "input_schema": _schema(
+            {
+                "url": {"type": "string", "description": "URL to check"},
+                "expect": {"type": "string", "description": "Expected text"},
+            },
+            ["url"],
+        ),
+    },
+    {
+        "name": "mcp_tool",
+        "description": "Call an MCP-registered tool.",
+        "input_schema": _schema(
+            {
+                "tool_name": {"type": "string", "description": "MCP tool name"},
+                "arguments": {"type": "object", "description": "Tool arguments"},
+            },
+            ["tool_name"],
+        ),
+    },
+    deepcopy(SUB_AGENT_TOOL_SPEC),
+)
+
+
+def default_core_tool_specs() -> list[ToolSpec]:
+    specs_by_name = {str(item["name"]): item for item in DEFAULT_TOOL_DEFINITIONS}
+    specs: list[ToolSpec] = []
+    for name in DEFAULT_TOOL_ORDER:
+        item = specs_by_name[name]
+        category = DEFAULT_TOOL_CATEGORIES[name]
+        specs.append(
+            ToolSpec(
+                name=name,
+                description=str(item["description"]),
+                input_schema=strict_tool_schema(item["input_schema"]),
+                output_schema=deepcopy(DEFAULT_OUTPUT_SCHEMA),
+                permission=DEFAULT_TOOL_PERMISSIONS[name],
+                metadata={
+                    "category": category,
+                    "display": _default_display(category),
+                    "failure_modes": deepcopy(
+                        item.get("failure_modes", DEFAULT_TOOL_FAILURE_MODES.get(name, []))
+                    ),
+                    "recovery": str(item.get("recovery", DEFAULT_TOOL_RECOVERY.get(name, ""))),
+                },
+            )
+        )
+    return specs
+
+
+def core_model_tools(
+    specs: list[ToolSpec] | None = None,
+    *,
+    include_tools: set[str] | None = None,
+    exclude_tools: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    tools: list[dict[str, Any]] = []
+    for spec in specs or default_core_tool_specs():
+        if include_tools is not None and spec.name not in include_tools:
+            continue
+        if exclude_tools is not None and spec.name in exclude_tools:
+            continue
+        tools.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": spec.name,
+                    "description": spec.description,
+                    "strict": True,
+                    "parameters": deepcopy(spec.input_schema),
+                },
+            }
+        )
+    return tools
+
+
+def strict_tool_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    normalized = deepcopy(schema)
+
+    def allow_null(node: dict[str, Any]) -> None:
+        schema_type = node.get("type")
+        if isinstance(schema_type, str):
+            if schema_type != "null":
+                node["type"] = [schema_type, "null"]
+        elif isinstance(schema_type, list):
+            if "null" not in schema_type:
+                node["type"] = [*schema_type, "null"]
+
+    def visit(node: dict[str, Any]) -> None:
+        if node.get("type") == "object" or "properties" in node:
+            properties = node.get("properties")
+            if isinstance(properties, dict):
+                originally_required = set(node.get("required") or [])
+                for key, child in properties.items():
+                    if isinstance(child, dict):
+                        if key not in originally_required:
+                            allow_null(child)
+                        visit(child)
+                node["required"] = list(properties.keys())
+            node["additionalProperties"] = False
+        items = node.get("items")
+        if isinstance(items, dict):
+            visit(items)
+
+    visit(normalized)
+    return normalized
+
+
+class CoreToolbox:
+    def __init__(
+        self,
+        *,
+        work_root: str | Path,
+        command_timeout: int = DEFAULT_COMMAND_TIMEOUT,
+        max_write_length: int = DEFAULT_MAX_WRITE_LENGTH,
+        max_list_items: int = DEFAULT_MAX_LIST_ITEMS,
+        max_text_length: int = DEFAULT_MAX_TEXT_LENGTH,
+        max_search_results: int = DEFAULT_MAX_SEARCH_RESULTS,
+        loaded_skill_roots: set[Path] | None = None,
+        skill_registry: SkillRegistry | None = None,
+        mcp_caller: MCPToolCaller | None = None,
+        mcp_tool_specs: list[ToolSpec] | None = None,
+        sub_agent_runner: SubAgentRunner | None = None,
+        command_policies: dict[str, object] | None = None,
+        approval_policy: ApprovalPolicy = "require",
+        disabled_tools: set[str] | None = None,
+        core_event_callback: Callable[[CoreEvent], Awaitable[None]] | None = None,
+    ) -> None:
+        self.work_root = Path(work_root).resolve()
+        self.work_root.mkdir(parents=True, exist_ok=True)
+        self.loaded_skill_roots = {Path(item).resolve() for item in loaded_skill_roots or set()}
+        self.mcp_caller = mcp_caller
+        self.sub_agent_runner = sub_agent_runner
+        self.approval_policy = approval_policy
+        self.disabled_tools = set(disabled_tools or set())
+        self.tool_permissions = dict(DEFAULT_TOOL_PERMISSIONS)
+        self.skill_registry = skill_registry or SkillRegistry(explicit_roots=self.loaded_skill_roots)
+        self._dynamic_mcp_tool_names = {spec.name for spec in mcp_tool_specs or [] if spec.name.startswith("mcp__")}
+        for spec in mcp_tool_specs or []:
+            self.tool_permissions[spec.name] = spec.permission  # type: ignore[assignment]
+        for name in self.disabled_tools:
+            self.tool_permissions[name] = HARD_BLOCK
+        self.approval_gate = ApprovalGate(
+            work_root=self.work_root,
+            tool_permissions=self.tool_permissions,
+            command_policies=command_policies,
+        )
+        self._specs = [*default_core_tool_specs(), *list(mcp_tool_specs or [])]
+        self._handlers = self._build_handlers(
+            command_timeout=command_timeout,
+            max_write_length=max_write_length,
+            max_list_items=max_list_items,
+            max_text_length=max_text_length,
+            max_search_results=max_search_results,
+            core_event_callback=core_event_callback,
+        )
+
+    def tool_specs(self) -> list[ToolSpec]:
+        return [
+            replace(spec, permission=self.tool_permissions.get(spec.name, HARD_BLOCK))
+            for spec in self._specs
+            if spec.name not in self.disabled_tools
+        ]
+
+    def model_tools(
+        self,
+        *,
+        include_tools: set[str] | None = None,
+        exclude_tools: set[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        return core_model_tools(self.tool_specs(), include_tools=include_tools, exclude_tools=exclude_tools)
+
+    def skill_index(self) -> str:
+        return self.skill_registry.prompt_index(self.work_root)
+
+    def prepare_call(self, call: ToolCall) -> ToolCall:
+        args = call.arguments if isinstance(call.arguments, dict) else {}
+        decision = self.approval_gate.check(call.name, args)
+        approval = {
+            "tier": decision.permission_tier,
+            "reason": decision.reason,
+            "blocked": decision.blocked,
+            "requires_approval": decision.requires_approval,
+        }
+        requires_approval = bool(decision.requires_approval)
+        if self.approval_policy == "auto_approve" and requires_approval and not decision.blocked:
+            requires_approval = False
+            approval["requires_approval"] = False
+            approval["auto_approved"] = True
+        metadata = {**dict(call.metadata or {}), "approval": approval}
+        return replace(
+            call,
+            requires_approval=requires_approval,
+            metadata=metadata,
+        )
+
+    async def execute(self, call: ToolCall) -> ToolResult:
+        approval = call.metadata.get("approval") if isinstance(call.metadata, dict) else None
+        if isinstance(approval, dict) and approval.get("blocked"):
+            return ToolResult(
+                call_id=call.id,
+                name=call.name,
+                status="blocked",
+                error=str(approval.get("reason") or "Tool call blocked"),
+                metadata={"approval": approval},
+            )
+        if call.name in self.disabled_tools:
+            return ToolResult(call_id=call.id, name=call.name, status="blocked", error=f"Tool disabled: {call.name}")
+        handler = self._handlers.get(call.name)
+        if handler is None and call.name in self._dynamic_mcp_tool_names:
+            handler = self._handlers.get("mcp_tool")
+        if handler is None:
+            return ToolResult(call_id=call.id, name=call.name, status="blocked", error=f"Unknown tool: {call.name}")
+        return await handler(call)
+
+    def _build_handlers(
+        self,
+        *,
+        command_timeout: int,
+        max_write_length: int,
+        max_list_items: int,
+        max_text_length: int,
+        max_search_results: int,
+        core_event_callback: Callable[[CoreEvent], Awaitable[None]] | None,
+    ) -> dict[str, ToolHandler]:
+        read_tools = WorkspaceReadOnlyTools(
+            self.work_root,
+            max_list_items=max_list_items,
+            max_text_length=max_text_length,
+            max_search_results=max_search_results,
+        )
+        for root in self.loaded_skill_roots:
+            read_tools.add_resource_root(root)
+        command_handlers = CommandToolHandlers(
+            work_root=self.work_root,
+            command_timeout=command_timeout,
+            loaded_skill_roots=self.loaded_skill_roots,
+            core_event_callback=core_event_callback,
+        )
+
+        async def call_mcp(call: ToolCall) -> ToolResult:
+            return await execute_mcp_tool_call(call, caller=self.mcp_caller)
+
+        async def load_skill(call: ToolCall) -> ToolResult:
+            args = call.arguments if isinstance(call.arguments, dict) else {}
+            name = args.get("name", "")
+            if not isinstance(name, str) or not name.strip():
+                return ToolResult(call_id=call.id, name=call.name, status="failed", error="Missing 'name' argument")
+
+            content = self.skill_registry.load_prompt_content(self.work_root, name)
+            found = not content.startswith(f'Skill "{name}" not found.')
+            if found:
+                skill = self.skill_registry.get(self.work_root, name)
+                if skill is not None:
+                    base = skill.location.parent.resolve()
+                    self.loaded_skill_roots.add(base)
+                    read_tools.add_resource_root(base)
+            return ToolResult(
+                call_id=call.id,
+                name=call.name,
+                status="ok" if found else "failed",
+                content=content,
+                error="" if found else content,
+                metadata={
+                    "skill": name.strip(),
+                    "found": found,
+                    "resource_roots": [path.as_posix() for path in read_tools.resource_roots()],
+                },
+            )
+
+        async def call_sub_agent(call: ToolCall) -> ToolResult:
+            if self.sub_agent_runner is None:
+                return ToolResult(
+                    call_id=call.id,
+                    name=call.name,
+                    status="failed",
+                    error="Sub-agent runner not available",
+                )
+            args = call.arguments if isinstance(call.arguments, dict) else {}
+            task = str(args.get("task") or "").strip()
+            if not task:
+                return ToolResult(call_id=call.id, name=call.name, status="failed", error="sub_agent requires 'task'")
+            content = await self.sub_agent_runner.run(
+                task=task,
+                agent=str(args.get("agent") or ""),
+                model=str(args.get("model") or ""),
+                expected_output=str(args.get("expected_output") or ""),
+                context=args.get("context"),
+            )
+            return ToolResult(
+                call_id=call.id,
+                name=call.name,
+                status="ok",
+                content=str(content),
+                metadata={
+                    "agent": str(args.get("agent") or ""),
+                    "expected_output": str(args.get("expected_output") or ""),
+                },
+            )
+
+        handlers: dict[str, ToolHandler] = {
+            **read_tools.as_dict(),
+            "load_skill": load_skill,
+            "write_file": make_write_file_handler(self.work_root, max_write_length=max_write_length),
+            "edit_file": make_edit_file_handler(self.work_root, max_write_length=max_write_length),
+            "run_command": command_handlers.run_command,
+            "run_tests": command_handlers.run_tests,
+            "git_status": make_git_status_handler(
+                self.work_root,
+                command_timeout=command_timeout,
+                run_subprocess=run_subprocess,
+            ),
+            "git_diff": make_git_diff_handler(
+                self.work_root,
+                command_timeout=command_timeout,
+                max_text_length=max_text_length,
+                run_subprocess=run_subprocess,
+            ),
+            "web_search": make_web_search_handler(str(self.work_root)),
+            "web_fetch": make_web_fetch_handler(str(self.work_root)),
+            "browser_check": make_browser_check_handler(str(self.work_root)),
+            "mcp_tool": call_mcp,
+            SUB_AGENT_TOOL_NAME: call_sub_agent,
+        }
+        return handlers
+
+
+def build_core_toolbox(**kwargs: Any) -> CoreToolbox:
+    return CoreToolbox(**kwargs)
+
+
+def _default_display(category: str) -> dict[str, Any]:
+    card_by_category = {
+        "file_read": "file",
+        "file_write": "diff",
+        "command": "command",
+        "git": "diff",
+        "web": "web",
+        "browser": "browser",
+        "skill": "skill",
+        "mcp": "tool",
+    }
+    return {
+        "card": card_by_category.get(category, "tool"),
+        "default_collapsed": category in {"mcp"},
+    }
+
+
+__all__ = [
+    "CoreToolbox",
+    "DEFAULT_COMMAND_TIMEOUT",
+    "DEFAULT_MAX_WRITE_LENGTH",
+    "DEFAULT_TOOL_CATEGORIES",
+    "DEFAULT_TOOL_FAILURE_MODES",
+    "DEFAULT_TOOL_ORDER",
+    "DEFAULT_TOOL_PERMISSIONS",
+    "DEFAULT_TOOL_RECOVERY",
+    "SubAgentRunner",
+    "build_core_toolbox",
+    "core_model_tools",
+    "default_core_tool_specs",
+    "strict_tool_schema",
+]

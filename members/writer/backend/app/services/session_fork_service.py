@@ -89,8 +89,6 @@ async def fork_session_response(
         await _copy_turn(db, source_turn=source_turn, fork_session_id=fork.id, message_clock=message_clock, index=index)
 
     fork.transcript_revision = len(included_turns)
-    await db.commit()
-    await db.refresh(fork)
     return await session_response_projected(db, fork)
 
 

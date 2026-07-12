@@ -38,21 +38,6 @@ class WriterThreadSnapshot(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, nullable=False)
 
 
-class WriterAppRequest(Base):
-    __tablename__ = "writer_app_requests"
-
-    request_id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    thread_id: Mapped[str] = mapped_column(String(36), nullable=False)
-    turn_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    item_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
-    kind: Mapped[str] = mapped_column(String(50), nullable=False)
-    status: Mapped[str] = mapped_column(String(50), nullable=False, default="open")
-    options_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-    response_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=now, nullable=False)
-    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-
-
 class WriterArtifact(Base):
     __tablename__ = "writer_artifacts"
 

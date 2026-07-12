@@ -16,7 +16,7 @@
       "import": "./dist/lamtools-ui.js",
       "types": "./dist/index.d.ts"
     },
-    "./styles": "./dist/style.css",
+    "./styles": "./dist/lamtools-ui.css",
     "./helpers": {
       "import": "./dist/lamtools-ui.js",
       "types": "./dist/helpers/index.d.ts"
@@ -24,12 +24,16 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "vue-tsc -b && vite build",
-    "typecheck": "vue-tsc --noEmit",
+    "build": "vite build && vue-tsc -b && vue-tsc --noEmit -p tsconfig.demo.json",
+    "typecheck": "vue-tsc --noEmit && vue-tsc --noEmit -p tsconfig.demo.json",
     "preview": "vite preview",
-    "test:contract": "vitest run tests/slot-contract.test.ts tests/chat-thread-process.test.ts"
+    "test:contract": "vitest run"
   },
   "dependencies": {
+    "dompurify": "^3.4.11",
+    "katex": "^0.17.0",
+    "marked": "^18.0.5",
+    "mermaid": "^11.15.0",
     "vue": "^3.5.38"
   },
   "devDependencies": {

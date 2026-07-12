@@ -32,57 +32,61 @@ def empty_thread_snapshot(thread_id: str) -> dict[str, Any]:
 
 def apply_run_item_event(state: dict[str, Any] | None, event: RunItemEvent) -> dict[str, Any]:
     next_state = deepcopy(state) if state else empty_thread_snapshot(event.thread_id)
-    seen = set(next_state.get("seen_event_ids") or [])
-    if event.event_id in seen:
-        return next_state
+    return apply_run_item_event_in_place(next_state, event)
 
-    next_state["thread_id"] = event.thread_id
-    next_state["snapshot_seq"] = max(
-        int(next_state.get("snapshot_seq") or 0),
+
+def apply_run_item_event_in_place(state: dict[str, Any], event: RunItemEvent) -> dict[str, Any]:
+    seen = set(state.get("seen_event_ids") or [])
+    if event.event_id in seen:
+        return state
+
+    state["thread_id"] = event.thread_id
+    state["snapshot_seq"] = max(
+        int(state.get("snapshot_seq") or 0),
         int(event.seq or 0),
     )
     if event.seq == 0:
-        next_state["snapshot_seq"] = int(next_state.get("snapshot_seq") or 0) + 1
+        state["snapshot_seq"] = int(state.get("snapshot_seq") or 0) + 1
 
-    next_state.setdefault("seen_event_ids", []).append(event.event_id)
-    if len(next_state["seen_event_ids"]) > 2000:
-        next_state["seen_event_ids"] = next_state["seen_event_ids"][-2000:]
+    state.setdefault("seen_event_ids", []).append(event.event_id)
+    if len(state["seen_event_ids"]) > 2000:
+        state["seen_event_ids"] = state["seen_event_ids"][-2000:]
 
     if event.kind == "status":
         status = event.payload.get("status") or event.status
         if status:
-            next_state["status"] = status
-        turn = _upsert_turn(next_state, event)
+            state["status"] = status
+        turn = _upsert_turn(state, event)
         if turn is not None and status:
             turn["status"] = status
-        return next_state
+        return state
 
     if event.kind == "approval_response":
-        _apply_approval_response(next_state, event)
-        turn = _upsert_turn(next_state, event)
+        _apply_approval_response(state, event)
+        turn = _upsert_turn(state, event)
         if turn is not None and event.status in TERMINAL_STATUSES:
             turn["status"] = event.status
-        _recompute_thread_status(next_state)
-        return next_state
+        _recompute_thread_status(state)
+        return state
 
     if event.kind == "usage":
-        turn = _upsert_turn(next_state, event)
+        turn = _upsert_turn(state, event)
         if event.usage:
             if event.payload.get("replace") is True:
                 turn["usage"] = dict(event.usage)
             else:
                 turn["usage"] = _merge_dict_values(turn.get("usage"), event.usage)
-        return next_state
+        return state
 
     if event.kind == "artifact" or event.artifacts:
-        _apply_artifact(next_state, event)
+        _apply_artifact(state, event)
 
-    item = _upsert_item(next_state, event)
+    item = _upsert_item(state, event)
     if event.kind == "approval_request":
         item["status"] = "waiting"
-        next_state["status"] = "waiting"
+        state["status"] = "waiting"
         request_id = str(event.payload.get("request_id") or event.item_id or event.event_id)
-        next_state.setdefault("requests", {})[request_id] = {
+        state.setdefault("requests", {})[request_id] = {
             "request_id": request_id,
             "status": "open",
             "item_id": item["item_id"],
@@ -91,44 +95,44 @@ def apply_run_item_event(state: dict[str, Any] | None, event: RunItemEvent) -> d
         }
     elif event.kind == "error":
         item["status"] = "failed"
-        next_state["last_error"] = event.payload or {"message": item.get("content", "")}
+        state["last_error"] = event.payload or {"message": item.get("content", "")}
         if _is_terminal_error_event(event):
-            next_state["status"] = "failed"
+            state["status"] = "failed"
     elif event.status == "waiting":
         item["status"] = "waiting"
-        next_state["status"] = "waiting"
+        state["status"] = "waiting"
     elif event.status in TERMINAL_STATUSES:
         item["status"] = event.status
     else:
         item["status"] = event.status
         if event.turn_id:
-            next_state["status"] = "running"
+            state["status"] = "running"
 
-    turn = _upsert_turn(next_state, event)
+    turn = _upsert_turn(state, event)
     if event.item_id and turn is not None and event.item_id not in turn.setdefault("items", []):
         turn["items"].append(event.item_id)
     if turn is None:
-        _recompute_thread_status(next_state)
-        return next_state
+        _recompute_thread_status(state)
+        return state
     if event.kind == "approval_request":
         turn["status"] = "waiting"
-        next_state["status"] = "waiting"
+        state["status"] = "waiting"
     elif _is_turn_terminal_event(event):
         turn["status"] = event.status
-        _recompute_thread_status(next_state)
+        _recompute_thread_status(state)
     elif event.status == "waiting":
         turn["status"] = "waiting"
-        next_state["status"] = "waiting"
+        state["status"] = "waiting"
     elif event.turn_id and str(turn.get("status") or "") not in TERMINAL_STATUSES:
         turn["status"] = "running"
-        _recompute_thread_status(next_state)
-    return next_state
+        _recompute_thread_status(state)
+    return state
 
 
 def reduce_run_item_events(thread_id: str, events: list[RunItemEvent]) -> dict[str, Any]:
     state = empty_thread_snapshot(thread_id)
     for event in sorted(events, key=lambda item: (item.seq or 0, item.created_at_ms, item.event_id)):
-        state = apply_run_item_event(state, event)
+        apply_run_item_event_in_place(state, event)
     return state
 
 

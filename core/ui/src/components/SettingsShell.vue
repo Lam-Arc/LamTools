@@ -12,6 +12,7 @@
           v-for="section in sections"
           :key="section.id"
           :class="{ active: activeSection === section.id }"
+          :data-settings-section="section.id"
           @click="activeSection = section.id; $emit('section-change', section.id)"
         >
           <span>{{ section.icon || '○' }}</span>

@@ -5,7 +5,7 @@
  * Uses the real project store + session store for project→session grouping.
  * Project-level actions (new session, delete, AGENTS.md) wired through sidebar.
  */
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   WorkspaceShell,
@@ -13,15 +13,27 @@ import {
   ChatThread,
   AttachmentTray,
   CommandPalette,
-  parseComposerSyntax,
-  useComposerCommandPalette,
+  CoreExecutionControls,
+  CoreQueuedInputTray,
+  buildCoreComposerHighlightSegments,
+  coreInputToText,
+  isCoreGuidableTurnStatus,
+  normalizeCoreSessionStatus,
+  selectCoreQueuedInputs,
+  selectLatestActiveTurnId,
+  updateCoreSessionListStatus,
+  useCoreAutoFollowScroll,
+  useCoreApprovalController,
+  useCoreExecutionControlsState,
+  useCoreLiveComposerController,
+  useCoreWorkbenchProjectionController,
+  useCoreQueuedInputController,
   useCoreWorkbenchController,
   usePendingAttachments,
   type CoreAttachment,
-  type CoreCommandCatalogItem,
   type CoreInputItem,
   type CoreMessage,
-  type MessagePart,
+  type CoreQueuedInput,
   type CoreWorkbenchApi,
   type CoreSessionListItem,
   type ProjectGroup,
@@ -31,12 +43,9 @@ import { useProjectStore } from '@/stores/project'
 import { useSessionStore } from '@/stores/session'
 import { useConfigStore } from '@/stores/config'
 import { useWriterAppServerStore } from '@/appServer/store'
-import { selectChatMessages, selectLatestTurnStatus, selectQueueTray } from '@/appServer/selectors'
+import { selectLatestTurnStatus } from '@/appServer/selectors'
 import { workbenchSessionRouteQuery, type WorkbenchRouteQuery } from '@/utils/workbenchRoute'
 import { pickProjectDirectory, projectNameFromPath } from '@/lib/project-directory-picker'
-import type { WriterAppItem, WriterAppQueueItem, WriterAppRequestState } from '@/appServer/protocol'
-import UiSelect from '@/components/UiSelect.vue'
-import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
 import {
   listCoreSessions,
   createCoreSession,
@@ -44,7 +53,7 @@ import {
 } from '@/api/core'
 import * as api from '@/api'
 import { removeSessionsByIds } from '@/lib/session-list'
-import type { Provider, Project, Session, Model, SessionChanges, SessionCheckpoint, CommitReview, AgentBranch, WriterQueuedInput } from '@/types'
+import type { Project, Session, Model, SessionChanges, SessionCheckpoint, CommitReview, AgentBranch } from '@/types'
 
 const router = useRouter()
 const requestedSessionIdFromUrl = new URLSearchParams(window.location.search).get('session')
@@ -56,26 +65,6 @@ const runtimeStatusText = ref('')
 const composerErrorText = ref('')
 
 // --- Execution model selection ---
-const selectedModelId = ref<string>('')
-type ThinkingMode = 'none' | 'low' | 'medium' | 'high' | 'max'
-const THINKING_MODE_KEY = 'lamwriter.composer.thinkingMode'
-const SHALLOW_THINKING_KEY = 'lamwriter.composer.shallowThinking'
-const selectedThinkingMode = ref<ThinkingMode>(readThinkingMode())
-const shallowThinkingEnabled = ref(readShallowThinkingEnabled())
-const thinkingBudgets: Record<Exclude<ThinkingMode, 'none'>, number> = {
-  low: 2000,
-  medium: 6000,
-  high: 10000,
-  max: 20000,
-}
-const thinkingLabels: Record<ThinkingMode, string> = {
-  none: '无思考',
-  low: '低思考',
-  medium: '中思考',
-  high: '高思考',
-  max: 'Max 思考',
-}
-
 const defaultModel = computed(() => {
   const resolvedId = configStore.resolvedConfig?.model?.id
   if (resolvedId) {
@@ -85,190 +74,54 @@ const defaultModel = computed(() => {
   return configStore.models[0] || null
 })
 
-const activeExecutionModel = computed(() => {
-  if (selectedModelId.value) {
-    const selected = configStore.models.find((model) => model.id === selectedModelId.value)
-    if (selected) return selected
-  }
-  return defaultModel.value
-})
-
-const activeExecutionProvider = computed(() => {
-  const model = activeExecutionModel.value
-  if (!model) return null
-  return configStore.providers.find((provider) => provider.id === model.provider_id) || null
-})
-
-const isXfyunCodingProvider = computed(() => {
-  const provider = activeExecutionProvider.value
-  if (!provider) return false
-  const text = `${provider.name} ${provider.base_url}`.toLowerCase()
-  return text.includes('xf-yun') || text.includes('xfyun') || text.includes('maas-coding')
-})
-
-const thinkingModeOptions = computed(() => {
-  const model = activeExecutionModel.value
-  if (!model) {
-    return [
-      { value: 'max', label: 'Max 思考' },
-      { value: 'high', label: '高思考' },
-      { value: 'medium', label: '中思考' },
-      { value: 'low', label: '低思考' },
-      { value: 'none', label: '无思考' },
-    ]
-  }
-  const supportsThinking = Boolean(model?.thinking_supported)
-  if (!supportsThinking) return [{ value: 'none', label: '无思考' }]
-  if (isXfyunCodingProvider.value) {
-    return [
-      { value: 'max', label: 'Max 思考' },
-      { value: 'none', label: '无思考' },
-    ]
-  }
-  return [
-    { value: 'max', label: 'Max 思考' },
-    { value: 'high', label: '高思考' },
-    { value: 'medium', label: '中思考' },
-    { value: 'low', label: '低思考' },
-    { value: 'none', label: '无思考' },
-  ]
-})
-
-const selectedThinkingLabel = computed(() => (
-  thinkingLabels[normalizeThinkingMode(selectedThinkingMode.value)]
-))
-
-const modelOptions = computed(() => {
-  const modelsByProvider = new Map<string, Model[]>()
-  for (const model of configStore.models) {
-    const list = modelsByProvider.get(model.provider_id) || []
-    list.push(model)
-    modelsByProvider.set(model.provider_id, list)
-  }
-
-  const options: Array<{ value: string; label: string; selectedLabel: string; group: string }> = []
-  if (defaultModel.value) {
-    const label = defaultModel.value.display_name || defaultModel.value.model_id
-    options.push({
-      value: '',
-      label: `当前：${label}`,
-      selectedLabel: label,
-      group: '',
-    })
-  }
-
-  const pushProviderModels = (provider: Provider | null, models: Model[]) => {
-    for (const model of models) {
-      options.push({
-        value: model.id,
-        label: model.display_name || model.model_id,
-        selectedLabel: model.display_name || model.model_id,
-        group: provider?.name || model.provider_id || 'Provider',
-      })
+const {
+  activeModel: activeExecutionModel,
+  modelOptions,
+  selectedModelId,
+  selectedThinkingMode,
+  selectModel,
+  selectThinkingMode,
+  shallowThinkingEnabled,
+  thinkingModeOptions,
+  turnOptions: currentThinkingOptions,
+} = useCoreExecutionControlsState({
+  models: computed(() => configStore.models),
+  providers: computed(() => configStore.providers),
+  defaultModel,
+  storage: window.localStorage,
+  storageKeys: {
+    thinkingMode: 'lamwriter.composer.thinkingMode',
+    shallowThinking: 'lamwriter.composer.shallowThinking',
+  },
+  labels: {
+    currentModelPrefix: '当前：',
+    thinking: {
+      none: '无思考',
+      low: '低思考',
+      medium: '中思考',
+      high: '高思考',
+      max: 'Max 思考',
+    },
+  },
+  onModelSelected: async (model) => {
+    try {
+      const setting = await configStore.fetchAppSetting('lamwriter.modelRouting')
+      const existingRoutes = setting.value?.routes
+      const routes = existingRoutes && typeof existingRoutes === 'object'
+        ? { ...(existingRoutes as Record<string, unknown>) }
+        : {}
+      routes.writer = { mode: 'model', model_id: model.id }
+      await configStore.saveAppSetting('lamwriter.modelRouting', { routes })
+      await Promise.all([
+        configStore.fetchResolvedConfig('writer'),
+        configStore.fetchModels(),
+      ])
+    } catch (err) {
+      console.error('Failed to set execution model:', err)
+      runtimeStatusText.value = '执行模型更新失败'
     }
-  }
-
-  for (const provider of configStore.providers) {
-    pushProviderModels(provider, modelsByProvider.get(provider.id) || [])
-    modelsByProvider.delete(provider.id)
-  }
-  for (const models of modelsByProvider.values()) {
-    pushProviderModels(null, models)
-  }
-  return options
+  },
 })
-
-async function selectModel(modelId: string) {
-  selectedModelId.value = ''
-  if (!modelId) return
-  const model = configStore.models.find((item) => item.id === modelId)
-  if (!model) return
-  try {
-    const setting = await configStore.fetchAppSetting('lamwriter.modelRouting')
-    const existingRoutes = setting.value?.routes
-    const routes = existingRoutes && typeof existingRoutes === 'object'
-      ? { ...(existingRoutes as Record<string, unknown>) }
-      : {}
-    routes.writer = { mode: 'model', model_id: model.id }
-    await configStore.saveAppSetting('lamwriter.modelRouting', { routes })
-    await Promise.all([
-      configStore.fetchResolvedConfig('writer'),
-      configStore.fetchModels(),
-    ])
-  } catch (err) {
-    console.error('Failed to set execution model:', err)
-    runtimeStatusText.value = '执行模型更新失败'
-  }
-}
-
-function syncSelectedModel() {
-  selectedModelId.value = ''
-}
-
-watch(() => configStore.models.map((model) => model.id).join('|'), syncSelectedModel)
-
-watch(thinkingModeOptions, (options) => {
-  if (options.some((option) => option.value === selectedThinkingMode.value)) return
-  selectedThinkingMode.value = String(options[0]?.value || 'none') as ThinkingMode
-}, { immediate: true })
-
-watch(selectedThinkingMode, (mode) => {
-  try {
-    window.localStorage?.setItem(THINKING_MODE_KEY, normalizeThinkingMode(mode))
-  } catch {
-    // Local storage can be unavailable in hardened desktop/browser contexts.
-  }
-})
-
-watch(shallowThinkingEnabled, (enabled) => {
-  try {
-    window.localStorage?.setItem(SHALLOW_THINKING_KEY, enabled ? '1' : '0')
-  } catch {
-    // Local storage can be unavailable in hardened desktop/browser contexts.
-  }
-})
-
-function normalizeThinkingMode(value: unknown): ThinkingMode {
-  return value === 'low' || value === 'medium' || value === 'high' || value === 'max' ? value : 'none'
-}
-
-function readThinkingMode(): ThinkingMode {
-  try {
-    const saved = window.localStorage?.getItem(THINKING_MODE_KEY)
-    return saved ? normalizeThinkingMode(saved) : 'max'
-  } catch {
-    return 'max'
-  }
-}
-
-function readShallowThinkingEnabled(): boolean {
-  try {
-    return window.localStorage?.getItem(SHALLOW_THINKING_KEY) === '1'
-  } catch {
-    return false
-  }
-}
-
-function selectThinkingMode(value: string) {
-  selectedThinkingMode.value = normalizeThinkingMode(value)
-}
-
-function toggleShallowThinking() {
-  shallowThinkingEnabled.value = !shallowThinkingEnabled.value
-}
-
-function currentThinkingOptions(): { thinking_enabled: boolean; thinking_budget?: number; shallow_thinking_enabled?: boolean } {
-  const mode = normalizeThinkingMode(selectedThinkingMode.value)
-  const shallow = shallowThinkingEnabled.value
-  if (mode === 'none' || !activeExecutionModel.value?.thinking_supported) {
-    return { thinking_enabled: false, shallow_thinking_enabled: shallow }
-  }
-  const modelBudget = Number(activeExecutionModel.value.thinking_budget || 0)
-  const budget = isXfyunCodingProvider.value
-    ? modelBudget || 10000
-    : Math.max(modelBudget || 0, thinkingBudgets[mode])
-  return { thinking_enabled: true, thinking_budget: budget, shallow_thinking_enabled: shallow }
-}
 
 // --- Core controller ---
 const coreApi: CoreWorkbenchApi = {
@@ -287,29 +140,21 @@ const {
   loadInitialData,
 } = useCoreWorkbenchController({ api: coreApi, initialSessionId: requestedSessionIdFromUrl })
 
-const messages = ref<CoreMessage[]>([])
-const queuedInputs = computed<WriterQueuedInput[]>(() => appServerQueuedInputs())
-const editingQueuedInputId = ref<string | null>(null)
-const queuedInputDraft = ref('')
+const queuedInputs = computed<CoreQueuedInput[]>(() => appServerQueuedInputs())
 const editingActiveSessionTitle = ref(false)
 const activeSessionTitleDraft = ref('')
 const composerTextareaEl = ref<HTMLTextAreaElement | null>(null)
 const composerCursor = ref(0)
-const commandCatalog = ref<CoreCommandCatalogItem[]>([])
-const commandError = ref('')
-const commandPaletteDismissedText = ref('')
 const attachmentFileInput = ref<HTMLInputElement | null>(null)
 const threadScrollEl = ref<HTMLElement | null>(null)
-const threadAutoFollow = ref(true)
-const submittingApprovalRequestIds = ref<Set<string>>(new Set())
+const threadScroll = useCoreAutoFollowScroll(threadScrollEl)
 let threadResizeObserver: ResizeObserver | null = null
-let lastComposerEnterHandledAt = 0
-const THREAD_BOTTOM_THRESHOLD_PX = 80
 const COMPOSER_MAX_ROWS = 5
-const COMPOSER_ENTER_FALLBACK_MS = 750
-const isAppServerActive = computed(() =>
-  Boolean(activeSessionId.value && appServerStore.state?.thread_id === activeSessionId.value),
-)
+const isAppServerActive = computed(() => (
+  activeSessionId.value !== null
+  && appServerStore.activeThreadId === activeSessionId.value
+  && appServerStore.connectionState === 'open'
+))
 const {
   pendingAttachments,
   hasBlockingFailure,
@@ -319,16 +164,6 @@ const {
   removeAttachment,
   clearAttachments,
 } = usePendingAttachments()
-const commandPalette = useComposerCommandPalette({
-  text: composerText,
-  cursor: composerCursor,
-  commands: commandCatalog,
-})
-const commandPaletteVisible = computed(() =>
-  commandPalette.open.value && commandPaletteDismissedText.value !== composerText.value,
-)
-const composerHighlightSegments = computed(() => buildComposerHighlightSegments(composerText.value))
-const hasComposerCommandTokens = computed(() => composerHighlightSegments.value.some(segment => segment.command))
 
 function resizeComposerTextarea() {
   const el = composerTextareaEl.value
@@ -363,82 +198,7 @@ function handleComposerInput() {
   updateComposerCursor()
 }
 
-interface ComposerHighlightSegment {
-  text: string
-  command: boolean
-}
-
-function buildComposerHighlightSegments(text: string): ComposerHighlightSegment[] {
-  const spans = parseComposerSyntax(text)
-    .filter(span => span.kind === 'slash')
-    .filter(span => Boolean(insertTokenCommand(span.value)))
-  if (!spans.length) return [{ text, command: false }]
-
-  const segments: ComposerHighlightSegment[] = []
-  let cursor = 0
-  for (const span of spans) {
-    if (span.start > cursor) segments.push({ text: text.slice(cursor, span.start), command: false })
-    segments.push({ text: text.slice(span.start, span.end), command: true })
-    cursor = span.end
-  }
-  if (cursor < text.length) segments.push({ text: text.slice(cursor), command: false })
-  return segments
-}
-
-function insertTokenCommand(value: string): CoreCommandCatalogItem | undefined {
-  const normalized = value.toLowerCase()
-  return commandCatalog.value.find(command =>
-    command.action === 'insert_token' && command.name.toLowerCase() === normalized,
-  )
-}
-
-function actionCommand(value: string): CoreCommandCatalogItem | undefined {
-  const normalized = value.toLowerCase()
-  return commandCatalog.value.find(command =>
-    command.action === 'run_action' && command.name.toLowerCase() === normalized,
-  )
-}
-
-function toCoreCommandCatalogItem(item: unknown): CoreCommandCatalogItem | null {
-  if (!isRecord(item)) return null
-  const name = String(item.name || '').trim().replace(/^\/+/, '')
-  if (!name) return null
-  const rawAction = String(item.action || 'run_action')
-  const action: CoreCommandCatalogItem['action'] =
-    rawAction === 'insert_token' || rawAction === 'expand_on_send' ? rawAction : 'run_action'
-  const source: CoreCommandCatalogItem['source'] = item.source === 'member' ? 'member' : 'core'
-  return {
-    name,
-    title: String(item.title || name),
-    description: String(item.description || ''),
-    icon: String(item.icon || '/'),
-    source,
-    action,
-    accepts_args: Boolean(item.accepts_args),
-  }
-}
-
-async function loadCommandCatalog(sessionId = activeSessionId.value || '') {
-  commandCatalog.value = []
-  commandError.value = ''
-  if (!sessionId) return
-  try {
-    await ensureAppServerConnected(sessionId)
-    const commands = await appServerStore.listCommands(currentSessionWorkRoot())
-    commandCatalog.value = commands
-      .map(item => toCoreCommandCatalogItem(item))
-      .filter((item): item is CoreCommandCatalogItem => Boolean(item))
-  } catch (err) {
-    commandError.value = err instanceof Error ? err.message : String(err)
-    runtimeStatusText.value = `命令列表加载失败：${commandError.value}`
-    console.error('Failed to load composer commands:', err)
-  }
-}
-
 watch(composerText, () => {
-  if (commandPaletteDismissedText.value && commandPaletteDismissedText.value !== composerText.value) {
-    commandPaletteDismissedText.value = ''
-  }
   void nextTick(resizeComposerTextarea)
 })
 
@@ -448,8 +208,98 @@ const activeSessionStatus = computed(() => {
   }
   if (appServerStore.connectionState === 'error') return 'failed'
   const active = sessions.value.find(session => session.id === activeSessionId.value)
-  return normalizeSessionStatus(active?.status || 'idle')
+  return normalizeCoreSessionStatus(active?.status || 'idle')
 })
+
+const liveComposerController = useCoreLiveComposerController({
+  activeThreadId: activeSessionId,
+  connectedThreadId: computed(() => appServerStore.activeThreadId),
+  connectionState: computed(() => appServerStore.connectionState),
+  text: composerText,
+  cursor: composerCursor,
+  status: activeSessionStatus,
+  attachments: attachmentInputItems,
+  connect: (threadId) => appServerStore.connect(api.API_BASE, threadId),
+  startTurn: (threadId, input, workRoot, options) => appServerStore.startTurn(threadId, input, workRoot, options),
+  interruptTurn: (threadId) => appServerStore.interruptTurn(threadId),
+  queueInput: (threadId, input) => appServerStore.queueInput(threadId, input),
+  listCommands: (workRoot) => appServerStore.listCommands(workRoot),
+  getWorkRoot: currentSessionWorkRoot,
+  executeCommand: executeWriterCommand,
+  canExecuteCommand: () => !composerIsRunning.value,
+  commandUnavailableMessage: '当前正在运行，请等本轮结束后再执行命令',
+  turnOptions: currentThinkingOptions,
+  clearComposer: clearComposerAfterPersisted,
+  clearAttachments,
+  focusComposer: (cursor) => {
+    void nextTick(() => {
+      composerTextareaEl.value?.focus()
+      composerTextareaEl.value?.setSelectionRange(cursor, cursor)
+      resizeComposerTextarea()
+    })
+  },
+  setStatusText: (text) => {
+    runtimeStatusText.value = text
+  },
+  onError: setComposerError,
+  onTurnStarted: async () => {
+    sessions.value = await listCoreSessions()
+  },
+  onTurnStartedError: (error) => console.error('Failed to refresh Writer sessions after turn start:', error),
+  messages: {
+    commandCatalogLoadFailed: (error) => `命令列表加载失败：${error}`,
+    noActiveThread: '请先选择会话',
+    queued: '已加入待发送',
+    sent: '已发送',
+    stopping: '正在停止',
+    stopFailed: '停止失败',
+    sendFailed: '发送失败',
+  },
+})
+const {
+  actionMode: composerActionMode,
+  commandCatalog,
+  commandError,
+  commandPalette,
+  paletteVisible: commandPaletteVisible,
+} = liveComposerController
+const composerHighlightSegments = computed(() => buildCoreComposerHighlightSegments(composerText.value, commandCatalog.value))
+const hasComposerCommandTokens = computed(() => composerHighlightSegments.value.some(segment => segment.command))
+
+const approvalControllerRef = shallowRef<ReturnType<typeof useCoreApprovalController>>()
+const projectionController = useCoreWorkbenchProjectionController({
+  snapshot: computed(() => appServerStore.state),
+  activeThreadId: activeSessionId,
+  status: activeSessionStatus,
+  submittingApprovalRequestIds: computed(() => (
+    approvalControllerRef.value?.submittingRequestIds.value ?? new Set<string>()
+  )),
+  shallowThinkingPending: shallowThinkingEnabled,
+  source: 'writer_app_server',
+  systemMessages: computed(buildSystemMessages),
+  onStatusChange: ({ status }) => syncActiveSessionListStatus(status),
+  onTurnFinished: () => {
+    void loadReviewChanges()
+  },
+})
+const {
+  messages,
+  processExpandedIds,
+  toggleProcess,
+} = projectionController
+
+const approvalController = useCoreApprovalController({
+  messages,
+  hasActiveThread: computed(() => Boolean(activeSessionId.value)),
+  canRespondApproval: isAppServerActive,
+  ensureApprovalChannel: () => liveComposerController.ensureConnected(activeSessionId.value || ''),
+  respondApproval: (requestId, decision, guidance) => appServerStore.respondApproval(requestId, decision, guidance),
+  submitText: submitWriterText,
+  deferText: (text) => {
+    composerText.value = text
+  },
+})
+approvalControllerRef.value = approvalController
 
 const activeSession = computed(() => (
   sessions.value.find(session => session.id === activeSessionId.value) || null
@@ -465,15 +315,28 @@ watch([activeSessionId, activeSessionTitle], () => {
   }
 }, { immediate: true })
 
-const canGuideQueuedInput = computed(() =>
-  activeSessionStatus.value === 'running' || activeSessionStatus.value === 'waiting',
-)
 const composerIsRunning = computed(() =>
   activeSessionStatus.value === 'running' || activeSessionStatus.value === 'waiting',
 )
-const composerActionMode = computed<'send' | 'stop'>(() =>
-  composerIsRunning.value && !composerText.value.trim() && pendingAttachments.value.length === 0 ? 'stop' : 'send',
-)
+const activeSteerTurnId = computed(() => {
+  if (!isCoreGuidableTurnStatus(activeSessionStatus.value) || !appServerStore.state) return ''
+  return selectLatestActiveTurnId(appServerStore.state)
+})
+const queueController = useCoreQueuedInputController({
+  activeTurnId: activeSteerTurnId,
+  ensureConnected: async (threadId) => {
+    if (!await liveComposerController.ensureConnected(threadId)) {
+      throw new Error(liveComposerController.lastError.value)
+    }
+  },
+  updateQueueInput: (threadId, itemId, text) => appServerStore.updateQueueInput(threadId, itemId, text),
+  deleteQueueInput: (threadId, itemId) => appServerStore.deleteQueueInput(threadId, itemId),
+  guideQueueInput: (threadId, turnId, itemId, text) => appServerStore.guideQueueInput(threadId, turnId, itemId, text),
+  onError: (error) => console.error('Failed to operate queued input:', error),
+})
+const editingQueuedInputId = queueController.editingId
+const queuedInputDraft = queueController.draft
+const canGuideQueuedInput = queueController.canGuide
 
 interface DecisionSelectPayload {
   partId: string
@@ -519,54 +382,12 @@ interface RunningAgentItem {
   at: string
 }
 
-// Process collapse state (per-message; process = tool calls, thinking, etc.)
-const processExpandedIds = ref<Set<string>>(new Set())
-
-function toggleProcess(id: string) {
-  const next = new Set(processExpandedIds.value)
-  if (next.has(id)) {
-    next.delete(id)
-  } else {
-    next.add(id)
-  }
-  processExpandedIds.value = next
-}
-
-function rebuildMessages() {
-  messages.value = appServerMessages()
-}
-
-function hasProcessParts(message: CoreMessage): boolean {
-  return (message.parts || []).some(part => part.partType !== 'text' && part.partType !== 'model_text')
-}
-
-function syncLiveProcessExpansion(status = activeSessionStatus.value) {
-  const isActive = isActiveTurnStatus(status)
-  if (!isActive) return
-  const next = new Set(processExpandedIds.value)
-  for (const message of messages.value) {
-    if (message.role === 'assistant' && hasProcessParts(message)) {
-      next.add(message.id)
-    }
-  }
-  processExpandedIds.value = next
-}
-
 function syncActiveSessionListStatus(status = activeSessionStatus.value) {
   const sessionId = activeSessionId.value
   if (!sessionId) return
-  const nextStatus = normalizeSessionStatus(status)
+  const nextStatus = normalizeCoreSessionStatus(status)
   const now = new Date().toISOString()
-  const index = sessions.value.findIndex(item => item.id === sessionId)
-  if (index >= 0 && sessions.value[index].status !== nextStatus) {
-    const updated = [...sessions.value]
-    updated[index] = {
-      ...updated[index],
-      status: nextStatus,
-      updatedAt: now,
-    } as CoreSessionListItem
-    sessions.value = updated
-  }
+  sessions.value = updateCoreSessionListStatus(sessions.value, sessionId, nextStatus, now)
   const storeIndex = sessionStore.sessions.findIndex(item => item.id === sessionId)
   if (storeIndex >= 0 && sessionStore.sessions[storeIndex].status !== nextStatus) {
     sessionStore.sessions[storeIndex] = {
@@ -577,258 +398,21 @@ function syncActiveSessionListStatus(status = activeSessionStatus.value) {
   }
 }
 
-function normalizeSessionStatus(status: string): string {
-  const value = String(status || '').toLowerCase()
-  if (value === 'active') return 'idle'
-  if (value === 'running' || value === 'waiting' || value === 'completed' || value === 'failed') return value
-  return 'idle'
-}
-
-function appServerMessages(): CoreMessage[] {
-  if (!appServerStore.state) return buildSystemMessages()
-  const sourceMessages = selectChatMessages(appServerStore.state)
-  const lastAssistantIndex = sourceMessages.findLastIndex(message => message.role === 'assistant')
-  const rendered = sourceMessages.map((message, index) => {
-    const isActiveAssistant = index === lastAssistantIndex
-      && message.role === 'assistant'
-      && isActiveTurnStatus(activeSessionStatus.value)
-    return {
-    id: message.id,
-    role: message.role,
-    content: message.content,
-    timestamp: '',
-    parts: [
-      ...message.parts.map(appServerItemToPart),
-      ...(message.attachments || []).map((attachment) => ({
-        id: `${message.id}:attachment:${attachment.id}`,
-        partType: 'attachment' as const,
-        status: 'completed' as const,
-        content: '',
-        label: attachment.label || attachment.filename,
-        metadata: { attachment },
-      })),
-    ],
-    metadata: {
-      source: 'writer_app_server',
-      ...(message.metadata || {}),
-      live: message.metadata?.live,
-      shallowThinkingPending: isActiveAssistant && shallowThinkingEnabled.value ? true : undefined,
-    },
-  } satisfies CoreMessage
-  })
-  return [...buildSystemMessages(), ...rendered]
-}
-
-function appServerItemToPart(item: WriterAppItem): MessagePart {
-  const type = String(item.type || '')
-  const requestId = typeof item.request_id === 'string' ? item.request_id : ''
-  const requestState = requestStateForId(requestId)
-  const partType: MessagePart['partType'] = type === 'dynamicToolCall'
-    ? 'tool_call'
-    : type === 'serverRequest'
-      ? 'decision'
-      : type === 'agentMessage'
-        ? 'model_text'
-        : appServerPartType(type)
-  const isResolvedRequest = requestState?.status === 'resolved' || item.status === 'resolved'
-  const isSubmittingRequest = requestId ? submittingApprovalRequestIds.value.has(requestId) : false
-  const status = appServerPartStatus(String(item.status || ''), isResolvedRequest, isSubmittingRequest)
-  const waitingResponse = requestState?.status === 'resolved'
-    ? appServerDecisionToWaitingResponse(String(requestState.decision || ''), String(requestState.guidance || ''))
-    : undefined
-  return {
-    id: item.item_id,
-    partType,
-    status,
-    content: String(item.content || item.message || item.summary || ''),
-    label: appServerPartLabel(item, partType),
-    detail: String(item.message || item.summary || ''),
-    toolName: typeof item.tool_name === 'string' ? item.tool_name : undefined,
-    toolArgs: {
-      ...(isRecord(item.arguments) ? item.arguments : {}),
-      ...(Array.isArray(item.options) ? { options: item.options } : {}),
-    },
-    toolResult: typeof item.content === 'string' ? item.content : undefined,
-    inputPreview: normalizeInputPreview(item.input_preview || item.inputPreview),
-    metadata: {
-      ...(isRecord(item.metadata) ? item.metadata : {}),
-      request_id: requestId || undefined,
-      title: item.title,
-      question: item.question,
-      description: item.description || item.message,
-      options: item.options,
-      waitingResponse,
-      waitingRequest: requestId ? {
-        kind: item.kind || 'approval',
-        request_id: requestId,
-        options: item.options,
-        response: waitingResponse,
-      } : undefined,
-    },
-  }
-}
-
-function normalizeInputPreview(value: unknown): MessagePart['inputPreview'] | undefined {
-  if (!isRecord(value)) return undefined
-  const content = typeof value.content === 'string' ? value.content : ''
-  const field = typeof value.field === 'string' ? value.field : ''
-  const chars = typeof value.chars === 'number' ? value.chars : content.length
-  if (!content || !field) return undefined
-  return {
-    field,
-    content,
-    chars,
-    truncated: value.truncated === true,
-  }
-}
-
-function appServerPartLabel(item: WriterAppItem, partType: MessagePart['partType']): string {
-  if (partType === 'model_text') return '正文'
-  return String(item.tool_name || item.kind || partType)
-}
-
-function requestStateForId(requestId: string): WriterAppRequestState | null {
-  if (!requestId) return null
-  return appServerStore.state?.core?.requests?.[requestId] || appServerStore.state?.requests?.[requestId] || null
-}
-
-function appServerDecisionToWaitingResponse(decision: string, guidance: string): Record<string, unknown> {
-  if (decision === 'deny') return { action: 'deny', response: guidance || 'deny' }
-  if (decision === 'other_guidance') return { action: 'guide', response: guidance || 'guide' }
-  if (decision === 'approve_once' || decision === 'approve_for_session') {
-    return { action: 'approve', response: decision }
-  }
-  return { action: decision || 'handled', response: guidance || decision }
-}
-
-function appServerPartStatus(rawStatus: string, isResolvedRequest: boolean, isSubmittingRequest: boolean): MessagePart['status'] {
-  if (isResolvedRequest) return 'completed'
-  if (isSubmittingRequest) return 'running'
-  if (rawStatus === 'waiting') return 'pending'
-  if (rawStatus === 'failed') return 'error'
-  if (rawStatus === 'completed' || rawStatus === 'error' || rawStatus === 'pending' || rawStatus === 'running') {
-    return rawStatus
-  }
-  return 'running'
-}
-
-function appServerPartType(type: string): MessagePart['partType'] {
-  if (type === 'reasoning') return 'reasoning'
-  if (type === 'error') return 'error'
-  if (type === 'fileChange') return 'file_diff'
-  if (type === 'commandExecution') return 'command_output'
-  if (type === 'dynamicToolCall' || type === 'mcpToolCall' || type === 'collabToolCall' || type === 'webSearch') return 'tool_call'
-  if (type === 'agent_summary' || type === 'sub_line') return type
-  if (type === 'toolResult') return 'tool_result'
-  if (type === 'plan') return 'plan'
-  if (type === 'contextCompaction' || type === 'compaction') return 'compaction'
-  if (type === 'status') return 'status'
-  if (type === 'imageView') return 'tool_result'
-  return 'error'
-}
-
-function appServerQueuedInputs(): WriterQueuedInput[] {
+function appServerQueuedInputs(): CoreQueuedInput[] {
   if (!appServerStore.state) return []
   if (!activeSessionId.value || appServerStore.state.thread_id !== activeSessionId.value) return []
-  return selectQueueTray(appServerStore.state).map((item, index) => appServerQueueItemToWriterInput(item, index))
-}
-
-function appServerQueueItemToWriterInput(item: WriterAppQueueItem, index: number): WriterQueuedInput {
-  return {
-    id: item.queue_item_id,
-    session_id: appServerStore.state?.thread_id || activeSessionId.value || '',
-    text: inputToText(item.input),
-    mode: String(item.mode || 'next_turn'),
-    status: String(item.status || 'queued'),
-    position: index + 1,
-    target_turn_id: null,
-    created_at: null,
-    updated_at: null,
-    dispatching_at: null,
-    dispatched_at: null,
-    consumed_at: null,
-    error: null,
-    metadata: { source: 'writer_app_server' },
-  }
-}
-
-function inputToText(input: unknown): string {
-  if (typeof input === 'string') return input
-  if (!Array.isArray(input)) return ''
-  return input.map((item) => {
-    if (!isRecord(item)) return ''
-    if (item.type === 'skill') return String(item.source_text || `/${item.name || ''}`)
-    return String(item.text || '')
-  }).join('')
+  return selectCoreQueuedInputs(appServerStore.state)
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value))
 }
 
-watch(
-  [
-    activeSessionStatus,
-    () => appServerStore.state?.snapshot_seq,
-  ],
-  () => {
-    rebuildMessages()
-    syncActiveSessionListStatus()
-    syncLiveProcessExpansion()
-  },
-  { immediate: true },
-)
-
-function isThreadNearBottom(): boolean {
-  const el = threadScrollEl.value
-  if (!el) return true
-  return el.scrollHeight - el.scrollTop - el.clientHeight <= THREAD_BOTTOM_THRESHOLD_PX
-}
-
-function handleThreadWheel(event: WheelEvent) {
-  if (event.deltaY < 0) {
-    threadAutoFollow.value = false
-  }
-}
-
-function handleThreadScroll() {
-  if (isThreadNearBottom()) {
-    threadAutoFollow.value = true
-  }
-}
-
-function afterFrame(): Promise<void> {
-  if (typeof requestAnimationFrame !== 'function') return Promise.resolve()
-  return new Promise(resolve => requestAnimationFrame(() => resolve()))
-}
-
-function shouldReduceMotion(): boolean {
-  return typeof window !== 'undefined'
-    && typeof window.matchMedia === 'function'
-    && window.matchMedia('(prefers-reduced-motion: reduce)').matches
-}
-
-async function scrollThreadToBottom(force = false, behavior: ScrollBehavior = 'auto') {
-  await nextTick()
-  const el = threadScrollEl.value
-  if (!el) return
-  if (!force && !threadAutoFollow.value) return
-  if (behavior === 'smooth' && !shouldReduceMotion()) {
-    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
-    threadAutoFollow.value = true
-    return
-  }
-  el.scrollTop = el.scrollHeight
-  await afterFrame()
-  el.scrollTop = el.scrollHeight
-  threadAutoFollow.value = true
-}
-
 function syncThreadResizeObserver() {
   if (typeof ResizeObserver === 'undefined') return
   threadResizeObserver?.disconnect()
   threadResizeObserver = new ResizeObserver(() => {
-    void scrollThreadToBottom()
+    void threadScroll.scrollToBottom()
   })
   const el = threadScrollEl.value
   if (!el) return
@@ -855,7 +439,7 @@ watch(
   messages,
   () => {
     void refreshThreadResizeObserver()
-    void scrollThreadToBottom()
+    void threadScroll.scrollToBottom()
   },
   { flush: 'post' },
 )
@@ -864,15 +448,15 @@ watch(
   latestUserMessageId,
   (newId, oldId) => {
     if (!newId || oldId === undefined || newId === oldId) return
-    threadAutoFollow.value = true
-    void scrollThreadToBottom(true, 'smooth')
+    threadScroll.autoFollow.value = true
+    void threadScroll.scrollToBottom(true, 'smooth')
   },
   { flush: 'post' },
 )
 
 onMounted(() => {
   void refreshThreadResizeObserver()
-  void scrollThreadToBottom(true)
+  void threadScroll.scrollToBottom(true)
 })
 
 onBeforeUnmount(() => {
@@ -1034,7 +618,7 @@ function toSessionItem(s: Session): SessionItem {
   return {
     id: s.id,
     title: s.title || `Session ${s.id.slice(0, 8)}`,
-    status: normalizeSessionStatus(core?.status || s.status || 'idle'),
+    status: normalizeCoreSessionStatus(core?.status || s.status || 'idle'),
     createdAt: s.created_at,
     updatedAt: core?.updatedAt || s.updated_at,
     metadata: { meta: `${s.phase || '?'} / ${s.mode || '?'}` },
@@ -1045,7 +629,7 @@ function toCoreSessionItem(s: CoreSessionListItem): SessionItem {
   return {
     id: s.id,
     title: s.title || `Session ${s.id.slice(0, 8)}`,
-    status: normalizeSessionStatus(s.status || 'idle'),
+    status: normalizeCoreSessionStatus(s.status || 'idle'),
     createdAt: s.createdAt,
     updatedAt: s.updatedAt,
     metadata: s.metadata,
@@ -1053,20 +637,6 @@ function toCoreSessionItem(s: CoreSessionListItem): SessionItem {
 }
 
 // --- Actions ---
-async function handleStop() {
-  if (!activeSessionId.value) return
-  runtimeStatusText.value = '正在停止'
-  try {
-    if (!isAppServerActive.value) {
-      await appServerStore.connect(api.API_BASE, activeSessionId.value)
-    }
-    await appServerStore.interruptTurn(activeSessionId.value)
-  } catch (err) {
-    console.error('Failed to cancel session:', err)
-    runtimeStatusText.value = '停止失败'
-  }
-}
-
 async function handleNewSession(projectGroupId: string) {
   const group = projectGroups.value.find((g) => g.id === projectGroupId)
   if (!group) {
@@ -1096,7 +666,7 @@ async function handleNewSession(projectGroupId: string) {
       branch: null,
       phase: 'idle',
       mode: 'EXECUTE',
-      status: normalizeSessionStatus(session.status || 'idle'),
+      status: normalizeCoreSessionStatus(session.status || 'idle'),
       project_id: rawProject?.id || null,
       created_at: now,
       updated_at: now,
@@ -1262,55 +832,13 @@ function modelAllowsPendingImages(): boolean {
 
 async function sendWriterTask() {
   const text = composerText.value.trim()
-  if (!text && pendingAttachments.value.length === 0 && composerActionMode.value === 'stop') {
-    await handleStop()
-    return
-  }
   await submitWriterText(text, { clearComposer: true, attachments: attachmentInputItems.value })
 }
 
-function replaceActiveSlash(command: CoreCommandCatalogItem, replacement?: string): void {
-  const span = commandPalette.activeSlash.value
-  if (!span) return
-  const nextText = replacement ?? (command.action === 'insert_token' ? `/${command.name}` : '')
-  const updatedText = `${composerText.value.slice(0, span.start)}${nextText}${composerText.value.slice(span.end)}`
-  composerText.value = updatedText
-  if (command.action === 'insert_token') commandPaletteDismissedText.value = updatedText
-  void nextTick(() => {
-    const el = composerTextareaEl.value
-    const cursor = span.start + nextText.length
-    el?.focus()
-    el?.setSelectionRange(cursor, cursor)
-    updateComposerCursor()
-    resizeComposerTextarea()
-  })
-}
-
-async function selectComposerCommand(command: CoreCommandCatalogItem) {
-  commandPalette.reset()
-  if (command.action === 'insert_token') {
-    replaceActiveSlash(command)
-    return
-  }
-  replaceActiveSlash(command, `/${command.name}`)
-  const ok = await executeComposerAction(command.name)
-  if (ok) replaceActiveSlash(command, '')
-  else commandPaletteDismissedText.value = composerText.value
-}
-
-async function executeComposerAction(command: string): Promise<boolean> {
-  if (!activeSessionId.value) {
-    setComposerError('请先选择会话')
-    return false
-  }
-  if (composerIsRunning.value) {
-    setComposerError('当前正在运行，请等本轮结束后再执行命令')
-    return false
-  }
+async function executeWriterCommand(threadId: string, command: string, workRoot?: string): Promise<boolean> {
   clearComposerError()
   try {
-    await ensureAppServerConnected(activeSessionId.value)
-    const result = await appServerStore.executeCommand(activeSessionId.value, command, currentSessionWorkRoot())
+    const result = await appServerStore.executeCommand(threadId, command, workRoot)
     if (command === 'fork') {
       const session = result.session as Session | undefined
       if (session?.id) {
@@ -1327,77 +855,14 @@ async function executeComposerAction(command: string): Promise<boolean> {
   }
 }
 
-function buildComposerInputItems(text: string, attachments: CoreInputItem[]): CoreInputItem[] {
-  const spans = parseComposerSyntax(text)
-    .filter(span => span.kind === 'slash')
-    .filter(span => Boolean(insertTokenCommand(span.value)))
-
-  if (!spans.length) return [{ type: 'text', text }, ...attachments]
-
-  const items: CoreInputItem[] = []
-  let cursor = 0
-  for (const span of spans) {
-    if (span.start > cursor) items.push({ type: 'text', text: text.slice(cursor, span.start) })
-    const command = insertTokenCommand(span.value)
-    if (command) items.push({ type: 'skill', name: command.name, source_text: span.raw })
-    cursor = span.end
-  }
-  if (cursor < text.length) items.push({ type: 'text', text: text.slice(cursor) })
-  return [...items, ...attachments]
-}
-
-function standaloneActionCommand(text: string): string {
-  const spans = parseComposerSyntax(text)
-  if (spans.length !== 1) return ''
-  const span = spans[0]
-  if (span.kind !== 'slash') return ''
-  if (text.slice(0, span.start).trim() || text.slice(span.end).trim()) return ''
-  return actionCommand(span.value)?.name ?? ''
-}
-
 async function handleComposerKeydown(event: KeyboardEvent) {
   updateComposerCursor()
-  if (commandPaletteVisible.value) {
-    if (event.key === 'ArrowDown') {
-      event.preventDefault()
-      commandPalette.move(1)
-      return
-    }
-    if (event.key === 'ArrowUp') {
-      event.preventDefault()
-      commandPalette.move(-1)
-      return
-    }
-    if (event.key === 'Escape') {
-      event.preventDefault()
-      commandPalette.reset()
-      commandPaletteDismissedText.value = composerText.value
-      return
-    }
-  }
-  if (event.key === 'Enter' && (!event.shiftKey || commandPaletteVisible.value)) {
-    await handleComposerEnter(event)
-  }
+  await liveComposerController.handleKeydown(event)
 }
 
 async function handleComposerKeyup(event: KeyboardEvent) {
   updateComposerCursor()
-  if (event.key !== 'Enter' || event.shiftKey) return
-  if (Date.now() - lastComposerEnterHandledAt < COMPOSER_ENTER_FALLBACK_MS) return
-  await handleComposerEnter(event)
-}
-
-async function handleComposerEnter(event: KeyboardEvent) {
-  event.preventDefault()
-  lastComposerEnterHandledAt = Date.now()
-  if (commandPaletteVisible.value) {
-    const selected = commandPalette.selected()
-    if (selected) {
-      await selectComposerCommand(selected)
-      return
-    }
-  }
-  await sendWriterTask()
+  await liveComposerController.handleKeyup(event)
 }
 
 function clearComposerAfterPersisted(expectedText: string) {
@@ -1417,18 +882,19 @@ async function submitWriterText(
   options: { clearComposer?: boolean; attachments?: CoreInputItem[] } = {},
 ) {
   const cleaned = text.trim()
-  const attachments = options.attachments || []
-  if (!cleaned && attachments.length === 0) return
+  const attachments = options.attachments || attachmentInputItems.value
+  if (!cleaned && attachments.length === 0) {
+    await liveComposerController.submit({ clearComposer: options.clearComposer })
+    return
+  }
   clearComposerError()
 
-  const sessionId = await ensureActiveSession(cleaned.slice(0, 48))
-  if (!sessionId) {
+  if (!await ensureActiveSession(cleaned.slice(0, 48))) {
     setComposerError('请先新建项目并选择一个会话')
     composerText.value = cleaned
     return
   }
 
-  const status = activeSessionStatus.value
   if (hasBlockingFailure.value) {
     setComposerError('附件上传失败，请重试或移除失败附件后再发送')
     composerText.value = cleaned
@@ -1439,106 +905,21 @@ async function submitWriterText(
     composerText.value = cleaned
     return
   }
-  if ((status === 'running' || status === 'waiting') && attachments.length > 0) {
+  if (composerIsRunning.value && attachments.length > 0) {
     setComposerError('当前正在运行，带附件的消息请等本轮结束后再发送')
     composerText.value = cleaned
     return
   }
 
-  const standaloneCommand = attachments.length === 0 ? standaloneActionCommand(cleaned) : ''
-  if (standaloneCommand) {
-    const ok = await executeComposerAction(standaloneCommand)
-    if (ok && options.clearComposer) clearComposerAfterPersisted(cleaned)
-    if (!ok) composerText.value = cleaned
-    return
-  }
-
-  if (status === 'running' || status === 'waiting') {
-    const inputItems = buildComposerInputItems(cleaned, [])
-    try {
-      await appServerStore.queueInput(sessionId, inputItems)
-      if (options.clearComposer) clearComposerAfterPersisted(cleaned)
-      runtimeStatusText.value = '已加入待发送'
-    } catch (err) {
-      console.error('Failed to queue Writer task:', err)
-      setComposerError(err instanceof Error ? err.message : '加入待发送失败')
-      composerText.value = cleaned
-    }
-    return
-  }
-
-  const inputItems = buildComposerInputItems(cleaned, attachments)
-  const runOk = await runWriterTask(sessionId, inputItems)
-  if (runOk) {
-    if (options.clearComposer) clearComposerAfterPersisted(cleaned)
-    clearAttachments()
-  } else if (options.clearComposer) {
-    composerText.value = cleaned
-  }
+  await liveComposerController.submit({ clearComposer: options.clearComposer })
 }
 
 async function handleDecisionSelect(payload: DecisionSelectPayload) {
-  const part = findMessagePart(payload.partId)
-  const waitingRequest = part?.metadata?.waitingRequest
-  if (activeSessionId.value && isAppServerActive.value && waitingRequest && typeof waitingRequest === 'object') {
-    const requestId = String((waitingRequest as Record<string, unknown>).request_id || '')
-    if (requestId) {
-      try {
-        submittingApprovalRequestIds.value = new Set([...submittingApprovalRequestIds.value, requestId])
-        rebuildMessages()
-        await appServerStore.respondApproval(requestId, appServerDecision(payload.option.id || payload.response), payload.response)
-      } catch (err) {
-        const next = new Set(submittingApprovalRequestIds.value)
-        next.delete(requestId)
-        submittingApprovalRequestIds.value = next
-        rebuildMessages()
-        console.error('Failed to respond approval:', err)
-        runtimeStatusText.value = '授权处理失败'
-      }
-      return
-    }
-  }
-  const text = payload.response.trim()
-  if (!text) return
-  if (!activeSessionId.value) {
-    composerText.value = text
-    return
-  }
-  await submitWriterText(text)
-}
-
-function appServerDecision(value: string): string {
-  const normalized = value.trim().toLowerCase()
-  if (normalized === 'approve' || normalized === 'accept' || normalized === 'approve_once') return 'approve_once'
-  if (normalized === 'approve_for_session' || normalized === 'acceptforsession') return 'approve_for_session'
-  if (normalized === 'deny' || normalized === 'decline' || normalized === 'cancel') return 'deny'
-  return 'other_guidance'
-}
-
-function findMessagePart(partId: string) {
-  for (const message of messages.value) {
-    const part = message.parts?.find(item => item.id === partId)
-    if (part) return part
-  }
-  return null
-}
-
-async function runWriterTask(sessionId: string, inputItems: CoreInputItem[]) {
-  try {
-    if (!isAppServerActive.value) {
-      await appServerStore.connect(api.API_BASE, sessionId)
-    }
-    await appServerStore.startTurn(sessionId, inputItems, currentSessionWorkRoot(), currentThinkingOptions())
-    runtimeStatusText.value = '已发送'
-    clearComposerError()
-    void listCoreSessions().then((refreshed) => {
-      sessions.value = refreshed
-    })
-    return true
-  } catch (err) {
-    console.error('Failed to run Writer task:', err)
-    setComposerError(err instanceof Error ? err.message : '发送失败')
-    return false
+  const pending = approvalController.handleDecision(payload)
+  const result = await pending
+  if (result === 'failed') {
+    console.error('Failed to respond approval:', approvalController.lastError.value)
+    runtimeStatusText.value = '授权处理失败'
   }
 }
 
@@ -2051,88 +1432,6 @@ async function loadCommitReview(sessionId = activeSessionId.value || '') {
   }
 }
 
-async function removeQueuedInput(item: WriterQueuedInput) {
-  try {
-    await ensureAppServerConnected(item.session_id)
-    if (editingQueuedInputId.value === item.id) {
-      editingQueuedInputId.value = null
-      queuedInputDraft.value = ''
-    }
-    await appServerStore.deleteQueueInput(item.session_id, item.id)
-  } catch (err) {
-    console.error('Failed to remove queued input:', err)
-  }
-}
-
-async function beginEditQueuedInput(item: WriterQueuedInput) {
-  if (item.status !== 'queued') return
-  editingQueuedInputId.value = item.id
-  queuedInputDraft.value = item.text
-  await nextTick()
-  document.querySelector<HTMLInputElement>(`[data-queued-input-edit="${item.id}"]`)?.focus()
-}
-
-function cancelEditQueuedInput() {
-  editingQueuedInputId.value = null
-  queuedInputDraft.value = ''
-}
-
-async function saveQueuedInput(item: WriterQueuedInput) {
-  if (editingQueuedInputId.value !== item.id) return
-  const text = queuedInputDraft.value.trim()
-  if (!text) {
-    cancelEditQueuedInput()
-    return
-  }
-  try {
-    await ensureAppServerConnected(item.session_id)
-    if (text !== item.text) {
-      await appServerStore.updateQueueInput(item.session_id, item.id, text)
-    }
-  } catch (err) {
-    console.error('Failed to update queued input:', err)
-  } finally {
-    cancelEditQueuedInput()
-  }
-}
-
-async function guideWithQueuedInput(item: WriterQueuedInput) {
-  try {
-    await ensureAppServerConnected(item.session_id)
-    if (editingQueuedInputId.value === item.id) {
-      await saveQueuedInput(item)
-    }
-    const activeTurnId = latestActiveAppServerTurnId()
-    if (activeTurnId) {
-      await appServerStore.steerTurn(item.session_id, activeTurnId, item.text)
-      await appServerStore.deleteQueueInput(item.session_id, item.id)
-    }
-  } catch (err) {
-    console.error('Failed to send queued input as guidance:', err)
-  }
-}
-
-async function ensureAppServerConnected(sessionId: string) {
-  if (!sessionId) throw new Error('No active Writer session')
-  if (!isAppServerActive.value || appServerStore.connectionState !== 'open') {
-    await appServerStore.connect(api.API_BASE, sessionId)
-  }
-}
-
-function latestActiveAppServerTurnId(): string {
-  const state = appServerStore.state
-  const turns = state?.turns || {}
-  const coreTurns = state?.core?.turns || {}
-  const active = Object.values(turns)
-    .filter((turn) => {
-      const coreStatus = coreTurns[turn.turn_id]?.status
-      const status = coreStatus || turn.status
-      return status === 'running' || status === 'waiting'
-    })
-    .sort((a, b) => Number(b.seq || 0) - Number(a.seq || 0))
-  return active[0]?.turn_id || ''
-}
-
 async function loadCheckpoints(sessionId = activeSessionId.value || '') {
   if (!sessionId) {
     checkpoints.value = []
@@ -2305,7 +1604,7 @@ function upsertForkedSession(session: Session) {
     {
       id: session.id,
       title: session.title || `Session ${session.id.slice(0, 8)}`,
-      status: normalizeSessionStatus(session.status || 'idle'),
+      status: normalizeCoreSessionStatus(session.status || 'idle'),
       createdAt: session.created_at,
       updatedAt: session.updated_at,
       metadata: {
@@ -2461,10 +1760,8 @@ async function syncSessionUrl(sessionId: string | null) {
   }).catch(() => undefined)
 }
 
-// ── Reset process expansion on session change ──
 watch(activeSessionId, (newId) => {
   void syncSessionUrl(newId ?? null)
-  processExpandedIds.value = new Set()
   reviewExpandedFiles.value = new Set()
   reviewAllFilesVisible.value = false
   reviewAllDiffsVisible.value = false
@@ -2477,16 +1774,14 @@ watch(activeSessionId, (newId) => {
   selectedAgentBranchDiff.value = ''
   commitReviewFeedback.value = ''
   commitFeedbackOpen.value = false
-  commandCatalog.value = []
-  commandError.value = ''
-  commandPaletteDismissedText.value = ''
+  liveComposerController.resetForThreadChange()
   if (newId) {
     appServerStore.disconnect()
     // Reset session store messages
     sessionStore.clearMessages()
     // Reset step store
     void appServerStore.connect(api.API_BASE, newId)
-      .then(() => loadCommandCatalog(newId))
+      .then(() => liveComposerController.loadCommandCatalog(newId))
       .catch((err) => {
         if (err instanceof Error && err.name === 'AbortError') return
         console.error('Failed to connect Writer App Server:', err)
@@ -2498,20 +1793,18 @@ watch(activeSessionId, (newId) => {
 
 function syncLoadedSessionStatus(session: Session | null) {
   if (!session) return
-  const index = sessions.value.findIndex(item => item.id === session.id)
-  if (index < 0) return
-  const updated = [...sessions.value]
-  updated[index] = {
-    ...updated[index],
-    status: normalizeSessionStatus(session.status || 'idle'),
-    updatedAt: session.updated_at || updated[index].updatedAt,
-  } as CoreSessionListItem
-  sessions.value = updated
+  if (!sessions.value.some(item => item.id === session.id)) return
+  sessions.value = updateCoreSessionListStatus(
+    sessions.value,
+    session.id,
+    normalizeCoreSessionStatus(session.status || 'idle'),
+    session.updated_at || new Date().toISOString(),
+  )
   const storeIndex = sessionStore.sessions.findIndex(item => item.id === session.id)
   if (storeIndex >= 0) {
     sessionStore.sessions[storeIndex] = {
       ...sessionStore.sessions[storeIndex],
-      status: normalizeSessionStatus(session.status || 'idle'),
+      status: normalizeCoreSessionStatus(session.status || 'idle'),
       updated_at: session.updated_at || sessionStore.sessions[storeIndex].updated_at,
     }
   }
@@ -2537,7 +1830,7 @@ function upsertCreatedProjectSession(project: Project, session: CoreSessionListI
     branch: null,
     phase: 'idle',
     mode: 'EXECUTE',
-    status: normalizeSessionStatus(session.status || 'idle'),
+    status: normalizeCoreSessionStatus(session.status || 'idle'),
     project_id: project.id,
     created_at: createdAt,
     updated_at: updatedAt,
@@ -2549,27 +1842,6 @@ function upsertCreatedProjectSession(project: Project, session: CoreSessionListI
     sessionStore.sessions.unshift(storeSession)
   }
 }
-
-function isActiveTurnStatus(status: string) {
-  return status === 'running' || status === 'waiting'
-}
-
-// ── Auto-collapse process when run finishes ──
-watch(
-  () => activeSessionStatus.value,
-  (nowStatus, wasStatus) => {
-    const nowRunning = isActiveTurnStatus(nowStatus)
-    const wasRunning = isActiveTurnStatus(String(wasStatus))
-    syncActiveSessionListStatus(nowStatus)
-    if (nowRunning) {
-      syncLiveProcessExpansion(nowStatus)
-    }
-    if (!nowRunning && wasRunning) {
-      processExpandedIds.value = new Set()
-      void loadReviewChanges()
-    }
-  },
-)
 
 async function saveAgentsMd() {
   await projectStore.saveAgentsMd(agentsMdProjectId.value, projectStore.agentsMdContent)
@@ -2641,7 +1913,6 @@ onMounted(async () => {
     configStore.fetchResolvedConfig('writer').catch(() => undefined),
     loadInitialData(),
   ])
-  syncSelectedModel()
 })
 </script>
 
@@ -2654,6 +1925,7 @@ onMounted(async () => {
     :show-right-panel="true"
     :composer-placeholder="'输入任务描述...'"
     :composer-disabled="composerActionMode === 'send' && !composerText.trim() && pendingAttachments.length === 0"
+    :composer-action-mode="composerActionMode"
     @new-session="newSession"
     @settings="router.push('/settings')"
     @composer-submit="sendWriterTask"
@@ -2746,8 +2018,8 @@ onMounted(async () => {
       <section
         ref="threadScrollEl"
         class="thread"
-        @scroll.passive="handleThreadScroll"
-        @wheel.passive="handleThreadWheel"
+        @scroll.passive="threadScroll.handleScroll"
+        @wheel.passive="threadScroll.handleWheel"
       >
         <template v-if="!activeSessionId">
         <div class="sidebar-empty" style="flex:1;display:flex;align-items:center;justify-content:center">
@@ -2761,22 +2033,7 @@ onMounted(async () => {
             :process-expanded-ids="processExpandedIds"
             @toggle-process="toggleProcess"
             @decision-select="handleDecisionSelect"
-          >
-            <template #assistant-content="slotProps">
-              <MarkdownRenderer
-                v-if="slotProps.content"
-                :content="slotProps.content"
-                :streaming="Boolean((slotProps as { live?: boolean }).live)"
-              />
-            </template>
-            <template #reasoning-content="slotProps">
-              <MarkdownRenderer
-                v-if="slotProps.content"
-                :content="slotProps.content"
-                :streaming="Boolean((slotProps as { live?: boolean }).live)"
-              />
-            </template>
-          </ChatThread>
+          />
         </template>
       </section>
     </template>
@@ -2790,55 +2047,18 @@ onMounted(async () => {
         multiple
         @change="handleAttachmentInputChange"
       />
-      <div v-if="queuedInputs.length" class="queued-input-tray" aria-label="待发送输入">
-        <div v-for="(item, index) in queuedInputs" :key="item.id" class="queued-input-row">
-          <div class="queued-input-copy">
-            <span class="queued-input-status">{{ index + 1 }}.</span>
-            <input
-              v-if="editingQueuedInputId === item.id"
-              v-model="queuedInputDraft"
-              class="queued-input-edit"
-              :data-queued-input-edit="item.id"
-              @blur="saveQueuedInput(item)"
-              @keydown.enter.prevent="saveQueuedInput(item)"
-              @keydown.esc.prevent="cancelEditQueuedInput"
-            />
-            <span v-else class="queued-input-text">{{ item.text }}</span>
-          </div>
-          <div class="queued-input-actions">
-            <button
-              class="queued-input-icon-action"
-              type="button"
-              :disabled="item.status !== 'queued'"
-              title="编辑"
-              aria-label="编辑待发送内容"
-              @click="beginEditQueuedInput(item)"
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M12 20h9" />
-                <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4 11.5-11.5Z" />
-              </svg>
-            </button>
-            <button
-              type="button"
-              :disabled="!canGuideQueuedInput || item.status !== 'queued'"
-              @click="guideWithQueuedInput(item)"
-            >
-              引导
-            </button>
-            <button
-              class="queued-input-icon-action"
-              type="button"
-              :disabled="item.status === 'dispatching'"
-              title="删除"
-              aria-label="删除待发送内容"
-              @click="removeQueuedInput(item)"
-            >
-              ×
-            </button>
-          </div>
-        </div>
-      </div>
+      <CoreQueuedInputTray
+        v-model:draft="queuedInputDraft"
+        :items="queuedInputs"
+        :editing-id="editingQueuedInputId"
+        :can-guide="canGuideQueuedInput"
+        :submitting-ids="queueController.submittingItemIds.value"
+        @edit="(item) => queueController.beginEdit(item as CoreQueuedInput)"
+        @save="(item) => queueController.save(item as CoreQueuedInput)"
+        @cancel="queueController.cancelEdit"
+        @delete="(item) => queueController.remove(item as CoreQueuedInput)"
+        @guide="(item) => queueController.guide(item as CoreQueuedInput)"
+      />
       <AttachmentTray
         :attachments="pendingAttachments"
         @remove="removeAttachment"
@@ -2854,7 +2074,7 @@ onMounted(async () => {
           v-if="commandPaletteVisible"
           :commands="commandPalette.filteredCommands.value"
           :active-index="commandPalette.activeIndex.value"
-          @select="selectComposerCommand"
+          @select="liveComposerController.selectCommand"
         />
         <div
           v-if="hasComposerCommandTokens"
@@ -2881,57 +2101,31 @@ onMounted(async () => {
     </template>
 
     <template #composer-tools>
-      <div class="composer-model-row">
-        <button
-          class="composer-attachment-button"
-          type="button"
-          title="添加附件"
-          aria-label="添加附件"
-          @click="attachmentFileInput?.click()"
-        >
-          +
-        </button>
-        <UiSelect
-          v-if="modelOptions.length > 0"
-          class="composer-model-select"
-          :model-value="selectedModelId"
-          :options="modelOptions"
-          placeholder="选择模型..."
-          direction="up"
-          @update:model-value="selectModel"
-        />
-        <UiSelect
-          class="composer-thinking-select"
-          :model-value="selectedThinkingMode"
-          :options="thinkingModeOptions"
-          :placeholder="selectedThinkingLabel"
-          direction="up"
-          @update:model-value="selectThinkingMode"
-        />
-        <button
-          class="composer-shallow-toggle"
-          :class="{ active: shallowThinkingEnabled }"
-          type="button"
-          title="Shallow thinking"
-          aria-label="Shallow thinking"
-          :aria-pressed="shallowThinkingEnabled"
-          @click="toggleShallowThinking"
-        >
-          Shallow
-        </button>
-      </div>
-    </template>
-
-    <template #composer-action>
-      <button
-        class="send"
-        :class="{ 'send--stop': composerActionMode === 'stop' }"
-        type="submit"
-        :disabled="composerActionMode === 'send' && !composerText.trim() && pendingAttachments.length === 0"
-        :title="composerActionMode === 'stop' ? '停止运行' : '发送'"
-        :aria-label="composerActionMode === 'stop' ? '停止运行' : '发送'"
-        @click.prevent="sendWriterTask"
-      >{{ composerActionMode === 'stop' ? 'stop' : 'send' }}</button>
+      <CoreExecutionControls
+        :model-value="selectedModelId"
+        :thinking-mode="selectedThinkingMode"
+        :shallow-thinking-enabled="shallowThinkingEnabled"
+        :model-options="modelOptions"
+        :thinking-mode-options="thinkingModeOptions"
+        model-aria-label="模型"
+        thinking-aria-label="思考模式"
+        shallow-label="Shallow"
+        @update:model-value="selectModel"
+        @update:thinking-mode="selectThinkingMode"
+        @update:shallow-thinking-enabled="(enabled) => { shallowThinkingEnabled = enabled }"
+      >
+        <template #leading>
+          <button
+            class="composer-attachment-button"
+            type="button"
+            title="添加附件"
+            aria-label="添加附件"
+            @click="attachmentFileInput?.click()"
+          >
+            +
+          </button>
+        </template>
+      </CoreExecutionControls>
     </template>
 
     <template #right-panel>
@@ -3089,94 +2283,6 @@ onMounted(async () => {
   background: transparent;
 }
 
-:deep(.composer-model-select) {
-  width: auto;
-  min-width: 0;
-}
-
-:deep(.composer-thinking-select),
-:deep(.composer-model-select) {
-  width: auto;
-  min-width: 0;
-}
-
-:deep(.composer-thinking-select .ui-select-trigger),
-:deep(.composer-model-select .ui-select-trigger) {
-  width: auto;
-  min-width: 0;
-  min-height: 28px;
-  height: 28px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  padding: 0 26px 0 8px;
-  color: color-mix(in srgb, var(--theme-composer-text, currentColor) 76%, transparent);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-:deep(.composer-thinking-select .ui-select-trigger:hover),
-:deep(.composer-thinking-select.open .ui-select-trigger),
-:deep(.composer-model-select .ui-select-trigger:hover),
-:deep(.composer-model-select.open .ui-select-trigger) {
-  background: color-mix(in srgb, var(--theme-composer-text, currentColor) 8%, transparent);
-  color: var(--theme-composer-text, currentColor);
-}
-
-:deep(.composer-thinking-select .ui-select-trigger:focus-visible),
-:deep(.composer-model-select .ui-select-trigger:focus-visible) {
-  outline: 2px solid color-mix(in srgb, var(--theme-composer-text, currentColor) 26%, transparent);
-  outline-offset: 2px;
-}
-
-:deep(.composer-thinking-select .ui-select-arrow),
-:deep(.composer-model-select .ui-select-arrow) {
-  right: 10px;
-}
-
-.composer-shallow-toggle {
-  height: 28px;
-  padding: 0 10px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: color-mix(in srgb, var(--theme-composer-text, currentColor) 70%, transparent);
-  box-shadow: none;
-  font: inherit;
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 28px;
-  cursor: pointer;
-}
-
-.composer-shallow-toggle:hover {
-  background: color-mix(in srgb, var(--theme-composer-text, currentColor) 8%, transparent);
-  color: var(--theme-composer-text, currentColor);
-}
-
-.composer-shallow-toggle.active {
-  background: transparent;
-  color: var(--green);
-  box-shadow: none;
-}
-
-.composer-shallow-toggle:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--theme-composer-text, currentColor) 26%, transparent);
-  outline-offset: 2px;
-}
-
-:global(.floating-composer:has(.composer-thinking-select.open)),
-:global(.floating-composer:has(.composer-model-select.open)),
-:global(.floating-composer:has(.command-palette)),
-:global(.floating-composer:has(.queued-input-tray)) {
-  overflow: visible;
-}
-
-:deep(.composer-thinking-select .ui-select-menu),
-:deep(.composer-model-select .ui-select-menu) {
-  z-index: var(--z-popover, 60);
-}
-
 .composer-attachment-button {
   display: inline-grid;
   place-items: center;
@@ -3194,204 +2300,6 @@ onMounted(async () => {
 .composer-attachment-button:hover {
   background: color-mix(in srgb, var(--theme-composer-text, currentColor) 10%, transparent);
   color: var(--theme-composer-text, currentColor);
-}
-
-.composer-input-wrap {
-  position: relative;
-  min-width: 0;
-}
-
-.composer-feedback {
-  margin: 0 0 8px;
-  padding: 6px 10px;
-  border-radius: 6px;
-  font-size: 13px;
-  line-height: 1.35;
-}
-
-.composer-feedback--error {
-  border: 1px solid color-mix(in srgb, #ef4444 34%, transparent);
-  background: color-mix(in srgb, #ef4444 10%, transparent);
-  color: color-mix(in srgb, #fecaca 72%, var(--theme-composer-text, currentColor));
-}
-
-.composer-input-wrap textarea {
-  position: relative;
-  z-index: 1;
-}
-
-.composer-input-wrap.has-command-tokens textarea {
-  color: transparent;
-  caret-color: var(--theme-composer-text, currentColor);
-}
-
-.composer-input-wrap.has-command-tokens textarea::placeholder {
-  color: color-mix(in srgb, var(--theme-composer-text, currentColor) 52%, transparent);
-}
-
-.composer-syntax-overlay {
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  min-height: 42px;
-  max-height: 190px;
-  overflow: hidden;
-  padding: 13px 16px 7px;
-  color: var(--theme-composer-text, currentColor);
-  font-size: 15px;
-  line-height: 1.45;
-  pointer-events: none;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.composer-skill-token {
-  border-radius: 4px;
-  background: color-mix(in srgb, #8ecbff 16%, transparent);
-  color: #8ecbff;
-}
-
-.queued-input-tray {
-  display: grid;
-  position: absolute;
-  z-index: 4;
-  left: var(--queued-input-left-inset, 20px);
-  bottom: 100%;
-  width: calc(100% - var(--composer-side-width, 58px) - var(--queued-input-left-inset, 20px) - var(--queued-input-right-inset, 0px));
-  margin: 0;
-}
-
-.queued-input-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 10px;
-  align-items: center;
-  min-height: 42px;
-  padding: 0 12px 0 16px;
-  border: 1px solid color-mix(in srgb, var(--theme-composer-text, currentColor) 12%, transparent);
-  border-bottom-width: 0;
-  background: var(--theme-composer-background);
-}
-
-.queued-input-row:first-child {
-  border-radius: 10px 10px 0 0;
-}
-
-.queued-input-row + .queued-input-row {
-  border-top-color: color-mix(in srgb, var(--theme-composer-text, currentColor) 8%, transparent);
-}
-
-.queued-input-copy {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 9px;
-  min-height: 28px;
-  font-size: 13px;
-}
-
-.queued-input-status {
-  flex: 0 0 auto;
-  color: color-mix(in srgb, var(--theme-composer-text, currentColor) 64%, transparent);
-  font-weight: 700;
-}
-
-.queued-input-text {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--theme-composer-text, currentColor);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.queued-input-edit {
-  min-width: 0;
-  width: 100%;
-  height: 28px;
-  border: 1px solid color-mix(in srgb, var(--theme-composer-text, currentColor) 18%, transparent);
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--theme-composer-background, transparent) 82%, transparent);
-  color: var(--theme-composer-text, currentColor);
-  padding: 0 8px;
-  font: inherit;
-  outline: none;
-}
-
-.queued-input-edit:focus {
-  border-color: color-mix(in srgb, var(--theme-composer-text, currentColor) 34%, transparent);
-}
-
-.queued-input-actions {
-  display: flex;
-  flex: 0 0 auto;
-  gap: 4px;
-  justify-content: flex-end;
-  white-space: nowrap;
-}
-
-.queued-input-actions button {
-  min-width: 32px;
-  height: 28px;
-  padding: 0 8px;
-  border: 1px solid transparent;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--theme-composer-text, currentColor);
-  font-size: 12px;
-  font-weight: 800;
-  line-height: 1;
-}
-
-.queued-input-actions button:hover:not(:disabled) {
-  border-color: color-mix(in srgb, var(--theme-composer-text, currentColor) 16%, transparent);
-  background: color-mix(in srgb, var(--theme-composer-text, currentColor) 12%, transparent);
-}
-
-.queued-input-actions button:disabled {
-  cursor: not-allowed;
-  opacity: 0.45;
-}
-
-.queued-input-icon-action {
-  display: inline-grid;
-  place-items: center;
-  width: 28px;
-  padding: 0;
-  font-size: 18px;
-}
-
-.queued-input-icon-action svg {
-  width: 15px;
-  height: 15px;
-  fill: none;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 2;
-}
-
-.send {
-  width: 54px;
-  height: 30px;
-  border: 1px solid color-mix(in srgb, var(--theme-control-text) 12%, transparent);
-  border-radius: 9px;
-  background: color-mix(in srgb, var(--theme-control-background) 70%, transparent);
-  color: color-mix(in srgb, var(--theme-control-text) 72%, transparent);
-  display: grid;
-  place-items: center;
-  font-size: 12px;
-  font-weight: 850;
-  line-height: 1;
-}
-
-.send--stop {
-  border-color: color-mix(in srgb, var(--red) 28%, transparent);
-  background: color-mix(in srgb, var(--red) 12%, var(--theme-control-background));
-  color: var(--red);
-}
-
-.send--stop:hover {
-  background: color-mix(in srgb, var(--red) 18%, var(--theme-control-background));
 }
 
 .runtime-resource-widget {
@@ -3552,19 +2460,6 @@ onMounted(async () => {
 }
 
 @media (max-width: 760px) {
-  .queued-input-row {
-    min-height: 42px;
-    padding: 0 10px 0 12px;
-  }
-
-  .queued-input-copy {
-    gap: 7px;
-  }
-
-  .queued-input-actions {
-    gap: 2px;
-  }
-
   .send {
     width: 50px;
     height: 30px;

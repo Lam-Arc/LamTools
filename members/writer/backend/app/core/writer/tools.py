@@ -4,16 +4,9 @@ from pathlib import Path
 from typing import Awaitable, Callable
 
 from lamtools_core.event import CoreEvent
+from lamtools_core.agent import SUB_AGENT_TOOL_NAME
 from lamtools_core.tool import ToolCall, ToolResult
-from lamtools_core.tool.command import run_subprocess as _run_subprocess
-from lamtools_core.tool.git_tools import make_git_diff_handler, make_git_status_handler
-from lamtools_core.tool.web_tools import (
-    make_browser_check_handler,
-    make_web_fetch_handler,
-    make_web_search_handler,
-)
-from lamtools_core.tool.command_tools import CommandToolHandlers
-from lamtools_core.tool.workspace_files import make_edit_file_handler, make_write_file_handler
+from lamtools_core.tool.default_toolbox import DEFAULT_TOOL_ORDER, CoreToolbox, build_core_toolbox
 
 from app.core.writer import management_tools
 from app.core.writer.read_tools import ReadOnlyToolExecutor
@@ -23,6 +16,10 @@ _DEFAULT_MAX_LIST_ITEMS = 100
 _DEFAULT_MAX_TEXT_LENGTH = 50_000
 _DEFAULT_MAX_SEARCH_RESULTS = 50
 _DEFAULT_MAX_WRITE_LENGTH = 100_000
+_CORE_EXECUTOR_TOOL_NAMES = tuple(
+    name for name in DEFAULT_TOOL_ORDER
+    if name not in {"mcp_tool", SUB_AGENT_TOOL_NAME}
+)
 
 
 class ReadWriteToolExecutor(ReadOnlyToolExecutor):
@@ -48,62 +45,88 @@ class ReadWriteToolExecutor(ReadOnlyToolExecutor):
         self._max_write_length = max_write_length
         self._command_timeout = command_timeout
         self._core_event_callback = core_event_callback
-        self._command_tools = CommandToolHandlers(
+        self._core_toolbox: CoreToolbox = build_core_toolbox(
             work_root=self._work_root,
+            max_list_items=max_list_items,
+            max_text_length=max_text_length,
+            max_search_results=max_search_results,
+            max_write_length=max_write_length,
             command_timeout=self._command_timeout,
-            loaded_skill_roots=self._loaded_skill_roots,
+            skill_registry=self._skills,
             core_event_callback=self._core_event_callback,
         )
 
     def as_dict(self) -> dict[str, Callable[[ToolCall], Awaitable[ToolResult]]]:
-        base = super().as_dict()
-        base["write_file"] = make_write_file_handler(
-            self._work_root,
-            max_write_length=self._max_write_length,
-        )
-        base["edit_file"] = make_edit_file_handler(
-            self._work_root,
-            max_write_length=self._max_write_length,
-        )
-        base["run_command"] = self.run_command
-        base["run_tests"] = self.run_tests
-        base["web_search"] = make_web_search_handler(str(self._work_root))
-        base["web_fetch"] = make_web_fetch_handler(str(self._work_root))
-        base["browser_check"] = make_browser_check_handler(str(self._work_root))
-        base["git_status"] = make_git_status_handler(
-            self._work_root,
-            command_timeout=self._command_timeout,
-            run_subprocess=_run_subprocess,
-        )
-        base["git_diff"] = make_git_diff_handler(
-            self._work_root,
-            command_timeout=self._command_timeout,
-            max_text_length=self._max_text_length,
-            run_subprocess=_run_subprocess,
-        )
+        base = {name: self._core_handler(name) for name in _CORE_EXECUTOR_TOOL_NAMES}
         base["request_commit_review"] = management_tools.request_commit_review
         base["write_checklist"] = management_tools.write_checklist
         base["update_checklist"] = management_tools.update_checklist
         base["verify_design"] = self.verify_design
+        base["inspect_project"] = self.inspect_project
         return base
 
+    def _core_handler(self, tool_name: str) -> Callable[[ToolCall], Awaitable[ToolResult]]:
+        async def handle(call: ToolCall) -> ToolResult:
+            return await self._execute_core_tool(tool_name, call)
+
+        return handle
+
+    async def _execute_core_tool(self, tool_name: str, call: ToolCall) -> ToolResult:
+        self._core_toolbox.skill_registry = self._skills
+        if call.name != tool_name:
+            call = ToolCall(
+                id=call.id,
+                name=tool_name,
+                arguments=call.arguments,
+                reason=call.reason,
+                goal=call.goal,
+                requires_approval=call.requires_approval,
+                raw=call.raw,
+                metadata=dict(call.metadata),
+            )
+        return await self._core_toolbox.execute(call)
+
+    async def read_file(self, call: ToolCall) -> ToolResult:
+        return await self._execute_core_tool("read_file", call)
+
+    async def list_dir(self, call: ToolCall) -> ToolResult:
+        return await self._execute_core_tool("list_dir", call)
+
+    async def search_files(self, call: ToolCall) -> ToolResult:
+        return await self._execute_core_tool("search_files", call)
+
+    async def search_content(self, call: ToolCall) -> ToolResult:
+        return await self._execute_core_tool("search_content", call)
+
+    async def load_skill(self, call: ToolCall) -> ToolResult:
+        return await self._execute_core_tool("load_skill", call)
+
     async def write_file(self, call: ToolCall) -> ToolResult:
-        return await make_write_file_handler(
-            self._work_root,
-            max_write_length=self._max_write_length,
-        )(call)
+        return await self._execute_core_tool("write_file", call)
 
     async def edit_file(self, call: ToolCall) -> ToolResult:
-        return await make_edit_file_handler(
-            self._work_root,
-            max_write_length=self._max_write_length,
-        )(call)
+        return await self._execute_core_tool("edit_file", call)
 
     async def run_command(self, call: ToolCall) -> ToolResult:
-        return await self._command_tools.run_command(call)
+        return await self._execute_core_tool("run_command", call)
 
     async def run_tests(self, call: ToolCall) -> ToolResult:
-        return await self._command_tools.run_tests(call)
+        return await self._execute_core_tool("run_tests", call)
+
+    async def git_status(self, call: ToolCall) -> ToolResult:
+        return await self._execute_core_tool("git_status", call)
+
+    async def git_diff(self, call: ToolCall) -> ToolResult:
+        return await self._execute_core_tool("git_diff", call)
+
+    async def web_search(self, call: ToolCall) -> ToolResult:
+        return await self._execute_core_tool("web_search", call)
+
+    async def web_fetch(self, call: ToolCall) -> ToolResult:
+        return await self._execute_core_tool("web_fetch", call)
+
+    async def browser_check(self, call: ToolCall) -> ToolResult:
+        return await self._execute_core_tool("browser_check", call)
 
     async def request_commit_review(self, call: ToolCall) -> ToolResult:
         return await management_tools.request_commit_review(call)

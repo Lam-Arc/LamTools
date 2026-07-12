@@ -16,3 +16,6 @@ class AppSetting(Base):
     namespace: Mapped[str] = mapped_column(String(100), primary_key=True)
     value: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now)
+
+
+__all__ = ["AppSetting"]

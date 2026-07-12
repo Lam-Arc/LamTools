@@ -66,6 +66,7 @@ async def create_turn(
     session_id: str,
     user_text: str,
     user_message_id: str | None,
+    turn_id: str | None = None,
 ) -> WriterTranscriptTurn:
     max_sequence = await db.execute(
         select(func.max(WriterTranscriptTurn.sequence)).where(WriterTranscriptTurn.session_id == session_id)
@@ -73,7 +74,7 @@ async def create_turn(
     sequence = int(max_sequence.scalar() or 0) + 1
     now = utc_now()
     turn = WriterTranscriptTurn(
-        id=gen_uuid(),
+        id=turn_id or gen_uuid(),
         session_id=session_id,
         sequence=sequence,
         user_text=user_text,
@@ -95,6 +96,7 @@ async def create_user_message_turn(
     message_id: str | None = None,
     message_parts: dict[str, Any] | None = None,
     attachment_ids: list[str] | None = None,
+    turn_id: str | None = None,
 ) -> tuple[WriterTranscriptTurn, WriterMessage]:
     user_message = WriterMessage(
         id=message_id or gen_uuid(),
@@ -109,6 +111,7 @@ async def create_user_message_turn(
         session_id=session_id,
         user_text=user_text,
         user_message_id=user_message.id,
+        turn_id=turn_id,
     )
     if attachment_ids:
         result = await db.execute(

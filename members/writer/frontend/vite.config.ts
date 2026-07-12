@@ -8,7 +8,6 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),
-      '@lamtools/ui': fileURLToPath(new URL('../../../core/ui/src', import.meta.url)),
     },
   },
   server: {
