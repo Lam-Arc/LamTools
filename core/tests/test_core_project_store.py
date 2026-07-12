@@ -22,6 +22,9 @@ async def test_create_makes_normalized_workspace_without_initializing_git(tmp_pa
         assert project.name == "workspace"
         assert requested_root.resolve().is_dir()
         assert not (requested_root.resolve() / ".git").exists()
+        assert [session.metadata for session in await db.project_store.list_sessions(project.id)] == [
+            {"project_id": project.id, "work_root": str(requested_root.resolve())}
+        ]
     finally:
         await db.close()
 
@@ -44,7 +47,7 @@ async def test_create_same_normalized_workspace_keeps_original_project_name(tmp_
 
 
 @pytest.mark.asyncio
-async def test_project_record_can_be_renamed_listed_and_deleted_without_deleting_workspace(tmp_path: Path) -> None:
+async def test_public_delete_cleans_linked_session_records_without_deleting_workspace(tmp_path: Path) -> None:
     db = await open_core_app_db(tmp_path / "core.db")
     root = tmp_path / "workspace"
     try:
@@ -56,8 +59,28 @@ async def test_project_record_can_be_renamed_listed_and_deleted_without_deleting
         assert await db.project_store.get(project.id) == renamed
         assert await db.project_store.list() == [renamed]
 
+        [session] = await db.project_store.list_sessions(project.id)
+
+        async def add_related_records(connection) -> None:
+            connection.add(
+                CoreAppEvent(
+                    event_id="public-delete-event",
+                    thread_id=session.id,
+                    seq=1,
+                    method="thread/started",
+                    payload_json={},
+                )
+            )
+            connection.add(CoreRuntimeSession(thread_id=session.id))
+
+        await db.persistence.write(add_related_records)
+
         assert await db.project_store.delete(project.id) is True
         assert await db.project_store.get(project.id) is None
+        assert await db.project_store.list_sessions(project.id) == []
+        async with db.session_factory() as connection:
+            assert await connection.get(CoreAppEvent, "public-delete-event") is None
+            assert await connection.get(CoreRuntimeSession, session.id) is None
         assert root.is_dir()
     finally:
         await db.close()
@@ -83,7 +106,7 @@ async def test_agents_md_is_utf8_and_survives_project_record_deletion(tmp_path: 
 
 
 @pytest.mark.asyncio
-async def test_project_creation_creates_a_linked_initial_session_and_deletion_removes_it(tmp_path: Path) -> None:
+async def test_create_with_initial_session_returns_the_public_initial_session(tmp_path: Path) -> None:
     db = await open_core_app_db(tmp_path / "core.db")
     root = tmp_path / "workspace"
     try:
@@ -96,38 +119,21 @@ async def test_project_creation_creates_a_linked_initial_session_and_deletion_re
         }
         assert await db.project_store.list_sessions(project.id) == [initial_session]
 
-        async def add_related_records(connection) -> None:
-            connection.add(
-                CoreAppEvent(
-                    event_id="project-session-event",
-                    thread_id=initial_session.id,
-                    seq=1,
-                    method="thread/started",
-                    payload_json={},
-                )
-            )
-            connection.add(CoreRuntimeSession(thread_id=initial_session.id))
-
-        await db.persistence.write(add_related_records)
-
-        assert await db.project_store.delete_with_sessions(project.id) is True
-        assert await db.project_store.get(project.id) is None
-        assert await db.project_store.list_sessions(project.id) == []
-        async with db.session_factory() as connection:
-            assert await connection.get(CoreAppEvent, "project-session-event") is None
-            assert await connection.get(CoreRuntimeSession, initial_session.id) is None
     finally:
         await db.close()
 
 
 @pytest.mark.asyncio
-async def test_project_deletion_rejects_active_linked_sessions(tmp_path: Path) -> None:
+@pytest.mark.parametrize("status", ["running", "waiting", "interrupting"])
+async def test_public_delete_rejects_active_linked_sessions(tmp_path: Path, status: str) -> None:
     db = await open_core_app_db(tmp_path / "core.db")
     try:
-        project, session, _ = await db.project_store.create_with_initial_session(tmp_path / "workspace")
-        await CoreDbSessionStore(lambda: db).patch(session.id, status="running")
+        project, _ = await db.project_store.create(tmp_path / "workspace")
+        [session] = await db.project_store.list_sessions(project.id)
+        await CoreDbSessionStore(lambda: db).patch(session.id, status=status)
 
         with pytest.raises(ActiveProjectSessionsError, match="active session"):
-            await db.project_store.delete_with_sessions(project.id)
+            await db.project_store.delete(project.id)
+        assert await db.project_store.get(project.id) is not None
     finally:
         await db.close()

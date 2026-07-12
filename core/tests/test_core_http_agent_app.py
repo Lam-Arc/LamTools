@@ -290,10 +290,35 @@ def test_project_http_delete_rejects_active_session_and_app_server_uses_project_
                 }
             )
             created = _receive_rpc_response(websocket, 3)["result"]
-        project_id = created["project"]["id"]
-        session_id = created["session"]["id"]
+            project_id = created["project"]["id"]
+            session_id = created["session"]["id"]
+
+            websocket.send_json({"id": 4, "method": "project.get", "params": {"project_id": project_id}})
+            assert _receive_rpc_response(websocket, 4)["result"]["project"]["id"] == project_id
+
+            websocket.send_json(
+                {"id": 5, "method": "project.update", "params": {"project_id": project_id, "name": "Renamed"}}
+            )
+            assert _receive_rpc_response(websocket, 5)["result"]["project"]["name"] == "Renamed"
+
+            websocket.send_json({"id": 6, "method": "project.sessions.list", "params": {"project_id": project_id}})
+            assert _receive_rpc_response(websocket, 6)["result"]["sessions"][0]["id"] == session_id
+
+            websocket.send_json(
+                {"id": 7, "method": "project.agents_md.update", "params": {"project_id": project_id, "content": "# Rules\n"}}
+            )
+            assert _receive_rpc_response(websocket, 7)["result"]["agents_md"] == {"content": "# Rules\n", "exists": True}
+
+            websocket.send_json({"id": 8, "method": "project.agents_md.get", "params": {"project_id": project_id}})
+            assert _receive_rpc_response(websocket, 8)["result"]["agents_md"] == {"content": "# Rules\n", "exists": True}
         assert client.patch(f"/api/core/sessions/{session_id}", json={"status": "running"}).status_code == 200
         assert client.delete(f"/api/core/projects/{project_id}").status_code == 409
+        assert client.patch(f"/api/core/sessions/{session_id}", json={"status": "idle"}).status_code == 200
+
+        with client.websocket_connect("/api/core/app-server") as websocket:
+            _initialize_websocket(websocket)
+            websocket.send_json({"id": 9, "method": "project.delete", "params": {"project_id": project_id}})
+            assert _receive_rpc_response(websocket, 9)["result"] == {"deleted": True}
 
 
 def _receive_rpc_response(websocket, request_id: int) -> dict:

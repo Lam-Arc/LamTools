@@ -51,18 +51,13 @@ class CoreProjectStore:
         normalized_root = str(root)
 
         async def write(db: Any) -> tuple[CoreProjectRecord, bool]:
-            existing = await db.scalar(select(CoreProject).where(CoreProject.work_root == normalized_root))
-            if existing is not None:
-                return _record(existing), False
-
-            project = CoreProject(
-                id=uuid4().hex,
-                name=str(name or "").strip() or _default_project_name(root),
-                work_root=normalized_root,
+            project, _, created = await _create_project_with_initial_session(
+                db,
+                root=root,
+                normalized_root=normalized_root,
+                name=name,
             )
-            db.add(project)
-            await db.flush()
-            return _record(project), True
+            return project, created
 
         return await self.write_coordinator.run(write)
 
@@ -76,38 +71,12 @@ class CoreProjectStore:
         normalized_root = str(root)
 
         async def write(db: Any) -> tuple[CoreProjectRecord, SessionRecord, bool]:
-            project = await db.scalar(select(CoreProject).where(CoreProject.work_root == normalized_root))
-            created = project is None
-            if project is None:
-                project = CoreProject(
-                    id=uuid4().hex,
-                    name=str(name or "").strip() or _default_project_name(root),
-                    work_root=normalized_root,
-                )
-                db.add(project)
-                await db.flush()
-
-            sessions = await _project_sessions(db, project.id)
-            if sessions:
-                return _record(project), sessions[0], created
-
-            session = SessionRecord(
-                id=uuid4().hex,
-                member_id="core",
-                title=project.name,
-                status="idle",
-                metadata={"project_id": project.id, "work_root": normalized_root},
+            return await _create_project_with_initial_session(
+                db,
+                root=root,
+                normalized_root=normalized_root,
+                name=name,
             )
-            db.add(
-                CoreThreadSnapshot(
-                    thread_id=session.id,
-                    snapshot_seq=0,
-                    snapshot_json=session_snapshot(session),
-                    updated_at=session.updated_at,
-                )
-            )
-            await db.flush()
-            return _record(project), session, created
 
         return await self.write_coordinator.run(write)
 
@@ -135,30 +104,18 @@ class CoreProjectStore:
         return await self.write_coordinator.run(write)
 
     async def delete(self, project_id: str) -> bool:
-        async def write(db: Any) -> bool:
-            project = await db.get(CoreProject, project_id)
-            if project is None:
-                return False
-            await db.delete(project)
-            return True
-
-        return await self.write_coordinator.run(write)
+        return await self._delete_with_sessions(project_id)
 
     async def list_sessions(self, project_id: str) -> list[SessionRecord]:
         async with self.session_factory() as db:
             return await _project_sessions(db, project_id)
 
     async def delete_with_sessions(self, project_id: str) -> bool:
+        return await self._delete_with_sessions(project_id)
+
+    async def _delete_with_sessions(self, project_id: str) -> bool:
         async def write(db: Any) -> bool:
-            project = await db.get(CoreProject, project_id)
-            if project is None:
-                return False
-            sessions = await _project_sessions(db, project_id)
-            if any(session.status.lower() in {"running", "waiting", "interrupting"} for session in sessions):
-                raise ActiveProjectSessionsError("Stop the active session before deleting the project")
-            await delete_session_records(db, [session.id for session in sessions])
-            await db.delete(project)
-            return True
+            return await _delete_project_with_sessions(db, project_id)
 
         return bool(await self.write_coordinator.run(write))
 
@@ -196,6 +153,59 @@ def _record(project: CoreProject) -> CoreProjectRecord:
         created_at=project.created_at,
         updated_at=project.updated_at,
     )
+
+
+async def _create_project_with_initial_session(
+    db: Any,
+    *,
+    root: Path,
+    normalized_root: str,
+    name: str | None,
+) -> tuple[CoreProjectRecord, SessionRecord, bool]:
+    project = await db.scalar(select(CoreProject).where(CoreProject.work_root == normalized_root))
+    created = project is None
+    if project is None:
+        project = CoreProject(
+            id=uuid4().hex,
+            name=str(name or "").strip() or _default_project_name(root),
+            work_root=normalized_root,
+        )
+        db.add(project)
+        await db.flush()
+
+    sessions = await _project_sessions(db, project.id)
+    if sessions:
+        return _record(project), sessions[0], created
+
+    session = SessionRecord(
+        id=uuid4().hex,
+        member_id="core",
+        title=project.name,
+        status="idle",
+        metadata={"project_id": project.id, "work_root": normalized_root},
+    )
+    db.add(
+        CoreThreadSnapshot(
+            thread_id=session.id,
+            snapshot_seq=0,
+            snapshot_json=session_snapshot(session),
+            updated_at=session.updated_at,
+        )
+    )
+    await db.flush()
+    return _record(project), session, created
+
+
+async def _delete_project_with_sessions(db: Any, project_id: str) -> bool:
+    project = await db.get(CoreProject, project_id)
+    if project is None:
+        return False
+    sessions = await _project_sessions(db, project_id)
+    if any(session.status.lower() in {"running", "waiting", "interrupting"} for session in sessions):
+        raise ActiveProjectSessionsError("Stop the active session before deleting the project")
+    await delete_session_records(db, [session.id for session in sessions])
+    await db.delete(project)
+    return True
 
 
 async def _project_sessions(db: Any, project_id: str) -> list[SessionRecord]:

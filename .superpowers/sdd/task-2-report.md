@@ -65,3 +65,25 @@ Warnings are existing `websockets.legacy` deprecations from the real WebSocket E
 ## Concern
 
 Task 5 must migrate Writer's legacy project overlay to the Core contracts and update its ownership assertions. This is an accepted cross-task concern, not a Task 2 blocker.
+
+## Review Follow-up
+
+### Fixed Important findings
+
+- Public `create()` retains its `(project, created)` signature and now uses the same private row-level lifecycle helper as `create_with_initial_session()`. A newly created project always receives its initial Core session.
+- Public `delete()` and `delete_with_sessions()` both use one private coordinated deletion path. Active `running`, `waiting`, and `interrupting` sessions are rejected, while event, runtime, and snapshot records are removed before the project row.
+- Added direct public-entry regressions for initial-session creation, linked-record cleanup, and all three active statuses.
+
+### App Server coverage
+
+Added real WebSocket request/response coverage for `project.get`, `project.update`, `project.delete`, `project.sessions.list`, `project.agents_md.get`, and `project.agents_md.update`.
+
+### Verification
+
+```powershell
+py -3.14 -m pytest tests/test_core_project_store.py tests/test_core_http_agent_app.py tests/test_operation_groups.py tests/test_core_live_client_e2e.py -q
+```
+
+Output: `27 passed, 3 warnings in 3.59s`. The warnings are existing `websockets.legacy` deprecations in the live WebSocket E2E test.
+
+`git diff --check` passed before commit.
