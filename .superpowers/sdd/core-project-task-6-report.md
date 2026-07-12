@@ -71,6 +71,7 @@ Verified through the live Core API:
 - Writer owns adapters, Writer persistence additions, and product-only fields.
 - Core owns `project.create` and `project.agents_md.*` contracts; Writer forwards the same operation names through its adapter.
 - REST and App Server ordinary project/session creation and work-root update do not receive a Git manager and do not initialize repositories.
+- Writer project persistence no longer carries an obsolete Git manager dependency.
 - The only remaining session-router initialization call is the explicit commit-review action through `_ensure_work_root_repo()`.
 
 ## Service Cleanup

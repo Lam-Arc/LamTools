@@ -28,7 +28,6 @@ async def ensure_writer_project(
     *,
     work_root: str,
     name: str | None = None,
-    git_manager: Any | None = None,
 ) -> WriterProject:
     try:
         normalized_root = str(ensure_workspace_root(work_root))
@@ -36,8 +35,6 @@ async def ensure_writer_project(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not normalized_root:
         raise HTTPException(status_code=400, detail="Project work_root is required")
-
-    _ = git_manager
 
     existing = await db.execute(select(WriterProject).where(WriterProject.work_root == normalized_root))
     existing_projects = existing.scalars().all()

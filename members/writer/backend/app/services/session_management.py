@@ -37,7 +37,7 @@ async def create_writer_session(
         if not normalized_root:
             normalized_root = ensure_work_root(project.work_root)
     elif normalized_root:
-        project = await ensure_writer_project(db, work_root=normalized_root, git_manager=None)
+        project = await ensure_writer_project(db, work_root=normalized_root)
         await db.flush()
         effective_project_id = project.id
 
