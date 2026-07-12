@@ -40,14 +40,47 @@ class ActiveProjectSessionsError(RuntimeError):
     pass
 
 
+def normalize_workspace_root(work_root: Path | str) -> Path:
+    raw = str(work_root).strip()
+    if not raw:
+        raise ValueError("work_root is required")
+    root = Path(raw).expanduser().resolve()
+    if root.exists() and not root.is_dir():
+        raise ValueError("work_root must point to a directory")
+    return root
+
+
+def ensure_workspace_root(work_root: Path | str) -> Path:
+    root = normalize_workspace_root(work_root)
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def workspace_name(work_root: Path | str) -> str:
+    root = normalize_workspace_root(work_root)
+    return root.name or root.anchor
+
+
+def read_workspace_agents_md(work_root: Path | str) -> dict[str, str | bool]:
+    path = normalize_workspace_root(work_root) / "AGENTS.md"
+    if not path.exists():
+        return {"content": "", "exists": False}
+    return {"content": path.read_text(encoding="utf-8"), "exists": True}
+
+
+def write_workspace_agents_md(work_root: Path | str, content: str) -> dict[str, str | bool]:
+    path = ensure_workspace_root(work_root) / "AGENTS.md"
+    path.write_text(content, encoding="utf-8")
+    return {"content": content, "exists": True}
+
+
 class CoreProjectStore:
     def __init__(self, session_factory: async_sessionmaker, write_coordinator: SQLiteWriteCoordinator) -> None:
         self.session_factory = session_factory
         self.write_coordinator = write_coordinator
 
     async def create(self, work_root: Path | str, name: str | None = None) -> tuple[CoreProjectRecord, bool]:
-        root = _normalize_work_root(work_root)
-        root.mkdir(parents=True, exist_ok=True)
+        root = ensure_workspace_root(work_root)
         normalized_root = str(root)
 
         async def write(db: Any) -> tuple[CoreProjectRecord, bool]:
@@ -66,8 +99,7 @@ class CoreProjectStore:
         work_root: Path | str,
         name: str | None = None,
     ) -> tuple[CoreProjectRecord, SessionRecord, bool]:
-        root = _normalize_work_root(work_root)
-        root.mkdir(parents=True, exist_ok=True)
+        root = ensure_workspace_root(work_root)
         normalized_root = str(root)
 
         async def write(db: Any) -> tuple[CoreProjectRecord, SessionRecord, bool]:
@@ -123,26 +155,17 @@ class CoreProjectStore:
         project = await self.get(project_id)
         if project is None:
             return None
-        path = Path(project.work_root) / "AGENTS.md"
-        if not path.exists():
-            return {"content": "", "exists": False}
-        return {"content": path.read_text(encoding="utf-8"), "exists": True}
+        return read_workspace_agents_md(project.work_root)
 
     async def write_agents_md(self, project_id: str, content: str) -> dict[str, str | bool] | None:
         project = await self.get(project_id)
         if project is None:
             return None
-        path = Path(project.work_root) / "AGENTS.md"
-        path.write_text(content, encoding="utf-8")
-        return {"content": content, "exists": True}
-
-
-def _normalize_work_root(work_root: Path | str) -> Path:
-    return Path(work_root).expanduser().resolve()
+        return write_workspace_agents_md(project.work_root, content)
 
 
 def _default_project_name(work_root: Path) -> str:
-    return work_root.name or work_root.anchor
+    return workspace_name(work_root)
 
 
 def _record(project: CoreProject) -> CoreProjectRecord:
@@ -216,4 +239,13 @@ async def _project_sessions(db: Any, project_id: str) -> list[SessionRecord]:
     return [session for session in sessions if session.metadata.get("project_id") == project_id]
 
 
-__all__ = ["ActiveProjectSessionsError", "CoreProjectRecord", "CoreProjectStore"]
+__all__ = [
+    "ActiveProjectSessionsError",
+    "CoreProjectRecord",
+    "CoreProjectStore",
+    "ensure_workspace_root",
+    "normalize_workspace_root",
+    "read_workspace_agents_md",
+    "workspace_name",
+    "write_workspace_agents_md",
+]

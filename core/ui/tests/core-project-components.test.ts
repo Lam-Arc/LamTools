@@ -31,6 +31,16 @@ describe('CoreProjectCreate', () => {
 
     expect(idleWrapper.emitted('cancel')).toEqual([[]])
   })
+
+  it('renders an optional work-root action slot without adding a default browser control', () => {
+    const defaultWrapper = mount(CoreProjectCreate)
+    const wrapper = mount(CoreProjectCreate, {
+      slots: { 'work-root-action': '<button type="button" data-project-browse>浏览</button>' },
+    })
+
+    expect(defaultWrapper.find('[data-project-browse]').exists()).toBe(false)
+    expect(wrapper.get('[data-project-browse]').text()).toBe('浏览')
+  })
 })
 
 describe('CoreAgentsEditor', () => {

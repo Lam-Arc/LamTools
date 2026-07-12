@@ -1,13 +1,14 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import * as api from '@/api'
-import type { Project, ProjectCreate, ProjectUpdate } from '@/types'
+import type { Project, ProjectCreate, ProjectUpdate, Session } from '@/types'
 
 export const useProjectStore = defineStore('project', () => {
   const projects = ref<Project[]>([])
   const activeProject = ref<Project | null>(null)
   const loading = ref(false)
   const agentsMdContent = ref('')
+  const agentsMdExists = ref(false)
 
   const activeProjectId = computed(() => activeProject.value?.id ?? null)
 
@@ -20,10 +21,10 @@ export const useProjectStore = defineStore('project', () => {
     }
   }
 
-  async function createProject(data: ProjectCreate): Promise<Project> {
-    const p = await api.createProject(data)
-    projects.value.push(p)
-    return p
+  async function createProject(data: ProjectCreate): Promise<{ project: Project; session: Session }> {
+    const result = await api.createProject(data)
+    projects.value.push(result.project)
+    return result
   }
 
   function selectProject(project: Project | null) {
@@ -47,15 +48,17 @@ export const useProjectStore = defineStore('project', () => {
   async function fetchAgentsMd(projectId: string) {
     const result = await api.getAgentsMd(projectId)
     agentsMdContent.value = result.content
+    agentsMdExists.value = result.exists
   }
 
   async function saveAgentsMd(projectId: string, content: string) {
     const result = await api.updateAgentsMd(projectId, content)
     agentsMdContent.value = result.content
+    agentsMdExists.value = result.exists
   }
 
   return {
-    projects, activeProject, loading, agentsMdContent, activeProjectId,
+    projects, activeProject, loading, agentsMdContent, agentsMdExists, activeProjectId,
     fetchProjects, createProject, selectProject, updateProject, deleteProject,
     fetchAgentsMd, saveAgentsMd,
   }

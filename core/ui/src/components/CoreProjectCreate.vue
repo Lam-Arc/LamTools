@@ -12,14 +12,17 @@
     </label>
     <label>
       <span>项目路径</span>
-      <input
-        v-model="workRoot"
-        data-project-root
-        class="field-input"
-        autocomplete="off"
-        required
-        :disabled="loading"
-      />
+      <div class="core-project-root-field">
+        <input
+          v-model="workRoot"
+          data-project-root
+          class="field-input"
+          autocomplete="off"
+          required
+          :disabled="loading"
+        />
+        <slot name="work-root-action" :set-work-root="setWorkRoot" />
+      </div>
     </label>
     <p v-if="error" class="core-project-error" role="alert">{{ error }}</p>
     <div class="core-project-actions">
@@ -55,6 +58,10 @@ function submit() {
   if (!root || props.loading) return
   emit('submit', { name: name.value.trim(), work_root: root })
 }
+
+function setWorkRoot(value: string) {
+  if (!props.loading) workRoot.value = value.trim()
+}
 </script>
 
 <style scoped>
@@ -76,6 +83,16 @@ function submit() {
   gap: 4px;
   color: color-mix(in srgb, var(--theme-backdrop-text) 72%, transparent);
   font-size: 12px;
+}
+
+.core-project-root-field {
+  display: flex;
+  gap: 8px;
+}
+
+.core-project-root-field input {
+  min-width: 0;
+  flex: 1;
 }
 
 .core-project-actions {

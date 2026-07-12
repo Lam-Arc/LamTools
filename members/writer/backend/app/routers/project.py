@@ -6,6 +6,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from lamtools_core.app.project_store import ActiveProjectSessionsError
+
 from app.database import execute_writer_write, get_db, get_writer_write
 from app.models.project import WriterProject
 from app.services.project_management import (
@@ -129,6 +131,8 @@ async def delete_project(
         await execute_writer_write(db, lambda write_db: delete_writer_project(write_db, project_id), write_transaction)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail="Project not found") from exc
+    except ActiveProjectSessionsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 # --- AGENTS.md Read/Write ---

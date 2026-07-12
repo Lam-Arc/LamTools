@@ -74,7 +74,15 @@ from .live_protocol import (
 )
 from .snapshot_store import CoreAppSnapshotProjector, SqlAlchemyThreadSnapshotStore
 from .core_db import CoreAppDb, CoreProject, open_core_app_db
-from .project_store import CoreProjectRecord, CoreProjectStore
+from .project_store import (
+    CoreProjectRecord,
+    CoreProjectStore,
+    ensure_workspace_root,
+    normalize_workspace_root,
+    read_workspace_agents_md,
+    workspace_name,
+    write_workspace_agents_md,
+)
 from .turn_acceptance import (
     CoreAppEventSpec,
     TURN_ACCEPT_DEDUPE_METHODS,
@@ -114,6 +122,11 @@ __all__ = [
     "CoreProject",
     "CoreProjectRecord",
     "CoreProjectStore",
+    "ensure_workspace_root",
+    "normalize_workspace_root",
+    "read_workspace_agents_md",
+    "workspace_name",
+    "write_workspace_agents_md",
     "CoreLiveMemberHooks",
     "DefaultCoreLiveMemberHooks",
     "PreparedLiveInput",

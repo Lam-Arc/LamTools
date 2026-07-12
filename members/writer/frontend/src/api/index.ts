@@ -4,6 +4,7 @@
 // ============================================================
 
 import { appServerUrl, fetchAppServerToken, WriterAppServerClient } from '@/appServer/client'
+import { normalizeProjectAgents, requireProjectCreateResult, type ProjectAgents } from './project-contract'
 import type {
   Project,
   ProjectCreate,
@@ -105,12 +106,14 @@ export function listProjects(): Promise<Project[]> {
     .then((result) => result.projects ?? [])
 }
 
-export function createProject(data: ProjectCreate): Promise<Project> {
-  return appServerOperation<{ project?: Project }>('project.create', { ...data })
-    .then((result) => {
-      if (!result.project) throw new Error('project.create response is missing project')
-      return result.project
-    })
+export interface WriterProjectCreateResult {
+  project: Project
+  session: Session
+}
+
+export function createProject(data: ProjectCreate): Promise<WriterProjectCreateResult> {
+  return appServerOperation<{ project?: Project; session?: Session }>('project.create', { ...data })
+    .then(requireProjectCreateResult)
 }
 
 export function pickProjectDirectory(): Promise<string> {
@@ -135,17 +138,17 @@ export function updateProject(id: string, data: ProjectUpdate): Promise<Project>
 }
 
 export function deleteProject(id: string): Promise<void> {
-  return appServerOperation<{ ok?: boolean }>('project.delete', { project_id: id }).then(() => undefined)
+  return appServerOperation<{ deleted?: boolean }>('project.delete', { project_id: id }).then(() => undefined)
 }
 
-export function getAgentsMd(id: string): Promise<{ content: string }> {
-  return appServerOperation<{ content?: string }>('project.agents_md.get', { project_id: id })
-    .then((result) => ({ content: result.content ?? '' }))
+export function getAgentsMd(id: string): Promise<ProjectAgents> {
+  return appServerOperation<{ agents_md?: unknown }>('project.agents_md.get', { project_id: id })
+    .then(normalizeProjectAgents)
 }
 
-export function updateAgentsMd(id: string, content: string): Promise<{ content: string }> {
-  return appServerOperation<{ content?: string }>('project.agents_md.update', { project_id: id, content })
-    .then((result) => ({ content: result.content ?? '' }))
+export function updateAgentsMd(id: string, content: string): Promise<ProjectAgents> {
+  return appServerOperation<{ agents_md?: unknown }>('project.agents_md.update', { project_id: id, content })
+    .then(normalizeProjectAgents)
 }
 
 export function listProjectSessions(projectId: string): Promise<Session[]> {

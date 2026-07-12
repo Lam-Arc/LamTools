@@ -1,20 +1,26 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from fastapi import HTTPException
 from sqlalchemy import select, update as sql_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from lamtools_core.app.project_store import (
+    ActiveProjectSessionsError,
+    ensure_workspace_root,
+    normalize_workspace_root,
+    read_workspace_agents_md,
+    workspace_name,
+    write_workspace_agents_md,
+)
+
 from app.models.project import WriterProject
 from app.models.session import WriterSession
-from app.routers.path_utils import ensure_work_root
 from app.services.session_deletion import delete_writer_session_records
 
 def project_name_from_work_root(work_root: str) -> str:
-    path = Path(work_root)
-    return path.name or path.drive or work_root
+    return workspace_name(work_root)
 
 
 async def ensure_writer_project(
@@ -24,7 +30,10 @@ async def ensure_writer_project(
     name: str | None = None,
     git_manager: Any | None = None,
 ) -> WriterProject:
-    normalized_root = ensure_work_root(work_root)
+    try:
+        normalized_root = str(ensure_workspace_root(work_root))
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not normalized_root:
         raise HTTPException(status_code=400, detail="Project work_root is required")
 
@@ -39,9 +48,7 @@ async def ensure_writer_project(
         name=str(name or '').strip() or project_name_from_work_root(normalized_root),
         work_root=normalized_root,
     )
-    agents_path = Path(normalized_root) / "AGENTS.md"
-    if agents_path.exists():
-        project.agents_md = agents_path.read_text(encoding="utf-8")
+    project.agents_md = str(read_workspace_agents_md(normalized_root)["content"])
     db.add(project)
     return project
 
@@ -149,7 +156,11 @@ async def update_writer_project(
 
     normalized_update = {key: value for key, value in update_data.items() if value is not None}
     if "work_root" in normalized_update:
-        normalized_update["work_root"] = ensure_work_root(str(normalized_update["work_root"]))
+        raw_root = str(normalized_update["work_root"]).strip()
+        try:
+            normalized_update["work_root"] = str(ensure_workspace_root(raw_root)) if raw_root else ""
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         if normalized_update["work_root"] and "name" not in normalized_update:
             normalized_update["name"] = project_name_from_work_root(normalized_update["work_root"])
     for key, value in normalized_update.items():
@@ -165,9 +176,13 @@ async def delete_writer_project(db: AsyncSession, project_id: str) -> None:
     project = await db.get(WriterProject, project_id)
     if project is None:
         raise LookupError("Project not found")
-    result = await db.execute(select(WriterSession.id).where(WriterSession.project_id == project_id))
-    for session_id in result.scalars().all():
-        await delete_writer_session_records(db, session_id)
+    sessions = (
+        await db.execute(select(WriterSession).where(WriterSession.project_id == project_id))
+    ).scalars().all()
+    if any(session.status.lower() in {"running", "waiting", "interrupting"} for session in sessions):
+        raise ActiveProjectSessionsError("Stop the active session before deleting the project")
+    for session in sessions:
+        await delete_writer_session_records(db, session.id)
     await db.delete(project)
     await db.flush()
 
@@ -179,14 +194,11 @@ async def read_project_agents_md(db: AsyncSession, project_id: str) -> dict[str,
     if not project.work_root:
         raise ValueError("Project has no work_root set")
 
-    agents_path = Path(project.work_root) / "AGENTS.md"
-    if not agents_path.exists():
-        return {"content": "", "exists": False}
-
-    content = agents_path.read_text(encoding="utf-8")
+    result = read_workspace_agents_md(project.work_root)
+    content = str(result["content"])
     project.agents_md = content
     await db.flush()
-    return {"content": content, "exists": True}
+    return result
 
 
 async def write_project_agents_md(db: AsyncSession, project_id: str, content: str) -> dict[str, str | bool]:
@@ -196,13 +208,10 @@ async def write_project_agents_md(db: AsyncSession, project_id: str, content: st
     if not project.work_root:
         raise ValueError("Project has no work_root set")
 
-    agents_path = Path(project.work_root) / "AGENTS.md"
-    agents_path.parent.mkdir(parents=True, exist_ok=True)
-    agents_path.write_text(content, encoding="utf-8")
-
+    result = write_workspace_agents_md(project.work_root, content)
     project.agents_md = content
     await db.flush()
-    return {"content": content, "exists": True}
+    return result
 
 
 def project_session_summary(session: WriterSession) -> dict[str, Any]:

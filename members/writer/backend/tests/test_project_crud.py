@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import app.models  # noqa: F401
-from app.app_server.operations import handle_project_create_operation
+from app.app_server.operations import handle_project_create_operation, handle_project_delete_operation
 from app.core.writer.git import WriterGitManager
 from app.database import Base
 from app.models.project import WriterProject
@@ -110,6 +110,40 @@ async def test_writer_project_create_never_initializes_git(tmp_path, monkeypatch
         project = outcome.response["result"]["project"]
         assert project["work_root"] == str(work_root.resolve())
         assert not (work_root / ".git").exists()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["running", "waiting", "interrupting"])
+async def test_writer_project_delete_rejects_active_sessions(tmp_path, status):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'project-delete.db'}", future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    try:
+        async with session_factory() as db:
+            project = WriterProject(id="project-active", name="Active", work_root=str(tmp_path))
+            db.add(project)
+            db.add(WriterSession(
+                id=f"session-{status}",
+                title="Active session",
+                work_root=str(tmp_path),
+                project_id=project.id,
+                status=status,
+            ))
+            await db.commit()
+
+        outcome = await handle_project_delete_operation(
+            request_id=1,
+            params={"project_id": "project-active"},
+            session_factory=session_factory,
+        )
+
+        assert outcome.response["error"]["data"]["code"] == 409
+        async with session_factory() as db:
+            assert await db.get(WriterProject, "project-active") is not None
     finally:
         await engine.dispose()
 

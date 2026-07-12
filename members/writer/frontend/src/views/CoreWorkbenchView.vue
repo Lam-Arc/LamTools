@@ -47,6 +47,8 @@ import { useConfigStore } from '@/stores/config'
 import { useWriterAppServerStore } from '@/appServer/store'
 import { selectLatestTurnStatus } from '@/appServer/selectors'
 import { workbenchSessionRouteQuery, type WorkbenchRouteQuery } from '@/utils/workbenchRoute'
+import { pickProjectDirectory } from '@/lib/project-directory-picker'
+import { createWriterProjectWorkspace, saveWriterProjectAgents } from '@/lib/project-workspace'
 import {
   listCoreSessions,
   createCoreSession,
@@ -1821,28 +1823,40 @@ function syncLoadedSessionStatus(session: Session | null) {
   }
 }
 
-function upsertCreatedProjectSession(project: Project, session: CoreSessionListItem) {
-  const createdAt = session.createdAt || new Date().toISOString()
-  const updatedAt = session.updatedAt || createdAt
+function upsertCreatedProjectSession(
+  project: Pick<Project, 'id' | 'name' | 'work_root'>,
+  session: Pick<Session, 'id' | 'title' | 'work_root'> & Partial<Session>,
+) {
+  const createdAt = session.created_at || new Date().toISOString()
+  const updatedAt = session.updated_at || createdAt
+  const coreSession: CoreSessionListItem = {
+    id: session.id,
+    title: session.title,
+    createdAt,
+    updatedAt,
+    groupId: 'writer-sessions',
+    status: session.status,
+    metadata: { project_id: project.id, work_root: project.work_root },
+  }
 
-  const coreIndex = sessions.value.findIndex(item => item.id === session.id)
+  const coreIndex = sessions.value.findIndex(item => item.id === coreSession.id)
   if (coreIndex >= 0) {
     const updated = [...sessions.value]
-    updated[coreIndex] = { ...updated[coreIndex], ...session }
+    updated[coreIndex] = { ...updated[coreIndex], ...coreSession }
     sessions.value = updated
   } else {
-    sessions.value = [session, ...sessions.value]
+    sessions.value = [coreSession, ...sessions.value]
   }
 
   const storeSession: Session = {
     id: session.id,
     title: session.title || 'New Session',
-    work_root: project.work_root,
-    branch: null,
-    phase: 'idle',
-    mode: 'EXECUTE',
+    work_root: session.work_root || project.work_root,
+    branch: session.branch ?? null,
+    phase: session.phase ?? 'idle',
+    mode: session.mode ?? 'EXECUTE',
     status: normalizeCoreSessionStatus(session.status || 'idle'),
-    project_id: project.id,
+    project_id: session.project_id || project.id,
     created_at: createdAt,
     updated_at: updatedAt,
   }
@@ -1854,11 +1868,11 @@ function upsertCreatedProjectSession(project: Project, session: CoreSessionListI
   }
 }
 
-async function saveAgentsMd() {
+async function saveAgentsMd(content: string) {
   agentsLoading.value = true
   agentsError.value = ''
   try {
-    await projectStore.saveAgentsMd(agentsMdProjectId.value, projectStore.agentsMdContent)
+    await saveWriterProjectAgents(agentsMdProjectId.value, content, projectStore.saveAgentsMd)
     showAgentsMd.value = false
   } catch (err) {
     console.error('Failed to save AGENTS.md:', err)
@@ -1871,33 +1885,44 @@ async function saveAgentsMd() {
 const showNewProject = ref(false)
 const projectActionLoading = ref(false)
 const projectActionError = ref('')
+const selectingProjectDirectory = ref(false)
 
 function closeNewProject() {
   showNewProject.value = false
   projectActionError.value = ''
 }
 
+async function browseProjectDirectory(setWorkRoot: (value: string) => void) {
+  selectingProjectDirectory.value = true
+  try {
+    const selected = await pickProjectDirectory({
+      desktop: window.lamwriterDesktop,
+      appServerPickDirectory: api.pickProjectDirectory,
+    })
+    if (selected.path) setWorkRoot(selected.path)
+    else if (selected.message) window.alert(selected.message)
+  } finally {
+    selectingProjectDirectory.value = false
+  }
+}
+
 async function handleNewProject(payload: { name: string; work_root: string }) {
-  const workRoot = payload.work_root.trim()
-  if (!workRoot || projectActionLoading.value) return
+  if (!payload.work_root.trim() || projectActionLoading.value) return
   projectActionLoading.value = true
   projectActionError.value = ''
   try {
-    const project = await projectStore.createProject({
-      name: payload.name || workRoot.split(/[/\\]/).filter(Boolean).pop() || '未命名',
-      work_root: workRoot,
+    await createWriterProjectWorkspace(payload, {
+      createProject: projectStore.createProject,
+      onCreated: ({ project, session }) => upsertCreatedProjectSession(project, session),
+      selectSession: async (sessionId) => {
+        await router.push({ name: 'workbench' }).catch(() => undefined)
+        await selectSession(sessionId)
+      },
+      refresh: async () => {
+        await Promise.all([sessionStore.fetchSessions(), projectStore.fetchProjects()])
+      },
     })
-    const session = await createCoreSession('New Session', project.work_root, project.id)
-    upsertCreatedProjectSession(project, session)
     closeNewProject()
-    await router.push({ name: 'workbench' }).catch(() => undefined)
-    await selectSession(session.id)
-    await Promise.all([
-      sessionStore.fetchSessions(),
-      projectStore.fetchProjects(),
-    ])
-    upsertCreatedProjectSession(project, session)
-    await selectSession(session.id)
   } catch (err) {
     console.error('Failed to create project:', err)
     projectActionError.value = '创建项目失败'
@@ -1944,7 +1969,18 @@ onMounted(async () => {
           :error="projectActionError"
           @submit="handleNewProject"
           @cancel="closeNewProject"
-        />
+        >
+          <template #work-root-action="{ setWorkRoot }">
+            <button
+              type="button"
+              class="btn-secondary-sm"
+              :disabled="selectingProjectDirectory"
+              @click="browseProjectDirectory(setWorkRoot)"
+            >
+              {{ selectingProjectDirectory ? '选择中' : '浏览' }}
+            </button>
+          </template>
+        </CoreProjectCreate>
       </div>
     </template>
 

@@ -7,7 +7,26 @@ import pytest
 from lamtools_core.app import open_core_app_db
 from lamtools_core.app.core_db import CoreAppEvent, CoreRuntimeSession
 from lamtools_core.app.core_session_store import CoreDbSessionStore
-from lamtools_core.app.project_store import ActiveProjectSessionsError
+from lamtools_core.app.project_store import (
+    ActiveProjectSessionsError,
+    ensure_workspace_root,
+    normalize_workspace_root,
+    read_workspace_agents_md,
+    write_workspace_agents_md,
+)
+
+
+def test_workspace_helpers_normalize_create_and_round_trip_utf8_agents(tmp_path: Path) -> None:
+    root = tmp_path / "nested" / "workspace" / ".." / "workspace"
+
+    assert normalize_workspace_root(root) == root.resolve()
+    assert ensure_workspace_root(root) == root.resolve()
+    assert root.resolve().is_dir()
+    assert read_workspace_agents_md(root) == {"content": "", "exists": False}
+
+    content = "# 项目规则\n\n请使用 UTF-8。\n"
+    assert write_workspace_agents_md(root, content) == {"content": content, "exists": True}
+    assert read_workspace_agents_md(root) == {"content": content, "exists": True}
 
 
 @pytest.mark.asyncio

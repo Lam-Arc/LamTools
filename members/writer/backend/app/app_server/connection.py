@@ -24,15 +24,7 @@ from .operations import (
     handle_attachment_list_operation,
     handle_attachment_open_operation,
     handle_attachment_preview_operation,
-    handle_project_create_operation,
-    handle_project_agents_md_get_operation,
-    handle_project_agents_md_update_operation,
-    handle_project_delete_operation,
     handle_project_directory_pick_operation,
-    handle_project_get_operation,
-    handle_project_list_operation,
-    handle_project_sessions_list_operation,
-    handle_project_update_operation,
     handle_session_create_operation,
     handle_session_delete_operation,
     handle_session_changes_get_operation,
@@ -147,15 +139,7 @@ class WriterAppServerConnection(CoreLiveConnection):
     def _operation_catalog(self) -> OperationCatalog:
         core_handlers = self.context.host.operation_handlers()
         return build_writer_operation_catalog(
-            project_create=self._project_create,
             project_directory_pick=self._project_directory_pick,
-            project_get=self._project_get,
-            project_list=self._project_list,
-            project_update=self._project_update,
-            project_delete=self._project_delete,
-            project_agents_md_get=self._project_agents_md_get,
-            project_agents_md_update=self._project_agents_md_update,
-            project_sessions_list=self._project_sessions_list,
             attachment_list=self._attachment_list,
             attachment_get=self._attachment_get,
             attachment_preview=self._attachment_preview,
@@ -373,74 +357,10 @@ class WriterAppServerConnection(CoreLiveConnection):
         )
         await self._send(outcome.response)
 
-    async def _project_list(self, request: JsonRpcRequest) -> None:
-        outcome = await handle_project_list_operation(
-            request_id=request.id,
-            params=request.params,
-            session_factory=async_session,
-        )
-        await self._send(outcome.response)
-
-    async def _project_create(self, request: JsonRpcRequest) -> None:
-        outcome = await handle_project_create_operation(
-            request_id=request.id,
-            params=request.params,
-            session_factory=async_session,
-        )
-        await self._send(outcome.response)
-
     async def _project_directory_pick(self, request: JsonRpcRequest) -> None:
         outcome = await handle_project_directory_pick_operation(
             request_id=request.id,
             params=request.params,
-        )
-        await self._send(outcome.response)
-
-    async def _project_get(self, request: JsonRpcRequest) -> None:
-        outcome = await handle_project_get_operation(
-            request_id=request.id,
-            params=request.params,
-            session_factory=async_session,
-        )
-        await self._send(outcome.response)
-
-    async def _project_update(self, request: JsonRpcRequest) -> None:
-        outcome = await handle_project_update_operation(
-            request_id=request.id,
-            params=request.params,
-            session_factory=async_session,
-        )
-        await self._send(outcome.response)
-
-    async def _project_delete(self, request: JsonRpcRequest) -> None:
-        outcome = await handle_project_delete_operation(
-            request_id=request.id,
-            params=request.params,
-            session_factory=async_session,
-        )
-        await self._send(outcome.response)
-
-    async def _project_agents_md_get(self, request: JsonRpcRequest) -> None:
-        outcome = await handle_project_agents_md_get_operation(
-            request_id=request.id,
-            params=request.params,
-            session_factory=async_session,
-        )
-        await self._send(outcome.response)
-
-    async def _project_agents_md_update(self, request: JsonRpcRequest) -> None:
-        outcome = await handle_project_agents_md_update_operation(
-            request_id=request.id,
-            params=request.params,
-            session_factory=async_session,
-        )
-        await self._send(outcome.response)
-
-    async def _project_sessions_list(self, request: JsonRpcRequest) -> None:
-        outcome = await handle_project_sessions_list_operation(
-            request_id=request.id,
-            params=request.params,
-            session_factory=async_session,
         )
         await self._send(outcome.response)
 

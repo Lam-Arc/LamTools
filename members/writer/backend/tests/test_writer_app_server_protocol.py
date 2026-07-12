@@ -180,14 +180,7 @@ def test_initialize_params_reject_missing_client_info():
 
 def test_connection_exposes_required_request_handlers():
     for name in (
-        "_project_create",
-        "_project_get",
-        "_project_list",
-        "_project_update",
-        "_project_delete",
-        "_project_agents_md_get",
-        "_project_agents_md_update",
-        "_project_sessions_list",
+        "_project_directory_pick",
         "_attachment_list",
         "_attachment_get",
         "_attachment_preview",
@@ -215,6 +208,14 @@ def test_connection_exposes_required_request_handlers():
     ):
         assert hasattr(WriterAppServerConnection, name)
     for core_owned_name in (
+        "_project_create",
+        "_project_get",
+        "_project_list",
+        "_project_update",
+        "_project_delete",
+        "_project_agents_md_get",
+        "_project_agents_md_update",
+        "_project_sessions_list",
         "_turn_start",
         "_turn_steer",
         "_approval_respond",
@@ -453,9 +454,7 @@ def test_operation_names_normalize_transport_aliases():
 
 def _build_test_writer_catalog(handler):
     overlay_arguments = (
-        "project_create", "project_directory_pick", "project_get", "project_list",
-        "project_update", "project_delete", "project_agents_md_get",
-        "project_agents_md_update", "project_sessions_list", "attachment_list",
+        "project_directory_pick", "attachment_list",
         "attachment_get", "attachment_preview", "attachment_open", "session_create",
         "session_get", "session_list", "session_update", "session_delete", "session_fork",
         "session_git_graph", "session_changes_get", "session_checkpoints_list",

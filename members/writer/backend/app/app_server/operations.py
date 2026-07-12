@@ -11,6 +11,7 @@ from uuid import uuid4
 logger = logging.getLogger(__name__)
 
 from fastapi import HTTPException
+from lamtools_core.app.project_store import ActiveProjectSessionsError
 from sqlalchemy import select, text
 from sqlalchemy.exc import OperationalError
 
@@ -294,15 +295,7 @@ WRITER_OVERLAY_OPERATION_NAMES: tuple[str, ...] = (
 
 def build_writer_operation_catalog(
     *,
-    project_create: OperationRpcHandler,
     project_directory_pick: OperationRpcHandler,
-    project_get: OperationRpcHandler,
-    project_list: OperationRpcHandler,
-    project_update: OperationRpcHandler,
-    project_delete: OperationRpcHandler,
-    project_agents_md_get: OperationRpcHandler,
-    project_agents_md_update: OperationRpcHandler,
-    project_sessions_list: OperationRpcHandler,
     attachment_list: OperationRpcHandler,
     attachment_get: OperationRpcHandler,
     attachment_preview: OperationRpcHandler,
@@ -331,15 +324,7 @@ def build_writer_operation_catalog(
     core_handlers: Mapping[str, Any],
 ) -> OperationCatalog:
     writer_overlay_handlers = {
-        "project.create": _handler(project_create),
         "project.directory.pick": _handler(project_directory_pick),
-        "project.get": _handler(project_get),
-        "project.list": _handler(project_list),
-        "project.update": _handler(project_update),
-        "project.delete": _handler(project_delete),
-        "project.agents_md.get": _handler(project_agents_md_get),
-        "project.agents_md.update": _handler(project_agents_md_update),
-        "project.sessions.list": _handler(project_sessions_list),
         "attachment.list": _handler(attachment_list),
         "attachment.get": _handler(attachment_get),
         "attachment.preview": _handler(attachment_preview),
@@ -1094,6 +1079,10 @@ async def handle_project_delete_operation(
     try:
         persistence = writer_persistence_host(session_factory)
         await persistence.write(lambda db: delete_writer_project(db, project_id))
+    except ActiveProjectSessionsError as exc:
+        return WriterOperationOutcome(
+            response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc), data={"code": 409})
+        )
     except LookupError as exc:
         return WriterOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
     return WriterOperationOutcome(response=rpc_result(request_id, {"deleted": True}))
