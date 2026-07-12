@@ -84,6 +84,20 @@ class CoreProject(CoreDbBase):
     )
 
 
+class CoreAttachment(CoreDbBase):
+    __tablename__ = "core_attachments"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    filename: Mapped[str] = mapped_column(String(512), nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(255), nullable=False)
+    size: Mapped[int] = mapped_column(Integer, nullable=False)
+    storage_path: Mapped[str] = mapped_column(String(2048), nullable=False)
+    preview_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    metadata_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+
+
 class SqlAlchemyRuntimeStateStore:
     def __init__(self, session_factory: async_sessionmaker, write_coordinator: SQLiteWriteCoordinator) -> None:
         self.session_factory = session_factory
@@ -307,6 +321,7 @@ def _json_safe(value: Any) -> Any:
 __all__ = [
     "CoreAppDb",
     "CoreAppEvent",
+    "CoreAttachment",
     "CoreProject",
     "CoreRuntimeSession",
     "CoreThreadSnapshot",

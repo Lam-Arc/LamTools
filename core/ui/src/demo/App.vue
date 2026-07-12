@@ -6,6 +6,8 @@
     :density="density"
     :theme="theme"
     :content-width="contentWidth"
+    :allow-environment-import="true"
+    :command-policies="commandPolicies"
     @close="showSettings = false"
     @update:density="uiPreferences.setDensity"
     @update:content-width="uiPreferences.setContentWidth"
@@ -18,6 +20,8 @@
     @add-stop="uiPreferences.addStop"
     @remove-stop="uiPreferences.removeStop"
     @sort-stops="uiPreferences.sortStops"
+    @import-environment="importEnvironmentConfig"
+    @update-command-policy="updateCommandPolicy"
     @create-provider="createProvider"
     @update-provider="updateProvider"
     @delete-provider="deleteProvider"
@@ -32,22 +36,23 @@
     :density="density"
     :theme="theme"
     :content-width="contentWidth"
-    :composer-disabled="composerActionMode === 'send' && (!activeSessionId || !composerText.trim())"
+    :composer-disabled="composerActionMode === 'send' && (!activeSessionId || (!composerText.trim() && pendingAttachments.length === 0))"
     :composer-action-mode="composerActionMode"
     :error-text="workbenchErrorText"
     :notice-text="runtimeStatusText"
     @new-session="openProjectCreate"
     @settings="showSettings = true"
     @composer-submit="submitComposer"
+    @composer-drop="handleComposerDrop"
   >
     <template #sidebar-header-action>
       <div class="core-project-header-action">
         <button class="icon-btn" type="button" title="新建项目" aria-label="新建项目" @click="openProjectCreate">+</button>
         <CoreProjectCreate
           v-if="showProjectCreate"
-          class="core-project-create-popover"
           :loading="projectCreateLoading"
           :error="projectCreateError"
+          :select-work-root="pickProjectDirectory"
           @submit="createProject"
           @cancel="closeProjectCreate"
         />
@@ -113,6 +118,7 @@
     </template>
 
     <template #composer-textarea>
+      <input ref="attachmentFileInput" class="sr-only" type="file" multiple @change="handleAttachmentInputChange" />
       <CoreQueuedInputTray
         v-model:draft="queuedInputDraft"
         :items="queuedInputs"
@@ -124,6 +130,13 @@
         @cancel="queueController.cancelEdit"
         @delete="(item) => queueController.remove(item as CoreQueuedInput)"
         @guide="(item) => queueController.guide(item as CoreQueuedInput)"
+      />
+      <AttachmentTray
+        :attachments="pendingAttachments"
+        @remove="removeAttachment"
+        @retry="retryPendingAttachment"
+        @preview="previewPendingAttachment"
+        @open="openPendingAttachment"
       />
       <div class="composer-input-wrap" :class="{ 'has-command-tokens': hasComposerCommandTokens }">
         <CommandPalette
@@ -164,7 +177,11 @@
         @update:model-value="executionControls.selectModel"
         @update:thinking-mode="executionControls.selectThinkingMode"
         @update:shallow-thinking-enabled="setShallowThinking"
-      />
+      >
+        <template #leading>
+          <button class="composer-attachment-button" type="button" title="添加附件" aria-label="添加附件" @click="attachmentFileInput?.click()">+</button>
+        </template>
+      </CoreExecutionControls>
     </template>
 
     <template #right-panel>
@@ -185,7 +202,7 @@ import {
   watch,
 } from 'vue'
 import type {
-  CoreInputItem,
+  CoreAttachment,
   CoreRuntimeEvent,
   CoreRuntimeStepGroup,
   CoreSessionListItem,
@@ -216,11 +233,13 @@ import {
   useCoreAutoFollowScroll,
   useCoreExecutionControlsState,
   useCoreLiveComposerController,
+  usePendingAttachments,
   useCoreQueuedInputController,
   useCoreUiPreferences,
   useCoreWorkbenchProjectionController,
 } from '../composables'
 
+import AttachmentTray from '../components/AttachmentTray.vue'
 import ChatThread from '../components/ChatThread.vue'
 import CommandPalette from '../components/CommandPalette.vue'
 import CoreExecutionControls from '../components/CoreExecutionControls.vue'
@@ -277,6 +296,7 @@ const events = ref<CoreRuntimeEvent[]>([])
 const composerText = ref('')
 const composerCursor = ref(0)
 const composerTextareaEl = ref<HTMLTextAreaElement | null>(null)
+const attachmentFileInput = ref<HTMLInputElement | null>(null)
 const composerErrorText = ref('')
 const runtimeStatusText = ref('')
 const loadError = ref<string | null>(null)
@@ -297,7 +317,11 @@ const uiPreferences = useCoreUiPreferences(settingsStorageKey)
 const { density, contentWidth, theme } = uiPreferences
 const availableModels = ref<RawModel[]>([])
 const availableProviders = ref<RawProvider[]>([])
-const emptyAttachments = computed<CoreInputItem[]>(() => [])
+const commandPolicies = ref<Record<'regular' | 'dangerous', 'auto_allow' | 'ask_user'>>({
+  regular: 'auto_allow',
+  dangerous: 'ask_user',
+})
+const { pendingAttachments, attachmentInputItems, addUploaded, markFailed, removeAttachment, clearAttachments } = usePendingAttachments()
 const threadScrollEl = ref<HTMLElement | null>(null)
 const threadScroll = useCoreAutoFollowScroll(threadScrollEl)
 const COMPOSER_MAX_ROWS = 5
@@ -377,7 +401,7 @@ const liveComposerController = useCoreLiveComposerController({
   text: composerText,
   cursor: composerCursor,
   status: latestStatus,
-  attachments: emptyAttachments,
+  attachments: attachmentInputItems,
   connect: connectLive,
   startTurn: (threadId, input, workRoot, options) => runtimeController.startTurn(threadId, input, workRoot, options),
   interruptTurn: (threadId) => runtimeController.interruptTurn(threadId),
@@ -394,6 +418,7 @@ const liveComposerController = useCoreLiveComposerController({
     ...executionControls.turnOptions(),
   }),
   clearComposer: clearComposerAfterPersisted,
+  clearAttachments,
   focusComposer,
   setStatusText: (text) => {
     runtimeStatusText.value = text
@@ -488,7 +513,7 @@ const canGuideQueuedInput = queueController.canGuide
 async function loadInitialData() {
   try {
     loadError.value = null
-    await Promise.all([loadModelOptions(), refreshProjects(), refreshSessions()])
+    await Promise.all([loadModelOptions(), loadCommandPolicies(), refreshProjects(), refreshSessions()])
     if (sessions.value[0]) await selectSession(sessions.value[0].id)
   } catch (error) {
     loadError.value = error instanceof Error ? error.message : String(error)
@@ -529,6 +554,17 @@ async function createProject(payload: CoreProjectCreatePayload) {
     projectCreateError.value = messageFromError(error)
   } finally {
     projectCreateLoading.value = false
+  }
+}
+
+async function pickProjectDirectory() {
+  projectCreateError.value = ''
+  try {
+    const result = await requestConfigOperation('project.directory.pick')
+    return typeof result.path === 'string' ? result.path : ''
+  } catch (error) {
+    projectCreateError.value = messageFromError(error)
+    return ''
   }
 }
 
@@ -678,6 +714,54 @@ async function submitComposer() {
   await liveComposerController.submit({ clearComposer: true })
 }
 
+async function uploadFiles(files: FileList | File[]) {
+  const sessionId = activeSessionId.value
+  if (!sessionId) {
+    composerErrorText.value = '请先选择会话'
+    return
+  }
+  for (const file of Array.from(files)) {
+    const failedId = `failed:${file.name}:${Date.now()}`
+    try {
+      const body = new FormData()
+      body.append('file', file)
+      const response = await fetch(`${apiBase}/sessions/${encodeURIComponent(sessionId)}/attachments`, { method: 'POST', body })
+      if (!response.ok) throw new Error(await response.text() || '上传失败')
+      addUploaded(await response.json() as CoreAttachment)
+    } catch (error) {
+      markFailed(failedId, file.name, messageFromError(error))
+      composerErrorText.value = `附件上传失败：${file.name}`
+    }
+  }
+}
+
+function handleAttachmentInputChange(event: Event) {
+  const input = event.target as HTMLInputElement
+  if (input.files?.length) void uploadFiles(input.files)
+  input.value = ''
+}
+
+function handleComposerDrop(event: DragEvent) {
+  if (event.dataTransfer?.files.length) void uploadFiles(event.dataTransfer.files)
+}
+
+function retryPendingAttachment(id: string) {
+  removeAttachment(id)
+  attachmentFileInput.value?.click()
+}
+
+async function previewPendingAttachment(id: string) {
+  if (id.startsWith('failed:')) return
+  const response = await fetch(`${apiBase}/attachments/${encodeURIComponent(id)}/preview`)
+  runtimeStatusText.value = response.ok ? '附件预览已读取' : '附件预览失败'
+}
+
+async function openPendingAttachment(id: string) {
+  if (id.startsWith('failed:')) return
+  const response = await fetch(`${apiBase}/attachments/${encodeURIComponent(id)}/open`, { method: 'POST' })
+  if (!response.ok) runtimeStatusText.value = '打开附件失败'
+}
+
 async function handleComposerKeydown(event: KeyboardEvent) {
   updateComposerCursor()
   await liveComposerController.handleKeydown(event)
@@ -754,6 +838,35 @@ async function updateModel(payload: CoreSettingsModelPayload) {
 async function deleteModel(modelRecordId: string) {
   if (!window.confirm('删除此模型配置，是否继续？')) return
   await mutateConfig('config.model.delete', { model_record_id: modelRecordId }, '模型已删除')
+}
+
+async function importEnvironmentConfig() {
+  await mutateConfig('config.import_env', {}, '已从当前环境导入')
+}
+
+async function loadCommandPolicies() {
+  try {
+    const result = await requestConfigOperation('settings.get', { namespace: 'core.runtimeControls' })
+    const value = result.value && typeof result.value === 'object' ? result.value as Record<string, unknown> : {}
+    const policies = value.command_policies && typeof value.command_policies === 'object'
+      ? value.command_policies as Record<string, unknown>
+      : {}
+    commandPolicies.value = {
+      regular: policies.regular === 'ask_user' ? 'ask_user' : 'auto_allow',
+      dangerous: policies.dangerous === 'auto_allow' ? 'auto_allow' : 'ask_user',
+    }
+  } catch {
+    commandPolicies.value = { regular: 'auto_allow', dangerous: 'ask_user' }
+  }
+}
+
+async function updateCommandPolicy(group: 'regular' | 'dangerous', policy: 'auto_allow' | 'ask_user') {
+  const next = { ...commandPolicies.value, [group]: policy }
+  await requestConfigOperation('settings.update', {
+    namespace: 'core.runtimeControls',
+    value: { command_policies: next },
+  })
+  commandPolicies.value = next
 }
 
 async function mutateConfig(method: string, params: object, successText: string) {
@@ -901,15 +1014,6 @@ onUnmounted(() => {
 
 .core-project-header-action {
   position: relative;
-}
-
-.core-project-create-popover {
-  position: absolute;
-  z-index: 4;
-  top: calc(100% + 6px);
-  right: 0;
-  width: min(340px, calc(var(--left-card-width) - 28px), calc(100vw - 48px));
-  max-width: 100%;
 }
 
 .core-project-management {

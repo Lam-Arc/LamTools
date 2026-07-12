@@ -180,7 +180,6 @@ def test_initialize_params_reject_missing_client_info():
 
 def test_connection_exposes_required_request_handlers():
     for name in (
-        "_project_directory_pick",
         "_attachment_list",
         "_attachment_get",
         "_attachment_preview",
@@ -454,7 +453,7 @@ def test_operation_names_normalize_transport_aliases():
 
 def _build_test_writer_catalog(handler):
     overlay_arguments = (
-        "project_directory_pick", "attachment_list",
+        "attachment_list",
         "attachment_get", "attachment_preview", "attachment_open", "session_create",
         "session_get", "session_list", "session_update", "session_delete", "session_fork",
         "session_git_graph", "session_changes_get", "session_checkpoints_list",
@@ -606,7 +605,8 @@ def test_writer_operation_catalog_is_core_workbench_plus_writer_overlay():
 
     assert set(catalog.list()) == set(CORE_WORKBENCH_OPERATION_NAMES) | set(WRITER_OVERLAY_OPERATION_NAMES)
     assert not (set(CORE_WORKBENCH_OPERATION_NAMES) & set(WRITER_OVERLAY_OPERATION_NAMES))
-    assert WRITER_OVERLAY_OPERATION_NAMES.count("project.directory.pick") == 1
+    assert "project.directory.pick" in CORE_WORKBENCH_OPERATION_NAMES
+    assert "project.directory.pick" not in WRITER_OVERLAY_OPERATION_NAMES
 
 
 @pytest.mark.asyncio
@@ -2910,7 +2910,7 @@ def test_writer_injects_only_non_lifecycle_core_operation_adapters():
     lifecycle_names = {
         "thread.start", "thread.read", "thread.resume", "turn.start", "turn.steer",
         "turn.cancel", "queue.create", "queue.update", "queue.delete",
-        "queue.guide",
+        "queue.guide", "project.directory.pick",
     }
 
     assert set(connection.context.operations.list()) == set(CORE_WORKBENCH_OPERATION_NAMES) - lifecycle_names

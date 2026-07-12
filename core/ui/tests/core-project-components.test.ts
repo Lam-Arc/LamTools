@@ -9,7 +9,7 @@ import SessionSidebar from '../src/components/SessionSidebar.vue'
 
 describe('CoreProjectCreate', () => {
   it('submits name and path without a Git option', async () => {
-    const wrapper = mount(CoreProjectCreate)
+    const wrapper = mount(CoreProjectCreate, { global: { stubs: { Teleport: true } } })
 
     await wrapper.get('[data-project-name]').setValue('Docs')
     await wrapper.get('[data-project-root]').setValue('E:\\docs')
@@ -20,7 +20,7 @@ describe('CoreProjectCreate', () => {
   })
 
   it('submits an empty optional name when only a path is provided', async () => {
-    const wrapper = mount(CoreProjectCreate)
+    const wrapper = mount(CoreProjectCreate, { global: { stubs: { Teleport: true } } })
 
     await wrapper.get('[data-project-root]').setValue('E:\\path-only')
     await wrapper.get('form').trigger('submit')
@@ -29,26 +29,49 @@ describe('CoreProjectCreate', () => {
   })
 
   it('keeps invalid and loading submissions disabled while exposing errors', async () => {
-    const wrapper = mount(CoreProjectCreate, { props: { loading: true, error: '目录不可用' } })
+    const wrapper = mount(CoreProjectCreate, {
+      props: { loading: true, error: '目录不可用' },
+      global: { stubs: { Teleport: true } },
+    })
 
     expect(wrapper.get('[data-project-submit]').attributes('disabled')).toBeDefined()
     expect(wrapper.get('[role="alert"]').text()).toBe('目录不可用')
 
-    const idleWrapper = mount(CoreProjectCreate, { props: { error: '目录不可用' } })
+    const idleWrapper = mount(CoreProjectCreate, {
+      props: { error: '目录不可用' },
+      global: { stubs: { Teleport: true } },
+    })
     expect(idleWrapper.get('[data-project-submit]').attributes('disabled')).toBeDefined()
     await idleWrapper.get('[data-project-cancel]').trigger('click')
 
     expect(idleWrapper.emitted('cancel')).toEqual([[]])
   })
 
-  it('renders an optional work-root action slot without adding a default browser control', () => {
-    const defaultWrapper = mount(CoreProjectCreate)
+  it('owns the directory action and writes the selected path into the shared field', async () => {
+    const defaultWrapper = mount(CoreProjectCreate, { global: { stubs: { Teleport: true } } })
     const wrapper = mount(CoreProjectCreate, {
-      slots: { 'work-root-action': '<button type="button" data-project-browse>浏览</button>' },
+      props: { selectWorkRoot: async () => 'E:\\selected' },
+      global: { stubs: { Teleport: true } },
     })
 
     expect(defaultWrapper.find('[data-project-browse]').exists()).toBe(false)
-    expect(wrapper.get('[data-project-browse]').text()).toBe('浏览')
+    await wrapper.get('[data-project-browse]').trigger('click')
+    await Promise.resolve()
+    expect((wrapper.get('[data-project-root]').element as HTMLInputElement).value).toBe('E:\\selected')
+  })
+
+  it('uses a modal backdrop and blocks dismissal while creation is running', async () => {
+    const wrapper = mount(CoreProjectCreate, { global: { stubs: { Teleport: true } } })
+    expect(wrapper.get('[role="dialog"]').attributes('aria-modal')).toBe('true')
+    await wrapper.get('[data-project-backdrop]').trigger('mousedown')
+    expect(wrapper.emitted('cancel')).toEqual([[]])
+
+    const loadingWrapper = mount(CoreProjectCreate, {
+      props: { loading: true },
+      global: { stubs: { Teleport: true } },
+    })
+    await loadingWrapper.get('[data-project-backdrop]').trigger('mousedown')
+    expect(loadingWrapper.emitted('cancel')).toBeUndefined()
   })
 })
 
@@ -114,12 +137,13 @@ describe('SessionSidebar compatibility groups', () => {
 })
 
 describe('Core project narrow layout contract', () => {
-  it('constrains the creation popover to the drawer width without moving it outside the drawer', () => {
+  it('owns a viewport-safe centered dialog instead of a sidebar popover', () => {
     const createSource = readFileSync(resolve(process.cwd(), 'src/components/CoreProjectCreate.vue'), 'utf8')
     const demoSource = readFileSync(resolve(process.cwd(), 'src/demo/App.vue'), 'utf8')
 
-    expect(createSource).toMatch(/\.core-project-create\s*\{[\s\S]*?width:\s*100%;[\s\S]*?min-width:\s*0;/)
-    expect(demoSource).toMatch(/\.core-project-create-popover\s*\{[\s\S]*?right:\s*0;[\s\S]*?width:\s*min\(340px,\s*calc\(var\(--left-card-width\)\s*-\s*28px\),\s*calc\(100vw\s*-\s*48px\)\);/)
-    expect(demoSource).not.toContain('.core-project-create-popover {\n    right: auto;')
+    expect(createSource).toMatch(/<Teleport defer to="\.workspace-shell">/)
+    expect(createSource).toMatch(/\.core-project-dialog-backdrop\s*\{[\s\S]*?position:\s*fixed;[\s\S]*?place-items:\s*center;/)
+    expect(createSource).toMatch(/\.core-project-dialog\s*\{[\s\S]*?width:\s*min\(520px,\s*100%\);[\s\S]*?max-height:\s*calc\(100dvh\s*-\s*48px\);/)
+    expect(demoSource).not.toContain('core-project-create-popover')
   })
 })

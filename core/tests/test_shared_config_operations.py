@@ -107,6 +107,30 @@ async def test_shared_config_operations_return_validation_errors(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_shared_settings_and_environment_import_use_shared_database(tmp_path, monkeypatch):
+    engine, session_factory = await _session_factory(tmp_path)
+    monkeypatch.setenv("LAMTOOLS_LLM_API_KEY", "sk-core-test")
+    monkeypatch.setenv("LAMTOOLS_LLM_BASE_URL", "https://core.example.test/v1")
+    monkeypatch.setenv("LAMTOOLS_LLM_MODEL_ID", "core-model")
+    try:
+        catalog = build_shared_config_operation_catalog(session_factory)
+        saved = await catalog.execute("settings.update", {
+            "namespace": "core.runtimeControls",
+            "value": {"command_policies": {"regular": "ask_user"}},
+        })
+        loaded = await catalog.execute("settings.get", {"namespace": "core.runtimeControls"})
+        assert loaded.payload == saved.payload
+
+        first = await catalog.execute("config.import_env")
+        second = await catalog.execute("config.import_env")
+        assert first.payload["provider"]["id"] == second.payload["provider"]["id"]
+        assert first.payload["model"]["id"] == second.payload["model"]["id"]
+        assert (await catalog.execute("config.providers.list")).payload["providers"]
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_shared_config_operations_retry_sqlite_locked_writes():
     attempts = 0
 

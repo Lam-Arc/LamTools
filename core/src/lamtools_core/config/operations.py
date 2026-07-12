@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 from sqlalchemy.exc import OperationalError
+from sqlalchemy import select
 
 from lamtools_core.app.operation_catalog import OperationCatalog, OperationRequest, OperationResult
 
 from .read import list_model_configs, list_provider_configs
+from .shared_database import AppSetting, LLMModel, LLMProvider
 from .write import (
     create_model_config,
     create_provider_config,
@@ -37,6 +40,7 @@ def build_shared_config_operation_catalog(
     create_model: Callable[[Any, dict[str, Any]], Awaitable[dict[str, Any]]] = create_model_config,
     update_model: Callable[[Any, str, dict[str, Any]], Awaitable[dict[str, Any]]] = update_model_config,
     delete_model: Callable[[Any, str], Awaitable[None]] = delete_model_config,
+    import_environment: ConfigWrite | None = None,
 ) -> OperationCatalog:
     catalog = OperationCatalog()
 
@@ -204,6 +208,75 @@ def build_shared_config_operation_catalog(
             return _error(request, str(exc))
         return OperationResult(name=request.name, payload={"ok": True})
 
+    async def settings_get(request: OperationRequest) -> OperationResult:
+        namespace = str(request.payload.get("namespace") or "").strip()
+        if not namespace:
+            return _error(request, "namespace is required")
+        async with session_factory() as db:
+            setting = await db.get(AppSetting, namespace)
+        return OperationResult(name=request.name, payload={"namespace": namespace, "value": setting.value if setting else {}})
+
+    async def settings_update(request: OperationRequest) -> OperationResult:
+        namespace = str(request.payload.get("namespace") or "").strip()
+        value = request.payload.get("value")
+        if not namespace or not isinstance(value, dict):
+            return _error(request, "namespace and object value are required")
+
+        async def write(db):
+            setting = await db.get(AppSetting, namespace)
+            if setting is None:
+                setting = AppSetting(namespace=namespace, value=dict(value))
+                db.add(setting)
+            else:
+                setting.value = dict(value)
+            await db.commit()
+            return {"namespace": namespace, "value": setting.value}
+
+        result = await _retry_sqlite_locked_write(session_factory, write, retry_delays=sqlite_lock_retry_delays)
+        return OperationResult(name=request.name, payload=result)
+
+    async def import_environment_operation(request: OperationRequest) -> OperationResult:
+        if import_environment is not None:
+            imported = await _retry_sqlite_locked_write(
+                session_factory, import_environment, retry_delays=sqlite_lock_retry_delays,
+            )
+            return OperationResult(name=request.name, payload=imported)
+        api_key = os.environ.get("LAMTOOLS_LLM_API_KEY", "").strip()
+        if not api_key:
+            return _error(request, "LAMTOOLS_LLM_API_KEY is not configured")
+        base_url = os.environ.get("LAMTOOLS_LLM_BASE_URL", "https://api.openai.com/v1").strip()
+        model_id = os.environ.get("LAMTOOLS_LLM_MODEL_ID", "").strip()
+        if not model_id:
+            return _error(request, "LAMTOOLS_LLM_MODEL_ID is not configured")
+
+        async def write(db):
+            provider = (await db.execute(select(LLMProvider).where(LLMProvider.base_url == base_url).limit(1))).scalar_one_or_none()
+            if provider is None:
+                provider = LLMProvider(
+                    name=os.environ.get("LAMTOOLS_LLM_PROVIDER_NAME", "Default from environment"),
+                    api_type=os.environ.get("LAMTOOLS_LLM_API_TYPE", "openai"),
+                    base_url=base_url,
+                    api_key=api_key,
+                    is_default=False,
+                )
+                db.add(provider)
+                await db.flush()
+            else:
+                provider.api_key = api_key
+            model = (await db.execute(select(LLMModel).where(
+                LLMModel.provider_id == provider.id, LLMModel.model_id == model_id,
+            ).limit(1))).scalar_one_or_none()
+            if model is None:
+                model = LLMModel(provider_id=provider.id, model_id=model_id, display_name=model_id, is_default=False)
+                db.add(model)
+            await db.commit()
+            await db.refresh(provider)
+            await db.refresh(model)
+            return {"provider": _provider_response(provider), "model": _model_response(model)}
+
+        imported = await _retry_sqlite_locked_write(session_factory, write, retry_delays=sqlite_lock_retry_delays)
+        return OperationResult(name=request.name, payload=imported)
+
     for name, handler in {
         "config.providers.list": providers_list,
         "config.provider.create": provider_create,
@@ -213,6 +286,9 @@ def build_shared_config_operation_catalog(
         "config.model.create": model_create,
         "config.model.update": model_update,
         "config.model.delete": model_delete,
+        "config.import_env": import_environment_operation,
+        "settings.get": settings_get,
+        "settings.update": settings_update,
     }.items():
         catalog.register(name, handler)
     return catalog
@@ -266,6 +342,22 @@ def _is_sqlite_locked_error(exc: BaseException) -> bool:
 
 def _error(request: OperationRequest, message: str) -> OperationResult:
     return OperationResult(name=request.name, status="error", payload={"error": message})
+
+
+def _provider_response(provider: LLMProvider) -> dict[str, Any]:
+    return {
+        "id": provider.id, "name": provider.name, "api_type": provider.api_type,
+        "base_url": provider.base_url, "has_api_key": bool(provider.api_key), "extra": provider.extra,
+    }
+
+
+def _model_response(model: LLMModel) -> dict[str, Any]:
+    return {
+        "id": model.id, "provider_id": model.provider_id, "model_id": model.model_id,
+        "display_name": model.display_name, "context_window": model.context_window,
+        "max_output_tokens": model.max_output_tokens, "thinking_supported": model.thinking_supported,
+        "thinking_budget": model.thinking_budget, "temperature": model.temperature, "extra": model.extra,
+    }
 
 
 __all__ = ["build_shared_config_operation_catalog"]

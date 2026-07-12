@@ -75,7 +75,7 @@ from app.services.project_management import (
     update_writer_project,
     write_project_agents_md,
 )
-from app.services.project_directory_picker import (
+from lamtools_core.project.directory_picker import (
     ProjectDirectoryPickerUnavailable,
     pick_project_directory,
 )
@@ -225,6 +225,7 @@ def _shared_config_operation_catalog(config_session_factory: Any) -> OperationCa
         create_model=create_model_config,
         update_model=update_model_config,
         delete_model=delete_model_config,
+        import_environment=import_env_provider_model_config,
     )
 
 
@@ -262,7 +263,6 @@ def operation_name(method: str) -> str:
 
 
 WRITER_OVERLAY_OPERATION_NAMES: tuple[str, ...] = (
-    "project.directory.pick",
     "attachment.list",
     "attachment.get",
     "attachment.preview",
@@ -293,7 +293,6 @@ WRITER_OVERLAY_OPERATION_NAMES: tuple[str, ...] = (
 
 def build_writer_operation_catalog(
     *,
-    project_directory_pick: OperationRpcHandler,
     attachment_list: OperationRpcHandler,
     attachment_get: OperationRpcHandler,
     attachment_preview: OperationRpcHandler,
@@ -322,7 +321,6 @@ def build_writer_operation_catalog(
     core_handlers: Mapping[str, Any],
 ) -> OperationCatalog:
     writer_overlay_handlers = {
-        "project.directory.pick": _handler(project_directory_pick),
         "attachment.list": _handler(attachment_list),
         "attachment.get": _handler(attachment_get),
         "attachment.preview": _handler(attachment_preview),
@@ -407,21 +405,6 @@ def build_writer_core_operation_adapter_catalog(
             session_factory=session_factory,
             writer_service=runtime.writer_service_or_none(),
             emit_event=emit_event,
-        ),
-        "settings.get": lambda request: adapt(
-            request,
-            handle_settings_get_operation,
-            session_factory=session_factory,
-            config_session_factory=config_session_factory,
-        ),
-        "settings.update": lambda request: adapt(
-            request,
-            handle_settings_update_operation,
-            session_factory=session_factory,
-            config_session_factory=config_session_factory,
-        ),
-        "config.import_env": lambda request: adapt(
-            request, handle_config_import_env_operation, config_session_factory=config_session_factory,
         ),
         "config.resolved.get": lambda request: adapt(
             request, handle_config_resolved_get_operation, config_session_factory=config_session_factory,

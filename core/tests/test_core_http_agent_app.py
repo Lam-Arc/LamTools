@@ -121,6 +121,31 @@ def test_core_agent_http_app_exposes_live_app_server(tmp_path: Path) -> None:
     assert initialized["result"]["protocolVersion"] == "core.app_server.v1"
 
 
+def test_core_agent_http_app_owns_attachment_storage(tmp_path: Path) -> None:
+    config_db = tmp_path / "lamtools-config.db"
+    _write_config_db(config_db)
+    app = create_core_agent_http_app(
+        model_id="model-record",
+        config_db=config_db,
+        core_db=tmp_path / "core.db",
+        data_dir=tmp_path / "core-data",
+        work_root=tmp_path / "workspace",
+    )
+    with TestClient(app) as client:
+        uploaded = client.post(
+            "/api/core/sessions/thread-attachment/attachments",
+            files={"file": ("notes.md", b"line one\nline two", "text/markdown")},
+        )
+        assert uploaded.status_code == 200
+        attachment = uploaded.json()
+        preview = client.get(f"/api/core/attachments/{attachment['id']}/preview")
+        listed = client.get("/api/core/sessions/thread-attachment/attachments")
+
+    assert preview.json()["text"] == "line one\nline two"
+    assert [item["id"] for item in listed.json()["attachments"]] == [attachment["id"]]
+    assert (tmp_path / "core-data" / "attachments" / "thread-attachment" / "notes.md").is_file()
+
+
 def test_core_http_sessions_survive_app_restart(tmp_path: Path) -> None:
     config_db = tmp_path / "lamtools-config.db"
     core_db = tmp_path / "core.db"

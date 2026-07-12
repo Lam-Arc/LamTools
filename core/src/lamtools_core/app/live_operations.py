@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from lamtools_core.event import RunItemEvent
 from lamtools_core.runtime import default_runtime_task_registry
+from lamtools_core.project.directory_picker import ProjectDirectoryPickerUnavailable, pick_project_directory
 
 from .event_store import AppEventEnvelope, AppEventInput, CORE_RUN_ITEM_METHOD, SqlAlchemyAppEventStore
 from .live_approval import normalize_approval_request
@@ -38,6 +39,17 @@ from .turn_acceptance import (
 
 
 TERMINAL_TURN_STATUSES = {"completed", "failed", "cancelled", "skipped"}
+
+
+async def handle_project_directory_pick_operation(
+    *, request_id: int | str | None, params: dict[str, Any], context: "CoreLiveContext"
+) -> "CoreLiveOperationOutcome":
+    del params, context
+    try:
+        selected = await asyncio.to_thread(pick_project_directory)
+    except (ProjectDirectoryPickerUnavailable, OSError) as exc:
+        return CoreLiveOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
+    return CoreLiveOperationOutcome(response=rpc_result(request_id, {"path": selected}))
 
 
 @dataclass
@@ -1323,6 +1335,7 @@ _CORE_LIVE_OPERATION_EXECUTORS = {
     "queue.update": handle_queue_update_operation,
     "queue.delete": handle_queue_delete_operation,
     "queue.guide": handle_queue_guidance_operation,
+    "project.directory.pick": handle_project_directory_pick_operation,
 }
 
 
@@ -1338,6 +1351,7 @@ __all__ = [
     "handle_thread_read_operation",
     "handle_thread_start_operation",
     "handle_thread_resume_operation",
+    "handle_project_directory_pick_operation",
     "handle_turn_cancel_operation",
     "handle_turn_start_operation",
     "handle_turn_steer_operation",

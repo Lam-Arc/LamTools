@@ -7,7 +7,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from lamtools_core.cli import (
@@ -21,6 +21,7 @@ from lamtools_core.cli import (
 from lamtools_core.http import create_core_router
 from lamtools_core.llm import LLMRequest
 from lamtools_core.config import build_shared_config_operation_catalog
+from lamtools_core.attachment import CoreAttachmentStore
 
 from .core_db import open_core_app_db
 from .core_session_store import CoreDbSessionStore
@@ -154,6 +155,7 @@ def create_core_agent_http_app(
     async def startup_core_agent() -> None:
         core_db_handle = await open_core_app_db(core_db_path)
         app_state["core_db"] = core_db_handle
+        app_state["attachment_store"] = CoreAttachmentStore(core_db_handle.session_factory, resolved_data_dir)
         agent_operations = create_core_agent_operations(
             spec=CoreAgentSpec(
                 default_model=config.model_id,
@@ -237,6 +239,34 @@ def create_core_agent_http_app(
     @app.get("/api/core/config/providers")
     async def list_config_providers() -> dict[str, Any]:
         return {"providers": _list_llm_provider_configs(config_db_path)}
+
+    def attachment_store() -> CoreAttachmentStore:
+        store = app_state.get("attachment_store")
+        if not isinstance(store, CoreAttachmentStore):
+            raise HTTPException(status_code=503, detail="Core Agent is not ready")
+        return store
+
+    @app.post("/api/core/sessions/{session_id}/attachments")
+    async def upload_attachment(session_id: str, file: UploadFile = File(...)) -> dict[str, Any]:
+        return await attachment_store().create(session_id, file.filename or "attachment", await file.read(), file.content_type)
+
+    @app.get("/api/core/sessions/{session_id}/attachments")
+    async def list_attachments(session_id: str) -> dict[str, Any]:
+        return {"attachments": await attachment_store().list(session_id)}
+
+    @app.get("/api/core/attachments/{attachment_id}/preview")
+    async def preview_attachment(attachment_id: str) -> dict[str, Any]:
+        try:
+            return await attachment_store().preview(attachment_id)
+        except (LookupError, FileNotFoundError) as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/core/attachments/{attachment_id}/open")
+    async def open_attachment(attachment_id: str) -> dict[str, str]:
+        try:
+            return await attachment_store().open(attachment_id)
+        except (LookupError, FileNotFoundError) as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     app.state.core_agent_app_state = app_state
     app.state.core_agent_work_root = resolved_work_root

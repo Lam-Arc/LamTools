@@ -24,7 +24,6 @@ from .operations import (
     handle_attachment_list_operation,
     handle_attachment_open_operation,
     handle_attachment_preview_operation,
-    handle_project_directory_pick_operation,
     handle_session_create_operation,
     handle_session_delete_operation,
     handle_session_changes_get_operation,
@@ -139,7 +138,6 @@ class WriterAppServerConnection(CoreLiveConnection):
     def _operation_catalog(self) -> OperationCatalog:
         core_handlers = self.context.host.operation_handlers()
         return build_writer_operation_catalog(
-            project_directory_pick=self._project_directory_pick,
             attachment_list=self._attachment_list,
             attachment_get=self._attachment_get,
             attachment_preview=self._attachment_preview,
@@ -354,13 +352,6 @@ class WriterAppServerConnection(CoreLiveConnection):
             request_id=request.id,
             params=request.params,
             session_factory=async_session,
-        )
-        await self._send(outcome.response)
-
-    async def _project_directory_pick(self, request: JsonRpcRequest) -> None:
-        outcome = await handle_project_directory_pick_operation(
-            request_id=request.id,
-            params=request.params,
         )
         await self._send(outcome.response)
 

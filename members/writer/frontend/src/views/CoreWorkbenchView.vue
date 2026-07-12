@@ -1702,25 +1702,19 @@ async function saveAgentsMdForProject(
 const showNewProject = ref(false)
 const projectActionLoading = ref(false)
 const projectActionError = ref('')
-const selectingProjectDirectory = ref(false)
 
 function closeNewProject() {
   showNewProject.value = false
   projectActionError.value = ''
 }
 
-async function browseProjectDirectory(setWorkRoot: (value: string) => void) {
-  selectingProjectDirectory.value = true
-  try {
-    const selected = await pickProjectDirectory({
-      desktop: window.lamwriterDesktop,
-      appServerPickDirectory: api.pickProjectDirectory,
-    })
-    if (selected.path) setWorkRoot(selected.path)
-    else if (selected.message) window.alert(selected.message)
-  } finally {
-    selectingProjectDirectory.value = false
-  }
+async function selectProjectDirectory() {
+  const selected = await pickProjectDirectory({
+    desktop: window.lamwriterDesktop,
+    appServerPickDirectory: api.pickProjectDirectory,
+  })
+  if (selected.message) window.alert(selected.message)
+  return selected.path
 }
 
 async function handleNewProject(payload: { name: string; work_root: string }) {
@@ -1784,20 +1778,10 @@ onMounted(async () => {
           v-if="showNewProject"
           :loading="projectActionLoading"
           :error="projectActionError"
+          :select-work-root="selectProjectDirectory"
           @submit="handleNewProject"
           @cancel="closeNewProject"
-        >
-          <template #work-root-action="{ setWorkRoot }">
-            <button
-              type="button"
-              class="btn-secondary-sm"
-              :disabled="selectingProjectDirectory"
-              @click="browseProjectDirectory(setWorkRoot)"
-            >
-              {{ selectingProjectDirectory ? '选择中' : '浏览' }}
-            </button>
-          </template>
-        </CoreProjectCreate>
+        />
       </div>
     </template>
 
