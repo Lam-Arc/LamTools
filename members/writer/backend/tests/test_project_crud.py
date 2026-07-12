@@ -12,7 +12,7 @@ from app.database import Base
 from app.models.project import WriterProject
 from app.models.session import WriterSession
 from app.routers.project import ProjectCreate, create_project, list_projects
-from app.routers.session import SessionCreate, create_session
+from app.routers.session import SessionCreate, SessionUpdate, create_session, update_session
 
 
 @pytest.mark.asyncio
@@ -168,4 +168,34 @@ async def test_create_session_creates_missing_work_root():
             assert work_root.is_dir()
             assert session["work_root"] == str(work_root.resolve())
 
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_rest_session_create_and_work_root_update_never_initialize_git(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'rest-session-git.db'}", future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    created_root = tmp_path / "rest-created"
+    updated_root = tmp_path / "rest-updated"
+    try:
+        async with session_factory() as db:
+            created = await create_session(
+                SessionCreate(title="REST no Git", work_root=str(created_root)),
+                db,
+            )
+            assert created_root.is_dir()
+            assert not (created_root / ".git").exists()
+
+            updated = await update_session(
+                created["id"],
+                SessionUpdate(work_root=str(updated_root)),
+                db,
+            )
+            assert updated["work_root"] == str(updated_root.resolve())
+            assert updated_root.is_dir()
+            assert not (updated_root / ".git").exists()
+    finally:
         await engine.dispose()

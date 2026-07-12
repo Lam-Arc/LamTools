@@ -211,7 +211,6 @@ async def create_session(body: SessionCreate, db: AsyncSession = Depends(get_db)
         work_root=body.work_root,
         mode=body.mode,
         project_id=body.project_id,
-        git_manager=_git_manager,
     )
 
 
@@ -248,7 +247,6 @@ async def update_session(
             db,
             session_id,
             body.model_dump(exclude_unset=True),
-            git_manager=_git_manager,
         )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail="Session not found")

@@ -15,10 +15,8 @@ from app.app_server.operations import (
     handle_session_checkpoint_create_operation,
     handle_session_checkpoint_restore_operation,
     handle_session_commit_review_decide_operation,
-    handle_session_create_operation,
     handle_session_rollback_turn_operation,
 )
-import app.app_server.operations as operations_module
 from app.app_server.runtime import WriterRuntimeLifecycle
 from app.config import Settings
 from app.database import Base, create_writer_engine, writer_write, writer_write_coordinator

@@ -15,7 +15,6 @@ from lamtools_core.app.project_store import ActiveProjectSessionsError
 from sqlalchemy import select, text
 from sqlalchemy.exc import OperationalError
 
-from app.core.writer.git import WriterGitManager
 from app.config import settings
 from app.database import async_session
 from app.models.session import WriterSession
@@ -130,9 +129,6 @@ INVALID_REQUEST = -32600
 _SQLITE_LOCKED_MESSAGE = "数据库正忙，请稍后重试"
 _SHARED_CONFIG_SESSION_REQUIRED_MESSAGE = "shared config session is required"
 _SQLITE_LOCK_RETRY_DELAYS = (0.05, 0.15)
-_git_manager = WriterGitManager()
-
-
 class _MissingSharedConfigSession(RuntimeError):
     pass
 
@@ -515,7 +511,6 @@ async def handle_session_create_operation(
                 if params.get("project_id") or params.get("projectId")
                 else None
             ),
-            git_manager=None,
         )
     session = await persistence.write(write)
     return WriterOperationOutcome(response=rpc_result(request_id, {"session": session}))
@@ -562,7 +557,7 @@ async def handle_session_update_operation(
     try:
         persistence = writer_persistence_host(session_factory)
         session = await persistence.write(
-            lambda db: update_writer_session(db, session_id, update_data, git_manager=None)
+            lambda db: update_writer_session(db, session_id, update_data)
         )
     except (LookupError, ValueError) as exc:
         return WriterOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
@@ -984,7 +979,6 @@ async def handle_project_create_operation(
                 title=project["name"],
                 work_root=project["work_root"],
                 project_id=project["id"],
-                git_manager=None,
             )
             return project, session
 

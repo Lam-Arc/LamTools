@@ -1851,13 +1851,21 @@ async def test_session_get_update_delete_operations_round_trip(tmp_path):
         )
         assert read.response["result"]["session"]["title"] == "Original"
 
+        updated_root = tmp_path / "app-server-updated"
         updated = await handle_session_update_operation(
             request_id=2,
-            params={"session_id": "session-crud", "title": "Renamed", "mode": "plan"},
+            params={
+                "session_id": "session-crud",
+                "title": "Renamed",
+                "mode": "plan",
+                "work_root": str(updated_root),
+            },
             session_factory=session_factory,
         )
         assert updated.response["result"]["session"]["title"] == "Renamed"
         assert updated.response["result"]["session"]["mode"] == "PLAN"
+        assert updated_root.is_dir()
+        assert not (updated_root / ".git").exists()
 
         deleted = await handle_session_delete_operation(
             request_id=3,

@@ -13,6 +13,10 @@ Baseline: `eb959123939abd0c43a706c5c85dd674f32f7f00`
    - Removed those implicit calls.
    - Kept explicit Git workflows unchanged.
    - Replaced the obsolete lock test with an assertion that ordinary session creation does not create `.git`.
+3. Review follow-up found that the REST `POST /sessions` and `PATCH /sessions/{id}` routes still passed a Git manager into the session service.
+   - Removed the Git manager parameters and the remaining session-service initialization branch.
+   - Added real temporary-directory regression coverage for REST creation, REST work-root update, and App Server `session.update` work-root update.
+   - Explicit Git initialization remains limited to the commit-review route that calls `_ensure_work_root_repo()`.
 
 No current documentation was found that describes projects as Writer-only. The only matching text was this task plan's historical TODO, so no unrelated documentation was changed.
 
@@ -27,6 +31,8 @@ No current documentation was found that describes projects as Writer-only. The o
 - `./scripts/build.ps1 all`: passed.
 - `git diff --check`: passed.
 - Focused changed-area verification before the final full run: `183 passed, 1 warning`.
+- Review follow-up targeted Writer tests: `test_project_crud.py`, `test_writer_app_server_protocol.py`, and `test_writer_sqlite_lifecycle.py`: `132 passed, 4 warnings in 37.17s`.
+- Review follow-up complete Writer backend suite: `748 passed, 7 warnings in 377.82s`.
 
 ## Real Core Acceptance
 
@@ -57,13 +63,15 @@ Verified through the live Core API:
 - Its created project record ID was `f38c38ebc8944045a570617d83991b52`.
 - Its fresh work root was `C:\Users\Administrator\AppData\Local\Temp\lamtools-task6\isolated-20260712-1450\writer-workspaces\ordinary-session-no-git`.
 - `.git` was absent after creation, and `writer project list` completed successfully.
+- REST session creation, REST work-root update, and App Server `session.update` work-root update now each create a real fresh directory without `.git`.
 
 ## Ownership Scan
 
 - Core owns the project operation group, HTTP project handlers, project persistence, and shared project UI client.
 - Writer owns adapters, Writer persistence additions, and product-only fields.
 - Core owns `project.create` and `project.agents_md.*` contracts; Writer forwards the same operation names through its adapter.
-- After the fix, no `init_repo` or `git init` call remains in Writer project/session creation handling.
+- REST and App Server ordinary project/session creation and work-root update do not receive a Git manager and do not initialize repositories.
+- The only remaining session-router initialization call is the explicit commit-review action through `_ensure_work_root_repo()`.
 
 ## Service Cleanup
 

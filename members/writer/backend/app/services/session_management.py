@@ -1,21 +1,15 @@
 from __future__ import annotations
 
-import logging
-
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.writer.core_kernel_adapter import schedule_writer_startup_prewarm
-from app.core.writer.git import WriterGitManager
 from app.models.project import WriterProject
 from app.models.session import WriterSession
 from app.routers.path_utils import ensure_work_root
 from app.services.session_deletion import delete_writer_session_records
 from app.services.project_management import ensure_writer_project
 from app.services.session_projection import session_response_projected
-
-logger = logging.getLogger(__name__)
-
 
 def normalize_session_mode(mode: str | None) -> str:
     value = (mode or "EXECUTE").strip()
@@ -31,7 +25,6 @@ async def create_writer_session(
     work_root: str = "",
     mode: str = "EXECUTE",
     project_id: str | None = None,
-    git_manager: WriterGitManager | None = None,
     schedule_prewarm=schedule_writer_startup_prewarm,
 ) -> dict:
     normalized_root = ensure_work_root(work_root)
@@ -92,8 +85,6 @@ async def update_writer_session(
     db: AsyncSession,
     session_id: str,
     update_data: dict,
-    *,
-    git_manager: WriterGitManager | None = None,
 ) -> dict:
     session = await db.get(WriterSession, session_id)
     if session is None:
@@ -110,12 +101,6 @@ async def update_writer_session(
             raise ValueError("Project not found")
         if "work_root" not in normalized_update or not normalized_update.get("work_root"):
             normalized_update["work_root"] = ensure_work_root(project.work_root)
-    if "work_root" in normalized_update and normalized_update["work_root"] and git_manager is not None:
-        try:
-            await git_manager.init_repo(str(normalized_update["work_root"]))
-        except Exception:
-            logger.debug("Unexpected error during git init at %s", normalized_update["work_root"], exc_info=True)
-
     for key, value in normalized_update.items():
         setattr(session, key, value)
 
