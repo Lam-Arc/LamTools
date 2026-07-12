@@ -61,6 +61,8 @@ export { default as SettingsShell } from './components/SettingsShell.vue';
 export { default as ThemeEditor } from './components/ThemeEditor.vue';
 export { default as ThemeAreaEditor } from './components/ThemeAreaEditor.vue';
 export { default as CoreSettings } from './components/CoreSettings.vue';
+export { default as CoreProjectCreate } from './components/CoreProjectCreate.vue';
+export { default as CoreAgentsEditor } from './components/CoreAgentsEditor.vue';
 export type {
   CoreSettingsDensity,
   CoreSettingsModel,
@@ -139,6 +141,21 @@ export {
 } from './composables';
 
 export { CORE_EXECUTION_CONTROLS_STORAGE_KEYS } from './composables';
+
+export {
+  createCoreProjectClient,
+  type CoreProjectClient,
+} from './projects/client';
+
+export {
+  buildCoreProjectGroups,
+  type CoreProject,
+  type CoreProjectAgents,
+  type CoreProjectCreatePayload,
+  type CoreProjectCreateResult,
+  type CoreProjectGroup,
+  type CoreProjectSession,
+} from './projects/types';
 
 export { usePendingAttachments } from './composables/usePendingAttachments';
 export { useComposerCommandPalette } from './composables/useComposerCommandPalette';

@@ -33,19 +33,62 @@
     :composer-action-mode="composerActionMode"
     :error-text="workbenchErrorText"
     :notice-text="runtimeStatusText"
-    @new-session="newSession"
+    @new-session="openProjectCreate"
     @settings="showSettings = true"
     @composer-submit="submitComposer"
   >
+    <template #sidebar-header-action>
+      <div class="core-project-header-action">
+        <button class="icon-btn" type="button" title="新建项目" aria-label="新建项目" @click="openProjectCreate">+</button>
+        <CoreProjectCreate
+          v-if="showProjectCreate"
+          class="core-project-create-popover"
+          :loading="projectCreateLoading"
+          :error="projectCreateError"
+          @submit="createProject"
+          @cancel="closeProjectCreate"
+        />
+      </div>
+    </template>
+
     <template #sidebar-body>
       <SessionSidebar
         :project-groups="projectGroups"
         :active-session-id="activeSessionId || undefined"
+        :allow-project-delete="true"
+        :allow-project-click="true"
+        :allow-project-context-menu="true"
         :allow-session-delete="true"
         @select-session="selectSession"
-        @new-session="newSession"
+        @select-project="openProjectActions"
+        @new-session="createProjectSession"
+        @delete-project="deleteProject"
+        @project-context-menu="openProjectActions"
         @rename-session="renameSession"
         @delete-session="deleteSession"
+      />
+      <section v-if="selectedProject" class="core-project-management" :aria-busy="projectActionLoading">
+        <form @submit.prevent="renameProject">
+          <label>
+            <span>项目名称</span>
+            <input v-model="projectNameDraft" class="field-input" :disabled="projectActionLoading" />
+          </label>
+          <div class="core-project-management-actions">
+            <button type="button" class="btn-cancel" :disabled="projectActionLoading || agentsLoading" @click="openAgentsEditor">AGENTS.md</button>
+            <button type="submit" class="btn-primary-sm" :disabled="projectActionLoading || !projectNameDraft.trim()">
+              {{ projectActionLoading ? '保存中' : '重命名' }}
+            </button>
+          </div>
+        </form>
+        <p v-if="projectActionError" class="core-project-management-error" role="alert">{{ projectActionError }}</p>
+      </section>
+      <CoreAgentsEditor
+        v-if="agentsProjectId"
+        :content="agentsContent"
+        :loading="agentsLoading"
+        :error="agentsError"
+        @save="saveAgents"
+        @close="closeAgentsEditor"
       />
     </template>
 
@@ -144,6 +187,12 @@ import type {
   CoreSessionListItem,
 } from '../types'
 import {
+  buildCoreProjectGroups,
+  type CoreProject,
+  type CoreProjectCreatePayload,
+} from '../projects/types'
+import { createCoreProjectClient } from '../projects/client'
+import {
   DEFAULT_THEME,
   addGradientStop,
   normalizeTheme,
@@ -181,6 +230,8 @@ import ChatThread from '../components/ChatThread.vue'
 import CommandPalette from '../components/CommandPalette.vue'
 import CoreExecutionControls from '../components/CoreExecutionControls.vue'
 import CoreQueuedInputTray from '../components/CoreQueuedInputTray.vue'
+import CoreAgentsEditor from '../components/CoreAgentsEditor.vue'
+import CoreProjectCreate from '../components/CoreProjectCreate.vue'
 import CoreSettings, {
   type CoreSettingsDensity,
   type CoreSettingsModelPayload,
@@ -195,7 +246,9 @@ type RawSession = {
   title: string
   status?: string
   created_at?: string
+  createdAt?: string
   updated_at?: string
+  updatedAt?: string
   metadata?: Record<string, unknown>
 }
 
@@ -220,6 +273,8 @@ type RawProvider = {
 }
 
 const apiBase = (import.meta.env.VITE_CORE_API_BASE || '/api/core').replace(/\/$/, '')
+const projectClient = createCoreProjectClient(apiBase)
+const projects = ref<CoreProject[]>([])
 const sessions = ref<CoreSessionListItem[]>([])
 const activeSessionId = ref<string | null>(null)
 const runtime = reactive(createCoreAppServerRuntimeState<CoreAppSnapshot, CoreAppServerClient>())
@@ -231,6 +286,17 @@ const composerTextareaEl = ref<HTMLTextAreaElement | null>(null)
 const composerErrorText = ref('')
 const runtimeStatusText = ref('')
 const loadError = ref<string | null>(null)
+const showProjectCreate = ref(false)
+const projectCreateLoading = ref(false)
+const projectCreateError = ref('')
+const selectedProjectId = ref<string | null>(null)
+const projectNameDraft = ref('')
+const projectActionLoading = ref(false)
+const projectActionError = ref('')
+const agentsProjectId = ref<string | null>(null)
+const agentsContent = ref('')
+const agentsLoading = ref(false)
+const agentsError = ref('')
 const settingsStorageKey = 'lamtools.core.ui'
 const showSettings = ref(false)
 const density = ref<CoreSettingsDensity>('standard')
@@ -279,11 +345,10 @@ const stepGroups = computed<CoreRuntimeStepGroup[]>(() => {
   }]
 })
 
-const projectGroups = computed(() => [{
-  id: 'core',
-  name: 'Core Agent',
-  sessions: sessions.value,
-}])
+const projectGroups = computed(() => buildCoreProjectGroups(projects.value, sessions.value))
+const selectedProject = computed(() => (
+  projects.value.find((project) => project.id === selectedProjectId.value) || null
+))
 
 const runtimeController = createCoreAppServerRuntimeController(runtime, {
   hydrateSnapshot,
@@ -421,11 +486,15 @@ const canGuideQueuedInput = queueController.canGuide
 async function loadInitialData() {
   try {
     loadError.value = null
-    await Promise.all([loadModelOptions(), refreshSessions()])
+    await Promise.all([loadModelOptions(), refreshProjects(), refreshSessions()])
     if (sessions.value[0]) await selectSession(sessions.value[0].id)
   } catch (error) {
     loadError.value = error instanceof Error ? error.message : String(error)
   }
+}
+
+async function refreshProjects() {
+  projects.value = await projectClient.list()
 }
 
 async function refreshSessions() {
@@ -436,7 +505,7 @@ async function refreshSessions() {
   ))
 }
 
-async function newSession() {
+async function newSession(project?: CoreProject) {
   const id = `core-ui-${Date.now().toString(36)}-${Math.random().toString(16).slice(2, 8)}`
   const session = toSession(await requestJson<RawSession>('/sessions', {
     method: 'POST',
@@ -445,11 +514,149 @@ async function newSession() {
       member_id: 'core',
       title: '新会话',
       status: 'idle',
-      metadata: { source: 'core-ui' },
+      metadata: {
+        source: 'core-ui',
+        ...(project ? { project_id: project.id, work_root: project.workRoot } : {}),
+      },
     },
   }))
   sessions.value = [session, ...sessions.value.filter((item) => item.id !== session.id)]
   await selectSession(session.id)
+}
+
+function openProjectCreate() {
+  projectCreateError.value = ''
+  showProjectCreate.value = true
+}
+
+function closeProjectCreate() {
+  if (projectCreateLoading.value) return
+  projectCreateError.value = ''
+  showProjectCreate.value = false
+}
+
+async function createProject(payload: CoreProjectCreatePayload) {
+  projectCreateLoading.value = true
+  projectCreateError.value = ''
+  try {
+    const created = await projectClient.create(payload)
+    projects.value = [created.project, ...projects.value.filter((project) => project.id !== created.project.id)]
+    const session = toSession(created.session)
+    sessions.value = [session, ...sessions.value.filter((item) => item.id !== session.id)]
+    selectedProjectId.value = created.project.id
+    showProjectCreate.value = false
+    await selectSession(session.id)
+  } catch (error) {
+    projectCreateError.value = messageFromError(error)
+  } finally {
+    projectCreateLoading.value = false
+  }
+}
+
+async function createProjectSession(projectId: string) {
+  const project = projects.value.find((item) => item.id === projectId)
+  if (!project) return
+  try {
+    await newSession(project)
+  } catch (error) {
+    composerErrorText.value = messageFromError(error)
+  }
+}
+
+function openProjectActions(projectId: string) {
+  const project = projects.value.find((item) => item.id === projectId)
+  if (!project) return
+  selectedProjectId.value = project.id
+  projectNameDraft.value = project.name
+  projectActionError.value = ''
+}
+
+async function renameProject() {
+  const project = selectedProject.value
+  const name = projectNameDraft.value.trim()
+  if (!project || !name) return
+  projectActionLoading.value = true
+  projectActionError.value = ''
+  try {
+    const updated = await projectClient.rename(project.id, name)
+    projects.value = projects.value.map((item) => item.id === updated.id ? updated : item)
+    projectNameDraft.value = updated.name
+  } catch (error) {
+    projectActionError.value = messageFromError(error)
+  } finally {
+    projectActionLoading.value = false
+  }
+}
+
+async function deleteProject(projectId: string) {
+  const project = projects.value.find((item) => item.id === projectId)
+  if (!project || !window.confirm(`确定删除项目「${project.name}」及其会话记录？此操作不可撤销。`)) return
+  projectActionLoading.value = true
+  projectActionError.value = ''
+  try {
+    const deletedSessionIds = new Set(sessions.value
+      .filter((session) => session.metadata?.project_id === project.id)
+      .map((session) => session.id))
+    await projectClient.delete(project.id)
+    projects.value = projects.value.filter((item) => item.id !== project.id)
+    sessions.value = sessions.value.filter((session) => !deletedSessionIds.has(session.id))
+    if (selectedProjectId.value === project.id) selectedProjectId.value = null
+    if (agentsProjectId.value === project.id) closeAgentsEditor()
+    if (activeSessionId.value && deletedSessionIds.has(activeSessionId.value)) {
+      runtimeController.disconnect()
+      liveComposerController.resetForThreadChange()
+      activeSessionId.value = null
+      events.value = []
+      if (sessions.value[0]) await selectSession(sessions.value[0].id)
+    }
+  } catch (error) {
+    projectActionError.value = messageFromError(error)
+  } finally {
+    projectActionLoading.value = false
+  }
+}
+
+async function openAgentsEditor() {
+  const project = selectedProject.value
+  if (!project) return
+  projectActionLoading.value = true
+  agentsLoading.value = true
+  agentsError.value = ''
+  try {
+    const agents = await projectClient.readAgents(project.id)
+    agentsProjectId.value = project.id
+    agentsContent.value = agents.content
+  } catch (error) {
+    projectActionError.value = messageFromError(error)
+  } finally {
+    agentsLoading.value = false
+    projectActionLoading.value = false
+  }
+}
+
+function closeAgentsEditor() {
+  if (agentsLoading.value) return
+  agentsProjectId.value = null
+  agentsContent.value = ''
+  agentsError.value = ''
+}
+
+async function saveAgents(content: string) {
+  const projectId = agentsProjectId.value
+  if (!projectId) return
+  agentsLoading.value = true
+  agentsError.value = ''
+  try {
+    const agents = await projectClient.writeAgents(projectId, content)
+    agentsContent.value = agents.content
+    runtimeStatusText.value = 'AGENTS.md 已保存'
+    agentsProjectId.value = null
+    agentsContent.value = ''
+  } catch (error) {
+    agentsError.value = messageFromError(error)
+  } finally {
+    agentsLoading.value = false
+  }
 }
 
 async function renameSession(sessionId: string, title: string) {
@@ -754,12 +961,15 @@ function toSession(raw: RawSession): CoreSessionListItem {
   return {
     id: raw.id,
     title: raw.title || raw.id,
-    createdAt: raw.created_at || '',
-    updatedAt: raw.updated_at,
-    groupId: 'core',
+    createdAt: raw.created_at || raw.createdAt || '',
+    updatedAt: raw.updated_at || raw.updatedAt,
     status: raw.status,
     metadata: raw.metadata,
   }
+}
+
+function messageFromError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
 
 watch(composerText, () => {
@@ -789,4 +999,53 @@ onUnmounted(() => {
 @import '../styles/variables.css';
 @import '../styles/base.css';
 @import '../styles/layout.css';
+
+.core-project-header-action {
+  position: relative;
+}
+
+.core-project-create-popover {
+  position: absolute;
+  z-index: 4;
+  top: calc(100% + 6px);
+  right: 0;
+}
+
+.core-project-management {
+  margin-top: 10px;
+  padding: 10px;
+  border-top: 1px solid color-mix(in srgb, var(--theme-backdrop-text) 14%, transparent);
+}
+
+.core-project-management form,
+.core-project-management label {
+  display: grid;
+  gap: 6px;
+}
+
+.core-project-management label {
+  color: color-mix(in srgb, var(--theme-backdrop-text) 72%, transparent);
+  font-size: 12px;
+}
+
+.core-project-management-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.core-project-management-error {
+  margin: 8px 0 0;
+  color: var(--red);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+@media (max-width: 560px) {
+  .core-project-create-popover {
+    right: auto;
+    left: 0;
+  }
+}
 </style>

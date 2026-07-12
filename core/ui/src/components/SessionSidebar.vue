@@ -14,7 +14,7 @@
         <div class="project-btns">
           <!-- Per-project new session -->
           <button
-            v-if="allowProjectNewSession"
+            v-if="allowProjectNewSession && group.canManage !== false"
             class="project-action add"
             :title="`在 ${group.name} 中新建会话`"
             :aria-label="`在 ${group.name} 中新建会话`"
@@ -32,7 +32,7 @@
           </button>
           <!-- Delete project -->
           <button
-            v-if="allowProjectDelete"
+            v-if="allowProjectDelete && group.canManage !== false"
             class="project-action remove"
             title="删除项目"
             :aria-label="`删除 ${group.name}`"
@@ -41,9 +41,9 @@
         </div>
         <div
           class="project-name"
-          :class="{ clickable: allowProjectClick }"
-          @click="allowProjectClick && emit('select-project', group.id)"
-          @contextmenu.prevent="allowProjectContextMenu && emit('project-context-menu', group.id)"
+          :class="{ clickable: allowProjectClick && group.canManage !== false }"
+          @click="allowProjectClick && group.canManage !== false && emit('select-project', group.id)"
+          @contextmenu.prevent="allowProjectContextMenu && group.canManage !== false && emit('project-context-menu', group.id)"
         >
           <strong>{{ group.name }}</strong>
           <span v-if="group.workRoot" class="work-root">{{ group.workRoot }}</span>
@@ -135,6 +135,7 @@ export interface ProjectGroup {
   name: string
   workRoot?: string
   sessions: SessionItem[]
+  canManage?: boolean
 }
 
 // ---------------------------------------------------------------------------
