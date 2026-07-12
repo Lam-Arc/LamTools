@@ -12,10 +12,19 @@ from lamtools_core.app import (
 from lamtools_core.app.queue_state import build_queue_update_plan
 
 
-def test_core_workbench_operations_do_not_include_member_overlay_names() -> None:
+def test_core_workbench_operations_include_project_workspace_contracts() -> None:
     names = set(CORE_WORKBENCH_OPERATION_NAMES)
 
-    assert "project.create" not in names
+    assert {
+        "project.list",
+        "project.create",
+        "project.get",
+        "project.update",
+        "project.delete",
+        "project.sessions.list",
+        "project.agents_md.get",
+        "project.agents_md.update",
+    } <= names
     assert "attachment.list" not in names
     assert "session.commit_review.get" not in names
 
@@ -48,13 +57,13 @@ def test_build_member_operation_catalog_registers_core_and_overlay_handlers() ->
 
     catalog = build_member_operation_catalog(
         core_handlers={name: handler for name in CORE_WORKBENCH_OPERATION_NAMES},
-        overlay_names=["project.create"],
-        overlay_handlers={"project.create": handler},
+        overlay_names=["attachment.list"],
+        overlay_handlers={"attachment.list": handler},
     )
 
     assert catalog.has("turn.start")
     assert catalog.has("plugin.list")
-    assert catalog.has("project.create")
+    assert catalog.has("attachment.list")
 
 
 def test_build_member_operation_catalog_rejects_overlay_that_shadows_core() -> None:

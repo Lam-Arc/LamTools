@@ -29,6 +29,7 @@ from .factory import create_app
 from .live_hub import CoreAppEventHub
 from .live_operations import CoreLiveContext, CoreLiveOperationHost
 from .persistence_host import AppPersistenceHost
+from .project_store import ActiveProjectSessionsError, CoreProjectStore
 from .live_router import create_core_live_router
 from .operation_catalog import OperationCatalog, OperationRequest, OperationResult
 
@@ -173,6 +174,7 @@ def create_core_agent_http_app(
             app_event_hub=live_hub,
             runtime_state_store=core_db_handle.runtime_state_store,
         )
+        _register_core_project_operations(agent_operations, project_store=core_db_handle.project_store)
         _register_core_config_operations(agent_operations, config_db_path=config_db_path)
         config_engine = create_async_engine(f"sqlite+aiosqlite:///{config_db_path}")
         config_session_factory = async_sessionmaker(config_engine, expire_on_commit=False)
@@ -218,7 +220,14 @@ def create_core_agent_http_app(
         on_startup=[startup_core_agent],
         on_shutdown=[shutdown_core_agent],
     )
-    app.include_router(create_core_router(session_store=session_store, operations=operations), prefix="/api/core")
+    app.include_router(
+        create_core_router(
+            session_store=session_store,
+            operations=operations,
+            project_store=lambda: app_state["core_db"].project_store,
+        ),
+        prefix="/api/core",
+    )
     app.include_router(create_core_live_router(live_context), prefix="/api/core")
 
     @app.get("/api/core/config/models")
@@ -233,6 +242,92 @@ def create_core_agent_http_app(
     app.state.core_agent_work_root = resolved_work_root
     app.state.core_agent_data_dir = resolved_data_dir
     return app
+
+
+def _register_core_project_operations(catalog: OperationCatalog, *, project_store: CoreProjectStore) -> None:
+    async def project_list(request: OperationRequest) -> OperationResult:
+        del request
+        return OperationResult(
+            name="project.list",
+            payload={"projects": [project.to_dict() for project in await project_store.list()]},
+        )
+
+    async def project_create(request: OperationRequest) -> OperationResult:
+        payload = request.payload
+        work_root = str(payload.get("work_root") or payload.get("workRoot") or "").strip()
+        if not work_root:
+            return OperationResult(name=request.name, status="error", payload={"error": "work_root is required"})
+        project, session, _ = await project_store.create_with_initial_session(
+            work_root,
+            name=str(payload.get("name") or ""),
+        )
+        return OperationResult(
+            name=request.name,
+            payload={"project": project.to_dict(), "session": session.to_dict()},
+        )
+
+    async def project_get(request: OperationRequest) -> OperationResult:
+        project = await project_store.get(_project_id(request))
+        if project is None:
+            return OperationResult(name=request.name, status="error", payload={"error": "Project not found"})
+        return OperationResult(name=request.name, payload={"project": project.to_dict()})
+
+    async def project_update(request: OperationRequest) -> OperationResult:
+        project = await project_store.rename(_project_id(request), str(request.payload.get("name") or ""))
+        if project is None:
+            return OperationResult(name=request.name, status="error", payload={"error": "Project not found"})
+        return OperationResult(name=request.name, payload={"project": project.to_dict()})
+
+    async def project_delete(request: OperationRequest) -> OperationResult:
+        try:
+            deleted = await project_store.delete_with_sessions(_project_id(request))
+        except ActiveProjectSessionsError as exc:
+            return OperationResult(name=request.name, status="error", payload={"error": str(exc), "code": 409})
+        if not deleted:
+            return OperationResult(name=request.name, status="error", payload={"error": "Project not found"})
+        return OperationResult(name=request.name, payload={"deleted": True})
+
+    async def project_sessions_list(request: OperationRequest) -> OperationResult:
+        project_id = _project_id(request)
+        if await project_store.get(project_id) is None:
+            return OperationResult(name=request.name, status="error", payload={"error": "Project not found"})
+        return OperationResult(
+            name=request.name,
+            payload={"sessions": [session.to_dict() for session in await project_store.list_sessions(project_id)]},
+        )
+
+    async def project_agents_md_get(request: OperationRequest) -> OperationResult:
+        agents_md = await project_store.read_agents_md(_project_id(request))
+        if agents_md is None:
+            return OperationResult(name=request.name, status="error", payload={"error": "Project not found"})
+        return OperationResult(name=request.name, payload={"agents_md": agents_md})
+
+    async def project_agents_md_update(request: OperationRequest) -> OperationResult:
+        agents_md = await project_store.write_agents_md(
+            _project_id(request),
+            str(request.payload.get("content") or ""),
+        )
+        if agents_md is None:
+            return OperationResult(name=request.name, status="error", payload={"error": "Project not found"})
+        return OperationResult(name=request.name, payload={"agents_md": agents_md})
+
+    handlers = {
+        "project.list": project_list,
+        "project.create": project_create,
+        "project.get": project_get,
+        "project.update": project_update,
+        "project.delete": project_delete,
+        "project.sessions.list": project_sessions_list,
+        "project.agents_md.get": project_agents_md_get,
+        "project.agents_md.update": project_agents_md_update,
+    }
+    for name, handler in handlers.items():
+        if not catalog.has(name):
+            catalog.register(name, handler)
+
+
+def _project_id(request: OperationRequest) -> str:
+    return str(request.payload.get("project_id") or request.payload.get("projectId") or request.payload.get("id") or "")
 
 
 def _register_core_config_operations(catalog: OperationCatalog, *, config_db_path: Path) -> None:

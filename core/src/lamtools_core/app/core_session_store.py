@@ -10,6 +10,7 @@ from sqlalchemy import delete, select
 from lamtools_core.session import MessageRecord, SessionRecord
 
 from .core_db import CoreAppDb, CoreAppEvent, CoreRuntimeSession, CoreThreadSnapshot
+from .snapshot_store import CoreAppSnapshotProjector
 
 
 class CoreDbSessionStore:
@@ -22,8 +23,7 @@ class CoreDbSessionStore:
         async def write(connection):
             if await connection.get(CoreThreadSnapshot, session.id) is not None:
                 raise ValueError(f"Session '{session.id}' already exists")
-            state = db.snapshot_store.projector.empty(session.id)
-            state.update(_session_state(session))
+            state = session_snapshot(session, projector=db.snapshot_store.projector)
             connection.add(
                 CoreThreadSnapshot(
                     thread_id=session.id,
@@ -41,7 +41,7 @@ class CoreDbSessionStore:
         db = self._db_provider()
         async with db.session_factory() as connection:
             row = await connection.get(CoreThreadSnapshot, session_id)
-            return _record_from_row(row) if row is not None else None
+            return session_record_from_snapshot(row) if row is not None else None
 
     async def list(self, member_id: str | None = None) -> list[SessionRecord]:
         db = self._db_provider()
@@ -51,7 +51,7 @@ class CoreDbSessionStore:
                     select(CoreThreadSnapshot).order_by(CoreThreadSnapshot.updated_at.desc())
                 )
             ).scalars().all()
-        records = [_record_from_row(row) for row in rows]
+        records = [session_record_from_snapshot(row) for row in rows]
         return [record for record in records if member_id is None or record.member_id == member_id]
 
     async def update(self, session: SessionRecord) -> SessionRecord:
@@ -85,7 +85,7 @@ class CoreDbSessionStore:
             row = await connection.get(CoreThreadSnapshot, session_id)
             if row is None:
                 return None
-            record = _record_from_row(row)
+            record = session_record_from_snapshot(row)
             if title is not None:
                 record.title = title
             if status is not None:
@@ -109,9 +109,7 @@ class CoreDbSessionStore:
             row = await connection.get(CoreThreadSnapshot, session_id)
             if row is None:
                 return False
-            await connection.delete(row)
-            await connection.execute(delete(CoreAppEvent).where(CoreAppEvent.thread_id == session_id))
-            await connection.execute(delete(CoreRuntimeSession).where(CoreRuntimeSession.thread_id == session_id))
+            await delete_session_records(connection, [session_id])
             return True
 
         return bool(await db.persistence.write(write))
@@ -161,7 +159,25 @@ def _session_state(session: SessionRecord, *, messages=None) -> dict:
     return state
 
 
-def _record_from_row(row: CoreThreadSnapshot) -> SessionRecord:
+def session_snapshot(
+    session: SessionRecord,
+    *,
+    projector: CoreAppSnapshotProjector | None = None,
+) -> dict:
+    state = (projector or CoreAppSnapshotProjector()).empty(session.id)
+    state.update(_session_state(session))
+    return state
+
+
+async def delete_session_records(connection, session_ids: list[str]) -> None:
+    if not session_ids:
+        return
+    await connection.execute(delete(CoreAppEvent).where(CoreAppEvent.thread_id.in_(session_ids)))
+    await connection.execute(delete(CoreRuntimeSession).where(CoreRuntimeSession.thread_id.in_(session_ids)))
+    await connection.execute(delete(CoreThreadSnapshot).where(CoreThreadSnapshot.thread_id.in_(session_ids)))
+
+
+def session_record_from_snapshot(row: CoreThreadSnapshot) -> SessionRecord:
     state = dict(row.snapshot_json or {})
     session = state.get("session") if isinstance(state.get("session"), dict) else {}
     updated_at = row.updated_at or datetime.now()
@@ -197,4 +213,9 @@ def _datetime(value, *, fallback: datetime) -> datetime:
     return fallback
 
 
-__all__ = ["CoreDbSessionStore"]
+__all__ = [
+    "CoreDbSessionStore",
+    "delete_session_records",
+    "session_record_from_snapshot",
+    "session_snapshot",
+]

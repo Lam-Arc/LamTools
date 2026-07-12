@@ -1,157 +1,67 @@
-# Task 2 Report: Core UI Command Palette And Token Types
+# Task 2 Report: DONE_WITH_CONCERNS
 
-## Scope
+## Scope and baseline
 
-- Task brief: `E:\LamTools\.superpowers\sdd\task-2-brief.md`
-- Allowed write scope followed exactly:
-  - `core/ui/src/types.ts`
-  - `core/ui/src/components/CommandPalette.vue`
-  - `core/ui/src/composables/useComposerCommandPalette.ts`
-  - `core/ui/tests/command-palette.test.ts`
-  - `core/ui/src/index.ts`
-  - `.superpowers/sdd/task-2-report.md`
+- Baseline: `ac8d7b9 feat(core): add persistent project workspaces`
+- No `core_db.py` schema change was needed. The existing durable session snapshot metadata already carries `project_id` and `work_root`; all project-session lifecycle writes use the existing SQLite write coordinator.
+- Official implementation-pattern check: OpenAI Agents and Claude Code documentation endpoints both returned HTTP 200 before implementation. The local HTTP/App Server operation catalog remains the appropriate mature pattern for this repository.
 
-## TDD Evidence
+## RED
 
-### RED
-
-1. Added failing test first in `core/ui/tests/command-palette.test.ts`.
-2. Ran:
+Command:
 
 ```powershell
-Push-Location core\ui
-npx vitest run tests\command-palette.test.ts
-Pop-Location
+py -3.14 -m pytest tests/test_core_project_store.py tests/test_core_http_agent_app.py tests/test_operation_groups.py -q
 ```
 
-3. Expected failure observed:
+Key output: `5 failed, 19 passed in 1.82s`.
 
-```text
-FAIL  tests/command-palette.test.ts [ tests/command-palette.test.ts ]
-Error: Failed to resolve import "../src/components/CommandPalette.vue" from "tests/command-palette.test.ts". Does the file exist?
-```
+The failures proved the missing `create_with_initial_session()` lifecycle, project HTTP routes, App Server operation registration, and shared operation names.
 
-This is the correct RED state because the component file did not exist yet.
+## Implemented Core changes
 
-### GREEN
+- Project creation now creates the project and an idle Core session in one coordinated write. The session metadata is exactly `{project_id, work_root}`.
+- Project session listing and deletion use the durable snapshot metadata. Project deletion rejects active sessions and atomically removes the project session's event, runtime, and snapshot rows before deleting the project.
+- HTTP routes expose project list/create/get/update/delete, linked-session listing, and real `AGENTS.md` read/write.
+- The Core App Server registers all eight project operations. `project.create` returns `{project, session}`.
+- The shared operation catalog lists the Core project contracts. Member overlays cannot override any Core operation, including `project.*`.
 
-Implemented the minimum briefed surface:
+## GREEN
 
-- Added core command catalog and token input types.
-- Added palette component for command rendering and selection emit.
-- Added palette composable for active slash detection, filtering, selection movement, and reset.
-- Exported the new types, component, and composable from the public entry.
-
-Ran:
+Command:
 
 ```powershell
-Push-Location core\ui
-npx vitest run tests\command-palette.test.ts tests\composer-syntax.test.ts
-npm run build
-Pop-Location
+py -3.14 -m pytest tests/test_core_project_store.py tests/test_core_http_agent_app.py tests/test_operation_groups.py tests/test_core_live_client_e2e.py -q
 ```
 
-Observed:
+Key output: `25 passed, 3 warnings in 3.29s`.
 
-```text
-Test Files  2 passed (2)
-Tests       5 passed (5)
-```
+Warnings are existing `websockets.legacy` deprecations from the real WebSocket E2E test.
 
-```text
-@lamtools/ui@0.1.0 build
-vue-tsc -b && vite build
-✓ built in 232ms
-```
+## Task 5 migration concern
 
-## Files Changed
+- The existing Writer project overlay still uses the eight `project.*` operation names.
+- Its three ownership assertions are a known Task 5 migration item. They do not block Task 2: Core now owns the contracts and no member override exemption remains.
+- No Writer files were modified in this task.
 
-- `core/ui/src/types.ts`
-- `core/ui/src/components/CommandPalette.vue`
-- `core/ui/src/composables/useComposerCommandPalette.ts`
-- `core/ui/tests/command-palette.test.ts`
-- `core/ui/src/index.ts`
+## Files changed
 
-## Self-Review
+- `core/src/lamtools_core/app/project_store.py`
+- `core/src/lamtools_core/app/core_session_store.py`
+- `core/src/lamtools_core/app/http_agent_app.py`
+- `core/src/lamtools_core/app/operation_groups.py`
+- `core/src/lamtools_core/http/routes.py`
+- `core/tests/test_core_project_store.py`
+- `core/tests/test_core_http_agent_app.py`
+- `core/tests/test_operation_groups.py`
+- `.superpowers/sdd/task-2-report.md`
 
-- Write scope stayed inside the task boundary.
-- Implementation matches the exact interfaces and command behavior from the brief.
-- Test-first order was preserved and RED was captured before any production code existed.
-- Public exports were updated so later member-side work can consume the new surface directly.
-- No Writer, backend, docs, or unrelated shared files were modified.
+## Self-review and commit
 
-## Concerns
+- Self-review completed: deletion cleanup has direct event/runtime/snapshot regression coverage; HTTP restart, real `AGENTS.md`, active-session `409`, and App Server project creation are covered.
+- `git diff --check` passed.
+- Commit: `feat(core): expose project workspace contracts`.
 
-- None for Task 2 scope.
+## Concern
 
-## Review Fix: Keep Selection In Range After Query Changes
-
-### RED
-
-Added a focused regression test in `core/ui/tests/command-palette.test.ts` covering this path:
-
-- Move the palette selection away from index `0`
-- Narrow the slash query so the filtered result set shrinks
-- Verify the selection index is brought back into range and still resolves to a command
-
-Ran:
-
-```powershell
-Push-Location core\ui
-npx vitest run tests\command-palette.test.ts
-Pop-Location
-```
-
-Observed failure:
-
-```text
-FAIL  tests/command-palette.test.ts > CommandPalette > keeps the selected command in range when the query shrinks the result set
-AssertionError: expected 2 to be +0
-```
-
-This confirmed the reviewer finding: after editing the slash query, `activeIndex` stayed at the old value and no longer matched the filtered command list.
-
-### GREEN
-
-Implemented the minimal fix in `core/ui/src/composables/useComposerCommandPalette.ts`:
-
-- Watch the filtered command list
-- Reset to `0` when the list becomes empty
-- Clamp `activeIndex` to the last valid item when the filtered list shrinks
-
-Re-ran the focused regression command:
-
-```powershell
-Push-Location core\ui
-npx vitest run tests\command-palette.test.ts
-Pop-Location
-```
-
-Observed:
-
-```text
-Test Files  1 passed (1)
-Tests       2 passed (2)
-```
-
-Then ran the required covering verification:
-
-```powershell
-Push-Location core\ui
-npx vitest run tests\command-palette.test.ts tests\composer-syntax.test.ts
-npm run build
-Pop-Location
-```
-
-Observed:
-
-```text
-Test Files  2 passed (2)
-Tests       6 passed (6)
-```
-
-```text
-@lamtools/ui@0.1.0 build
-vue-tsc -b && vite build
-✓ built in 245ms
-```
+Task 5 must migrate Writer's legacy project overlay to the Core contracts and update its ownership assertions. This is an accepted cross-task concern, not a Task 2 blocker.

@@ -42,6 +42,14 @@ CORE_WORKBENCH_OPERATION_NAMES: tuple[str, ...] = (
     "plugin.disable",
     "hook.list",
     "hook.trust",
+    "project.list",
+    "project.create",
+    "project.get",
+    "project.update",
+    "project.delete",
+    "project.sessions.list",
+    "project.agents_md.get",
+    "project.agents_md.update",
 )
 
 

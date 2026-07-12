@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import inspect
 import uuid
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
@@ -12,6 +13,7 @@ from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel, Field
 
 from ..app.operation_catalog import OperationCatalog
+from ..app.project_store import ActiveProjectSessionsError, CoreProjectStore
 from ..provider import ProviderConfig, ProviderRegistry
 from ..run_event import (
     InMemoryRuntimeEventStore,
@@ -47,6 +49,19 @@ class SessionUpdateRequest(BaseModel):
     title: str | None = None
     status: str | None = None
     metadata: dict[str, Any] | None = None
+
+
+class ProjectCreateRequest(BaseModel):
+    work_root: str = Field(min_length=1)
+    name: str = ""
+
+
+class ProjectUpdateRequest(BaseModel):
+    name: str = Field(min_length=1)
+
+
+class AgentsMdUpdateRequest(BaseModel):
+    content: str
 
 
 class MessageCreateRequest(BaseModel):
@@ -109,6 +124,7 @@ def create_core_router(
     provider_registry: ProviderRegistry | None = None,
     usage_ledger: InMemoryUsageLedger | UsageLedger | None = None,
     operations: OperationCatalog | None = None,
+    project_store: CoreProjectStore | Callable[[], CoreProjectStore] | None = None,
 ) -> APIRouter:
     """Create an APIRouter with all core LamTools routes.
 
@@ -138,6 +154,12 @@ def create_core_router(
         _usage_ledger = usage_ledger
 
     _operations = operations
+
+    def require_project_store() -> CoreProjectStore:
+        resolved = project_store() if callable(project_store) else project_store
+        if resolved is None:
+            raise HTTPException(status_code=503, detail="Project storage is not configured")
+        return resolved
 
     router = APIRouter()
 
@@ -308,6 +330,71 @@ def create_core_router(
             "user_message": user_message.to_dict(),
             "assistant_message": assistant_message.to_dict(),
         }
+
+    # ==================================================================
+    # Project routes
+    # ==================================================================
+
+    @router.get("/projects")
+    async def list_projects() -> dict[str, Any]:
+        store = require_project_store()
+        return {"projects": [project.to_dict() for project in await store.list()]}
+
+    @router.post("/projects", status_code=201)
+    async def create_project(body: ProjectCreateRequest, response: Response) -> dict[str, Any]:
+        store = require_project_store()
+        project, session, created = await store.create_with_initial_session(body.work_root, name=body.name)
+        if not created:
+            response.status_code = 200
+        return {"project": project.to_dict(), "session": session.to_dict()}
+
+    @router.get("/projects/{project_id}")
+    async def get_project(project_id: str) -> dict[str, Any]:
+        project = await require_project_store().get(project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        return project.to_dict()
+
+    @router.patch("/projects/{project_id}")
+    async def update_project(project_id: str, body: ProjectUpdateRequest) -> dict[str, Any]:
+        project = await require_project_store().rename(project_id, body.name)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        return project.to_dict()
+
+    @router.delete("/projects/{project_id}", status_code=204)
+    async def delete_project(project_id: str) -> Response:
+        try:
+            deleted = await require_project_store().delete_with_sessions(project_id)
+        except ActiveProjectSessionsError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Project not found")
+        return Response(status_code=204)
+
+    @router.get("/projects/{project_id}/sessions")
+    async def list_project_sessions(project_id: str) -> dict[str, Any]:
+        store = require_project_store()
+        if await store.get(project_id) is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        return {"sessions": [session.to_dict() for session in await store.list_sessions(project_id)]}
+
+    @router.get("/projects/{project_id}/agents-md")
+    async def get_project_agents_md(project_id: str) -> dict[str, str | bool]:
+        agents_md = await require_project_store().read_agents_md(project_id)
+        if agents_md is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        return agents_md
+
+    @router.put("/projects/{project_id}/agents-md")
+    async def update_project_agents_md(
+        project_id: str,
+        body: AgentsMdUpdateRequest,
+    ) -> dict[str, str | bool]:
+        agents_md = await require_project_store().write_agents_md(project_id, body.content)
+        if agents_md is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        return agents_md
 
     # ==================================================================
     # Event routes

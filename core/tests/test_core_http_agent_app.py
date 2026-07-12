@@ -224,6 +224,78 @@ def test_core_http_session_delete_removes_persisted_thread(tmp_path: Path) -> No
     assert asyncio.run(list_core_cli_sessions(core_db=core_db)) == []
 
 
+def test_project_http_round_trip_survives_restart_and_uses_agents_md(tmp_path: Path) -> None:
+    config_db = tmp_path / "lamtools-config.db"
+    core_db = tmp_path / "core.db"
+    root = tmp_path / "workspace"
+    _write_config_db(config_db)
+
+    app = create_core_agent_http_app(
+        model_id="model-record",
+        config_db=config_db,
+        core_db=core_db,
+        data_dir=tmp_path / "core-data",
+        work_root=root,
+    )
+    with TestClient(app) as client:
+        created = client.post("/api/core/projects", json={"name": "Docs", "work_root": str(root)})
+        assert created.status_code == 201
+        result = created.json()
+        project_id = result["project"]["id"]
+        assert result["session"]["metadata"] == {
+            "project_id": project_id,
+            "work_root": str(root.resolve()),
+        }
+
+        content = "# Project instructions\n\nUse UTF-8.\n"
+        assert client.put(f"/api/core/projects/{project_id}/agents-md", json={"content": content}).json() == {
+            "content": content,
+            "exists": True,
+        }
+        assert client.get(f"/api/core/projects/{project_id}/agents-md").json() == {
+            "content": content,
+            "exists": True,
+        }
+        assert client.get(f"/api/core/projects/{project_id}/sessions").json()["sessions"] == [result["session"]]
+
+    restarted_app = create_core_agent_http_app(
+        model_id="model-record",
+        config_db=config_db,
+        core_db=core_db,
+        data_dir=tmp_path / "core-data",
+        work_root=root,
+    )
+    with TestClient(restarted_app) as client:
+        assert client.get(f"/api/core/projects/{project_id}").json()["name"] == "Docs"
+
+
+def test_project_http_delete_rejects_active_session_and_app_server_uses_project_operations(tmp_path: Path) -> None:
+    config_db = tmp_path / "lamtools-config.db"
+    _write_config_db(config_db)
+    app = create_core_agent_http_app(
+        model_id="model-record",
+        config_db=config_db,
+        core_db=tmp_path / "core.db",
+        data_dir=tmp_path / "core-data",
+        work_root=tmp_path / "workspace",
+    )
+    with TestClient(app) as client:
+        with client.websocket_connect("/api/core/app-server") as websocket:
+            _initialize_websocket(websocket)
+            websocket.send_json(
+                {
+                    "id": 3,
+                    "method": "project.create",
+                    "params": {"name": "Docs", "work_root": str(tmp_path / "workspace")},
+                }
+            )
+            created = _receive_rpc_response(websocket, 3)["result"]
+        project_id = created["project"]["id"]
+        session_id = created["session"]["id"]
+        assert client.patch(f"/api/core/sessions/{session_id}", json={"status": "running"}).status_code == 200
+        assert client.delete(f"/api/core/projects/{project_id}").status_code == 409
+
+
 def _receive_rpc_response(websocket, request_id: int) -> dict:
     while True:
         message = websocket.receive_json()
@@ -464,6 +536,16 @@ def test_core_agent_http_app_exposes_config_catalog_over_live_operations(tmp_pat
     ]
     assert "secret" not in str(providers)
     operations = app.state.core_agent_app_state["operations"]
+    assert {
+        "project.list",
+        "project.create",
+        "project.get",
+        "project.update",
+        "project.delete",
+        "project.sessions.list",
+        "project.agents_md.get",
+        "project.agents_md.update",
+    } <= set(operations.list())
     assert operations.has("config.provider.create")
     assert operations.has("config.model.update")
     assert operations.has("plugin.list")
