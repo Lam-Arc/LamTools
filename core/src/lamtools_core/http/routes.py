@@ -177,7 +177,7 @@ def create_core_router(
 
     @router.post("/sessions", status_code=201)
     async def create_session(body: SessionCreateRequest) -> dict[str, Any]:
-        if "project_id" in body.metadata:
+        if _has_project_metadata(body.metadata):
             raise HTTPException(status_code=422, detail="Use the project session endpoint for project-owned sessions")
         record = SessionRecord(
             id=body.id,
@@ -201,8 +201,10 @@ def create_core_router(
         session_id: str,
         body: SessionUpdateRequest,
     ) -> dict[str, Any]:
-        if body.metadata is not None and "project_id" in body.metadata:
-            raise HTTPException(status_code=422, detail="Use the project session endpoint for project-owned sessions")
+        existing = await _store_call(_session_store.get, session_id)
+        if existing is None:
+            raise HTTPException(status_code=404, detail="Session not found")
+        metadata = _validated_session_metadata(existing.metadata, body.metadata)
         patch_method = getattr(_session_store, "patch", None)
         if patch_method is not None:
             record = await _store_call(
@@ -210,20 +212,18 @@ def create_core_router(
                 session_id,
                 title=body.title,
                 status=body.status,
-                metadata=body.metadata,
+                metadata=metadata,
             )
             if record is None:
                 raise HTTPException(status_code=404, detail="Session not found")
             return record.to_dict()
-        record = await _store_call(_session_store.get, session_id)
-        if record is None:
-            raise HTTPException(status_code=404, detail="Session not found")
+        record = existing
         if body.title is not None:
             record.title = body.title
         if body.status is not None:
             record.status = body.status
-        if body.metadata is not None:
-            record.metadata = body.metadata
+        if metadata is not None:
+            record.metadata = metadata
         await _store_call(_session_store.update, record)
         return record.to_dict()
 
@@ -353,7 +353,7 @@ def create_core_router(
         store = require_project_store()
         try:
             project, session, created = await store.create_with_initial_session(body.work_root, name=body.name)
-        except ValueError as exc:
+        except (OSError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         if not created:
             response.status_code = 200
@@ -370,7 +370,7 @@ def create_core_router(
     async def update_project(project_id: str, body: ProjectUpdateRequest) -> dict[str, Any]:
         try:
             project = await require_project_store().rename(project_id, body.name)
-        except ValueError as exc:
+        except (OSError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         if project is None:
             raise HTTPException(status_code=404, detail="Project not found")
@@ -403,7 +403,10 @@ def create_core_router(
 
     @router.get("/projects/{project_id}/agents-md")
     async def get_project_agents_md(project_id: str) -> dict[str, str | bool]:
-        agents_md = await require_project_store().read_agents_md(project_id)
+        try:
+            agents_md = await require_project_store().read_agents_md(project_id)
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         if agents_md is None:
             raise HTTPException(status_code=404, detail="Project not found")
         return agents_md
@@ -413,7 +416,10 @@ def create_core_router(
         project_id: str,
         body: AgentsMdUpdateRequest,
     ) -> dict[str, str | bool]:
-        agents_md = await require_project_store().write_agents_md(project_id, body.content)
+        try:
+            agents_md = await require_project_store().write_agents_md(project_id, body.content)
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         if agents_md is None:
             raise HTTPException(status_code=404, detail="Project not found")
         return agents_md
@@ -838,3 +844,21 @@ def _datetime_from_ms(value: Any) -> datetime:
         return datetime.fromtimestamp(int(value) / 1000)
     except (TypeError, ValueError, OSError, OverflowError):
         return datetime.now()
+
+
+def _has_project_metadata(metadata: dict[str, Any]) -> bool:
+    return "project_id" in metadata or "work_root" in metadata
+
+
+def _validated_session_metadata(existing: dict[str, Any], requested: dict[str, Any] | None) -> dict[str, Any] | None:
+    if requested is None:
+        return None
+    project_id = existing.get("project_id")
+    if not isinstance(project_id, str) or not project_id:
+        if _has_project_metadata(requested):
+            raise HTTPException(status_code=422, detail="Use the project session endpoint for project-owned sessions")
+        return dict(requested)
+    metadata = dict(requested)
+    metadata["project_id"] = project_id
+    metadata["work_root"] = str(existing.get("work_root") or "")
+    return metadata

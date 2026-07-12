@@ -2,10 +2,15 @@
 
 Baseline: `0d5ecd5`
 
-Status: DONE
+Status: DONE (second final-fix wave)
 
 ## Completed fixes
 
+- Blank project names are optional during creation and normalize to the workspace directory name. Renames still reject blank values across HTTP, App Server, and CLI.
+- Project-owned Core session metadata is immutable through generic PATCH. The persistence write transaction preserves canonical `project_id` and `work_root`; unowned sessions cannot inject either field.
+- Writer AGENTS.md loading, success, error, and completion state now all require the current request token and project ID. Saving captures the opening project and remains disabled until the current read completes.
+- Writer duplicate-project migration now runs in the explicit write coordinator before list reads. It commits the session reassignment and duplicate deletion before returning results.
+- Generic Writer `project.update` now rejects `agents_md` and directs callers to `project.agents_md.update`.
 - Writer workbench now uses Core `buildCoreProjectGroups`, keyed strictly by persisted `project_id`. Sessions with a missing or invalid ID share one unmanaged `Unassigned` group. The orphan pseudo-project deletion path was removed.
 - Core project storage now owns project-session creation under the SQLite write coordinator. It validates the project in the same write transaction and writes canonical `project_id` and `work_root`.
 - HTTP, App Server, and shared UI use the project-session entrypoint. Generic session creation rejects client-supplied project IDs.
@@ -19,15 +24,16 @@ Status: DONE
 Targeted final checks:
 
 - Core project/HTTP/CLI: 43 passed.
-- Writer project/Core HTTP/App Server: 141 passed.
-- Writer frontend: 59 passed.
+- Writer project/Core HTTP/App Server: 142 passed, then the focused App Server protocol suite: 107 passed.
+- Core UI project contract: 13 passed.
+- Writer frontend: 60 passed.
 
 Full verification was rerun after the final changes:
 
 - Core backend: 785 passed.
-- Core UI contract: 160 passed.
-- Writer backend: 752 passed.
-- Writer frontend: 59 passed.
+- Core UI contract: 161 passed.
+- Writer backend: 754 passed.
+- Writer frontend: 60 passed.
 - `scripts/build.ps1 all`: passed.
 - `git diff --check`: passed.
 

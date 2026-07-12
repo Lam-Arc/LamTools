@@ -83,7 +83,7 @@ async def merge_duplicate_projects(
     return canonical
 
 
-async def dedupe_writer_projects(db: AsyncSession) -> None:
+async def migrate_writer_project_duplicates(db: AsyncSession) -> None:
     result = await db.execute(select(WriterProject).where(WriterProject.work_root != ""))
     by_root: dict[str, list[WriterProject]] = {}
     for project in result.scalars().all():
@@ -93,6 +93,7 @@ async def dedupe_writer_projects(db: AsyncSession) -> None:
         if len(projects) <= 1:
             continue
         await merge_duplicate_projects(db, work_root, projects)
+    await db.flush()
 
 
 def project_response(project: WriterProject) -> dict[str, Any]:
@@ -125,8 +126,6 @@ async def list_writer_project_responses(
     limit: int = 50,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
-    await dedupe_writer_projects(db)
-    await db.flush()
     result = await db.execute(
         select(WriterProject)
         .order_by(WriterProject.updated_at.desc())
@@ -153,6 +152,13 @@ async def update_writer_project(
         raise LookupError("Project not found")
 
     normalized_update = {key: value for key, value in update_data.items() if value is not None}
+    if "agents_md" in normalized_update:
+        raise ValueError("Use project.agents_md.update for AGENTS.md")
+    if "name" in normalized_update:
+        normalized_name = str(normalized_update["name"]).strip()
+        if not normalized_name:
+            raise ValueError("Project name is required")
+        normalized_update["name"] = normalized_name
     if "work_root" in normalized_update:
         raw_root = str(normalized_update["work_root"]).strip()
         try:
@@ -264,7 +270,7 @@ async def list_project_session_summaries(
 __all__ = [
     "create_writer_project_response",
     "create_writer_project_session",
-    "dedupe_writer_projects",
+    "migrate_writer_project_duplicates",
     "delete_writer_project",
     "ensure_writer_project",
     "get_writer_project_response",

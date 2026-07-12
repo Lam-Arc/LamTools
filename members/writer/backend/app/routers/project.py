@@ -17,6 +17,7 @@ from app.services.project_management import (
     get_writer_project_response,
     list_project_session_summaries,
     list_writer_project_responses,
+    migrate_writer_project_duplicates,
     read_project_agents_md,
     update_writer_project,
     write_project_agents_md,
@@ -99,7 +100,9 @@ async def list_projects(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
+    write_transaction=Depends(get_writer_write),
 ):
+    await execute_writer_write(db, migrate_writer_project_duplicates, write_transaction)
     return [
         ProjectResponse(**project)
         for project in await list_writer_project_responses(db, limit=limit, offset=offset)
@@ -127,6 +130,8 @@ async def update_project(
         ))
     except LookupError as exc:
         raise HTTPException(status_code=404, detail="Project not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.delete("/projects/{project_id}", status_code=204)

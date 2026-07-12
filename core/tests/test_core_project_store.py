@@ -178,13 +178,15 @@ async def test_project_delete_and_create_session_race_cannot_leave_an_orphan(tmp
 
 
 @pytest.mark.asyncio
-async def test_project_store_rejects_blank_names_and_work_roots(tmp_path: Path) -> None:
+async def test_project_store_defaults_blank_create_names_but_rejects_blank_renames(tmp_path: Path) -> None:
     db = await open_core_app_db(tmp_path / "core.db")
     try:
         with pytest.raises(ValueError, match="work_root is required"):
             await db.project_store.create("   ")
+        project, _ = await db.project_store.create(tmp_path / "workspace", name="   ")
+        assert project.name == "workspace"
         with pytest.raises(ValueError, match="Project name is required"):
-            await db.project_store.create(tmp_path / "workspace", name="   ")
+            await db.project_store.rename(project.id, "   ")
     finally:
         await db.close()
 

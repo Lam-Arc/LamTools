@@ -19,6 +19,15 @@ describe('CoreProjectCreate', () => {
     expect(wrapper.text()).not.toContain('Git')
   })
 
+  it('submits an empty optional name when only a path is provided', async () => {
+    const wrapper = mount(CoreProjectCreate)
+
+    await wrapper.get('[data-project-root]').setValue('E:\\path-only')
+    await wrapper.get('form').trigger('submit')
+
+    expect(wrapper.emitted('submit')).toEqual([[{ name: '', work_root: 'E:\\path-only' }]])
+  })
+
   it('keeps invalid and loading submissions disabled while exposing errors', async () => {
     const wrapper = mount(CoreProjectCreate, { props: { loading: true, error: '目录不可用' } })
 

@@ -262,7 +262,7 @@ def _register_core_project_operations(catalog: OperationCatalog, *, project_stor
                 work_root,
                 name=payload.get("name") if "name" in payload else None,
             )
-        except ValueError as exc:
+        except (OSError, ValueError) as exc:
             return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
         return OperationResult(
             name=request.name,
@@ -276,7 +276,10 @@ def _register_core_project_operations(catalog: OperationCatalog, *, project_stor
         return OperationResult(name=request.name, payload={"project": project.to_dict()})
 
     async def project_update(request: OperationRequest) -> OperationResult:
-        project = await project_store.rename(_project_id(request), str(request.payload.get("name") or ""))
+        try:
+            project = await project_store.rename(_project_id(request), str(request.payload.get("name") or ""))
+        except (OSError, ValueError) as exc:
+            return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
         if project is None:
             return OperationResult(name=request.name, status="error", payload={"error": "Project not found"})
         return OperationResult(name=request.name, payload={"project": project.to_dict()})
@@ -310,16 +313,22 @@ def _register_core_project_operations(catalog: OperationCatalog, *, project_stor
         return OperationResult(name=request.name, payload={"session": session.to_dict()})
 
     async def project_agents_md_get(request: OperationRequest) -> OperationResult:
-        agents_md = await project_store.read_agents_md(_project_id(request))
+        try:
+            agents_md = await project_store.read_agents_md(_project_id(request))
+        except (OSError, ValueError) as exc:
+            return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
         if agents_md is None:
             return OperationResult(name=request.name, status="error", payload={"error": "Project not found"})
         return OperationResult(name=request.name, payload={"agents_md": agents_md})
 
     async def project_agents_md_update(request: OperationRequest) -> OperationResult:
-        agents_md = await project_store.write_agents_md(
-            _project_id(request),
-            str(request.payload.get("content") or ""),
-        )
+        try:
+            agents_md = await project_store.write_agents_md(
+                _project_id(request),
+                str(request.payload.get("content") or ""),
+            )
+        except (OSError, ValueError) as exc:
+            return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
         if agents_md is None:
             return OperationResult(name=request.name, status="error", payload={"error": "Project not found"})
         return OperationResult(name=request.name, payload={"agents_md": agents_md})

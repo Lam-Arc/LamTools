@@ -102,3 +102,56 @@ test('Writer discards stale AGENTS.md reads and saves through the project captur
   assert.deepEqual(content, ['# B'])
   assert.deepEqual(savedProjectIds, ['project-a'])
 })
+
+test('Writer keeps the latest AGENTS.md loading state through stale completion and failure', async () => {
+  type Result = { content: string; exists: boolean }
+  let currentProjectId = 'project-a'
+  let currentToken = 1
+  let loading = true
+  let readyToken = 0
+  let content = ''
+  let error = ''
+  let resolveOld!: (value: Result) => void
+  let rejectOld!: (reason: Error) => void
+  let resolveNew!: (value: Result) => void
+  const oldSuccess = new Promise<Result>((resolve) => { resolveOld = resolve })
+  const oldFailure = new Promise<Result>((_resolve, reject) => { rejectOld = reject })
+  const newest = new Promise<Result>((resolve) => { resolveNew = resolve })
+
+  const apply = async (projectId: string, token: number, response: Promise<Result>) => {
+    try {
+      const result = await response
+      if (shouldApplyWriterProjectAgents(projectId, token, currentProjectId, currentToken)) {
+        content = result.content
+        readyToken = token
+      }
+    } catch {
+      if (shouldApplyWriterProjectAgents(projectId, token, currentProjectId, currentToken)) error = '读取 AGENTS.md 失败'
+    } finally {
+      if (shouldApplyWriterProjectAgents(projectId, token, currentProjectId, currentToken)) loading = false
+    }
+  }
+
+  const first = apply('project-a', 1, oldSuccess)
+  currentProjectId = 'project-b'
+  currentToken = 2
+  loading = true
+  const second = apply('project-b', 2, newest)
+  resolveOld({ content: '# stale', exists: true })
+  await first
+  assert.equal(loading, true)
+  assert.equal(readyToken === currentToken, false)
+
+  const failedOld = apply('project-a', 1, oldFailure)
+  rejectOld(new Error('stale failed'))
+  await failedOld
+  assert.equal(loading, true)
+  assert.equal(error, '')
+
+  resolveNew({ content: '# current', exists: true })
+  await second
+  assert.equal(content, '# current')
+  assert.equal(error, '')
+  assert.equal(loading, false)
+  assert.equal(readyToken === currentToken, true)
+})

@@ -243,6 +243,8 @@ async def get_session(session_id: str, db: AsyncSession = Depends(get_db)):
 async def update_session(
     session_id: str, body: SessionUpdate, db: AsyncSession = Depends(get_db)
 ):
+    if body.project_id is not None:
+        raise HTTPException(status_code=422, detail="Use the project session endpoint for project-owned sessions")
     try:
         return await update_writer_session(
             db,

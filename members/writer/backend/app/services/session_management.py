@@ -92,6 +92,8 @@ async def update_writer_session(
         raise LookupError("Session not found")
 
     normalized_update = {key: value for key, value in update_data.items() if value is not None}
+    if "project_id" in normalized_update:
+        raise ValueError("Use the project session endpoint for project-owned sessions")
     if "mode" in normalized_update:
         normalized_update["mode"] = normalize_session_mode(normalized_update["mode"])
     if "work_root" in normalized_update:

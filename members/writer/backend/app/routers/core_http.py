@@ -57,11 +57,11 @@ def _session_to_core(s: WriterSession) -> dict[str, Any]:
     metadata: dict[str, Any] = dict(s.metadata_ or {})
     lifecycle = project_session_lifecycle(s)
     # Preserve useful Writer fields in metadata/details
-    metadata.setdefault("work_root", s.work_root or "")
+    metadata["work_root"] = s.work_root or ""
     metadata.setdefault("branch", s.branch or "")
     metadata.setdefault("phase", s.phase or "idle")
     metadata.setdefault("mode", s.mode or "EXECUTE")
-    metadata.setdefault("project_id", s.project_id or "")
+    metadata["project_id"] = s.project_id or ""
     metadata.setdefault("loop_position", s.loop_position or "execute")
     metadata["lifecycle"] = lifecycle
 
@@ -185,7 +185,13 @@ async def update_session(
         if body.phase is not None:
             session.phase = body.phase
         if body.metadata is not None:
-            session.metadata_ = {**dict(session.metadata_ or {}), **body.metadata}
+            metadata = dict(body.metadata)
+            if session.project_id:
+                metadata.pop("project_id", None)
+                metadata.pop("work_root", None)
+            elif "project_id" in metadata or "work_root" in metadata:
+                raise HTTPException(status_code=422, detail="Use the project session endpoint for project-owned sessions")
+            session.metadata_ = {**dict(session.metadata_ or {}), **metadata}
         await write_db.flush()
         return await _session_to_core_projected(write_db, session)
     return await execute_writer_write(db, write, write_transaction)

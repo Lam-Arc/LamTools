@@ -16,7 +16,7 @@ from app.core.writer.git import WriterGitManager
 from app.database import Base
 from app.models.project import WriterProject
 from app.models.session import WriterSession
-from app.routers.project import ProjectCreate, create_project, list_projects
+from app.routers.project import ProjectCreate, ProjectUpdate, create_project, list_projects, update_project
 from app.routers.session import SessionCreate, SessionUpdate, create_session, update_session
 
 
@@ -67,10 +67,17 @@ async def test_project_work_root_dedupe_merges_sessions():
             ).scalar_one()
             assert session.project_id == canonical.id
 
-            project = await create_project(ProjectCreate(work_root=work_root), db)
-            assert project.id == canonical.id
-
         await engine.dispose()
+
+        reopened_engine = create_async_engine(f"sqlite+aiosqlite:///{root / 'test.db'}", future=True)
+        reopened_factory = async_sessionmaker(reopened_engine, expire_on_commit=False)
+        async with reopened_factory() as db:
+            projects = (await db.execute(select(WriterProject).where(WriterProject.work_root == work_root))).scalars().all()
+            session = await db.get(WriterSession, "session-on-duplicate")
+            assert [project.id for project in projects] == ["project-good"]
+            assert session is not None
+            assert session.project_id == "project-good"
+        await reopened_engine.dispose()
 
 @pytest.mark.asyncio
 async def test_create_project_creates_missing_work_root():
@@ -90,6 +97,27 @@ async def test_create_project_creates_missing_work_root():
             assert project.work_root == str(work_root.resolve())
             assert project.name == "Custom REST Project"
 
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_writer_blank_create_name_uses_workspace_default_and_project_update_rejects_agents_cache(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'project-validation.db'}", future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    try:
+        work_root = tmp_path / "workspace"
+        async with session_factory() as db:
+            project = await create_project(ProjectCreate(work_root=str(work_root), name="   "), db)
+            assert project.name == "workspace"
+
+            with pytest.raises(Exception, match="project.agents_md.update"):
+                await update_project(project.id, ProjectUpdate(agents_md="stale cache"), db)
+            with pytest.raises(Exception, match="Project name is required"):
+                await update_project(project.id, ProjectUpdate(name="   "), db)
+    finally:
         await engine.dispose()
 
 

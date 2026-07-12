@@ -91,7 +91,7 @@ class CoreDbSessionStore:
             if status is not None:
                 record.status = status
             if metadata is not None:
-                record.metadata = metadata
+                record.metadata = _canonicalize_project_metadata(record.metadata, metadata)
             record.updated_at = datetime.now()
             state = dict(row.snapshot_json or {})
             state.update(_session_state(record, messages=state.get("messages")))
@@ -157,6 +157,16 @@ def _session_state(session: SessionRecord, *, messages=None) -> dict:
     if messages is not None:
         state["messages"] = messages
     return state
+
+
+def _canonicalize_project_metadata(existing: dict, requested: dict) -> dict:
+    project_id = existing.get("project_id")
+    if not isinstance(project_id, str) or not project_id:
+        return dict(requested)
+    metadata = dict(requested)
+    metadata["project_id"] = project_id
+    metadata["work_root"] = str(existing.get("work_root") or "")
+    return metadata
 
 
 def session_snapshot(

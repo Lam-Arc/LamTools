@@ -70,6 +70,7 @@ from app.services.project_management import (
     get_writer_project_response,
     list_project_session_summaries,
     list_writer_project_responses,
+    migrate_writer_project_duplicates,
     read_project_agents_md,
     update_writer_project,
     write_project_agents_md,
@@ -485,6 +486,8 @@ async def handle_session_list_operation(
 ) -> WriterOperationOutcome:
     limit = _bounded_int(params.get("limit"), default=50, minimum=1, maximum=200)
     offset = _bounded_int(params.get("offset"), default=0, minimum=0, maximum=100000)
+    persistence = writer_persistence_host(session_factory)
+    await persistence.write(migrate_writer_project_duplicates)
     async with session_factory() as db:
         result = await db.execute(
             select(WriterSession)
@@ -549,13 +552,18 @@ async def handle_session_update_operation(
         return WriterOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message="session_id is required"))
     work_root = params["work_root"] if "work_root" in params else params.get("workRoot")
     project_id = params["project_id"] if "project_id" in params else params.get("projectId")
+    if project_id is not None:
+        return WriterOperationOutcome(response=rpc_error(
+            request_id,
+            code=INVALID_REQUEST,
+            message="Use project.sessions.create for project-owned sessions",
+        ))
     update_data = {
         key: value
         for key, value in {
             "title": params.get("title"),
             "mode": params.get("mode"),
             "work_root": work_root,
-            "project_id": project_id,
         }.items()
         if value is not None
     }
@@ -959,6 +967,8 @@ async def handle_project_list_operation(
 ) -> WriterOperationOutcome:
     limit = _bounded_int(params.get("limit"), default=50, minimum=1, maximum=200)
     offset = _bounded_int(params.get("offset"), default=0, minimum=0, maximum=100000)
+    persistence = writer_persistence_host(session_factory)
+    await persistence.write(migrate_writer_project_duplicates)
     async with session_factory() as db:
         projects = await list_writer_project_responses(db, limit=limit, offset=offset)
     return WriterOperationOutcome(response=rpc_result(request_id, {"projects": projects}))
@@ -1021,7 +1031,7 @@ async def handle_project_get_operation(
     try:
         async with session_factory() as db:
             project = await get_writer_project_response(db, project_id)
-    except LookupError as exc:
+    except (LookupError, ValueError) as exc:
         return WriterOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
     return WriterOperationOutcome(response=rpc_result(request_id, {"project": project}))
 
@@ -1049,7 +1059,7 @@ async def handle_project_update_operation(
     try:
         persistence = writer_persistence_host(session_factory)
         project = await persistence.write(lambda db: update_writer_project(db, project_id, update_data))
-    except LookupError as exc:
+    except (LookupError, ValueError) as exc:
         return WriterOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
     return WriterOperationOutcome(response=rpc_result(request_id, {"project": project}))
 
@@ -1092,7 +1102,7 @@ async def handle_project_session_create_operation(
             title=str(params.get("title") or "New Session"),
             mode=str(params.get("mode") or "EXECUTE"),
         ))
-    except LookupError as exc:
+    except (LookupError, ValueError) as exc:
         return WriterOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
     return WriterOperationOutcome(response=rpc_result(request_id, {"session": session}))
 

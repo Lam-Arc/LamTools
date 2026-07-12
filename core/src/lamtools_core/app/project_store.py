@@ -127,7 +127,7 @@ class CoreProjectStore:
         return _record(project) if project is not None else None
 
     async def rename(self, project_id: str, name: str) -> CoreProjectRecord | None:
-        name = _normalize_project_name(name)
+        name = _normalize_project_name(name, required=True)
 
         async def write(db: Any) -> CoreProjectRecord | None:
             project = await db.get(CoreProject, project_id)
@@ -184,12 +184,16 @@ def _default_project_name(work_root: Path) -> str:
     return workspace_name(work_root)
 
 
-def _normalize_project_name(name: str | None) -> str | None:
+def _normalize_project_name(name: str | None, *, required: bool = False) -> str | None:
     if name is None:
+        if required:
+            raise ValueError("Project name is required")
         return None
     normalized = str(name).strip()
     if not normalized:
-        raise ValueError("Project name is required")
+        if required:
+            raise ValueError("Project name is required")
+        return None
     return normalized
 
 

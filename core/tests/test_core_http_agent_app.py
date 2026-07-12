@@ -238,10 +238,12 @@ def test_project_http_round_trip_survives_restart_and_uses_agents_md(tmp_path: P
         work_root=root,
     )
     with TestClient(app) as client:
-        assert client.post(
+        unnamed = client.post(
             "/api/core/projects",
             json={"name": "   ", "work_root": str(tmp_path / "invalid-name")},
-        ).status_code == 422
+        )
+        assert unnamed.status_code == 201
+        assert unnamed.json()["project"]["name"] == "invalid-name"
         created = client.post("/api/core/projects", json={"name": "Docs", "work_root": str(root)})
         assert created.status_code == 201
         result = created.json()
@@ -277,7 +279,7 @@ def test_project_http_round_trip_survives_restart_and_uses_agents_md(tmp_path: P
                 "member_id": "core",
                 "title": "Invalid",
                 "status": "idle",
-                "metadata": {"project_id": "missing"},
+                "metadata": {"work_root": "E:\\forged"},
             },
         ).status_code == 422
 
@@ -319,7 +321,7 @@ def test_project_http_delete_rejects_active_session_and_app_server_uses_project_
             websocket.send_json(
                 {"id": 31, "method": "project.create", "params": {"name": "   ", "work_root": str(tmp_path / "invalid")}},
             )
-            assert _receive_rpc_response(websocket, 31)["error"]["message"] == "Project name is required"
+            assert _receive_rpc_response(websocket, 31)["result"]["project"]["name"] == "invalid"
 
             websocket.send_json({"id": 4, "method": "project.get", "params": {"project_id": project_id}})
             assert _receive_rpc_response(websocket, 4)["result"]["project"]["id"] == project_id
@@ -328,6 +330,11 @@ def test_project_http_delete_rejects_active_session_and_app_server_uses_project_
                 {"id": 5, "method": "project.update", "params": {"project_id": project_id, "name": "Renamed"}}
             )
             assert _receive_rpc_response(websocket, 5)["result"]["project"]["name"] == "Renamed"
+
+            websocket.send_json(
+                {"id": 51, "method": "project.update", "params": {"project_id": project_id, "name": "   "}}
+            )
+            assert _receive_rpc_response(websocket, 51)["error"]["message"] == "Project name is required"
 
             websocket.send_json({"id": 6, "method": "project.sessions.list", "params": {"project_id": project_id}})
             assert _receive_rpc_response(websocket, 6)["result"]["sessions"][0]["id"] == session_id
@@ -343,6 +350,16 @@ def test_project_http_delete_rejects_active_session_and_app_server_uses_project_
 
             websocket.send_json({"id": 8, "method": "project.agents_md.get", "params": {"project_id": project_id}})
             assert _receive_rpc_response(websocket, 8)["result"]["agents_md"] == {"content": "# Rules\n", "exists": True}
+        protected = client.patch(
+            f"/api/core/sessions/{session_id}",
+            json={"metadata": {"project_id": "forged", "work_root": "E:\\forged", "note": "kept"}},
+        )
+        assert protected.status_code == 200
+        assert protected.json()["metadata"] == {
+            "project_id": project_id,
+            "work_root": str((tmp_path / "workspace").resolve()),
+            "note": "kept",
+        }
         assert client.patch(f"/api/core/sessions/{session_id}", json={"status": "running"}).status_code == 200
         assert client.delete(f"/api/core/projects/{project_id}").status_code == 409
         assert client.patch(f"/api/core/sessions/{session_id}", json={"status": "idle"}).status_code == 200
@@ -351,6 +368,7 @@ def test_project_http_delete_rejects_active_session_and_app_server_uses_project_
             _initialize_websocket(websocket)
             websocket.send_json({"id": 9, "method": "project.delete", "params": {"project_id": project_id}})
             assert _receive_rpc_response(websocket, 9)["result"] == {"deleted": True}
+        assert client.get(f"/api/core/sessions/{session_id}").status_code == 404
 
 
 def _receive_rpc_response(websocket, request_id: int) -> dict:

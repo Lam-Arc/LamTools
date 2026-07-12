@@ -2319,6 +2319,13 @@ async def test_project_operations_create_list_update_get_and_delete(tmp_path):
         assert updated.response["result"]["project"]["config"] == {"defaultMode": "plan"}
         assert updated.response["result"]["project"]["name"] == "Renamed Project"
 
+        rejected_agents_cache = await handle_project_update_operation(
+            request_id=41,
+            params={"project_id": project["id"], "agents_md": "stale cache"},
+            session_factory=session_factory,
+        )
+        assert rejected_agents_cache.response["error"]["message"] == "Use project.agents_md.update for AGENTS.md"
+
         read = await handle_project_get_operation(
             request_id=5,
             params={"project_id": project["id"]},

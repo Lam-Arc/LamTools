@@ -786,7 +786,11 @@ async function handleProjectContextMenu(projectGroupId: string) {
   agentsMdProjectId.value = targetProjectId
   agentsContent.value = ''
   const requestToken = ++agentsRequestToken.value
-  agentsSaveHandler.value = createWriterProjectAgentsSaveHandler(targetProjectId, saveAgentsMdForProject)
+  agentsReadyToken.value = 0
+  agentsSaveHandler.value = createWriterProjectAgentsSaveHandler(
+    targetProjectId,
+    (projectId, content) => saveAgentsMdForProject(projectId, requestToken, content),
+  )
   agentsError.value = ''
   agentsLoading.value = true
   showAgentsMd.value = true
@@ -794,12 +798,17 @@ async function handleProjectContextMenu(projectGroupId: string) {
     const agents = await projectStore.fetchAgentsMd(targetProjectId)
     if (shouldApplyWriterProjectAgents(targetProjectId, requestToken, agentsMdProjectId.value, agentsRequestToken.value)) {
       agentsContent.value = agents.content
+      agentsReadyToken.value = requestToken
     }
   } catch (err) {
     console.error('Failed to load AGENTS.md:', err)
-    agentsError.value = '读取 AGENTS.md 失败'
+    if (shouldApplyWriterProjectAgents(targetProjectId, requestToken, agentsMdProjectId.value, agentsRequestToken.value)) {
+      agentsError.value = '读取 AGENTS.md 失败'
+    }
   } finally {
-    agentsLoading.value = false
+    if (shouldApplyWriterProjectAgents(targetProjectId, requestToken, agentsMdProjectId.value, agentsRequestToken.value)) {
+      agentsLoading.value = false
+    }
   }
 }
 
@@ -807,6 +816,7 @@ const showAgentsMd = ref(false)
 const agentsMdProjectId = ref('')
 const agentsContent = ref('')
 const agentsRequestToken = ref(0)
+const agentsReadyToken = ref(0)
 const agentsLoading = ref(false)
 const agentsError = ref('')
 const agentsSaveHandler = ref<(content: string) => Promise<WriterProjectAgents>>(async () => ({ content: '', exists: false }))
@@ -1662,20 +1672,33 @@ function upsertCreatedProjectSession(
   }
 }
 
-async function saveAgentsMdForProject(projectId: string, content: string): Promise<WriterProjectAgents> {
+async function saveAgentsMdForProject(
+  projectId: string,
+  requestToken: number,
+  content: string,
+): Promise<WriterProjectAgents> {
+  if (!shouldApplyWriterProjectAgents(projectId, requestToken, agentsMdProjectId.value, agentsRequestToken.value)) {
+    throw new Error('AGENTS.md target changed')
+  }
   agentsLoading.value = true
   agentsError.value = ''
   try {
     const saved = await projectStore.saveAgentsMd(projectId, content)
-    if (projectId === agentsMdProjectId.value) agentsContent.value = saved.content
-    showAgentsMd.value = false
+    if (shouldApplyWriterProjectAgents(projectId, requestToken, agentsMdProjectId.value, agentsRequestToken.value)) {
+      agentsContent.value = saved.content
+      showAgentsMd.value = false
+    }
     return saved
   } catch (err) {
     console.error('Failed to save AGENTS.md:', err)
-    agentsError.value = '保存 AGENTS.md 失败'
+    if (shouldApplyWriterProjectAgents(projectId, requestToken, agentsMdProjectId.value, agentsRequestToken.value)) {
+      agentsError.value = '保存 AGENTS.md 失败'
+    }
     throw err
   } finally {
-    agentsLoading.value = false
+    if (shouldApplyWriterProjectAgents(projectId, requestToken, agentsMdProjectId.value, agentsRequestToken.value)) {
+      agentsLoading.value = false
+    }
   }
 }
 
@@ -2040,7 +2063,7 @@ onMounted(async () => {
         <div class="modal-card wide">
           <CoreAgentsEditor
             :content="agentsContent"
-            :loading="agentsLoading"
+            :loading="agentsLoading || agentsReadyToken !== agentsRequestToken"
             :error="agentsError"
             @save="agentsSaveHandler"
             @close="showAgentsMd = false"
