@@ -73,6 +73,8 @@ from .live_protocol import (
     snapshot_notification,
 )
 from .snapshot_store import CoreAppSnapshotProjector, SqlAlchemyThreadSnapshotStore
+from .core_db import CoreAppDb, CoreProject, open_core_app_db
+from .project_store import CoreProjectRecord, CoreProjectStore
 from .turn_acceptance import (
     CoreAppEventSpec,
     TURN_ACCEPT_DEDUPE_METHODS,
@@ -97,6 +99,7 @@ __all__ = [
     "CoreAgentSpec",
     "CoreAppEventHub",
     "CoreAppEventSpec",
+    "CoreAppDb",
     "CoreAppServerClient",
     "CoreApprovalContinuationCoordinator",
     "CliLiveFormatter",
@@ -108,6 +111,9 @@ __all__ = [
     "CoreLiveConnection",
     "CoreLiveConnectionAdapter",
     "CoreLiveOperationOutcome",
+    "CoreProject",
+    "CoreProjectRecord",
+    "CoreProjectStore",
     "CoreLiveMemberHooks",
     "DefaultCoreLiveMemberHooks",
     "PreparedLiveInput",
@@ -159,6 +165,7 @@ __all__ = [
     "latest_active_turn_id",
     "next_dispatchable_queue_item",
     "normalize_operation_name",
+    "open_core_app_db",
     "queue_delete_payload",
     "queue_dispatch_payload",
     "queue_item_payload",

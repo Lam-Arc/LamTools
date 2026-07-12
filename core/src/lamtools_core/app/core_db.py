@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 import json
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import DateTime, Integer, JSON, String, UniqueConstraint, select, update
 from sqlalchemy.exc import IntegrityError
@@ -21,6 +21,9 @@ from .event_store import SqlAlchemyAppEventStore
 from .persistence_host import AppPersistenceHost
 from .snapshot_store import CoreAppSnapshotProjector, SqlAlchemyThreadSnapshotStore
 from .sqlite_write import SQLiteWriteCoordinator, configure_sqlite_engine
+
+if TYPE_CHECKING:
+    from .project_store import CoreProjectStore
 
 
 class CoreDbBase(DeclarativeBase):
@@ -64,6 +67,21 @@ class CoreRuntimeSession(CoreDbBase):
     pending_approval_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     last_event_seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+
+
+class CoreProject(CoreDbBase):
+    __tablename__ = "core_projects"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    work_root: Mapped[str] = mapped_column(String(2048), unique=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.now,
+        onupdate=datetime.now,
+        nullable=False,
+    )
 
 
 class SqlAlchemyRuntimeStateStore:
@@ -174,6 +192,7 @@ class CoreAppDb:
     event_store: SqlAlchemyAppEventStore
     snapshot_store: SqlAlchemyThreadSnapshotStore
     runtime_state_store: SqlAlchemyRuntimeStateStore
+    project_store: CoreProjectStore
     persistence: AppPersistenceHost
 
     async def close(self) -> None:
@@ -193,6 +212,8 @@ async def open_core_app_db(path: Path | str) -> CoreAppDb:
         await conn.run_sync(CoreDbBase.metadata.create_all)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     write_coordinator = SQLiteWriteCoordinator(session_factory)
+    from .project_store import CoreProjectStore
+
     event_store = SqlAlchemyAppEventStore(CoreAppEvent)
     snapshot_store = SqlAlchemyThreadSnapshotStore(CoreThreadSnapshot, projector=CoreAppSnapshotProjector())
     persistence = AppPersistenceHost(
@@ -208,6 +229,7 @@ async def open_core_app_db(path: Path | str) -> CoreAppDb:
         event_store=event_store,
         snapshot_store=snapshot_store,
         runtime_state_store=SqlAlchemyRuntimeStateStore(session_factory, write_coordinator),
+        project_store=CoreProjectStore(session_factory, write_coordinator),
         persistence=persistence,
     )
 
@@ -285,6 +307,7 @@ def _json_safe(value: Any) -> Any:
 __all__ = [
     "CoreAppDb",
     "CoreAppEvent",
+    "CoreProject",
     "CoreRuntimeSession",
     "CoreThreadSnapshot",
     "RuntimeStateConflictError",
