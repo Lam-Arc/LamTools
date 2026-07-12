@@ -163,6 +163,14 @@ async def cmd_project_create(args: argparse.Namespace) -> int:
     return 0
 
 
+async def cmd_project_list(args: argparse.Namespace) -> int:
+    async with AppServerClient(_base_url(args)) as client:
+        await client.connect()
+        projects = await client.list_projects()
+    print(json.dumps({"projects": projects}, ensure_ascii=False, sort_keys=True))
+    return 0
+
+
 async def cmd_list(args: argparse.Namespace) -> int:
     async with AppServerClient(_base_url(args)) as client:
         await client.connect()
@@ -589,6 +597,7 @@ def build_parser() -> argparse.ArgumentParser:
     project_create = project_sub.add_parser("create", help="Create a project")
     project_create.add_argument("--work-root", required=True)
     project_create.set_defaults(func=cmd_project_create)
+    project_sub.add_parser("list", help="List projects").set_defaults(func=cmd_project_list)
     project_pick = project_sub.add_parser("pick-directory", help="Open the local directory picker")
     project_pick.set_defaults(func=cmd_pick_directory)
 

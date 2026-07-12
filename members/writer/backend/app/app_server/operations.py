@@ -518,12 +518,6 @@ async def handle_session_create_operation(
             git_manager=None,
         )
     session = await persistence.write(write)
-    work_root = str(session.get("work_root") or "")
-    if work_root:
-        try:
-            await _git_manager.init_repo(work_root)
-        except Exception:
-            logger.debug("Unexpected error during session Git init at %s", work_root, exc_info=True)
     return WriterOperationOutcome(response=rpc_result(request_id, {"session": session}))
 
 
@@ -570,12 +564,6 @@ async def handle_session_update_operation(
         session = await persistence.write(
             lambda db: update_writer_session(db, session_id, update_data, git_manager=None)
         )
-        work_root = str(session.get("work_root") or "") if "work_root" in update_data else ""
-        if work_root:
-            try:
-                await _git_manager.init_repo(work_root)
-            except Exception:
-                logger.debug("Unexpected error during session Git init at %s", work_root, exc_info=True)
     except (LookupError, ValueError) as exc:
         return WriterOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
     return WriterOperationOutcome(response=rpc_result(request_id, {"session": session}))

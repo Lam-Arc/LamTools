@@ -654,31 +654,6 @@ async def test_session_rollback_does_not_hold_writer_write_lock(monkeypatch, tmp
 
 
 @pytest.mark.asyncio
-async def test_session_create_git_init_does_not_hold_writer_write_lock(monkeypatch, tmp_path):
-    engine = create_writer_engine(f"sqlite+aiosqlite:///{tmp_path / 'session-create-lock.db'}")
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    coordinator = writer_write_coordinator(session_factory)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    await coordinator.run(lambda db: _seed_concurrent_session(db))
-    git = _BlockingGit("init_repo")
-    monkeypatch.setattr(operations_module, "_git_manager", git)
-    task = asyncio.create_task(handle_session_create_operation(
-        request_id=5,
-        params={"title": "Created", "work_root": str(tmp_path / "workspace")},
-        session_factory=session_factory,
-    ))
-    try:
-        await _assert_concurrent_writer_write_completes(coordinator, git, task)
-        assert git.calls["init_repo"] == 1
-    finally:
-        git.release.set()
-        if not task.done():
-            await task
-        await engine.dispose()
-
-
-@pytest.mark.asyncio
 async def test_waiting_decision_is_core_owned(tmp_path):
     del tmp_path
     resolved = resolve_waiting_decision("guide", "continue safely")

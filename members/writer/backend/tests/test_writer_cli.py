@@ -85,6 +85,14 @@ def test_parser_accepts_project_pick_directory():
     assert args.project_command == "pick-directory"
 
 
+def test_parser_accepts_project_list():
+    parser = build_parser()
+    args = parser.parse_args(["project", "list"])
+
+    assert args.command == "project"
+    assert args.project_command == "list"
+
+
 def test_parser_accepts_plugin_and_hook_commands():
     parser = build_parser()
 

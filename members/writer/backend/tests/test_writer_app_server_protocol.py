@@ -1793,6 +1793,7 @@ async def test_session_create_operation_creates_project_backed_session(tmp_path)
         assert row["mode"] == "PLAN"
         assert row["project_id"]
         assert work_root.is_dir()
+        assert not (work_root / ".git").exists()
     finally:
         await engine.dispose()
 

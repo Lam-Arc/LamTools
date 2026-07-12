@@ -65,6 +65,11 @@ class AppServerClient(CoreAppServerClient):
         project = response.get("project")
         return project if isinstance(project, dict) else {}
 
+    async def list_projects(self) -> list[dict[str, Any]]:
+        response = await self.request("project.list", {})
+        projects = response.get("projects")
+        return projects if isinstance(projects, list) else []
+
     async def pick_project_directory(self) -> str:
         response = await self.request("project.directory.pick", {})
         return str(response.get("path") or "")
