@@ -5,43 +5,29 @@
     </div>
 
     <section
-      v-for="group in projectGroups"
-      :key="group.id"
-      class="project-block"
-      :class="{ active: isGroupActive(group) }"
+      v-for="section in projectSections"
+      :key="section.id"
+      class="sidebar-section"
+      :data-sidebar-section="section.id"
     >
+      <h2 class="sidebar-section-title">{{ section.label }}</h2>
+      <article
+        v-for="group in section.groups"
+        :key="group.id"
+        class="project-block"
+        :class="{ active: isGroupActive(group) }"
+      >
       <div class="project-top">
         <div class="project-btns">
-          <!-- Per-project new session -->
           <button
-            v-if="allowProjectNewSession && group.canManage !== false"
-            class="project-action add"
+            class="project-action menu-trigger"
             type="button"
-            :title="`在 ${group.name} 中新建会话`"
-            :aria-label="`在 ${group.name} 中新建会话`"
-            :aria-busy="isProjectBusy(group.id)"
-            :data-project-new="group.id"
-            :disabled="isProjectBusy(group.id)"
-            @click.stop="emit('new-session', group.id)"
-          >{{ isProjectBusy(group.id) ? '…' : '+' }}</button>
-          <!-- Fold / expand -->
-          <button
-            v-if="group.sessions.length > projectSessionLimit && projectSessionLimit > 0"
-            class="project-action fold"
-            :title="groupExpanded[group.id] ? '折叠会话列表' : '展开全部会话'"
-            :aria-label="groupExpanded[group.id] ? '折叠会话列表' : '展开全部会话'"
-            @click.stop="toggleGroupExpand(group.id)"
-          >
-            {{ groupExpanded[group.id] ? '−' : '…' }}
-          </button>
-          <!-- Delete project -->
-          <button
-            v-if="allowProjectDelete && group.canManage !== false"
-            class="project-action remove"
-            title="删除项目"
-            :aria-label="`删除 ${group.name}`"
-            @click.stop="emit('delete-project', group.id)"
-          >×</button>
+            title="项目操作"
+            :aria-label="`${group.name} 项目操作`"
+            :aria-expanded="openProjectMenuId === group.id"
+            :data-project-menu-trigger="group.id"
+            @click.stop="toggleProjectMenu(group.id)"
+          >•••</button>
         </div>
         <button
           type="button"
@@ -93,21 +79,37 @@
           <span class="conversation-actions">
             <span
               v-if="s.status"
-              class="status"
+              class="status conversation-status"
               :class="statusClass(s.status)"
               :title="statusLabel(s.status)"
               :aria-label="`状态：${statusLabel(s.status)}`"
               role="img"
             ></span>
-            <button
-              v-if="allowSessionDelete"
-              class="conversation-delete"
-              type="button"
-              title="删除会话"
-              :aria-label="`删除会话 ${s.title || s.id.slice(0, 8)}`"
-              :data-session-delete="s.id"
-              @click.stop="emit('delete-session', s.id)"
-            >×</button>
+            <span class="conversation-hover-actions">
+              <button
+                class="conversation-action pin"
+                :class="{ active: isSessionPinned(s.id) }"
+                type="button"
+                :title="isSessionPinned(s.id) ? '取消置顶' : '置顶会话'"
+                :aria-label="`${isSessionPinned(s.id) ? '取消置顶' : '置顶'}会话 ${s.title || s.id.slice(0, 8)}`"
+                :aria-pressed="isSessionPinned(s.id)"
+                :data-session-pin="s.id"
+                @click.stop="toggleSessionPin(s.id)"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 4 6 6-3 1-3 4 1 3-1 1-4-4-5 5-1-1 5-5-4-4 1-1 3 1 4-3 1-3Z" /></svg>
+              </button>
+              <button
+                v-if="allowSessionDelete"
+                class="conversation-action delete"
+                type="button"
+                title="删除会话"
+                :aria-label="`删除会话 ${s.title || s.id.slice(0, 8)}`"
+                :data-session-delete="s.id"
+                @click.stop="emit('delete-session', s.id)"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M9 7V4h6v3m2 0-1 13H8L7 7m3 4v5m4-5v5" /></svg>
+              </button>
+            </span>
           </span>
         </div>
         <button
@@ -119,12 +121,50 @@
           还有 {{ hiddenCount(group) }} 个会话
         </button>
       </div>
+      <div
+        v-if="openProjectMenuId === group.id"
+        class="project-menu"
+        role="menu"
+        :aria-label="`${group.name} 项目操作`"
+        :data-project-menu="group.id"
+        @click.stop
+        @keydown.escape.prevent="closeProjectMenu"
+      >
+        <button
+          v-if="allowProjectNewSession && group.canManage !== false"
+          role="menuitem"
+          :disabled="isProjectBusy(group.id)"
+          :data-project-new="group.id"
+          @click="runProjectAction(group.id, 'new-session')"
+        >{{ isProjectBusy(group.id) ? '正在创建…' : '新建会话' }}</button>
+        <button role="menuitem" :data-project-pin="group.id" @click="runProjectAction(group.id, 'pin')">
+          {{ isPinned(group.id) ? '取消置顶' : '置顶项目' }}
+        </button>
+        <button
+          v-if="group.sessions.length > projectSessionLimit && projectSessionLimit > 0"
+          role="menuitem"
+          @click="runProjectAction(group.id, 'fold')"
+        >{{ groupExpanded[group.id] ? '收起会话' : '展开全部会话' }}</button>
+        <button
+          v-if="allowProjectContextMenu && group.canManage !== false"
+          role="menuitem"
+          @click="runProjectAction(group.id, 'settings')"
+        >项目设置</button>
+        <span v-if="allowProjectDelete && group.canManage !== false" class="project-menu-separator"></span>
+        <button
+          v-if="allowProjectDelete && group.canManage !== false"
+          class="danger"
+          role="menuitem"
+          @click="runProjectAction(group.id, 'delete')"
+        >删除项目</button>
+      </div>
+      </article>
     </section>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, nextTick } from 'vue'
+import { computed, ref, reactive, nextTick, onBeforeUnmount, onMounted } from 'vue'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -170,6 +210,8 @@ const props = withDefaults(
     allowProjectContextMenu?: boolean
     /** Project ids with an in-flight new-session request. */
     busyProjectIds?: readonly string[]
+    /** localStorage key used to persist pinned projects. Empty disables persistence. */
+    pinStorageKey?: string
   }>(),
   {
     projectSessionLimit: 0,
@@ -180,6 +222,7 @@ const props = withDefaults(
     allowProjectClick: false,
     allowProjectContextMenu: false,
     busyProjectIds: () => [],
+    pinStorageKey: '',
   },
 )
 
@@ -197,6 +240,126 @@ const emit = defineEmits<{
 // Group expand/collapse
 // ---------------------------------------------------------------------------
 const groupExpanded = reactive<Record<string, boolean>>({})
+const pinnedProjectIds = ref<string[]>(loadPinnedProjectIds())
+const pinnedSessionIds = ref<string[]>(loadPinnedSessionIds())
+const openProjectMenuId = ref<string | null>(null)
+const RECENT_WINDOW_MS = 30 * 24 * 60 * 60 * 1000
+
+const projectSections = computed(() => {
+  const sorted = [...props.projectGroups].sort(compareProjectActivityDesc)
+  const pinned = sorted.filter((group) => isPinned(group.id))
+  const unpinned = sorted.filter((group) => !isPinned(group.id))
+  const recentThreshold = Date.now() - RECENT_WINDOW_MS
+  const recent = unpinned.filter((group) => projectActivityTime(group) >= recentThreshold)
+  const earlier = unpinned.filter((group) => projectActivityTime(group) < recentThreshold)
+
+  return [
+    { id: 'pinned', label: 'PINNED', groups: pinned },
+    { id: 'recent', label: 'RECENT', groups: recent },
+    { id: 'earlier', label: 'EARLIER', groups: earlier },
+  ].filter((section) => section.groups.length > 0)
+})
+
+function projectActivityTime(group: ProjectGroup): number {
+  return group.sessions.reduce((latest, session) => {
+    const updated = Date.parse(session.updatedAt || '')
+    const created = Date.parse(session.createdAt || '')
+    const timestamp = Number.isFinite(updated) ? updated : Number.isFinite(created) ? created : 0
+    return Math.max(latest, timestamp)
+  }, 0)
+}
+
+function compareProjectActivityDesc(a: ProjectGroup, b: ProjectGroup): number {
+  const activityDifference = projectActivityTime(b) - projectActivityTime(a)
+  return activityDifference || a.name.localeCompare(b.name)
+}
+
+function loadPinnedProjectIds(): string[] {
+  if (!props.pinStorageKey || typeof localStorage === 'undefined') return []
+  try {
+    const stored = JSON.parse(localStorage.getItem(props.pinStorageKey) || '[]')
+    return Array.isArray(stored) ? stored.filter((id): id is string => typeof id === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+function isPinned(groupId: string): boolean {
+  return pinnedProjectIds.value.includes(groupId)
+}
+
+function toggleProjectPin(groupId: string) {
+  pinnedProjectIds.value = isPinned(groupId)
+    ? pinnedProjectIds.value.filter((id) => id !== groupId)
+    : [...pinnedProjectIds.value, groupId]
+  if (!props.pinStorageKey || typeof localStorage === 'undefined') return
+  try {
+    localStorage.setItem(props.pinStorageKey, JSON.stringify(pinnedProjectIds.value))
+  } catch {
+    // Pinning still works for this session when browser storage is unavailable.
+  }
+}
+
+function loadPinnedSessionIds(): string[] {
+  if (!props.pinStorageKey || typeof localStorage === 'undefined') return []
+  try {
+    const stored = JSON.parse(localStorage.getItem(`${props.pinStorageKey}.sessions`) || '[]')
+    return Array.isArray(stored) ? stored.filter((id): id is string => typeof id === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+function isSessionPinned(sessionId: string): boolean {
+  return pinnedSessionIds.value.includes(sessionId)
+}
+
+function toggleSessionPin(sessionId: string) {
+  pinnedSessionIds.value = isSessionPinned(sessionId)
+    ? pinnedSessionIds.value.filter((id) => id !== sessionId)
+    : [...pinnedSessionIds.value, sessionId]
+  if (!props.pinStorageKey || typeof localStorage === 'undefined') return
+  try {
+    localStorage.setItem(`${props.pinStorageKey}.sessions`, JSON.stringify(pinnedSessionIds.value))
+  } catch {
+    // Session pinning remains available until reload.
+  }
+}
+
+function toggleProjectMenu(groupId: string) {
+  openProjectMenuId.value = openProjectMenuId.value === groupId ? null : groupId
+}
+
+function closeProjectMenu() {
+  openProjectMenuId.value = null
+}
+
+function handleDocumentPointerDown() {
+  closeProjectMenu()
+}
+
+function handleDocumentKeyDown(event: KeyboardEvent) {
+  if (event.key === 'Escape') closeProjectMenu()
+}
+
+onMounted(() => {
+  document.addEventListener('pointerdown', handleDocumentPointerDown)
+  document.addEventListener('keydown', handleDocumentKeyDown)
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('pointerdown', handleDocumentPointerDown)
+  document.removeEventListener('keydown', handleDocumentKeyDown)
+})
+
+function runProjectAction(groupId: string, action: 'new-session' | 'pin' | 'fold' | 'settings' | 'delete') {
+  closeProjectMenu()
+  if (action === 'new-session') emit('new-session', groupId)
+  if (action === 'pin') toggleProjectPin(groupId)
+  if (action === 'fold') toggleGroupExpand(groupId)
+  if (action === 'settings') emit('project-context-menu', groupId)
+  if (action === 'delete') emit('delete-project', groupId)
+}
 
 function toggleGroupExpand(groupId: string) {
   groupExpanded[groupId] = !groupExpanded[groupId]
@@ -211,10 +374,9 @@ function selectProject(projectId: string, canManage: boolean) {
 }
 
 function visibleSessions(group: ProjectGroup): SessionItem[] {
-  if (props.projectSessionLimit <= 0 || groupExpanded[group.id]) {
-    return group.sessions
-  }
-  return group.sessions.slice(0, props.projectSessionLimit)
+  const ordered = [...group.sessions].sort((a, b) => Number(isSessionPinned(b.id)) - Number(isSessionPinned(a.id)))
+  if (props.projectSessionLimit <= 0 || groupExpanded[group.id]) return ordered
+  return ordered.slice(0, props.projectSessionLimit)
 }
 
 function sessionOrdinal(group: ProjectGroup, session: SessionItem): number {

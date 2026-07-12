@@ -124,6 +124,7 @@ describe('SessionSidebar compatibility groups', () => {
     })
 
     const entry = wrapper.get('[data-project-entry="project-1"]')
+    await wrapper.get('[data-project-menu-trigger="project-1"]').trigger('click')
     const create = wrapper.get('[data-project-new="project-1"]')
     expect(entry.element.tagName).toBe('BUTTON')
     expect(create.attributes('disabled')).toBeDefined()

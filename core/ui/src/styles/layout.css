@@ -131,15 +131,15 @@
 
 .drawer-head {
   flex: 0 0 auto;
-  min-height: 52px;
-  padding: 13px calc(14px + var(--left-overlap)) 13px 14px;
-  border-bottom: 1px solid rgba(255,255,255,.08);
+  min-height: 66px;
+  padding: 18px calc(16px + var(--left-overlap)) 12px 16px;
+  border-bottom: 0;
   display: flex;
   align-items: center;
   gap: 12px;
 }
 .drawer-right .drawer-head { padding: 13px 14px; }
-.drawer-head strong { flex: 1; font-size: 15px; line-height: 1.25; }
+.drawer-head strong { flex: 1; font-size: 20px; line-height: 1.2; letter-spacing: -.02em; }
 
 .pin-plain {
   width: 28px; height: 28px;
@@ -157,7 +157,7 @@
   min-height: 0;
   max-height: none;
   overflow: auto;
-  padding: 11px calc(11px + var(--left-overlap)) 16px 11px;
+  padding: 8px calc(12px + var(--left-overlap)) 16px 12px;
   scrollbar-width: none;
   -ms-overflow-style: none;
 }
@@ -1228,16 +1228,28 @@
 /* =========================================================================
    Sidebar content — project blocks, sessions
    ========================================================================= */
+.sidebar-section + .sidebar-section {
+  margin-top: 24px;
+}
+.sidebar-section-title {
+  margin: 0 8px 9px;
+  color: color-mix(in srgb, var(--theme-backdrop-text) 54%, transparent);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: .055em;
+}
 .project-block {
-  border-radius: 12px;
-  padding: 10px 9px 9px;
-  margin-bottom: 8px;
-  background: color-mix(in srgb, var(--theme-backdrop-text) 4%, transparent);
-  border: 1px solid color-mix(in srgb, var(--theme-backdrop-text) 7%, transparent);
+  position: relative;
+  border-radius: 10px;
+  padding: 8px 6px 7px;
+  margin-bottom: 5px;
+  background: transparent;
+  border: 0;
 }
 .project-block.active {
-  background: color-mix(in srgb, var(--theme-backdrop-text) 7%, transparent);
-  outline: 1px solid color-mix(in srgb, var(--theme-backdrop-text) 15%, transparent);
+  background: transparent;
+  outline: 0;
 }
 .project-top {
   display: grid;
@@ -1258,7 +1270,7 @@
   text-overflow: ellipsis;
 }
 .project-name strong {
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1.22;
   color: var(--theme-backdrop-text);
   white-space: normal;
@@ -1277,12 +1289,13 @@
   align-items: flex-start;
   justify-content: flex-end;
   gap: 3px;
-  opacity: .54;
+  opacity: .62;
   transition: opacity .16s ease;
   order: 2;
 }
 .project-block:hover .project-btns,
-.project-block.active .project-btns { opacity: 1; }
+.project-block.active .project-btns,
+.project-btns:focus-within { opacity: 1; }
 
 .project-action {
   width: 24px; height: 24px;
@@ -1298,17 +1311,57 @@
   background: color-mix(in srgb, var(--theme-backdrop-text) 9%, transparent);
   color: var(--theme-backdrop-text);
 }
-.project-action.add:hover { color: var(--green); }
-.project-action.fold { font-size: 13px; color: color-mix(in srgb, var(--theme-backdrop-text) 62%, transparent); }
-.project-action.fold:hover { color: var(--theme-backdrop-text); }
-.project-action.remove { font-size: 16px; color: color-mix(in srgb, var(--theme-backdrop-text) 52%, transparent); }
-.project-action.remove:hover {
-  background: color-mix(in srgb, var(--red) 14%, transparent);
+.project-action:focus-visible {
+  opacity: 1;
+  outline: 2px solid color-mix(in srgb, var(--blue) 75%, transparent);
+  outline-offset: 1px;
+}
+.project-action.menu-trigger {
+  width: 28px;
+  font-size: 11px;
+  letter-spacing: 1px;
+}
+.project-menu {
+  position: absolute;
+  z-index: var(--z-dropdown, 60);
+  top: 36px;
+  right: 4px;
+  width: 154px;
+  padding: 5px;
+  border: 1px solid color-mix(in srgb, var(--theme-backdrop-text) 12%, transparent);
+  border-radius: 10px;
+  background: var(--theme-backdrop-background);
+  box-shadow: 0 6px 8px rgba(0,0,0,.18);
+}
+.project-menu button {
+  width: 100%;
+  min-height: 31px;
+  padding: 0 9px;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--theme-backdrop-text);
+  font-size: 12px;
+  text-align: left;
+}
+.project-menu button:hover,
+.project-menu button:focus-visible {
+  background: color-mix(in srgb, var(--theme-backdrop-text) 8%, transparent);
+  outline: none;
+}
+.project-menu button:disabled {
+  opacity: .45;
+}
+.project-menu button.danger {
   color: var(--red);
 }
-
+.project-menu-separator {
+  display: block;
+  height: 1px;
+  margin: 4px 5px;
+  background: color-mix(in srgb, var(--theme-backdrop-text) 10%, transparent);
+}
 .conversation-list {
-  margin-top: 8px;
+  margin-top: 5px;
   display: grid;
   gap: 2px;
 }
@@ -1317,7 +1370,7 @@
   border: 0;
   border-radius: 10px;
   background: transparent;
-  padding: 7px 8px;
+  padding: 6px 8px;
   display: grid;
   grid-template-columns: 20px minmax(0, 1fr) auto;
   gap: 7px;
@@ -1359,28 +1412,69 @@
   color: color-mix(in srgb, var(--theme-backdrop-text) 62%, transparent); font-size: 11px;
 }
 .conversation-actions {
+  position: relative;
+  min-width: 42px;
+  min-height: 22px;
   display: inline-flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 6px;
 }
-.conversation-delete {
-  width: 20px;
-  height: 20px;
+.conversation-hover-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .14s ease;
+}
+.conversation-status {
+  position: absolute;
+  right: 7px;
+  transition: opacity .12s ease;
+}
+.conversation:hover .conversation-status,
+.conversation:focus-within .conversation-status {
+  opacity: 0;
+}
+.conversation:hover .conversation-hover-actions,
+.conversation:focus-within .conversation-hover-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+.conversation-action {
+  width: 21px;
+  height: 21px;
   border: 0;
-  border-radius: 7px;
+  border-radius: 6px;
   background: transparent;
   color: color-mix(in srgb, var(--theme-backdrop-text) 52%, transparent);
-  font-size: 15px;
-  line-height: 1;
   display: inline-grid;
   place-items: center;
   cursor: pointer;
 }
-.conversation-delete:hover,
-.conversation-delete:focus-visible {
+.conversation-action svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.conversation-action:hover,
+.conversation-action:focus-visible {
+  background: color-mix(in srgb, var(--theme-backdrop-text) 9%, transparent);
+  color: var(--theme-backdrop-text);
+  outline: none;
+}
+.conversation-action.pin.active {
+  color: var(--orange);
+}
+.conversation-action.delete:hover,
+.conversation-action.delete:focus-visible {
   background: color-mix(in srgb, var(--red) 14%, transparent);
   color: var(--red);
-  outline: none;
 }
 
 /* Session status indicators */

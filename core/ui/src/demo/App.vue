@@ -32,6 +32,7 @@
   <WorkspaceShell
     v-else
     product-name="LamTools Core"
+    sidebar-title="Core"
     :storage-key="settingsStorageKey"
     :density="density"
     :theme="theme"
@@ -62,6 +63,8 @@
     <template #sidebar-body>
       <SessionSidebar
         :project-groups="projectGroups"
+        :project-session-limit="8"
+        pin-storage-key="lamtools-core.sidebar.pinned-projects"
         :active-session-id="activeSessionId || undefined"
         :busy-project-ids="busyProjectIds"
         :allow-project-delete="true"

@@ -42,7 +42,7 @@
         >
           {{ leftPinned ? '◆' : '◇' }}
         </button>
-        <strong>{{ productName }}</strong>
+        <strong>{{ sidebarTitle || productName }}</strong>
         <slot name="sidebar-header-action">
           <button class="icon-btn" title="新建" aria-label="新建会话" @click="$emit('new-session')">+</button>
         </slot>
@@ -153,6 +153,7 @@ import type { ThemeData } from '../composables/useShellLayout'
 const props = withDefaults(
   defineProps<{
     productName: string
+    sidebarTitle?: string
     storageKey?: string
     density?: 'compact' | 'standard' | 'loose'
     contentWidth?: number
@@ -171,6 +172,7 @@ const props = withDefaults(
   }>(),
   {
     storageKey: 'lamtools.ui',
+    sidebarTitle: '',
     density: 'standard',
     contentWidth: 780,
     rightPanelTitle: '运行状态',

@@ -1758,6 +1758,7 @@ onMounted(async () => {
 <template>
   <WorkspaceShell
     product-name="LamWriter"
+    sidebar-title="Writer"
     storage-key="lamwriter.ui"
     density="standard"
     right-panel-title="运行状态"
@@ -1789,6 +1790,7 @@ onMounted(async () => {
     <template #sidebar-body>
       <SessionSidebar
         :project-groups="projectGroups"
+        pin-storage-key="lamwriter.sidebar.pinned-projects"
         :active-session-id="activeSessionId ?? undefined"
         :project-session-limit="8"
         :allow-project-delete="true"
