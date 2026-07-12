@@ -65,6 +65,7 @@ from app.services.config_write import (
 )
 from app.services.project_management import (
     create_writer_project_response,
+    create_writer_project_session,
     delete_writer_project,
     get_writer_project_response,
     list_project_session_summaries,
@@ -454,6 +455,9 @@ def build_writer_core_operation_adapter_catalog(
         "project.delete": lambda request: adapt(
             request, handle_project_delete_operation, session_factory=session_factory,
         ),
+        "project.sessions.create": lambda request: adapt(
+            request, handle_project_session_create_operation, session_factory=session_factory,
+        ),
         "project.agents_md.get": lambda request: adapt(
             request, handle_project_agents_md_get_operation, session_factory=session_factory,
         ),
@@ -499,6 +503,12 @@ async def handle_session_create_operation(
     params: dict[str, Any],
     session_factory: Any = async_session,
 ) -> WriterOperationOutcome:
+    if params.get("project_id") or params.get("projectId"):
+        return WriterOperationOutcome(response=rpc_error(
+            request_id,
+            code=INVALID_REQUEST,
+            message="Use project.sessions.create for project-owned sessions",
+        ))
     persistence = writer_persistence_host(session_factory)
     async def write(db):
         return await create_writer_session(
@@ -506,11 +516,6 @@ async def handle_session_create_operation(
             title=str(params.get("title") or "New Session"),
             work_root=str(params.get("work_root") or params.get("workRoot") or ""),
             mode=str(params.get("mode") or "EXECUTE"),
-            project_id=(
-                str(params.get("project_id") or params.get("projectId"))
-                if params.get("project_id") or params.get("projectId")
-                else None
-            ),
         )
     session = await persistence.write(write)
     return WriterOperationOutcome(response=rpc_result(request_id, {"session": session}))
@@ -1068,6 +1073,28 @@ async def handle_project_delete_operation(
     except LookupError as exc:
         return WriterOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
     return WriterOperationOutcome(response=rpc_result(request_id, {"deleted": True}))
+
+
+async def handle_project_session_create_operation(
+    *,
+    request_id: int | str | None,
+    params: dict[str, Any],
+    session_factory: Any = async_session,
+) -> WriterOperationOutcome:
+    project_id = str(params.get("project_id") or params.get("projectId") or params.get("id") or "")
+    if not project_id:
+        return WriterOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message="project_id is required"))
+    try:
+        persistence = writer_persistence_host(session_factory)
+        session = await persistence.write(lambda db: create_writer_project_session(
+            db,
+            project_id,
+            title=str(params.get("title") or "New Session"),
+            mode=str(params.get("mode") or "EXECUTE"),
+        ))
+    except LookupError as exc:
+        return WriterOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
+    return WriterOperationOutcome(response=rpc_result(request_id, {"session": session}))
 
 
 async def handle_project_agents_md_get_operation(
@@ -1874,6 +1901,7 @@ __all__ = [
     "handle_config_subagent_upsert_operation",
     "handle_plugin_catalog_operation",
     "handle_project_create_operation",
+    "handle_project_session_create_operation",
     "handle_project_agents_md_get_operation",
     "handle_project_agents_md_update_operation",
     "handle_project_delete_operation",

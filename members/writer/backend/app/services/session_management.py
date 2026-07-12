@@ -8,7 +8,6 @@ from app.models.project import WriterProject
 from app.models.session import WriterSession
 from app.routers.path_utils import ensure_work_root
 from app.services.session_deletion import delete_writer_session_records
-from app.services.project_management import ensure_writer_project
 from app.services.session_projection import session_response_projected
 
 def normalize_session_mode(mode: str | None) -> str:
@@ -37,6 +36,8 @@ async def create_writer_session(
         if not normalized_root:
             normalized_root = ensure_work_root(project.work_root)
     elif normalized_root:
+        from app.services.project_management import ensure_writer_project
+
         project = await ensure_writer_project(db, work_root=normalized_root)
         await db.flush()
         effective_project_id = project.id

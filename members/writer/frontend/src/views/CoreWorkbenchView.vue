@@ -32,14 +32,13 @@ import {
   useCoreQueuedInputController,
   useCoreWorkbenchController,
   usePendingAttachments,
+  buildCoreProjectGroups,
   type CoreAttachment,
   type CoreInputItem,
   type CoreMessage,
   type CoreQueuedInput,
   type CoreWorkbenchApi,
   type CoreSessionListItem,
-  type ProjectGroup,
-  type SessionItem,
 } from '@lamtools/ui'
 import { useProjectStore } from '@/stores/project'
 import { useSessionStore } from '@/stores/session'
@@ -48,7 +47,12 @@ import { useWriterAppServerStore } from '@/appServer/store'
 import { selectLatestTurnStatus } from '@/appServer/selectors'
 import { workbenchSessionRouteQuery, type WorkbenchRouteQuery } from '@/utils/workbenchRoute'
 import { pickProjectDirectory } from '@/lib/project-directory-picker'
-import { createWriterProjectWorkspace, saveWriterProjectAgents } from '@/lib/project-workspace'
+import { createWriterProjectWorkspace } from '@/lib/project-workspace'
+import {
+  createWriterProjectAgentsSaveHandler,
+  shouldApplyWriterProjectAgents,
+  type WriterProjectAgents,
+} from '@/lib/project-agents-editor'
 import {
   listCoreSessions,
   createCoreSession,
@@ -471,210 +475,27 @@ function buildSystemMessages(): CoreMessage[] {
   return []
 }
 
-// --- Project groups (real grouping from projectStore + sessionStore) ---
-function projectGroupKey(p: { work_root: string; id: string }): string {
-  return p.work_root || p.id
-}
-
-function projectGroupIdFromKey(key: string): string {
-  return `project:${key}`
-}
-
-function orphanGroupIdFromKey(key: string): string {
-  return `orphan:${key}`
-}
-
-function rawProjectGroupKeyFromId(projectGroupId: string): string {
-  return projectGroupId.startsWith('project:') ? projectGroupId.slice('project:'.length) : projectGroupId
-}
-
-interface RawProjectGroup {
-  key: string
-  primary: { id: string; name: string; work_root: string; updated_at: string }
-  projects: { id: string; name: string; work_root: string; updated_at: string }[]
-  sessions: Session[]
-}
-
-interface SortableProjectGroup {
-  group: ProjectGroup
-  sortAt: string
-}
-
-const projectGroups = computed<ProjectGroup[]>(() => {
-  const coreById = coreSessionById.value
-  const groupedSessionIds = new Set<string>()
-  // If no projects yet, show empty state — user must create a project first
-  const rawGroups = new Map<string, RawProjectGroup>()
-  for (const project of projectStore.projects) {
-    const key = projectGroupKey(project as unknown as { work_root: string; id: string })
-    const existing = rawGroups.get(key)
-    if (existing) {
-      existing.projects.push({
-        id: project.id,
-        name: project.name,
-        work_root: project.work_root,
-        updated_at: project.updated_at,
-      })
-    } else {
-      rawGroups.set(key, {
-        key,
-        primary: {
-          id: project.id,
-          name: project.name,
-          work_root: project.work_root,
-          updated_at: project.updated_at,
-        },
-        projects: [
-          {
-            id: project.id,
-            name: project.name,
-            work_root: project.work_root,
-            updated_at: project.updated_at,
-          },
-        ],
-        sessions: [],
-      })
-    }
-  }
-
-  for (const group of rawGroups.values()) {
-    group.projects.sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at))
-    group.primary = group.projects[0]
-    group.sessions = group.projects
-      .flatMap((p) => sessionStore.sessionsByProject.get(p.id) || [])
-      .sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at))
-    for (const session of group.sessions) groupedSessionIds.add(session.id)
-  }
-
-  const groupedProjects: SortableProjectGroup[] = Array.from(rawGroups.values())
-    .sort((a, b) => Date.parse(b.primary.updated_at) - Date.parse(a.primary.updated_at))
-    .map((g) => {
-      const latestSessionAt = g.sessions[0]?.updated_at || ''
-      return {
-        group: {
-          id: projectGroupIdFromKey(g.key),
-          name: projectDisplayName(g.primary),
-          workRoot: g.primary.work_root,
-          sessions: g.sessions.map(toSessionItem),
-        },
-        sortAt: latestTimestamp(g.primary.updated_at, latestSessionAt),
-      }
-    })
-
-  const orphanGroups = sessions.value
-    .filter((session) => !groupedSessionIds.has(session.id))
-    .reduce((groups, session) => {
-      const workRoot = coreSessionWorkRoot(session)
-      const key = workRoot || `session:${session.id}`
-      const group = groups.get(key) || {
-        id: orphanGroupIdFromKey(key),
-        name: workRoot ? projectDisplayName({ name: '', work_root: workRoot }) : '未归档会话',
-        workRoot,
-        sessions: [] as SessionItem[],
-      }
-      group.sessions.push(toCoreSessionItem(coreById.get(session.id) || session))
-      groups.set(key, group)
-      return groups
-    }, new Map<string, ProjectGroup>())
-
-  return [
-    ...Array.from(orphanGroups.values()).map((group) => ({
-      group,
-      sortAt: latestTimestamp(...group.sessions.map((session) => session.updatedAt || session.createdAt || '')),
-    })),
-    ...groupedProjects,
-  ]
-    .sort((a, b) => timestampSortValue(b.sortAt) - timestampSortValue(a.sortAt))
-    .map((item) => item.group)
-})
-
-const coreSessionById = computed(() => {
-  const map = new Map<string, CoreSessionListItem>()
-  for (const session of sessions.value) map.set(session.id, session)
-  return map
-})
-
-function projectDisplayName(p: { name: string; work_root: string }): string {
-  return p.name || p.work_root.split(/[/\\]/).filter(Boolean).pop() || '未命名项目'
-}
-
-function latestTimestamp(...values: string[]): string {
-  let latest = ''
-  let latestTime = Number.NEGATIVE_INFINITY
-  for (const value of values) {
-    const time = Date.parse(value)
-    if (Number.isFinite(time) && time > latestTime) {
-      latest = value
-      latestTime = time
-    }
-  }
-  return latest
-}
-
-function timestampSortValue(value: string): number {
-  const time = Date.parse(value)
-  return Number.isFinite(time) ? time : 0
-}
-
-function toSessionItem(s: Session): SessionItem {
-  const core = coreSessionById.value.get(s.id)
-  return {
-    id: s.id,
-    title: s.title || `Session ${s.id.slice(0, 8)}`,
-    status: normalizeCoreSessionStatus(core?.status || s.status || 'idle'),
-    createdAt: s.created_at,
-    updatedAt: core?.updatedAt || s.updated_at,
-    metadata: { meta: `${s.phase || '?'} / ${s.mode || '?'}` },
-  }
-}
-
-function toCoreSessionItem(s: CoreSessionListItem): SessionItem {
-  return {
-    id: s.id,
-    title: s.title || `Session ${s.id.slice(0, 8)}`,
-    status: normalizeCoreSessionStatus(s.status || 'idle'),
-    createdAt: s.createdAt,
-    updatedAt: s.updatedAt,
-    metadata: s.metadata,
-  }
-}
+const projectGroups = computed(() => buildCoreProjectGroups(
+  projectStore.projects.map((project) => ({
+    id: project.id,
+    name: project.name,
+    workRoot: project.work_root,
+    createdAt: project.created_at,
+    updatedAt: project.updated_at,
+  })),
+  sessions.value,
+))
 
 // --- Actions ---
 async function handleNewSession(projectGroupId: string) {
   const group = projectGroups.value.find((g) => g.id === projectGroupId)
-  if (!group) {
-    await newSession()
-    return
-  }
-
-  const rawProjectGroupKey = rawProjectGroupKeyFromId(projectGroupId)
-  const rawProject = projectStore.projects.find(
-    (p) => projectGroupKey(p as unknown as { work_root: string; id: string }) === rawProjectGroupKey,
-  )
+  if (!group?.canManage) return
+  const project = projectStore.projects.find((item) => item.id === projectGroupId)
+  if (!project) return
 
   try {
-    const session = await createCoreSession(
-      'New Session',
-      group.workRoot || '',
-      rawProject?.id || null,
-    )
-    sessions.value.unshift(session)
-
-    // Also push to sessionStore so the sidebar updates immediately
-    const now = new Date().toISOString()
-    sessionStore.sessions.unshift({
-      id: session.id,
-      title: session.title,
-      work_root: group.workRoot || '',
-      branch: null,
-      phase: 'idle',
-      mode: 'EXECUTE',
-      status: normalizeCoreSessionStatus(session.status || 'idle'),
-      project_id: rawProject?.id || null,
-      created_at: now,
-      updated_at: now,
-    })
-
+    const session = await projectStore.createProjectSession(project.id)
+    upsertCreatedProjectSession(project, session)
     await selectSession(session.id)
   } catch (err) {
     console.error('Failed to create session:', err)
@@ -933,19 +754,14 @@ function currentSessionWorkRoot(): string {
 
 async function handleDeleteProject(projectGroupId: string) {
   const group = projectGroups.value.find((item) => item.id === projectGroupId)
-  const rawProjectGroupKey = rawProjectGroupKeyFromId(projectGroupId)
-  const rawGroup = projectStore.projects.find(
-    (p) => projectGroupKey(p as unknown as { work_root: string; id: string }) === rawProjectGroupKey,
-  )
-  if (!rawGroup) {
-    await handleDeleteOrphanProjectGroup(projectGroupId)
-    return
-  }
-  const confirmed = window.confirm(`确定删除项目「${rawGroup.name || rawGroup.work_root}」？此操作不可撤销。`)
+  if (!group?.canManage) return
+  const project = projectStore.projects.find((item) => item.id === projectGroupId)
+  if (!project) return
+  const confirmed = window.confirm(`确定删除项目「${project.name || project.work_root}」？此操作不可撤销。`)
   if (!confirmed) return
   try {
     const deletedSessionIds = new Set((group?.sessions || []).map((session) => session.id))
-    await projectStore.deleteProject(rawGroup.id)
+    await projectStore.deleteProject(project.id)
     sessions.value = removeSessionsByIds(sessions.value, deletedSessionIds)
     sessionStore.removeSessions(deletedSessionIds)
     if (activeSessionId.value && deletedSessionIds.has(activeSessionId.value)) {
@@ -963,47 +779,22 @@ async function handleDeleteProject(projectGroupId: string) {
   }
 }
 
-async function handleDeleteOrphanProjectGroup(projectGroupId: string) {
-  const group = projectGroups.value.find((item) => item.id === projectGroupId)
-  if (!group) return
-  const sessionIds = group.sessions.map((session) => session.id)
-  if (sessionIds.length === 0) return
-  const label = group.workRoot || group.name || '未归档会话'
-  const confirmed = window.confirm(`确定删除工作区「${label}」下的 ${sessionIds.length} 个会话？此操作不可撤销。`)
-  if (!confirmed) return
-  try {
-    for (const sessionId of sessionIds) {
-      await sessionStore.deleteSession(sessionId)
-    }
-    const deleted = new Set(sessionIds)
-    sessions.value = removeSessionsByIds(sessions.value, deleted)
-    if (activeSessionId.value && deleted.has(activeSessionId.value)) {
-      appServerStore.disconnect()
-      sessionStore.clearMessages()
-      const nextSession = sessions.value[0]
-      if (nextSession) {
-        await selectSession(nextSession.id)
-      } else {
-        await loadInitialData()
-      }
-    }
-  } catch (err) {
-    console.error('Failed to delete orphan project group:', err)
-  }
-}
-
 async function handleProjectContextMenu(projectGroupId: string) {
-  const rawProjectGroupKey = rawProjectGroupKeyFromId(projectGroupId)
-  const rawGroup = projectStore.projects.find(
-    (p) => projectGroupKey(p as unknown as { work_root: string; id: string }) === rawProjectGroupKey,
-  )
-  if (!rawGroup) return
-  agentsMdProjectId.value = rawGroup.id
+  const group = projectGroups.value.find((item) => item.id === projectGroupId)
+  if (!group?.canManage) return
+  const targetProjectId = group.id
+  agentsMdProjectId.value = targetProjectId
+  agentsContent.value = ''
+  const requestToken = ++agentsRequestToken.value
+  agentsSaveHandler.value = createWriterProjectAgentsSaveHandler(targetProjectId, saveAgentsMdForProject)
   agentsError.value = ''
   agentsLoading.value = true
   showAgentsMd.value = true
   try {
-    await projectStore.fetchAgentsMd(rawGroup.id)
+    const agents = await projectStore.fetchAgentsMd(targetProjectId)
+    if (shouldApplyWriterProjectAgents(targetProjectId, requestToken, agentsMdProjectId.value, agentsRequestToken.value)) {
+      agentsContent.value = agents.content
+    }
   } catch (err) {
     console.error('Failed to load AGENTS.md:', err)
     agentsError.value = '读取 AGENTS.md 失败'
@@ -1014,8 +805,11 @@ async function handleProjectContextMenu(projectGroupId: string) {
 
 const showAgentsMd = ref(false)
 const agentsMdProjectId = ref('')
+const agentsContent = ref('')
+const agentsRequestToken = ref(0)
 const agentsLoading = ref(false)
 const agentsError = ref('')
+const agentsSaveHandler = ref<(content: string) => Promise<WriterProjectAgents>>(async () => ({ content: '', exists: false }))
 
 interface DiffFileBlock {
   path: string
@@ -1868,15 +1662,18 @@ function upsertCreatedProjectSession(
   }
 }
 
-async function saveAgentsMd(content: string) {
+async function saveAgentsMdForProject(projectId: string, content: string): Promise<WriterProjectAgents> {
   agentsLoading.value = true
   agentsError.value = ''
   try {
-    await saveWriterProjectAgents(agentsMdProjectId.value, content, projectStore.saveAgentsMd)
+    const saved = await projectStore.saveAgentsMd(projectId, content)
+    if (projectId === agentsMdProjectId.value) agentsContent.value = saved.content
     showAgentsMd.value = false
+    return saved
   } catch (err) {
     console.error('Failed to save AGENTS.md:', err)
     agentsError.value = '保存 AGENTS.md 失败'
+    throw err
   } finally {
     agentsLoading.value = false
   }
@@ -2242,10 +2039,10 @@ onMounted(async () => {
       <div v-if="showAgentsMd" class="modal-overlay" @click.self="!agentsLoading && (showAgentsMd = false)">
         <div class="modal-card wide">
           <CoreAgentsEditor
-            :content="projectStore.agentsMdContent"
+            :content="agentsContent"
             :loading="agentsLoading"
             :error="agentsError"
-            @save="saveAgentsMd"
+            @save="agentsSaveHandler"
             @close="showAgentsMd = false"
           />
         </div>

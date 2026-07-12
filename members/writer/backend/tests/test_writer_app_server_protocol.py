@@ -557,9 +557,10 @@ def test_writer_operation_catalog_covers_app_server_rpc_methods():
         "project.create",
         "project.delete",
         "project.directory.pick",
-        "project.get",
-        "project.list",
-        "project.sessions.list",
+            "project.get",
+            "project.list",
+            "project.sessions.create",
+            "project.sessions.list",
         "project.update",
             "queue.create",
             "queue.delete",
@@ -1799,6 +1800,24 @@ async def test_session_create_operation_creates_project_backed_session(tmp_path)
 
 
 @pytest.mark.asyncio
+async def test_session_create_operation_rejects_client_project_id(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'session-create-invalid-project.db'}", future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    try:
+        outcome = await handle_session_create_operation(
+            request_id=1,
+            params={"title": "Invalid", "project_id": "missing-project"},
+            session_factory=session_factory,
+        )
+        assert outcome.response["error"]["message"] == "Use project.sessions.create for project-owned sessions"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_session_get_update_delete_operations_round_trip(tmp_path):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'session-crud.db'}", future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -2370,6 +2389,10 @@ async def test_project_agents_md_operations_read_and_write_file(tmp_path):
             session_factory=session_factory,
         )
         assert missing.response["result"] == {"agents_md": {"content": "", "exists": False}}
+        async with session_factory() as db:
+            project = await db.get(WriterProject, "project-agents")
+            assert project is not None
+            assert project.agents_md is None
 
         updated = await handle_project_agents_md_update_operation(
             request_id=2,

@@ -19,6 +19,11 @@ function createWorkspace() {
     get: vi.fn(),
     rename: vi.fn().mockResolvedValue({ ...project, name: 'Documentation' }),
     delete: vi.fn().mockResolvedValue(undefined),
+    createSession: vi.fn().mockResolvedValue({
+      id: 'session-2',
+      title: '新会话',
+      metadata: { project_id: 'project-1', work_root: 'E:\\docs' },
+    }),
     listSessions: vi.fn(),
     readAgents: vi.fn().mockResolvedValue({ content: '# Existing', exists: true }),
     writeAgents: vi.fn().mockResolvedValue({ content: '# Updated', exists: true }),
@@ -27,26 +32,18 @@ function createWorkspace() {
   const sessions = ref<CoreProjectSession[]>([])
   const activeSessionId = ref<string | null>(null)
   const selectSession = vi.fn().mockResolvedValue(undefined)
-  const createSession = vi.fn().mockResolvedValue({
-    id: 'session-2',
-    title: '新会话',
-    metadata: { project_id: 'project-1', work_root: 'E:\\docs' },
-  })
-
   return {
     client,
     projects,
     sessions,
     activeSessionId,
     selectSession,
-    createSession,
     actions: createCoreProjectWorkspaceActions({
       client,
       projects,
       sessions,
       activeSessionId,
       selectSession,
-      createSession,
     }),
   }
 }
@@ -86,7 +83,7 @@ describe('Core project demo workspace actions', () => {
     const workspace = createWorkspace()
     workspace.projects.value = [project]
     let release!: () => void
-    workspace.createSession.mockImplementationOnce(() => new Promise((resolve) => {
+    workspace.client.createSession.mockImplementationOnce(() => new Promise((resolve) => {
       release = () => resolve({ id: 'session-2', title: '新会话', metadata: {} })
     }))
 
@@ -94,10 +91,8 @@ describe('Core project demo workspace actions', () => {
     const second = workspace.actions.createProjectSession('project-1')
 
     expect(workspace.actions.busyProjectIds.value).toEqual(['project-1'])
-    expect(workspace.createSession).toHaveBeenCalledTimes(1)
-    expect(workspace.createSession).toHaveBeenCalledWith(expect.objectContaining({
-      metadata: { source: 'core-ui', project_id: 'project-1', work_root: 'E:\\docs' },
-    }))
+    expect(workspace.client.createSession).toHaveBeenCalledTimes(1)
+    expect(workspace.client.createSession).toHaveBeenCalledWith('project-1', '新会话')
     release()
     await Promise.all([first, second])
     expect(workspace.actions.busyProjectIds.value).toEqual([])

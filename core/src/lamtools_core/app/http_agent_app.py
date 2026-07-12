@@ -257,10 +257,13 @@ def _register_core_project_operations(catalog: OperationCatalog, *, project_stor
         work_root = str(payload.get("work_root") or payload.get("workRoot") or "").strip()
         if not work_root:
             return OperationResult(name=request.name, status="error", payload={"error": "work_root is required"})
-        project, session, _ = await project_store.create_with_initial_session(
-            work_root,
-            name=str(payload.get("name") or ""),
-        )
+        try:
+            project, session, _ = await project_store.create_with_initial_session(
+                work_root,
+                name=payload.get("name") if "name" in payload else None,
+            )
+        except ValueError as exc:
+            return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
         return OperationResult(
             name=request.name,
             payload={"project": project.to_dict(), "session": session.to_dict()},
@@ -296,6 +299,16 @@ def _register_core_project_operations(catalog: OperationCatalog, *, project_stor
             payload={"sessions": [session.to_dict() for session in await project_store.list_sessions(project_id)]},
         )
 
+    async def project_sessions_create(request: OperationRequest) -> OperationResult:
+        try:
+            session = await project_store.create_session(
+                _project_id(request),
+                title=str(request.payload.get("title") or "New Session"),
+            )
+        except LookupError as exc:
+            return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
+        return OperationResult(name=request.name, payload={"session": session.to_dict()})
+
     async def project_agents_md_get(request: OperationRequest) -> OperationResult:
         agents_md = await project_store.read_agents_md(_project_id(request))
         if agents_md is None:
@@ -317,6 +330,7 @@ def _register_core_project_operations(catalog: OperationCatalog, *, project_stor
         "project.get": project_get,
         "project.update": project_update,
         "project.delete": project_delete,
+        "project.sessions.create": project_sessions_create,
         "project.sessions.list": project_sessions_list,
         "project.agents_md.get": project_agents_md_get,
         "project.agents_md.update": project_agents_md_update,

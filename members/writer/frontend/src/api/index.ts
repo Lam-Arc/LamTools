@@ -156,6 +156,14 @@ export function listProjectSessions(projectId: string): Promise<Session[]> {
     .then((result) => result.sessions ?? [])
 }
 
+export function createProjectSession(projectId: string, title = 'New Session'): Promise<Session> {
+  return appServerOperation<{ session?: Session }>('project.sessions.create', { project_id: projectId, title })
+    .then((result) => {
+      if (!result.session) throw new Error('project.sessions.create response is missing session')
+      return result.session
+    })
+}
+
 // --- Sessions ---
 
 export function listSessions(): Promise<Session[]> {

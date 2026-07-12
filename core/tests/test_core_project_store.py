@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -138,6 +139,52 @@ async def test_create_with_initial_session_returns_the_public_initial_session(tm
         }
         assert await db.project_store.list_sessions(project.id) == [initial_session]
 
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_project_session_creation_uses_canonical_project_and_rejects_missing_projects(tmp_path: Path) -> None:
+    db = await open_core_app_db(tmp_path / "core.db")
+    try:
+        project, _ = await db.project_store.create(tmp_path / "workspace")
+        session = await db.project_store.create_session(project.id, title="Follow-up")
+
+        assert session.metadata == {"project_id": project.id, "work_root": project.work_root}
+        assert session.title == "Follow-up"
+        with pytest.raises(LookupError, match="Project not found"):
+            await db.project_store.create_session("missing-project")
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_project_delete_and_create_session_race_cannot_leave_an_orphan(tmp_path: Path) -> None:
+    db = await open_core_app_db(tmp_path / "core.db")
+    try:
+        project, _ = await db.project_store.create(tmp_path / "workspace")
+        deleted, created = await asyncio.gather(
+            db.project_store.delete(project.id),
+            db.project_store.create_session(project.id),
+            return_exceptions=True,
+        )
+
+        assert deleted is True
+        assert await db.project_store.get(project.id) is None
+        assert await db.project_store.list_sessions(project.id) == []
+        assert isinstance(created, (LookupError, type(None))) or created.id
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_project_store_rejects_blank_names_and_work_roots(tmp_path: Path) -> None:
+    db = await open_core_app_db(tmp_path / "core.db")
+    try:
+        with pytest.raises(ValueError, match="work_root is required"):
+            await db.project_store.create("   ")
+        with pytest.raises(ValueError, match="Project name is required"):
+            await db.project_store.create(tmp_path / "workspace", name="   ")
     finally:
         await db.close()
 

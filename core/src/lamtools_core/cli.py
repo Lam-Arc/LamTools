@@ -623,7 +623,7 @@ def build_parser() -> argparse.ArgumentParser:
     project_list.set_defaults(func=cmd_project_list)
     project_create = project_sub.add_parser("create", help="Create or reuse a project workspace")
     project_create.add_argument("work_root")
-    project_create.add_argument("--name", default="")
+    project_create.add_argument("--name", default=None)
     project_create.add_argument("--core-db", default="", help="Core-owned SQLite runtime database")
     project_create.set_defaults(func=cmd_project_create)
     project_show = project_sub.add_parser("show", help="Show a project workspace")

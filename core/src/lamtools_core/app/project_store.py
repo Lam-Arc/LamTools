@@ -80,6 +80,7 @@ class CoreProjectStore:
         self.write_coordinator = write_coordinator
 
     async def create(self, work_root: Path | str, name: str | None = None) -> tuple[CoreProjectRecord, bool]:
+        name = _normalize_project_name(name)
         root = ensure_workspace_root(work_root)
         normalized_root = str(root)
 
@@ -99,6 +100,7 @@ class CoreProjectStore:
         work_root: Path | str,
         name: str | None = None,
     ) -> tuple[CoreProjectRecord, SessionRecord, bool]:
+        name = _normalize_project_name(name)
         root = ensure_workspace_root(work_root)
         normalized_root = str(root)
 
@@ -125,13 +127,27 @@ class CoreProjectStore:
         return _record(project) if project is not None else None
 
     async def rename(self, project_id: str, name: str) -> CoreProjectRecord | None:
+        name = _normalize_project_name(name)
+
         async def write(db: Any) -> CoreProjectRecord | None:
             project = await db.get(CoreProject, project_id)
             if project is None:
                 return None
-            project.name = str(name).strip()
+            project.name = name
             await db.flush()
             return _record(project)
+
+        return await self.write_coordinator.run(write)
+
+    async def create_session(self, project_id: str, *, title: str = "New Session") -> SessionRecord:
+        """Create a session only after resolving its persisted project in the write transaction."""
+        session_title = str(title).strip() or "New Session"
+
+        async def write(db: Any) -> SessionRecord:
+            project = await db.get(CoreProject, project_id)
+            if project is None:
+                raise LookupError("Project not found")
+            return await _create_project_session(db, project, title=session_title)
 
         return await self.write_coordinator.run(write)
 
@@ -168,6 +184,15 @@ def _default_project_name(work_root: Path) -> str:
     return workspace_name(work_root)
 
 
+def _normalize_project_name(name: str | None) -> str | None:
+    if name is None:
+        return None
+    normalized = str(name).strip()
+    if not normalized:
+        raise ValueError("Project name is required")
+    return normalized
+
+
 def _record(project: CoreProject) -> CoreProjectRecord:
     return CoreProjectRecord(
         id=project.id,
@@ -190,7 +215,7 @@ async def _create_project_with_initial_session(
     if project is None:
         project = CoreProject(
             id=uuid4().hex,
-            name=str(name or "").strip() or _default_project_name(root),
+            name=name or _default_project_name(root),
             work_root=normalized_root,
         )
         db.add(project)
@@ -200,12 +225,17 @@ async def _create_project_with_initial_session(
     if sessions:
         return _record(project), sessions[0], created
 
+    session = await _create_project_session(db, project, title=project.name)
+    return _record(project), session, created
+
+
+async def _create_project_session(db: Any, project: CoreProject, *, title: str) -> SessionRecord:
     session = SessionRecord(
         id=uuid4().hex,
         member_id="core",
-        title=project.name,
+        title=title,
         status="idle",
-        metadata={"project_id": project.id, "work_root": normalized_root},
+        metadata={"project_id": project.id, "work_root": project.work_root},
     )
     db.add(
         CoreThreadSnapshot(
@@ -216,7 +246,7 @@ async def _create_project_with_initial_session(
         )
     )
     await db.flush()
-    return _record(project), session, created
+    return session
 
 
 async def _delete_project_with_sessions(db: Any, project_id: str) -> bool:

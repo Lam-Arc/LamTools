@@ -166,6 +166,13 @@ class TestCoreSessionsCRUD:
         assert data["metadata"]["phase"] == "idle"
         assert data["metadata"]["mode"] == "EXECUTE"
 
+    def test_generic_session_create_rejects_client_project_id(self, client):
+        response = client.post(
+            "/api/core/sessions",
+            json={"title": "Invalid project session", "project_id": "missing-project"},
+        )
+        assert response.status_code == 422
+
     def test_get_session(self, client):
         # Create first
         create_resp = client.post(

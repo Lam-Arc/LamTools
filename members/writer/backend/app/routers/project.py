@@ -12,6 +12,7 @@ from app.database import execute_writer_write, get_db, get_writer_write
 from app.models.project import WriterProject
 from app.services.project_management import (
     create_writer_project_response,
+    create_writer_project_session,
     delete_writer_project,
     get_writer_project_response,
     list_project_session_summaries,
@@ -66,6 +67,11 @@ class SessionSummary(BaseModel):
     status: str
     created_at: datetime
     updated_at: datetime
+
+
+class ProjectSessionCreate(BaseModel):
+    title: str = "New Session"
+    mode: str = "EXECUTE"
 
 
 # --- Project CRUD ---
@@ -165,6 +171,28 @@ async def write_agents_md(
 
 
 # --- Project Sessions ---
+
+@router.post("/projects/{project_id}/sessions", response_model=SessionSummary, status_code=201)
+async def create_project_session(
+    project_id: str,
+    body: ProjectSessionCreate,
+    db: AsyncSession = Depends(get_db),
+    write_transaction=Depends(get_writer_write),
+):
+    try:
+        session = await execute_writer_write(
+            db,
+            lambda write_db: create_writer_project_session(
+                write_db,
+                project_id,
+                title=body.title,
+                mode=body.mode,
+            ),
+            write_transaction,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="Project not found") from exc
+    return SessionSummary(**session)
 
 @router.get("/projects/{project_id}/sessions", response_model=list[SessionSummary])
 async def list_project_sessions(

@@ -193,7 +193,7 @@ import {
   type CoreProjectCreatePayload,
 } from '../projects/types'
 import { createCoreProjectClient } from '../projects/client'
-import { createCoreProjectWorkspaceActions, type CoreProjectSessionCreatePayload } from '../projects/workspace'
+import { createCoreProjectWorkspaceActions } from '../projects/workspace'
 import {
   DEFAULT_THEME,
   addGradientStop,
@@ -357,7 +357,6 @@ const projectWorkspace = createCoreProjectWorkspaceActions({
   sessions,
   activeSessionId,
   selectSession,
-  createSession: createProjectSessionRecord,
 })
 const busyProjectIds = projectWorkspace.busyProjectIds
 
@@ -514,20 +513,6 @@ async function refreshSessions() {
   sessions.value = loaded.map((session) => (
     session.id === currentId ? { ...session, status: latestStatus.value } : session
   ))
-}
-
-async function createProjectSessionRecord(payload: CoreProjectSessionCreatePayload): Promise<CoreSessionListItem> {
-  const id = `core-ui-${Date.now().toString(36)}-${Math.random().toString(16).slice(2, 8)}`
-  return toSession(await requestJson<RawSession>('/sessions', {
-    method: 'POST',
-    body: {
-      id,
-      member_id: 'core',
-      title: payload.title,
-      status: 'idle',
-      metadata: payload.metadata,
-    },
-  }))
 }
 
 function openProjectCreate() {

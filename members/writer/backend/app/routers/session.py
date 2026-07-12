@@ -205,12 +205,13 @@ class AgentBranchActionResponse(BaseModel):
 
 @router.post("/sessions", response_model=SessionResponse)
 async def create_session(body: SessionCreate, db: AsyncSession = Depends(get_db)):
+    if body.project_id is not None:
+        raise HTTPException(status_code=422, detail="Use the project session endpoint for project-owned sessions")
     return await create_writer_session(
         db,
         title=body.title,
         work_root=body.work_root,
         mode=body.mode,
-        project_id=body.project_id,
     )
 
 

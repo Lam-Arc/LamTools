@@ -62,11 +62,9 @@ export async function listCoreSessions(): Promise<CoreSessionListItem[]> {
 export async function createCoreSession(
   title: string = 'New Session',
   workRoot: string = '',
-  projectId: string | null = null,
 ): Promise<CoreSessionListItem> {
   const body: Record<string, unknown> = { title }
   if (workRoot) body.work_root = workRoot
-  if (projectId) body.project_id = projectId
   const raw = await request<CoreSessionRawLike>('/api/core/sessions', {
     method: 'POST',
     body: JSON.stringify(body),

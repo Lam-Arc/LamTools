@@ -9,18 +9,12 @@ import type {
   CoreProjectCreateResult,
 } from './types'
 
-export interface CoreProjectSessionCreatePayload {
-  title: string
-  metadata: Record<string, unknown>
-}
-
 export interface CoreProjectWorkspaceOptions {
   client: CoreProjectClient
   projects: Ref<CoreProject[]>
   sessions: Ref<CoreSessionListItem[]>
   activeSessionId: Ref<string | null>
   selectSession(sessionId: string): Promise<void>
-  createSession(payload: CoreProjectSessionCreatePayload): Promise<CoreSessionListItem>
 }
 
 export function createCoreProjectWorkspaceActions(options: CoreProjectWorkspaceOptions) {
@@ -40,19 +34,11 @@ export function createCoreProjectWorkspaceActions(options: CoreProjectWorkspaceO
     },
     createProjectSession: async (projectId: string): Promise<CoreSessionListItem | undefined> => {
       if (busyIds.value.has(projectId)) return undefined
-      const project = options.projects.value.find((item) => item.id === projectId)
-      if (!project) return undefined
+      if (!options.projects.value.some((item) => item.id === projectId)) return undefined
 
       busyIds.value = new Set([...busyIds.value, projectId])
       try {
-        const session = await options.createSession({
-          title: '新会话',
-          metadata: {
-            source: 'core-ui',
-            project_id: project.id,
-            work_root: project.workRoot,
-          },
-        })
+        const session = toSessionItem(await options.client.createSession(projectId, '新会话'))
         options.sessions.value = upsertById(options.sessions.value, session)
         options.activeSessionId.value = session.id
         await options.selectSession(session.id)

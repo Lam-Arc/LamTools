@@ -18,6 +18,7 @@ from lamtools_core.app.project_store import (
 from app.models.project import WriterProject
 from app.models.session import WriterSession
 from app.services.session_deletion import delete_writer_session_records
+from app.services.session_management import create_writer_session
 
 def project_name_from_work_root(work_root: str) -> str:
     return workspace_name(work_root)
@@ -39,6 +40,8 @@ async def ensure_writer_project(
     existing = await db.execute(select(WriterProject).where(WriterProject.work_root == normalized_root))
     existing_projects = existing.scalars().all()
     if existing_projects:
+        if len(existing_projects) == 1:
+            return existing_projects[0]
         return await merge_duplicate_projects(db, normalized_root, existing_projects)
 
     project = WriterProject(
@@ -55,9 +58,7 @@ async def merge_duplicate_projects(
     work_root: str,
     projects: list[WriterProject],
 ) -> WriterProject:
-    derived_name = project_name_from_work_root(work_root)
-    canonical = next((p for p in projects if p.name == derived_name), projects[0])
-    canonical.name = derived_name
+    canonical = min(projects, key=lambda project: (project.created_at, project.id))
     canonical.work_root = work_root
 
     duplicate_ids = [p.id for p in projects if p.id != canonical.id]
@@ -184,6 +185,25 @@ async def delete_writer_project(db: AsyncSession, project_id: str) -> None:
     await db.flush()
 
 
+async def create_writer_project_session(
+    db: AsyncSession,
+    project_id: str,
+    *,
+    title: str = "New Session",
+    mode: str = "EXECUTE",
+) -> dict[str, Any]:
+    project = await db.get(WriterProject, project_id)
+    if project is None:
+        raise LookupError("Project not found")
+    return await create_writer_session(
+        db,
+        title=title,
+        work_root=project.work_root,
+        mode=mode,
+        project_id=project.id,
+    )
+
+
 async def read_project_agents_md(db: AsyncSession, project_id: str) -> dict[str, str | bool]:
     project = await db.get(WriterProject, project_id)
     if project is None:
@@ -192,9 +212,6 @@ async def read_project_agents_md(db: AsyncSession, project_id: str) -> dict[str,
         raise ValueError("Project has no work_root set")
 
     result = read_workspace_agents_md(project.work_root)
-    content = str(result["content"])
-    project.agents_md = content
-    await db.flush()
     return result
 
 
@@ -246,6 +263,7 @@ async def list_project_session_summaries(
 
 __all__ = [
     "create_writer_project_response",
+    "create_writer_project_session",
     "dedupe_writer_projects",
     "delete_writer_project",
     "ensure_writer_project",

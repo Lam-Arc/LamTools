@@ -47,6 +47,7 @@ CORE_WORKBENCH_OPERATION_NAMES: tuple[str, ...] = (
     "project.get",
     "project.update",
     "project.delete",
+    "project.sessions.create",
     "project.sessions.list",
     "project.agents_md.get",
     "project.agents_md.update",

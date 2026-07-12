@@ -27,6 +27,10 @@ export const useProjectStore = defineStore('project', () => {
     return result
   }
 
+  async function createProjectSession(projectId: string, title = 'New Session'): Promise<Session> {
+    return api.createProjectSession(projectId, title)
+  }
+
   function selectProject(project: Project | null) {
     activeProject.value = project
   }
@@ -46,20 +50,16 @@ export const useProjectStore = defineStore('project', () => {
   }
 
   async function fetchAgentsMd(projectId: string) {
-    const result = await api.getAgentsMd(projectId)
-    agentsMdContent.value = result.content
-    agentsMdExists.value = result.exists
+    return api.getAgentsMd(projectId)
   }
 
   async function saveAgentsMd(projectId: string, content: string) {
-    const result = await api.updateAgentsMd(projectId, content)
-    agentsMdContent.value = result.content
-    agentsMdExists.value = result.exists
+    return api.updateAgentsMd(projectId, content)
   }
 
   return {
     projects, activeProject, loading, agentsMdContent, agentsMdExists, activeProjectId,
-    fetchProjects, createProject, selectProject, updateProject, deleteProject,
+    fetchProjects, createProject, createProjectSession, selectProject, updateProject, deleteProject,
     fetchAgentsMd, saveAgentsMd,
   }
 })

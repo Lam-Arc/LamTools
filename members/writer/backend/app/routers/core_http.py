@@ -22,6 +22,7 @@ from app.shared_config_database import get_shared_config_db
 from app.routers.path_utils import ensure_work_root
 from app.core.writer.core_kernel_adapter import schedule_writer_startup_prewarm
 from app.services.llm_config_service import resolve_llm_config
+from app.services.session_management import create_writer_session
 from app.services.session_lifecycle import merge_lifecycle_with_transcript_status, project_session_lifecycle
 from app.services.transcript_service import latest_turn_status
 
@@ -134,15 +135,18 @@ async def create_session(
     db: AsyncSession = Depends(get_db),
     write_transaction: Any = Depends(get_writer_write),
 ):
+    if body.project_id is not None:
+        raise HTTPException(status_code=422, detail="Use the project session endpoint for project-owned sessions")
+
     async def write(write_db):
-        session = WriterSession(
+        created = await create_writer_session(
+            write_db,
             title=body.title,
             work_root=ensure_work_root(body.work_root),
             mode=body.mode,
-            project_id=body.project_id,
         )
-        write_db.add(session)
-        await write_db.flush()
+        session = await write_db.get(WriterSession, created["id"])
+        assert session is not None
         return await _session_to_core_projected(write_db, session)
     result = await execute_writer_write(db, write, write_transaction)
     schedule_writer_startup_prewarm(result.get("work_root") or "")

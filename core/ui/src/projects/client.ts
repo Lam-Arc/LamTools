@@ -12,6 +12,7 @@ export interface CoreProjectClient {
   get(projectId: string): Promise<CoreProject>
   rename(projectId: string, name: string): Promise<CoreProject>
   delete(projectId: string): Promise<void>
+  createSession(projectId: string, title?: string): Promise<CoreProjectSession>
   listSessions(projectId: string): Promise<CoreProjectSession[]>
   readAgents(projectId: string): Promise<CoreProjectAgents>
   writeAgents(projectId: string, content: string): Promise<CoreProjectAgents>
@@ -56,6 +57,12 @@ export function createCoreProjectClient(apiBase: string): CoreProjectClient {
     },
     async delete(projectId) {
       await request(base, projectPath(projectId), { method: 'DELETE' })
+    },
+    async createSession(projectId, title = 'New Session') {
+      return toSession(await request<RawProjectSession>(base, `${projectPath(projectId)}/sessions`, {
+        method: 'POST',
+        body: { title },
+      }))
     },
     async listSessions(projectId) {
       const response = await request<{ sessions: RawProjectSession[] }>(base, `${projectPath(projectId)}/sessions`)

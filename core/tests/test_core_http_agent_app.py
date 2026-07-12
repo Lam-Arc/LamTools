@@ -238,6 +238,10 @@ def test_project_http_round_trip_survives_restart_and_uses_agents_md(tmp_path: P
         work_root=root,
     )
     with TestClient(app) as client:
+        assert client.post(
+            "/api/core/projects",
+            json={"name": "   ", "work_root": str(tmp_path / "invalid-name")},
+        ).status_code == 422
         created = client.post("/api/core/projects", json={"name": "Docs", "work_root": str(root)})
         assert created.status_code == 201
         result = created.json()
@@ -257,6 +261,25 @@ def test_project_http_round_trip_survives_restart_and_uses_agents_md(tmp_path: P
             "exists": True,
         }
         assert client.get(f"/api/core/projects/{project_id}/sessions").json()["sessions"] == [result["session"]]
+        created_session = client.post(
+            f"/api/core/projects/{project_id}/sessions",
+            json={"title": "Follow-up"},
+        )
+        assert created_session.status_code == 201
+        assert created_session.json()["metadata"] == {
+            "project_id": project_id,
+            "work_root": str(root.resolve()),
+        }
+        assert client.post(
+            "/api/core/sessions",
+            json={
+                "id": "invalid-project-session",
+                "member_id": "core",
+                "title": "Invalid",
+                "status": "idle",
+                "metadata": {"project_id": "missing"},
+            },
+        ).status_code == 422
 
     restarted_app = create_core_agent_http_app(
         model_id="model-record",
@@ -293,6 +316,11 @@ def test_project_http_delete_rejects_active_session_and_app_server_uses_project_
             project_id = created["project"]["id"]
             session_id = created["session"]["id"]
 
+            websocket.send_json(
+                {"id": 31, "method": "project.create", "params": {"name": "   ", "work_root": str(tmp_path / "invalid")}},
+            )
+            assert _receive_rpc_response(websocket, 31)["error"]["message"] == "Project name is required"
+
             websocket.send_json({"id": 4, "method": "project.get", "params": {"project_id": project_id}})
             assert _receive_rpc_response(websocket, 4)["result"]["project"]["id"] == project_id
 
@@ -303,6 +331,10 @@ def test_project_http_delete_rejects_active_session_and_app_server_uses_project_
 
             websocket.send_json({"id": 6, "method": "project.sessions.list", "params": {"project_id": project_id}})
             assert _receive_rpc_response(websocket, 6)["result"]["sessions"][0]["id"] == session_id
+
+            websocket.send_json({"id": 61, "method": "project.sessions.create", "params": {"project_id": project_id}})
+            project_session = _receive_rpc_response(websocket, 61)["result"]["session"]
+            assert project_session["metadata"]["project_id"] == project_id
 
             websocket.send_json(
                 {"id": 7, "method": "project.agents_md.update", "params": {"project_id": project_id, "content": "# Rules\n"}}

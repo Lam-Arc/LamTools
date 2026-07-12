@@ -261,6 +261,13 @@ def test_core_project_cli_lists_shows_renames_and_deletes(monkeypatch, tmp_path:
     assert json.loads(capsys.readouterr().out) == {"deleted": True, "project_id": project_id}
 
 
+def test_core_project_cli_rejects_blank_name(monkeypatch, tmp_path: Path, capsys) -> None:
+    monkeypatch.setenv("LAMTOOLS_CORE_DB", str(tmp_path / "core.db"))
+
+    assert main(["project", "create", str(tmp_path / "workspace"), "--name", "   "]) == 1
+    assert "Project name is required" in capsys.readouterr().err
+
+
 def test_core_cli_parser_exposes_live_control_commands(tmp_path: Path) -> None:
     parser = build_parser()
 

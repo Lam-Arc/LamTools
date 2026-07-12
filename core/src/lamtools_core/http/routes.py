@@ -53,11 +53,15 @@ class SessionUpdateRequest(BaseModel):
 
 class ProjectCreateRequest(BaseModel):
     work_root: str = Field(min_length=1)
-    name: str = ""
+    name: str | None = None
 
 
 class ProjectUpdateRequest(BaseModel):
     name: str = Field(min_length=1)
+
+
+class ProjectSessionCreateRequest(BaseModel):
+    title: str = "New Session"
 
 
 class AgentsMdUpdateRequest(BaseModel):
@@ -173,6 +177,8 @@ def create_core_router(
 
     @router.post("/sessions", status_code=201)
     async def create_session(body: SessionCreateRequest) -> dict[str, Any]:
+        if "project_id" in body.metadata:
+            raise HTTPException(status_code=422, detail="Use the project session endpoint for project-owned sessions")
         record = SessionRecord(
             id=body.id,
             member_id=body.member_id,
@@ -195,6 +201,8 @@ def create_core_router(
         session_id: str,
         body: SessionUpdateRequest,
     ) -> dict[str, Any]:
+        if body.metadata is not None and "project_id" in body.metadata:
+            raise HTTPException(status_code=422, detail="Use the project session endpoint for project-owned sessions")
         patch_method = getattr(_session_store, "patch", None)
         if patch_method is not None:
             record = await _store_call(
@@ -343,7 +351,10 @@ def create_core_router(
     @router.post("/projects", status_code=201)
     async def create_project(body: ProjectCreateRequest, response: Response) -> dict[str, Any]:
         store = require_project_store()
-        project, session, created = await store.create_with_initial_session(body.work_root, name=body.name)
+        try:
+            project, session, created = await store.create_with_initial_session(body.work_root, name=body.name)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         if not created:
             response.status_code = 200
         return {"project": project.to_dict(), "session": session.to_dict()}
@@ -357,7 +368,10 @@ def create_core_router(
 
     @router.patch("/projects/{project_id}")
     async def update_project(project_id: str, body: ProjectUpdateRequest) -> dict[str, Any]:
-        project = await require_project_store().rename(project_id, body.name)
+        try:
+            project = await require_project_store().rename(project_id, body.name)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         if project is None:
             raise HTTPException(status_code=404, detail="Project not found")
         return project.to_dict()
@@ -378,6 +392,14 @@ def create_core_router(
         if await store.get(project_id) is None:
             raise HTTPException(status_code=404, detail="Project not found")
         return {"sessions": [session.to_dict() for session in await store.list_sessions(project_id)]}
+
+    @router.post("/projects/{project_id}/sessions", status_code=201)
+    async def create_project_session(project_id: str, body: ProjectSessionCreateRequest) -> dict[str, Any]:
+        try:
+            session = await require_project_store().create_session(project_id, title=body.title)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail="Project not found") from exc
+        return session.to_dict()
 
     @router.get("/projects/{project_id}/agents-md")
     async def get_project_agents_md(project_id: str) -> dict[str, str | bool]:

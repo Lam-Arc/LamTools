@@ -1,3 +1,4 @@
+import asyncio
 import tempfile
 from pathlib import Path
 
@@ -6,7 +7,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import app.models  # noqa: F401
-from app.app_server.operations import handle_project_create_operation, handle_project_delete_operation
+from app.app_server.operations import (
+    handle_project_create_operation,
+    handle_project_delete_operation,
+    handle_project_session_create_operation,
+)
 from app.core.writer.git import WriterGitManager
 from app.database import Base
 from app.models.project import WriterProject
@@ -85,6 +90,98 @@ async def test_create_project_creates_missing_work_root():
             assert project.work_root == str(work_root.resolve())
             assert project.name == "Custom REST Project"
 
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_duplicate_project_create_preserves_the_existing_renamed_project_name(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'project-name.db'}", future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    try:
+        work_root = str((tmp_path / "workspace").resolve())
+        async with session_factory() as db:
+            first = await create_project(ProjectCreate(work_root=work_root, name="Renamed by user"), db)
+            duplicate = await create_project(ProjectCreate(work_root=work_root, name="New default"), db)
+
+            assert duplicate.id == first.id
+            assert duplicate.name == "Renamed by user"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_project_session_creation_rejects_missing_or_deleted_projects(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'project-session.db'}", future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    try:
+        created = await handle_project_create_operation(
+            request_id=1,
+            params={"work_root": str(tmp_path / "workspace")},
+            session_factory=session_factory,
+        )
+        project_id = created.response["result"]["project"]["id"]
+        session = await handle_project_session_create_operation(
+            request_id=2,
+            params={"project_id": project_id, "title": "Inside project"},
+            session_factory=session_factory,
+        )
+        assert session.response["result"]["session"]["project_id"] == project_id
+
+        deleted = await handle_project_delete_operation(
+            request_id=3,
+            params={"project_id": project_id},
+            session_factory=session_factory,
+        )
+        assert deleted.response["result"] == {"deleted": True}
+        missing = await handle_project_session_create_operation(
+            request_id=4,
+            params={"project_id": project_id},
+            session_factory=session_factory,
+        )
+        assert missing.response["error"]["message"] == "Project not found"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_project_delete_and_session_create_race_leaves_no_orphan(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'project-session-race.db'}", future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    try:
+        created = await handle_project_create_operation(
+            request_id=1,
+            params={"work_root": str(tmp_path / "workspace")},
+            session_factory=session_factory,
+        )
+        project_id = created.response["result"]["project"]["id"]
+        deleted, session = await asyncio.gather(
+            handle_project_delete_operation(
+                request_id=2,
+                params={"project_id": project_id},
+                session_factory=session_factory,
+            ),
+            handle_project_session_create_operation(
+                request_id=3,
+                params={"project_id": project_id},
+                session_factory=session_factory,
+            ),
+        )
+
+        assert deleted.response["result"] == {"deleted": True}
+        assert "result" in session.response or session.response["error"]["message"] == "Project not found"
+        async with session_factory() as db:
+            assert await db.get(WriterProject, project_id) is None
+            assert (await db.execute(select(WriterSession).where(WriterSession.project_id == project_id))).scalars().all() == []
+    finally:
         await engine.dispose()
 
 
