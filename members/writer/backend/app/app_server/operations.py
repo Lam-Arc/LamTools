@@ -263,15 +263,7 @@ def operation_name(method: str) -> str:
 
 
 WRITER_OVERLAY_OPERATION_NAMES: tuple[str, ...] = (
-    "project.create",
     "project.directory.pick",
-    "project.get",
-    "project.list",
-    "project.update",
-    "project.delete",
-    "project.agents_md.get",
-    "project.agents_md.update",
-    "project.sessions.list",
     "attachment.list",
     "attachment.get",
     "attachment.preview",
@@ -465,6 +457,30 @@ def build_writer_core_operation_adapter_catalog(
         ),
         "config.subagent.delete": lambda request: adapt(
             request, handle_config_subagent_delete_operation,
+        ),
+        "project.create": lambda request: adapt(
+            request, handle_project_create_operation, session_factory=session_factory,
+        ),
+        "project.get": lambda request: adapt(
+            request, handle_project_get_operation, session_factory=session_factory,
+        ),
+        "project.list": lambda request: adapt(
+            request, handle_project_list_operation, session_factory=session_factory,
+        ),
+        "project.update": lambda request: adapt(
+            request, handle_project_update_operation, session_factory=session_factory,
+        ),
+        "project.delete": lambda request: adapt(
+            request, handle_project_delete_operation, session_factory=session_factory,
+        ),
+        "project.agents_md.get": lambda request: adapt(
+            request, handle_project_agents_md_get_operation, session_factory=session_factory,
+        ),
+        "project.agents_md.update": lambda request: adapt(
+            request, handle_project_agents_md_update_operation, session_factory=session_factory,
+        ),
+        "project.sessions.list": lambda request: adapt(
+            request, handle_project_sessions_list_operation, session_factory=session_factory,
         ),
     }
     for operation in ("plugin.list", "plugin.enable", "plugin.disable", "hook.list", "hook.trust"):
@@ -983,15 +999,26 @@ async def handle_project_create_operation(
 ) -> WriterOperationOutcome:
     try:
         persistence = writer_persistence_host(session_factory)
-        project = await persistence.write(lambda db: create_writer_project_response(
+        async def create_project(db):
+            project = await create_writer_project_response(
                 db,
                 work_root=str(params.get("work_root") or params.get("workRoot") or ""),
                 name=params.get("name"),
-                git_manager=_git_manager,
-            ))
+            )
+            sessions = await list_project_session_summaries(db, project["id"], limit=1)
+            session = sessions[0] if sessions else await create_writer_session(
+                db,
+                title=project["name"],
+                work_root=project["work_root"],
+                project_id=project["id"],
+                git_manager=None,
+            )
+            return project, session
+
+        project, session = await persistence.write(create_project)
     except HTTPException as exc:
         return WriterOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc.detail)))
-    return WriterOperationOutcome(response=rpc_result(request_id, {"project": project}))
+    return WriterOperationOutcome(response=rpc_result(request_id, {"project": project, "session": session}))
 
 
 async def handle_project_directory_pick_operation(
@@ -1069,7 +1096,7 @@ async def handle_project_delete_operation(
         await persistence.write(lambda db: delete_writer_project(db, project_id))
     except LookupError as exc:
         return WriterOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
-    return WriterOperationOutcome(response=rpc_result(request_id, {"ok": True}))
+    return WriterOperationOutcome(response=rpc_result(request_id, {"deleted": True}))
 
 
 async def handle_project_agents_md_get_operation(
@@ -1086,7 +1113,7 @@ async def handle_project_agents_md_get_operation(
             result = await read_project_agents_md(db, project_id)
     except (LookupError, ValueError) as exc:
         return WriterOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
-    return WriterOperationOutcome(response=rpc_result(request_id, result))
+    return WriterOperationOutcome(response=rpc_result(request_id, {"agents_md": result}))
 
 
 async def handle_project_agents_md_update_operation(
@@ -1106,7 +1133,7 @@ async def handle_project_agents_md_update_operation(
         result = await persistence.write(lambda db: write_project_agents_md(db, project_id, content))
     except (LookupError, ValueError) as exc:
         return WriterOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
-    return WriterOperationOutcome(response=rpc_result(request_id, result))
+    return WriterOperationOutcome(response=rpc_result(request_id, {"agents_md": result}))
 
 
 async def handle_project_sessions_list_operation(

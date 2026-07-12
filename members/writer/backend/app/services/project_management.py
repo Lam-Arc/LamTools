@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 from typing import Any
 
@@ -8,14 +7,10 @@ from fastapi import HTTPException
 from sqlalchemy import select, update as sql_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.writer.git import WriterGitManager
 from app.models.project import WriterProject
 from app.models.session import WriterSession
 from app.routers.path_utils import ensure_work_root
 from app.services.session_deletion import delete_writer_session_records
-
-logger = logging.getLogger(__name__)
-
 
 def project_name_from_work_root(work_root: str) -> str:
     path = Path(work_root)
@@ -27,22 +22,18 @@ async def ensure_writer_project(
     *,
     work_root: str,
     name: str | None = None,
-    git_manager: WriterGitManager | None = None,
+    git_manager: Any | None = None,
 ) -> WriterProject:
     normalized_root = ensure_work_root(work_root)
     if not normalized_root:
         raise HTTPException(status_code=400, detail="Project work_root is required")
 
+    _ = git_manager
+
     existing = await db.execute(select(WriterProject).where(WriterProject.work_root == normalized_root))
     existing_projects = existing.scalars().all()
     if existing_projects:
         return await merge_duplicate_projects(db, normalized_root, existing_projects)
-
-    if git_manager is not None:
-        try:
-            await git_manager.init_repo(normalized_root)
-        except Exception:
-            logger.debug("Unexpected error during git init at %s", normalized_root, exc_info=True)
 
     project = WriterProject(
         name=str(name or '').strip() or project_name_from_work_root(normalized_root),
@@ -116,9 +107,8 @@ async def create_writer_project_response(
     *,
     work_root: str,
     name: str | None = None,
-    git_manager: WriterGitManager | None = None,
 ) -> dict[str, Any]:
-    project = await ensure_writer_project(db, work_root=work_root, name=name, git_manager=git_manager)
+    project = await ensure_writer_project(db, work_root=work_root, name=name)
     await db.flush()
     await db.refresh(project)
     return project_response(project)
@@ -182,7 +172,7 @@ async def delete_writer_project(db: AsyncSession, project_id: str) -> None:
     await db.flush()
 
 
-async def read_project_agents_md(db: AsyncSession, project_id: str) -> dict[str, str]:
+async def read_project_agents_md(db: AsyncSession, project_id: str) -> dict[str, str | bool]:
     project = await db.get(WriterProject, project_id)
     if project is None:
         raise LookupError("Project not found")
@@ -191,15 +181,15 @@ async def read_project_agents_md(db: AsyncSession, project_id: str) -> dict[str,
 
     agents_path = Path(project.work_root) / "AGENTS.md"
     if not agents_path.exists():
-        return {"content": ""}
+        return {"content": "", "exists": False}
 
     content = agents_path.read_text(encoding="utf-8")
     project.agents_md = content
     await db.flush()
-    return {"content": content}
+    return {"content": content, "exists": True}
 
 
-async def write_project_agents_md(db: AsyncSession, project_id: str, content: str) -> dict[str, str]:
+async def write_project_agents_md(db: AsyncSession, project_id: str, content: str) -> dict[str, str | bool]:
     project = await db.get(WriterProject, project_id)
     if project is None:
         raise LookupError("Project not found")
@@ -212,7 +202,7 @@ async def write_project_agents_md(db: AsyncSession, project_id: str, content: st
 
     project.agents_md = content
     await db.flush()
-    return {"content": content}
+    return {"content": content, "exists": True}
 
 
 def project_session_summary(session: WriterSession) -> dict[str, Any]:

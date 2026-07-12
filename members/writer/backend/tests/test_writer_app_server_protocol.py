@@ -489,7 +489,7 @@ async def test_writer_operation_catalog_wraps_rpc_handlers():
         metadata={"rpc_request": connection_module.JsonRpcRequest(id=1, method="project.create", params={})},
     )
 
-    assert called == ["project.create"]
+    assert called == []
 
 
 def test_plugin_operations_are_registered_in_writer_catalog():
@@ -606,6 +606,7 @@ def test_writer_operation_catalog_is_core_workbench_plus_writer_overlay():
 
     assert set(catalog.list()) == set(CORE_WORKBENCH_OPERATION_NAMES) | set(WRITER_OVERLAY_OPERATION_NAMES)
     assert not (set(CORE_WORKBENCH_OPERATION_NAMES) & set(WRITER_OVERLAY_OPERATION_NAMES))
+    assert WRITER_OVERLAY_OPERATION_NAMES.count("project.directory.pick") == 1
 
 
 @pytest.mark.asyncio
@@ -2313,7 +2314,7 @@ async def test_project_operations_create_list_update_get_and_delete(tmp_path):
             params={"project_id": project["id"]},
             session_factory=session_factory,
         )
-        assert deleted.response["result"] == {"ok": True}
+        assert deleted.response["result"] == {"deleted": True}
         async with session_factory() as db:
             assert await db.get(WriterProject, project["id"]) is None
             assert await db.get(WriterSession, "project-session") is None
@@ -2360,14 +2361,14 @@ async def test_project_agents_md_operations_read_and_write_file(tmp_path):
             params={"project_id": "project-agents"},
             session_factory=session_factory,
         )
-        assert missing.response["result"] == {"content": ""}
+        assert missing.response["result"] == {"agents_md": {"content": "", "exists": False}}
 
         updated = await handle_project_agents_md_update_operation(
             request_id=2,
             params={"project_id": "project-agents", "content": "Use UTF-8."},
             session_factory=session_factory,
         )
-        assert updated.response["result"] == {"content": "Use UTF-8."}
+        assert updated.response["result"] == {"agents_md": {"content": "Use UTF-8.", "exists": True}}
         assert (work_root / "AGENTS.md").read_text(encoding="utf-8") == "Use UTF-8."
 
         read = await handle_project_agents_md_get_operation(
@@ -2375,7 +2376,7 @@ async def test_project_agents_md_operations_read_and_write_file(tmp_path):
             params={"project_id": "project-agents"},
             session_factory=session_factory,
         )
-        assert read.response["result"] == {"content": "Use UTF-8."}
+        assert read.response["result"] == {"agents_md": {"content": "Use UTF-8.", "exists": True}}
         async with session_factory() as db:
             project = await db.get(WriterProject, "project-agents")
             assert project is not None

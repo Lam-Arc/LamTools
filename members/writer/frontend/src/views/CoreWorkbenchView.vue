@@ -13,7 +13,9 @@ import {
   ChatThread,
   AttachmentTray,
   CommandPalette,
+  CoreAgentsEditor,
   CoreExecutionControls,
+  CoreProjectCreate,
   CoreQueuedInputTray,
   buildCoreComposerHighlightSegments,
   coreInputToText,
@@ -45,7 +47,6 @@ import { useConfigStore } from '@/stores/config'
 import { useWriterAppServerStore } from '@/appServer/store'
 import { selectLatestTurnStatus } from '@/appServer/selectors'
 import { workbenchSessionRouteQuery, type WorkbenchRouteQuery } from '@/utils/workbenchRoute'
-import { pickProjectDirectory, projectNameFromPath } from '@/lib/project-directory-picker'
 import {
   listCoreSessions,
   createCoreSession,
@@ -989,20 +990,30 @@ async function handleDeleteOrphanProjectGroup(projectGroupId: string) {
   }
 }
 
-function handleProjectContextMenu(projectGroupId: string) {
+async function handleProjectContextMenu(projectGroupId: string) {
   const rawProjectGroupKey = rawProjectGroupKeyFromId(projectGroupId)
   const rawGroup = projectStore.projects.find(
     (p) => projectGroupKey(p as unknown as { work_root: string; id: string }) === rawProjectGroupKey,
   )
   if (!rawGroup) return
-  // Open AGENTS.md for this project
-  projectStore.fetchAgentsMd(rawGroup.id)
-  showAgentsMd.value = true
   agentsMdProjectId.value = rawGroup.id
+  agentsError.value = ''
+  agentsLoading.value = true
+  showAgentsMd.value = true
+  try {
+    await projectStore.fetchAgentsMd(rawGroup.id)
+  } catch (err) {
+    console.error('Failed to load AGENTS.md:', err)
+    agentsError.value = '读取 AGENTS.md 失败'
+  } finally {
+    agentsLoading.value = false
+  }
 }
 
 const showAgentsMd = ref(false)
 const agentsMdProjectId = ref('')
+const agentsLoading = ref(false)
+const agentsError = ref('')
 
 interface DiffFileBlock {
   path: string
@@ -1844,52 +1855,41 @@ function upsertCreatedProjectSession(project: Project, session: CoreSessionListI
 }
 
 async function saveAgentsMd() {
-  await projectStore.saveAgentsMd(agentsMdProjectId.value, projectStore.agentsMdContent)
-  showAgentsMd.value = false
-}
-
-const showNewProject = ref(false)
-const newProjectWorkRoot = ref('')
-const newProjectName = ref('')
-const selectingProjectDirectory = ref(false)
-
-function resetNewProjectForm() {
-  showNewProject.value = false
-  newProjectWorkRoot.value = ''
-  newProjectName.value = ''
-}
-
-async function browseProjectDirectory() {
-  selectingProjectDirectory.value = true
+  agentsLoading.value = true
+  agentsError.value = ''
   try {
-    const selected = await pickProjectDirectory({
-      desktop: window.lamwriterDesktop,
-      appServerPickDirectory: api.pickProjectDirectory,
-    })
-    if (!selected.path) {
-      if (selected.message) window.alert(selected.message)
-      return
-    }
-    newProjectWorkRoot.value = selected.path
-    if (!newProjectName.value.trim()) {
-      newProjectName.value = projectNameFromPath(selected.path)
-    }
+    await projectStore.saveAgentsMd(agentsMdProjectId.value, projectStore.agentsMdContent)
+    showAgentsMd.value = false
+  } catch (err) {
+    console.error('Failed to save AGENTS.md:', err)
+    agentsError.value = '保存 AGENTS.md 失败'
   } finally {
-    selectingProjectDirectory.value = false
+    agentsLoading.value = false
   }
 }
 
-async function handleNewProject() {
-  const workRoot = newProjectWorkRoot.value.trim()
-  if (!workRoot) return
+const showNewProject = ref(false)
+const projectActionLoading = ref(false)
+const projectActionError = ref('')
+
+function closeNewProject() {
+  showNewProject.value = false
+  projectActionError.value = ''
+}
+
+async function handleNewProject(payload: { name: string; work_root: string }) {
+  const workRoot = payload.work_root.trim()
+  if (!workRoot || projectActionLoading.value) return
+  projectActionLoading.value = true
+  projectActionError.value = ''
   try {
     const project = await projectStore.createProject({
-      name: newProjectName.value.trim() || workRoot.split(/[/\\]/).filter(Boolean).pop() || '未命名',
+      name: payload.name || workRoot.split(/[/\\]/).filter(Boolean).pop() || '未命名',
       work_root: workRoot,
     })
     const session = await createCoreSession('New Session', project.work_root, project.id)
     upsertCreatedProjectSession(project, session)
-    resetNewProjectForm()
+    closeNewProject()
     await router.push({ name: 'workbench' }).catch(() => undefined)
     await selectSession(session.id)
     await Promise.all([
@@ -1900,6 +1900,9 @@ async function handleNewProject() {
     await selectSession(session.id)
   } catch (err) {
     console.error('Failed to create project:', err)
+    projectActionError.value = '创建项目失败'
+  } finally {
+    projectActionLoading.value = false
   }
 }
 
@@ -1935,33 +1938,13 @@ onMounted(async () => {
     <template #sidebar-header-action>
       <div class="header-new-menu">
         <button class="icon-btn" title="新建项目" @click="showNewProject = !showNewProject">+</button>
-        <div v-if="showNewProject" class="new-project-popover" @keydown.esc="resetNewProjectForm">
-          <div class="new-project-head">
-            <strong>新建项目</strong>
-          </div>
-          <label class="new-project-field">
-            <span>项目名称</span>
-            <input v-model="newProjectName" placeholder="可选" class="field-input" @keydown.enter="handleNewProject" />
-          </label>
-          <label class="new-project-field">
-            <span>工作目录</span>
-            <div class="path-picker-row">
-              <input v-model="newProjectWorkRoot" placeholder="选择或输入绝对路径" class="field-input" @keydown.enter="handleNewProject" />
-              <button
-                type="button"
-                class="btn-secondary-sm"
-                :disabled="selectingProjectDirectory"
-                @click="browseProjectDirectory"
-              >
-                {{ selectingProjectDirectory ? '选择中' : '浏览' }}
-              </button>
-            </div>
-          </label>
-          <div class="popover-actions">
-            <button class="btn-cancel" @click="resetNewProjectForm">取消</button>
-            <button class="btn-primary-sm" :disabled="!newProjectWorkRoot.trim()" @click="handleNewProject">新建项目</button>
-          </div>
-        </div>
+        <CoreProjectCreate
+          v-if="showNewProject"
+          :loading="projectActionLoading"
+          :error="projectActionError"
+          @submit="handleNewProject"
+          @cancel="closeNewProject"
+        />
       </div>
     </template>
 
@@ -2220,18 +2203,15 @@ onMounted(async () => {
 
     <!-- AGENTS.md modal -->
     <template #modals>
-      <div v-if="showAgentsMd" class="modal-overlay" @click.self="showAgentsMd = false">
+      <div v-if="showAgentsMd" class="modal-overlay" @click.self="!agentsLoading && (showAgentsMd = false)">
         <div class="modal-card wide">
-          <h2>AGENTS.md</h2>
-          <textarea
-            :value="projectStore.agentsMdContent"
-            class="agents-editor"
-            @input="projectStore.agentsMdContent = ($event.target as HTMLTextAreaElement).value"
+          <CoreAgentsEditor
+            :content="projectStore.agentsMdContent"
+            :loading="agentsLoading"
+            :error="agentsError"
+            @save="saveAgentsMd"
+            @close="showAgentsMd = false"
           />
-          <div class="modal-actions">
-            <button @click="showAgentsMd = false">取消</button>
-            <button class="btn-primary" @click="saveAgentsMd">保存配置</button>
-          </div>
         </div>
       </div>
     </template>

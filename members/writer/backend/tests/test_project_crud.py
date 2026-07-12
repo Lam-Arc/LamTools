@@ -6,6 +6,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import app.models  # noqa: F401
+from app.app_server.operations import handle_project_create_operation
+from app.core.writer.git import WriterGitManager
 from app.database import Base
 from app.models.project import WriterProject
 from app.models.session import WriterSession
@@ -83,6 +85,32 @@ async def test_create_project_creates_missing_work_root():
             assert project.work_root == str(work_root.resolve())
             assert project.name == "Custom REST Project"
 
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_writer_project_create_never_initializes_git(tmp_path, monkeypatch):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'project-create.db'}", future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async def forbidden(*args, **kwargs):
+        raise AssertionError("Git initialization must not run")
+
+    monkeypatch.setattr(WriterGitManager, "init_repo", forbidden)
+    work_root = tmp_path / "workspace"
+    try:
+        outcome = await handle_project_create_operation(
+            request_id=1,
+            params={"work_root": str(work_root)},
+            session_factory=session_factory,
+        )
+
+        project = outcome.response["result"]["project"]
+        assert project["work_root"] == str(work_root.resolve())
+        assert not (work_root / ".git").exists()
+    finally:
         await engine.dispose()
 
 

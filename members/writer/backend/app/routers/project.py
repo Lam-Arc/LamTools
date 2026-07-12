@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -9,7 +8,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import execute_writer_write, get_db, get_writer_write
 from app.models.project import WriterProject
-from app.core.writer.git import WriterGitManager
 from app.services.project_management import (
     create_writer_project_response,
     delete_writer_project,
@@ -21,11 +19,7 @@ from app.services.project_management import (
     write_project_agents_md,
 )
 
-logger = logging.getLogger(__name__)
-
 router = APIRouter()
-
-_git_manager = WriterGitManager()
 
 
 # --- Request/Response Schemas ---
@@ -86,15 +80,9 @@ async def create_project(
             write_db,
             work_root=body.work_root,
             name=body.name,
-            git_manager=None,
         ),
         write_transaction,
     )
-    if project.get("work_root"):
-        try:
-            await _git_manager.init_repo(str(project["work_root"]))
-        except Exception:
-            logger.debug("Unexpected error during project Git init", exc_info=True)
     return ProjectResponse(**project)
 
 
