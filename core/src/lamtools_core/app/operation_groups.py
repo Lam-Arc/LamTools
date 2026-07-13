@@ -39,8 +39,6 @@ CORE_WORKBENCH_OPERATION_NAMES: tuple[str, ...] = (
     "config.resolved.get",
     "config.adapter_profiles.list",
     "config.runtime_capabilities.get",
-    "config.subagent.upsert",
-    "config.subagent.delete",
     "plugin.list",
     "plugin.enable",
     "plugin.disable",

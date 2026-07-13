@@ -90,7 +90,6 @@ from app.services.session_rollback_service import (
 )
 from app.services.session_undo_service import undo_session_changes_response, undo_session_file_change_response
 from app.services.session_projection import session_response_projected
-from app.services.subagent_config import delete_project_subagent_config, upsert_project_subagent_config
 from lamtools_core.app import (
     OperationCatalog,
     OperationRequest,
@@ -382,12 +381,6 @@ def build_writer_core_operation_adapter_catalog(
             handle_config_runtime_capabilities_get_operation,
             session_factory=session_factory,
             config_session_factory=config_session_factory,
-        ),
-        "config.subagent.upsert": lambda request: adapt(
-            request, handle_config_subagent_upsert_operation, session_factory=session_factory,
-        ),
-        "config.subagent.delete": lambda request: adapt(
-            request, handle_config_subagent_delete_operation,
         ),
         "project.create": lambda request: adapt(
             request, handle_project_create_operation, session_factory=session_factory,
@@ -1373,49 +1366,6 @@ async def handle_config_runtime_capabilities_get_operation(
     return WriterOperationOutcome(response=rpc_result(request_id, {"runtime_capabilities": capabilities}))
 
 
-async def handle_config_subagent_upsert_operation(
-    *,
-    request_id: int | str | None,
-    params: dict[str, Any],
-    session_factory: Any = async_session,
-) -> WriterOperationOutcome:
-    name = str(params.get("name") or "")
-    if not name:
-        return WriterOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message="name is required"))
-    try:
-        async with session_factory() as db:
-            subagent = await upsert_project_subagent_config(
-                db,
-                name=name,
-                payload=params,
-                work_root=str(params.get("work_root") or params.get("workRoot") or "") or None,
-            )
-    except ValueError as exc:
-        return WriterOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
-    return WriterOperationOutcome(response=rpc_result(request_id, {"subagent": subagent}))
-
-
-async def handle_config_subagent_delete_operation(
-    *,
-    request_id: int | str | None,
-    params: dict[str, Any],
-) -> WriterOperationOutcome:
-    name = str(params.get("name") or "")
-    if not name:
-        return WriterOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message="name is required"))
-    try:
-        removed = delete_project_subagent_config(
-            name=name,
-            work_root=str(params.get("work_root") or params.get("workRoot") or "") or None,
-        )
-    except ValueError as exc:
-        return WriterOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
-    if not removed:
-        return WriterOperationOutcome(
-            response=rpc_error(request_id, code=INVALID_REQUEST, message="Project subagent definition not found")
-        )
-    return WriterOperationOutcome(response=rpc_result(request_id, {"ok": True}))
-
 async def handle_plugin_catalog_operation(
     *,
     request_id: int | str | None,
@@ -1536,8 +1486,6 @@ __all__ = [
     "handle_config_providers_list_operation",
     "handle_config_resolved_get_operation",
     "handle_config_runtime_capabilities_get_operation",
-    "handle_config_subagent_delete_operation",
-    "handle_config_subagent_upsert_operation",
     "handle_plugin_catalog_operation",
     "handle_project_create_operation",
     "handle_project_session_create_operation",

@@ -91,3 +91,34 @@ async def test_core_approval_continuation_denial_is_terminal_without_member_resu
     assert result["decision"] == "deny"
     assert store.state.status == "cancelled"
     assert [event.name for event in events] == ["runtime.approval_response", "runtime.cancelled"]
+
+
+@pytest.mark.asyncio
+async def test_core_approval_continuation_routes_delegated_session_back_to_child():
+    state = pending_state()
+    state.metadata["pending_approval"]["delegated_session"] = {
+        "agent": "worker",
+        "session_id": "thread-1:sub:001:worker",
+    }
+    parent_prompts = []
+    delegated_prompts = []
+
+    coordinator = CoreApprovalContinuationCoordinator(
+        state_store=StateStore(state),
+        emit_event=lambda _event: None,
+        execute_tool=lambda tool_call: ApprovedToolExecution(
+            tool_call["name"], tool_call["arguments"], "ok", "completed"
+        ),
+        continue_turn=lambda prompt, _state: parent_prompts.append(prompt),
+        continue_delegated_turn=lambda prompt, _state, delegated: delegated_prompts.append(
+            (prompt, delegated["session_id"])
+        ),
+    )
+
+    await coordinator.respond(
+        thread_id="thread-1", request_id="call-1", decision="approve"
+    )
+
+    assert parent_prompts == []
+    assert delegated_prompts
+    assert delegated_prompts[0][1] == "thread-1:sub:001:worker"

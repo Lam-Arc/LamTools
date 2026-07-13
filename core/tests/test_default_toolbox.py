@@ -19,14 +19,11 @@ class FakeSubAgentRunner:
     def __init__(self) -> None:
         self.calls = []
 
-    async def run(self, *, task, agent="", model="", expected_output="", context=None):
+    async def run(self, *, task, agent=""):
         self.calls.append(
             {
                 "task": task,
                 "agent": agent,
-                "model": model,
-                "expected_output": expected_output,
-                "context": context,
             }
         )
         return f"sub:{task}"
@@ -160,7 +157,7 @@ async def test_core_toolbox_executes_injected_sub_agent_runner(tmp_path):
         ToolCall(
             id="sub-1",
             name="sub_agent",
-            arguments={"task": "inspect", "agent": "reader", "expected_output": "summary"},
+            arguments={"task": "inspect", "agent": "reader"},
         )
     )
 

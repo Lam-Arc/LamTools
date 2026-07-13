@@ -22,8 +22,6 @@ import type {
   ModelUpdate,
   ResolvedConfig,
   RuntimeCapabilities,
-  SubAgentDefinition,
-  SubAgentDefinitionUpdate,
   AppSetting,
   AdapterProfile,
   GitVersionGraph,
@@ -485,18 +483,6 @@ export function getRuntimeCapabilities(workRoot?: string): Promise<RuntimeCapabi
       if (!result.runtime_capabilities) throw new Error('config.runtime_capabilities.get response is missing runtime capabilities')
       return result.runtime_capabilities
     })
-}
-
-export function saveProjectSubAgent(workRoot: string, agent: SubAgentDefinitionUpdate): Promise<SubAgentDefinition> {
-  return appServerOperation<{ subagent?: SubAgentDefinition }>('config.subagent.upsert', { ...agent, work_root: workRoot })
-    .then((result) => {
-      if (!result.subagent) throw new Error('config.subagent.upsert response is missing subagent')
-      return result.subagent
-    })
-}
-
-export function deleteProjectSubAgent(workRoot: string, name: string): Promise<void> {
-  return appServerOperation<{ ok?: boolean }>('config.subagent.delete', { work_root: workRoot, name }).then(() => undefined)
 }
 
 export function listAdapterProfiles(): Promise<AdapterProfile[]> {

@@ -40,9 +40,6 @@ class SubAgentRunner(Protocol):
         *,
         task: str,
         agent: str = "",
-        model: str = "",
-        expected_output: str = "",
-        context: Any = None,
     ) -> str: ...
 
 DEFAULT_MAX_WRITE_LENGTH = 500_000
@@ -610,9 +607,6 @@ class CoreToolbox:
             content = await self.sub_agent_runner.run(
                 task=task,
                 agent=str(args.get("agent") or ""),
-                model=str(args.get("model") or ""),
-                expected_output=str(args.get("expected_output") or ""),
-                context=args.get("context"),
             )
             return ToolResult(
                 call_id=call.id,
@@ -621,7 +615,6 @@ class CoreToolbox:
                 content=str(content),
                 metadata={
                     "agent": str(args.get("agent") or ""),
-                    "expected_output": str(args.get("expected_output") or ""),
                 },
             )
 

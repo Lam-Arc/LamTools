@@ -51,7 +51,7 @@ from lamtools_core.llm import (
     LLMUsage,
 )
 from lamtools_core.prompt import PromptContext
-from lamtools_core.runtime import RuntimeState, RuntimeToolStep, RuntimeTurnInput
+from lamtools_core.runtime import InMemoryRuntimeStateStore, RuntimeState, RuntimeToolStep, RuntimeTurnInput
 from lamtools_core.tool import ToolCall, ToolResult
 from lamtools_core.plugins import (
     HookRegistry,
@@ -68,6 +68,7 @@ from app.core.writer.core_kernel_adapter import (
     WriterKit,
     _validate_command_paths,
     _validate_path,
+    resume_sub_agent_turn,
     run_core_kernel,
 )
 from app.core.writer.skills import WriterSkill
@@ -1108,9 +1109,7 @@ class TestRunCoreKernelIntegration:
                     name="sub_agent",
                     arguments={
                         "task": "读取 README 并汇总结论",
-                        "mode": "low",
-                        "clean": False,
-                        "options": {"agent": "explorer"},
+                        "agent": "explorer",
                     },
                 )
             ],
@@ -1148,8 +1147,18 @@ class TestRunCoreKernelIntegration:
         assert llm.call_count == 4
         sub_request = next(
             request for request in llm.requests
-            if any("临时 SubAgent" in message.content for message in request.messages)
+            if any(
+                message.role == "user" and message.content == "读取 README 并汇总结论"
+                for message in request.messages
+            )
         )
+        main_system_messages = [
+            message.content for message in llm.requests[0].messages if message.role == "system"
+        ]
+        sub_system_messages = [
+            message.content for message in sub_request.messages if message.role == "system"
+        ]
+        assert sub_system_messages == main_system_messages
         tool_names = {
             tool.get("function", {}).get("name")
             for tool in sub_request.tools
@@ -1178,8 +1187,6 @@ class TestRunCoreKernelIntegration:
                     arguments={
                         "task": "连续检查目录六次后总结",
                         "agent": "explorer",
-                        "model": None,
-                        "expected_output": "检查完成说明",
                     },
                 )
             ],
@@ -1224,6 +1231,71 @@ class TestRunCoreKernelIntegration:
         )
         assert sub_result.status == "ok"
         assert len(sub_result.metadata["tool_calls"]) == 6
+
+    @pytest.mark.asyncio
+    async def test_sub_agent_approval_wait_is_forwarded_to_parent_session(self, tmp_path):
+        work_root = tmp_path / "project"
+        work_root.mkdir()
+        (work_root / "old.txt").write_text("data", encoding="utf-8")
+        events: list[CoreEvent] = []
+
+        async def capture_event(event: CoreEvent) -> None:
+            events.append(event)
+
+        llm = FakeLLMClient()
+        llm.add_response(LLMResponse(
+            content="",
+            tool_calls=[LLMToolCall(
+                id="call-sub-approval",
+                name="sub_agent",
+                arguments={"task": "移动文件", "agent": "worker"},
+            )],
+            finish_reason="tool_calls",
+        ))
+        llm.add_response(LLMResponse(
+            content="准备移动文件",
+            tool_calls=[LLMToolCall(
+                id="sub-dangerous-command",
+                name="run_command",
+                arguments={"command": "move old.txt new.txt"},
+            )],
+            finish_reason="tool_calls",
+        ))
+
+        state_store = InMemoryRuntimeStateStore()
+        result = await run_core_kernel(
+            goal="派子代理移动文件",
+            session_id="parent-approval-session",
+            llm_client=llm,
+            work_root=str(work_root),
+            runtime_controls={"command_policies": {"regular": "auto_allow", "dangerous": "ask_user"}},
+            state_store=state_store,
+            live_event_callback=capture_event,
+        )
+
+        assert result.decision == "wait"
+        parent_state = await state_store.get("parent-approval-session")
+        assert parent_state is not None
+        pending = parent_state.metadata["pending_approval"]
+        assert pending["request_id"] == "sub-dangerous-command"
+        assert pending["delegated_session"]["agent"] == "worker"
+        approval_events = [event for event in events if event.name == "runtime.approval_request"]
+        assert approval_events
+        assert approval_events[-1].session_id == "parent-approval-session"
+        assert not (work_root / "new.txt").exists()
+
+        llm.add_response(LLMResponse(content="审批后子任务完成。", finish_reason="stop"))
+        resumed = await resume_sub_agent_turn(
+            parent_state=parent_state,
+            delegated_session=pending["delegated_session"],
+            prompt="已批准并执行 run_command，结果成功。",
+            llm_client=llm,
+            work_root=str(work_root),
+            runtime_controls={"command_policies": {"regular": "auto_allow", "dangerous": "ask_user"}},
+            live_event_callback=capture_event,
+        )
+        assert resumed.decision == "done"
+        assert resumed.message == "审批后子任务完成。"
 
     @pytest.mark.asyncio
     async def test_distinct_file_read_failures_do_not_masquerade_as_done(self, tmp_path):
@@ -1335,9 +1407,7 @@ class TestRunCoreKernelIntegration:
                     name="sub_agent",
                     arguments={
                         "task": "创建 worker.txt",
-                        "mode": "low",
-                        "clean": True,
-                        "options": {"agent": "worker", "write_scope": ["worker.txt"]},
+                        "agent": "worker",
                     },
                 )
             ],
@@ -1382,9 +1452,8 @@ class TestRunCoreKernelIntegration:
         assert sub_result.metadata["agent_name"] == "worker"
         assert sub_result.metadata["agent_index"] == "001"
         assert sub_result.metadata["sub_session_id"] == "test-sub-agent-delivery-merge:sub:001:worker"
-        assert sub_result.metadata["workspace_delivery"] == {}
-        assert sub_result.metadata["changed_files"] == []
-        assert sub_result.metadata["changed_files_count"] == 0
+        assert "workspace_delivery" not in sub_result.metadata
+        assert "changed_files" not in sub_result.metadata
         assert "branch" not in sub_result.metadata["tool_facts"]
         tool_calls = sub_result.metadata["tool_calls"]
         write_call = next(item for item in tool_calls if item["name"] == "write_file")
@@ -4843,7 +4912,7 @@ class TestMultiTurnHistory:
     2. The current user message (goal) is NOT duplicated — it appears once.
     3. Only user/assistant roles from history are included; tool/internal
        are filtered out.
-    4. History is capped at 20 entries (excess truncated from front).
+    4. History is not capped by message count; token compaction owns pressure.
     5. Without history, behaviour is unchanged (backward compatible).
     """
 
@@ -5042,8 +5111,7 @@ class TestMultiTurnHistory:
         ]
 
     @pytest.mark.asyncio
-    async def test_system_summary_survives_history_cap(self):
-        """System summary stays model-visible after capping long history."""
+    async def test_system_summary_and_full_history_remain_visible_before_token_compaction(self):
         llm = FakeLLMClient()
         llm.add_response(LLMResponse(content="Done.", finish_reason="stop"))
 
@@ -5077,27 +5145,21 @@ class TestMultiTurnHistory:
                 and message.content[1:].isdigit()
             )
         ]
-        assert len(filtered_messages) == 21
+        assert len(filtered_messages) == 26
         assert filtered_messages[0] == ("system", "compacted-summary")
         assert filtered_messages[1:5] == [
-            ("assistant", "A2"),
-            ("user", "Q3"),
-            ("assistant", "A3"),
-            ("user", "Q4"),
+            ("user", "Q0"),
+            ("assistant", "A0"),
+            ("user", "Q1"),
+            ("assistant", "A1"),
         ]
-        assert ("user", "Q0") not in filtered_messages
-        assert ("assistant", "A0") not in filtered_messages
-        assert ("user", "Q1") not in filtered_messages
-        assert ("assistant", "A1") not in filtered_messages
-        assert ("user", "Q2") not in filtered_messages
         assert filtered_messages[-2:] == [
             ("assistant", "A11"),
             ("user", "Current"),
         ]
 
     @pytest.mark.asyncio
-    async def test_history_capped_at_20(self):
-        """History entries beyond 20 are truncated from the front."""
+    async def test_history_is_not_capped_by_message_count(self):
         llm = FakeLLMClient()
         llm.add_response(LLMResponse(content="Done.", finish_reason="stop"))
 
@@ -5106,7 +5168,7 @@ class TestMultiTurnHistory:
         for i in range(25):
             history.append({"role": "user", "content": f"Q{i}"})
             history.append({"role": "assistant", "content": f"A{i}"})
-        # 50 entries total — only last 20 should be used
+        # 50 entries total — all remain until token-driven compaction triggers.
 
         result = await run_core_kernel(
             goal="Current",
@@ -5119,11 +5181,8 @@ class TestMultiTurnHistory:
         messages = llm.last_request.messages
         # Filter out system messages (persona, discipline, hook_context)
         messages = _conversation_messages(messages)
-        # 20 history entries + 1 current user message = 21
-        # The first 30 entries (Q0..A14) should be dropped
-        assert len(messages) == 21
-        # First message should be from the 16th pair (index 30 in original)
-        assert messages[0].content == "Q15"
+        assert len(messages) == 51
+        assert messages[0].content == "Q0"
 
     @pytest.mark.asyncio
     async def test_empty_content_entries_filtered(self):

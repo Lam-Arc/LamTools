@@ -9,6 +9,7 @@ from lamtools_core.runtime import RuntimeState
 
 SUB_SESSION_METADATA_KEY = "_sub_sessions"
 SUB_SESSION_RUNTIME_STATES_KEY = "_sub_session_runtime_states"
+SUB_SESSION_HISTORY_KEY = "_history"
 
 
 @dataclass(frozen=True)
@@ -51,9 +52,20 @@ class SubSessionManager:
 
 
 class SubSessionRuntimeStateStore:
-    def __init__(self, parent_state: RuntimeState, *, metadata_key: str = SUB_SESSION_RUNTIME_STATES_KEY) -> None:
+    def __init__(
+        self,
+        parent_state: RuntimeState,
+        *,
+        parent_state_store: Any | None = None,
+        metadata_key: str = SUB_SESSION_RUNTIME_STATES_KEY,
+    ) -> None:
         self._parent_state = parent_state
+        self._parent_state_store = parent_state_store
         self._metadata_key = metadata_key
+
+    @property
+    def parent_state(self) -> RuntimeState:
+        return self._parent_state
 
     async def get(self, session_id: str) -> RuntimeState | None:
         states = self._states()
@@ -67,7 +79,31 @@ class SubSessionRuntimeStateStore:
         return RuntimeState(**data)
 
     async def save(self, state: RuntimeState) -> None:
-        self._states()[state.session_id] = state.to_dict()
+        states = self._states()
+        previous = states.get(state.session_id)
+        history = previous.get(SUB_SESSION_HISTORY_KEY, []) if isinstance(previous, dict) else []
+        states[state.session_id] = {**state.to_dict(), SUB_SESSION_HISTORY_KEY: history}
+        await self._persist_parent()
+
+    async def get_history(self, session_id: str) -> list[dict[str, Any]]:
+        raw = self._states().get(session_id)
+        if not isinstance(raw, dict) or not isinstance(raw.get(SUB_SESSION_HISTORY_KEY), list):
+            return []
+        return deepcopy(raw[SUB_SESSION_HISTORY_KEY])
+
+    async def save_checkpoint(self, state: RuntimeState, history: list[dict[str, Any]]) -> None:
+        self._states()[state.session_id] = {
+            **state.to_dict(),
+            SUB_SESSION_HISTORY_KEY: deepcopy(history),
+        }
+        await self._persist_parent()
+
+    async def _persist_parent(self) -> None:
+        if self._parent_state_store is not None:
+            await self._parent_state_store.save(self._parent_state)
+
+    async def persist_parent(self) -> None:
+        await self._persist_parent()
 
     def _states(self) -> dict[str, Any]:
         raw = self._parent_state.metadata.get(self._metadata_key)
@@ -137,6 +173,7 @@ def _tool_name(tool: dict[str, Any]) -> str:
 
 __all__ = [
     "SUB_SESSION_METADATA_KEY",
+    "SUB_SESSION_HISTORY_KEY",
     "SUB_SESSION_RUNTIME_STATES_KEY",
     "SubSessionManager",
     "SubSessionRuntimeStateStore",

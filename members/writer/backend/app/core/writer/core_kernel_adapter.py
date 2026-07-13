@@ -96,6 +96,7 @@ from lamtools_core.mem import format_session_memory_summary
 from lamtools_core.app import assemble_core_agent_plugins
 from lamtools_core.prompt import PromptContext, format_prompt_sections
 from lamtools_core.runtime import InMemoryRuntimeStateStore, RuntimeState, RuntimeStateStore, RuntimeTurnInput
+from lamtools_core.sub_session import SubSessionRuntimeStateStore, normalize_sub_session_agent_name
 from lamtools_core.tool import ToolCall, ToolResult
 from lamtools_core.tool.command import run_subprocess as _run_subprocess
 from lamtools_core.tool.command import validate_command_paths as _validate_command_paths
@@ -111,7 +112,6 @@ from app.core.writer.agent_runtime import (
     AgentRegistry,
     AgentRuntime,
     AgentRunResult,
-    SubAgentDefinition,
     default_agent_registry,
 )
 from app.core.writer.failure_specs import failure_recovery_instruction
@@ -209,10 +209,12 @@ class WriterKit:
         work_root: str = "",
         agent_llm_client: Any = None,
         runtime_controls: dict[str, dict[str, bool]] | None = None,
-        sub_agent_llm_client_factory: Callable[[SubAgentDefinition, AgentCall], Awaitable[Any]] | None = None,
-        sub_agent_workspace_factory: Callable[[SubAgentDefinition, AgentCall], Awaitable[dict[str, Any] | None]] | None = None,
         core_event_callback: Callable[[CoreEvent], Awaitable[None]] | None = None,
         tool_allowlist: set[str] | frozenset[str] | None = None,
+        context_window_tokens: int | None = None,
+        compact_trigger_ratio: float = 0.8,
+        cancel_event: asyncio.Event | None = None,
+        runtime_state_store: RuntimeStateStore | None = None,
     ) -> None:
         """Initialise with optional tool_executor, initial_history, work_root, and agent_llm_client.
 
@@ -238,10 +240,12 @@ class WriterKit:
         self._work_root = work_root
         self._agent_llm_client = agent_llm_client
         self._runtime_controls = runtime_controls or {}
-        self._sub_agent_llm_client_factory = sub_agent_llm_client_factory
-        self._sub_agent_workspace_factory = sub_agent_workspace_factory
         self._core_event_callback = core_event_callback
         self._tool_allowlist = frozenset(tool_allowlist) if tool_allowlist is not None else None
+        self._context_window_tokens = context_window_tokens
+        self._compact_trigger_ratio = compact_trigger_ratio
+        self._cancel_event = cancel_event
+        self._runtime_state_store = runtime_state_store
         self._agent_runtime: AgentRuntime | None = None
         self._agent_registry = self._build_agent_registry()
         self._intervention_pending: str = ""  # System-level repair prompt, injected on next turn
@@ -259,11 +263,16 @@ class WriterKit:
                 tool_runner=self._agent_tool_runner,
                 registry=self._agent_registry,
                 model_tools=self._effective_tools,
-                work_root=self._work_root,
-                sub_agent_llm_client_factory=self._sub_agent_llm_client_factory,
-                sub_agent_workspace_factory=self._sub_agent_workspace_factory,
+                model_tools_provider=self._agent_model_tools,
+                parent_state_store=self._runtime_state_store,
                 sub_agent_kernel_runner=self._run_sub_agent_kernel,
             )
+
+    def _agent_model_tools(self) -> list[dict[str, Any]]:
+        tools = list(self._effective_tools)
+        if self._mcp_registry is not None and self._mcp_loaded:
+            tools.extend(self._mcp_registry.tool_definitions())
+        return tools
 
     def _filter_effective_tools(self, tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Advertise only tools that can actually be executed in this runtime."""
@@ -379,15 +388,12 @@ class WriterKit:
 
     async def _run_sub_agent_kernel(
         self,
-        definition: SubAgentDefinition,
+        agent_name: str,
         call: AgentCall,
         prompt: str,
         available_tools: frozenset[str],
-        workspace: dict[str, Any],
     ) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
         llm_client = self._agent_llm_client
-        if self._sub_agent_llm_client_factory is not None:
-            llm_client = await self._sub_agent_llm_client_factory(definition, call)
         if llm_client is None:
             raise RuntimeError("SubAgent runtime has no LLM client")
 
@@ -403,92 +409,92 @@ class WriterKit:
 
         sub_session_id = str(call.options.get("_sub_session_id") or "")
         if not sub_session_id:
-            sub_session_id = f"sub:{definition.name}:{uuid.uuid4().hex[:8]}"
+            sub_session_id = f"sub:{agent_name}:{uuid.uuid4().hex[:8]}"
         option_state_store = call.options.get("_sub_session_state_store")
         if hasattr(option_state_store, "get") and hasattr(option_state_store, "save"):
             state_store = option_state_store
         else:
             state_store = InMemoryRuntimeStateStore()
-        initial_history = await self._sub_session_history(state_store, sub_session_id)
-
         nested_kit = WriterKit(
             tool_executor=tool_executor,
-            initial_history=initial_history,
             work_root=work_root,
             agent_llm_client=None,
             runtime_controls=self._runtime_controls,
             tool_allowlist=available_tools,
             core_event_callback=self._core_event_callback,
+            context_window_tokens=self._context_window_tokens,
+            compact_trigger_ratio=self._compact_trigger_ratio,
+            cancel_event=self._cancel_event,
         )
         event_log = InMemoryEventLog()
 
+        event_sink = SubAgentEventForwardingSink(
+            event_log=event_log,
+            core_event_callback=self._core_event_callback,
+            agent_name=agent_name,
+            call=call,
+        )
         kernel = CoreLoopKernel(
             kit=nested_kit,
             llm_client=core_llm,
             state_store=state_store,
-            event_sink=SubAgentEventForwardingSink(
-                event_log=event_log,
-                core_event_callback=self._core_event_callback,
-                definition=definition,
-                call=call,
-            ),
+            event_sink=event_sink,
             policy=LoopPolicy(
+                context_window_tokens=self._context_window_tokens,
+                compact_trigger_ratio=self._compact_trigger_ratio,
                 parallel_tool_names=(),
             ),
             hook_engine=_build_plugin_hook_engine(work_root),
         )
-        result = await kernel.run(RuntimeTurnInput(
-            user_message=prompt,
-            metadata={"session_id": sub_session_id},
-        ))
-        await self._record_sub_session_history(state_store, sub_session_id, prompt, result.message)
+        watcher_task = None
+        if self._cancel_event is not None:
+            async def _cancel_watcher() -> None:
+                await self._cancel_event.wait()
+                kernel.cancel()
+            watcher_task = asyncio.create_task(_cancel_watcher())
+        try:
+            result = await kernel.run(RuntimeTurnInput(
+                user_message=prompt,
+                metadata={"session_id": sub_session_id},
+            ))
+        finally:
+            if watcher_task is not None:
+                watcher_task.cancel()
         nested_events = [event for _, event in event_log.replay_since()]
         data, tool_records, reasoning_blocks, diagnostics = project_sub_agent_result(result, nested_events)
+        if result.decision == "wait":
+            child_state = await state_store.get(sub_session_id)
+            pending = child_state.metadata.get("pending_approval") if child_state is not None else None
+            waiting = child_state.metadata.get("pending_waiting_request") if child_state is not None else None
+            if isinstance(pending, dict):
+                delegated = {
+                    **pending,
+                    "delegated_session": {
+                        "agent": agent_name,
+                        "session_id": sub_session_id,
+                        "task": call.task,
+                        "tools": sorted(available_tools),
+                        "agent_run_id": str(call.options.get("_agent_run_id") or ""),
+                        "sub_line_id": str(call.options.get("_sub_line_id") or ""),
+                        "parent_tool_call_id": str(call.options.get("_parent_tool_call_id") or ""),
+                    },
+                }
+                parent_state = getattr(state_store, "parent_state", None)
+                if parent_state is not None:
+                    parent_state.metadata["pending_approval"] = delegated
+                    if isinstance(waiting, dict):
+                        parent_state.metadata["pending_waiting_request"] = dict(waiting)
+                    persist_parent = getattr(state_store, "persist_parent", None)
+                    if callable(persist_parent):
+                        await persist_parent()
+                diagnostics["pending_approval"] = delegated
+                approval_event = next(
+                    (event for event in reversed(nested_events) if event.name == "runtime.approval_request"),
+                    None,
+                )
+                if approval_event is not None:
+                    await event_sink.forward(approval_event)
         return data, tool_records, reasoning_blocks, diagnostics
-
-    async def _sub_session_history(
-        self,
-        state_store: RuntimeStateStore,
-        sub_session_id: str,
-    ) -> list[ChatMessage]:
-        state = await state_store.get(sub_session_id)
-        if state is None:
-            return []
-        raw = state.metadata.get("_sub_session_history")
-        if not isinstance(raw, list):
-            return []
-        messages: list[ChatMessage] = []
-        for item in raw[-20:]:
-            if not isinstance(item, dict):
-                continue
-            role = str(item.get("role") or "")
-            content = str(item.get("content") or "")
-            if role in {"user", "assistant"} and content:
-                messages.append(ChatMessage(role=role, content=content))
-        return messages
-
-    async def _record_sub_session_history(
-        self,
-        state_store: RuntimeStateStore,
-        sub_session_id: str,
-        user_message: str,
-        assistant_message: str,
-    ) -> None:
-        if not sub_session_id:
-            return
-        state = await state_store.get(sub_session_id)
-        if state is None:
-            state = RuntimeState(session_id=sub_session_id)
-        history = state.metadata.get("_sub_session_history")
-        if not isinstance(history, list):
-            history = []
-            state.metadata["_sub_session_history"] = history
-        if user_message:
-            history.append({"role": "user", "content": user_message})
-        if assistant_message:
-            history.append({"role": "assistant", "content": assistant_message})
-        del history[:-20]
-        await state_store.save(state)
 
     # -- RuntimeKit protocol --------------------------------------------------
 
@@ -921,6 +927,7 @@ class WriterKit:
             clean=clean,
             options=agent_options,
         )
+        agent_call.options.setdefault("_parent_tool_call_id", call.id)
         logger.info(f"Agent dispatch: name={name} mode={mode} task={task[:80]}...")
         try:
             result: AgentRunResult = await self._agent_runtime.run(
@@ -949,6 +956,18 @@ class WriterKit:
             "valid_design": valid,
             "winner_name": metadata.get("winner_name", ""),
         }
+        diagnostics = metadata.get("diagnostics") if isinstance(metadata.get("diagnostics"), dict) else {}
+        if diagnostics.get("decision") == "wait" and isinstance(diagnostics.get("pending_approval"), dict):
+            tool_metadata["delegated_approval_pending"] = True
+            tool_metadata["pending_approval"] = diagnostics["pending_approval"]
+            return ToolResult(
+                call_id=call.id,
+                name=call.name,
+                status="blocked",
+                content=content,
+                error="Sub-agent is waiting for user approval.",
+                metadata=tool_metadata,
+            )
         facts = agent_tool_facts_for_model(result.name, tool_metadata)
         if facts:
             tool_metadata["tool_facts"] = facts
@@ -1042,6 +1061,13 @@ class WriterKit:
         consecutive times, stop as failed so it cannot masquerade as done.
         """
         hint = turn.decision_hint
+
+        if any(
+            tool_step.result is not None
+            and bool(tool_step.result.metadata.get("delegated_approval_pending"))
+            for tool_step in step.tool_steps
+        ):
+            return "wait"
 
         if self._should_stop_repeated_failure(state, step):
             return "failed"
@@ -1142,8 +1168,6 @@ async def run_core_kernel(
     state_store: RuntimeStateStore | None = None,
     live_event_callback: Callable[[CoreEvent], Awaitable[None]] | None = None,
     runtime_controls: dict[str, dict[str, bool]] | None = None,
-    sub_agent_llm_client_factory: Callable[[SubAgentDefinition, AgentCall], Awaitable[Any]] | None = None,
-    sub_agent_workspace_factory: Callable[[SubAgentDefinition, AgentCall], Awaitable[dict[str, Any] | None]] | None = None,
     cancel_event: asyncio.Event | None = None,
     guidance_source: Callable[[], list[str]] | None = None,
     guidance_finalizer: Callable[[], list[str] | None] | None = None,
@@ -1182,7 +1206,8 @@ async def run_core_kernel(
             filtered out. These messages are prepended to the LLM request
             so the model sees the full multi-turn context. The current
             user message (``goal``) must NOT be included here — the
-            kernel appends it automatically. At most 20 entries are used.
+            kernel appends it automatically. Token-driven compaction handles
+            context pressure; history is not truncated by message count.
         state_store: Optional Core runtime state store. Services should pass
             their persistent member-backed store; tests may rely on the
             in-memory default.
@@ -1238,19 +1263,11 @@ async def run_core_kernel(
                     metadata["key"] = "context_compaction_summary"
                     metadata["kind"] = "history"
                 filtered_history.append((index, ChatMessage(role=role, content=content, metadata=metadata)))
-        system_entries = [item for item in filtered_history if item[1].role == "system"]
-        if len(system_entries) >= 20:
-            kept_indices = {index for index, _ in system_entries[-20:]}
-        else:
-            conversation_budget = 20 - len(system_entries)
-            conversation_entries = [item for item in filtered_history if item[1].role in ("user", "assistant")]
-            kept_indices = {index for index, _ in system_entries}
-            kept_indices.update(index for index, _ in conversation_entries[-conversation_budget:])
-        initial_history.extend(
-            message
-            for index, message in filtered_history
-            if index in kept_indices
-        )
+        initial_history.extend(message for _, message in filtered_history)
+
+    context_window = int(getattr(raw_writer_client, "context_window", 0) or 0)
+    context_window_tokens = context_window if context_window > 0 else None
+    compact_trigger_ratio = 0.8
 
     # Build Kit with initial_history, work_root, and agent_llm_client for agent support
     kit = WriterKit(
@@ -1259,9 +1276,11 @@ async def run_core_kernel(
         work_root=work_root or "",
         agent_llm_client=raw_writer_client,
         runtime_controls=runtime_controls,
-        sub_agent_llm_client_factory=sub_agent_llm_client_factory,
-        sub_agent_workspace_factory=sub_agent_workspace_factory,
         core_event_callback=live_event_callback,
+        context_window_tokens=context_window_tokens,
+        compact_trigger_ratio=compact_trigger_ratio,
+        cancel_event=cancel_event,
+        runtime_state_store=effective_state_store,
     )
 
     # Build event sink (collects events in memory)
@@ -1274,10 +1293,9 @@ async def run_core_kernel(
                 await live_event_callback(event)
 
     # Build policy
-    context_window = int(getattr(raw_writer_client, "context_window", 0) or 0)
     policy = LoopPolicy(
-        context_window_tokens=context_window if context_window > 0 else None,
-        compact_trigger_ratio=0.8,
+        context_window_tokens=context_window_tokens,
+        compact_trigger_ratio=compact_trigger_ratio,
         parallel_tool_names=(),
     )
 
@@ -1434,6 +1452,106 @@ async def run_core_kernel(
     if result.error:
         result.metadata["error"] = result.error
 
+    return result
+
+
+async def resume_sub_agent_turn(
+    *,
+    parent_state: RuntimeState,
+    delegated_session: dict[str, Any],
+    prompt: str,
+    llm_client: Any,
+    work_root: str,
+    runtime_controls: dict[str, dict[str, bool]] | None = None,
+    live_event_callback: Callable[[CoreEvent], Awaitable[None]] | None = None,
+) -> KernelResult:
+    """Resume a delegated session after its pending approval is resolved."""
+    raw_writer_client = llm_client
+    core_llm = llm_client if hasattr(llm_client, "complete") else WriterLLMClientAdapter(writer_client=llm_client)
+    context_window = int(getattr(raw_writer_client, "context_window", 0) or 0)
+    context_window_tokens = context_window if context_window > 0 else None
+    available_tools = frozenset(str(item) for item in delegated_session.get("tools", []) if str(item))
+    agent_name = normalize_sub_session_agent_name(str(delegated_session.get("agent") or ""))
+    sub_session_id = str(delegated_session.get("session_id") or "")
+    if not sub_session_id:
+        raise ValueError("Delegated session id is required")
+
+    state_store = SubSessionRuntimeStateStore(parent_state)
+    child_state = await state_store.get(sub_session_id)
+    if child_state is None:
+        raise ValueError("Delegated runtime state not found")
+    child_state.metadata.pop("pending_approval", None)
+    child_state.metadata.pop("pending_waiting_request", None)
+    child_state.status = "running"
+    child_state.loop_state = "continue"
+    history = await state_store.get_history(sub_session_id)
+    await state_store.save_checkpoint(child_state, history)
+
+    effective_executor = _resolve_tool_executor(None, work_root, live_event_callback)
+    nested_kit = WriterKit(
+        tool_executor=effective_executor,
+        work_root=work_root,
+        agent_llm_client=None,
+        runtime_controls=runtime_controls,
+        tool_allowlist=available_tools,
+        core_event_callback=live_event_callback,
+        context_window_tokens=context_window_tokens,
+        compact_trigger_ratio=0.8,
+    )
+    call = AgentCall(
+        name="sub",
+        task=str(delegated_session.get("task") or prompt),
+        options={
+            "_agent_run_id": str(delegated_session.get("agent_run_id") or ""),
+            "_sub_line_id": str(delegated_session.get("sub_line_id") or ""),
+            "_parent_session_id": parent_state.session_id,
+            "_parent_run_id": parent_state.run_id,
+        },
+    )
+    event_log = InMemoryEventLog()
+    event_sink = SubAgentEventForwardingSink(
+        event_log=event_log,
+        core_event_callback=live_event_callback,
+        agent_name=agent_name,
+        call=call,
+    )
+    kernel = CoreLoopKernel(
+        kit=nested_kit,
+        llm_client=core_llm,
+        state_store=state_store,
+        event_sink=event_sink,
+        policy=LoopPolicy(
+            context_window_tokens=context_window_tokens,
+            compact_trigger_ratio=0.8,
+            parallel_tool_names=(),
+        ),
+        hook_engine=_build_plugin_hook_engine(work_root),
+    )
+    result = await kernel.run(RuntimeTurnInput(
+        user_message=prompt,
+        metadata={"session_id": sub_session_id},
+    ))
+    if result.decision == "wait":
+        child_state = await state_store.get(sub_session_id)
+        pending = child_state.metadata.get("pending_approval") if child_state is not None else None
+        waiting = child_state.metadata.get("pending_waiting_request") if child_state is not None else None
+        if isinstance(pending, dict):
+            parent_state.metadata["pending_approval"] = {
+                **pending,
+                "delegated_session": delegated_session,
+            }
+            if isinstance(waiting, dict):
+                parent_state.metadata["pending_waiting_request"] = dict(waiting)
+            approval_event = next(
+                (
+                    event
+                    for _, event in reversed(event_log.replay_since())
+                    if event.name == "runtime.approval_request"
+                ),
+                None,
+            )
+            if approval_event is not None:
+                await event_sink.forward(approval_event)
     return result
 
 

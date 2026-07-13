@@ -15,7 +15,7 @@ from lamtools_core.config.shared_database import init_shared_config_schema
 
 
 @pytest.mark.asyncio
-async def test_model_routing_state_initializes_and_preserves_sub_agent_model(tmp_path):
+async def test_model_routing_state_keeps_only_writer_route(tmp_path):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'test.db'}", future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
@@ -51,9 +51,10 @@ async def test_model_routing_state_initializes_and_preserves_sub_agent_model(tmp
                 "mode": "model",
                 "model_id": main_model.id,
             }
-            assert state["routes"]["sub_agent"]["mode"] == "follow_default"
+            assert "sub_agent" not in state["routes"]
 
-            await set_route_model(db, "sub_agent", agent_model.id)
+            with pytest.raises(ValueError, match="always use the parent Writer model"):
+                await set_route_model(db, "sub_agent", agent_model.id)
             await set_route_model(db, "writer", main_model.id)
             await db.commit()
 
@@ -64,24 +65,21 @@ async def test_model_routing_state_initializes_and_preserves_sub_agent_model(tmp
                 "mode": "model",
                 "model_id": main_model.id,
             }
-            assert setting.value["routes"]["sub_agent"] == {
-                "mode": "model",
-                "model_id": agent_model.id,
-            }
+            assert "sub_agent" not in setting.value["routes"]
 
             resolved_writer = await resolve_llm_config(db, "writer")
             resolved_agent = await resolve_llm_config(db, "sub_agent")
             assert resolved_writer is not None
             assert resolved_writer.model.model_id == "main-model"
             assert resolved_agent is not None
-            assert resolved_agent.model.model_id == "agent-model"
-            assert resolved_agent.matched_rule is True
+            assert resolved_agent.model.model_id == "main-model"
+            assert resolved_agent.matched_rule is False
     finally:
         await engine.dispose()
 
 
 @pytest.mark.asyncio
-async def test_sub_agent_named_route_overrides_general_sub_agent_route(tmp_path):
+async def test_legacy_sub_agent_routes_are_removed_and_ignored(tmp_path):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'test.db'}", future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
@@ -103,18 +101,28 @@ async def test_sub_agent_named_route_overrides_general_sub_agent_route(tmp_path)
             db.add_all([main_model, general_model, worker_model])
             await db.flush()
 
-            await ensure_model_routing_state(db, default_model_id=main_model.id)
-            await set_route_model(db, "sub_agent", general_model.id)
-            await set_route_model(db, "sub_agent:worker", worker_model.id)
+            db.add(AppSetting(
+                namespace=MODEL_ROUTING_NAMESPACE,
+                value={
+                    "version": 1,
+                    "routes": {
+                        "writer": {"mode": "model", "model_id": main_model.id},
+                        "sub_agent": {"mode": "model", "model_id": general_model.id},
+                        "sub_agent:worker": {"mode": "model", "model_id": worker_model.id},
+                    },
+                },
+            ))
+            state = await ensure_model_routing_state(db, default_model_id=main_model.id)
             await db.commit()
 
             resolved_worker = await resolve_llm_config(db, "sub_agent:worker")
             resolved_reviewer = await resolve_llm_config(db, "sub_agent:reviewer")
 
             assert resolved_worker is not None
-            assert resolved_worker.model.model_id == "worker-model"
+            assert set(state["routes"]) == {"writer"}
+            assert resolved_worker.model.model_id == "main-model"
             assert resolved_reviewer is not None
-            assert resolved_reviewer.model.model_id == "general-sub-model"
+            assert resolved_reviewer.model.model_id == "main-model"
     finally:
         await engine.dispose()
 
@@ -143,7 +151,7 @@ async def test_direct_model_override_accepts_model_identifier(tmp_path):
             await ensure_model_routing_state(db, default_model_id=main_model.id)
             await db.commit()
 
-            resolved = await resolve_llm_config(db, "sub_agent:explorer", model_id="fast-sub-model")
+            resolved = await resolve_llm_config(db, "writer", model_id="fast-sub-model")
 
             assert resolved is not None
             assert resolved.model.id == named_model.id
@@ -160,7 +168,7 @@ async def test_direct_model_override_rejects_unknown_model_instead_of_routing_el
         await init_shared_config_schema(engine)
         async with session_factory() as db:
             with pytest.raises(ValueError, match="Model not found"):
-                await resolve_llm_config(db, "sub_agent", model_id="missing-model")
+                await resolve_llm_config(db, "writer", model_id="missing-model")
     finally:
         await engine.dispose()
 
@@ -197,7 +205,7 @@ async def test_legacy_default_model_id_migrates_to_writer_route(tmp_path):
                 "mode": "model",
                 "model_id": main_model.id,
             }
-            resolved = await resolve_llm_config(db, "sub_agent:reviewer")
+            resolved = await resolve_llm_config(db, "writer")
             assert resolved is not None
             assert resolved.model.id == main_model.id
     finally:
@@ -234,7 +242,7 @@ async def test_model_routing_setting_is_the_only_runtime_route_source(tmp_path):
                 },
             ))
 
-            resolved = await resolve_llm_config(db, "sub_agent:reviewer")
+            resolved = await resolve_llm_config(db, "writer")
             await db.commit()
 
             assert resolved is not None

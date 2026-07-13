@@ -5,7 +5,6 @@ import * as api from '@/api'
 import type {
   Provider, ProviderCreate, ProviderUpdate, Model, ModelCreate, ModelUpdate,
   ResolvedConfig, RuntimeCapabilities, AppSetting, AdapterProfile,
-  SubAgentDefinition, SubAgentDefinitionUpdate,
 } from '@/types'
 
 const MASKED_KEY = /^(?:\*{4,}|[a-zA-Z0-9]{2,8}\.\.\.[a-zA-Z0-9]{2,8})$/
@@ -52,19 +51,9 @@ export const useConfigStore = defineStore('config', () => {
   async function saveAppSetting(namespace: string, value: Record<string, unknown>): Promise<AppSetting> {
     return api.putAppSetting(namespace, value)
   }
-  async function saveProjectSubAgent(workRoot: string, agent: SubAgentDefinitionUpdate): Promise<SubAgentDefinition> {
-    const saved = await api.saveProjectSubAgent(workRoot, agent)
-    await fetchRuntimeCapabilities(workRoot)
-    return saved
-  }
-  async function deleteProjectSubAgent(workRoot: string, name: string) {
-    await api.deleteProjectSubAgent(workRoot, name)
-    await fetchRuntimeCapabilities(workRoot)
-  }
-
   return {
     ...core, resolvedConfig, runtimeCapabilities, adapterProfiles, importEnvConfig,
     fetchResolvedConfig, fetchRuntimeCapabilities, fetchAdapterProfiles,
-    fetchAppSetting, saveAppSetting, saveProjectSubAgent, deleteProjectSubAgent,
+    fetchAppSetting, saveAppSetting,
   }
 })

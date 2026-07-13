@@ -26,11 +26,11 @@ from lamtools_core.app.sqlite_write import configure_sqlite_engine
 from lamtools_core.app.approval_continuation import CoreApprovalContinuationCoordinator
 from app.core.writer.state_store import WriterStateStore
 from app.core.writer.core_kernel_adapter import (
+    resume_sub_agent_turn,
     run_core_kernel,
     schedule_writer_startup_prewarm,
 )
 from app.core.writer.llm_bridge import WriterLLMClientAdapter
-from app.core.writer.agent_runtime import AgentCall, SubAgentDefinition
 from app.core.writer.git import WriterGitManager
 from app.models.base import gen_uuid
 from app.models.session import WriterSession
@@ -227,34 +227,6 @@ def writer_orchestrate(
             shallow_thinking_enabled,
         )
 
-    async def _resolve_sub_agent_llm_client(
-        db: AsyncSession,
-        definition: SubAgentDefinition,
-        call: AgentCall,
-        *,
-        thinking_enabled: bool | None = None,
-        thinking_budget: int | None = None,
-        shallow_thinking_enabled: bool | None = None,
-    ):
-        model_override = str(call.options.get("model") or definition.model or "").strip()
-        async with effective_config_session_factory() as config_db:
-            if model_override:
-                resolved = await resolve_llm_config(config_db, "sub_agent", model_id=model_override)
-            else:
-                resolved = await resolve_llm_config(config_db, "sub_agent")
-            if resolved is None:
-                resolved = await resolve_llm_config(config_db, "sub_agent")
-            if resolved is None:
-                raise RuntimeError("No LLM provider/model configured in DB")
-        return _with_shallow_thinking_client(
-            build_llm_client(
-                resolved,
-                thinking_enabled=thinking_enabled,
-                thinking_budget=thinking_budget,
-            ),
-            shallow_thinking_enabled,
-        )
-
     # --- Service functions ---
 
     async def _runtime_controls(db: AsyncSession) -> dict[str, dict[str, Any]]:
@@ -372,9 +344,6 @@ def writer_orchestrate(
         work_root: str,
         runtime_controls: dict[str, dict[str, bool]] | None = None,
         user_content_blocks: list[dict[str, Any]] | None = None,
-        thinking_enabled: bool | None = None,
-        thinking_budget: int | None = None,
-        shallow_thinking_enabled: bool | None = None,
         model_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Run Writer through the CoreLoopKernel path.
@@ -404,18 +373,8 @@ def writer_orchestrate(
             llm_client=llm_client,
             work_root=work_root,
             runtime_controls=runtime_controls,
-            sub_agent_llm_client_factory=lambda definition, call: _resolve_sub_agent_for_runtime(
-                definition, call,
-                thinking_enabled=thinking_enabled,
-                thinking_budget=thinking_budget,
-                shallow_thinking_enabled=shallow_thinking_enabled,
-            ),
             model_context=model_context,
         )
-
-    async def _resolve_sub_agent_for_runtime(definition, call, **options):
-        async with state_session_factory() as read_db:
-            return await _resolve_sub_agent_llm_client(read_db, definition, call, **options)
 
     async def run_turn(
         db: AsyncSession | None = None,
@@ -513,9 +472,6 @@ def writer_orchestrate(
                 llm_client=resolved_client,
                 work_root=work_root,
                 runtime_controls=controls,
-                thinking_enabled=thinking_enabled,
-                thinking_budget=thinking_budget,
-                shallow_thinking_enabled=shallow_thinking_enabled,
                 model_context=model_context,
             )
         except BaseException:
@@ -581,11 +537,44 @@ def writer_orchestrate(
                 runtime_controls=controls,
             )
 
+        async def continue_delegated_turn(
+            prompt: str,
+            state: RuntimeState,
+            delegated_session: dict[str, Any],
+        ) -> None:
+            async with state_session_factory() as read_db:
+                resolved_client = await _resolve_llm_client(read_db)
+                controls = await _runtime_controls(read_db)
+            sub_result = await resume_sub_agent_turn(
+                parent_state=state,
+                delegated_session=delegated_session,
+                prompt=prompt,
+                llm_client=resolved_client,
+                work_root=work_root,
+                runtime_controls=controls,
+                live_event_callback=recorder.record_core_event,
+            )
+            await core_state_store.save(state)
+            if sub_result.decision == "wait":
+                return
+            handoff = str(sub_result.message or sub_result.error or "子 Agent 未返回正文").strip()
+            await _run_core_kernel_path(
+                db=None,
+                session_id=session_id,
+                transcript_turn_id=turn.id,
+                user_message=f"子 Agent 已在审批后继续执行，返回结果：\n{handoff}",
+                raw_user_message=turn.user_text,
+                llm_client=resolved_client,
+                work_root=work_root,
+                runtime_controls=controls,
+            )
+
         return CoreApprovalContinuationCoordinator(
             state_store=core_state_store,
             emit_event=recorder.record_core_event,
             execute_tool=lambda tool_call: execute_approved_tool(tool_call, work_root=work_root),
             continue_turn=continue_turn,
+            continue_delegated_turn=continue_delegated_turn,
         )
 
     async def compact_session_context(

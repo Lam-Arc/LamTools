@@ -22,6 +22,9 @@ def project_sub_agent_result(
     }
     if result.error:
         diagnostics["error"] = result.error
+    if result.decision == "wait":
+        diagnostics["fallback_reason"] = "approval_pending"
+        return {}, tool_records, reasoning_blocks, diagnostics
     if not final_text:
         diagnostics["fallback_reason"] = result.error or "empty_final_output"
         return {}, tool_records, reasoning_blocks, diagnostics

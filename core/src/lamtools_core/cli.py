@@ -213,12 +213,14 @@ async def run_core_cli_task(
     work_root.mkdir(parents=True, exist_ok=True)
 
     resolved_model_id = options.model_id
+    context_window_tokens: int | None = None
     model_context: dict[str, Any] = {"model_id": resolved_model_id}
     if llm_client is None:
         config_db = _resolve_config_db(options.config_db)
         config = load_llm_config(config_db, model_ref=options.model_id)
         profile = _resolve_adapter_profile(config, options.adapter_dirs)
         resolved_model_id = config.model_id
+        context_window_tokens = config.context_window or None
         model_context = {
             "model_record_id": config.model_record_id,
             "model_id": config.model_id,
@@ -254,15 +256,22 @@ async def run_core_cli_task(
         plugin_assembly["hook_engine"].set_mcp_caller(mcp_registry if mcp_tool_specs else None)
     from lamtools_core.tool.sub_agent_runner import KernelSubAgentRunner
 
+    core_instructions = "You are LamTools Core Agent, a standalone general-purpose agent runtime."
+    context_window_tokens = int(getattr(llm_client, "context_window", 0) or 0) or context_window_tokens
     sub_agent_runner = KernelSubAgentRunner(
         work_root=work_root,
         llm_client=llm_client,
         model_id=resolved_model_id,
+        instructions=core_instructions,
+        temperature=options.temperature,
+        max_tokens=options.max_tokens,
+        thinking_enabled=options.thinking_enabled,
+        thinking_budget=options.thinking_budget,
         approval_policy=options.approval_policy,
         loaded_skill_roots=set(plugin_assembly["skill_roots"]),
-        agent_roots=tuple(plugin_assembly.get("agent_roots") or ()),
         mcp_caller=mcp_registry if mcp_tool_specs else None,
         mcp_tool_specs=mcp_tool_specs,
+        context_window_tokens=context_window_tokens,
     )
     toolbox = build_core_toolbox(
         work_root=work_root,
@@ -276,7 +285,7 @@ async def run_core_cli_task(
         work_root=work_root,
         config=CoreBaseAgentConfig(
             model_id=resolved_model_id,
-            instructions="You are LamTools Core Agent, a standalone general-purpose agent runtime.",
+            instructions=core_instructions,
             temperature=options.temperature,
             max_tokens=options.max_tokens,
             thinking_enabled=options.thinking_enabled,
@@ -292,7 +301,12 @@ async def run_core_cli_task(
             llm_client=llm_client,
             state_store=core_db.runtime_state_store,
             event_sink=sink,
-            policy=LoopPolicy(model_timeout_seconds=360, model_retries=3, persist_steps=True),
+            policy=LoopPolicy(
+                model_timeout_seconds=360,
+                model_retries=3,
+                persist_steps=True,
+                context_window_tokens=context_window_tokens,
+            ),
             hook_engine=plugin_assembly["hook_engine"],
         )
         result = await kernel.run(
@@ -304,6 +318,11 @@ async def run_core_cli_task(
                     "thinking_enabled": options.thinking_enabled,
                     "thinking_budget": options.thinking_budget,
                     "shallow_thinking_enabled": options.shallow_thinking_enabled,
+                    **(
+                        {"context_window_tokens": context_window_tokens}
+                        if context_window_tokens is not None
+                        else {}
+                    ),
                 },
             )
         )

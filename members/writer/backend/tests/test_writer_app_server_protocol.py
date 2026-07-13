@@ -24,8 +24,6 @@ from app.app_server.operations import (
     handle_config_provider_delete_operation,
     handle_config_provider_update_operation,
     handle_config_runtime_capabilities_get_operation,
-    handle_config_subagent_delete_operation,
-    handle_config_subagent_upsert_operation,
     handle_config_model_create_operation,
     handle_config_model_delete_operation,
     handle_config_model_update_operation,
@@ -533,8 +531,6 @@ def test_writer_operation_catalog_covers_app_server_rpc_methods():
         "config.providers.list",
         "config.resolved.get",
         "config.runtime_capabilities.get",
-        "config.subagent.delete",
-        "config.subagent.upsert",
         "hook.list",
         "hook.trust",
         "plugin.disable",
@@ -708,15 +704,6 @@ async def test_model_write_operations_return_validation_errors():
     assert create.response["error"]["message"] == "provider_id and model_id are required"
     assert update.response["error"]["message"] == "model_record_id is required"
     assert delete.response["error"]["message"] == "model_record_id is required"
-
-
-@pytest.mark.asyncio
-async def test_subagent_write_operations_return_validation_errors():
-    upsert = await handle_config_subagent_upsert_operation(request_id=1, params={})
-    delete = await handle_config_subagent_delete_operation(request_id=2, params={})
-
-    assert upsert.response["error"]["message"] == "name is required"
-    assert delete.response["error"]["message"] == "name is required"
 
 
 @pytest.mark.asyncio
@@ -2195,50 +2182,6 @@ async def test_runtime_capabilities_operation_returns_settings_payload(tmp_path)
     finally:
         await engine.dispose()
         await shared_engine.dispose()
-
-
-@pytest.mark.asyncio
-async def test_subagent_operations_create_update_and_delete_project_definition(tmp_path):
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'subagents.db'}", future=True)
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    try:
-        work_root = tmp_path / "workspace"
-        work_root.mkdir()
-        created = await handle_config_subagent_upsert_operation(
-            request_id=1,
-            params={
-                "work_root": str(work_root),
-                "name": "project-worker",
-                "description": "Project worker",
-                "role": "Reviewer",
-                "developer_instructions": "Review the project.",
-                "tools": ["read_file"],
-                "model": "gpt-test",
-                "max_tool_rounds": 4,
-                "aliases": ["worker"],
-            },
-            session_factory=session_factory,
-        )
-
-        subagent = created.response["result"]["subagent"]
-        assert subagent["name"] == "project-worker"
-        assert subagent["role"] == "Reviewer"
-        assert subagent["tools"] == ["read_file"]
-        assert subagent["enabled"] is True
-        assert (work_root / ".lamtools" / "agents" / "project-worker.md").is_file()
-
-        deleted = await handle_config_subagent_delete_operation(
-            request_id=2,
-            params={"work_root": str(work_root), "name": "project-worker"},
-        )
-
-        assert deleted.response["result"] == {"ok": True}
-        assert not (work_root / ".lamtools" / "agents" / "project-worker.md").exists()
-    finally:
-        await engine.dispose()
 
 
 @pytest.mark.asyncio

@@ -213,7 +213,8 @@ def test_sub_agent_tool_schema_is_mvp_minimal():
     schema = spec["input_schema"]
     properties = schema["properties"]
 
-    assert set(properties) == {"task", "agent", "model", "expected_output"}
+    assert set(properties) == {"task", "agent"}
+    assert schema["required"] == ["task", "agent"]
     assert "options" not in properties
     assert "write_scope" not in str(schema)
     assert "isolated" not in str(schema)
@@ -545,8 +546,7 @@ async def test_agent_tool_summary_includes_standard_agent_metadata(tmp_path):
                     name="sub_agent",
                     arguments={
                         "task": "Review the project",
-                        "mode": "low",
-                        "options": {"role": "review", "expected_output": "blocking issues"},
+                        "agent": "review",
                     },
                 )
             ],
@@ -565,11 +565,11 @@ async def test_agent_tool_summary_includes_standard_agent_metadata(tmp_path):
     summary = result.metadata["tool_results_summary"]
     agent_summary = next(item for item in summary if item["tool_name"] == "sub_agent")
     metadata = agent_summary["metadata"]
-    assert metadata["agent_name"] == "sub"
+    assert metadata["agent_name"] == "review"
     assert metadata["agent_index"] == "001"
-    assert metadata["sub_session_id"] == "agent-standard-metadata:sub:001:sub"
+    assert metadata["sub_session_id"] == "agent-standard-metadata:sub:001:review"
     assert metadata["runtime_agent"] == "sub"
-    assert metadata["role"] == "review"
+    assert "role" not in metadata
     assert metadata["task"] == "Review the project"
     assert all(
         item.get("label") not in {"Agent 类型", "子代理角色", "工具权限"}

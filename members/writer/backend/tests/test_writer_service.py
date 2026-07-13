@@ -16,7 +16,6 @@ from app.models.session import WriterSession
 from app.models.transcript import WriterTranscriptBlock, WriterTranscriptTurn
 import app.services.app_projection_sink as app_projection_sink_module
 import app.services.writer_service as writer_service_module
-from app.core.writer.agent_runtime import AgentCall, SubAgentDefinition
 from app.services.writer_service import writer_orchestrate
 from lamtools_core.event import CoreEvent
 from lamtools_core.kernel import KernelResult
@@ -349,37 +348,10 @@ async def test_run_turn_binds_post_run_checkpoint_to_app_server_turn(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_sub_agent_model_factory_uses_generic_route_and_explicit_model(monkeypatch, tmp_path):
-    resolved_calls: list[dict[str, str | None]] = []
-
-    async def _fake_resolve_llm_config(db, route, model_id=None):
-        resolved_calls.append({"route": route, "model_id": model_id})
-        model_key = model_id or route
-        return SimpleNamespace(
-            provider=SimpleNamespace(id=f"provider:{model_key}"),
-            model=SimpleNamespace(id=f"model:{model_key}", model_id=model_key),
-            task_type=route,
-        )
-
-    def _fake_build_llm_client(resolved, thinking_enabled=None, thinking_budget=None):
-        return SimpleNamespace(model_id=resolved.model.model_id)
-
+async def test_runtime_does_not_install_a_sub_agent_model_factory(monkeypatch, tmp_path):
+    observed_kwargs = {}
     async def _fake_run_core_kernel(**kwargs):
-        factory = kwargs["sub_agent_llm_client_factory"]
-        await factory(
-            SubAgentDefinition(
-                name="worker",
-                description="Worker",
-                role="sub",
-                developer_instructions="",
-                tools=(),
-            ),
-            AgentCall(
-                name="sub",
-                task="delegate",
-                options={"agent": "worker", "model": "glm5.2-xfyun-maas"},
-            ),
-        )
+        observed_kwargs.update(kwargs)
         return KernelResult(
             session_id=kwargs["session_id"],
             run_id="run-sub-agent-route",
@@ -388,8 +360,6 @@ async def test_sub_agent_model_factory_uses_generic_route_and_explicit_model(mon
             metadata={"core_events": [], "steps_count": 0, "tool_results_summary": [], "verification_summaries": []},
         )
 
-    monkeypatch.setattr(writer_service_module, "resolve_llm_config", _fake_resolve_llm_config)
-    monkeypatch.setattr(writer_service_module, "build_llm_client", _fake_build_llm_client)
     monkeypatch.setattr(writer_service_module, "run_core_kernel", _fake_run_core_kernel)
 
     settings = Settings(
@@ -413,8 +383,7 @@ async def test_sub_agent_model_factory_uses_generic_route_and_explicit_model(mon
 
             await run_turn(db, session_id, "delegate work")
 
-        assert {"route": "sub_agent", "model_id": "glm5.2-xfyun-maas"} in resolved_calls
-        assert all(call["route"] != "sub_agent:worker" for call in resolved_calls)
+        assert "sub_agent_llm_client_factory" not in observed_kwargs
     finally:
         await engine.dispose()
 

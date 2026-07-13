@@ -31,9 +31,6 @@ RunCoreKernel = Callable[..., Awaitable[KernelResult]]
 SummarizeKernelResult = Callable[[KernelResult], dict[str, Any]]
 SchedulePrewarm = Callable[[str], None]
 RuntimeTaskRegistryFactory = Callable[[], Any]
-SubAgentLLMClientFactory = Callable[[Any, Any], Awaitable[Any]]
-
-
 def _current_user_content(
     text: str,
     extra_blocks: list[dict[str, Any]] | None,
@@ -103,7 +100,6 @@ class WriterRuntimeRunner:
         llm_client: Any,
         work_root: str,
         runtime_controls: dict[str, dict[str, bool]] | None = None,
-        sub_agent_llm_client_factory: SubAgentLLMClientFactory | None = None,
         model_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         pre_run_compaction = await self._compact_before_history_cap(
@@ -181,7 +177,6 @@ class WriterRuntimeRunner:
                 state_store=self._state_store,
                 live_event_callback=recorder.record_core_event,
                 runtime_controls=runtime_controls,
-                sub_agent_llm_client_factory=sub_agent_llm_client_factory,
                 cancel_event=runtime_task_registry.get_cancel_event(session_id),
                 run_id=turn.id,
                 turn_id=turn.id,

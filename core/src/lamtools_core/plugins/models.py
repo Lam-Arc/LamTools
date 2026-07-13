@@ -20,7 +20,6 @@ class PluginManifest:
     skill_roots: list[Path] = field(default_factory=list)
     hook_files: list[Path] = field(default_factory=list)
     mcp_files: list[Path] = field(default_factory=list)
-    agent_roots: list[Path] = field(default_factory=list)
     permissions: dict[str, Any] = field(default_factory=dict)
     raw: dict[str, Any] = field(default_factory=dict)
 

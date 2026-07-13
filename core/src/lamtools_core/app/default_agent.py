@@ -78,6 +78,7 @@ class CoreAgentRuntimeOptions:
     thinking_enabled: bool | None = None
     thinking_budget: int | None = None
     shallow_thinking_enabled: bool = False
+    context_window_tokens: int | None = None
 
 
 def create_core_agent_operations(
@@ -193,6 +194,12 @@ def create_core_agent_operations(
                 approval_policy=approval_policy,
                 llm_client=runtime_model_provider,
                 model_id=runtime_options.model_id,
+                instructions=spec.instructions,
+                context_window_tokens=runtime_options.context_window_tokens,
+                thinking_enabled=runtime_options.thinking_enabled,
+                thinking_budget=runtime_options.thinking_budget,
+                sub_agent_state_store=runtime_state_store,
+                sub_agent_session_prefix=thread_id,
             )
             try:
                 kernel = CoreLoopKernel(
@@ -210,7 +217,12 @@ def create_core_agent_operations(
                     llm_client=runtime_model_provider,  # type: ignore[arg-type]
                     state_store=runtime_state_store,
                     event_sink=sink,
-                    policy=LoopPolicy(model_timeout_seconds=360, model_retries=3, persist_steps=True),
+                    policy=LoopPolicy(
+                        model_timeout_seconds=360,
+                        model_retries=3,
+                        persist_steps=True,
+                        context_window_tokens=runtime_options.context_window_tokens,
+                    ),
                     hook_engine=plugin_assembly["hook_engine"],
                 )
                 kernel_result = await kernel.run(
@@ -244,6 +256,11 @@ def create_core_agent_operations(
                                 else {}
                             ),
                             "shallow_thinking_enabled": runtime_options.shallow_thinking_enabled,
+                            **(
+                                {"context_window_tokens": runtime_options.context_window_tokens}
+                                if runtime_options.context_window_tokens is not None
+                                else {}
+                            ),
                         },
                     )
                 )
@@ -442,6 +459,12 @@ def create_core_agent_operations(
                         approval_policy="auto_approve",
                         llm_client=runtime_model_provider,
                         model_id=runtime_options.model_id,
+                        instructions=spec.instructions,
+                        context_window_tokens=runtime_options.context_window_tokens,
+                        thinking_enabled=runtime_options.thinking_enabled,
+                        thinking_budget=runtime_options.thinking_budget,
+                        sub_agent_state_store=runtime_state_store,
+                        sub_agent_session_prefix=thread_id,
                     )
                     call = ToolCall(
                         id=str(pending_call.get("id") or ""),
@@ -529,6 +552,12 @@ def create_core_agent_operations(
                     approval_policy="require",
                     llm_client=runtime_model_provider,
                     model_id=runtime_options.model_id,
+                    instructions=spec.instructions,
+                    context_window_tokens=runtime_options.context_window_tokens,
+                    thinking_enabled=runtime_options.thinking_enabled,
+                    thinking_budget=runtime_options.thinking_budget,
+                    sub_agent_state_store=runtime_state_store,
+                    sub_agent_session_prefix=thread_id,
                 )
                 kernel = CoreLoopKernel(
                     kit=CoreBaseAgentKit(
@@ -544,7 +573,12 @@ def create_core_agent_operations(
                     llm_client=runtime_model_provider,  # type: ignore[arg-type]
                     state_store=runtime_state_store,
                     event_sink=sink,
-                    policy=LoopPolicy(model_timeout_seconds=360, model_retries=3, persist_steps=True),
+                    policy=LoopPolicy(
+                        model_timeout_seconds=360,
+                        model_retries=3,
+                        persist_steps=True,
+                        context_window_tokens=runtime_options.context_window_tokens,
+                    ),
                     hook_engine=plugin_assembly["hook_engine"],
                 )
                 kernel_result = await kernel.run(
@@ -569,6 +603,11 @@ def create_core_agent_operations(
                                 else {}
                             ),
                             "shallow_thinking_enabled": runtime_options.shallow_thinking_enabled,
+                            **(
+                                {"context_window_tokens": runtime_options.context_window_tokens}
+                                if runtime_options.context_window_tokens is not None
+                                else {}
+                            ),
                         },
                     )
                 )
@@ -742,11 +781,21 @@ def _runtime_options_from_request(spec: CoreAgentSpec, request: OperationRequest
             spec.metadata.get("shallow_thinking_enabled"),
         )
     )
+    context_window_tokens = _optional_int(
+        payload.get("context_window_tokens"),
+        payload.get("contextWindowTokens"),
+        payload.get("context_window"),
+        metadata.get("context_window_tokens"),
+        metadata.get("contextWindowTokens"),
+        metadata.get("context_window"),
+        spec.metadata.get("context_window"),
+    )
     return CoreAgentRuntimeOptions(
         model_id=model_id,
         thinking_enabled=thinking_enabled,
         thinking_budget=thinking_budget,
         shallow_thinking_enabled=shallow_thinking_enabled,
+        context_window_tokens=context_window_tokens,
     )
 
 
@@ -762,6 +811,11 @@ def _runtime_options_from_state(spec: CoreAgentSpec, state: Any) -> CoreAgentRun
                 metadata.get("shallow_thinking_enabled"),
                 spec.metadata.get("shallow_thinking_enabled"),
             )
+        ),
+        context_window_tokens=_optional_int(
+            metadata.get("context_window_tokens"),
+            metadata.get("context_window"),
+            spec.metadata.get("context_window"),
         ),
     )
 
@@ -865,6 +919,14 @@ async def _build_core_runtime_toolbox(
     approval_policy: str,
     llm_client: Any | None = None,
     model_id: str = "",
+    instructions: str = "",
+    context_window_tokens: int | None = None,
+    temperature: float = 0.2,
+    max_tokens: int = 4096,
+    thinking_enabled: bool | None = None,
+    thinking_budget: int | None = None,
+    sub_agent_state_store: RuntimeStateStore | None = None,
+    sub_agent_session_prefix: str = "core-sub-agent",
 ):
     from lamtools_core.mcp import MCPToolRegistry
     from lamtools_core.tool.sub_agent_runner import KernelSubAgentRunner
@@ -884,11 +946,18 @@ async def _build_core_runtime_toolbox(
             work_root=work_root,
             llm_client=llm_client,
             model_id=model_id,
+            instructions=instructions,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            thinking_enabled=thinking_enabled,
+            thinking_budget=thinking_budget,
             approval_policy=normalized_policy,
             loaded_skill_roots=skill_roots,
-            agent_roots=tuple(plugin_assembly.get("agent_roots") or ()),
             mcp_caller=registry if mcp_tool_specs else None,
             mcp_tool_specs=mcp_tool_specs,
+            context_window_tokens=context_window_tokens,
+            state_store=sub_agent_state_store,
+            session_prefix=sub_agent_session_prefix,
         )
     toolbox = build_core_toolbox(
         work_root=work_root,

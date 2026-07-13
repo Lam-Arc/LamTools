@@ -15,10 +15,8 @@ MODEL_ROUTING_VERSION = 1
 
 DEFAULT_ROUTE_TASK_TYPES = [
     "writer",
-    "sub_agent",
 ]
 EXECUTION_ROUTE_TASK_TYPES = {"writer"}
-AGENT_ROUTE_TASK_TYPES = {"sub_agent"}
 
 
 @dataclass(frozen=True)
@@ -74,9 +72,6 @@ async def _initial_model_routing_state(db: AsyncSession, default_model: LLMModel
     routes: dict[str, dict[str, str | None]] = {
         "writer": _route_entry("model", writer_model_id),
     }
-    for task_type in AGENT_ROUTE_TASK_TYPES:
-        routes[task_type] = _route_entry("follow_default")
-
     return {
         "version": MODEL_ROUTING_VERSION,
         "routes": routes,
@@ -108,16 +103,12 @@ async def ensure_model_routing_state(
             "version": MODEL_ROUTING_VERSION,
             "routes": raw_routes,
         }
-        routes = dict(value["routes"])
+        routes = {
+            key: entry
+            for key, entry in dict(value["routes"]).items()
+            if key != "sub_agent" and not str(key).startswith("sub_agent:")
+        }
         routes["writer"] = _route_entry("model", writer_model_id)
-        for task_type in AGENT_ROUTE_TASK_TYPES:
-            entry = routes.get(task_type) if isinstance(routes.get(task_type), dict) else {}
-            mode = str(entry.get("mode") or "follow_default")
-            model_id = str(entry.get("model_id") or "")
-            if mode == "model" and await _model_exists(db, model_id) is not None:
-                routes[task_type] = _route_entry("model", model_id)
-            else:
-                routes[task_type] = _route_entry("follow_default")
         value["routes"] = routes
 
     if setting is None:
@@ -145,6 +136,8 @@ async def _set_writer_model(db: AsyncSession, model_id: str) -> dict:
 
 async def set_route_model(db: AsyncSession, task_type: str, model_id: str | None) -> dict:
     normalized = (task_type or "writer").strip() or "writer"
+    if normalized == "sub_agent" or normalized.startswith("sub_agent:"):
+        raise ValueError("Sub-agent sessions always use the parent Writer model")
     if normalized in EXECUTION_ROUTE_TASK_TYPES:
         if not model_id:
             value = await ensure_model_routing_state(db)
@@ -180,6 +173,8 @@ async def resolve_llm_config(db: AsyncSession, task_type: str = "default", *, mo
     specified model directly, enabling per-request model switching.
     """
     normalized = (task_type or "writer").strip() or "writer"
+    if normalized == "sub_agent" or normalized.startswith("sub_agent:"):
+        normalized = "writer"
 
     # ── Direct model override (per-request switching) ──
     if model_id:
@@ -201,16 +196,8 @@ async def resolve_llm_config(db: AsyncSession, task_type: str = "default", *, mo
     writer_entry = routes.get("writer") if isinstance(routes.get("writer"), dict) else {}
     writer_model_id = str(writer_entry.get("model_id") or "")
     resolved_model_id = writer_model_id
-    route_candidates = [normalized]
-    if normalized.startswith("sub_agent:"):
-        route_candidates.append("sub_agent")
     if normalized not in EXECUTION_ROUTE_TASK_TYPES:
-        entry: dict = {}
-        for route_candidate in route_candidates:
-            candidate_entry = routes.get(route_candidate) if isinstance(routes.get(route_candidate), dict) else {}
-            if str(candidate_entry.get("mode") or "") == "model":
-                entry = candidate_entry
-                break
+        entry = routes.get(normalized) if isinstance(routes.get(normalized), dict) else {}
         if str(entry.get("mode") or "") == "model":
             route_model_id = str(entry.get("model_id") or "")
             if await _model_exists(db, route_model_id) is not None:

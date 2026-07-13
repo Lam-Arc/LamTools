@@ -73,9 +73,8 @@ async def runtime_capabilities_response(
     work_root: str | None = None,
     shared_db: AsyncSession | None = None,
 ) -> dict[str, Any]:
-    from app.config import settings
     from app.core.prompt_assembler import WRITER_TOOLS
-    from app.core.writer.agent_runtime import default_agent_registry, load_sub_agent_definitions
+    from app.core.writer.agent_runtime import default_agent_registry
     from app.core.writer.permission import TOOL_PERMISSIONS
 
     controls = await runtime_controls(db, shared_db=shared_db)
@@ -105,22 +104,6 @@ async def runtime_capabilities_response(
             "enabled": bool(agent_controls.get(spec.name, True)),
         })
 
-    effective_work_root = work_root or settings.writer_work_root
-    subagents = [
-        {
-            "name": definition.name,
-            "description": definition.description,
-            "role": definition.role,
-            "developer_instructions": definition.developer_instructions,
-            "tools": list(definition.tools),
-            "model": definition.model,
-            "aliases": list(definition.aliases),
-            "source": definition.source,
-            "enabled": bool(agent_controls.get(f"sub:{definition.name}", True)),
-        }
-        for definition in load_sub_agent_definitions(effective_work_root)
-    ]
-
     tools = []
     for item in WRITER_TOOLS:
         function = item.get("function") or {}
@@ -138,7 +121,6 @@ async def runtime_capabilities_response(
 
     return {
         "agents": agents,
-        "subagents": subagents,
         "tools": tools,
         "command_policies": command_policies,
     }

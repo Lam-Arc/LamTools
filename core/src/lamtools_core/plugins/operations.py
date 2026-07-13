@@ -29,7 +29,6 @@ def build_plugin_operation_catalog(
                 "skills": [str(path) for path in item.skill_roots],
                 "hooks": [str(path) for path in item.hook_files],
                 "mcp": [str(path) for path in item.mcp_files],
-                "agents": [str(path) for path in item.agent_roots],
             }
             for item in plugin_registry.discover()
         ]

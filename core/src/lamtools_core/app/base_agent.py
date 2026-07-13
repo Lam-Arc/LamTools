@@ -289,12 +289,6 @@ def assemble_core_agent_plugins(
             for path in plugin.mcp_files
             if path.exists()
         ],
-        "agent_roots": [
-            path
-            for plugin in enabled_plugins
-            for path in plugin.agent_roots
-            if path.exists()
-        ],
         "hook_engine": HookEngine(hooks) if hooks else None,
     }
 

@@ -217,28 +217,6 @@ export interface AgentCapability {
   enabled: boolean
 }
 
-export interface SubAgentDefinition {
-  name: string
-  description: string
-  role: string
-  developer_instructions: string
-  tools: string[]
-  model: string
-  aliases: string[]
-  source: string
-  enabled: boolean
-}
-
-export interface SubAgentDefinitionUpdate {
-  name: string
-  description: string
-  role: string
-  developer_instructions: string
-  tools: string[]
-  model?: string
-  aliases?: string[]
-}
-
 export interface AgentBranch {
   branch: string
   head: string | null
@@ -258,7 +236,6 @@ export interface ToolCapability {
 
 export interface RuntimeCapabilities {
   agents: AgentCapability[]
-  subagents: SubAgentDefinition[]
   tools: ToolCapability[]
   command_policies?: Record<string, string>
 }

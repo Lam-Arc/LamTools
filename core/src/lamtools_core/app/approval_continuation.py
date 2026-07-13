@@ -28,6 +28,7 @@ class CoreApprovalContinuationCoordinator:
     emit_event: Callable[[CoreEvent], Any]
     execute_tool: Callable[[dict[str, Any]], Any]
     continue_turn: Callable[[str, Any], Any]
+    continue_delegated_turn: Callable[[str, Any, dict[str, Any]], Any] | None = None
 
     async def respond(
         self,
@@ -124,7 +125,11 @@ class CoreApprovalContinuationCoordinator:
                 ))
                 raise
 
-        await _call(self.continue_turn, prompt, state)
+        delegated = pending.get("delegated_session")
+        if isinstance(delegated, dict) and self.continue_delegated_turn is not None:
+            await _call(self.continue_delegated_turn, prompt, state, delegated)
+        else:
+            await _call(self.continue_turn, prompt, state)
         return {"status": "continued", "decision": resolved.action}
 
     @staticmethod

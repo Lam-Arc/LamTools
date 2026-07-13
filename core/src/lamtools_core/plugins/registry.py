@@ -104,7 +104,6 @@ class PluginRegistry:
             skill_roots=self._paths(root, raw.get("skills")),
             hook_files=hook_files,
             mcp_files=mcp_files,
-            agent_roots=self._paths(root, raw.get("agents")),
             permissions=raw.get("permissions") if isinstance(raw.get("permissions"), dict) else {},
             raw=dict(raw),
         )

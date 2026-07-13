@@ -1,19 +1,14 @@
 from __future__ import annotations
 
-"""Generic runtime for delegated Writer agents.
-
-This module registers durable sub-agents. Core provides the reusable agent
-runtime mechanics; Writer decides which delegated roles are available.
-"""
+"""Writer adapter for reusable delegated sub-sessions."""
 
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from lamtools_core.agent import SUB_AGENT_SPEC, build_sub_agent_prompt
+from lamtools_core.agent import SUB_AGENT_SPEC
 from lamtools_core.runtime import RuntimeState
 from lamtools_core.sub_session import (
     SubSessionManager,
@@ -21,42 +16,6 @@ from lamtools_core.sub_session import (
     filter_sub_agent_tools,
     normalize_sub_session_agent_name,
 )
-from lamtools_core.tool.sub_agent import (
-    SubAgentDefinition,
-    definition_map,
-    delete_project_sub_agent_definition,
-    parse_sub_agent_definition,
-    project_sub_agent_definition_path,
-    render_sub_agent_definition,
-    validate_project_sub_agent_name,
-    write_project_sub_agent_definition,
-)
-
-SUB_AGENT_READ_TOOLS = frozenset({
-    "inspect_project",
-    "read_file",
-    "list_dir",
-    "search_files",
-    "search_content",
-    "recall_session",
-    "load_skill",
-    "web_search",
-    "web_fetch",
-    "browser_check",
-    "git_status",
-    "git_diff",
-})
-
-SUB_AGENT_REVIEW_TOOLS = frozenset({
-    *SUB_AGENT_READ_TOOLS,
-    "run_tests",
-})
-
-SUB_AGENT_IMPLEMENTATION_TOOLS = frozenset({
-    *SUB_AGENT_REVIEW_TOOLS,
-    "write_file",
-    "edit_file",
-})
 
 @dataclass(frozen=True)
 class AgentSpec:
@@ -86,98 +45,6 @@ class AgentRunResult:
     name: str
     output: str
     metadata: dict[str, Any] = field(default_factory=dict)
-
-
-BUILTIN_SUB_AGENT_DEFINITIONS: tuple[SubAgentDefinition, ...] = (
-    SubAgentDefinition(
-        name="default",
-        aliases=("general-purpose", "general_purpose", "general"),
-        description="General-purpose delegated agent for focused investigation and handoff.",
-        role="general",
-        tools=tuple(sorted(SUB_AGENT_READ_TOOLS)),
-        developer_instructions=(
-            "Handle broad delegated tasks conservatively. Prefer reading and searching before conclusions. "
-            "Return concise findings, risks, and a handoff for the main Writer."
-        ),
-    ),
-    SubAgentDefinition(
-        name="explorer",
-        aliases=("explore", "researcher", "searcher"),
-        description="Read-only exploration agent for codebase search, documentation lookup, and evidence gathering.",
-        role="research",
-        tools=tuple(sorted(SUB_AGENT_READ_TOOLS)),
-        developer_instructions=(
-            "Explore only. Gather facts with file/search/web tools, cite concrete evidence in findings, "
-            "and do not modify files or run broad commands."
-        ),
-    ),
-    SubAgentDefinition(
-        name="worker",
-        aliases=("coder", "coding", "implementer"),
-        description="Implementation worker for small scoped code changes under reduced permissions.",
-        role="implementation",
-        tools=tuple(sorted(SUB_AGENT_IMPLEMENTATION_TOOLS)),
-        developer_instructions=(
-            "Implement only the delegated slice. Keep edits small, use existing patterns, and report changed files, "
-            "verification, risks, and what the main Writer must review before acceptance."
-        ),
-    ),
-    SubAgentDefinition(
-        name="reviewer",
-        aliases=("review", "qa", "tester", "diagnostic"),
-        description="Review and diagnosis agent for tests, regressions, and quality checks.",
-        role="review",
-        tools=tuple(sorted(SUB_AGENT_REVIEW_TOOLS)),
-        developer_instructions=(
-            "Review, diagnose, and verify. You may run targeted tests, but do not edit files. "
-            "Return blocking issues, likely causes, and the smallest next action."
-        ),
-    ),
-)
-
-
-def load_sub_agent_definitions(work_root: str | Path | None = None) -> tuple[SubAgentDefinition, ...]:
-    """Load project/user subagent definitions, with project files overriding built-ins.
-
-    Definition files follow the Claude-style shape:
-
-    ---
-    name: explorer
-    description: Read-only exploration agent
-    tools:
-      - read_file
-      - search_content
-    model: ""
-    ---
-    Developer instructions...
-    """
-    definitions: dict[str, SubAgentDefinition] = {
-        item.name: item for item in BUILTIN_SUB_AGENT_DEFINITIONS
-    }
-    for directory, source in _sub_agent_definition_dirs(work_root):
-        for path in sorted(directory.glob("*.md")):
-            parsed = parse_sub_agent_definition(path, source)
-            if parsed is not None:
-                definitions[parsed.name] = parsed
-    return tuple(definitions[name] for name in sorted(definitions))
-
-
-def sub_agent_definition_map(work_root: str | Path | None = None) -> dict[str, SubAgentDefinition]:
-    return definition_map(load_sub_agent_definitions(work_root))
-
-
-def _sub_agent_definition_dirs(work_root: str | Path | None) -> list[tuple[Path, str]]:
-    dirs: list[tuple[Path, str]] = []
-    home = Path.home()
-    for directory in (home / ".writer" / "agents", home / ".claude" / "agents"):
-        if directory.is_dir():
-            dirs.append((directory, "user"))
-    if work_root:
-        root = Path(work_root).resolve()
-        for directory in (root / ".lamtools" / "agents", root / ".writer" / "agents", root / ".claude" / "agents"):
-            if directory.is_dir():
-                dirs.append((directory, "project"))
-    return dirs
 
 
 class AgentRegistry:
@@ -239,11 +106,10 @@ class AgentRuntime:
         runtime_fact_recorder: Callable[..., Awaitable[str | None]] | None = None,
         registry: AgentRegistry | None = None,
         model_tools: list[dict[str, Any]] | None = None,
-        work_root: str | Path | None = None,
-        sub_agent_llm_client_factory: Callable[[SubAgentDefinition, AgentCall], Awaitable[Any]] | None = None,
-        sub_agent_workspace_factory: Callable[[SubAgentDefinition, AgentCall], Awaitable[dict[str, Any] | None]] | None = None,
+        model_tools_provider: Callable[[], list[dict[str, Any]]] | None = None,
+        parent_state_store: Any | None = None,
         sub_agent_kernel_runner: Callable[
-            [SubAgentDefinition, AgentCall, str, frozenset[str], dict[str, Any]],
+            [str, AgentCall, str, frozenset[str]],
             Awaitable[tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]],
         ] | None = None,
     ) -> None:
@@ -253,14 +119,12 @@ class AgentRuntime:
         self._runtime_fact_recorder = runtime_fact_recorder
         self.registry = registry or default_agent_registry()
         self._model_tools = list(model_tools or [])
-        self._sub_agent_definitions = sub_agent_definition_map(work_root)
-        self._sub_agent_llm_client_factory = sub_agent_llm_client_factory
-        self._sub_agent_workspace_factory = sub_agent_workspace_factory
+        self._model_tools_provider = model_tools_provider
+        self._parent_state_store = parent_state_store
         self._sub_agent_kernel_runner = sub_agent_kernel_runner
         self._cache: dict[str, AgentRunResult] = {}
         self._agent_stack: list[str] = []
         self._agent_tool_stack: list[frozenset[str]] = []
-        self._agent_workspace_stack: list[dict[str, Any]] = []
         self._sub_session_manager = SubSessionManager()
         self._fallback_parent_states: dict[str, RuntimeState] = {}
 
@@ -306,18 +170,23 @@ class AgentRuntime:
             call.options.setdefault("_agent_name", sub_session.agent_name)
             call.options.setdefault("_agent_index", sub_session.agent_index)
             call.options.setdefault("_sub_session_id", sub_session.session_id)
-            call.options.setdefault("_sub_session_state_store", SubSessionRuntimeStateStore(parent_state))
+            call.options.setdefault(
+                "_sub_session_state_store",
+                SubSessionRuntimeStateStore(
+                    parent_state,
+                    parent_state_store=self._parent_state_store,
+                ),
+            )
+            call.options.setdefault("_parent_session_id", parent_state.session_id)
+            call.options.setdefault("_parent_run_id", parent_state.run_id)
 
         available_tools = self._available_tools_for_call(spec, call)
         run_id = f"{spec.name}-{uuid4().hex[:12]}"
         sub_line_id = f"subline-{run_id}"
         call.options.setdefault("_agent_run_id", run_id)
         call.options.setdefault("_sub_line_id", sub_line_id)
-        definition = self._sub_agent_definition_for_call(call) if spec.name == "sub" else None
-        workspace = await self._workspace_for_call(spec, call)
         self._agent_stack.append(spec.name)
         self._agent_tool_stack.append(available_tools)
-        self._agent_workspace_stack.append(workspace)
         try:
             if spec.name == "sub":
                 result = await self._run_sub(session_id, spec, call)
@@ -327,7 +196,6 @@ class AgentRuntime:
             return result
         finally:
             self._agent_tool_stack.pop()
-            self._agent_workspace_stack.pop()
             self._agent_stack.pop()
 
     def _standard_agent_metadata(
@@ -395,21 +263,6 @@ class AgentRuntime:
         available = set(self._parent_tool_names())
         return frozenset(available)
 
-    def _sub_agent_definition_for_call(self, call: AgentCall) -> SubAgentDefinition:
-        agent_name = self._agent_name_for_call(call)
-        return SubAgentDefinition(
-            name=agent_name,
-            description="Reusable delegated sub session",
-            role="sub",
-            developer_instructions="",
-            tools=tuple(sorted(self._parent_tool_names())),
-            source="runtime",
-        )
-
-    async def _workspace_for_call(self, spec: AgentSpec, call: AgentCall) -> dict[str, Any]:
-        _ = spec, call
-        return {}
-
     def _agent_name_for_call(self, call: AgentCall) -> str:
         return normalize_sub_session_agent_name(
             call.options.get("_agent_name")
@@ -419,7 +272,8 @@ class AgentRuntime:
 
     def _parent_tool_names(self) -> tuple[str, ...]:
         names: list[str] = []
-        for tool in filter_sub_agent_tools(self._model_tools):
+        tools = self._model_tools_provider() if self._model_tools_provider is not None else self._model_tools
+        for tool in filter_sub_agent_tools(tools):
             function = tool.get("function") if isinstance(tool, dict) else None
             if isinstance(function, dict):
                 name = str(function.get("name") or "").strip()
@@ -449,36 +303,9 @@ class AgentRuntime:
         return str(fallback or "").strip()[:1000]
 
     async def _run_sub(self, session_id: str, spec: AgentSpec, call: AgentCall) -> AgentRunResult:
-        definition = self._sub_agent_definition_for_call(call)
-        role = str(call.options.get("role") or definition.role).strip() or definition.role
-        expected_output = str(call.options.get("expected_output") or "focused findings and concrete next steps").strip()
-        context = call.options.get("context", {})
-        workspace = self._agent_workspace_stack[-1] if self._agent_workspace_stack else {}
-        task_context = {
-            "context_inheritance": "sub_session",
-            "delegated_by": "Writer",
-            "full_main_conversation": False,
-            "agent_name": definition.name,
-            "agent_index": str(call.options.get("_agent_index") or ""),
-            "sub_session_id": str(call.options.get("_sub_session_id") or ""),
-            "project_context": context if isinstance(context, dict) else {"value": context},
-        }
+        agent_name = self._agent_name_for_call(call)
         available_tools = self._available_tools_for_call(spec, call)
-        developer_instructions = str(call.options.get("developer_instructions") or definition.developer_instructions)
-        prompt = build_sub_agent_prompt(
-            member_name="Writer",
-            agent_name=definition.name,
-            role=role,
-            task=call.task,
-            expected_output=expected_output,
-            context=json_dumps(task_context),
-            tools=tuple(sorted(available_tools)),
-            tool_policy=(
-                "权限等同主 Agent；只能调用列出的工具。"
-                "不能继续调用 sub_agent 或派发其它 Agent。"
-            ),
-            developer_instructions=developer_instructions,
-        )
+        prompt = call.task
         tool_records: list[dict[str, Any]] = []
         reasoning_blocks: list[dict[str, Any]] = []
         diagnostics: dict[str, Any] = {}
@@ -486,43 +313,30 @@ class AgentRuntime:
             if self._sub_agent_kernel_runner is None:
                 raise RuntimeError("SubAgent must run through the core kernel loop")
             data, tool_records, reasoning_blocks, diagnostics = await self._sub_agent_kernel_runner(
-                definition,
+                agent_name,
                 call,
                 prompt,
                 available_tools,
-                workspace,
             )
             if not data:
                 diagnostics.setdefault("fallback_reason", "empty_final_output")
-                data = {"content": self._sub_agent_failure_text(definition, call, role, diagnostics)}
+                data = {"content": self._sub_agent_failure_text(agent_name, call, diagnostics)}
         except Exception as exc:
             diagnostics = {
                 "fallback_reason": "exception",
                 "exception_type": type(exc).__name__,
                 "exception": self._truncate(str(exc), 500),
             }
-            data = {"content": self._sub_agent_failure_text(definition, call, role, diagnostics)}
+            data = {"content": self._sub_agent_failure_text(agent_name, call, diagnostics)}
         used_fallback = bool(diagnostics.get("fallback_reason"))
 
-        output = str(data.get("content") or self._sub_agent_failure_text(definition, call, role, diagnostics))
-        delivery = diagnostics.get("workspace_delivery")
-        delivery_meta = dict(delivery) if isinstance(delivery, dict) else {}
-        changed_files = delivery_meta.get("changed_files") or delivery_meta.get("paths") or []
-        if not isinstance(changed_files, list):
-            changed_files = []
-        changed_files = [str(item) for item in changed_files if str(item)]
+        output = str(data.get("content") or self._sub_agent_failure_text(agent_name, call, diagnostics))
         return AgentRunResult(spec.name, output, {
             "agent_run_id": str(call.options.get("_agent_run_id") or ""),
             "sub_line_id": str(call.options.get("_sub_line_id") or ""),
-            "role": role,
-            "agent": definition.name,
+            "agent": agent_name,
             "agent_index": str(call.options.get("_agent_index") or ""),
             "sub_session_id": str(call.options.get("_sub_session_id") or ""),
-            "subagent_description": definition.description,
-            "model": str(call.options.get("model") or definition.model or ""),
-            "workspace_delivery": delivery_meta,
-            "changed_files": changed_files,
-            "changed_files_count": len(changed_files),
             "tools": sorted(available_tools),
             "tool_calls": tool_records,
             "reasoning_blocks": reasoning_blocks,
@@ -532,9 +346,8 @@ class AgentRuntime:
 
     def _sub_agent_failure_text(
         self,
-        definition: SubAgentDefinition,
+        agent_name: str,
         call: AgentCall,
-        role: str,
         diagnostics: dict[str, Any],
     ) -> str:
         reason = (
@@ -555,8 +368,7 @@ class AgentRuntime:
             observed.append(f"事件数：{event_count}")
         observed_text = f"\n- 观测：{'；'.join(observed)}" if observed else ""
         return (
-            f"子代理 {definition.name} 执行失败。\n\n"
-            f"- 角色：{role}\n"
+            f"子代理 {agent_name} 执行失败。\n\n"
             f"- 任务：{call.task}\n"
             f"- 运行器：{runner}\n"
             f"- 决策：{decision}{observed_text}\n"
@@ -582,10 +394,6 @@ class AgentRuntime:
             )
         if self._tool_runner is None:
             return f"Tool unavailable for agent runtime: {name}"
-        workspace = self._agent_workspace_stack[-1] if self._agent_workspace_stack else {}
-        if workspace.get("work_root"):
-            params = dict(params)
-            params["__agent_work_root"] = str(workspace["work_root"])
         try:
             return await self._tool_runner(name, params)
         except Exception as exc:

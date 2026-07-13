@@ -1,119 +1,93 @@
 # Sub-agent 当前能力与调用指南
 
-本文描述 Writer 当前真实运行链路。它区分已实现能力、内部兼容字段和尚未实现能力，避免把规划当成现状。
+## 产品定义
 
-## 产品定位
+Sub-agent 不是另一种 Agent，也没有专用 persona、Prompt 或模型路由。它是同一个 Agent 在父 session 所属的子 session 中继续运行。
 
-Writer 当前采用 manager/worker 模式：主 Agent 始终负责最终答复，sub-agent 是主 Agent 同步调用的辅助工具。子 Agent 完成后把结果正文返回给主 Agent，由主 Agent 继续判断、整合和验收。
+主 Agent 调用 `sub_agent` 等价于向指定子 session 发送一条普通 `user` 消息。子 Agent 的最终回复再作为 `sub_agent` 工具结果返回父 Agent，由主 Agent 继续整合、验收并回复用户。这属于 agent-as-tool，不是把对话控制权永久转移出去的 handoff。
 
-这不是控制权转移式 handoff。OpenAI 对两种模式的区分是：handoff 会把当前对话控制权交给专用 Agent；agent-as-tool 则由主 Agent 保持答复所有权。Writer 当前属于后者。
+主、子 Agent 共用：
 
-## 调用字段
+- 同一个模型实例、模型参数和 thinking 配置；
+- 同一套 system prompt 与 Prompt 拼接顺序；
+- 同一套 Agent loop、工具执行、审批、错误处理和 token 驱动自动压缩；
+- 同一工作目录和父 Agent 当前可用的工具权限。
 
-模型调用 `sub_agent` 时使用以下对象：
+编排层只保留三个差异：子 session 从属于父 session；子工具集合移除 `sub_agent`；子回复作为工具结果回到父 Agent。
+
+## 调用接口
+
+模型调用时必须传入且只能传入两个字段：
 
 ```json
 {
   "task": "核实权限链并给出文件与行号证据",
-  "agent": "permission_auditor",
-  "model": null,
-  "expected_output": "结论、证据、风险和下一步建议"
+  "agent": "permission_auditor"
 }
 ```
 
-| 字段 | 是否必须出现 | 可否为空 | 作用 |
+| 字段 | 必须出现 | 可为空 | 作用 |
 | --- | --- | --- | --- |
-| `task` | 是 | 否 | 自包含的委派任务。主 Agent 应把必要背景写进任务，不应假设子 Agent 看过完整主对话。 |
-| `agent` | 是 | 是 | 稳定的子 session 名。相同父 session 内使用同名会复用同一子 session；空值使用 `sub`。 |
-| `model` | 是 | 是 | 可选模型 ID 覆盖；空值沿用 sub-agent 路由或默认模型。 |
-| `expected_output` | 是 | 是 | 期望交付内容，只用于提示和验收导向，不是强制结构化输出校验。 |
+| `task` | 是 | 否 | 作为一条原样的 `user` 消息发送给子 session。需要的任务背景应直接写在这里。 |
+| `agent` | 是 | 是 | 子 session 名/复用标识。相同父 session 内同名复用；`null` 或空值使用 `sub`。它不代表角色、权限 profile 或模型。 |
 
-公开工具协议不接受其他字段。内部运行层虽然已有 `context`、`role` 等兼容入口，但模型侧协议尚未开放，不应作为可用接口依赖。
+不再支持 `model`、`expected_output`、`role`、`developer_instructions`、`context`、`write_scope`、`isolated` 或 `maxTurns`。项目/user/plugin 中的旧 Agent profile 不再被运行时读取，Writer 配置接口也不再提供 profile CRUD。
 
-## 轮次和结束条件
+## 上下文与自动压缩
 
-sub-agent 不再配置固定工具调用轮次，也不存在“最多 5 轮”的真实运行限制。旧定义文件里的 `maxTurns`、`maxToolRounds` 或 `max_tool_rounds` 会被忽略，新保存的定义不再写出这些字段。
+首次调用某个名字时，该 `task` 是子 session 的第一条用户消息。之后再次调用相同 `agent` 名时，新 `task` 会作为下一条普通用户消息追加，子 session 会看到自己的完整会话历史。
 
-运行会持续到以下任一条件发生：
+主 session 和子 session 都不按“最近 20 条”硬截断。两者使用同一个 token 窗口和压缩阈值：请求接近模型上下文窗口时，由统一 Kernel 对旧上下文做结构化摘要压缩。压缩后的摘要继续留在该 session 的历史中。
 
-- 子 Agent 给出不含工具调用的最终回复；
-- 进入等待或失败状态；
-- 模型请求超时或重试耗尽；
-- 模型上下文容量报错；
-- 工具或运行时安全规则终止执行。
+子 session 不会自动继承父 session 的完整对话记录。父 Agent 需要把本次委派所需的信息写进 `task`；这与用户向一个已有 session 发送新消息的语义一致。
 
-“无固定轮次”不等于“不可停止”。模型超时、权限、递归深度和重复失败保护仍然有效。Writer 当前没有单个子 Agent 的即时取消：父任务取消要等正在执行的子调用返回后才能继续生效；子运行也没有启用 Core 主动上下文压缩，超出模型容量时仍可能直接失败。
+## 模型、Prompt 与权限
 
-## 权限机制
+- 不存在 `sub_agent` 或 `sub_agent:{name}` 模型路由；旧路由配置会被清理并忽略。
+- 子 Agent 直接复用父 Agent 已解析完成的 LLM client，不会重新查询数据库，也不能在调用中覆盖模型。
+- Writer 子 Agent 使用与主 Writer 相同的 system prompt 组装；Core 子 Agent使用与父 Core Agent 相同的 instructions。
+- 子 Agent 继承父 Agent 当前可见工具集合，并在运行时强制移除 `sub_agent`。因此它不能继续创建孙 Agent。
+- 其余工具仍经过与主 Agent相同的执行器、权限和审批规则；Prompt 不能提升权限。
+- 子 Agent 触发审批时，审批请求显示在父 session；父流程进入等待。批准或指导后先恢复原子 session，子 Agent 完成后再把结果交回主 Agent。
+- 子 Agent 与父 Agent 使用同一工作目录，不创建专用 worktree，也没有独立 `write_scope`。
+- 父任务取消会转发到正在运行的子 Kernel；模型超时、重试耗尽、审批阻塞和显式失败仍可终止运行。
 
-Writer 当前权限规则如下：
+工具调用轮次没有固定上限，也不存在“最多 5 轮”。任务会在无工具的最终回复、等待、失败、取消或运行时错误时结束。
 
-1. 子 Agent 只看到主 Agent 当前可见工具集合，并强制移除 `sub_agent`，因此不能继续派发孙 Agent。
-2. 工具调用仍经过同一权限和审批执行链；子 Agent 的消息不能批准权限，也不能提升权限。
-3. 子 Agent 与主 Agent 共享当前工作目录。当前没有接通独立 worktree，也没有接通按子 Agent 限制写入路径的 `write_scope`。
-4. 子 Agent 不继承完整主对话，只收到委派任务包，以及同一子 session 自己保留的短历史。
+## 子 session 身份
 
-通用 Core runner 还支持通过 Agent 定义里的 `tools` 收窄工具列表；但 Writer 当前实时路径以父 Agent 工具集合为准，项目 Agent 定义中的工具列表尚未成为 Writer 的真实权限边界。配置页展示与运行时权限仍需后续收敛。
-
-## 子 session
-
-Writer 为每个父 session 内的稳定 `agent` 名分配一个逻辑子 session：
+Writer 在每个父 session 内按 `agent` 名分配稳定编号，例如：
 
 ```text
-父 session
-└─ parent:sub:001:permission_auditor
+parent-session
+├─ parent-session:sub:001:permission_auditor
+└─ parent-session:sub:002:test_fixer
 ```
 
-- 同一个父 session、同一个 `agent` 名：复用同一子 session。
-- 同一个父 session、不同 `agent` 名：创建不同编号的子 session。
-- 不同父 session：不会共享子 session。
-- 子 session 有独立运行状态和自己的短历史，当前最多回载最近 20 条 user/assistant 记录。
-- 子状态内嵌在父 session 的运行状态中，不是独立顶层 session 数据行。
+- 同一父 session + 同一 `agent`：复用同一个子 session 和历史；
+- 同一父 session + 不同 `agent`：创建不同子 session；
+- 不同父 session：不会共享子 session；
+- 子状态与历史存放在父 session 的运行状态内，不是顶层 session 数据行。
 
-Core 独立 CLI 的通用 runner 当前每次调用生成临时内存 session；Writer 上述同名复用语义不要反向假定到所有 Core 调用面。
+Core 独立运行面同样以“父 session + `agent` 名”作为子 session 身份，并使用父 runtime 的 checkpoint store；父 Agent 跨轮重建运行器后仍会恢复原子 session 历史。
 
-## 交接与补发信息
+## handoff、补发信息与主 Agent控制
 
-当前交接是同步工具返回：子 Agent 的最终正文、工具记录、推理记录、诊断信息和变更文件摘要被包装成 `sub_agent` 工具结果，回到主 Agent 的下一轮上下文。主 Agent 仍然负责最终结论和验收。
+当前 handoff 是同步工具返回：子 Agent 的正文、工具记录、推理记录和诊断信息被包装成 `sub_agent` 工具结果，进入主 Agent 的下一轮上下文。主 Agent拥有最终回复权。
 
-当前支持：
-
-- 子 Agent 完成后，主 Agent 再次调用相同 `agent` 名进行追问或补充任务；
-- 复用该子 session 的短历史继续工作。
-
-当前不支持：
-
-- 向正在运行的子 Agent 定向发送消息；
-- 对单个子 Agent 执行 pause、interrupt 或 cancel；
-- 子 Agent 主动把控制权切换给主 Agent 的独立 handoff API；
-- 子 Agent 之间互发消息。
-
-因此，“补发信息”目前是完成后的同名 follow-up，不是运行中的 `send_message`。
+主 Agent 可以在子 Agent 完成后再次调用相同 `agent`，把补充信息作为下一条用户消息发送到原子 session。当前不支持向仍在运行的子 Agent 实时插入消息，也没有单独公开的 pause、interrupt 或子 Agent 之间互发消息接口。
 
 ## 前端展示
 
-子 session 不出现在左侧顶层 session 列表中。它显示在父 session 的主对话时间线内：
+子 session 不占用左侧顶层 session 列表，也没有独立路由页面。它显示在父 session 的对话时间线内：
 
-- 默认以子 Agent 卡片显示编号、名称和运行中/完成/失败状态；
-- 卡片内展示委派任务、推理、工具调用和最终结果；
-- 可显示交付分支、变更文件数量等运行摘要；
-- 子 Agent 的最终文本若已经汇总到卡片，会抑制主时间线里的重复副本。
-
-这是一条嵌套时间线，不是可单独导航、单独聊天的完整 session 页面。
-
-## 当前限制与后续优先级
-
-按风险和收益排序：
-
-1. 接通父权限上限与子 Agent profile 的交集，避免配置页工具范围与真实执行不一致。
-2. 复用已有 workspace/write-scope 能力，为写入型子 Agent 提供明确隔离。
-3. 增加稳定 `agent_id` 寻址，以及运行中 `send`、完成后 `followup/resume`、`interrupt` 操作。
-4. 前端增加可展开的子 session 树和定向补发入口，同时保持子 session 不占用顶层列表。
-5. 补充并发上限、单子 Agent 成本/时间预算和可观测统计；这些是安全边界，不应重新变成固定工具轮次。
+- 一个子 Agent 对应一条可展开的嵌套运行记录；
+- 展示子 session 名/编号、运行状态、委派任务、推理、工具调用和最终结果；
+- 最终正文进入该卡片，并同时作为主 Agent可见的工具结果，避免另建一条顶层对话；
+- 同名 follow-up 继续归入同一逻辑子 session。
 
 ## 成熟方案对照
 
-- OpenAI Agents SDK 将 handoff 和 agents-as-tools 分开；Writer 当前应保持 agents-as-tools 语义：<https://developers.openai.com/api/docs/guides/agents/orchestration>
-- OpenAI 的 agent loop 会按需跨多轮调用工具，并提供 session、trace、guardrail 和可恢复审批：<https://developers.openai.com/api/docs/guides/agents>
-- OpenAI Multi-agent 提供 `spawn_agent`、`send_message`、`followup_task`、`interrupt_agent`、`wait_agent` 和 `list_agents` 等协作动作：<https://developers.openai.com/api/docs/guides/tools-multi-agent>
-- Claude Code subagents 使用独立上下文、工具权限和可选 `maxTurns`；不设置 `maxTurns` 不等于取消权限或运行安全边界：<https://code.claude.com/docs/en/sub-agents>
+- OpenAI 将 handoff 与 agent-as-tool 分开；当前实现采用主 Agent保留控制权的 agent-as-tool：<https://developers.openai.com/api/docs/guides/agents/orchestration>
+- OpenAI agent loop 按需跨多轮调用工具，并由 session、trace、guardrail 和审批控制边界：<https://developers.openai.com/api/docs/guides/agents>
+- Claude Code subagent 也使用独立上下文和受控工具集合；LamTools MVP 进一步收敛为与父 Agent同模型、同 Prompt、同权限，仅禁止递归委派：<https://code.claude.com/docs/en/sub-agents>

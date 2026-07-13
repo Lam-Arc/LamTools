@@ -8,10 +8,6 @@ from app.core.writer.agent_runtime import (
     AgentRuntime,
     AgentSpec,
     default_agent_registry,
-    delete_project_sub_agent_definition,
-    load_sub_agent_definitions,
-    SubAgentDefinition,
-    write_project_sub_agent_definition,
 )
 
 
@@ -76,13 +72,12 @@ class RecordingSubAgentKernelRunner:
         self.reasoning_blocks = reasoning_blocks or []
         self.calls = []
 
-    async def __call__(self, definition, call, prompt, available_tools, workspace):
+    async def __call__(self, agent_name, call, prompt, available_tools):
         self.calls.append({
-            "definition": definition,
+            "agent_name": agent_name,
             "call": call,
             "prompt": prompt,
             "available_tools": available_tools,
-            "workspace": workspace,
         })
         return (
             {
@@ -176,7 +171,7 @@ async def test_sub_agent_uses_writer_chosen_name_and_core_identity():
             name="sub",
             task="审查项目",
             mode="low",
-            options={"agent": "repo_reader", "expected_output": "阻塞问题和下一步"},
+            options={"agent": "repo_reader"},
         ),
     )
     second = await runtime.run(
@@ -199,8 +194,7 @@ async def test_sub_agent_uses_writer_chosen_name_and_core_identity():
     assert third.metadata["sub_session_id"] == "agent-runtime-test:sub:002:test_fixer"
     assert first.metadata["runtime_agent"] == "sub"
     assert "final_answer" not in first.metadata
-    assert "临时 SubAgent" in runner.calls[0]["prompt"]
-    assert "最终必须输出 JSON" not in runner.calls[0]["prompt"]
+    assert runner.calls[0]["prompt"] == "审查项目"
     assert "read_file" in runner.calls[0]["available_tools"]
     assert "write_file" in runner.calls[0]["available_tools"]
     assert "sub_agent" not in runner.calls[0]["available_tools"]
@@ -335,7 +329,7 @@ async def test_sub_agent_inherits_parent_tools_without_role_allowlist():
             name="sub",
             task="审查 README",
             mode="low",
-                options={"agent": "reviewer", "expected_output": "发现问题"},
+                options={"agent": "reviewer"},
             ),
         )
 
@@ -407,6 +401,28 @@ async def test_worker_sub_agent_can_write_but_not_call_agents():
 
 
 @pytest.mark.asyncio
+async def test_sub_agent_tool_set_uses_current_dynamic_parent_tools():
+    runner = RecordingSubAgentKernelRunner()
+    current_tools = list(MODEL_TOOLS)
+    runtime = AgentRuntime(
+        llm_client=RecordingLLM([]),
+        design_mode_selector=lambda task: "low",
+        model_tools=MODEL_TOOLS,
+        model_tools_provider=lambda: current_tools,
+        sub_agent_kernel_runner=runner,
+    )
+    current_tools.append({"type": "function", "function": {"name": "mcp__docs__search"}})
+
+    await runtime.run(
+        "agent-runtime-test",
+        AgentCall(name="sub", task="查官方文档", options={"agent": "researcher"}),
+    )
+
+    assert "mcp__docs__search" in runner.calls[0]["available_tools"]
+    assert "sub_agent" not in runner.calls[0]["available_tools"]
+
+
+@pytest.mark.asyncio
 async def test_write_capable_sub_agent_does_not_require_write_scope():
     runner = RecordingSubAgentKernelRunner(content="不需要单独声明写入范围")
     runtime = AgentRuntime(
@@ -443,140 +459,4 @@ async def test_sub_agent_ignores_legacy_write_scope_option():
     )
 
     assert "write_scope" not in result.metadata
-    assert runner.calls[0]["workspace"] == {}
-
-
-def test_project_sub_agent_definition_overrides_builtin(tmp_path):
-    project = tmp_path / "project"
-    agent_dir = project / ".claude" / "agents"
-    agent_dir.mkdir(parents=True)
-    (agent_dir / "explorer.md").write_text(
-        "\n".join([
-            "---",
-            "name: explorer",
-            "description: Project explorer",
-            "tools:",
-            "  - read_file",
-            "model: fast-model",
-            "---",
-            "Only inspect the requested files.",
-        ]),
-        encoding="utf-8",
-    )
-
-    definitions = {item.name: item for item in load_sub_agent_definitions(project)}
-
-    assert definitions["explorer"].source == "project"
-    assert definitions["explorer"].description == "Project explorer"
-    assert definitions["explorer"].tools == ("read_file",)
-    assert definitions["explorer"].model == "fast-model"
-
-
-def test_project_sub_agent_definition_write_and_delete_roundtrip(tmp_path):
-    project = tmp_path / "project"
-
-    saved = write_project_sub_agent_definition(
-        project,
-        SubAgentDefinition(
-            name="project-worker",
-            description="Project worker",
-            role="implementation",
-            developer_instructions="Only handle project work.",
-            tools=("read_file", "write_file"),
-            model="fast-model",
-            aliases=("pw",),
-            source="project",
-        ),
-    )
-
-    assert saved.source == "project"
-    definitions = {item.name: item for item in load_sub_agent_definitions(project)}
-    assert definitions["project-worker"].developer_instructions == "Only handle project work."
-    assert definitions["project-worker"].tools == ("read_file", "write_file")
-    assert definitions["project-worker"].aliases == ("pw",)
-
-    assert delete_project_sub_agent_definition(project, "project-worker")
-    assert "project-worker" not in {item.name for item in load_sub_agent_definitions(project)}
-
-
-@pytest.mark.asyncio
-async def test_runtime_ignores_project_sub_agent_definition_tools_for_mvp(tmp_path):
-    project = tmp_path / "project"
-    agent_dir = project / ".lamtools" / "agents"
-    agent_dir.mkdir(parents=True)
-    (agent_dir / "worker.md").write_text(
-        "\n".join([
-            "---",
-            "name: worker",
-            "description: Read-only project worker",
-            "tools: [read_file]",
-            "---",
-            "Do not write files.",
-        ]),
-        encoding="utf-8",
-    )
-    runner = RecordingSubAgentKernelRunner(content="交回主 Writer")
-    runtime = AgentRuntime(
-        llm_client=RecordingLLM([]),
-        design_mode_selector=lambda task: "low",
-        model_tools=MODEL_TOOLS,
-        work_root=project,
-        sub_agent_kernel_runner=runner,
-    )
-
-    result = await runtime.run(
-        "agent-runtime-test",
-        AgentCall(name="sub", task="实现", mode="low", options={"agent": "worker"}),
-    )
-
-    assert result.metadata["agent"] == "worker"
-    assert result.metadata["tools"] == ["read_file", "run_tests", "write_file"]
-    assert runner.calls[0]["available_tools"] == frozenset({"read_file", "run_tests", "write_file"})
-
-
-@pytest.mark.asyncio
-async def test_runtime_still_reads_legacy_writer_project_sub_agent_definitions(tmp_path):
-    project = tmp_path / "project"
-    agent_dir = project / ".writer" / "agents"
-    agent_dir.mkdir(parents=True)
-    (agent_dir / "worker.md").write_text(
-        "\n".join([
-            "---",
-            "name: worker",
-            "description: Legacy project worker",
-            "tools: [read_file]",
-            "---",
-            "Do not write files.",
-        ]),
-        encoding="utf-8",
-    )
-
-    definitions = {item.name: item for item in load_sub_agent_definitions(project)}
-
-    assert definitions["worker"].source == "project"
-    assert definitions["worker"].description == "Legacy project worker"
-
-
-@pytest.mark.asyncio
-async def test_sub_agent_workspace_factory_is_not_used_in_mvp(tmp_path):
-    workspace = tmp_path / "agent-worktree"
-    workspace.mkdir()
-    runner = RecordingSubAgentKernelRunner(content="完成")
-
-    async def workspace_factory(definition, call):
-        raise AssertionError("MVP must not create a sub-agent workspace")
-        return {"work_root": str(workspace), "branch": f"writer/agent/{definition.name}/test"}
-
-    runtime = AgentRuntime(
-        llm_client=RecordingLLM([]),
-        design_mode_selector=lambda task: "low",
-        sub_agent_workspace_factory=workspace_factory,
-        sub_agent_kernel_runner=runner,
-    )
-
-    await runtime.run(
-        "agent-runtime-test",
-        AgentCall(name="sub", task="实现", mode="low", options={"agent": "worker"}),
-    )
-
-    assert runner.calls[0]["workspace"] == {}
+    assert runner.calls[0]["prompt"] == "实现"

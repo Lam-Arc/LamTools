@@ -22,7 +22,6 @@ def test_registry_discovers_plugin_resources(tmp_path: Path):
         "skills": ["./skills"],
         "hooks": ["./hooks/hooks.json"],
         "mcpServers": "./mcp/mcp.json",
-        "agents": ["./agents"],
         "permissions": {"commands": "ask_user"},
     })
 
@@ -35,7 +34,6 @@ def test_registry_discovers_plugin_resources(tmp_path: Path):
     assert plugins[0].hook_files == [plugin.resolve() / "hooks" / "hooks.json"]
     assert plugins[0].skill_roots == [plugin.resolve() / "skills"]
     assert plugins[0].mcp_files == [plugin.resolve() / "mcp" / "mcp.json"]
-    assert plugins[0].agent_roots == [plugin.resolve() / "agents"]
 
 
 def test_registry_uses_default_hook_and_mcp_paths(tmp_path: Path):

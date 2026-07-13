@@ -35,7 +35,6 @@ from app.services.llm_config_service import (
     set_route_model,
 )
 from app.services.runtime_capabilities import runtime_capabilities_response
-from app.services.subagent_config import delete_project_subagent_config, upsert_project_subagent_config
 
 logger = logging.getLogger(__name__)
 
@@ -161,28 +160,6 @@ class AgentCapabilityResponse(BaseModel):
     enabled: bool
 
 
-class SubAgentDefinitionResponse(BaseModel):
-    name: str
-    description: str
-    role: str
-    developer_instructions: str = ""
-    tools: list[str]
-    model: str
-    aliases: list[str]
-    source: str
-    enabled: bool
-
-
-class SubAgentDefinitionUpsert(BaseModel):
-    name: str
-    description: str = ""
-    role: str = ""
-    developer_instructions: str = ""
-    tools: list[str] = []
-    model: str = ""
-    aliases: list[str] = []
-
-
 class ToolCapabilityResponse(BaseModel):
     name: str
     description: str
@@ -194,7 +171,6 @@ class ToolCapabilityResponse(BaseModel):
 
 class RuntimeCapabilitiesResponse(BaseModel):
     agents: list[AgentCapabilityResponse]
-    subagents: list[SubAgentDefinitionResponse] = []
     tools: list[ToolCapabilityResponse]
     command_policies: dict[str, str]
 
@@ -283,41 +259,6 @@ async def get_runtime_capabilities(
     return RuntimeCapabilitiesResponse(
         **await runtime_capabilities_response(db, work_root=work_root, shared_db=shared_db)
     )
-
-
-@router.put("/config/subagents/{name}", response_model=SubAgentDefinitionResponse)
-async def upsert_project_sub_agent_definition(
-    name: str,
-    body: SubAgentDefinitionUpsert,
-    work_root: str | None = Query(None),
-    db: AsyncSession = Depends(get_db),
-):
-    """Create or update a project-scoped subagent definition."""
-    try:
-        return SubAgentDefinitionResponse(
-            **await upsert_project_subagent_config(
-                db,
-                name=name,
-                payload=body.model_dump(),
-                work_root=work_root,
-            )
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@router.delete("/config/subagents/{name}", status_code=204)
-async def delete_project_sub_agent_definition_route(
-    name: str,
-    work_root: str | None = Query(None),
-):
-    """Delete only project-scoped Writer subagent definitions."""
-    try:
-        removed = delete_project_subagent_config(name=name, work_root=work_root)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if not removed:
-        raise HTTPException(status_code=404, detail="Project subagent definition not found")
 
 
 @router.get("/config/adapter-profiles", response_model=list[AdapterProfileResponse])
