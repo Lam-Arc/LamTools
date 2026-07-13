@@ -25,7 +25,7 @@ def test_core_workbench_operations_include_project_workspace_contracts() -> None
         "project.agents_md.get",
         "project.agents_md.update",
     } <= names
-    assert "attachment.list" not in names
+    assert {"attachment.list", "attachment.get", "attachment.preview", "attachment.open"} <= names
     assert "session.commit_review.get" not in names
 
 
@@ -57,13 +57,14 @@ def test_build_member_operation_catalog_registers_core_and_overlay_handlers() ->
 
     catalog = build_member_operation_catalog(
         core_handlers={name: handler for name in CORE_WORKBENCH_OPERATION_NAMES},
-        overlay_names=["attachment.list"],
-        overlay_handlers={"attachment.list": handler},
+        overlay_names=["session.commit_review.get"],
+        overlay_handlers={"session.commit_review.get": handler},
     )
 
     assert catalog.has("turn.start")
     assert catalog.has("plugin.list")
     assert catalog.has("attachment.list")
+    assert catalog.has("session.commit_review.get")
 
 
 def test_build_member_operation_catalog_rejects_overlay_that_shadows_core() -> None:

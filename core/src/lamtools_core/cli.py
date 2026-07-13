@@ -600,6 +600,30 @@ def build_parser() -> argparse.ArgumentParser:
     approval_respond.add_argument("--raw", action="store_true")
     approval_respond.set_defaults(func=cmd_approval_respond)
 
+    command = sub.add_parser("command", help="Use the Core command system")
+    command_sub = command.add_subparsers(dest="command_action", required=True)
+    command_catalog = command_sub.add_parser("catalog", help="List commands and skills")
+    command_catalog.add_argument("--work-root", default="")
+    _add_live_connection_arguments(command_catalog)
+    command_catalog.add_argument("--raw", action="store_true")
+    command_catalog.set_defaults(func=cmd_command_catalog)
+    command_execute = command_sub.add_parser("execute", help="Execute a Core command action")
+    command_execute.add_argument("thread_id")
+    command_execute.add_argument("name")
+    command_execute.add_argument("--work-root", default="")
+    _add_live_connection_arguments(command_execute)
+    command_execute.add_argument("--raw", action="store_true")
+    command_execute.set_defaults(func=cmd_command_execute)
+
+    attachment = sub.add_parser("attachment", help="Use Core attachment upload and storage")
+    attachment_sub = attachment.add_subparsers(dest="attachment_action", required=True)
+    attachment_upload = attachment_sub.add_parser("upload", help="Upload an attachment to a Core session")
+    attachment_upload.add_argument("thread_id")
+    attachment_upload.add_argument("file")
+    _add_live_connection_arguments(attachment_upload)
+    attachment_upload.add_argument("--raw", action="store_true")
+    attachment_upload.set_defaults(func=cmd_attachment_upload)
+
     session = sub.add_parser("session", help="Query Core Agent sessions")
     session_sub = session.add_subparsers(dest="session_command", required=True)
     session_list = session_sub.add_parser("list", help="List Core Agent sessions")
@@ -795,6 +819,49 @@ async def cmd_approval_respond(args: argparse.Namespace) -> int:
         ),
     )
     _print_live_result(args, result, f"approval {args.action} sent")
+    return 0
+
+
+async def cmd_command_catalog(args: argparse.Namespace) -> int:
+    result = await _invoke_live(
+        args,
+        lambda client: client.request("command.catalog", {"work_root": args.work_root}),
+    )
+    message = "\n".join(
+        f"/{item['name']}\t{item.get('description', '')}"
+        for item in result.get("commands", [])
+        if isinstance(item, dict) and item.get("name")
+    )
+    _print_live_result(args, result, message)
+    return 0
+
+
+async def cmd_command_execute(args: argparse.Namespace) -> int:
+    result = await _invoke_live(
+        args,
+        lambda client: client.request(
+            "command.execute",
+            {"thread_id": args.thread_id, "command": args.name, "work_root": args.work_root},
+        ),
+    )
+    _print_live_result(args, result, f"/{args.name} completed for {args.thread_id}")
+    return 0
+
+
+async def cmd_attachment_upload(args: argparse.Namespace) -> int:
+    path = Path(args.file).resolve()
+    if not path.is_file():
+        raise FileNotFoundError(f"Attachment file not found: {path}")
+    headers = {"Authorization": f"Bearer {args.token}"} if args.token else {}
+    async with httpx.AsyncClient(timeout=60.0, headers=headers) as client:
+        with path.open("rb") as stream:
+            response = await client.post(
+                f"{args.base_url.rstrip('/')}/api/core/sessions/{quote(args.thread_id, safe='')}/attachments",
+                files={"file": (path.name, stream)},
+            )
+        response.raise_for_status()
+        result = response.json()
+    _print_live_result(args, result, f"uploaded {path.name} ({result.get('id', '-')})")
     return 0
 
 

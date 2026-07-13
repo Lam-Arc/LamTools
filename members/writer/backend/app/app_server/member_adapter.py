@@ -3,23 +3,71 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from app.models.session import WriterSession
-from app.services.composer_input_service import prepare_composer_input
+from app.core.writer.skills import WriterSkillRegistry
+from app.core.resource_dirs import writer_resource_roots
 from app.services.project_management import ensure_writer_project
 from app.services.session_management import resolve_writer_session_work_root
 from app.services.session_projection import session_response_projected
+from app.services.session_compaction_service import compact_session_context_response
+from app.services.session_fork_service import fork_session_response
 from app.services.transcript_service import create_user_message_turn
+from app.services.attachment_service import WriterAttachmentRepository
 from lamtools_core.app.live_member import (
     PreparedLiveInput,
     QueueMaterialization,
     TurnMaterialization,
 )
 from lamtools_core.app.queue_state import input_item_attachment_ids as input_attachment_ids
+from lamtools_core.composer_commands import prepare_composer_input
 
 
 class WriterLiveMemberAdapter:
     def __init__(self, *, session_factory: Callable[[], Any], runtime: Any) -> None:
         self._session_factory = session_factory
         self._runtime = runtime
+
+    def command_member_roots(self):
+        return writer_resource_roots()
+
+    def attachment_repository(self, db):
+        return WriterAttachmentRepository(db)
+
+    def command_skill_registry(self):
+        return WriterSkillRegistry()
+
+    def command_action_handlers(self):
+        return {
+            "compact": self._compact_command,
+            "fork": self._fork_command,
+        }
+
+    async def _compact_command(self, *, thread_id: str, on_delta=None):
+        writer_service = self._runtime.writer_service_or_none()
+        compact = writer_service.get("compact_session_context") if isinstance(writer_service, dict) else None
+        if callable(compact):
+            return await compact(session_id=thread_id, on_summary_delta=on_delta)
+        async with self._session_factory() as db:
+            result = await compact_session_context_response(
+                db,
+                session_id=thread_id,
+                on_summary_delta=on_delta,
+            )
+            await db.commit()
+            return result
+
+    async def _fork_command(self, *, thread_id: str, work_root: str = ""):
+        del work_root
+        async with self._session_factory() as db:
+            session = await db.get(WriterSession, thread_id)
+            title = f"{session.title if session else 'Session'} fork"
+            result = await fork_session_response(
+                db,
+                thread_id,
+                title=title,
+                isolated_worktree=True,
+            )
+            await db.commit()
+            return {"status": "forked", "session": result}
 
     async def augment_thread_read(self, *, db, thread_id, result):
         del result
@@ -57,7 +105,11 @@ class WriterLiveMemberAdapter:
                 work_root=requested_root,
                 project_id=session.project_id,
             )
-        prepared = prepare_composer_input(work_root=work_root, input_items=input_items)
+        prepared = prepare_composer_input(
+            work_root=work_root,
+            input_items=input_items,
+            skill_registry=WriterSkillRegistry(),
+        )
         return PreparedLiveInput(
             visible_input=prepared.visible_items,
             runtime_input=prepared.runtime_items,

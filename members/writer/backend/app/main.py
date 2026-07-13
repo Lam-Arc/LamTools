@@ -140,8 +140,8 @@ _writer_manifest = MemberManifest(
     version="0.1.0",
     capabilities=["session", "project", "config", "attachment"],
     default_routes={
-        "/api": "Writer session, project, config, attachment routers",
-        "/api/core": "Core HTTP adapter -- sessions, providers, usage",
+        "/api": "Writer session, project, and config routers",
+        "/api/core": "Core HTTP adapter -- sessions, providers, usage, attachments",
     },
 )
 
@@ -185,7 +185,7 @@ app.add_middleware(
 app.include_router(session_router, prefix="/api")
 app.include_router(project_router, prefix="/api")
 app.include_router(config_router, prefix="/api")
-app.include_router(attachment_router, prefix="/api")
+app.include_router(attachment_router, prefix="/api/core")
 app.include_router(app_server_router, prefix="/api")
 
 # Writer Core HTTP adapter -- maps Writer DB to Core-shaped JSON

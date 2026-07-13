@@ -8,7 +8,6 @@ Follows the artist_orchestrate pattern from LamImager:
 - Functions close over shared state (settings, clients, stores)
 """
 import logging
-import base64
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -40,7 +39,7 @@ from app.models.attachment import WriterAttachment
 from app.models.transcript import WriterTranscriptTurn
 from app.shared_config_database import shared_config_session
 from app.services.app_projection_sink import AppProjectionSink
-from app.services.attachment_service import read_text_preview
+from app.services.attachment_service import WriterAttachmentRepository
 from app.services.checkpoint_service import WriterCheckpointService
 from app.services.commit_review_service import WriterCommitReviewService
 from app.services.runtime_approved_tool import (
@@ -57,6 +56,7 @@ from app.services.session_compaction_service import (
 from app.services.llm_config_service import build_llm_client, resolve_llm_config
 from app.services.transcript_service import create_user_message_turn
 from lamtools_core.runtime import RuntimeState, default_runtime_task_registry
+from lamtools_core.attachment import build_attachment_runtime_input
 
 logger = logging.getLogger(__name__)
 
@@ -684,70 +684,7 @@ async def _session_attachment_input(
     attachments = list(reversed(result.scalars().all()))
     if not attachments:
         return "", []
-    current = set(current_ids)
-    lines = ["", "当前会话附件索引（本地存储路径不会提供给模型）："]
-    content_blocks: list[dict[str, Any]] = []
-    for attachment in attachments:
-        marker = "本条消息附件" if attachment.id in current else "历史附件"
-        if attachment.id in current and _is_image_attachment(attachment):
-            block = _image_attachment_content_block(attachment)
-            if block is not None:
-                content_blocks.append(block)
-                lines.append(
-                    f"- [{marker}] {attachment.filename} | {attachment.mime_type} | {attachment.size} bytes | 已作为图片输入提供"
-                )
-            else:
-                lines.append(
-                    f"- [{marker}] {attachment.filename} | {attachment.mime_type} | {attachment.size} bytes | 图片文件缺失，未能提供给模型"
-                )
-            continue
-        if attachment.id in current and attachment.preview_type == "text":
-            lines.append(_text_attachment_context_line(marker, attachment))
-            continue
-        lines.append(
-            f"- [{marker}] {attachment.filename} | {attachment.mime_type} | {attachment.size} bytes | {_attachment_label(attachment)}"
-        )
-    return "\n".join(lines), content_blocks
-
-
-def _is_image_attachment(attachment: WriterAttachment) -> bool:
-    return attachment.preview_type == "image" or str(attachment.mime_type or "").startswith("image/")
-
-
-def _image_attachment_content_block(attachment: WriterAttachment) -> dict[str, Any] | None:
-    path = Path(attachment.storage_path)
-    if not path.exists() or not path.is_file():
-        return None
-    mime_type = str(attachment.mime_type or "application/octet-stream")
-    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
-    return {
-        "type": "image_url",
-        "image_url": {
-            "url": f"data:{mime_type};base64,{encoded}",
-            "detail": "auto",
-        },
-    }
-
-
-def _text_attachment_context_line(marker: str, attachment: WriterAttachment) -> str:
-    path = Path(attachment.storage_path)
-    if not path.exists() or not path.is_file():
-        return (
-            f"- [{marker}] {attachment.filename} | {attachment.mime_type} | "
-            f"{attachment.size} bytes | 文本文件缺失，未能提供内容"
-        )
-    preview = read_text_preview(path)
-    return (
-        f"- [{marker}] {attachment.filename} | {attachment.mime_type} | {attachment.size} bytes | 文本内容如下：\n"
-        f"{preview}"
+    return build_attachment_runtime_input(
+        [WriterAttachmentRepository._record(item) for item in attachments],
+        current_ids,
     )
-
-
-def _attachment_label(attachment: WriterAttachment) -> str:
-    if _is_image_attachment(attachment):
-        return "图片附件；仅本条消息图片会直接提供给模型"
-    if attachment.preview_type == "text":
-        return "文本附件；仅本条消息文本会直接提供给模型"
-    if attachment.preview_type == "pdf" or attachment.mime_type == "application/pdf":
-        return "PDF 附件；当前未自动解析"
-    return "二进制附件；当前未自动解析"

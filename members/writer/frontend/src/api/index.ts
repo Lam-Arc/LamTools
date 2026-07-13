@@ -356,7 +356,7 @@ export function abandonAgentBranch(sessionId: string, branch: string): Promise<{
 export function uploadAttachment(sessionId: string, file: File): Promise<Attachment> {
   const formData = new FormData()
   formData.append('file', file)
-  return requestForm<Attachment>(`/api/sessions/${sessionId}/attachments`, formData)
+  return requestForm<Attachment>(`/api/core/sessions/${sessionId}/attachments`, formData)
 }
 
 export function listAttachments(sessionId: string): Promise<Attachment[]> {

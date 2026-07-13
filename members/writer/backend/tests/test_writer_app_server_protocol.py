@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 import app.app_server.connection as connection_module
 import app.app_server.operations as operations_module
 import app.app_server.reducer as reducer_module
+from app.app_server.member_adapter import WriterLiveMemberAdapter
 from app.app_server.runtime_bridge import persist_run_item_events_as_app_events
 from app.app_server.operations import (
     WRITER_OVERLAY_OPERATION_NAMES,
@@ -32,14 +33,8 @@ from app.app_server.operations import (
     handle_config_import_env_operation,
     handle_config_providers_list_operation,
     handle_config_resolved_get_operation,
-    handle_attachment_get_operation,
-    handle_attachment_list_operation,
-    handle_attachment_open_operation,
-    handle_attachment_preview_operation,
     handle_artifact_open_operation,
     handle_artifact_read_operation,
-    handle_command_catalog_operation,
-    handle_command_execute_operation,
     handle_project_agents_md_get_operation,
     handle_project_agents_md_update_operation,
     handle_project_create_operation,
@@ -180,10 +175,6 @@ def test_initialize_params_reject_missing_client_info():
 
 def test_connection_exposes_required_request_handlers():
     for name in (
-        "_attachment_list",
-        "_attachment_get",
-        "_attachment_preview",
-        "_attachment_open",
         "_session_create",
         "_session_get",
         "_session_list",
@@ -453,9 +444,7 @@ def test_operation_names_normalize_transport_aliases():
 
 def _build_test_writer_catalog(handler):
     overlay_arguments = (
-        "attachment_list",
-        "attachment_get", "attachment_preview", "attachment_open", "session_create",
-        "session_get", "session_list", "session_update", "session_delete", "session_fork",
+        "session_create", "session_get", "session_list", "session_update", "session_delete", "session_fork",
         "session_git_graph", "session_changes_get", "session_checkpoints_list",
         "session_checkpoint_create", "session_checkpoint_restore", "session_commit_review_get",
         "session_commit_review_decide", "session_agent_branches_list",
@@ -620,394 +609,6 @@ async def test_turn_cancel_operation_returns_error_without_thread_id():
 
 
 @pytest.mark.asyncio
-async def test_command_catalog_includes_core_and_dynamic_skills(tmp_path):
-    skill_dir = tmp_path / ".codex" / "skills" / "reviewer"
-    skill_dir.mkdir(parents=True)
-    (skill_dir / "SKILL.md").write_text(
-        "---\nname: reviewer\ndescription: Review code\n---\nREVIEW BODY\n",
-        encoding="utf-8",
-    )
-
-    outcome = await handle_command_catalog_operation(
-        request_id=1,
-        params={"work_root": str(tmp_path)},
-    )
-
-    names = [item["name"] for item in outcome.response["result"]["commands"]]
-    assert "compact" in names
-    assert "fork" in names
-    assert "reviewer" in names
-
-
-@pytest.mark.asyncio
-async def test_command_catalog_hides_skill_names_disabled_by_member_config(tmp_path, monkeypatch):
-    member_root = tmp_path / "member-writer"
-    skill_dir = member_root / "skills" / "disabled-skill-catalog"
-    skill_dir.mkdir(parents=True)
-    (skill_dir / "SKILL.md").write_text(
-        "---\nname: /Disabled Skill Catalog\ndescription: Review code\n---\nREVIEW BODY\n",
-        encoding="utf-8",
-    )
-    (member_root / "command").mkdir(parents=True)
-    (member_root / "command" / "config.json").write_text(
-        '{"disabled_core_commands":["disabled skill catalog"]}',
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("LAMWRITER_MEMBER_RESOURCE_DIR", str(member_root))
-
-    outcome = await handle_command_catalog_operation(
-        request_id=1,
-        params={"work_root": str(tmp_path)},
-    )
-
-    names = [item["name"] for item in outcome.response["result"]["commands"]]
-    assert "disabled-skill-catalog" not in names
-    assert "disabled skill catalog" not in names
-    assert "/Disabled Skill Catalog" not in names
-
-
-@pytest.mark.asyncio
-async def test_command_catalog_hides_skill_names_that_collide_with_core_commands(tmp_path, monkeypatch):
-    member_root = tmp_path / "member-writer"
-    skill_dir = member_root / "skills" / "fork"
-    skill_dir.mkdir(parents=True)
-    (skill_dir / "SKILL.md").write_text(
-        "---\nname: fork\ndescription: Review code\n---\nREVIEW BODY\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("LAMWRITER_MEMBER_RESOURCE_DIR", str(member_root))
-
-    outcome = await handle_command_catalog_operation(
-        request_id=1,
-        params={"work_root": str(tmp_path)},
-    )
-
-    matching = [item for item in outcome.response["result"]["commands"] if item["name"] == "fork"]
-    assert len(matching) == 1
-    assert matching[0]["action"] == "run_action"
-
-
-@pytest.mark.asyncio
-async def test_command_catalog_hides_mixed_case_skill_names_that_collide_with_core_commands(
-    tmp_path, monkeypatch
-):
-    member_root = tmp_path / "member-writer"
-    skill_dir = member_root / "skills" / "fork-mixed"
-    skill_dir.mkdir(parents=True)
-    (skill_dir / "SKILL.md").write_text(
-        "---\nname: /Fork\ndescription: Review code\n---\nREVIEW BODY\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("LAMWRITER_MEMBER_RESOURCE_DIR", str(member_root))
-
-    outcome = await handle_command_catalog_operation(
-        request_id=1,
-        params={"work_root": str(tmp_path)},
-    )
-
-    names = [item["name"] for item in outcome.response["result"]["commands"]]
-    assert "/Fork" not in names
-    matching = [item for item in outcome.response["result"]["commands"] if item["name"] == "fork"]
-    assert len(matching) == 1
-    assert matching[0]["action"] == "run_action"
-
-
-
-
-@pytest.mark.asyncio
-async def test_command_execute_forks_session_and_compacts_session_context(tmp_path):
-    work_root = tmp_path / "workspace"
-    work_root.mkdir()
-    for args in (
-        ["git", "init"],
-        ["git", "config", "user.email", "writer@example.test"],
-        ["git", "config", "user.name", "Writer Test"],
-    ):
-        subprocess.run(args, cwd=work_root, check=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    (work_root / "README.md").write_text("baseline\n", encoding="utf-8")
-    subprocess.run(["git", "add", "."], cwd=work_root, check=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    subprocess.run(
-        ["git", "commit", "-m", "test: baseline"],
-        cwd=work_root,
-        check=True,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'command-execute.db'}", future=True)
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    try:
-        async with session_factory() as db:
-            db.add(WriterSession(id="thread-command", title="Command", work_root=str(work_root)))
-            base_time = datetime.now(timezone.utc)
-            for index in range(8):
-                db.add(
-                    WriterMessage(
-                        id=f"cmd-{index}",
-                        session_id="thread-command",
-                        role="user" if index % 2 == 0 else "assistant",
-                        content=f"cmd-message-{index}",
-                        created_at=base_time + timedelta(seconds=index),
-                    )
-                )
-            await db.commit()
-
-        fork = await handle_command_execute_operation(
-            request_id=1,
-            params={"session_id": "thread-command", "command": "fork", "work_root": str(work_root)},
-            session_factory=session_factory,
-        )
-        compact = await handle_command_execute_operation(
-            request_id=2,
-            params={"session_id": "thread-command", "command": "compact", "work_root": str(work_root)},
-            session_factory=session_factory,
-        )
-
-        assert fork.response["result"]["result"]["status"] == "forked"
-        assert fork.response["result"]["result"]["session"]["id"] != "thread-command"
-        assert compact.response["result"]["result"]["status"] == "compacted"
-        assert compact.response["result"]["result"]["compacted_messages"] == 2
-        compact_snapshot = compact.response["result"]["snapshot"]
-        compact_items = compact_snapshot["core"]["items"]
-        compact_item = next(
-            item
-            for item in compact_items.values()
-            if item.get("payload", {}).get("type") == "compaction"
-            and item.get("payload", {}).get("compacted_messages") == 2
-        )
-        assert compact_item["last_seq"] == compact.response["result"]["snapshot"]["snapshot_seq"]
-        assert compact_snapshot["core"]["turns"][compact_item["turn_id"]]["last_seq"] == compact_snapshot["snapshot_seq"]
-        assert any(
-            event.method == "core/runItem"
-            and event.payload.get("payload", {}).get("type") == "compaction"
-            and event.payload.get("payload", {}).get("compacted_messages") == 2
-            for event in compact.publish_events
-        )
-
-        async with session_factory() as db:
-            session = await db.get(WriterSession, "thread-command")
-            assert session is not None
-            assert "cmd-message-0" in (session.context_summary or "")
-            assert session.runtime_state["manual_compaction"]["retained_message_count"] == 6
-    finally:
-        await engine.dispose()
-
-
-@pytest.mark.asyncio
-async def test_command_execute_compact_uses_injected_core_compaction_interface(tmp_path):
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'command-compact-injected.db'}", future=True)
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    calls: list[str] = []
-
-    async def compact_session_context(*, session_id: str, on_summary_delta=None):
-        del on_summary_delta
-        calls.append(session_id)
-        summary = "[Compacted Context]\n1. Current Goal\n- From injected interface."
-        return {
-            "status": "compacted",
-            "session_id": session_id,
-            "compacted_at": datetime.now(timezone.utc).isoformat(),
-            "compacted_messages": 7,
-            "retained_messages": 6,
-            "summary": summary,
-        }
-
-    try:
-        async with session_factory() as db:
-            db.add(WriterSession(id="thread-injected-compact", title="Command"))
-            await db.commit()
-
-        compact = await handle_command_execute_operation(
-            request_id=1,
-            params={"session_id": "thread-injected-compact", "command": "compact"},
-            session_factory=session_factory,
-            writer_service={"compact_session_context": compact_session_context},
-        )
-
-        assert calls == ["thread-injected-compact"]
-        assert compact.response["result"]["result"]["status"] == "compacted"
-        assert compact.response["result"]["result"]["compacted_messages"] == 7
-        compact_items = compact.response["result"]["snapshot"]["core"]["items"]
-        assert any(
-            item.get("payload", {}).get("type") == "compaction"
-            and item.get("payload", {}).get("content", "").startswith("[Compacted Context]")
-            for item in compact_items.values()
-        )
-    finally:
-        await engine.dispose()
-
-
-@pytest.mark.asyncio
-async def test_command_execute_compact_emits_running_delta_and_completed_events(tmp_path):
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'command-compact-events.db'}", future=True)
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    emitted = []
-    summary = "[Compacted Context]\n1. Current Goal\n- streamed compact summary"
-
-    async def compact_session_context(*, session_id: str, on_summary_delta=None):
-        if on_summary_delta is not None:
-            await on_summary_delta("[Compacted Context]\n")
-            await on_summary_delta("1. Current Goal\n- streamed compact summary")
-        return {
-            "status": "compacted",
-            "session_id": session_id,
-            "compacted_at": datetime.now(timezone.utc).isoformat(),
-            "compacted_messages": 4,
-            "retained_messages": 6,
-            "summary": summary,
-        }
-
-    async def emit_event(event):
-        emitted.append(event)
-
-    try:
-        async with session_factory() as db:
-            db.add(WriterSession(id="thread-streaming-compact", title="Command"))
-            await db.commit()
-
-        compact = await handle_command_execute_operation(
-            request_id=1,
-            params={"session_id": "thread-streaming-compact", "command": "compact"},
-            session_factory=session_factory,
-            writer_service={"compact_session_context": compact_session_context},
-            emit_event=emit_event,
-        )
-
-        assert compact.response["result"]["result"]["status"] == "compacted"
-        assert compact.publish_events == []
-        assert [event.payload.get("status") for event in emitted] == [
-            "running",
-            "running",
-            "running",
-            "completed",
-        ]
-        payloads = [event.payload.get("payload", {}) for event in emitted]
-        assert payloads[0]["type"] == "compaction"
-        assert payloads[0]["label"] == "正在压缩"
-        assert payloads[1]["delta"] == "[Compacted Context]\n"
-        assert payloads[2]["delta"] == "1. Current Goal\n- streamed compact summary"
-        assert payloads[3]["label"] == "上下文已压缩"
-        assert payloads[3]["content"] == summary
-        assert len({event.payload.get("item_id") for event in emitted}) == 1
-        compact_items = compact.response["result"]["snapshot"]["core"]["items"]
-        compact_item = next(item for item in compact_items.values() if item.get("payload", {}).get("type") == "compaction")
-        assert compact_item["content"] == summary
-    finally:
-        await engine.dispose()
-
-
-@pytest.mark.asyncio
-async def test_command_execute_compact_failure_marks_thread_terminal(tmp_path):
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'command-compact-failure-terminal.db'}", future=True)
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    async def compact_session_context(*, session_id: str, on_summary_delta=None):
-        raise ValueError("forced compaction failure")
-
-    try:
-        async with session_factory() as db:
-            db.add(WriterSession(id="thread-failing-compact", title="Command"))
-            await db.commit()
-
-        compact = await handle_command_execute_operation(
-            request_id=1,
-            params={"session_id": "thread-failing-compact", "command": "compact"},
-            session_factory=session_factory,
-            writer_service={"compact_session_context": compact_session_context},
-        )
-
-        async with session_factory() as db:
-            after_failure = await load_snapshot(db, "thread-failing-compact")
-
-        stop = await handle_core_turn_cancel_operation(
-            request_id=2,
-            params={"thread_id": "thread-failing-compact"},
-            context=_core_live_context(session_factory),
-        )
-
-        async with session_factory() as db:
-            after_stop = await load_snapshot(db, "thread-failing-compact")
-
-        assert compact.response["error"]["message"] == "forced compaction failure"
-        assert after_failure["status"] == "failed"
-        assert after_failure["core"]["status"] == "failed"
-        compact_items = after_failure["core"]["items"]
-        assert any(
-            item.get("payload", {}).get("type") == "compaction"
-            and item.get("payload", {}).get("label") == "压缩失败"
-            and item.get("status") == "failed"
-            for item in compact_items.values()
-        )
-        assert stop.response["result"]["status"] == "idle"
-        assert after_stop["status"] == "failed"
-        assert after_stop["core"]["status"] == "failed"
-    finally:
-        await engine.dispose()
-
-
-@pytest.mark.asyncio
-async def test_command_execute_compact_returns_clear_errors(tmp_path):
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'command-compact-errors.db'}", future=True)
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    try:
-        async with session_factory() as db:
-            db.add(WriterSession(id="thread-short", title="Short"))
-            base_time = datetime.now(timezone.utc)
-            for index in range(6):
-                db.add(
-                    WriterMessage(
-                        id=f"short-{index}",
-                        session_id="thread-short",
-                        role="user" if index % 2 == 0 else "assistant",
-                        content=f"short-message-{index}",
-                        created_at=base_time + timedelta(seconds=index),
-                    )
-                )
-            await db.commit()
-
-        missing = await handle_command_execute_operation(
-            request_id=1,
-            params={"session_id": "missing-session", "command": "compact"},
-            session_factory=session_factory,
-        )
-        short = await handle_command_execute_operation(
-            request_id=2,
-            params={"session_id": "thread-short", "command": "compact"},
-            session_factory=session_factory,
-        )
-
-        assert missing.response["error"]["message"] == "Session not found"
-        assert short.response["result"]["result"]["status"] == "compacted"
-        assert short.response["result"]["result"]["compacted_messages"] == 1
-        assert short.response["result"]["result"]["retained_messages"] == 5
-        compact_items = short.response["result"]["snapshot"]["core"]["items"]
-        assert any(
-            item.get("payload", {}).get("type") == "compaction"
-            and item.get("payload", {}).get("label") == "上下文已压缩"
-            and item.get("payload", {}).get("compacted_messages") == 1
-            and item.get("payload", {}).get("retained_messages") == 5
-            for item in compact_items.values()
-        )
-    finally:
-        await engine.dispose()
-
-
-@pytest.mark.asyncio
 async def test_settings_operations_return_validation_errors():
     get_result = await handle_settings_get_operation(request_id=1, params={})
     update_result = await handle_settings_update_operation(request_id=2, params={"namespace": "x"})
@@ -1129,10 +730,18 @@ async def test_artifact_operations_return_validation_errors():
 
 @pytest.mark.asyncio
 async def test_attachment_operations_return_validation_errors():
-    listed = await handle_attachment_list_operation(request_id=1, params={})
-    read = await handle_attachment_get_operation(request_id=2, params={})
-    preview = await handle_attachment_preview_operation(request_id=3, params={})
-    open_result = await handle_attachment_open_operation(request_id=4, params={})
+    listed = await core_live_operations_module.handle_attachment_list_operation(
+        request_id=1, params={}, context=_core_live_context(),
+    )
+    read = await core_live_operations_module.handle_attachment_get_operation(
+        request_id=2, params={}, context=_core_live_context(),
+    )
+    preview = await core_live_operations_module.handle_attachment_preview_operation(
+        request_id=3, params={}, context=_core_live_context(),
+    )
+    open_result = await core_live_operations_module.handle_attachment_open_operation(
+        request_id=4, params={}, context=_core_live_context(),
+    )
 
     assert listed.response["error"]["message"] == "session_id is required"
     assert read.response["error"]["message"] == "attachment_id is required"
@@ -2107,11 +1716,6 @@ async def test_attachment_operations_list_read_preview_and_open(monkeypatch, tmp
 
     opened: list[str] = []
 
-    async def fake_open_attachment_response(db, attachment_id):
-        from app.services.attachment_service import open_attachment_response
-
-        return await open_attachment_response(db, attachment_id, opener=lambda path: opened.append(str(path)))
-
     try:
         attachment_path = tmp_path / "note.txt"
         attachment_path.write_text("hello attachment", encoding="utf-8")
@@ -2131,32 +1735,32 @@ async def test_attachment_operations_list_read_preview_and_open(monkeypatch, tmp
             )
             await db.commit()
 
-        listed = await handle_attachment_list_operation(
-            request_id=1,
-            params={"session_id": "session-attachment"},
-            session_factory=session_factory,
+        context = _core_live_context(session_factory)
+        context.host.member_hooks = WriterLiveMemberAdapter(
+            session_factory=lambda: session_factory(),
+            runtime=None,
+        )
+        listed = await core_live_operations_module.handle_attachment_list_operation(
+            request_id=1, params={"session_id": "session-attachment"}, context=context,
         )
         assert listed.response["result"]["attachments"][0]["id"] == "attachment-text"
 
-        read = await handle_attachment_get_operation(
-            request_id=2,
-            params={"attachment_id": "attachment-text"},
-            session_factory=session_factory,
+        read = await core_live_operations_module.handle_attachment_get_operation(
+            request_id=2, params={"attachment_id": "attachment-text"}, context=context,
         )
         assert read.response["result"]["attachment"]["filename"] == "note.txt"
 
-        preview = await handle_attachment_preview_operation(
-            request_id=3,
-            params={"attachment_id": "attachment-text"},
-            session_factory=session_factory,
+        preview = await core_live_operations_module.handle_attachment_preview_operation(
+            request_id=3, params={"attachment_id": "attachment-text"}, context=context,
         )
         assert preview.response["result"]["preview"]["text"] == "hello attachment"
 
-        monkeypatch.setattr(operations_module, "open_attachment_response", fake_open_attachment_response)
-        opened_result = await handle_attachment_open_operation(
-            request_id=4,
-            params={"attachment_id": "attachment-text"},
-            session_factory=session_factory,
+        monkeypatch.setattr(
+            "lamtools_core.attachment.service.open_with_default_app",
+            lambda path: opened.append(str(path)),
+        )
+        opened_result = await core_live_operations_module.handle_attachment_open_operation(
+            request_id=4, params={"attachment_id": "attachment-text"}, context=context,
         )
         assert opened_result.response["result"] == {"status": "opened", "id": "attachment-text"}
         assert opened == [str(attachment_path)]
@@ -2913,7 +2517,11 @@ def test_writer_injects_only_non_lifecycle_core_operation_adapters():
         "queue.guide", "project.directory.pick",
     }
 
-    assert set(connection.context.operations.list()) == set(CORE_WORKBENCH_OPERATION_NAMES) - lifecycle_names
+    core_owned_names = lifecycle_names | {
+        "command.catalog", "command.execute",
+        "attachment.list", "attachment.get", "attachment.preview", "attachment.open",
+    }
+    assert set(connection.context.operations.list()) == set(CORE_WORKBENCH_OPERATION_NAMES) - core_owned_names
 
 
 def test_backend_reducer_resolves_core_approval_request():
@@ -3600,10 +3208,14 @@ async def test_connection_returns_rpc_error_when_operation_handler_raises(monkey
     connection.initialized = True
     connection.thread_id = "thread-1"
 
-    async def failing_command_execute(request):
+    async def failing_command_execute(**_kwargs):
         raise RuntimeError("compact failed")
 
-    monkeypatch.setitem(connection.context.operations._handlers, "command.execute", failing_command_execute)
+    monkeypatch.setattr(
+        connection.context.host.member_hooks,
+        "command_action_handlers",
+        lambda: {"compact": failing_command_execute},
+    )
 
     await connection._handle_raw(
         {
@@ -3615,7 +3227,7 @@ async def test_connection_returns_rpc_error_when_operation_handler_raises(monkey
 
     response = await connection.outbound.get()
     assert response["id"] == 9
-    assert response["error"]["code"] == -32000
+    assert response["error"]["code"] == -32600
     assert response["error"]["message"] == "compact failed"
 
 

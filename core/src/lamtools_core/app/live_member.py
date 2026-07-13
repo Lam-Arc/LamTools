@@ -32,6 +32,14 @@ class QueueMaterialization:
 
 
 class CoreLiveMemberHooks(Protocol):
+    def attachment_repository(self, db: Any) -> Any: ...
+
+    def command_member_roots(self) -> list[Any]: ...
+
+    def command_skill_registry(self) -> Any: ...
+
+    def command_action_handlers(self) -> dict[str, Any]: ...
+
     async def materialize_thread(
         self, *, db: AsyncSession, thread_id: str, params: dict[str, Any]
     ) -> dict[str, Any]: ...
@@ -61,6 +69,21 @@ class CoreLiveMemberHooks(Protocol):
     ) -> QueueMaterialization: ...
 
 class DefaultCoreLiveMemberHooks:
+    def attachment_repository(self, db):
+        del db
+        return None
+
+    def command_member_roots(self):
+        return []
+
+    def command_skill_registry(self):
+        from lamtools_core.skills import SkillRegistry
+
+        return SkillRegistry()
+
+    def command_action_handlers(self):
+        return {}
+
     async def materialize_thread(self, *, db, thread_id, params):
         del db, thread_id, params
         return {}

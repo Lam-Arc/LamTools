@@ -1,6 +1,11 @@
 from pathlib import Path
 
-from lamtools_core.composer_commands import load_command_catalog
+from lamtools_core.composer_commands import (
+    build_composer_command_catalog,
+    load_command_catalog,
+    prepare_composer_input,
+)
+from lamtools_core.skills import SkillRegistry
 
 
 def write_json(path: Path, content: str) -> None:
@@ -70,3 +75,51 @@ def test_member_cannot_replace_disabled_core_command_name(tmp_path: Path):
     catalog = load_command_catalog(core_roots=[core], member_roots=[member])
 
     assert [item.name for item in catalog] == []
+
+
+def test_core_catalog_includes_skills_and_core_prepares_skill_with_attachments(tmp_path: Path):
+    core = tmp_path / "core"
+    work_root = tmp_path / "workspace"
+    write_json(
+        core / "command" / "compact.json",
+        '{"name":"compact","title":"Compact","description":"Compact context","icon":"archive","action":"run_action"}',
+    )
+    skill_dir = work_root / ".codex" / "skills" / "reviewer"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: reviewer\ndescription: Review changes\n---\nREVIEW WORKFLOW\n",
+        encoding="utf-8",
+    )
+    registry = SkillRegistry()
+
+    catalog = build_composer_command_catalog(
+        core_roots=[core],
+        member_roots=[],
+        work_root=work_root,
+        skill_registry=registry,
+    )
+    prepared = prepare_composer_input(
+        work_root=work_root,
+        input_items=[
+            {"type": "skill", "name": "reviewer", "source_text": "/reviewer"},
+            {"type": "text", "text": " check this"},
+            {"type": "attachment", "attachment_id": "att-1", "filename": "note.md"},
+        ],
+        skill_registry=registry,
+    )
+
+    actions = {item.name: item.action for item in catalog}
+    assert actions["compact"] == "run_action"
+    assert actions["reviewer"] == "insert_token"
+    assert prepared.visible_items == [
+        {"type": "text", "text": "/reviewer"},
+        {"type": "text", "text": " check this"},
+        {"type": "attachment", "attachment_id": "att-1", "filename": "note.md"},
+    ]
+    assert prepared.visible_text == "/reviewer check this"
+    assert "REVIEW WORKFLOW" in prepared.runtime_text
+    assert prepared.runtime_items[-1] == {
+        "type": "attachment",
+        "attachment_id": "att-1",
+        "filename": "note.md",
+    }

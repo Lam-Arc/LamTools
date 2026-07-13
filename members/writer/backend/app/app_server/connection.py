@@ -20,10 +20,6 @@ from .hub import hub
 from .operations import (
     build_writer_core_operation_adapter_catalog,
     build_writer_operation_catalog,
-    handle_attachment_get_operation,
-    handle_attachment_list_operation,
-    handle_attachment_open_operation,
-    handle_attachment_preview_operation,
     handle_session_create_operation,
     handle_session_delete_operation,
     handle_session_changes_get_operation,
@@ -138,10 +134,6 @@ class WriterAppServerConnection(CoreLiveConnection):
     def _operation_catalog(self) -> OperationCatalog:
         core_handlers = self.context.host.operation_handlers()
         return build_writer_operation_catalog(
-            attachment_list=self._attachment_list,
-            attachment_get=self._attachment_get,
-            attachment_preview=self._attachment_preview,
-            attachment_open=self._attachment_open,
             session_create=self._session_create,
             session_get=self._session_get,
             session_list=self._session_list,
@@ -200,7 +192,6 @@ class WriterAppServerConnection(CoreLiveConnection):
             session_factory=async_session,
         )
         await self._send(outcome.response)
-
     async def _session_get(self, request: JsonRpcRequest) -> None:
         outcome = await handle_session_get_operation(
             request_id=request.id,
@@ -349,38 +340,6 @@ class WriterAppServerConnection(CoreLiveConnection):
 
     async def _session_change_file_undo(self, request: JsonRpcRequest) -> None:
         outcome = await handle_session_change_file_undo_operation(
-            request_id=request.id,
-            params=request.params,
-            session_factory=async_session,
-        )
-        await self._send(outcome.response)
-
-    async def _attachment_list(self, request: JsonRpcRequest) -> None:
-        outcome = await handle_attachment_list_operation(
-            request_id=request.id,
-            params=request.params,
-            session_factory=async_session,
-        )
-        await self._send(outcome.response)
-
-    async def _attachment_get(self, request: JsonRpcRequest) -> None:
-        outcome = await handle_attachment_get_operation(
-            request_id=request.id,
-            params=request.params,
-            session_factory=async_session,
-        )
-        await self._send(outcome.response)
-
-    async def _attachment_preview(self, request: JsonRpcRequest) -> None:
-        outcome = await handle_attachment_preview_operation(
-            request_id=request.id,
-            params=request.params,
-            session_factory=async_session,
-        )
-        await self._send(outcome.response)
-
-    async def _attachment_open(self, request: JsonRpcRequest) -> None:
-        outcome = await handle_attachment_open_operation(
             request_id=request.id,
             params=request.params,
             session_factory=async_session,

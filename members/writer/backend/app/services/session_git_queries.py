@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.writer.git import GitCommandResult, WriterGitManager
 from app.models.session import WriterSession
-from app.services.attachment_service import open_with_default_app
+from lamtools_core.attachment import open_with_default_app
 
 _git_manager = WriterGitManager()
 

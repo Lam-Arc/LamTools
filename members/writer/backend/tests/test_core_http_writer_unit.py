@@ -30,6 +30,7 @@ from app.shared_config_database import get_shared_config_db
 from app.routers.config import router as config_router
 from app.routers.session import router as session_router
 from app.routers.core_http import get_writer_write, router as core_http_router
+from app.routers.attachment import router as attachment_router
 from lamtools_core.app import create_app
 from lamtools_core.config.shared_database import init_shared_config_schema
 from lamtools_core.member import MemberManifest
@@ -111,6 +112,7 @@ def test_app_and_client():
     app.include_router(session_router, prefix="/api")
     app.include_router(config_router, prefix="/api")
     app.include_router(core_http_router, prefix="/api/core")
+    app.include_router(attachment_router, prefix="/api/core")
 
     client = TestClient(app)
     yield client
@@ -417,3 +419,24 @@ class TestUsageRoutes:
         data = response.json()
         assert data["total_cost"] == 0.0
         assert data["currency"] == "EUR"
+
+
+class TestCoreAttachmentEndpoint:
+    def test_upload_uses_core_route_and_writer_storage_adapter(self, client, tmp_path):
+        created = client.post(
+            "/api/core/sessions",
+            json={"title": "Attachment", "work_root": str(tmp_path)},
+        )
+        assert created.status_code == 201
+        session_id = created.json()["id"]
+
+        uploaded = client.post(
+            f"/api/core/sessions/{session_id}/attachments",
+            files={"file": ("说明.txt", "附件正文".encode("utf-8"), "text/plain")},
+        )
+
+        assert uploaded.status_code == 200
+        payload = uploaded.json()
+        assert payload["session_id"] == session_id
+        assert payload["filename"] == "说明.txt"
+        assert (tmp_path / ".lamwriter" / "attachments" / session_id / "说明.txt").read_text(encoding="utf-8") == "附件正文"

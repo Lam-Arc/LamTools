@@ -6,7 +6,6 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 logger = logging.getLogger(__name__)
 
@@ -18,12 +17,6 @@ from sqlalchemy.exc import OperationalError
 from app.config import settings
 from app.database import async_session
 from app.models.session import WriterSession
-from app.services.attachment_service import (
-    get_attachment_response,
-    list_session_attachment_responses,
-    open_attachment_response,
-    preview_attachment_response,
-)
 from app.services.app_settings import get_app_setting_value, update_app_setting_value
 from app.services.agent_branch_service import (
     abandon_agent_branch_response,
@@ -48,8 +41,6 @@ from app.services.commit_review_service import (
     get_commit_review_response,
     persist_commit_review_approval,
 )
-from app.services.command_service import execute_writer_command, normalize_writer_command_name, writer_command_catalog
-from app.services.composer_input_service import prepare_composer_input
 from app.services.config_read import (
     list_adapter_profile_configs,
     resolved_config_response,
@@ -80,11 +71,6 @@ from lamtools_core.project.directory_picker import (
     pick_project_directory,
 )
 from app.services.runtime_capabilities import runtime_capabilities_response
-from app.services.session_compaction_service import (
-    apply_session_context_compaction,
-    execute_session_context_compaction,
-    prepare_session_context_compaction,
-)
 from app.services.session_management import (
     create_writer_session,
     delete_writer_session,
@@ -115,7 +101,6 @@ from lamtools_core.app import (
     normalize_operation_name,
 )
 from lamtools_core.config import build_shared_config_operation_catalog
-from lamtools_core.context_compaction import ContextCompactionError
 from lamtools_core.event import RunItemEvent
 from .artifacts import open_artifact, read_artifact
 from .event_store import append_event_and_load_snapshot, append_run_item_event_and_apply_snapshot
@@ -263,10 +248,6 @@ def operation_name(method: str) -> str:
 
 
 WRITER_OVERLAY_OPERATION_NAMES: tuple[str, ...] = (
-    "attachment.list",
-    "attachment.get",
-    "attachment.preview",
-    "attachment.open",
     "session.create",
     "session.get",
     "session.list",
@@ -293,10 +274,6 @@ WRITER_OVERLAY_OPERATION_NAMES: tuple[str, ...] = (
 
 def build_writer_operation_catalog(
     *,
-    attachment_list: OperationRpcHandler,
-    attachment_get: OperationRpcHandler,
-    attachment_preview: OperationRpcHandler,
-    attachment_open: OperationRpcHandler,
     session_create: OperationRpcHandler,
     session_get: OperationRpcHandler,
     session_list: OperationRpcHandler,
@@ -321,10 +298,6 @@ def build_writer_operation_catalog(
     core_handlers: Mapping[str, Any],
 ) -> OperationCatalog:
     writer_overlay_handlers = {
-        "attachment.list": _handler(attachment_list),
-        "attachment.get": _handler(attachment_get),
-        "attachment.preview": _handler(attachment_preview),
-        "attachment.open": _handler(attachment_open),
         "session.create": _handler(session_create),
         "session.get": _handler(session_get),
         "session.list": _handler(session_list),
@@ -397,14 +370,6 @@ def build_writer_core_operation_adapter_catalog(
         ),
         "artifact.open": lambda request: adapt(
             request, handle_artifact_open_operation, session_factory=session_factory,
-        ),
-        "command.catalog": lambda request: adapt(request, handle_command_catalog_operation),
-        "command.execute": lambda request: adapt(
-            request,
-            handle_command_execute_operation,
-            session_factory=session_factory,
-            writer_service=runtime.writer_service_or_none(),
-            emit_event=emit_event,
         ),
         "config.resolved.get": lambda request: adapt(
             request, handle_config_resolved_get_operation, config_session_factory=config_session_factory,
@@ -1143,74 +1108,6 @@ async def handle_project_sessions_list_operation(
     return WriterOperationOutcome(response=rpc_result(request_id, {"sessions": sessions}))
 
 
-async def handle_attachment_list_operation(
-    *,
-    request_id: int | str | None,
-    params: dict[str, Any],
-    session_factory: Any = async_session,
-) -> WriterOperationOutcome:
-    session_id = str(params.get("session_id") or params.get("sessionId") or "")
-    if not session_id:
-        return WriterOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message="session_id is required"))
-    try:
-        async with session_factory() as db:
-            attachments = await list_session_attachment_responses(db, session_id)
-    except LookupError as exc:
-        return WriterOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
-    return WriterOperationOutcome(response=rpc_result(request_id, {"attachments": attachments}))
-
-
-async def handle_attachment_get_operation(
-    *,
-    request_id: int | str | None,
-    params: dict[str, Any],
-    session_factory: Any = async_session,
-) -> WriterOperationOutcome:
-    attachment_id = str(params.get("attachment_id") or params.get("attachmentId") or params.get("id") or "")
-    if not attachment_id:
-        return WriterOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message="attachment_id is required"))
-    try:
-        async with session_factory() as db:
-            attachment = await get_attachment_response(db, attachment_id)
-    except LookupError as exc:
-        return WriterOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
-    return WriterOperationOutcome(response=rpc_result(request_id, {"attachment": attachment}))
-
-
-async def handle_attachment_preview_operation(
-    *,
-    request_id: int | str | None,
-    params: dict[str, Any],
-    session_factory: Any = async_session,
-) -> WriterOperationOutcome:
-    attachment_id = str(params.get("attachment_id") or params.get("attachmentId") or params.get("id") or "")
-    if not attachment_id:
-        return WriterOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message="attachment_id is required"))
-    try:
-        async with session_factory() as db:
-            preview = await preview_attachment_response(db, attachment_id)
-    except (LookupError, FileNotFoundError) as exc:
-        return WriterOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
-    return WriterOperationOutcome(response=rpc_result(request_id, {"preview": preview}))
-
-
-async def handle_attachment_open_operation(
-    *,
-    request_id: int | str | None,
-    params: dict[str, Any],
-    session_factory: Any = async_session,
-) -> WriterOperationOutcome:
-    attachment_id = str(params.get("attachment_id") or params.get("attachmentId") or params.get("id") or "")
-    if not attachment_id:
-        return WriterOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message="attachment_id is required"))
-    try:
-        async with session_factory() as db:
-            result = await open_attachment_response(db, attachment_id)
-    except (LookupError, FileNotFoundError) as exc:
-        return WriterOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
-    return WriterOperationOutcome(response=rpc_result(request_id, result))
-
-
 async def handle_settings_get_operation(
     *,
     request_id: int | str | None,
@@ -1519,20 +1416,6 @@ async def handle_config_subagent_delete_operation(
         )
     return WriterOperationOutcome(response=rpc_result(request_id, {"ok": True}))
 
-async def handle_command_catalog_operation(
-    *,
-    request_id: int | str | None,
-    params: dict[str, Any],
-) -> WriterOperationOutcome:
-    work_root = params.get("work_root") or params.get("workRoot")
-    return WriterOperationOutcome(
-        response=rpc_result(
-            request_id,
-            {"commands": writer_command_catalog(work_root if isinstance(work_root, (str, Path)) else None)},
-        )
-    )
-
-
 async def handle_plugin_catalog_operation(
     *,
     request_id: int | str | None,
@@ -1566,229 +1449,6 @@ def _plugin_project_root(params: dict[str, Any]) -> str:
         or ""
     )
     return str(raw).strip() if isinstance(raw, (str, Path)) else ""
-
-
-async def handle_command_execute_operation(
-    *,
-    request_id: int | str | None,
-    params: dict[str, Any],
-    session_factory: Any = async_session,
-    writer_service: Any | None = None,
-    emit_event: Callable[[WriterAppEventEnvelope], Awaitable[None]] | None = None,
-) -> WriterOperationOutcome:
-    session_id = str(
-        params.get("session_id")
-        or params.get("sessionId")
-        or params.get("thread_id")
-        or params.get("threadId")
-        or ""
-    )
-    command = str(params.get("command") or "")
-    if not session_id or not command:
-        return WriterOperationOutcome(
-            response=rpc_error(
-                request_id,
-                code=INVALID_REQUEST,
-                message="session_id and command are required",
-            )
-        )
-    normalized_command = normalize_writer_command_name(command)
-    compact_ids: dict[str, str] | None = None
-    published_events: list[WriterAppEventEnvelope] = []
-    try:
-        if normalized_command == "compact":
-            compact_ids = _compact_command_run_ids(session_id)
-            persistence = writer_persistence_host(session_factory)
-
-            async def persist_event(event: RunItemEvent):
-                async def write(db):
-                    envelope = await append_run_item_event_and_apply_snapshot(db, event)
-                    return envelope, await load_snapshot(db, session_id)
-                return await persistence.write(write)
-
-            running_event, snapshot = await persist_event(
-                _compact_command_run_item_event(session_id, {}, ids=compact_ids, status="running")
-            )
-            if emit_event is not None:
-                await emit_event(running_event)
-            else:
-                published_events.append(running_event)
-
-            async def on_compaction_delta(delta: str) -> None:
-                if not delta:
-                    return
-                envelope, _snapshot = await persist_event(
-                    _compact_command_run_item_event(
-                        session_id, {"delta": delta}, ids=compact_ids, status="running",
-                    )
-                )
-                if emit_event is not None:
-                    await emit_event(envelope)
-
-            compact = writer_service.get("compact_session_context") if isinstance(writer_service, dict) else None
-            if callable(compact):
-                result = await compact(session_id=session_id, on_summary_delta=on_compaction_delta)
-            else:
-                async with session_factory() as read_db:
-                    plan = await prepare_session_context_compaction(read_db, session_id=session_id)
-                _raw_result, payload = await execute_session_context_compaction(
-                    plan, llm_client=None, on_summary_delta=on_compaction_delta,
-                )
-                result = await persistence.write(
-                    lambda write_db: apply_session_context_compaction(write_db, plan=plan, payload=payload)
-                )
-            completed_event, snapshot = await persist_event(
-                _compact_command_run_item_event(
-                    session_id, result, ids=compact_ids, status="completed",
-                )
-            )
-            if emit_event is not None:
-                await emit_event(completed_event)
-            else:
-                published_events.append(completed_event)
-        else:
-            persistence = writer_persistence_host(session_factory)
-            async def write(db):
-                result = await execute_writer_command(
-                    db,
-                    session_id=session_id,
-                    command=command,
-                    work_root=params.get("work_root") or params.get("workRoot"),
-                )
-                return result, await load_snapshot(db, session_id)
-            result, snapshot = await persistence.write(write)
-    except (LookupError, ValueError, ContextCompactionError) as exc:
-        if normalized_command == "compact" and compact_ids is not None:
-            await _publish_compact_failed_event(
-                session_factory=session_factory,
-                session_id=session_id,
-                ids=compact_ids,
-                error=str(exc),
-                emit_event=emit_event,
-            )
-        return WriterOperationOutcome(
-            response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc))
-        )
-    return WriterOperationOutcome(
-        response=rpc_result(request_id, {"result": result, "snapshot": snapshot}),
-        publish_events=published_events,
-    )
-
-
-def _compact_command_run_ids(session_id: str) -> dict[str, str]:
-    run_id = f"{session_id}:command:compact:{uuid4().hex[:12]}"
-    return {
-        "run_id": run_id,
-        "turn_id": run_id,
-        "item_id": f"{run_id}:summary",
-    }
-
-
-def _compact_command_run_item_event(
-    session_id: str,
-    result: dict[str, Any],
-    *,
-    ids: dict[str, str],
-    status: str,
-) -> RunItemEvent:
-    event_id = f"compact:{status}:{uuid4().hex[:16]}"
-    content = str(result.get("summary") or result.get("content") or "")
-    delta = str(result.get("delta") or "")
-    label = (
-        "正在压缩"
-        if status == "running"
-        else "压缩失败"
-        if status == "failed"
-        else "暂无可压缩上下文"
-        if result.get("status") == "skipped"
-        else "上下文已压缩"
-    )
-    payload: dict[str, Any] = {
-        "type": "compaction",
-        "label": label,
-        "trigger": "manual",
-    }
-    if content:
-        payload["content"] = content
-    if delta:
-        payload["delta"] = delta
-    if result.get("error"):
-        payload["error"] = str(result.get("error"))
-        payload["content"] = str(result.get("error"))
-    if result.get("status"):
-        payload["compaction_status"] = result.get("status")
-    if result.get("reason"):
-        payload["message"] = str(result.get("reason"))
-    for key in ("compacted_messages", "retained_messages", "before_tokens", "after_tokens"):
-        if result.get(key) is not None:
-            payload[key] = result.get(key)
-    return RunItemEvent(
-        kind="message",
-        thread_id=session_id,
-        event_id=event_id,
-        run_id=ids["run_id"],
-        turn_id=ids["turn_id"],
-        item_id=ids["item_id"],
-        status=status if status in {"running", "completed", "failed"} else "running",
-        payload=payload,
-        source="command.execute",
-        metadata={"command": "compact"},
-    )
-
-
-async def _publish_compact_failed_event(
-    *,
-    session_factory: Any,
-    session_id: str,
-    ids: dict[str, str],
-    error: str,
-    emit_event: Callable[[WriterAppEventEnvelope], Awaitable[None]] | None,
-) -> WriterAppEventEnvelope | None:
-    persistence = writer_persistence_host(session_factory)
-    async def write(db):
-        envelope = await append_run_item_event_and_apply_snapshot(
-            db,
-            _compact_command_run_item_event(
-                session_id,
-                {"error": error},
-                ids=ids,
-                status="failed",
-            ),
-        )
-        terminal_envelope = await append_run_item_event_and_apply_snapshot(
-            db,
-            _compact_command_terminal_event(session_id, ids=ids, error=error),
-        )
-        return envelope, terminal_envelope
-    envelope, terminal_envelope = await persistence.write(write)
-    if emit_event is not None:
-        await emit_event(envelope)
-        await emit_event(terminal_envelope)
-    return envelope
-
-
-def _compact_command_terminal_event(
-    session_id: str,
-    *,
-    ids: dict[str, str],
-    error: str,
-) -> RunItemEvent:
-    return RunItemEvent(
-        kind="status",
-        thread_id=session_id,
-        event_id=f"compact:failed-status:{uuid4().hex[:16]}",
-        run_id=ids["run_id"],
-        turn_id=ids["turn_id"],
-        status="failed",
-        payload={
-            "type": "turn",
-            "status": "failed",
-            "raw_end_reason": "command_failed",
-            "message": error,
-        },
-        source="command.execute",
-        metadata={"command": "compact"},
-    )
 
 
 async def handle_artifact_read_operation(
@@ -1862,14 +1522,8 @@ __all__ = [
     "WriterOperationOutcome",
     "build_writer_core_operation_adapter_catalog",
     "build_writer_operation_catalog",
-    "handle_attachment_get_operation",
-    "handle_attachment_list_operation",
-    "handle_attachment_open_operation",
-    "handle_attachment_preview_operation",
     "handle_artifact_open_operation",
     "handle_artifact_read_operation",
-    "handle_command_catalog_operation",
-    "handle_command_execute_operation",
     "handle_config_adapter_profiles_list_operation",
     "handle_config_provider_create_operation",
     "handle_config_provider_delete_operation",

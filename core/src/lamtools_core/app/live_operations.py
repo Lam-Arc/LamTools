@@ -4,15 +4,24 @@ import asyncio
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lamtools_core.event import RunItemEvent
+from lamtools_core.attachment import AttachmentService
+from lamtools_core.composer_commands import (
+    build_composer_command_catalog,
+    default_core_resource_roots,
+    normalize_command_name,
+)
 from lamtools_core.runtime import default_runtime_task_registry
 from lamtools_core.project.directory_picker import ProjectDirectoryPickerUnavailable, pick_project_directory
+from lamtools_core.tool.approval import normalize_command_policies
 
 from .event_store import AppEventEnvelope, AppEventInput, CORE_RUN_ITEM_METHOD, SqlAlchemyAppEventStore
+from .command_execution import execute_command_action
 from .live_approval import normalize_approval_request
 from .live_hub import CoreAppEventHub, hub as default_hub
 from .live_member import DefaultCoreLiveMemberHooks, PreparedLiveInput
@@ -24,6 +33,7 @@ from .queue_state import (
     build_queue_guidance_plan,
     build_queue_update_plan,
     input_items_text,
+    latest_active_turn_id,
     next_dispatchable_queue_item,
     queue_delete_payload,
     queue_dispatch_payload,
@@ -50,6 +60,122 @@ async def handle_project_directory_pick_operation(
     except (ProjectDirectoryPickerUnavailable, OSError) as exc:
         return CoreLiveOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
     return CoreLiveOperationOutcome(response=rpc_result(request_id, {"path": selected}))
+
+
+async def handle_command_catalog_operation(
+    *, request_id: int | str | None, params: dict[str, Any], context: "CoreLiveContext"
+) -> "CoreLiveOperationOutcome":
+    commands = await _live_command_catalog(context=context, params=params)
+    return CoreLiveOperationOutcome(response=rpc_result(request_id, {"commands": commands}))
+
+
+async def handle_command_execute_operation(
+    *, request_id: int | str | None, params: dict[str, Any], context: "CoreLiveContext"
+) -> "CoreLiveOperationOutcome":
+    thread_id = _thread_id_from_params(params)
+    command = normalize_command_name(params.get("command"))
+    if not thread_id or not command:
+        return CoreLiveOperationOutcome(
+            response=rpc_error(
+                request_id,
+                code=INVALID_REQUEST,
+                message="thread_id and command are required",
+            )
+        )
+    catalog = {str(item.get("name") or ""): item for item in await _live_command_catalog(context=context, params=params)}
+    definition = catalog.get(command)
+    if definition is None:
+        return CoreLiveOperationOutcome(
+            response=rpc_error(request_id, code=INVALID_REQUEST, message=f"Command not available: {command}")
+        )
+    if definition.get("action") != "run_action":
+        return CoreLiveOperationOutcome(
+            response=rpc_error(
+                request_id,
+                code=INVALID_REQUEST,
+                message=f"Command is not executable as an action: {command}",
+            )
+        )
+
+    actions = context.host.member_hooks.command_action_handlers()
+    work_root = str(params.get("work_root") or params.get("workRoot") or "")
+    try:
+        if command == "compact":
+            result, snapshot = await _execute_compact_live_command(
+                context=context,
+                thread_id=thread_id,
+                work_root=work_root,
+                actions=actions,
+                params=params,
+            )
+        else:
+            result = await _execute_live_command_action(
+                context=context,
+                command=command,
+                thread_id=thread_id,
+                work_root=work_root,
+                actions=actions,
+                params=params,
+            )
+            async with context.session_factory() as db:
+                snapshot = await context.persistence.load(db, thread_id)
+    except (LookupError, RuntimeError, TypeError, ValueError) as exc:
+        return CoreLiveOperationOutcome(
+            response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc))
+        )
+    return CoreLiveOperationOutcome(
+        response=rpc_result(request_id, {"result": result, "snapshot": snapshot})
+    )
+
+
+async def handle_attachment_operation(
+    *, request_id: int | str | None, params: dict[str, Any], context: "CoreLiveContext", operation: str
+) -> "CoreLiveOperationOutcome":
+    session_id = _thread_id_from_params(params)
+    attachment_id = str(params.get("attachment_id") or params.get("attachmentId") or params.get("id") or "").strip()
+    if operation == "list" and not session_id:
+        return CoreLiveOperationOutcome(
+            response=rpc_error(request_id, code=INVALID_REQUEST, message="session_id is required")
+        )
+    if operation != "list" and not attachment_id:
+        return CoreLiveOperationOutcome(
+            response=rpc_error(request_id, code=INVALID_REQUEST, message="attachment_id is required")
+        )
+    try:
+        async with context.session_factory() as db:
+            repository = context.host.member_hooks.attachment_repository(db)
+            if repository is None:
+                raise RuntimeError("Attachment storage is not configured")
+            service = AttachmentService(repository)
+            if operation == "list":
+                result = {"attachments": await service.list(session_id)}
+            elif operation == "get":
+                result = {"attachment": await service.get_response(attachment_id)}
+            elif operation == "preview":
+                result = {"preview": await service.preview(attachment_id)}
+            else:
+                result = await service.open(attachment_id)
+    except (FileNotFoundError, LookupError, RuntimeError, ValueError) as exc:
+        return CoreLiveOperationOutcome(
+            response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc))
+        )
+    return CoreLiveOperationOutcome(response=rpc_result(request_id, result))
+
+
+async def handle_attachment_list_operation(**kwargs):
+    return await handle_attachment_operation(**kwargs, operation="list")
+
+
+async def handle_attachment_get_operation(**kwargs):
+    return await handle_attachment_operation(**kwargs, operation="get")
+
+
+async def handle_attachment_preview_operation(**kwargs):
+    return await handle_attachment_operation(**kwargs, operation="preview")
+
+
+async def handle_attachment_open_operation(**kwargs):
+    return await handle_attachment_operation(**kwargs, operation="open")
 
 
 @dataclass
@@ -352,7 +478,7 @@ async def handle_turn_start_operation(
             )
 
         snapshot = await context.persistence.load(db, thread_id)
-        active_run_id = _latest_active_turn_id(snapshot) or context.host.runtime_task_registry.active_run_id(thread_id)
+        active_run_id = latest_active_turn_id(snapshot) or context.host.runtime_task_registry.active_run_id(thread_id)
         if active_run_id:
             return CoreLiveOperationOutcome(
                 response=rpc_error(
@@ -473,7 +599,7 @@ async def handle_turn_cancel_operation(
     async def write(db):
         snapshot = await context.persistence.load(db, thread_id)
         requested_turn_id = str(params.get("turn_id") or params.get("turnId") or "")
-        turn_id = requested_turn_id or _latest_active_turn_id(snapshot) or ""
+        turn_id = requested_turn_id or latest_active_turn_id(snapshot) or ""
         if requested_turn_id and not _is_active_turn(snapshot, requested_turn_id):
             turn_id = ""
         if not turn_id:
@@ -1287,22 +1413,193 @@ async def _persist_operation_result(
         await context.hub.publish(event)
 
 
-def _latest_active_turn_id(snapshot: dict[str, Any]) -> str | None:
-    core = snapshot.get("core")
-    turns = core.get("turns") if isinstance(core, dict) else snapshot.get("turns")
-    if not isinstance(turns, dict):
-        return None
-    active: list[dict[str, Any]] = []
-    for turn_id, turn in turns.items():
-        if not isinstance(turn, dict):
-            continue
-        status = str(turn.get("status") or "")
-        if status in {"running", "waiting", "interrupting"}:
-            active.append({**turn, "turn_id": turn.get("turn_id") or turn_id})
-    if not active:
-        return None
-    active.sort(key=lambda item: int(item.get("last_seq") or item.get("seq") or 0), reverse=True)
-    return str(active[0].get("turn_id") or "") or None
+async def _live_command_catalog(
+    *, context: CoreLiveContext, params: dict[str, Any]
+) -> list[dict[str, Any]]:
+    if isinstance(context.host.member_hooks, DefaultCoreLiveMemberHooks) and context.operations.has("command.catalog"):
+        result = await context.operations.execute("command.catalog", params, metadata={"source": "core_live"})
+        if result.status != "ok":
+            raise ValueError(str(result.payload.get("error") or result.status))
+        commands = result.payload.get("commands")
+        return [dict(item) for item in commands if isinstance(item, dict)] if isinstance(commands, list) else []
+    hooks = context.host.member_hooks
+    work_root = params.get("work_root") or params.get("workRoot")
+    commands = build_composer_command_catalog(
+        core_roots=default_core_resource_roots(),
+        member_roots=[Path(item) for item in hooks.command_member_roots()],
+        work_root=work_root if isinstance(work_root, (str, Path)) else None,
+        skill_registry=hooks.command_skill_registry(),
+    )
+    return [command.to_dict() for command in commands]
+
+
+async def _execute_live_command_action(
+    *,
+    context: CoreLiveContext,
+    command: str,
+    thread_id: str,
+    work_root: str,
+    actions: dict[str, Any],
+    params: dict[str, Any],
+    on_delta: Callable[[str], Any] | None = None,
+) -> dict[str, Any]:
+    if command in actions:
+        return await execute_command_action(
+            command=command,
+            thread_id=thread_id,
+            work_root=work_root,
+            handlers=actions,
+            on_delta=on_delta,
+        )
+    if not context.operations.has("command.execute"):
+        raise ValueError(f"Command is not executable as an action: {command}")
+    result = await context.operations.execute(
+        "command.execute",
+        {**params, "thread_id": thread_id, "command": command},
+        metadata={"source": "core_live"},
+    )
+    if result.status != "ok":
+        raise ValueError(str(result.payload.get("error") or result.status))
+    nested = result.payload.get("result")
+    return dict(nested) if isinstance(nested, dict) else dict(result.payload)
+
+
+async def _execute_compact_live_command(
+    *,
+    context: CoreLiveContext,
+    thread_id: str,
+    work_root: str,
+    actions: dict[str, Any],
+    params: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    ids = _compact_command_ids(thread_id)
+    _, snapshot = await _persist_command_run_item(
+        context=context,
+        event=_compact_command_event(thread_id, {}, ids=ids, status="running"),
+    )
+
+    async def on_delta(delta: str) -> None:
+        if not delta:
+            return
+        await _persist_command_run_item(
+            context=context,
+            event=_compact_command_event(
+                thread_id,
+                {"delta": delta},
+                ids=ids,
+                status="running",
+            ),
+        )
+
+    try:
+        result = await _execute_live_command_action(
+            context=context,
+            command="compact",
+            thread_id=thread_id,
+            work_root=work_root,
+            actions=actions,
+            params=params,
+            on_delta=on_delta,
+        )
+    except BaseException as exc:
+        await _persist_command_run_item(
+            context=context,
+            event=_compact_command_event(
+                thread_id,
+                {"error": str(exc)},
+                ids=ids,
+                status="failed",
+            ),
+        )
+        await _persist_command_run_item(
+            context=context,
+            event=_compact_command_terminal_event(thread_id, ids=ids, error=str(exc)),
+        )
+        raise
+    _, snapshot = await _persist_command_run_item(
+        context=context,
+        event=_compact_command_event(thread_id, result, ids=ids, status="completed"),
+    )
+    return result, snapshot
+
+
+async def _persist_command_run_item(
+    *, context: CoreLiveContext, event: RunItemEvent
+) -> tuple[AppEventEnvelope, dict[str, Any]]:
+    async def write(db: AsyncSession):
+        envelope = await _append_run_item(db, context=context, event=event)
+        return envelope, await context.persistence.load(db, event.thread_id)
+
+    envelope, snapshot = await context.persistence.write(write)
+    await context.hub.publish(envelope)
+    return envelope, snapshot
+
+
+def _compact_command_ids(thread_id: str) -> dict[str, str]:
+    run_id = f"{thread_id}:command:compact:{uuid.uuid4().hex[:12]}"
+    return {"run_id": run_id, "turn_id": run_id, "item_id": f"{run_id}:summary"}
+
+
+def _compact_command_event(
+    thread_id: str,
+    result: dict[str, Any],
+    *,
+    ids: dict[str, str],
+    status: str,
+) -> RunItemEvent:
+    content = str(result.get("summary") or result.get("content") or result.get("error") or "")
+    payload: dict[str, Any] = {
+        "type": "compaction",
+        "label": "正在压缩" if status == "running" else "压缩失败" if status == "failed" else "上下文已压缩",
+        "trigger": "manual",
+    }
+    if content:
+        payload["content"] = content
+    if result.get("delta"):
+        payload["delta"] = str(result["delta"])
+    if result.get("error"):
+        payload["error"] = str(result["error"])
+    if result.get("status"):
+        payload["compaction_status"] = result["status"]
+    for key in ("compacted_messages", "retained_messages", "before_tokens", "after_tokens", "target_tokens"):
+        if result.get(key) is not None:
+            payload[key] = result[key]
+    return RunItemEvent(
+        kind="message",
+        thread_id=thread_id,
+        event_id=f"compact:{status}:{uuid.uuid4().hex[:16]}",
+        run_id=ids["run_id"],
+        turn_id=ids["turn_id"],
+        item_id=ids["item_id"],
+        status=status,
+        payload=payload,
+        source="command.execute",
+        metadata={"command": "compact"},
+    )
+
+
+def _compact_command_terminal_event(
+    thread_id: str,
+    *,
+    ids: dict[str, str],
+    error: str,
+) -> RunItemEvent:
+    return RunItemEvent(
+        kind="status",
+        thread_id=thread_id,
+        event_id=f"compact:failed-status:{uuid.uuid4().hex[:16]}",
+        run_id=ids["run_id"],
+        turn_id=ids["turn_id"],
+        status="failed",
+        payload={
+            "type": "turn",
+            "status": "failed",
+            "raw_end_reason": "command_failed",
+            "message": error,
+        },
+        source="command.execute",
+        metadata={"command": "compact"},
+    )
 
 
 def _is_active_turn(snapshot: dict[str, Any], turn_id: str) -> bool:
@@ -1331,6 +1628,12 @@ _CORE_LIVE_OPERATION_EXECUTORS = {
     "turn.cancel": handle_turn_cancel_operation,
     "turn.steer": handle_turn_steer_operation,
     "approval.respond": handle_approval_respond_operation,
+    "command.catalog": handle_command_catalog_operation,
+    "command.execute": handle_command_execute_operation,
+    "attachment.list": handle_attachment_list_operation,
+    "attachment.get": handle_attachment_get_operation,
+    "attachment.preview": handle_attachment_preview_operation,
+    "attachment.open": handle_attachment_open_operation,
     "queue.create": handle_queue_create_operation,
     "queue.update": handle_queue_update_operation,
     "queue.delete": handle_queue_delete_operation,

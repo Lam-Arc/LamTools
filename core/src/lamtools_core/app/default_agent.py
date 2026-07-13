@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from lamtools_core.event import CollectingEventSink
 from lamtools_core.llm import ChatMessage
-from lamtools_core.composer_commands import load_command_catalog
+from lamtools_core.composer_commands import (
+    build_composer_command_catalog,
+    default_core_resource_roots,
+    normalize_command_name,
+)
 from lamtools_core.member import PromptFragment, StaticMemberKit
 from lamtools_core.runtime import (
     InMemoryRuntimeStateStore,
@@ -20,6 +24,7 @@ from lamtools_core.runtime import (
     RuntimeTurnInput,
     default_runtime_task_registry,
 )
+from lamtools_core.skills import SkillRegistry
 from lamtools_core.session import InMemorySessionStore, SessionStore
 from lamtools_core.snapshot import InMemorySnapshotStore, SnapshotStore
 from lamtools_core.tool import ToolSpec
@@ -32,6 +37,7 @@ from .base_agent import (
     core_events_to_run_items,
     core_events_to_snapshot,
 )
+from .command_execution import CommandActionHandler, compact_runtime_history, execute_command_action
 from .approval_resolution import ApprovalResolutionLifecycle
 from .agent_app import AgentApp, AgentSpec, ModelProvider, ModelTurnOutput, TurnInput
 from .event_store import SqlAlchemyAppEventStore
@@ -88,6 +94,7 @@ def create_core_agent_operations(
     app_event_hub: Any | None = None,
     command_core_roots: list[Path | str] | None = None,
     command_member_roots: list[Path | str] | None = None,
+    command_action_handlers: Mapping[str, CommandActionHandler] | None = None,
     runtime_state_store: RuntimeStateStore | None = None,
     runtime_task_registry: RuntimeTaskRegistry | None = None,
 ) -> OperationCatalog:
@@ -119,6 +126,24 @@ def create_core_agent_operations(
         snapshot_store=snapshot_store or InMemorySnapshotStore(),
     )
     catalog = OperationCatalog()
+    resolved_command_core_roots = [
+        Path(item) for item in (command_core_roots or default_core_resource_roots())
+    ]
+    resolved_command_member_roots = [Path(item) for item in (command_member_roots or [])]
+
+    def command_skill_registry() -> SkillRegistry:
+        plugin_assembly = assemble_core_agent_plugins(
+            data_dir=paths.data_dir,
+            work_root=paths.work_root,
+            plugin_roots=plugin_roots,
+        )
+        return SkillRegistry(
+            explicit_roots=[
+                *resolved_command_member_roots,
+                *resolved_command_core_roots,
+                *plugin_assembly.get("skill_roots", []),
+            ]
+        )
 
     async def turn_start(request: OperationRequest) -> OperationResult:
         thread_id = str(request.payload.get("thread_id") or request.payload.get("session_id") or "").strip()
@@ -592,19 +617,81 @@ def create_core_agent_operations(
         )
 
     async def command_catalog(request: OperationRequest) -> OperationResult:
-        del request
-        commands = load_command_catalog(
-            core_roots=[Path(item) for item in (command_core_roots or _default_core_resource_roots())],
-            member_roots=[Path(item) for item in (command_member_roots or [])],
+        work_root = request.payload.get("work_root") or request.payload.get("workRoot") or paths.work_root
+        commands = build_composer_command_catalog(
+            core_roots=resolved_command_core_roots,
+            member_roots=resolved_command_member_roots,
+            work_root=work_root,
+            skill_registry=command_skill_registry(),
         )
         return OperationResult(
             name="command.catalog",
             payload={"commands": [command.to_dict() for command in commands]},
         )
 
+    async def command_execute(request: OperationRequest) -> OperationResult:
+        thread_id = str(
+            request.payload.get("thread_id")
+            or request.payload.get("threadId")
+            or request.payload.get("session_id")
+            or request.payload.get("sessionId")
+            or ""
+        ).strip()
+        command = normalize_command_name(request.payload.get("command"))
+        if not thread_id or not command:
+            return OperationResult(
+                name=request.name,
+                status="error",
+                payload={"error": "thread_id and command are required"},
+            )
+        available = {
+            item.name: item
+            for item in build_composer_command_catalog(
+                core_roots=resolved_command_core_roots,
+                member_roots=resolved_command_member_roots,
+                work_root=request.payload.get("work_root") or request.payload.get("workRoot") or paths.work_root,
+                skill_registry=command_skill_registry(),
+            )
+        }
+        definition = available.get(command)
+        if definition is None:
+            return OperationResult(
+                name=request.name,
+                status="error",
+                payload={"error": f"Command not available: {command}"},
+            )
+        if definition.action != "run_action":
+            return OperationResult(
+                name=request.name,
+                status="error",
+                payload={"error": f"Command is not executable as an action: {command}"},
+            )
+        handlers = dict(command_action_handlers or {})
+        handlers.setdefault(
+            "compact",
+            lambda thread_id, on_delta=None: compact_runtime_history(
+                runtime_state_store=runtime_state_store,
+                thread_id=thread_id,
+                llm_client=model_provider if _is_llm_client(model_provider) else None,  # type: ignore[arg-type]
+                model=spec.default_model,
+                on_delta=on_delta,
+            ),
+        )
+        try:
+            result = await execute_command_action(
+                command=command,
+                thread_id=thread_id,
+                work_root=str(request.payload.get("work_root") or request.payload.get("workRoot") or paths.work_root),
+                handlers=handlers,
+            )
+        except (LookupError, RuntimeError, TypeError, ValueError) as exc:
+            return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
+        return OperationResult(name=request.name, payload={"result": result})
+
     catalog.register("turn.start", turn_start)
     catalog.register("approval.respond", approval_respond)
     catalog.register("command.catalog", command_catalog)
+    catalog.register("command.execute", command_execute)
     plugin_operations = build_core_plugin_operation_catalog(
         data_dir=paths.data_dir,
         work_root=paths.work_root,
@@ -709,10 +796,6 @@ def _model_provider_for_runtime(model_provider: Any, *, runtime_options: CoreAge
 
         provider = ShallowThinkingClient(provider)
     return provider
-
-
-def _default_core_resource_roots() -> list[Path]:
-    return [Path(__file__).resolve().parents[3]]
 
 
 async def _persist_run_items(
