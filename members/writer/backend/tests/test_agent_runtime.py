@@ -458,7 +458,6 @@ def test_project_sub_agent_definition_overrides_builtin(tmp_path):
             "tools:",
             "  - read_file",
             "model: fast-model",
-            "maxTurns: 2",
             "---",
             "Only inspect the requested files.",
         ]),
@@ -471,7 +470,6 @@ def test_project_sub_agent_definition_overrides_builtin(tmp_path):
     assert definitions["explorer"].description == "Project explorer"
     assert definitions["explorer"].tools == ("read_file",)
     assert definitions["explorer"].model == "fast-model"
-    assert definitions["explorer"].max_tool_rounds == 2
 
 
 def test_project_sub_agent_definition_write_and_delete_roundtrip(tmp_path):
@@ -486,7 +484,6 @@ def test_project_sub_agent_definition_write_and_delete_roundtrip(tmp_path):
             developer_instructions="Only handle project work.",
             tools=("read_file", "write_file"),
             model="fast-model",
-            max_tool_rounds=2,
             aliases=("pw",),
             source="project",
         ),

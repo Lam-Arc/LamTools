@@ -114,7 +114,6 @@ async def runtime_capabilities_response(
             "developer_instructions": definition.developer_instructions,
             "tools": list(definition.tools),
             "model": definition.model,
-            "max_tool_rounds": definition.max_tool_rounds,
             "aliases": list(definition.aliases),
             "source": definition.source,
             "enabled": bool(agent_controls.get(f"sub:{definition.name}", True)),

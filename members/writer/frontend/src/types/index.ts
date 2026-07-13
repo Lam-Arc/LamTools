@@ -224,7 +224,6 @@ export interface SubAgentDefinition {
   developer_instructions: string
   tools: string[]
   model: string
-  max_tool_rounds: number
   aliases: string[]
   source: string
   enabled: boolean
@@ -237,7 +236,6 @@ export interface SubAgentDefinitionUpdate {
   developer_instructions: string
   tools: string[]
   model?: string
-  max_tool_rounds: number
   aliases?: string[]
 }
 

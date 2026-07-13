@@ -1167,6 +1167,65 @@ class TestRunCoreKernelIntegration:
         assert "README 内容是 hello from workspace" in (sub_tool_results[0].content or "")
 
     @pytest.mark.asyncio
+    async def test_writer_sub_agent_has_no_fixed_tool_round_limit(self, tmp_path):
+        llm = FakeLLMClient()
+        llm.add_response(LLMResponse(
+            content="",
+            tool_calls=[
+                LLMToolCall(
+                    id="call-sub-six-rounds",
+                    name="sub_agent",
+                    arguments={
+                        "task": "连续检查目录六次后总结",
+                        "agent": "explorer",
+                        "model": None,
+                        "expected_output": "检查完成说明",
+                    },
+                )
+            ],
+            finish_reason="tool_calls",
+        ))
+        for round_number in range(1, 7):
+            llm.add_response(LLMResponse(
+                content="",
+                tool_calls=[
+                    LLMToolCall(
+                        id=f"sub-list-{round_number}",
+                        name="list_dir",
+                        arguments={"path": "."},
+                    )
+                ],
+                finish_reason="tool_calls",
+            ))
+        llm.add_response(LLMResponse(
+            content="子代理已完成六轮目录检查。",
+            finish_reason="stop",
+        ))
+        llm.add_response(LLMResponse(
+            content="主流程已收到六轮检查结果。",
+            finish_reason="stop",
+        ))
+
+        result = await run_core_kernel(
+            goal="派发 explorer 连续检查目录。",
+            session_id="test-sub-agent-six-tool-rounds",
+            llm_client=llm,
+            work_root=str(tmp_path),
+        )
+
+        assert result.decision == "done"
+        assert result.message == "主流程已收到六轮检查结果。"
+        assert llm.call_count == 9
+        sub_result = next(
+            item.result
+            for step in result.steps
+            for item in step.tool_steps
+            if item.call.name == "sub_agent"
+        )
+        assert sub_result.status == "ok"
+        assert len(sub_result.metadata["tool_calls"]) == 6
+
+    @pytest.mark.asyncio
     async def test_distinct_file_read_failures_do_not_masquerade_as_done(self, tmp_path):
         llm = FakeLLMClient()
         llm.add_response(LLMResponse(

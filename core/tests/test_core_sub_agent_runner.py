@@ -58,6 +58,32 @@ class ScriptedMainAndSubAgentLLM:
         yield LLMStreamEvent(kind="done")
 
 
+class SixToolRoundSubAgentLLM:
+    def __init__(self) -> None:
+        self.requests: list[LLMRequest] = []
+
+    async def complete(self, request: LLMRequest) -> LLMResponse:
+        raise AssertionError("Sub-agent runner should use streaming")
+
+    async def stream(self, request: LLMRequest):
+        self.requests.append(request)
+        round_number = len(self.requests)
+        if round_number <= 6:
+            yield LLMStreamEvent(
+                kind="done",
+                tool_calls=[
+                    LLMToolCall(
+                        id=f"list-{round_number}",
+                        name="list_dir",
+                        arguments={"path": "."},
+                    )
+                ],
+            )
+            return
+        yield LLMStreamEvent(kind="content_delta", content="completed after six tool rounds")
+        yield LLMStreamEvent(kind="done")
+
+
 @pytest.mark.asyncio
 async def test_kernel_sub_agent_runner_uses_core_loop_without_recursive_sub_agent(tmp_path):
     llm = ScriptedSubAgentOnlyLLM()
@@ -69,6 +95,17 @@ async def test_kernel_sub_agent_runner_uses_core_loop_without_recursive_sub_agen
     assert len(llm.requests) == 1
     assert "sub_agent" not in {tool["function"]["name"] for tool in llm.requests[0].tools or []}
     assert "read_file" in {tool["function"]["name"] for tool in llm.requests[0].tools or []}
+
+
+@pytest.mark.asyncio
+async def test_kernel_sub_agent_runner_has_no_fixed_tool_round_limit(tmp_path):
+    llm = SixToolRoundSubAgentLLM()
+    runner = KernelSubAgentRunner(work_root=tmp_path, llm_client=llm, model_id="fake-model")
+
+    result = await runner.run(task="inspect the project thoroughly", agent="worker")
+
+    assert result == "completed after six tool rounds"
+    assert len(llm.requests) == 7
 
 
 @pytest.mark.asyncio

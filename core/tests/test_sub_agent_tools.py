@@ -73,7 +73,7 @@ def test_parse_sub_agent_definition_frontmatter(tmp_path):
     assert definition.description == "Project explorer"
     assert definition.tools == ("read_file",)
     assert definition.model == "fast-model"
-    assert definition.max_tool_rounds == 2
+    assert not hasattr(definition, "max_tool_rounds")
     assert definition.developer_instructions == "Only inspect files."
 
 
@@ -87,7 +87,6 @@ def test_project_sub_agent_definition_write_delete_roundtrip(tmp_path):
             developer_instructions="Only handle project work.",
             tools=("read_file", "write_file"),
             model="fast-model",
-            max_tool_rounds=2,
             aliases=("pw",),
         ),
     )
@@ -95,7 +94,9 @@ def test_project_sub_agent_definition_write_delete_roundtrip(tmp_path):
     assert saved.name == "project_worker"
     path = project_sub_agent_definition_path(tmp_path, "project_worker")
     assert path.is_file()
-    assert "Only handle project work." in path.read_text(encoding="utf-8")
+    definition_text = path.read_text(encoding="utf-8")
+    assert "Only handle project work." in definition_text
+    assert "maxTurns" not in definition_text
     assert delete_project_sub_agent_definition(tmp_path, "project_worker") is True
     assert not path.exists()
 

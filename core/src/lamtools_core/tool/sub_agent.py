@@ -20,7 +20,6 @@ class SubAgentDefinition:
     developer_instructions: str
     tools: tuple[str, ...]
     model: str = ""
-    max_tool_rounds: int = 3
     aliases: tuple[str, ...] = ()
     source: str = "builtin"
 
@@ -49,11 +48,6 @@ def parse_sub_agent_definition(path: Path, source: str) -> SubAgentDefinition | 
         return None
     tools = frontmatter_list(data.get("tools"))
     aliases = tuple(frontmatter_list(data.get("aliases")))
-    max_rounds_raw = data.get("max_tool_rounds") or data.get("maxToolRounds") or data.get("maxTurns")
-    try:
-        max_rounds = int(max_rounds_raw) if max_rounds_raw is not None else 3
-    except (TypeError, ValueError):
-        max_rounds = 3
     description = str(data.get("description") or "").strip()
     role = str(data.get("role") or name).strip()
     return SubAgentDefinition(
@@ -63,7 +57,6 @@ def parse_sub_agent_definition(path: Path, source: str) -> SubAgentDefinition | 
         developer_instructions=body.strip(),
         tools=tuple(normalize_tool_name(item) for item in tools if normalize_tool_name(item)),
         model=str(data.get("model") or "").strip(),
-        max_tool_rounds=max(0, min(max_rounds, 5)),
         aliases=tuple(normalize_agent_key(item) for item in aliases if normalize_agent_key(item)),
         source=source,
     )
@@ -94,7 +87,6 @@ def render_sub_agent_definition(definition: SubAgentDefinition) -> str:
         lines.append(f"  - {tool}")
     if definition.model:
         lines.append(f"model: {yaml_scalar(definition.model)}")
-    lines.append(f"maxTurns: {max(0, min(int(definition.max_tool_rounds), 5))}")
     if definition.aliases:
         lines.append("aliases:")
         for alias in definition.aliases:
@@ -114,7 +106,6 @@ def write_project_sub_agent_definition(work_root: str | Path, definition: SubAge
         developer_instructions=definition.developer_instructions.strip(),
         tools=tuple(normalize_tool_name(tool) for tool in definition.tools if normalize_tool_name(tool)),
         model=definition.model.strip(),
-        max_tool_rounds=max(0, min(int(definition.max_tool_rounds), 5)),
         aliases=tuple(validate_project_sub_agent_name(alias) for alias in definition.aliases if alias.strip()),
         source="project",
     )

@@ -168,7 +168,6 @@ class SubAgentDefinitionResponse(BaseModel):
     developer_instructions: str = ""
     tools: list[str]
     model: str
-    max_tool_rounds: int
     aliases: list[str]
     source: str
     enabled: bool
@@ -181,7 +180,6 @@ class SubAgentDefinitionUpsert(BaseModel):
     developer_instructions: str = ""
     tools: list[str] = []
     model: str = ""
-    max_tool_rounds: int = 3
     aliases: list[str] = []
 
 

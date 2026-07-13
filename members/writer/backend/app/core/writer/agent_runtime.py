@@ -148,7 +148,6 @@ def load_sub_agent_definitions(work_root: str | Path | None = None) -> tuple[Sub
       - read_file
       - search_content
     model: ""
-    maxTurns: 3
     ---
     Developer instructions...
     """
