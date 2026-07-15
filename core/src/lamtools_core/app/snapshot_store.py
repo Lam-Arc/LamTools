@@ -11,7 +11,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lamtools_core.event import RunItemEvent
-from lamtools_core.snapshot import apply_run_item_event_in_place, empty_thread_snapshot
+from lamtools_core.snapshot import (
+    apply_run_item_event_in_place,
+    empty_thread_snapshot,
+    reconcile_terminal_requests,
+)
 
 from .event_store import CORE_RUN_ITEM_METHOD, AppEventEnvelope
 
@@ -226,8 +230,10 @@ class CoreAppSnapshotProjector:
         """Rebuild derived status fields after loading an older persisted projection."""
         core = state.get("core")
         if isinstance(core, dict):
+            reconcile_terminal_requests(core)
             self._recompute_thread_status(core)
             self._sync_turns_from_core(state)
+        reconcile_terminal_requests(state)
         self._recompute_thread_status(state)
         return state
 

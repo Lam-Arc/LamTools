@@ -77,6 +77,7 @@ def apply_run_item_event_in_place(state: dict[str, Any], event: RunItemEvent) ->
             state["last_error"] = dict(event.payload)
         if turn is not None and status in TERMINAL_STATUSES:
             _close_turn_items(state, turn, status)
+            reconcile_terminal_requests(state)
         return state
 
     if event.kind == "approval_response":
@@ -153,6 +154,7 @@ def apply_run_item_event_in_place(state: dict[str, Any], event: RunItemEvent) ->
         state["status"] = "waiting"
     elif _is_turn_terminal_event(event):
         turn["status"] = event.status
+        reconcile_terminal_requests(state)
         _recompute_thread_status(state)
     elif event.status == "waiting":
         turn["status"] = "waiting"
@@ -314,6 +316,31 @@ def _has_open_request(state: dict[str, Any]) -> bool:
     )
 
 
+def reconcile_terminal_requests(state: dict[str, Any]) -> dict[str, Any]:
+    """Close stale server requests whose owning turn can no longer answer them."""
+    turns = state.get("turns")
+    requests = state.get("requests")
+    if not isinstance(turns, dict) or not isinstance(requests, dict):
+        return state
+    terminal_statuses = {
+        str(turn_id): str(turn.get("status") or "")
+        for turn_id, turn in turns.items()
+        if isinstance(turn, dict) and str(turn.get("status") or "") in TERMINAL_STATUSES
+    }
+    for request_id, request in list(requests.items()):
+        if not isinstance(request, dict) or request.get("status") != "open":
+            continue
+        terminal_status = terminal_statuses.get(str(request.get("turn_id") or ""))
+        if not terminal_status:
+            continue
+        requests[request_id] = {
+            **request,
+            "status": "cancelled" if terminal_status == "cancelled" else "resolved",
+            "terminal_turn_status": terminal_status,
+        }
+    return state
+
+
 def _latest_active_turn(state: dict[str, Any]) -> dict[str, Any] | None:
     turns = [
         turn for turn in (state.get("turns") or {}).values()
@@ -361,5 +388,6 @@ __all__ = [
     "InMemorySnapshotStore",
     "apply_run_item_event",
     "empty_thread_snapshot",
+    "reconcile_terminal_requests",
     "reduce_run_item_events",
 ]

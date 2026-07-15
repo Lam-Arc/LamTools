@@ -251,6 +251,37 @@ async def test_snapshot_load_reconciles_stale_running_status_from_terminal_turns
         await engine.dispose()
 
 
+@pytest.mark.asyncio
+async def test_snapshot_load_closes_open_requests_from_cancelled_turns(tmp_path):
+    engine, session_factory = await _session_factory(tmp_path)
+    store = SqlAlchemyThreadSnapshotStore(ThreadSnapshotRow)
+    stale = store.projector.empty("thread-cancelled")
+    stale["status"] = "cancelled"
+    stale["turns"] = {
+        "turn-1": {"turn_id": "turn-1", "status": "cancelled", "last_seq": 5, "items": []}
+    }
+    stale["core"]["status"] = "cancelled"
+    stale["core"]["turns"] = {
+        "turn-1": {"turn_id": "turn-1", "status": "cancelled", "last_seq": 5, "items": []}
+    }
+    stale["core"]["requests"] = {
+        "request-1": {"request_id": "request-1", "turn_id": "turn-1", "status": "open"}
+    }
+    try:
+        async with session_factory() as db:
+            db.add(ThreadSnapshotRow(thread_id="thread-cancelled", snapshot_seq=5, snapshot_json=stale))
+            await db.commit()
+
+        async with session_factory() as db:
+            loaded = await store.load(db, "thread-cancelled")
+
+        assert loaded["status"] == "cancelled"
+        assert loaded["core"]["status"] == "cancelled"
+        assert loaded["core"]["requests"]["request-1"]["status"] == "cancelled"
+    finally:
+        await engine.dispose()
+
+
 def test_projector_in_place_replay_matches_copying_apply():
     projector = CoreAppSnapshotProjector(member_defaults={"queue": []})
     events = [
