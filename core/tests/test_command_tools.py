@@ -16,6 +16,10 @@ from lamtools_core.tool.command import (
     validate_command_paths,
 )
 import lamtools_core.tool.command as command_module
+import lamtools_core.tool.command_runner as command_runner
+import lamtools_core.tool.command_tools as command_tools_module
+from lamtools_core.tool import ToolCall
+from lamtools_core.tool.command_tools import CommandToolHandlers
 
 
 def test_command_execution_defaults_are_tool_friendly():
@@ -35,6 +39,86 @@ def test_windows_command_creationflags_hide_console(monkeypatch):
 
     assert flags & 0x200
     assert flags & 0x08000000
+
+
+def test_windows_command_shell_prefers_git_bash(monkeypatch, tmp_path: Path):
+    bash = tmp_path / "bash.exe"
+    bash.write_text("", encoding="utf-8")
+    monkeypatch.setattr(command_runner.sys, "platform", "win32")
+    monkeypatch.setattr(command_runner, "_git_bash_path", lambda: bash)
+    monkeypatch.delenv("LAMTOOLS_COMMAND_SHELL", raising=False)
+
+    shell = command_runner.resolve_command_shell()
+
+    assert shell.name == "Git Bash"
+    assert shell.argv("pwd && ls") == [
+        str(bash),
+        "--noprofile",
+        "--norc",
+        "-lc",
+        "pwd && ls",
+    ]
+
+
+def test_windows_command_shell_honors_explicit_powershell(monkeypatch):
+    monkeypatch.setattr(command_runner.sys, "platform", "win32")
+    monkeypatch.setenv("LAMTOOLS_COMMAND_SHELL", "powershell")
+
+    shell = command_runner.resolve_command_shell()
+
+    assert shell.name == "Windows PowerShell 5.1"
+    assert shell.executable == "powershell.exe"
+    assert "Windows PowerShell 5.1" in command_runner.command_shell_prompt()
+    assert "&&" in command_runner.command_shell_prompt()
+
+
+def test_windows_command_shell_falls_back_when_git_bash_is_missing(monkeypatch):
+    monkeypatch.setattr(command_runner.sys, "platform", "win32")
+    monkeypatch.setattr(command_runner, "_git_bash_path", lambda: None)
+    monkeypatch.setattr(command_runner.shutil, "which", lambda _name: None)
+    monkeypatch.delenv("LAMTOOLS_COMMAND_SHELL", raising=False)
+
+    shell = command_runner.resolve_command_shell()
+
+    assert shell.name == "Windows PowerShell 5.1"
+
+
+@pytest.mark.asyncio
+async def test_run_command_uses_resolved_shell_and_reports_it(monkeypatch, tmp_path: Path):
+    shell = command_runner.CommandShell(
+        name="Git Bash",
+        executable=r"C:\Program Files\Git\bin\bash.exe",
+        kind="git-bash",
+    )
+    captured: dict[str, object] = {}
+
+    async def fake_run(argv, **_kwargs):
+        captured["argv"] = argv
+        return CommandExecution(exit_code=0, stdout="ok\n")
+
+    monkeypatch.setattr(command_tools_module.sys, "platform", "win32")
+    monkeypatch.setattr(command_tools_module, "resolve_command_shell", lambda: shell)
+    monkeypatch.setattr(command_tools_module, "_run_subprocess", fake_run)
+    handlers = CommandToolHandlers(
+        work_root=tmp_path,
+        command_timeout=10,
+        loaded_skill_roots=set(),
+    )
+
+    result = await handlers.run_command(
+        ToolCall(id="shell-call", name="run_command", arguments={"command": "pwd && ls"})
+    )
+
+    assert result.status == "ok"
+    assert captured["argv"] == [
+        shell.executable,
+        "--noprofile",
+        "--norc",
+        "-lc",
+        "pwd && ls",
+    ]
+    assert result.metadata["shell"] == "Git Bash"
+    assert result.metadata["shell_executable"] == shell.executable
 
 
 def test_format_command_output_keeps_stdout_and_stderr_separate():

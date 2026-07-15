@@ -92,6 +92,35 @@ async def test_writer_kit_resets_original_task_for_each_turn():
 
 
 @pytest.mark.asyncio
+async def test_writer_system_prompt_names_current_command_shell(monkeypatch, tmp_path):
+    import app.core.writer.core_kernel_adapter as adapter_module
+
+    monkeypatch.setattr(
+        adapter_module,
+        "command_shell_prompt",
+        lambda: "[Command Shell]\nrun_command uses Git Bash.",
+    )
+    kit = WriterKit(work_root=str(tmp_path))
+    state = RuntimeState(session_id="writer-shell-prompt")
+    context = await kit.build_context(
+        state,
+        RuntimeTurnInput(user_message="test"),
+        [],
+        0,
+    )
+
+    request = await kit.build_model_request(state, context)
+
+    shell_messages = [
+        message
+        for message in request.messages
+        if isinstance(message.metadata, dict) and message.metadata.get("key") == "command_shell"
+    ]
+    assert len(shell_messages) == 1
+    assert "run_command uses Git Bash" in str(shell_messages[0].content)
+
+
+@pytest.mark.asyncio
 async def test_writer_kernel_adapter_preserves_supplied_transcript_turn_identity():
     llm = FakeLLMClient()
     llm.add_response(LLMResponse(content="done", finish_reason="stop"))

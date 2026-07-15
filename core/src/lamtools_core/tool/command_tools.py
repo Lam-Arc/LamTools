@@ -27,11 +27,11 @@ from lamtools_core.tool.command_runner import (
     _make_background_http_probe,
     _make_readiness_http_probe,
     _normalize_windows_shell_command,
+    resolve_command_shell,
     _resolve_skill_script_paths,
     _run_background_subprocess,
     _run_subprocess,
     _validate_readiness_url,
-    _windows_shell_argv,
 )
 
 
@@ -68,9 +68,8 @@ class CommandToolHandlers:
         On Unix (Linux/macOS): commands are split via ``shlex.split`` and
         executed without shell expansion.
 
-        On Windows: commands are executed via PowerShell so the runtime matches
-        the Windows prompt contract and supports common commands such as
-        ``Get-ChildItem`` and ``Select-Object``.
+        On Windows: Git Bash is preferred when available. PowerShell 7 or
+        Windows PowerShell 5.1 are safe fallbacks when Git Bash is unavailable.
 
         Path validation applies regardless of platform. Risk approval is
         handled by the caller's command policy before this method executes.
@@ -132,10 +131,16 @@ class CommandToolHandlers:
         command = _resolve_skill_script_paths(command, self._work_root, self._loaded_skill_roots)
 
         if sys.platform == 'win32':
-            shell_command = _normalize_windows_shell_command(command)
-            argv = _windows_shell_argv(shell_command)
-            validation_argv = ["cmd", *split_command_for_path_validation(shell_command)]
+            command_shell = resolve_command_shell()
+            shell_command = (
+                _normalize_windows_shell_command(command)
+                if command_shell.kind in {"powershell", "pwsh"}
+                else command
+            )
+            argv = command_shell.argv(shell_command)
+            validation_argv = [command_shell.kind, *split_command_for_path_validation(shell_command)]
         else:
+            command_shell = resolve_command_shell()
             try:
                 argv = shlex.split(command)
             except ValueError as exc:
@@ -269,6 +274,8 @@ class CommandToolHandlers:
         metadata = {
             **public_call_metadata,
             "command": command,
+            "shell": command_shell.name,
+            "shell_executable": command_shell.executable,
             "argv": argv,
             "exit_code": execution.exit_code,
             "timed_out": execution.timed_out,
@@ -286,6 +293,8 @@ class CommandToolHandlers:
             content=output,
             metadata={
                 "command": command,
+                "shell": command_shell.name,
+                "shell_executable": command_shell.executable,
                 "exit_code": execution.exit_code,
                 "timed_out": execution.timed_out,
                 "background": execution.background,

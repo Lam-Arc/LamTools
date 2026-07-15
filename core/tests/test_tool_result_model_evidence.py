@@ -5,6 +5,7 @@ import pytest
 from lamtools_core.app.base_agent import CoreBaseAgentKit
 from lamtools_core.kernel import KernelStep, KernelTurn, VerificationResult
 from lamtools_core.runtime import RuntimeState, RuntimeToolStep
+from lamtools_core.prompt import PromptContext
 from lamtools_core.tool import ToolArtifact, ToolCall, ToolResult
 
 
@@ -15,6 +16,34 @@ class _CapturingToolbox:
     async def execute(self, call: ToolCall) -> ToolResult:
         self.call = call
         return ToolResult(call_id=call.id, name=call.name, status="ok")
+
+    def tool_specs(self):
+        return []
+
+    def model_tools(self):
+        return []
+
+    def skill_index(self):
+        return ""
+
+
+@pytest.mark.asyncio
+async def test_base_agent_system_prompt_names_current_command_shell(monkeypatch, tmp_path):
+    import lamtools_core.app.base_agent as base_agent_module
+
+    monkeypatch.setattr(
+        base_agent_module,
+        "command_shell_prompt",
+        lambda: "[Command Shell]\nrun_command uses Git Bash.",
+    )
+    kit = CoreBaseAgentKit(work_root=tmp_path, toolbox=_CapturingToolbox())  # type: ignore[arg-type]
+
+    request = await kit.build_model_request(
+        RuntimeState(session_id="shell-prompt"),
+        PromptContext(session_id="shell-prompt"),
+    )
+
+    assert "run_command uses Git Bash" in str(request.messages[0].content)
 
 
 @pytest.mark.asyncio

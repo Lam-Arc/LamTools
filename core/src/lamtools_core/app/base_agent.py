@@ -23,6 +23,7 @@ from lamtools_core.runtime import RuntimeState, RuntimeTurnInput
 from lamtools_core.snapshot import reduce_run_item_events
 from lamtools_core.tool import ToolCall, ToolResult
 from lamtools_core.tool.default_toolbox import ApprovalPolicy, CoreToolbox, build_core_toolbox
+from lamtools_core.tool.command_runner import command_shell_prompt
 from lamtools_core.tool.workspace import line_count
 
 
@@ -135,6 +136,7 @@ class CoreBaseAgentKit:
     async def build_model_request(self, state: RuntimeState, context: PromptContext) -> LLMRequest:
         system_lines = [
             self.config.instructions,
+            command_shell_prompt(),
             "Use the available tools when they help complete the user's request.",
             "If the user explicitly asks to use a sub-agent, call sub_agent before producing the final result.",
             "When the user assigns a deliverable to a sub-agent, delegate the complete requested deliverable, including any requested file creation or tool action. The Parent Agent should verify the result instead of recreating that deliverable itself.",

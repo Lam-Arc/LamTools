@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import datetime
+import os
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -543,7 +545,97 @@ def _normalize_windows_shell_command(command: str) -> str:
     return stripped
 
 
-def _windows_shell_argv(command: str) -> list[str]:
+@dataclass(frozen=True)
+class CommandShell:
+    name: str
+    executable: str
+    kind: str
+
+    def argv(self, command: str) -> list[str]:
+        if self.kind == "git-bash":
+            return [self.executable, "--noprofile", "--norc", "-lc", command]
+        if self.kind == "pwsh":
+            return _powershell_argv(command, executable=self.executable)
+        return _powershell_argv(command, executable=self.executable)
+
+
+def _git_bash_path() -> Path | None:
+    candidates: list[Path] = []
+    explicit = os.environ.get("LAMTOOLS_GIT_BASH", "").strip()
+    if explicit:
+        candidates.append(Path(explicit))
+
+    for executable in ("bash.exe", "bash"):
+        resolved = shutil.which(executable)
+        if resolved:
+            candidates.append(Path(resolved))
+
+    git = shutil.which("git.exe") or shutil.which("git")
+    if git:
+        git_root = Path(git).resolve().parent.parent
+        candidates.extend(
+            (git_root / "bin" / "bash.exe", git_root / "usr" / "bin" / "bash.exe")
+        )
+
+    for env_name in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"):
+        base = os.environ.get(env_name, "").strip()
+        if base:
+            candidates.extend(
+                (
+                    Path(base) / "Git" / "bin" / "bash.exe",
+                    Path(base) / "Programs" / "Git" / "bin" / "bash.exe",
+                )
+            )
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate).casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        if "windows\\system32" in key.replace("/", "\\"):
+            continue
+        if candidate.is_file():
+            return candidate.resolve()
+    return None
+
+
+def resolve_command_shell() -> CommandShell:
+    if sys.platform != "win32":
+        return CommandShell(name="Direct POSIX execution", executable="", kind="direct")
+
+    preferred = os.environ.get("LAMTOOLS_COMMAND_SHELL", "git-bash").strip().lower()
+    if preferred in {"git-bash", "gitbash", "bash", ""}:
+        git_bash = _git_bash_path()
+        if git_bash is not None:
+            return CommandShell(name="Git Bash", executable=str(git_bash), kind="git-bash")
+    elif preferred in {"pwsh", "powershell7", "powershell-7"}:
+        pwsh = shutil.which("pwsh.exe") or shutil.which("pwsh")
+        if pwsh:
+            return CommandShell(name="PowerShell 7", executable=pwsh, kind="pwsh")
+    elif preferred in {"powershell", "windows-powershell", "powershell5", "powershell-5.1"}:
+        return CommandShell(name="Windows PowerShell 5.1", executable="powershell.exe", kind="powershell")
+
+    pwsh = shutil.which("pwsh.exe") or shutil.which("pwsh")
+    if pwsh:
+        return CommandShell(name="PowerShell 7", executable=pwsh, kind="pwsh")
+    return CommandShell(name="Windows PowerShell 5.1", executable="powershell.exe", kind="powershell")
+
+
+def command_shell_prompt() -> str:
+    shell = resolve_command_shell()
+    if shell.kind == "git-bash":
+        syntax = "Use Bash syntax and Unix commands. Do not use PowerShell cmdlets or Windows PowerShell quoting."
+    elif shell.kind == "direct":
+        syntax = "Commands are executed directly without shell expansion. Avoid shell-only pipelines and redirection."
+    elif shell.kind == "pwsh":
+        syntax = "Use PowerShell 7 syntax. Do not assume Windows PowerShell 5.1 limitations or Bash syntax."
+    else:
+        syntax = "Use Windows PowerShell 5.1 syntax. Do not use PowerShell 7-only operators such as && or Bash syntax."
+    return f"[Command Shell]\nrun_command uses {shell.name} ({shell.executable}). {syntax}"
+
+
+def _powershell_argv(command: str, *, executable: str = "powershell.exe") -> list[str]:
     wrapped = (
         "$ErrorActionPreference = 'Stop'; "
         f"try {{ $__lamtools_output = & {{ {command} }}; "
@@ -557,10 +649,15 @@ def _windows_shell_argv(command: str) -> list[str]:
         "if ($__lamtools_exit_ok) { exit 0 } else { exit 1 }"
     )
     return [
-        "powershell.exe",
+        executable,
         "-NoProfile",
         "-ExecutionPolicy",
         "Bypass",
         "-Command",
         wrapped,
     ]
+
+
+def _windows_shell_argv(command: str) -> list[str]:
+    """Compatibility wrapper for callers that explicitly require Windows PowerShell."""
+    return _powershell_argv(command)

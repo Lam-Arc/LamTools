@@ -71,6 +71,7 @@ from pathlib import Path
 from typing import Any, Callable, Awaitable
 
 from lamtools_core.context_compaction import COMPACTION_PREFIX
+from lamtools_core.tool.command_runner import command_shell_prompt
 from lamtools_core.event import CoreEvent, EventSink, InMemoryEventLog
 from lamtools_core.kernel import (
     CoreLoopKernel,
@@ -538,6 +539,11 @@ class WriterKit:
             role="system",
             content=runtime_now_prompt(),
             metadata={"key": "runtime_now", "kind": "context"},
+        ))
+        messages.append(ChatMessage(
+            role="system",
+            content=command_shell_prompt(),
+            metadata={"key": "command_shell", "kind": "context"},
         ))
         # 3.5 Inject path exhaustion intervention (consumed once per turn)
         if self._intervention_pending:
