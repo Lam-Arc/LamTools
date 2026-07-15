@@ -29,4 +29,27 @@ describe('CoreResourceStats', () => {
     expect(empty.find('.core-resource-line').classes()).not.toContain('has-data')
     expect(empty.find('.core-resource-line').attributes('aria-valuenow')).toBe('0')
   })
+
+  it('uses a completed compaction result as the current context size', () => {
+    const compactedMessages = [
+      ...messages,
+      {
+        metadata: {},
+        parts: [{
+          partType: 'compaction',
+          status: 'completed',
+          metadata: {
+            compaction_status: 'compacted',
+            after_tokens: 2_067,
+          },
+        }],
+      },
+    ]
+
+    const wrapper = mount(CoreResourceStats, { props: { messages: compactedMessages } })
+
+    expect(wrapper.text()).toContain('2.1k / 100k')
+    expect(wrapper.text()).toContain('2%')
+    expect(wrapper.text()).toContain('已压缩')
+  })
 })

@@ -50,7 +50,7 @@ import type { CoreMessage } from '../types'
 import { buildCoreResourceSummary, CORE_CONTEXT_COMPACTION_TRIGGER_RATIO } from '../runtime/resources'
 
 const props = withDefaults(defineProps<{
-  messages: Array<Pick<CoreMessage, 'metadata'>>
+  messages: Array<Pick<CoreMessage, 'metadata'> & Partial<Pick<CoreMessage, 'parts'>>>
   contextWindow?: number | null
   variant?: 'panel' | 'composer'
   title?: string

@@ -1,4 +1,4 @@
-import type { CoreMessage } from '../types'
+import type { CoreMessage, MessagePart } from '../types'
 
 export const CORE_CONTEXT_COMPACTION_TRIGGER_RATIO = 0.8
 
@@ -15,32 +15,43 @@ export interface CoreResourceSummary {
 }
 
 export function buildCoreResourceSummary(
-  messages: Array<Pick<CoreMessage, 'metadata'>>,
+  messages: Array<Pick<CoreMessage, 'metadata'> & Partial<Pick<CoreMessage, 'parts'>>>,
   modelContextWindow?: number | null,
 ): CoreResourceSummary | null {
   const records = messages
     .map(message => message.metadata?.processMetrics)
     .filter((metrics): metrics is Record<string, unknown> => Boolean(metrics && typeof metrics === 'object'))
-  if (records.length === 0) return null
+  let current = -1
+  let max = firstNumber(modelContextWindow)
+  let threshold = -1
+  let contextCompacted = false
+  for (const message of messages) {
+    const metrics = message.metadata?.processMetrics
+    if (metrics && typeof metrics === 'object') {
+      const record = metrics as Record<string, unknown>
+      current = latestNumber(current,
+        record.estimated_prompt_tokens,
+        record.estimatedPromptTokens,
+        record.context_tokens,
+        record.contextTokens,
+      )
+      max = latestNumber(max, record.context_window_tokens, record.contextWindowTokens)
+      threshold = latestNumber(threshold,
+        record.context_compaction_trigger_tokens,
+        record.contextCompactionTriggerTokens,
+        record.trigger_tokens,
+        record.triggerTokens,
+      )
+      contextCompacted = record.context_compacted === true || record.contextCompacted === true
+    }
+    const compactedTokens = latestCompletedCompactionTokens(message.parts)
+    if (compactedTokens >= 0) {
+      current = compactedTokens
+      contextCompacted = true
+    }
+  }
+  if (records.length === 0 && current < 0) return null
 
-  const latest = records[records.length - 1]
-  const current = firstNumber(
-    latest.estimated_prompt_tokens,
-    latest.estimatedPromptTokens,
-    latest.context_tokens,
-    latest.contextTokens,
-  )
-  const max = firstNumber(
-    latest.context_window_tokens,
-    latest.contextWindowTokens,
-    modelContextWindow,
-  )
-  const threshold = firstNumber(
-    latest.context_compaction_trigger_tokens,
-    latest.contextCompactionTriggerTokens,
-    latest.trigger_tokens,
-    latest.triggerTokens,
-  )
   const hasContext = current >= 0 && max > 0
   const currentRatio = hasContext ? clampRatio(current / max) : 0
   const thresholdRatio = threshold > 0 && max > 0
@@ -65,7 +76,6 @@ export function buildCoreResourceSummary(
   }
   if (!hasContext && !hasCalls && !hasInput && !hasOutput) return null
 
-  const contextCompacted = latest.context_compacted === true || latest.contextCompacted === true
   return {
     currentPct,
     thresholdPct,
@@ -83,12 +93,30 @@ export function buildCoreResourceSummary(
   }
 }
 
+function latestCompletedCompactionTokens(parts?: MessagePart[]): number {
+  let tokens = -1
+  for (const part of parts || []) {
+    if (part.partType !== 'compaction' || part.status !== 'completed') continue
+    const metadata = part.metadata
+    if (!metadata || typeof metadata !== 'object') continue
+    const status = String(metadata.compaction_status ?? metadata.compactionStatus ?? '')
+    if (status !== 'compacted') continue
+    tokens = latestNumber(tokens, metadata.after_tokens, metadata.afterTokens)
+  }
+  return tokens
+}
+
 function firstNumber(...values: unknown[]): number {
   for (const value of values) {
     const metric = Number(value)
     if (Number.isFinite(metric) && metric >= 0) return metric
   }
   return -1
+}
+
+function latestNumber(current: number, ...values: unknown[]): number {
+  const next = firstNumber(...values)
+  return next >= 0 ? next : current
 }
 
 function clampRatio(value: number): number {
