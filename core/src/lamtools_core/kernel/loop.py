@@ -1258,13 +1258,17 @@ class CoreLoopKernel:
 
     @staticmethod
     def _has_tool_progress_structure(reply: str) -> bool:
-        text = str(reply or "").lower()
+        raw_text = str(reply or "").strip()
+        text = raw_text.lower()
         required_groups = (
             ("已确认事实", "confirmed facts"),
             ("剩余不确定性", "remaining uncertainty"),
             ("下一步", "next action", "next step"),
         )
-        return all(any(marker in text for marker in group) for group in required_groups)
+        if all(any(marker in text for marker in group) for group in required_groups):
+            return True
+        substantive_lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
+        return len(raw_text) >= 80 and len(substantive_lines) >= 3
 
     def _observe_repeated_tool_failures(
         self,

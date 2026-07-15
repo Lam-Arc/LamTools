@@ -1886,6 +1886,34 @@ class TestKernelStateSave:
         assert resumed.status == "ok"
 
     @pytest.mark.asyncio
+    async def test_substantive_natural_progress_report_can_resume_with_next_tool(self):
+        calls = [
+            ToolCall(id=f"write-{index}", name="write_file", arguments={"path": f"part-{index}.txt"})
+            for index in range(4)
+        ]
+        natural_progress = (
+            "已确认的事实：架构、设计和种子数据已经读取，目标与约束已经明确。\n"
+            "需要实现的内容：主页面、完整样式、应用逻辑、Markdown 解析和导入导出。\n"
+            "现在我将开始实现这些文件，并逐个写入后运行验证。"
+        )
+        kit = MockRuntimeKit(steps=[
+            MockKitStep(reply="", tool_calls=[calls[0]]),
+            MockKitStep(reply="", tool_calls=[calls[1]]),
+            MockKitStep(reply="", tool_calls=[calls[2]]),
+            MockKitStep(reply=natural_progress, tool_calls=[calls[3]]),
+            MockKitStep(reply="完成", decision="done"),
+        ])
+        policy = LoopPolicy(max_tool_only_rounds_without_progress=2)
+
+        result = await _make_kernel(kit, policy=policy).run(_make_turn_input())
+
+        assert result.decision == "done"
+        resumed = result.steps[3].tool_steps[0].result
+        assert resumed is not None
+        assert resumed.status == "ok"
+        assert result.steps[3].metadata["tool_progress_completed"] is True
+
+    @pytest.mark.asyncio
     async def test_plain_text_does_not_complete_required_failure_diagnosis(self):
         failed = ToolCall(id="failed", name="run_command", arguments={"command": "broken"})
         complete = "[根因] 未知 [证据] exit 1 [方案1] 查日志 [方案2] 查环境 [选择] 方案1 [验证信号] 命令成功"
