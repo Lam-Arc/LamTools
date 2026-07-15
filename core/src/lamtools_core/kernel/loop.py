@@ -344,6 +344,7 @@ class CoreLoopKernel:
         error_msg = ""
         recent_tool_result_fingerprints: list[str] = []
         recent_successful_payloads: list[dict[str, Any]] = []
+        recent_successful_outputs: list[dict[str, Any]] = []
         explicit_input_errors: dict[str, ToolResult] = {}
         diagnosis_failed_calls: dict[str, ToolResult] = {}
         failure_diagnosis_pending = False
@@ -771,11 +772,22 @@ class CoreLoopKernel:
                         await self._save_checkpoint(state, history)
                         break
 
-                repeat_observation = self._observe_repeated_tool_failures(
+                output_overlap_observation = self._observe_overlapping_success_outputs(
+                    turn.tool_calls,
+                    tool_results,
+                    recent_successful_outputs,
+                )
+                exact_repeat_observation = self._observe_repeated_tool_failures(
                     turn.tool_calls,
                     tool_results,
                     recent_tool_result_fingerprints,
                     explicit_input_errors,
+                )
+                repeat_observation = (
+                    output_overlap_observation
+                    if output_overlap_observation.get("recovery_prompt")
+                    or output_overlap_observation.get("no_progress")
+                    else exact_repeat_observation
                 )
                 observation_audit = repeat_observation.get("audit")
                 if isinstance(observation_audit, dict):
@@ -813,7 +825,12 @@ class CoreLoopKernel:
                     await self._save_checkpoint(state, history)
                     break
                 recovery_prompt = repeat_observation.get("recovery_prompt")
+                overlap_reassessment_required = bool(
+                    output_overlap_observation.get("recovery_prompt")
+                )
                 if isinstance(recovery_prompt, str) and recovery_prompt:
+                    if overlap_reassessment_required:
+                        tool_progress_pending = True
                     history.append(ChatMessage(role="system", content=recovery_prompt))
                     step.metadata["no_progress_recovery_required"] = True
                     state.metadata["no_progress_recovery"] = {
@@ -822,7 +839,12 @@ class CoreLoopKernel:
                     }
                     await self._save_checkpoint(state, history)
 
-                if tool_progress_completed and not payload_reassessment_required and not duplicate_payload_blocked:
+                if (
+                    tool_progress_completed
+                    and not payload_reassessment_required
+                    and not duplicate_payload_blocked
+                    and not overlap_reassessment_required
+                ):
                     tool_progress_pending = False
                     tool_only_rounds = 0
                     tool_progress_blocked_rounds = 0
@@ -1097,6 +1119,10 @@ class CoreLoopKernel:
         collect(call.arguments)
         if not values:
             return None
+        return CoreLoopKernel._substantive_text_signature(call.name, values)
+
+    @staticmethod
+    def _substantive_text_signature(tool: str, values: list[str]) -> dict[str, Any]:
         exact = hashlib.sha256(
             json.dumps(values, ensure_ascii=False, sort_keys=True).encode("utf-8")
         ).hexdigest()
@@ -1106,7 +1132,7 @@ class CoreLoopKernel:
             for line in value.splitlines()
             if line.strip()
         }
-        return {"tool": call.name, "exact": exact, "lines": lines}
+        return {"tool": tool, "exact": exact, "lines": lines}
 
     @staticmethod
     def _substantive_payloads_match(left: dict[str, Any], right: dict[str, Any]) -> bool:
@@ -1122,6 +1148,49 @@ class CoreLoopKernel:
         if smaller < 8:
             return False
         return len(left_lines & right_lines) / smaller >= 0.98
+
+    def _observe_overlapping_success_outputs(
+        self,
+        calls: list[ToolCall],
+        results: list[ToolResult],
+        recent_outputs: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        window = max(3, int(self.policy.identical_tool_result_window or 12))
+        for call, result in zip(calls, results):
+            if result.status in {"failed", "blocked"} or len(result.content) < _TOOL_INPUT_PROGRESS_CHARS:
+                continue
+            signature = self._substantive_text_signature(call.name, [result.content])
+            prior = next(
+                (
+                    item
+                    for item in reversed(recent_outputs)
+                    if self._substantive_payloads_match(signature, item)
+                ),
+                None,
+            )
+            record = {**signature, "challenged": prior is not None}
+            recent_outputs.append(record)
+            del recent_outputs[:-window]
+            if prior is None:
+                continue
+            audit = {
+                "fingerprint_sha256": signature["exact"],
+                "kind": "overlapping_success_output",
+                "window": window,
+            }
+            if bool(prior.get("challenged")):
+                return {"audit": audit, "no_progress": (
+                    "No progress observed: three successful tool results contained materially overlapping "
+                    "large output with almost no new evidence. The run is paused and can be resumed after "
+                    "choosing a different investigation or execution approach."
+                )}
+            prior["challenged"] = True
+            return {"audit": audit, "recovery_prompt": (
+                "[OVERLAPPING_OUTPUT_REASSESSMENT_REQUIRED] Two successful tool calls returned materially "
+                "overlapping large output. Before using more tools, reuse the existing evidence, report what "
+                "new fact was actually gained, and choose a materially different next action."
+            )}
+        return {}
 
     @staticmethod
     def _is_explicit_input_error(result: ToolResult) -> bool:
