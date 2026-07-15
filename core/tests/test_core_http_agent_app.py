@@ -696,3 +696,32 @@ async def test_core_config_routing_llm_client_uses_per_request_model_and_thinkin
             "thinking_budget": 1234,
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_core_config_routing_llm_client_uses_selected_model_output_limit_by_default(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config_db = tmp_path / "lamtools-config.db"
+    _write_two_model_config_db(config_db)
+    captured: list[int] = []
+
+    async def fake_stream(self, request):
+        captured.append(self.max_tokens)
+        yield LLMStreamEvent(kind="done")
+
+    monkeypatch.setattr(CoreHttpLLMClient, "stream", fake_stream)
+    client = CoreConfigRoutingLLMClient(
+        config_db_path=config_db,
+        default_model_ref="model-record",
+        thinking_enabled=True,
+        thinking_budget=10000,
+        max_tokens=None,
+        temperature=0.2,
+    )
+
+    events = [event async for event in client.stream(LLMRequest(model="second-record"))]
+
+    assert [event.kind for event in events] == ["done"]
+    assert captured == [8192]

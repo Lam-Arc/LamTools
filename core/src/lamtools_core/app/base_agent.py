@@ -86,7 +86,7 @@ class CoreBaseAgentConfig:
     model_id: str = ""
     instructions: str = "You are a standalone general-purpose agent runtime."
     temperature: float = 0.2
-    max_tokens: int = 4096
+    max_tokens: int | None = None
     thinking_enabled: bool | None = None
     thinking_budget: int | None = None
     approval_policy: ApprovalPolicy = "require"

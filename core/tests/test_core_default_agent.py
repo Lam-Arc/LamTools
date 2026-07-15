@@ -554,6 +554,27 @@ async def test_core_agent_operation_applies_per_turn_model_and_shallow_thinking(
 
 
 @pytest.mark.asyncio
+async def test_core_agent_leaves_model_output_limit_unset_without_turn_override(tmp_path):
+    llm = CapturingCoreAgentLLM()
+    catalog = create_core_agent_operations(
+        spec=CoreAgentSpec(default_model="default-model"),
+        paths=CoreAgentPaths(data_dir=tmp_path / "data", work_root=tmp_path / "work"),
+        model_provider=llm,
+    )
+
+    result = await catalog.execute(
+        "turn.start",
+        {
+            "thread_id": "thread-model-output-limit",
+            "message": "hello",
+        },
+    )
+
+    assert result.status == "ok"
+    assert llm.requests[0].max_tokens is None
+
+
+@pytest.mark.asyncio
 async def test_core_agent_instructs_parent_to_delegate_complete_deliverable(tmp_path):
     llm = CapturingCoreAgentLLM()
     catalog = create_core_agent_operations(

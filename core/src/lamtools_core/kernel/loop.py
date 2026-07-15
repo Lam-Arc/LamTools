@@ -425,6 +425,20 @@ class CoreLoopKernel:
                     )
                 # 5.5 Parse model output
                 turn = await self.kit.parse_model_output(state, response)
+                invalid_tool_argument_errors: dict[str, str] = {}
+                for call_index, response_call in enumerate(response.tool_calls or []):
+                    metadata = response_call.metadata if isinstance(response_call.metadata, dict) else {}
+                    if not metadata.get("arguments_parse_error") or call_index >= len(turn.tool_calls):
+                        continue
+                    turn_call = turn.tool_calls[call_index]
+                    raw_chars = int(metadata.get("raw_arguments_chars") or 0)
+                    finish_reason = str(response.finish_reason or "unknown")
+                    invalid_tool_argument_errors[turn_call.id] = (
+                        "Model tool arguments were incomplete or invalid JSON and were not executed "
+                        f"(finish_reason={finish_reason}, received={raw_chars} chars). "
+                        "Generate one complete call with all required fields; if the payload is large, "
+                        "split it into smaller calls."
+                    )
                 step.turn = turn
                 failure_diagnosis_completed = (
                     failure_diagnosis_pending
@@ -506,7 +520,16 @@ class CoreLoopKernel:
 
                 # 5.8 Execute tool calls
                 tool_results: list[ToolResult] = []
-                blocked_results: dict[str, ToolResult] = {}
+                blocked_results: dict[str, ToolResult] = {
+                    call.id: ToolResult(
+                        call_id=call.id,
+                        name=call.name,
+                        status="failed",
+                        error=invalid_tool_argument_errors[call.id],
+                    )
+                    for call in turn.tool_calls
+                    if call.id in invalid_tool_argument_errors
+                }
                 payload_matches: dict[str, tuple[dict[str, Any], dict[str, Any] | None]] = {}
                 for call in turn.tool_calls:
                     payload = self._substantive_tool_payload(call)
@@ -520,9 +543,10 @@ class CoreLoopKernel:
                     )
                     if payload is not None:
                         payload_matches[call.id] = (payload, prior_payload)
-                    blocked = await self._apply_pre_tool_hook(state, call)
-                    if blocked is not None:
-                        blocked_results[call.id] = blocked
+                    if call.id not in blocked_results:
+                        blocked = await self._apply_pre_tool_hook(state, call)
+                        if blocked is not None:
+                            blocked_results[call.id] = blocked
                     if (
                         prior_payload is not None
                         and bool(prior_payload.get("challenged"))

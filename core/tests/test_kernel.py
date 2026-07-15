@@ -1158,6 +1158,77 @@ class TestKernelEvents:
         assert input_events[-1].payload["arguments_text"] == arguments_text
 
     @pytest.mark.asyncio
+    async def test_truncated_streamed_tool_arguments_are_not_executed(self):
+        """An output-limit cutoff must not turn partial JSON into an empty tool call."""
+
+        incomplete_arguments = '{"path":"css/style.css","content":"' + ("x" * 2048)
+
+        class TruncatedToolInputStreamLLM:
+            async def stream(self, request: LLMRequest):
+                _ = request
+                yield LLMStreamEvent(
+                    kind="tool_call_delta",
+                    metadata={
+                        "tool_calls_delta": [{
+                            "index": 0,
+                            "id": "call-truncated-write",
+                            "type": "function",
+                            "function": {
+                                "name": "write_file",
+                                "arguments": incomplete_arguments,
+                            },
+                        }]
+                    },
+                )
+                yield LLMStreamEvent(kind="done", metadata={"finish_reason": "length"})
+
+            async def complete(self, request: LLMRequest) -> LLMResponse:
+                raise AssertionError("streaming fixture must not fall back to complete()")
+
+        class ResponseDrivenKit(MockRuntimeKit):
+            def __init__(self) -> None:
+                super().__init__([MockKitStep(reply="", decision="done")])
+                self.executed = False
+
+            async def parse_model_output(self, state: RuntimeState, response: LLMResponse) -> KernelTurn:
+                self._step_index += 1
+                return KernelTurn(
+                    tool_calls=[
+                        ToolCall(
+                            id=call.id,
+                            name=call.name,
+                            arguments=call.arguments if isinstance(call.arguments, dict) else {},
+                        )
+                        for call in response.tool_calls
+                    ]
+                )
+
+            async def execute_tool(self, state: RuntimeState, call: ToolCall) -> ToolResult:
+                self.executed = True
+                return await super().execute_tool(state, call)
+
+        kit = ResponseDrivenKit()
+        sink = CollectingEventSink()
+        kernel = _make_kernel(
+            kit,
+            llm_client=TruncatedToolInputStreamLLM(),
+            event_sink=sink,
+        )
+
+        await kernel.run(_make_turn_input())
+
+        assert kit.executed is False
+        failed_results = [
+            event for event in sink.events
+            if event.name == "runtime.tool.finished" and event.payload.get("status") == "failed"
+        ]
+        assert failed_results
+        assert all(
+            "incomplete or invalid JSON" in event.payload["error"]
+            for event in failed_results
+        )
+
+    @pytest.mark.asyncio
     async def test_character_text_and_reasoning_streams_are_coalesced_and_flush_complete_content(self):
         """Text-like streams stay live without persisting one cumulative snapshot per character."""
 

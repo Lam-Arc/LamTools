@@ -47,7 +47,7 @@ class CoreConfigRoutingLLMClient:
         adapter_dirs: tuple[Path | str, ...] = (),
         thinking_enabled: bool = True,
         thinking_budget: int = 10000,
-        max_tokens: int = 4096,
+        max_tokens: int | None = None,
         temperature: float = 0.2,
     ) -> None:
         self.config_db_path = Path(config_db_path)
@@ -119,7 +119,7 @@ def create_core_agent_http_app(
     plugin_roots: tuple[Path | str, ...] = (),
     thinking_enabled: bool = True,
     thinking_budget: int = 10000,
-    max_tokens: int = 4096,
+    max_tokens: int | None = None,
     temperature: float = 0.2,
 ) -> FastAPI:
     config_db_path = _resolve_config_db(config_db)
@@ -129,7 +129,7 @@ def create_core_agent_http_app(
         default_model_ref=model_id or config.model_record_id or config.model_id,
         thinking_enabled=thinking_enabled,
         thinking_budget=thinking_budget or config.thinking_budget,
-        max_tokens=max_tokens or config.max_output_tokens,
+        max_tokens=max_tokens,
         temperature=temperature if temperature is not None else config.temperature,
     )
 
@@ -508,7 +508,7 @@ def create_default_core_agent_http_app() -> FastAPI:
         work_root=work_root,
         thinking_enabled=_env_bool("LAMTOOLS_CORE_THINKING_ENABLED", default=True),
         thinking_budget=_env_int("LAMTOOLS_CORE_THINKING_BUDGET", default=10000),
-        max_tokens=_env_int("LAMTOOLS_CORE_MAX_TOKENS", default=4096),
+        max_tokens=_env_int("LAMTOOLS_CORE_MAX_TOKENS", default=0) or None,
         temperature=_env_float("LAMTOOLS_CORE_TEMPERATURE", default=0.2),
     )
 

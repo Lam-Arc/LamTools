@@ -81,6 +81,27 @@ def parse_tool_call_arguments(args_str: str) -> dict[str, Any]:
         return {}
 
 
+def _tool_call_argument_metadata(args_str: Any) -> dict[str, Any]:
+    if not isinstance(args_str, str):
+        return {}
+    metadata: dict[str, Any] = {"raw_arguments": args_str}
+    source = args_str.strip()
+    if not source:
+        return metadata
+    fence_match = _MARKDOWN_FENCE_RE.match(source)
+    source = fence_match.group(1) if fence_match else source
+    try:
+        parsed = json.loads(source)
+    except (json.JSONDecodeError, TypeError):
+        metadata["arguments_parse_error"] = True
+        metadata["raw_arguments_chars"] = len(args_str)
+        return metadata
+    if not isinstance(parsed, dict):
+        metadata["arguments_parse_error"] = True
+        metadata["raw_arguments_chars"] = len(args_str)
+    return metadata
+
+
 def normalize_usage(raw: Any) -> LLMUsage | None:
     """Convert common provider usage shapes into ``LLMUsage``.
 
@@ -188,7 +209,7 @@ def chat_message_from_openai(message: dict[str, Any]) -> ChatMessage:
                 name=str(fn.get("name") or ""),
                 arguments=parse_tool_call_arguments(raw_arguments) if isinstance(raw_arguments, str) else {},
                 raw=raw_call,
-                metadata={"raw_arguments": raw_arguments} if isinstance(raw_arguments, str) else {},
+                metadata=_tool_call_argument_metadata(raw_arguments),
             )
         )
 
@@ -275,7 +296,7 @@ def normalize_openai_response(response: dict[str, Any]) -> LLMResponse:
                 name=fn.get("name", ""),
                 arguments=args,
                 raw=tc,
-                metadata={"raw_arguments": args_str},
+                metadata=_tool_call_argument_metadata(args_str),
             )
         )
 
@@ -317,7 +338,7 @@ def _resolve_raw_tool_calls(raw_list: list[dict[str, Any]]) -> list[LLMToolCall]
                 name=fn.get("name", ""),
                 arguments=args,
                 raw=tc,
-                metadata={"raw_arguments": args_str},
+                metadata=_tool_call_argument_metadata(args_str),
             )
         )
     return result
@@ -487,7 +508,7 @@ def resolve_tool_calls(
                 name=fn.get("name", ""),
                 arguments=args,
                 raw=acc,
-                metadata={"raw_arguments": args_str},
+                metadata=_tool_call_argument_metadata(args_str),
             )
         )
 

@@ -83,7 +83,7 @@ class CoreAgentRuntimeOptions:
     thinking_budget: int | None = None
     shallow_thinking_enabled: bool = False
     context_window_tokens: int | None = None
-    max_tokens: int = 4096
+    max_tokens: int | None = None
     temperature: float = 0.2
     compact_trigger_tokens: int | None = None
     compact_limit_tokens: int | None = None
@@ -1165,7 +1165,7 @@ def _runtime_options_from_request(spec: CoreAgentSpec, request: OperationRequest
     )
     max_tokens = _optional_int(
         payload.get("max_tokens"), payload.get("maxTokens"), metadata.get("max_tokens")
-    ) or 4096
+    )
     temperature = _optional_float(
         payload.get("temperature"), metadata.get("temperature")
     )
@@ -1211,7 +1211,7 @@ def _runtime_options_from_state(spec: CoreAgentSpec, state: Any) -> CoreAgentRun
             metadata.get("context_window"),
             spec.metadata.get("context_window"),
         ),
-        max_tokens=_optional_int(metadata.get("max_tokens")) or 4096,
+        max_tokens=_optional_int(metadata.get("max_tokens")),
         temperature=0.2 if temperature is None else temperature,
         compact_trigger_tokens=_optional_int(metadata.get("compact_trigger_tokens")),
         compact_limit_tokens=_optional_int(metadata.get("compact_limit_tokens")),
@@ -1363,7 +1363,7 @@ async def _build_core_runtime_toolbox(
     instructions: str = "",
     context_window_tokens: int | None = None,
     temperature: float = 0.2,
-    max_tokens: int = 4096,
+    max_tokens: int | None = None,
     thinking_enabled: bool | None = None,
     thinking_budget: int | None = None,
     sub_agent_state_store: RuntimeStateStore | None = None,

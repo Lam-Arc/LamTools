@@ -71,7 +71,7 @@ class CoreCliRunOptions:
     thinking_enabled: bool = True
     thinking_budget: int = 10000
     shallow_thinking_enabled: bool = False
-    max_tokens: int = 4096
+    max_tokens: int | None = None
     compact_trigger_tokens: int | None = None
     compact_limit_tokens: int | None = None
     temperature: float = 0.2
@@ -560,7 +560,7 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--work-root", "--project", dest="work_root", default="")
     serve.add_argument("--thinking", choices=("enabled", "disabled"), default="enabled")
     serve.add_argument("--thinking-budget", type=int, default=10000)
-    serve.add_argument("--max-tokens", type=int, default=4096)
+    serve.add_argument("--max-tokens", type=int, default=None)
     serve.add_argument("--temperature", type=float, default=0.2)
     serve.add_argument("--raw", action="store_true")
     serve.set_defaults(func=cmd_serve)
@@ -579,7 +579,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--no-thinking", action="store_true")
     run.add_argument("--shallow-thinking", action="store_true", help="Require a prompt-based shallow thinking block")
     run.add_argument("--auto-approve", action="store_true", help="Run approval-gated Core tools without prompting")
-    run.add_argument("--max-tokens", type=int, default=4096)
+    run.add_argument("--max-tokens", type=int, default=None)
     run.add_argument("--compact-trigger-tokens", type=int, default=None, help="Session-only automatic compaction trigger")
     run.add_argument("--compact-limit-tokens", type=int, default=None, help="Session-only post-compaction upper limit")
     run.add_argument("--temperature", type=float, default=0.2)
@@ -1027,7 +1027,7 @@ async def cmd_run(args: argparse.Namespace) -> int:
             thinking_enabled=not bool(args.no_thinking),
             thinking_budget=args.thinking_budget,
             shallow_thinking_enabled=bool(args.shallow_thinking),
-            max_tokens=int(args.max_tokens),
+            max_tokens=int(args.max_tokens) if args.max_tokens is not None else None,
             temperature=float(args.temperature),
             compact_trigger_tokens=compact_trigger_tokens,
             compact_limit_tokens=compact_limit_tokens,
