@@ -40,7 +40,7 @@ from lamtools_core.event import RunItemEvent
 from lamtools_core.app.snapshot_store import SqlAlchemyThreadSnapshotStore
 import lamtools_core.app.live_operations as live_operations_module
 from lamtools_core.llm import LLMRequest, LLMResponse, LLMStreamEvent
-from lamtools_core.runtime import RuntimeTaskRegistry
+from lamtools_core.runtime import InMemoryRuntimeStateStore, RuntimeTaskRegistry
 
 
 class Base(DeclarativeBase):
@@ -634,6 +634,7 @@ async def _live_core_context(tmp_path, llm: BlockingCoreLLM) -> tuple[object, Co
     )
     hub = CoreAppEventHub()
     runtime_task_registry = RuntimeTaskRegistry()
+    runtime_state_store = InMemoryRuntimeStateStore()
     operations = create_core_agent_operations(
         paths=CoreAgentPaths(data_dir=tmp_path / "data", work_root=tmp_path / "work"),
         model_provider=llm,
@@ -641,16 +642,19 @@ async def _live_core_context(tmp_path, llm: BlockingCoreLLM) -> tuple[object, Co
         app_event_store=event_store,
         thread_snapshot_store=snapshot_store,
         app_event_hub=hub,
+        runtime_state_store=runtime_state_store,
         runtime_task_registry=runtime_task_registry,
     )
-    return engine, CoreLiveContext(
+    context = CoreLiveContext(
         session_factory=session_factory,
         event_store=event_store,
         snapshot_store=snapshot_store,
         operations=operations,
         hub=hub,
         runtime_task_registry=runtime_task_registry,
+        runtime_state_store=runtime_state_store,
     )
+    return engine, context
 
 
 @pytest.mark.asyncio
@@ -1547,6 +1551,20 @@ async def test_force_cancel_persists_and_publishes_cancelled_terminal(tmp_path):
             and event.payload.get("status") == "cancelled"
             for event in published
         )
+        runtime_state = await context.host.runtime_state_store.get(thread_id)
+        assert runtime_state is not None
+        assert runtime_state.status == "cancelled"
+
+        runtime_state.status = "running"
+        await context.host.runtime_state_store.save(runtime_state)
+        await handle_thread_resume_operation(
+            request_id=4,
+            params={"thread_id": thread_id, "last_seen_seq": 0},
+            context=context,
+        )
+        reconciled_state = await context.host.runtime_state_store.get(thread_id)
+        assert reconciled_state is not None
+        assert reconciled_state.status == "cancelled"
         assert context.runtime_task_registry.task(thread_id, run_id=turn_id) is None
     finally:
         context.hub.unsubscribe(thread_id, subscription)

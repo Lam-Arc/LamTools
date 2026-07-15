@@ -16,7 +16,7 @@ from lamtools_core.composer_commands import (
     default_core_resource_roots,
     normalize_command_name,
 )
-from lamtools_core.runtime import default_runtime_task_registry
+from lamtools_core.runtime import RuntimeStateStore, default_runtime_task_registry
 from lamtools_core.project.directory_picker import ProjectDirectoryPickerUnavailable, pick_project_directory
 from lamtools_core.tool.approval import normalize_command_policies
 
@@ -187,6 +187,7 @@ class CoreLiveOperationHost:
     persistence: AppPersistenceHost
     hub: CoreAppEventHub = field(default_factory=lambda: default_hub)
     runtime_task_registry: Any = field(default_factory=default_runtime_task_registry)
+    runtime_state_store: RuntimeStateStore | None = None
     product_operation_executors: dict[str, Any] = field(default_factory=dict)
     operation_executors: dict[str, Any] = field(default_factory=dict)
     member_hooks: Any = field(default_factory=DefaultCoreLiveMemberHooks)
@@ -283,6 +284,7 @@ class CoreLiveContext:
     hub: CoreAppEventHub = field(default_factory=lambda: default_hub)
     persistence: AppPersistenceHost | None = None
     runtime_task_registry: Any = field(default_factory=default_runtime_task_registry)
+    runtime_state_store: RuntimeStateStore | None = None
     host: CoreLiveOperationHost | None = None
 
     def __post_init__(self) -> None:
@@ -293,6 +295,7 @@ class CoreLiveContext:
             object.__setattr__(self, "snapshot_store", self.host.snapshot_store)
             object.__setattr__(self, "hub", self.host.hub)
             object.__setattr__(self, "runtime_task_registry", self.host.runtime_task_registry)
+            object.__setattr__(self, "runtime_state_store", self.host.runtime_state_store)
             return
         persistence = self.persistence
         if persistence is None:
@@ -312,6 +315,7 @@ class CoreLiveContext:
                 persistence=persistence,
                 hub=self.hub,
                 runtime_task_registry=self.runtime_task_registry,
+                runtime_state_store=self.runtime_state_store,
             ),
         )
 
@@ -340,6 +344,7 @@ async def handle_thread_resume_operation(
     async with context.session_factory() as db:
         events = await context.persistence.list_after(db, thread_id=thread_id, after_seq=after_seq, limit=page_limit)
         snapshot = await context.persistence.load(db, thread_id)
+    await _reconcile_cancelled_runtime_state(context=context, thread_id=thread_id, snapshot=snapshot)
     last_event_seq = max((event.seq for event in events), default=after_seq)
     snapshot_seq = _int_param(snapshot.get("snapshot_seq") if isinstance(snapshot, dict) else None, default=last_event_seq)
     has_more = bool(events) and last_event_seq < snapshot_seq
@@ -376,6 +381,7 @@ async def handle_thread_read_operation(
             thread_id=thread_id,
             result={"snapshot": snapshot, "events": events},
         )
+    await _reconcile_cancelled_runtime_state(context=context, thread_id=thread_id, snapshot=snapshot)
     return CoreLiveOperationOutcome(
         response=rpc_result(
             request_id,
@@ -1405,10 +1411,12 @@ async def _run_core_turn(*, context: CoreLiveContext, runtime_start: dict[str, A
     except BaseException as exc:
         cancel_requested = context.host.runtime_task_registry.get_cancel_event(thread_id).is_set()
         if cancel_requested:
-            await _persist_cancelled_terminal(
-                context=context,
-                thread_id=thread_id,
-                turn_id=turn_id,
+            await asyncio.shield(
+                _persist_cancelled_terminal(
+                    context=context,
+                    thread_id=thread_id,
+                    turn_id=turn_id,
+                )
             )
             raise
         await asyncio.shield(
@@ -1529,6 +1537,8 @@ async def _persist_cancelled_terminal(
     thread_id: str,
     turn_id: str,
 ) -> AppEventEnvelope | None:
+    await _persist_cancelled_runtime_state(context=context, thread_id=thread_id, turn_id=turn_id)
+
     async def write(db: AsyncSession) -> AppEventEnvelope | None:
         snapshot = await context.persistence.load(db, thread_id)
         if _turn_is_terminal(snapshot, turn_id):
@@ -1545,6 +1555,40 @@ async def _persist_cancelled_terminal(
         return None
     await context.hub.publish(event)
     return event
+
+
+async def _persist_cancelled_runtime_state(
+    *, context: CoreLiveContext, thread_id: str, turn_id: str
+) -> None:
+    store = context.runtime_state_store
+    if store is None:
+        return
+    state = await store.get(thread_id)
+    if state is None or state.run_id != turn_id:
+        return
+    state.status = "cancelled"
+    state.loop_state = "failed"
+    state.metadata.pop("pending_approval", None)
+    await store.save(state)
+
+
+async def _reconcile_cancelled_runtime_state(
+    *, context: CoreLiveContext, thread_id: str, snapshot: dict[str, Any]
+) -> None:
+    core = snapshot.get("core")
+    projected_status = str(core.get("status") or "") if isinstance(core, dict) else ""
+    if projected_status != "cancelled" and str(snapshot.get("status") or "") != "cancelled":
+        return
+    store = context.runtime_state_store
+    if store is None:
+        return
+    state = await store.get(thread_id)
+    if state is None or state.status == "cancelled":
+        return
+    state.status = "cancelled"
+    state.loop_state = "failed"
+    state.metadata.pop("pending_approval", None)
+    await store.save(state)
 
 
 def _turn_is_terminal(snapshot: dict[str, Any], turn_id: str) -> bool:

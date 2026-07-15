@@ -217,6 +217,7 @@ def create_core_agent_http_app(
                 persistence=core_db_handle.persistence,
                 hub=live_hub,
                 runtime_task_registry=runtime_task_registry,
+                runtime_state_store=core_db_handle.runtime_state_store,
             ),
         )
 
