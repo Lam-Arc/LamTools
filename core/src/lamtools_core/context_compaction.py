@@ -43,6 +43,7 @@ class ContextCompactionError(RuntimeError):
 CompactionDeltaSink = Callable[[str], Awaitable[None] | None]
 CompactionEventSink = Callable[[dict[str, Any]], Awaitable[None] | None]
 CompactionTokenEstimator = Callable[[list[ChatMessage]], int]
+MAX_COMPACTION_SEGMENT_INPUT_TOKENS = 64_000
 
 
 @dataclass(frozen=True)
@@ -92,6 +93,14 @@ class ContextCompactionResult:
     @property
     def retained_count(self) -> int:
         return len(self.retained_messages)
+
+
+def compaction_segment_input_limit(context_window_tokens: int) -> int:
+    """Return the per-request input ceiling used by every compaction entrypoint."""
+    window = max(0, int(context_window_tokens or 0))
+    if window <= 0:
+        return MAX_COMPACTION_SEGMENT_INPUT_TOKENS
+    return max(1, min(MAX_COMPACTION_SEGMENT_INPUT_TOKENS, window // 2))
 
 
 @dataclass(frozen=True)
@@ -1100,6 +1109,7 @@ __all__ = [
     "ContextCompactionResult",
     "compact_context",
     "compress_structured_compaction_summary",
+    "compaction_segment_input_limit",
     "fallback_structured_compaction_summary",
     "format_messages_for_compaction",
     "select_context_compaction_layout",

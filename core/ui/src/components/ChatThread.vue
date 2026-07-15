@@ -1846,7 +1846,12 @@ function compactionDetail(part: MessagePart): string {
   if (status === 'not_needed') {
     return `${reason === 'no_gain' ? '未获得收益 · ' : ''}原上下文已保留`
   }
-  if (status === 'failed') return '原上下文已保留'
+  if (status === 'failed') {
+    const failure = String(
+      rawPart.message || rawPart.error || metadata.message || metadata.error || part.detail || '',
+    ).trim()
+    return failure ? `原上下文已保留 · ${compactDetail(failure, 180)}` : '原上下文已保留'
+  }
   if (status === 'running') return ''
   const before = rawPart.before_tokens ?? rawPart.beforeTokens ?? metadata.before_tokens ?? metadata.beforeTokens
   const after = rawPart.after_tokens ?? rawPart.afterTokens ?? metadata.after_tokens ?? metadata.afterTokens

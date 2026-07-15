@@ -136,6 +136,29 @@ describe('core appServer runtime store', () => {
     expect(runtime.state?.snapshot_seq).toBe(4)
   })
 
+  it('interrupts without requesting a potentially large thread snapshot', async () => {
+    const runtime = createCoreAppServerRuntimeState()
+    const calls: Array<{ method: string; params: Record<string, unknown> }> = []
+    runtime.client = fakeClient(async (method, params) => {
+      calls.push({ method, params })
+      return { events: [] }
+    })
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: () => fakeClient(),
+    })
+
+    await controller.interruptTurn('thread-large', 'turn-active')
+
+    expect(calls).toEqual([{
+      method: 'turn/interrupt',
+      params: {
+        thread_id: 'thread-large',
+        turn_id: 'turn-active',
+        include_snapshot: false,
+      },
+    }])
+  })
+
   it('reconnects after socket close and resumes from last snapshot sequence', async () => {
     const runtime = createCoreAppServerRuntimeState<CoreAppSnapshot, ReconnectingClient>()
     ReconnectingClient.instances = []

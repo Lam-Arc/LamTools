@@ -10,6 +10,8 @@ from lamtools_core.app.default_agent import (
     _persist_core_event_live,
     create_core_agent_operations,
 )
+from lamtools_core.app import command_execution
+from lamtools_core.context_compaction import ContextCompactionResult
 from lamtools_core.app.live_hub import CoreAppEventHub
 from lamtools_core.app.base_agent import build_core_plugin_operation_catalog, core_events_to_run_items
 from lamtools_core.event import CoreEvent
@@ -364,6 +366,40 @@ async def test_core_agent_command_execute_compacts_runtime_history(tmp_path):
     assert result.payload["result"]["status"] == "not_needed"
     compacted_history = await state_store.get_history("thread-compact")
     assert compacted_history == history
+
+
+@pytest.mark.asyncio
+async def test_manual_compaction_uses_session_model_and_safe_segment_input_limit(monkeypatch):
+    state_store = InMemoryRuntimeStateStore()
+    state = RuntimeState(
+        session_id="thread-large-compact",
+        metadata={"model_id": "session-model", "context_window_tokens": 256_000},
+    )
+    await state_store.save_checkpoint(
+        state,
+        [{"role": "user", "content": "large history"}],
+    )
+    captured = {}
+
+    async def capture(request):
+        captured["request"] = request
+        return ContextCompactionResult(
+            status="not_needed",
+            trigger="manual",
+            display_payload={"status": "not_needed", "reason": "no_gain"},
+        )
+
+    monkeypatch.setattr(command_execution, "compact_context", capture)
+
+    await command_execution.compact_runtime_history(
+        runtime_state_store=state_store,
+        thread_id=state.session_id,
+        model="default-model",
+    )
+
+    request = captured["request"]
+    assert request.model == "session-model"
+    assert request.input_limit_tokens == 64_000
 
 
 def test_core_agent_spec_accepts_member_paths_without_product_names(tmp_path):

@@ -27,6 +27,7 @@ from lamtools_core.context_compaction import (
     ContextCompactionRequest,
     ContextCompactionResult,
     compact_context,
+    compaction_segment_input_limit,
 )
 from lamtools_core.event import CoreEvent, EventCategory, EventSink
 from lamtools_core.llm import ChatMessage, LLMClient, LLMRequest, LLMResponse, LLMStreamEvent, LLMToolCall
@@ -1854,13 +1855,6 @@ class CoreLoopKernel:
             finally:
                 request.messages = original_messages
 
-        def compaction_input_limit(model_window: int) -> int:
-            output_reserve = min(
-                max(int(request.max_tokens or 0), 256),
-                max(256, model_window // 4),
-            )
-            return max(1, model_window - output_reserve)
-
         async def attempt_compaction(
             *,
             model: str,
@@ -1914,7 +1908,7 @@ class CoreLoopKernel:
                     model=model,
                     timeout=request.timeout,
                     limit_tokens=limit_tokens,
-                    input_limit_tokens=compaction_input_limit(model_window),
+                    input_limit_tokens=compaction_segment_input_limit(model_window),
                     estimate_tokens=estimate_compaction_tokens,
                     on_delta=on_compaction_delta,
                     on_event=on_compaction_event,

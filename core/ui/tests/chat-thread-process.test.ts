@@ -297,6 +297,34 @@ describe('ChatThread process cards', () => {
     expect(wrapper.find('.compaction-summary').exists()).toBe(false);
   });
 
+  it('shows the compact failure reason without exposing an empty summary', () => {
+    const messages: CoreMessage[] = [{
+      id: 'm-compaction-failed',
+      role: 'assistant',
+      content: '',
+      timestamp: '2026-07-15T00:00:00.000Z',
+      metadata: { timeline: true },
+      parts: [{
+        id: 'p-compaction-failed',
+        partType: 'compaction',
+        status: 'error',
+        content: '',
+        label: '压缩未完成',
+        compaction_status: 'failed',
+        message: 'Context compaction failed: engine timeout',
+      }],
+    }];
+
+    const wrapper = mount(ChatThread, {
+      props: { messages, processExpandedIds: new Set(['m-compaction-failed']) },
+    });
+
+    const row = wrapper.find('.compaction-step');
+    expect(row.text()).toContain('原上下文已保留');
+    expect(row.text()).toContain('engine timeout');
+    expect(wrapper.find('.compaction-summary').exists()).toBe(false);
+  });
+
   it('keeps compaction expanded content below the title row', () => {
     const source = readFileSync(resolve(__dirname, '../src/components/ChatThread.vue'), 'utf8');
     const compactionRule = source.match(/\.compaction-step\s*\{[^}]+\}/)?.[0] || '';

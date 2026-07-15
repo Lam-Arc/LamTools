@@ -378,10 +378,145 @@ async def test_core_compact_command_cancelled_releases_active_projection(tmp_pat
             )
         async with context.session_factory() as db:
             snapshot = await context.persistence.load(db, "thread-compact-cancelled")
+            events = await context.persistence.list_thread(db, thread_id="thread-compact-cancelled")
 
         turn = next(iter(snapshot["core"]["turns"].values()))
         assert turn["status"] == "cancelled"
+        compaction_statuses = [
+            event.payload.get("payload", {}).get("compaction_status")
+            for event in events
+            if event.method == "core/runItem"
+            and event.payload.get("payload", {}).get("type") == "compaction"
+        ]
+        assert "failed" not in compaction_statuses
+        assert "cancelled" in compaction_statuses
+        cancelled_item = next(
+            event.payload["payload"]
+            for event in events
+            if event.method == "core/runItem"
+            and event.payload.get("payload", {}).get("compaction_status") == "cancelled"
+        )
+        assert cancelled_item["label"] == "压缩已取消"
     finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_core_compact_command_rejects_overlapping_compaction_and_releases_claim(tmp_path):
+    engine, context = await _context(tmp_path)
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+    calls = 0
+
+    class Hooks(DefaultCoreLiveMemberHooks):
+        def command_action_handlers(self):
+            async def compact(**_kwargs):
+                nonlocal calls
+                calls += 1
+                if calls == 1:
+                    first_started.set()
+                    await release_first.wait()
+                return {"status": "not_needed", "reason": "no_gain"}
+
+            return {"compact": compact}
+
+    context.host.member_hooks = Hooks()
+    first = asyncio.create_task(handle_command_execute_operation(
+        request_id=1,
+        params={"thread_id": "thread-compact-exclusive", "command": "compact"},
+        context=context,
+    ))
+    try:
+        await asyncio.wait_for(first_started.wait(), timeout=1)
+        overlapping = await handle_command_execute_operation(
+            request_id=2,
+            params={"thread_id": "thread-compact-exclusive", "command": "compact"},
+            context=context,
+        )
+        assert overlapping.response["error"]["message"] == "A context compaction is already running"
+        assert calls == 1
+
+        release_first.set()
+        completed = await first
+        assert completed.response["result"]["result"]["status"] == "not_needed"
+
+        next_run = await handle_command_execute_operation(
+            request_id=3,
+            params={"thread_id": "thread-compact-exclusive", "command": "compact"},
+            context=context,
+        )
+        assert next_run.response["result"]["result"]["status"] == "not_needed"
+        assert calls == 2
+    finally:
+        release_first.set()
+        if not first.done():
+            await first
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_core_compact_stop_cancels_the_real_operation_without_late_failure(tmp_path):
+    engine, context = await _context(tmp_path)
+    started = asyncio.Event()
+    handler_cancelled = asyncio.Event()
+    calls = 0
+
+    class Hooks(DefaultCoreLiveMemberHooks):
+        def command_action_handlers(self):
+            async def compact(**_kwargs):
+                nonlocal calls
+                calls += 1
+                if calls > 1:
+                    return {"status": "not_needed", "reason": "no_gain"}
+                started.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    handler_cancelled.set()
+                    raise
+
+            return {"compact": compact}
+
+    context.host.member_hooks = Hooks()
+    operation = asyncio.create_task(handle_command_execute_operation(
+        request_id=1,
+        params={"thread_id": "thread-compact-stop", "command": "compact", "client_command_id": "stop123"},
+        context=context,
+    ))
+    try:
+        await asyncio.wait_for(started.wait(), timeout=1)
+        run_id = "thread-compact-stop:command:compact:stop123"
+        assert context.runtime_task_registry.task("thread-compact-stop", run_id=run_id) is not None
+
+        await handle_turn_cancel_operation(
+            request_id=2,
+            params={"thread_id": "thread-compact-stop", "turn_id": run_id},
+            context=context,
+        )
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(operation, timeout=1)
+        assert handler_cancelled.is_set()
+
+        async with context.session_factory() as db:
+            events = await context.persistence.list_thread(db, thread_id="thread-compact-stop")
+        compact_statuses = [
+            str(event.payload.get("status") or "")
+            for event in events
+            if event.turn_id == run_id and event.method == "core/runItem"
+        ]
+        assert "failed" not in compact_statuses
+
+        next_run = await handle_command_execute_operation(
+            request_id=3,
+            params={"thread_id": "thread-compact-stop", "command": "compact"},
+            context=context,
+        )
+        assert next_run.response["result"]["result"]["status"] == "not_needed"
+    finally:
+        if not operation.done():
+            operation.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await operation
         await engine.dispose()
 
 
@@ -1287,12 +1422,12 @@ async def test_core_live_turn_cancel_publishes_interrupting_status(tmp_path):
 
         outcome = await handle_turn_cancel_operation(
             request_id=2,
-            params={"thread_id": "thread-1"},
+            params={"thread_id": "thread-1", "include_snapshot": False},
             context=context,
         )
 
         result = outcome.response["result"]
-        assert result["snapshot"]["status"] == "running"
+        assert "snapshot" not in result
         assert [event["method"] for event in result["events"]] == ["turn/interrupted", "core/runItem"]
         assert result["events"][1]["payload"]["status"] == "interrupting"
     finally:

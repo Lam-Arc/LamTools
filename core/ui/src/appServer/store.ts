@@ -287,6 +287,7 @@ export function createCoreAppServerRuntimeController<
     const response = await runtime.client!.request('turn/interrupt', {
       thread_id: threadId,
       ...(turnId ? { turn_id: turnId } : {}),
+      include_snapshot: false,
     })
     applyResponse(response)
   }

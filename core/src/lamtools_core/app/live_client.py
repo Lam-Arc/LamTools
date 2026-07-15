@@ -219,7 +219,10 @@ class CoreAppServerClient:
             await self.put_app_server_event(event)
 
     async def cancel_turn(self, *, thread_id: str, turn_id: str = "") -> dict[str, Any]:
-        return await self.request("turn.cancel", {"thread_id": thread_id, "turn_id": turn_id})
+        return await self.request(
+            "turn.cancel",
+            {"thread_id": thread_id, "turn_id": turn_id, "include_snapshot": False},
+        )
 
     async def read_thread(self, *, thread_id: str) -> dict[str, Any]:
         return await self.request("thread.read", {"thread_id": thread_id})

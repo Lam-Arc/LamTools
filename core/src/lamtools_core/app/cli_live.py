@@ -373,7 +373,9 @@ async def execute_compaction_command_live(
     client_command_id = uuid.uuid4().hex
     target_turn_id = f"{thread_id}:command:compact:{client_command_id}"
     try:
-        await client.connect(thread_id=thread_id, last_seen_seq=0)
+        # command.execute subscribes the connection before starting compaction.
+        # Avoid replaying an arbitrarily large historical event stream first.
+        await client.connect()
         operation_task = asyncio.create_task(
             client.execute_command(
                 thread_id=thread_id,

@@ -267,6 +267,9 @@ class CoreLiveConnection:
         if not self.initialized:
             await self._send_not_initialized(request)
             return
+        thread_id = _thread_id_from_params(request.params)
+        if thread_id:
+            self._subscribe(thread_id)
         if await self._handle_operation_request(request):
             return
         try:

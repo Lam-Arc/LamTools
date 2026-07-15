@@ -4,7 +4,11 @@ import inspect
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
-from lamtools_core.context_compaction import ContextCompactionRequest, compact_context
+from lamtools_core.context_compaction import (
+    ContextCompactionRequest,
+    compact_context,
+    compaction_segment_input_limit,
+)
 from lamtools_core.llm import ChatMessage, LLMClient, LLMToolCall
 from lamtools_core.runtime import RuntimeCheckpointStore, RuntimeState, RuntimeStateStore
 
@@ -48,6 +52,20 @@ async def compact_runtime_history(
 ) -> dict[str, Any]:
     if not isinstance(runtime_state_store, RuntimeCheckpointStore):
         raise RuntimeError("Runtime history storage does not support manual compaction")
+    state = await runtime_state_store.get(thread_id) or RuntimeState(session_id=thread_id)
+    metadata = state.metadata if isinstance(state.metadata, dict) else {}
+    metrics = metadata.get("runtime_context_metrics")
+    metrics = metrics if isinstance(metrics, dict) else {}
+    audit = metadata.get("runtime_audit")
+    audit = audit if isinstance(audit, dict) else {}
+    loop_policy = audit.get("loop_policy")
+    loop_policy = loop_policy if isinstance(loop_policy, dict) else {}
+    context_window_tokens = _first_positive_int(
+        metadata.get("context_window_tokens"),
+        metrics.get("context_window_tokens"),
+        loop_policy.get("context_window_tokens"),
+    )
+    active_model = str(metadata.get("model_id") or metrics.get("model_id") or model).strip()
     raw_history = await runtime_state_store.get_history(thread_id)
     messages = [message for item in raw_history if (message := _chat_message_from_dict(item)) is not None]
     result = await compact_context(
@@ -55,8 +73,9 @@ async def compact_runtime_history(
             trigger="manual",
             messages=messages,
             llm_client=llm_client,
-            model=model,
+            model=active_model,
             limit_tokens=MANUAL_COMPACTION_LIMIT_TOKENS,
+            input_limit_tokens=compaction_segment_input_limit(context_window_tokens),
             on_event=on_event,
         )
     )
@@ -66,7 +85,6 @@ async def compact_runtime_history(
             "session_id": thread_id,
             "summary": result.summary,
         }
-    state = await runtime_state_store.get(thread_id) or RuntimeState(session_id=thread_id)
     await runtime_state_store.save_checkpoint(
         state,
         [message.to_dict() for message in result.replacement_messages],
@@ -82,6 +100,17 @@ async def compact_runtime_history(
         "trigger": "manual",
         "summary": result.summary,
     }
+
+
+def _first_positive_int(*values: Any) -> int:
+    for value in values:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            continue
+        if parsed > 0:
+            return parsed
+    return 0
 
 
 def _accepted_kwargs(handler: CommandActionHandler, kwargs: dict[str, Any]) -> dict[str, Any]:

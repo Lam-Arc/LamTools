@@ -438,7 +438,7 @@ async def test_execute_compaction_command_streams_new_deltas_and_terminal_state_
 
     assert result["status"] == "compacted"
     assert saw_terminal is True
-    assert live.connected_with == {"thread_id": "thread-1", "last_seen_seq": 0}
+    assert live.connected_with == {}
     assert [(str(chunk), chunk.end) for chunk in output] == [
         ("[00:00] phase 正在压缩上下文", "\n"),
         ("摘要片段", ""),

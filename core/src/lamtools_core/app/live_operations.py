@@ -661,9 +661,10 @@ async def handle_turn_cancel_operation(
         if requested_turn_id and not _is_active_turn(snapshot, requested_turn_id):
             turn_id = ""
         if not turn_id:
-            return CoreLiveOperationOutcome(
-                response=rpc_result(request_id, {"status": "idle", "event": None, "snapshot": snapshot})
-            )
+            payload: dict[str, Any] = {"status": "idle", "event": None}
+            if params.get("include_snapshot") is not False:
+                payload["snapshot"] = snapshot
+            return CoreLiveOperationOutcome(response=rpc_result(request_id, payload))
         interrupted = await _append_app_event(
             db,
             context=context,
@@ -710,14 +711,11 @@ async def handle_turn_cancel_operation(
             events.append(terminal)
             async with context.session_factory() as db:
                 snapshot = await context.persistence.load(db, thread_id)
+    response_payload: dict[str, Any] = {"events": [event.to_dict() for event in events]}
+    if params.get("include_snapshot") is not False:
+        response_payload["snapshot"] = snapshot
     return CoreLiveOperationOutcome(
-        response=rpc_result(
-            request_id,
-            {
-                "events": [event.to_dict() for event in events],
-                "snapshot": snapshot,
-            },
-        ),
+        response=rpc_result(request_id, response_payload),
         publish_events=events,
     )
 
@@ -1651,6 +1649,40 @@ async def _execute_compact_live_command(
         thread_id,
         client_command_id=str(params.get("client_command_id") or params.get("clientCommandId") or ""),
     )
+    registry = context.host.runtime_task_registry
+    if not registry.accept_run(thread_id, ids["run_id"]):
+        raise RuntimeError("A context compaction is already running")
+    operation_task = asyncio.create_task(_execute_claimed_compact_live_command(
+        context=context,
+        thread_id=thread_id,
+        work_root=work_root,
+        actions=actions,
+        params=params,
+        ids=ids,
+    ))
+    if not registry.register(thread_id, operation_task, run_id=ids["run_id"]):
+        operation_task.cancel()
+        try:
+            await operation_task
+        except asyncio.CancelledError:
+            pass
+        registry.release_run(thread_id, run_id=ids["run_id"])
+        raise RuntimeError("A context compaction is already running")
+    try:
+        return await operation_task
+    finally:
+        registry.release_run(thread_id, run_id=ids["run_id"])
+
+
+async def _execute_claimed_compact_live_command(
+    *,
+    context: CoreLiveContext,
+    thread_id: str,
+    work_root: str,
+    actions: dict[str, Any],
+    params: dict[str, Any],
+    ids: dict[str, str],
+) -> tuple[dict[str, Any], dict[str, Any]]:
     _, snapshot = await _persist_command_run_item(
         context=context,
         event=_compact_command_event(thread_id, {}, ids=ids, status="running"),
@@ -1765,10 +1797,20 @@ def _compact_command_event(
     status: str,
 ) -> RunItemEvent:
     content = str(result.get("content") or result.get("summary") or result.get("error") or "")
-    business_status = str(result.get("status") or status)
+    cancelled = status == "cancelled" or str(result.get("reason") or "") == "cancelled"
+    business_status = "cancelled" if cancelled else str(result.get("status") or status)
+    default_label = (
+        "正在压缩上下文"
+        if status == "running"
+        else "压缩已取消"
+        if cancelled
+        else "压缩未完成"
+        if status == "failed"
+        else "上下文已压缩"
+    )
     payload: dict[str, Any] = {
         "type": "compaction",
-        "label": str(result.get("label") or ("正在压缩上下文" if status == "running" else "压缩未完成" if status == "failed" else "上下文已压缩")),
+        "label": "压缩已取消" if cancelled else str(result.get("label") or default_label),
         "trigger": "manual",
         "compaction_status": business_status,
     }

@@ -173,7 +173,8 @@ async def test_core_app_server_client_runs_live_operation_matrix_against_real_we
             )
             assert [event["method"] for event in cancelled["events"]] == ["turn/interrupted", "core/runItem"]
             cancelled_turn_id = cancelling["runtime_start"]["turn_id"]
-            assert cancelled["snapshot"]["core"]["turns"][cancelled_turn_id]["status"] == "interrupting"
+            assert "snapshot" not in cancelled
+            assert cancelled["events"][1]["payload"]["status"] == "interrupting"
             await _wait_for_terminal(client, "thread-cancel")
             cancelled_snapshot = (await client.read_thread(thread_id="thread-cancel"))["snapshot"]
             cancelled_turn = cancelled_snapshot["core"]["turns"][cancelled_turn_id]

@@ -613,3 +613,48 @@ def test_core_live_resume_switches_connection_subscription_before_replaying(tmp_
     import asyncio
 
     asyncio.run(run())
+
+
+def test_core_live_subscribes_before_running_a_thread_operation(tmp_path):
+    async def run() -> None:
+        engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'core-live-router-stream.db'}", future=True)
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        session_factory = async_sessionmaker(engine, expire_on_commit=False)
+        operations = OperationCatalog()
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def long_operation(request: OperationRequest) -> OperationResult:
+            started.set()
+            await release.wait()
+            return OperationResult(name=request.name, payload={"ok": True})
+
+        operations.register("member.long", long_operation)
+        context = CoreLiveContext(
+            session_factory=session_factory,
+            event_store=SqlAlchemyAppEventStore(AppEventRow, protocol_version="core.app_server.v1"),
+            snapshot_store=SqlAlchemyThreadSnapshotStore(
+                ThreadSnapshotRow,
+                projector=CoreAppSnapshotProjector(member_defaults={"queue": []}),
+            ),
+            operations=operations,
+            hub=CoreAppEventHub(),
+        )
+        connection = CoreLiveConnection(DummyWebSocket(), context=context)
+        connection.initialized = True
+        operation = asyncio.create_task(connection.handle_raw({
+            "id": 1,
+            "method": "member.long",
+            "params": {"thread_id": "thread-stream"},
+        }))
+        await started.wait()
+
+        assert connection.thread_id == "thread-stream"
+        assert connection.subscription is not None
+
+        release.set()
+        await operation
+        await engine.dispose()
+
+    asyncio.run(run())
