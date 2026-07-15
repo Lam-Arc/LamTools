@@ -168,6 +168,49 @@ async def test_compact_context_auto_preserves_prefix_and_latest_user_message():
 
 
 @pytest.mark.asyncio
+async def test_compact_context_fallback_produces_minimum_sufficient_continuation_state():
+    messages = [
+        ChatMessage(
+            role="user",
+            content=(
+                "Do not push, create a pull request, or deploy without my confirmation. "
+                "The export must keep the current filters. "
+                + ("important context " * 180)
+            ),
+        ),
+        ChatMessage(
+            role="assistant",
+            content=(
+                "Implemented the export route. Typecheck passed, but the timezone test still fails. "
+                + ("verified work " * 180)
+            ),
+        ),
+        ChatMessage(role="user", content="Fix the timezone test next."),
+    ]
+
+    result = await compact_context(
+        ContextCompactionRequest(
+            trigger="auto",
+            messages=messages,
+            limit_tokens=1200,
+            estimate_tokens=_estimate,
+        )
+    )
+
+    assert result.status == "compacted"
+    assert "1. Current Objective And Done Criteria" in result.summary
+    assert "2. Active User Instructions" in result.summary
+    assert "3. External Action Authorization" in result.summary
+    assert "4. Confirmed Facts And Decisions" in result.summary
+    assert "5. Current Execution State" in result.summary
+    assert "6. Verification Evidence" in result.summary
+    assert "7. Open Issues, Risks, And Hypotheses" in result.summary
+    assert "8. Rejected Or Superseded Directions" in result.summary
+    assert "9. Next Actions" in result.summary
+    assert "Do not push, create a pull request, or deploy without my confirmation." in result.summary
+
+
+@pytest.mark.asyncio
 async def test_compact_context_manual_reuses_same_entry_and_retains_tail_messages():
     llm = _CompactionClient()
     messages = [
@@ -346,7 +389,7 @@ async def test_compact_context_segments_oversized_history_within_model_input_lim
 
 
 @pytest.mark.asyncio
-async def test_compact_context_coalesces_character_stream_events_without_losing_content():
+async def test_compact_context_forwards_native_character_stream_events_without_losing_content():
     llm = _CharacterStreamingCompactionClient()
     progress = []
     messages = [
@@ -370,8 +413,7 @@ async def test_compact_context_coalesces_character_stream_events_without_losing_
     deltas = [event["delta"] for event in progress if event.get("delta")]
     assert result.status == "compacted"
     assert "".join(deltas) == llm.summary
-    assert len(deltas) < len(llm.summary) // 10
-    assert all(len(delta) >= 64 for delta in deltas[:-1])
+    assert deltas == list(llm.summary)
 
 
 @pytest.mark.asyncio

@@ -266,6 +266,7 @@ describe('useCoreLiveComposerController', () => {
   it('owns command loading, palette selection, and live submission effects', async () => {
     const calls: string[] = []
     const activeThreadId = ref<string | null>('thread-1')
+    const activeTurnId = ref('turn-1')
     const connectedThreadId = ref('')
     const connectionState = ref<'connecting' | 'open' | 'closed' | 'error'>('closed')
     const text = ref('/')
@@ -278,6 +279,7 @@ describe('useCoreLiveComposerController', () => {
 
     const controller = useCoreLiveComposerController({
       activeThreadId,
+      activeTurnId,
       connectedThreadId,
       connectionState,
       text,
@@ -294,6 +296,9 @@ describe('useCoreLiveComposerController', () => {
       },
       interruptTurn: async (threadId) => {
         calls.push(`stop:${threadId}`)
+      },
+      steerTurn: async (threadId, turnId, input) => {
+        calls.push(`steer:${threadId}:${turnId}:${JSON.stringify(input)}`)
       },
       queueInput: async (threadId, input) => {
         calls.push(`queue:${threadId}:${JSON.stringify(input)}`)
@@ -317,6 +322,7 @@ describe('useCoreLiveComposerController', () => {
       },
       messages: {
         queued: 'Queued by member',
+        guided: 'Guided by member',
         stopping: 'Stopping by member',
       },
     })
@@ -340,8 +346,8 @@ describe('useCoreLiveComposerController', () => {
     text.value = 'stop now'
     status.value = 'running'
     await controller.submit({ clearComposer: true })
-    expect(calls).toContain('queue:thread-1:[{"type":"text","text":"stop now"}]')
-    expect(statusText.value).toBe('Queued by member')
+    expect(calls).toContain('steer:thread-1:turn-1:[{"type":"text","text":"stop now"}]')
+    expect(statusText.value).toBe('Guided by member')
     expect(clearedTexts).toContain('stop now')
 
     text.value = ''

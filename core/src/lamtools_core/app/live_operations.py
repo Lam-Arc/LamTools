@@ -4,6 +4,7 @@ import asyncio
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -1734,9 +1735,10 @@ async def _execute_claimed_compact_live_command(
 
     terminal_emitted = False
     latest_snapshot = snapshot
+    persisted_content_length = 0
 
     async def on_event(payload: dict[str, Any]) -> None:
-        nonlocal terminal_emitted, latest_snapshot
+        nonlocal terminal_emitted, latest_snapshot, persisted_content_length
         business_status = str(payload.get("status") or "running")
         cancelled = business_status == "cancelled" or str(payload.get("reason") or "") == "cancelled"
         event_status = (
@@ -1748,6 +1750,19 @@ async def _execute_claimed_compact_live_command(
             if business_status in {"compacted", "not_needed"}
             else "running"
         )
+        delta = str(payload.get("delta") or "")
+        content = str(payload.get("content") or "")
+        if event_status == "running" and delta:
+            await _publish_transient_compaction_delta(
+                context=context,
+                thread_id=thread_id,
+                ids=ids,
+                payload=payload,
+            )
+            if len(content) - persisted_content_length < 64:
+                return
+            payload = {key: value for key, value in payload.items() if key != "delta"}
+            persisted_content_length = len(content)
         _, latest_snapshot = await _persist_command_run_item(
             context=context,
             event=_compact_command_event(
@@ -1816,6 +1831,29 @@ async def _execute_claimed_compact_live_command(
         event=_compact_command_terminal_event(thread_id, ids=ids, status="completed"),
     )
     return result, snapshot
+
+
+async def _publish_transient_compaction_delta(
+    *,
+    context: CoreLiveContext,
+    thread_id: str,
+    ids: dict[str, str],
+    payload: dict[str, Any],
+) -> None:
+    event = _compact_command_event(thread_id, payload, ids=ids, status="running")
+    await context.hub.publish(AppEventEnvelope(
+        event_id=event.event_id,
+        protocol_version="core.app_server.v1",
+        seq=0,
+        thread_id=thread_id,
+        method=CORE_RUN_ITEM_METHOD,
+        payload=event.to_dict(),
+        created_at=datetime.now(timezone.utc),
+        turn_id=event.turn_id or None,
+        item_id=event.item_id or None,
+        parent_item_id=event.parent_item_id or None,
+        client_message_id=None,
+    ))
 
 
 async def _persist_command_run_item(

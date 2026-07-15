@@ -315,14 +315,26 @@ async def test_core_compact_command_can_omit_large_snapshot_from_response(tmp_pa
 @pytest.mark.asyncio
 async def test_core_compact_command_forwards_operation_delta_to_live_events(tmp_path):
     engine, context = await _context(tmp_path)
+    live_events = context.hub.subscribe("thread-compact-delta")
 
     async def execute(request):
         on_event = request.payload.get("_on_event")
         assert callable(on_event)
-        await on_event({"status": "running", "phase": "segment", "delta": "摘要增量"})
+        for delta, content in (("摘", "摘"), ("要", "摘要"), ("增量", "摘要增量")):
+            await on_event({
+                "status": "running",
+                "phase": "segment",
+                "delta": delta,
+                "content": content,
+            })
         return OperationResult(
             name=request.name,
-            payload={"result": {"status": "compacted", "before_tokens": 1000, "after_tokens": 500}},
+            payload={"result": {
+                "status": "compacted",
+                "summary": "摘要增量",
+                "before_tokens": 1000,
+                "after_tokens": 500,
+            }},
         )
 
     context.operations.register("command.execute", execute)
@@ -348,7 +360,17 @@ async def test_core_compact_command_forwards_operation_delta_to_live_events(tmp_
 
         assert outcome.response["result"]["result"]["status"] == "compacted"
         payloads = [json.loads(row) if isinstance(row, str) else row for row in rows]
-        assert any(row.get("payload", {}).get("delta") == "摘要增量" for row in payloads)
+        published = []
+        while not live_events.empty():
+            published.append(live_events.get_nowait())
+        native_deltas = [
+            event.payload.get("payload", {}).get("delta")
+            for event in published
+            if getattr(event, "seq", -1) == 0 and event.payload.get("payload", {}).get("delta")
+        ]
+        assert native_deltas == ["摘", "要", "增量"]
+        assert not any(row.get("payload", {}).get("delta") for row in payloads)
+        assert any(row.get("payload", {}).get("content") == "摘要增量" for row in payloads)
         assert {
             row.get("turn_id") for row in payloads
         } == {"thread-compact-delta:command:compact:current123"}

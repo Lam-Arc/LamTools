@@ -128,6 +128,15 @@ describe('core appServer workbench actions', () => {
       statusText: '已加入待发送',
     })
     expect(coreComposerSubmissionEffects(
+      { status: 'guided', inputItems: [{ type: 'text', text: 'change course' }] },
+      { clearComposer: true, submittedText: 'change course', guidedStatusText: '引导已发送' },
+    )).toEqual({
+      clearComposer: true,
+      clearComposerText: 'change course',
+      clearAttachments: false,
+      statusText: '引导已发送',
+    })
+    expect(coreComposerSubmissionEffects(
       { status: 'started', inputItems: [{ type: 'text', text: 'write' }], ok: true },
       { clearComposer: true, submittedText: 'write' },
     )).toEqual({
@@ -169,17 +178,36 @@ describe('core appServer workbench actions', () => {
     expect(calls).toEqual(['compact'])
   })
 
-  it('queues input while a turn is active and starts turns while idle', async () => {
+  it('steers text while a turn is active, queues attachments, and starts turns while idle', async () => {
     const queued: CoreInputItem[][] = []
+    const guided: CoreInputItem[][] = []
     const started: CoreInputItem[][] = []
 
     await submitCoreComposerTask({
       threadId: 'thread-1',
+      activeTurnId: 'turn-1',
       text: '请 /reviewer 看看',
       status: 'running',
       commandCatalog: commands,
+      steerTurn: async (_threadId, _turnId, inputItems) => {
+        guided.push(inputItems)
+      },
       queueInput: async (_threadId, inputItems) => {
         queued.push(inputItems)
+      },
+      startTurn: async () => false,
+    })
+    await submitCoreComposerTask({
+      threadId: 'thread-1',
+      activeTurnId: 'turn-1',
+      text: '附加证据',
+      status: 'running',
+      attachments: [{ type: 'attachment', attachment_id: 'att-active', filename: 'active.md' }],
+      queueInput: async (_threadId, inputItems) => {
+        queued.push(inputItems)
+      },
+      steerTurn: async () => {
+        throw new Error('attachments should be queued')
       },
       startTurn: async () => false,
     })
@@ -198,10 +226,14 @@ describe('core appServer workbench actions', () => {
       },
     })
 
-    expect(queued).toEqual([[
+    expect(guided).toEqual([[
       { type: 'text', text: '请 ' },
       { type: 'skill', name: 'reviewer', source_text: '/reviewer' },
       { type: 'text', text: ' 看看' },
+    ]])
+    expect(queued).toEqual([[
+      { type: 'text', text: '附加证据' },
+      { type: 'attachment', attachment_id: 'att-active', filename: 'active.md' },
     ]])
     expect(startedResult.status).toBe('started')
     expect(started).toEqual([[

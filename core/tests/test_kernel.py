@@ -962,6 +962,55 @@ class TestKernelUnboundedLoop:
         ]
 
     @pytest.mark.asyncio
+    async def test_guidance_stops_remaining_sequential_tool_calls_before_next_model_round(self):
+        registry = RuntimeTaskRegistry()
+        current_task = asyncio.current_task()
+        assert current_task is not None
+        assert registry.accept_run("guided-tool-thread", "guided-tool-run") is True
+        assert registry.register("guided-tool-thread", current_task, run_id="guided-tool-run") is True
+        first = ToolCall(id="first", name="run_command", arguments={"command": "first"})
+        second = ToolCall(id="second", name="run_command", arguments={"command": "second"})
+
+        class GuidanceInjectingKit(MockRuntimeKit):
+            def __init__(self) -> None:
+                super().__init__([
+                    MockKitStep(tool_calls=[first, second], decision="continue"),
+                    MockKitStep(reply="Guidance applied", decision="done"),
+                ])
+                self.executed: list[str] = []
+
+            async def execute_tool(self, state, call):
+                self.executed.append(call.id)
+                if call.id == "first":
+                    assert registry.accept_guidance(
+                        "guided-tool-thread",
+                        "stop the old approach",
+                        run_id="guided-tool-run",
+                        guidance_id="guidance-mid-batch",
+                    ) == "accepted"
+                return ToolResult(call_id=call.id, name=call.name, content=f"{call.id} done")
+
+        kit = GuidanceInjectingKit()
+        kernel = _make_kernel(kit)
+        result = await kernel.run(RuntimeTurnInput(
+            user_message="start",
+            run_id="guided-tool-run",
+            turn_id="guided-tool-run",
+            metadata={"session_id": "guided-tool-thread"},
+            guidance_source=registry.guidance_source("guided-tool-thread", run_id="guided-tool-run"),
+            guidance_finalizer=registry.guidance_finalizer("guided-tool-thread", run_id="guided-tool-run"),
+        ))
+
+        assert result.decision == "done"
+        assert kit.executed == ["first"]
+        assert result.steps[0].metadata["guidance_interrupted_tool_batch"] is True
+        assert [step.result.status for step in result.steps[0].tool_steps] == ["ok", "blocked"]
+        assert any(
+            message.role == "user" and message.content == "stop the old approach"
+            for message in kit.context_histories[1]
+        )
+
+    @pytest.mark.asyncio
     async def test_registry_rejects_run_overwrite_and_deduplicates_guidance_ids(self):
         registry = RuntimeTaskRegistry()
         current_task = asyncio.current_task()

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import ipaddress
 import re
 from typing import Awaitable, Callable
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -25,6 +27,28 @@ def _http_session() -> httpx.AsyncClient:
             headers={"User-Agent": _FETCH_USER_AGENT},
         )
     return _HTTP_CLIENT
+
+
+def _is_loopback_url(url: str) -> bool:
+    hostname = (urlsplit(url).hostname or "").strip().lower()
+    if hostname == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False
+
+
+async def _browser_check_get(url: str) -> httpx.Response:
+    if not _is_loopback_url(url):
+        return await _http_session().get(url)
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(_DEFAULT_FETCH_TIMEOUT),
+        follow_redirects=True,
+        headers={"User-Agent": _FETCH_USER_AGENT},
+        trust_env=False,
+    ) as client:
+        return await client.get(url)
 
 
 def make_web_search_handler(work_root: str) -> Callable[[ToolCall], Awaitable[ToolResult]]:
@@ -223,8 +247,7 @@ def make_browser_check_handler(work_root: str) -> Callable[[ToolCall], Awaitable
             return ToolResult(call_id=call.id, name=call.name, status="failed", error="'expect' must be a string or null")
 
         try:
-            client = _http_session()
-            resp = await client.get(url)
+            resp = await _browser_check_get(url)
         except httpx.HTTPError as exc:
             return ToolResult(call_id=call.id, name=call.name, status="failed", error=f"browser_check network error: {exc}")
         except Exception as exc:

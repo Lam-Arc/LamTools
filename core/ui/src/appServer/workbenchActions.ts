@@ -6,11 +6,13 @@ export type CoreWorkbenchTurnStatus = 'idle' | 'running' | 'waiting' | 'interrup
 
 export interface SubmitCoreComposerTaskOptions {
   threadId: string
+  activeTurnId?: string
   text: string
   status: CoreWorkbenchTurnStatus
   commandCatalog?: CoreCommandCatalogItem[]
   attachments?: CoreInputItem[]
   executeCommand?: (command: string) => Promise<boolean>
+  steerTurn?: (threadId: string, turnId: string, inputItems: CoreInputItem[]) => Promise<void>
   queueInput: (threadId: string, inputItems: CoreInputItem[]) => Promise<void>
   startTurn: (threadId: string, inputItems: CoreInputItem[]) => Promise<boolean>
 }
@@ -18,6 +20,7 @@ export interface SubmitCoreComposerTaskOptions {
 export type SubmitCoreComposerTaskResult =
   | { status: 'ignored' }
   | { status: 'command'; command: string; ok: boolean }
+  | { status: 'guided'; inputItems: CoreInputItem[] }
   | { status: 'queued'; inputItems: CoreInputItem[] }
   | { status: 'started'; inputItems: CoreInputItem[]; ok: boolean }
 
@@ -25,6 +28,7 @@ export interface CoreComposerSubmissionEffectOptions {
   clearComposer?: boolean
   submittedText: string
   queuedStatusText?: string
+  guidedStatusText?: string
 }
 
 export interface CoreComposerSubmissionEffectPlan {
@@ -83,7 +87,11 @@ export async function submitCoreComposerTask(
   }
 
   if (isCoreActiveTurnStatus(options.status)) {
-    const inputItems = buildCoreComposerInputItems(cleaned, [], commandCatalog)
+    const inputItems = buildCoreComposerInputItems(cleaned, attachments, commandCatalog)
+    if (attachments.length === 0 && options.activeTurnId && options.steerTurn) {
+      await options.steerTurn(options.threadId, options.activeTurnId, inputItems)
+      return { status: 'guided', inputItems }
+    }
     await options.queueInput(options.threadId, inputItems)
     return { status: 'queued', inputItems }
   }
@@ -109,6 +117,12 @@ export function coreComposerSubmissionEffects(
     return _clearablePlan(options, {
       clearAttachments: false,
       statusText: options.queuedStatusText || 'Queued',
+    })
+  }
+  if (result.status === 'guided') {
+    return _clearablePlan(options, {
+      clearAttachments: false,
+      statusText: options.guidedStatusText || 'Guidance sent',
     })
   }
   if (result.ok) {

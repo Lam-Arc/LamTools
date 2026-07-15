@@ -711,7 +711,7 @@ class CoreLoopKernel:
                         await self._save_checkpoint(state, history)
                 else:
                     # Sequential execution (OpenAI Codex default for shell-safety)
-                    for call in turn.tool_calls:
+                    for call_index, call in enumerate(turn.tool_calls):
                         await self._emit_tool_started(state, call, response_index=index)
                         if call.id in blocked_results:
                             result = blocked_results[call.id]
@@ -724,6 +724,30 @@ class CoreLoopKernel:
                         tool_message = await self.kit.format_tool_result_for_model(state, call, result)
                         history.append(tool_message)
                         await self._save_checkpoint(state, history)
+                        if not await self._consume_guidance(state, turn_input, history, index):
+                            continue
+                        remaining_calls = turn.tool_calls[call_index + 1:]
+                        for skipped_call in remaining_calls:
+                            await self._emit_tool_started(state, skipped_call, response_index=index)
+                            skipped = ToolResult(
+                                call_id=skipped_call.id,
+                                name=skipped_call.name,
+                                status="blocked",
+                                content="Skipped because new user guidance changed the active turn.",
+                                metadata={"guidance_interrupted": True},
+                            )
+                            tool_results.append(skipped)
+                            step.tool_steps.append(RuntimeToolStep(call=skipped_call, result=skipped))
+                            await self._emit_tool_finished(
+                                state, skipped_call, skipped, response_index=index
+                            )
+                            history.append(await self.kit.format_tool_result_for_model(
+                                state, skipped_call, skipped
+                            ))
+                        if remaining_calls:
+                            step.metadata["guidance_interrupted_tool_batch"] = True
+                            await self._save_checkpoint(state, history)
+                        break
 
                 payload_reassessment_required = False
                 duplicate_payload_blocked = any(

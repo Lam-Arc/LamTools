@@ -271,13 +271,14 @@ export function createCoreAppServerRuntimeController<
       : {}
   }
 
-  async function steerTurn(threadId: string, turnId: string, text: string) {
+  async function steerTurn(threadId: string, turnId: string, input: string | InputItem[]) {
     await ensureClient()
+    const inputItems = typeof input === 'string' ? [{ type: 'text' as const, text: input }] : input
     const response = await runtime.client!.request('turn/steer', {
       thread_id: threadId,
       turn_id: turnId,
       client_message_id: crypto.randomUUID(),
-      input: [{ type: 'text', text }],
+      input: inputItems,
     })
     applyResponse(response)
   }

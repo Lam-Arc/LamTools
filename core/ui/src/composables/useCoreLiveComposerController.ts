@@ -19,6 +19,7 @@ export interface CoreLiveComposerMessages {
   commandCatalogLoadFailed?: (error: string) => string
   noActiveThread?: string
   queued?: string
+  guided?: string
   sendFailed?: string
   stopping?: string
   stopFailed?: string
@@ -36,6 +37,7 @@ export interface UseCoreLiveComposerControllerOptions {
   connect(threadId: string): Promise<void>
   startTurn(threadId: string, input: CoreInputItem[], workRoot?: string, options?: Record<string, unknown>): Promise<void>
   interruptTurn(threadId: string, turnId?: string): Promise<void>
+  steerTurn?(threadId: string, turnId: string, input: CoreInputItem[]): Promise<void>
   queueInput(threadId: string, input: CoreInputItem[]): Promise<void>
   listCommands(workRoot?: string): Promise<unknown[]>
   getWorkRoot(): string
@@ -220,11 +222,13 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
     try {
       const result = await submitCoreComposerTask({
         threadId,
+        activeTurnId: options.activeTurnId?.value || '',
         text: submittedText,
         status: options.status.value,
         commandCatalog: commandCatalog.value,
         attachments: options.attachments.value,
         executeCommand: runCommand,
+        steerTurn: options.steerTurn,
         queueInput: options.queueInput,
         startTurn: async (_threadId, input) => {
           const started = await liveTurnController.startThreadTurn(
@@ -301,6 +305,7 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
       clearComposer,
       submittedText,
       queuedStatusText: options.messages?.queued || 'Queued',
+      guidedStatusText: options.messages?.guided || 'Guidance sent',
     })
     if (plan.clearComposer) options.clearComposer?.(plan.clearComposerText || '')
     if (plan.restoreText !== undefined) options.text.value = plan.restoreText

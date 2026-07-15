@@ -112,3 +112,33 @@ async def test_browser_check_reports_expected_text(monkeypatch):
     assert result.status == "ok"
     assert "title: Demo" in result.content
     assert result.metadata["expect_found"] is True
+
+
+@pytest.mark.asyncio
+async def test_browser_check_bypasses_system_proxy_for_loopback_urls(monkeypatch):
+    real_client = httpx.AsyncClient
+    created: list[dict] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="local ok", request=request)
+
+    def client_factory(**kwargs):
+        created.append(dict(kwargs))
+        return real_client(
+            transport=httpx.MockTransport(handler),
+            timeout=kwargs.get("timeout"),
+            follow_redirects=kwargs.get("follow_redirects", False),
+            headers=kwargs.get("headers"),
+            trust_env=kwargs.get("trust_env", True),
+        )
+
+    monkeypatch.setattr(web_tools.httpx, "AsyncClient", client_factory)
+    tool = make_browser_check_handler("")
+    result = await tool(ToolCall(
+        id="call-browser-local",
+        name="browser_check",
+        arguments={"url": "http://localhost:8080/", "expect": "local ok"},
+    ))
+
+    assert result.status == "ok"
+    assert any(options.get("trust_env") is False for options in created)
