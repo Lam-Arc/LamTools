@@ -151,6 +151,70 @@ class CoreProjectStore:
 
         return await self.write_coordinator.run(write)
 
+    async def ensure_session(
+        self,
+        work_root: Path | str,
+        session_id: str,
+        *,
+        title: str,
+    ) -> tuple[CoreProjectRecord, SessionRecord, bool]:
+        """Bind a caller-owned session id to its workspace without creating a spare session."""
+        root = ensure_workspace_root(work_root)
+        normalized_root = str(root)
+        session_title = str(title).strip() or session_id
+
+        async def write(db: Any) -> tuple[CoreProjectRecord, SessionRecord, bool]:
+            project = await db.scalar(select(CoreProject).where(CoreProject.work_root == normalized_root))
+            created = project is None
+            if project is None:
+                project = CoreProject(
+                    id=uuid4().hex,
+                    name=_default_project_name(root),
+                    work_root=normalized_root,
+                )
+                db.add(project)
+                await db.flush()
+
+            row = await db.get(CoreThreadSnapshot, session_id)
+            if row is None:
+                session = SessionRecord(
+                    id=session_id,
+                    member_id="core",
+                    title=session_title,
+                    status="idle",
+                    metadata={"project_id": project.id, "work_root": project.work_root},
+                )
+                db.add(
+                    CoreThreadSnapshot(
+                        thread_id=session.id,
+                        snapshot_seq=0,
+                        snapshot_json=session_snapshot(session),
+                        updated_at=session.updated_at,
+                    )
+                )
+            else:
+                session = session_record_from_snapshot(row)
+                if not session.title or session.title in {session.id, "New Session"}:
+                    session.title = session_title
+                session.metadata = {
+                    **session.metadata,
+                    "project_id": project.id,
+                    "work_root": project.work_root,
+                }
+                state = dict(row.snapshot_json or {})
+                state["session"] = {
+                    "member_id": session.member_id,
+                    "title": session.title,
+                    "metadata": session.metadata,
+                    "created_at": session.created_at.isoformat(),
+                }
+                row.snapshot_json = state
+                row.updated_at = session.updated_at
+            await db.flush()
+            return _record(project), session, created
+
+        return await self.write_coordinator.run(write)
+
     async def delete(self, project_id: str) -> bool:
         return await self._delete_with_sessions(project_id)
 

@@ -52,6 +52,11 @@ class CoreAppServerClient:
             await self._resume_thread(thread_id=thread_id, last_seen_seq=last_seen_seq)
 
     async def request(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        result = await self._request_result(method, params)
+        command_result = result.get("result")
+        return command_result if isinstance(command_result, dict) else result
+
+    async def _request_result(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         if self._ws is None:
             raise RuntimeError("App-server client is not connected")
         request_id = self._next_id
@@ -66,10 +71,7 @@ class CoreAppServerClient:
             message = error.get("message") if isinstance(error, dict) else str(error)
             raise RuntimeError(str(message or "app-server request failed"))
         result = response.get("result")
-        if isinstance(result, dict):
-            command_result = result.get("result")
-            return command_result if isinstance(command_result, dict) else result
-        return {}
+        return result if isinstance(result, dict) else {}
 
     async def start_turn(
         self,
@@ -82,6 +84,7 @@ class CoreAppServerClient:
         thinking_enabled: bool | None = None,
         thinking_budget: int | None = None,
         shallow_thinking_enabled: bool | None = None,
+        context_window_tokens: int | None = None,
         approval_policy: str | None = None,
         client_message_id: str | None = None,
     ) -> dict[str, Any]:
@@ -102,6 +105,8 @@ class CoreAppServerClient:
             params["thinking_budget"] = thinking_budget
         if shallow_thinking_enabled is not None:
             params["shallow_thinking_enabled"] = shallow_thinking_enabled
+        if context_window_tokens is not None:
+            params["context_window_tokens"] = context_window_tokens
         if approval_policy:
             params["approval_policy"] = approval_policy
         response = await self.request("turn.start", params)
@@ -208,14 +213,18 @@ class CoreAppServerClient:
         return await self.request("thread.read", {"thread_id": thread_id})
 
     async def execute_command(self, *, thread_id: str, command: str, work_root: str = "") -> dict[str, Any]:
-        response = await self._request_with_events(
+        response = await self._request_result(
             "command.execute",
             {
                 "thread_id": thread_id,
                 "command": command,
                 "work_root": work_root,
+                "include_snapshot": False,
             },
         )
+        for event in response.get("events") or []:
+            if isinstance(event, dict):
+                await self.put_app_server_event(event)
         result = response.get("result")
         return result if isinstance(result, dict) else {}
 

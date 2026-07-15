@@ -211,6 +211,12 @@ def effective_turn_status(snapshot: dict[str, Any], turn_id: str) -> str:
 
 
 def latest_active_turn_id(snapshot: dict[str, Any]) -> str | None:
+    core = snapshot.get("core")
+    has_thread_status = bool(snapshot.get("status")) or (
+        isinstance(core, dict) and bool(core.get("status"))
+    )
+    if has_thread_status and effective_thread_status(snapshot) not in ACTIVE_TURN_STATUSES:
+        return None
     turns = _merged_turns(snapshot)
     active: list[dict[str, Any]] = []
     for turn_id, turn in turns.items():

@@ -2,18 +2,22 @@
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from lamtools_core.event import CollectingEventSink
+from lamtools_core.event import CollectingEventSink, EventSink
 from lamtools_core.llm import ChatMessage
 from lamtools_core.composer_commands import (
     build_composer_command_catalog,
     default_core_resource_roots,
     normalize_command_name,
 )
+from lamtools_core.checkpoint import CoreCheckpointCoordinator, register_checkpoint_operations
 from lamtools_core.member import PromptFragment, StaticMemberKit
 from lamtools_core.runtime import (
     InMemoryRuntimeStateStore,
@@ -40,7 +44,7 @@ from .base_agent import (
 from .command_execution import CommandActionHandler, compact_runtime_history, execute_command_action
 from .approval_resolution import ApprovalResolutionLifecycle
 from .agent_app import AgentApp, AgentSpec, ModelProvider, ModelTurnOutput, TurnInput
-from .event_store import SqlAlchemyAppEventStore
+from .event_store import AppEventEnvelope, CORE_RUN_ITEM_METHOD, SqlAlchemyAppEventStore
 from .live_approval import normalize_approval_request
 from .operation_catalog import OperationCatalog, OperationRequest, OperationResult
 from .persistence_host import AppPersistenceHost
@@ -98,6 +102,7 @@ def create_core_agent_operations(
     command_action_handlers: Mapping[str, CommandActionHandler] | None = None,
     runtime_state_store: RuntimeStateStore | None = None,
     runtime_task_registry: RuntimeTaskRegistry | None = None,
+    enable_turn_checkpoints: bool = False,
 ) -> OperationCatalog:
     spec = spec or CoreAgentSpec()
     runtime_state_store = runtime_state_store or InMemoryRuntimeStateStore()
@@ -132,6 +137,15 @@ def create_core_agent_operations(
     ]
     resolved_command_member_roots = [Path(item) for item in (command_member_roots or [])]
 
+    def checkpoint_coordinator(work_root: Path | str) -> CoreCheckpointCoordinator | None:
+        if db_session_factory is None or not enable_turn_checkpoints:
+            return None
+        return CoreCheckpointCoordinator(
+            work_root=work_root,
+            session_factory=db_session_factory,  # type: ignore[arg-type]
+            storage_root=Path(paths.data_dir) / "checkpoints",
+        )
+
     def command_skill_registry() -> SkillRegistry:
         plugin_assembly = assemble_core_agent_plugins(
             data_dir=paths.data_dir,
@@ -158,6 +172,7 @@ def create_core_agent_operations(
             return OperationResult(name=request.name, status="error", payload={"error": "thread_id is required"})
         if not message:
             return OperationResult(name=request.name, status="error", payload={"error": "message is required"})
+        runtime_work_root = _work_root_from_request(paths, request)
         if _is_llm_client(model_provider):
             from lamtools_core.kernel.loop import CoreLoopKernel
             from lamtools_core.kernel.policy import LoopPolicy
@@ -179,17 +194,21 @@ def create_core_agent_operations(
                     app_event_hub=app_event_hub,
                 )
 
-            sink = CollectingEventSink(live_callback if app_event_hub is not None else None)
+            sink = CollectingEventSink(
+                live_callback if app_event_hub is not None else None,
+                should_collect=_should_collect_core_event,
+            )
             approval_policy = str(request.payload.get("approval_policy") or "require")
             if approval_policy not in {"require", "auto_approve"}:
                 approval_policy = "require"
             plugin_assembly = assemble_core_agent_plugins(
                 data_dir=paths.data_dir,
-                work_root=paths.work_root,
+                work_root=runtime_work_root,
                 plugin_roots=plugin_roots,
             )
+            turn_checkpoint_coordinator = checkpoint_coordinator(runtime_work_root)
             toolbox, mcp_registry = await _build_core_runtime_toolbox(
-                work_root=paths.work_root,
+                work_root=runtime_work_root,
                 plugin_assembly=plugin_assembly,
                 approval_policy=approval_policy,
                 llm_client=runtime_model_provider,
@@ -200,11 +219,13 @@ def create_core_agent_operations(
                 thinking_budget=runtime_options.thinking_budget,
                 sub_agent_state_store=runtime_state_store,
                 sub_agent_session_prefix=thread_id,
+                sub_agent_event_sink=sink,
+                checkpoint_coordinator=turn_checkpoint_coordinator,
             )
             try:
                 kernel = CoreLoopKernel(
                     kit=CoreBaseAgentKit(
-                        work_root=paths.work_root,
+                        work_root=runtime_work_root,
                         config=CoreBaseAgentConfig(
                             model_id=runtime_options.model_id,
                             instructions=spec.instructions,
@@ -224,6 +245,7 @@ def create_core_agent_operations(
                         context_window_tokens=runtime_options.context_window_tokens,
                     ),
                     hook_engine=plugin_assembly["hook_engine"],
+                    checkpoint_coordinator=turn_checkpoint_coordinator,
                 )
                 kernel_result = await kernel.run(
                     RuntimeTurnInput(
@@ -243,7 +265,7 @@ def create_core_agent_operations(
                             **dict(request.payload.get("metadata") or {}),
                             "session_id": thread_id,
                             "data_dir": str(paths.data_dir),
-                            "work_root": str(paths.work_root),
+                            "work_root": str(runtime_work_root),
                             "model_id": runtime_options.model_id,
                             **(
                                 {"thinking_enabled": runtime_options.thinking_enabled}
@@ -301,7 +323,7 @@ def create_core_agent_operations(
                     **request.metadata,
                     **dict(request.payload.get("metadata") or {}),
                     "data_dir": str(paths.data_dir),
-                    "work_root": str(paths.work_root),
+                    "work_root": str(runtime_work_root),
                 },
             )
         )
@@ -381,6 +403,7 @@ def create_core_agent_operations(
             except ValueError as exc:
                 return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
             runtime_options = _runtime_options_from_state(spec, state)
+            runtime_work_root = _work_root_from_state(paths, state)
             runtime_model_provider = _model_provider_for_runtime(
                 model_provider,
                 runtime_options=runtime_options,
@@ -413,6 +436,7 @@ def create_core_agent_operations(
                     db_session_factory=db_session_factory,
                     app_event_store=app_event_store,
                     thread_snapshot_store=thread_snapshot_store,
+                    app_event_hub=app_event_hub,
                 ),
                 run_items_from_events=lambda events: core_events_to_run_items(events, thread_id=thread_id),
                 snapshot_from_events=lambda events: core_events_to_snapshot(events, thread_id=thread_id),
@@ -420,16 +444,250 @@ def create_core_agent_operations(
             decision_failure = await lifecycle.persist_decision()
             if decision_failure is not None:
                 return decision_failure
-            approval_response_event = lifecycle.decision_event
-
+            decision_durable = request.metadata.get("approval_decision_durable")
+            if callable(decision_durable):
+                durable_result = decision_durable({
+                    "thread_id": thread_id,
+                    "run_id": state.run_id,
+                    "turn_id": str(state.metadata.get("turn_id") or state.run_id),
+                    "work_root": str(runtime_work_root),
+                    "decision": decision.action,
+                    "snapshot": lifecycle.decision_snapshot,
+                })
+                if inspect.isawaitable(durable_result):
+                    await durable_result
             if decision.action == "deny":
                 return await lifecycle.finalize_cancelled()
 
             try:
                 await lifecycle.clear_pending_for_execution()
             except BaseException as exc:
+                if isinstance(exc, asyncio.CancelledError):
+                    raise
                 return await lifecycle.finalize_failure(exc)
             state = lifecycle.state
+
+            delegated_session = pending.get("delegated_session") if isinstance(pending, dict) else None
+            if isinstance(delegated_session, dict) and decision.action == "approve":
+                async def delegated_live_callback(event: Any) -> None:
+                    await _persist_core_event_live(
+                        event,
+                        thread_id=thread_id,
+                        db_session_factory=db_session_factory,
+                        app_event_store=app_event_store,
+                        thread_snapshot_store=thread_snapshot_store,
+                        app_event_hub=app_event_hub,
+                    )
+
+                sink = CollectingEventSink(
+                    delegated_live_callback if app_event_hub is not None else None,
+                    should_collect=_should_collect_core_event,
+                )
+                mcp_registry = None
+                try:
+                    plugin_assembly = assemble_core_agent_plugins(
+                        data_dir=paths.data_dir,
+                        work_root=runtime_work_root,
+                        plugin_roots=plugin_roots,
+                    )
+                    toolbox, mcp_registry = await _build_core_runtime_toolbox(
+                        work_root=runtime_work_root,
+                        plugin_assembly=plugin_assembly,
+                        approval_policy="require",
+                        llm_client=runtime_model_provider,
+                        model_id=runtime_options.model_id,
+                        instructions=spec.instructions,
+                        context_window_tokens=runtime_options.context_window_tokens,
+                        thinking_enabled=runtime_options.thinking_enabled,
+                        thinking_budget=runtime_options.thinking_budget,
+                        sub_agent_state_store=runtime_state_store,
+                        sub_agent_session_prefix=thread_id,
+                        sub_agent_event_sink=sink,
+                    )
+                    sub_agent_runner = toolbox.sub_agent_runner
+                    if sub_agent_runner is None or not hasattr(sub_agent_runner, "resume_approved"):
+                        raise RuntimeError("Sub-agent approval continuation is unavailable")
+                    child_result = await sub_agent_runner.resume_approved(
+                        session_id=str(delegated_session.get("session_id") or ""),
+                        pending_call=pending_call,
+                        task=str(delegated_session.get("task") or ""),
+                        agent=str(delegated_session.get("agent") or ""),
+                        parent_call_id=str(delegated_session.get("parent_call_id") or ""),
+                        parent_run_id=str(delegated_session.get("parent_run_id") or state.run_id),
+                        parent_turn_id=str(
+                            delegated_session.get("parent_turn_id")
+                            or state.metadata.get("turn_id")
+                            or state.run_id
+                        ),
+                    )
+                    if child_result.decision == "wait" and child_result.pending_approval:
+                        await _close_mcp_registry(mcp_registry)
+                        mcp_registry = None
+                        state.metadata["pending_approval"] = {
+                            **dict(child_result.pending_approval),
+                            "delegated_session": dict(delegated_session),
+                        }
+                        if child_result.pending_waiting_request:
+                            state.metadata["pending_waiting_request"] = dict(
+                                child_result.pending_waiting_request
+                            )
+                        state.status = "waiting"
+                        state.loop_state = "wait"
+                        await runtime_state_store.save(state)
+
+                        events = _without_approval_response_events(sink.events)
+                        run_items = core_events_to_run_items(events, thread_id=thread_id)
+                        snapshot = await _persist_run_items(
+                            run_items,
+                            db_session_factory=db_session_factory,
+                            app_event_store=app_event_store,
+                            thread_snapshot_store=thread_snapshot_store,
+                        )
+                        if snapshot is None:
+                            snapshot = core_events_to_snapshot(events, thread_id=thread_id)
+                        return OperationResult(
+                            name=request.name,
+                            status="ok",
+                            payload={
+                                "thread_id": thread_id,
+                                "run_id": state.run_id,
+                                "turn_id": str(
+                                    state.metadata.get("turn_id")
+                                    or f"{thread_id}:turn:{state.run_id}"
+                                ),
+                                "message": child_result.message,
+                                "decision": "wait",
+                                "snapshot": snapshot,
+                                "run_items": [
+                                    item.to_dict()
+                                    for item in [*lifecycle.decision_run_items, *run_items]
+                                ],
+                                "events": [event.to_dict() for event in events],
+                            },
+                        )
+                    if not child_result.succeeded:
+                        raise RuntimeError(child_result.failure_message())
+                    handoff_metadata = {
+                        "agent": str(delegated_session.get("agent") or ""),
+                        "sub_session_id": child_result.session_id,
+                        "sub_run_id": child_result.run_id,
+                        "decision": child_result.decision,
+                        "model_id": child_result.model_id,
+                        "tool_call_count": child_result.tool_call_count,
+                        "ended_with_final_response": child_result.ended_with_final_response,
+                    }
+                    await sink.emit(CoreEvent(
+                        name="runtime.tool.finished",
+                        category="tool",
+                        payload={
+                            "tool_name": "sub_agent",
+                            "call_id": str(delegated_session.get("parent_call_id") or ""),
+                            "status": "ok",
+                            "content": child_result.message,
+                            "error": "",
+                            "metadata": handoff_metadata,
+                        },
+                        session_id=thread_id,
+                        run_id=state.run_id,
+                        tags=["tool"],
+                    ))
+                    kernel = CoreLoopKernel(
+                        kit=CoreBaseAgentKit(
+                            work_root=runtime_work_root,
+                            config=CoreBaseAgentConfig(
+                                model_id=runtime_options.model_id,
+                                instructions=spec.instructions,
+                                thinking_enabled=runtime_options.thinking_enabled,
+                                thinking_budget=runtime_options.thinking_budget,
+                            ),
+                            toolbox=toolbox,
+                        ),
+                        llm_client=runtime_model_provider,  # type: ignore[arg-type]
+                        state_store=runtime_state_store,
+                        event_sink=sink,
+                        policy=LoopPolicy(
+                            model_timeout_seconds=360,
+                            model_retries=3,
+                            persist_steps=True,
+                            context_window_tokens=runtime_options.context_window_tokens,
+                        ),
+                        hook_engine=plugin_assembly["hook_engine"],
+                    )
+                    kernel_result = await kernel.run(
+                        RuntimeTurnInput(
+                            user_message=(
+                                "Sub-agent completed the delegated task and handed off this result:\n"
+                                f"{child_result.message}"
+                            ),
+                            state=state,
+                            run_id=state.run_id,
+                            turn_id=str(state.metadata.get("turn_id") or ""),
+                            metadata={
+                                **request.metadata,
+                                **dict(request.payload.get("metadata") or {}),
+                                "session_id": thread_id,
+                                "data_dir": str(paths.data_dir),
+                                "work_root": str(runtime_work_root),
+                                "model_id": runtime_options.model_id,
+                                **(
+                                    {"thinking_enabled": runtime_options.thinking_enabled}
+                                    if runtime_options.thinking_enabled is not None
+                                    else {}
+                                ),
+                                **(
+                                    {"thinking_budget": runtime_options.thinking_budget}
+                                    if runtime_options.thinking_budget is not None
+                                    else {}
+                                ),
+                            },
+                        )
+                    )
+                except BaseException as exc:
+                    if isinstance(exc, asyncio.CancelledError):
+                        raise
+                    try:
+                        await _close_mcp_registry(mcp_registry)
+                    except BaseException as close_exc:
+                        return await lifecycle.finalize_failure(close_exc)
+                    return await lifecycle.finalize_failure(exc)
+                try:
+                    await _close_mcp_registry(mcp_registry)
+                except BaseException as exc:
+                    return await lifecycle.finalize_failure(exc)
+                events = _without_approval_response_events(sink.events)
+                run_items = core_events_to_run_items(events, thread_id=thread_id)
+                try:
+                    snapshot = await _persist_run_items(
+                        run_items,
+                        db_session_factory=db_session_factory,
+                        app_event_store=app_event_store,
+                        thread_snapshot_store=thread_snapshot_store,
+                    )
+                except BaseException as exc:
+                    return await lifecycle.finalize_failure(exc)
+                if snapshot is None:
+                    snapshot = core_events_to_snapshot(events, thread_id=thread_id)
+                return OperationResult(
+                    name=request.name,
+                    status="ok" if kernel_result.decision in {"done", "wait"} else "error",
+                    payload={
+                        "thread_id": kernel_result.session_id,
+                        "run_id": kernel_result.run_id,
+                        "turn_id": str(
+                            kernel_result.state.metadata.get("turn_id")
+                            or f"{kernel_result.session_id}:turn:{kernel_result.run_id}"
+                        ),
+                        "message": kernel_result.message,
+                        "decision": kernel_result.decision,
+                        "snapshot": snapshot,
+                        "run_items": [
+                            item.to_dict()
+                            for item in [*lifecycle.decision_run_items, *run_items]
+                        ],
+                        "events": [event.to_dict() for event in events],
+                        **({"error": kernel_result.error} if kernel_result.error else {}),
+                    },
+                )
 
             original_task = str(state.metadata.get("original_user_message") or "")
             tool_name = str(pending_call.get("name") or "")
@@ -444,17 +702,17 @@ def create_core_agent_operations(
                     )
                 except BaseException as exc:
                     return await lifecycle.finalize_failure(exc)
-                approval_events: list[CoreEvent] = [approval_response_event]
+                approval_events: list[CoreEvent] = []
             else:
                 mcp_registry = None
                 try:
                     plugin_assembly = assemble_core_agent_plugins(
                         data_dir=paths.data_dir,
-                        work_root=paths.work_root,
+                        work_root=runtime_work_root,
                         plugin_roots=plugin_roots,
                     )
                     toolbox, mcp_registry = await _build_core_runtime_toolbox(
-                        work_root=paths.work_root,
+                        work_root=runtime_work_root,
                         plugin_assembly=plugin_assembly,
                         approval_policy="auto_approve",
                         llm_client=runtime_model_provider,
@@ -477,6 +735,8 @@ def create_core_agent_operations(
                     )
                     tool_result = await toolbox.execute(call)
                 except BaseException as exc:
+                    if isinstance(exc, asyncio.CancelledError):
+                        raise
                     try:
                         await _close_mcp_registry(mcp_registry)
                     except BaseException as close_exc:
@@ -493,7 +753,6 @@ def create_core_agent_operations(
                     tool_status="completed" if tool_result.status == "ok" else "failed",
                 )
                 approval_events = [
-                    approval_response_event,
                     CoreEvent(
                         name="runtime.tool.finished",
                         category="tool",
@@ -538,16 +797,29 @@ def create_core_agent_operations(
                 except BaseException as exc:
                     return await lifecycle.finalize_failure(exc)
 
-            sink = CollectingEventSink()
+            async def approval_live_callback(event: Any) -> None:
+                await _persist_core_event_live(
+                    event,
+                    thread_id=thread_id,
+                    db_session_factory=db_session_factory,
+                    app_event_store=app_event_store,
+                    thread_snapshot_store=thread_snapshot_store,
+                    app_event_hub=app_event_hub,
+                )
+
+            sink = CollectingEventSink(
+                approval_live_callback if app_event_hub is not None else None,
+                should_collect=_should_collect_core_event,
+            )
             mcp_registry = None
             try:
                 plugin_assembly = assemble_core_agent_plugins(
                     data_dir=paths.data_dir,
-                    work_root=paths.work_root,
+                    work_root=runtime_work_root,
                     plugin_roots=plugin_roots,
                 )
                 toolbox, mcp_registry = await _build_core_runtime_toolbox(
-                    work_root=paths.work_root,
+                    work_root=runtime_work_root,
                     plugin_assembly=plugin_assembly,
                     approval_policy="require",
                     llm_client=runtime_model_provider,
@@ -558,10 +830,11 @@ def create_core_agent_operations(
                     thinking_budget=runtime_options.thinking_budget,
                     sub_agent_state_store=runtime_state_store,
                     sub_agent_session_prefix=thread_id,
+                    sub_agent_event_sink=sink,
                 )
                 kernel = CoreLoopKernel(
                     kit=CoreBaseAgentKit(
-                        work_root=paths.work_root,
+                        work_root=runtime_work_root,
                         config=CoreBaseAgentConfig(
                             model_id=runtime_options.model_id,
                             instructions=spec.instructions,
@@ -584,13 +857,16 @@ def create_core_agent_operations(
                 kernel_result = await kernel.run(
                     RuntimeTurnInput(
                         user_message=continuation,
+                        user_content=continuation,
                         state=lifecycle.state,
+                        run_id=lifecycle.state.run_id,
+                        turn_id=str(lifecycle.state.metadata.get("turn_id") or ""),
                         metadata={
                             **request.metadata,
                             **dict(request.payload.get("metadata") or {}),
                             "session_id": thread_id,
                             "data_dir": str(paths.data_dir),
-                            "work_root": str(paths.work_root),
+                            "work_root": str(runtime_work_root),
                             "model_id": runtime_options.model_id,
                             **(
                                 {"thinking_enabled": runtime_options.thinking_enabled}
@@ -612,6 +888,8 @@ def create_core_agent_operations(
                     )
                 )
             except BaseException as exc:
+                if isinstance(exc, asyncio.CancelledError):
+                    raise
                 try:
                     await _close_mcp_registry(mcp_registry)
                 except BaseException as close_exc:
@@ -640,11 +918,14 @@ def create_core_agent_operations(
                 payload={
                     "thread_id": kernel_result.session_id,
                     "run_id": kernel_result.run_id,
-                    "turn_id": f"{kernel_result.session_id}:turn:{kernel_result.run_id}",
+                    "turn_id": str(kernel_result.state.metadata.get("turn_id") or f"{kernel_result.session_id}:turn:{kernel_result.run_id}"),
                     "message": kernel_result.message,
                     "decision": kernel_result.decision,
                     "snapshot": snapshot,
-                    "run_items": [item.to_dict() for item in run_items],
+                    "run_items": [
+                        item.to_dict()
+                        for item in [*lifecycle.decision_run_items, *run_items]
+                    ],
                     "events": [event.to_dict() for event in events],
                     **({"error": kernel_result.error} if kernel_result.error else {}),
                 },
@@ -708,12 +989,12 @@ def create_core_agent_operations(
         handlers = dict(command_action_handlers or {})
         handlers.setdefault(
             "compact",
-            lambda thread_id, on_delta=None: compact_runtime_history(
+            lambda thread_id, on_event=None: compact_runtime_history(
                 runtime_state_store=runtime_state_store,
                 thread_id=thread_id,
                 llm_client=model_provider if _is_llm_client(model_provider) else None,  # type: ignore[arg-type]
                 model=spec.default_model,
-                on_delta=on_delta,
+                on_event=on_event,
             ),
         )
         try:
@@ -731,6 +1012,13 @@ def create_core_agent_operations(
     catalog.register("approval.respond", approval_respond)
     catalog.register("command.catalog", command_catalog)
     catalog.register("command.execute", command_execute)
+    if db_session_factory is not None:
+        register_checkpoint_operations(
+            catalog,
+            session_factory=db_session_factory,  # type: ignore[arg-type]
+            data_dir=paths.data_dir,
+            default_work_root=paths.work_root,
+        )
     plugin_operations = build_core_plugin_operation_catalog(
         data_dir=paths.data_dir,
         work_root=paths.work_root,
@@ -749,6 +1037,23 @@ def create_core_agent_operations(
 
 def _is_llm_client(value: Any) -> bool:
     return callable(getattr(value, "complete", None)) and callable(getattr(value, "stream", None))
+
+
+def _work_root_from_request(paths: CoreAgentPaths, request: OperationRequest) -> Path:
+    payload = request.payload if isinstance(request.payload, dict) else {}
+    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    supplied = (
+        payload.get("work_root")
+        or payload.get("workRoot")
+        or metadata.get("work_root")
+        or metadata.get("workRoot")
+    )
+    return Path(supplied or paths.work_root).expanduser().resolve()
+
+
+def _work_root_from_state(paths: CoreAgentPaths, state: Any) -> Path:
+    metadata = state.metadata if isinstance(getattr(state, "metadata", None), dict) else {}
+    return Path(metadata.get("work_root") or paths.work_root).expanduser().resolve()
 
 
 def _runtime_options_from_request(spec: CoreAgentSpec, request: OperationRequest) -> CoreAgentRuntimeOptions:
@@ -858,6 +1163,7 @@ async def _persist_run_items(
     db_session_factory: Callable[[], Any] | None,
     app_event_store: SqlAlchemyAppEventStore | None,
     thread_snapshot_store: SqlAlchemyThreadSnapshotStore | None,
+    app_event_hub: Any | None = None,
 ) -> dict[str, Any] | None:
     if not run_items or db_session_factory is None or app_event_store is None or thread_snapshot_store is None:
         return None
@@ -868,11 +1174,24 @@ async def _persist_run_items(
     )
 
     async def write(db):
+        envelopes = []
         for item in run_items:
-            await persistence.append_run_item(db, item)
-        return await persistence.load(db, run_items[-1].thread_id)
+            envelopes.append(await persistence.append_run_item(db, item))
+        return await persistence.load(db, run_items[-1].thread_id), envelopes
 
-    return await persistence.write(write)
+    snapshot, envelopes = await persistence.write(write)
+    if app_event_hub is not None:
+        publish = getattr(app_event_hub, "publish", None)
+        if callable(publish):
+            for envelope in envelopes:
+                published = publish(envelope)
+                if inspect.isawaitable(published):
+                    await published
+    return snapshot
+
+
+def _should_collect_core_event(event: Any) -> bool:
+    return getattr(event, "metadata", {}).get("delivery") != "transient"
 
 
 async def _persist_core_event_live(
@@ -884,6 +1203,28 @@ async def _persist_core_event_live(
     thread_snapshot_store: SqlAlchemyThreadSnapshotStore | None,
     app_event_hub: Any | None,
 ) -> None:
+    if getattr(event, "metadata", {}).get("delivery") == "transient":
+        if app_event_hub is None:
+            return
+        run_items = core_events_to_run_items([event], thread_id=thread_id, include_transient=True)
+        for item in run_items:
+            await app_event_hub.publish(AppEventEnvelope(
+                event_id=item.event_id,
+                protocol_version="core.app_server.v1",
+                seq=0,
+                thread_id=item.thread_id,
+                method=CORE_RUN_ITEM_METHOD,
+                payload=item.to_dict(),
+                created_at=datetime.fromtimestamp(
+                    item.created_at_ms / 1000,
+                    timezone.utc,
+                ),
+                turn_id=item.turn_id or None,
+                item_id=item.item_id or None,
+                parent_item_id=item.parent_item_id or None,
+                client_message_id=None,
+            ))
+        return
     if db_session_factory is None or app_event_store is None or thread_snapshot_store is None:
         return
     run_items = core_events_to_run_items([event], thread_id=thread_id)
@@ -927,6 +1268,8 @@ async def _build_core_runtime_toolbox(
     thinking_budget: int | None = None,
     sub_agent_state_store: RuntimeStateStore | None = None,
     sub_agent_session_prefix: str = "core-sub-agent",
+    sub_agent_event_sink: EventSink | None = None,
+    checkpoint_coordinator: Any | None = None,
 ):
     from lamtools_core.mcp import MCPToolRegistry
     from lamtools_core.tool.sub_agent_runner import KernelSubAgentRunner
@@ -958,6 +1301,8 @@ async def _build_core_runtime_toolbox(
             context_window_tokens=context_window_tokens,
             state_store=sub_agent_state_store,
             session_prefix=sub_agent_session_prefix,
+            parent_event_sink=sub_agent_event_sink,
+            checkpoint_coordinator=checkpoint_coordinator,
         )
     toolbox = build_core_toolbox(
         work_root=work_root,
@@ -977,6 +1322,10 @@ async def _close_mcp_registry(registry: Any) -> None:
     result = close()
     if hasattr(result, "__await__"):
         await result
+
+
+def _without_approval_response_events(events: list[Any]) -> list[Any]:
+    return [event for event in events if event.name != "runtime.approval_response"]
 
 
 __all__ = [

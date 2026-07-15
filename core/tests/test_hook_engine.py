@@ -110,7 +110,9 @@ async def test_untrusted_hook_does_not_execute(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_http_hook_can_block_tool(tmp_path: Path):
+async def test_http_hook_can_block_tool(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:1")
+    monkeypatch.delenv("NO_PROXY", raising=False)
     captured = {}
 
     class Handler(BaseHTTPRequestHandler):

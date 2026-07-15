@@ -10,6 +10,30 @@ import type { CoreMessage } from '../src/types';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 describe('ChatThread process cards', () => {
+  it('shows a terminal failure without requiring the process panel to be expanded', () => {
+    const wrapper = mount(ChatThread, {
+      props: {
+        messages: [{
+          id: 'failed-turn',
+          role: 'assistant',
+          content: '',
+          timestamp: '',
+          metadata: { timeline: true },
+          parts: [{
+            id: 'failed-turn-status',
+            partType: 'status',
+            status: 'error',
+            content: 'Unexpected error: invalid tool arguments',
+            detail: 'Unexpected error: invalid tool arguments',
+            label: 'status',
+          }],
+        }],
+      },
+    });
+
+    expect(wrapper.get('[role="alert"]').text()).toContain('invalid tool arguments');
+  });
+
   it('renders assistant Markdown through the shared default renderer', () => {
     const wrapper = mount(ChatThread, {
       props: {
@@ -56,8 +80,77 @@ describe('ChatThread process cards', () => {
 
     expect(wrapper.findAll('.process-step')).toHaveLength(1);
     expect(wrapper.findAll('.process-step--info')).toHaveLength(0);
-    expect(wrapper.find('.tool-card-header').text()).toContain('run_command');
-    expect(wrapper.find('.tool-card-header').text()).toContain('echo ok');
+    expect(wrapper.find('.tool-card-header--command').text()).toContain('run_command');
+    expect(wrapper.find('.tool-card-header--command').text()).toContain('echo ok');
+    expect(wrapper.find('.process-tool-row').exists()).toBe(false);
+  });
+
+  it('renders non-command tools as neutral accessible rows', () => {
+    const messages: CoreMessage[] = [{
+      id: 'm-tool-row',
+      role: 'assistant',
+      content: 'Done.',
+      timestamp: '2026-06-18T00:00:00.000Z',
+      metadata: { timeline: true },
+      parts: [{
+        id: 'p-tool-row',
+        partType: 'tool_call',
+        status: 'completed',
+        content: 'Created notes.txt',
+        toolResult: 'Created notes.txt',
+        label: 'write_file',
+        toolName: 'write_file',
+        toolArgs: { path: 'notes.txt' },
+      }],
+    }];
+
+    const wrapper = mount(ChatThread, {
+      props: {
+        messages,
+        processExpandedIds: new Set(['m-tool-row']),
+      },
+    });
+
+    const row = wrapper.find('.process-tool-row');
+    expect(row.exists()).toBe(true);
+    expect(row.attributes('aria-expanded')).toBe('false');
+    expect(row.find('.tool-row-name').text()).toBe('write_file');
+    expect(row.find('.tool-row-summary').text()).toContain('notes.txt');
+    expect(row.find('.tool-row-status').text()).toBe('已完成');
+    expect(row.find('.process-step-marker').exists()).toBe(false);
+    expect(wrapper.find('.tool-type-tag').exists()).toBe(false);
+  });
+
+  it('keeps non-command tool details line-based while preserving the command terminal', () => {
+    const source = readFileSync(resolve(__dirname, '../src/components/ChatThread.vue'), 'utf8');
+    const contextRowRule = source.match(/\.context-tool-row\s*\{[^}]+\}/)?.[0] || '';
+    const rowOutputRule = source.match(/\.tool-card-body--row \.tool-output,[\s\S]*?\{[^}]+\}/)?.[0] || '';
+    const testResultRule = source.match(/\.test-result-card\s*\{[^}]+\}/)?.[0] || '';
+    const diffRule = source.match(/\.diff-block\s*\{[^}]+\}/)?.[0] || '';
+    const wrapToggleRule = source.match(/\.wrap-toggle\s*\{[^}]+\}/)?.[0] || '';
+    const commandOutputRule = source.match(/\.command-output\s*\{[^}]+\}/)?.[0] || '';
+    const processToolRowRule = source.match(/\.process-tool-row\s*\{[^}]+\}/)?.[0] || '';
+
+    expect(source).not.toContain('.context-tool-card {');
+    expect(contextRowRule).not.toContain('border:');
+    expect(contextRowRule).not.toContain('background:');
+    expect(rowOutputRule).toContain('border: 0');
+    expect(rowOutputRule).toContain('background: transparent');
+    expect(testResultRule).not.toContain('border:');
+    expect(testResultRule).not.toContain('background:');
+    expect(diffRule).not.toContain('border:');
+    expect(diffRule).not.toContain('background:');
+    expect(wrapToggleRule).toContain('border: 0');
+    expect(wrapToggleRule).toContain('background: transparent');
+    expect(source).toContain('@media (max-width: 720px)');
+    expect(source).toMatch(/prefers-reduced-motion: reduce[\s\S]*\.process-tool-row/);
+    expect(processToolRowRule).toContain('display: flex');
+    expect(processToolRowRule).toContain('justify-content: flex-start');
+    expect(processToolRowRule).toContain('flex-wrap: nowrap');
+
+    expect(commandOutputRule).toContain('border: 1px solid');
+    expect(commandOutputRule).toContain('border-radius: 10px');
+    expect(commandOutputRule).toContain('background: #050806');
   });
 
   it('renders compaction rows with localized title and token detail', () => {
@@ -75,7 +168,8 @@ describe('ChatThread process cards', () => {
         label: 'compaction',
         before_tokens: 351051,
         after_tokens: 153000,
-        target_tokens: 153600,
+        limit_tokens: 153600,
+        segments: 5,
         removed_messages: 42,
       }],
     }];
@@ -89,9 +183,9 @@ describe('ChatThread process cards', () => {
 
     const row = wrapper.find('.compaction-step');
     expect(row.text()).toContain('上下文已压缩');
-    expect(row.text()).toContain('351051 -> 153000 tokens');
-    expect(row.text()).toContain('42 条消息');
-    expect(row.text()).toContain('点击查看摘要');
+    expect(row.text()).toContain('351051 → 153000 tokens');
+    expect(row.text()).toContain('5 段');
+    expect(row.text()).not.toContain('点击查看摘要');
     expect(row.text()).not.toContain('Compacted Context');
     expect(row.text()).not.toContain('compaction点击查看');
   });
@@ -132,13 +226,12 @@ describe('ChatThread process cards', () => {
     expect(summary.exists()).toBe(true);
     expect(summary.text()).toContain('[Compacted Context]');
     expect(summary.text()).toContain('summary line 9');
-    expect(summary.text()).toContain('内容较长，已折叠显示。');
-    expect(summary.text()).not.toContain('summary line 11');
-    expect(summary.text()).not.toContain('tail should stay hidden');
+    expect(summary.text()).toContain('summary line 11');
+    expect(summary.text()).toContain('tail should stay hidden');
     expect(wrapper.find('.compaction-body').exists()).toBe(false);
   });
 
-  it('renders skipped compaction without an empty summary affordance', () => {
+  it('renders not-needed compaction without an empty summary affordance', () => {
     const messages: CoreMessage[] = [{
       id: 'm-compaction-skipped',
       role: 'assistant',
@@ -146,13 +239,13 @@ describe('ChatThread process cards', () => {
       timestamp: '2026-06-18T00:00:00.000Z',
       metadata: { timeline: true },
       parts: [{
-        id: 'p-compaction-skipped',
+        id: 'p-compaction-not-needed',
         partType: 'compaction',
         status: 'completed',
         content: '',
-        label: '暂无可压缩上下文',
-        compaction_status: 'skipped',
-        message: 'Not enough history to compact',
+        label: '无需压缩',
+        compaction_status: 'not_needed',
+        reason: 'no_gain',
         compacted_messages: 0,
       }],
     }];
@@ -165,9 +258,35 @@ describe('ChatThread process cards', () => {
     });
 
     const row = wrapper.find('.compaction-step');
-    expect(row.text()).toContain('暂无可压缩上下文');
-    expect(row.text()).toContain('Not enough history to compact');
-    expect(row.text()).not.toContain('点击查看摘要');
+    expect(row.text()).toContain('无需压缩');
+    expect(row.text()).toContain('未获得收益');
+    expect(row.text()).toContain('原上下文已保留');
+    expect(wrapper.find('.compaction-summary').exists()).toBe(false);
+  });
+
+  it('renders cancelled compaction as a failed terminal row with the original context preserved', () => {
+    const messages: CoreMessage[] = [{
+      id: 'm-compaction-cancelled',
+      role: 'assistant',
+      content: '',
+      timestamp: '2026-07-14T00:00:00.000Z',
+      parts: [{
+        id: 'p-compaction-cancelled',
+        partType: 'compaction',
+        status: 'completed',
+        content: '',
+        label: 'compaction',
+        metadata: { compaction_status: 'cancelled', reason: 'cancelled' },
+      }],
+    }];
+
+    const wrapper = mount(ChatThread, {
+      props: { messages, processExpandedIds: new Set(['m-compaction-cancelled']) },
+    });
+
+    const row = wrapper.find('.compaction-step');
+    expect(row.text()).toContain('压缩未完成');
+    expect(row.text()).toContain('原上下文已保留');
     expect(wrapper.find('.compaction-summary').exists()).toBe(false);
   });
 
@@ -179,6 +298,7 @@ describe('ChatThread process cards', () => {
     expect(compactionRule).toContain('display: block');
     expect(compactionRule).toContain('width: 100%');
     expect(summaryRule).toContain('margin: 6px 0 0 18px');
+    expect(summaryRule).toContain('border: 0');
     expect(source).not.toContain('class="process-step process-step--compaction"');
     expect(source).not.toContain('class="compaction-summary-label"');
   });
@@ -298,6 +418,80 @@ describe('ChatThread process cards', () => {
     expect(wrapper.find('.diff-block--wrap').exists()).toBe(true);
   });
 
+  it('auto-expands running compaction and streams the summary accessibly', () => {
+    const messages: CoreMessage[] = [{
+      id: 'm-compaction-running',
+      role: 'assistant',
+      content: '',
+      timestamp: '2026-06-18T00:00:00.000Z',
+      metadata: { timeline: true },
+      parts: [{
+        id: 'p-compaction-running',
+        partType: 'compaction',
+        status: 'running',
+        content: '[Compacted Context]\n1. Current Goal\n- Streaming now',
+        label: '正在压缩上下文 · 第 2/5 段',
+        compaction_status: 'running',
+        phase: 'segment',
+        segment: 2,
+        segments: 5,
+      }],
+    }];
+
+    const wrapper = mount(ChatThread, {
+      props: { messages, processExpandedIds: new Set(['m-compaction-running']) },
+    });
+
+    expect(wrapper.find('.compaction-step').text()).toContain('正在压缩上下文 · 第 2/5 段');
+    expect(wrapper.find('.compaction-summary').exists()).toBe(true);
+    expect(wrapper.find('.compaction-summary').attributes('aria-live')).toBe('polite');
+    expect(wrapper.find('.compaction-summary-text').text()).toContain('Streaming now');
+  });
+
+  it('renders edit_file old and new strings as red and green diff rows', async () => {
+    const messages: CoreMessage[] = [{
+      id: 'm-edit',
+      role: 'assistant',
+      content: '',
+      timestamp: '2026-07-13T00:00:00.000Z',
+      metadata: { timeline: true },
+      parts: [{
+        id: 'p-edit',
+        partType: 'tool_result',
+        status: 'completed',
+        label: 'edit_file',
+        toolName: 'edit_file',
+        toolArgs: {
+          path: 'notes.txt',
+          old_string: 'old first\nold second',
+          new_string: 'new first\nnew second',
+        },
+        toolResult: 'Edited notes.txt: replaced 21 chars with 21 chars.',
+        artifacts: [{
+          kind: 'file_change',
+          uri: 'notes.txt',
+          content: '--- a/notes.txt+++ b/notes.txt@@ -1,2 +1,2 @@-old first\n-old second\n+new first\n+new second',
+        }],
+      }],
+    }];
+
+    const wrapper = mount(ChatThread, {
+      props: {
+        messages,
+        processExpandedIds: new Set(['m-edit']),
+      },
+    });
+
+    await wrapper.find('.tool-card-header').trigger('click');
+
+    const deleted = wrapper.findAll('.diff-line--del').map(line => line.text()).join('\n');
+    const added = wrapper.findAll('.diff-line--add').map(line => line.text()).join('\n');
+    expect(deleted).toContain('old first');
+    expect(deleted).toContain('old second');
+    expect(added).toContain('new first');
+    expect(added).toContain('new second');
+  });
+
   it('uses file paths as the main title for file write steps', () => {
     const messages: CoreMessage[] = [{
       id: 'm-write-title',
@@ -404,6 +598,43 @@ describe('ChatThread process cards', () => {
     expect(body.find('.tool-input-preview').exists(), body.html()).toBe(true);
     expect(body.find('.tool-input-preview').text()).toContain('<');
     expect(body.text()).not.toContain('参数生成中：36 chars');
+  });
+
+  it('keeps a running write placeholder in the compact row instead of rendering a fake diff', async () => {
+    const messages: CoreMessage[] = [{
+      id: 'm-write-placeholder',
+      role: 'assistant',
+      content: '',
+      timestamp: '2026-07-13T00:00:00.000Z',
+      metadata: { timeline: true },
+      parts: [{
+        id: 'p-write-placeholder',
+        partType: 'tool_call',
+        status: 'running',
+        label: 'write_file',
+        detail: '模型正在生成工具调用。',
+        content: '模型正在生成工具调用。',
+        toolName: 'write_file',
+      }],
+    }];
+
+    const wrapper = mount(ChatThread, {
+      props: {
+        messages,
+        processExpandedIds: new Set(['m-write-placeholder']),
+      },
+    });
+
+    const row = wrapper.find('.process-step--tool .process-tool-row');
+    expect(row.exists()).toBe(true);
+    expect(row.attributes('aria-expanded')).toBeUndefined();
+    expect(row.find('.tool-expand-chevron').exists()).toBe(false);
+
+    await row.trigger('click');
+
+    expect(wrapper.find('.tool-card-body').exists()).toBe(false);
+    expect(wrapper.find('.diff-block').exists()).toBe(false);
+    expect(wrapper.find('.wrap-toggle').exists()).toBe(false);
   });
 
   it('emits a normal reply payload when a decision option is selected', async () => {
@@ -593,6 +824,63 @@ describe('ChatThread process cards', () => {
     expect(block.find('.assistant-answer').text()).toContain('子 agent 已完成复核。');
   });
 
+  it('gives a sub agent the same body and historical-process text lifecycle', () => {
+    const finalText = '任务已完成。\n\n文件保存路径：story.txt'
+    const messages: CoreMessage[] = [{
+      id: 'm-agent-text-lifecycle',
+      role: 'assistant',
+      content: '',
+      timestamp: '2026-06-18T00:00:00.000Z',
+      metadata: { timeline: true },
+      parts: [{
+        id: 'p-agent-text-lifecycle',
+        partType: 'agent_summary',
+        status: 'completed',
+        content: finalText,
+        toolResult: finalText,
+        toolName: 'sub_agent',
+        metadata: {
+          agent_name: 'story_writer',
+          subLineParts: [
+            {
+              id: 'sub-text-old',
+              partType: 'model_text',
+              status: 'completed',
+              content: '我先检查写作要求。',
+            },
+            {
+              id: 'sub-write',
+              partType: 'tool_result',
+              status: 'completed',
+              toolName: 'write_file',
+              toolResult: 'Created story.txt',
+            },
+            {
+              id: 'sub-text-final',
+              partType: 'model_text',
+              status: 'completed',
+              content: finalText,
+            },
+          ],
+        },
+      }],
+    }];
+
+    const wrapper = mount(ChatThread, {
+      props: {
+        messages,
+        processExpandedIds: new Set(['m-agent-text-lifecycle']),
+      },
+    });
+
+    const block = wrapper.find('.sub-line-block');
+    const historicalText = block.find('.process-step--model-text');
+    expect(historicalText.text()).toContain('我先检查写作要求。');
+    expect(historicalText.text()).not.toContain('任务已完成。');
+    expect(block.find('.assistant-answer').text()).toContain('任务已完成。');
+    expect(block.text().split('任务已完成。')).toHaveLength(2);
+  });
+
   it('renders agent final answer as user-facing conclusion', () => {
     const messages: CoreMessage[] = [{
       id: 'm-agent-json',
@@ -754,7 +1042,7 @@ describe('ChatThread process cards', () => {
     expect(wrapper.find('.process-current').exists()).toBe(false);
   });
 
-  it('renders live transcript model text as visible process text', () => {
+  it('renders the latest live model text in the body instead of the process area', () => {
     const messages: CoreMessage[] = [{
       id: 'm-live-model-text',
       role: 'assistant',
@@ -777,8 +1065,49 @@ describe('ChatThread process cards', () => {
       },
     });
 
-    expect(wrapper.find('.assistant-answer--process').exists()).toBe(true);
-    expect(wrapper.find('.assistant-answer--process').text()).toContain('Streaming model text is visible.');
+    expect(wrapper.find('.assistant-answer--process').exists()).toBe(false);
+    expect(wrapper.find('.assistant-answer').text()).toContain('Streaming model text is visible.');
+  });
+
+  it('moves replaced model text into process while the newest text owns the body', () => {
+    const messages: CoreMessage[] = [{
+      id: 'm-live-replaced-model-text',
+      role: 'assistant',
+      content: '',
+      timestamp: '2026-06-18T00:00:00.000Z',
+      metadata: { live: true, timeline: true, liveStatus: '正在处理' },
+      parts: [
+        {
+          id: 'p-model-text-old',
+          partType: 'model_text',
+          status: 'completed',
+          label: '正文',
+          content: '旧正文进入过程。',
+        },
+        {
+          id: 'p-tool-between-text',
+          partType: 'tool_result',
+          status: 'completed',
+          toolName: 'read_file',
+          toolResult: 'Read one file.',
+          content: '',
+        },
+        {
+          id: 'p-model-text-current',
+          partType: 'model_text',
+          status: 'running',
+          label: '正文',
+          content: '新正文留在主体。',
+        },
+      ],
+    }];
+
+    const wrapper = mount(ChatThread, { props: { messages } });
+
+    const historicalText = wrapper.find('.assistant-answer--process');
+    expect(historicalText.text()).toContain('旧正文进入过程。');
+    expect(historicalText.text()).not.toContain('新正文留在主体。');
+    expect(wrapper.find('.assistant-answer:not(.assistant-answer--process)').text()).toContain('新正文留在主体。');
   });
 
   it('shows a shallow thinking placeholder without forcing the message into live rendering', () => {
@@ -979,6 +1308,69 @@ describe('ChatThread process cards', () => {
     expect(wrapper.emitted('decision-select')?.[0]?.[0]).toMatchObject({
       partId: 'p-live-decision',
       response: 'approve',
+    });
+  });
+
+  it('keeps decision copy and whitespace outside the approval click targets', async () => {
+    const messages: CoreMessage[] = [{
+      id: 'm-safe-decision',
+      role: 'assistant',
+      content: '',
+      timestamp: '2026-06-18T00:00:00.000Z',
+      metadata: { live: true, timeline: true, liveStatus: '等待用户处理' },
+      parts: [{
+        id: 'p-safe-decision',
+        partType: 'decision',
+        status: 'pending',
+        content: 'Writer 请求写入文件',
+        label: '需要权限审批',
+        toolName: 'write_file',
+        toolArgs: {
+          reason: '确认是否允许本次写入。',
+          options: [
+            { id: 'approve', label: '允许', description: '继续执行本次操作', response: 'approve' },
+            { id: 'deny', label: '拒绝', description: '本轮停在等待点', response: 'deny' },
+          ],
+        },
+      }],
+    }];
+
+    const wrapper = mount(ChatThread, { props: { messages } });
+    const descriptions = wrapper.findAll('.decision-option-desc');
+    const groups = wrapper.findAll('.decision-option-group');
+    const source = readFileSync(resolve(__dirname, '../src/components/ChatThread.vue'), 'utf8');
+    const cardRule = source.match(/\.decision-card\s*\{[^}]+\}/)?.[0] || '';
+    const optionsRule = source.match(/\.decision-options\s*\{[^}]+\}/)?.[0] || '';
+    const optionRule = source.match(/\.decision-option\s*\{[^}]+\}/)?.[0] || '';
+    const approveRule = source.match(/\.decision-option--approve\s*\{[^}]+\}/)?.[0] || '';
+    const denyRule = source.match(/\.decision-option--deny\s*\{[^}]+\}/)?.[0] || '';
+
+    expect(descriptions).toHaveLength(2);
+    expect(groups).toHaveLength(2);
+    expect(descriptions.every(description => !description.element.closest('button'))).toBe(true);
+    expect(cardRule).toContain('background: transparent');
+    expect(cardRule).toContain('box-shadow: none');
+    expect(cardRule).toContain('#b49a60');
+    expect(source).not.toContain('.decision-card--pending {\n  border-left-color: color-mix(in srgb, var(--blue)');
+    expect(optionsRule).toContain('display: grid');
+    expect(optionsRule).toContain('grid-template-columns: minmax(0, 1fr)');
+    expect(optionRule).toContain('border: 0');
+    expect(optionRule).toContain('background: transparent');
+    expect(optionRule).toContain('justify-content: flex-start');
+    expect(approveRule).toContain('var(--green)');
+    expect(denyRule).toContain('var(--red)');
+
+    await wrapper.find('.decision-card-title').trigger('click');
+    await wrapper.find('.decision-card-detail').trigger('click');
+    await descriptions[1].trigger('click');
+    await wrapper.find('.decision-options').trigger('click');
+
+    expect(wrapper.emitted('decision-select')).toBeUndefined();
+
+    await wrapper.find('.decision-option--deny').trigger('click');
+    expect(wrapper.emitted('decision-select')?.[0]?.[0]).toMatchObject({
+      partId: 'p-safe-decision',
+      response: 'deny',
     });
   });
 

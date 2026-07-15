@@ -18,7 +18,14 @@ import httpx
 
 from lamtools_core.app.base_agent import assemble_core_agent_plugins, CoreBaseAgentConfig, CoreBaseAgentKit
 from lamtools_core.app.base_agent import core_events_to_run_items
-from lamtools_core.app.cli_live import CliLiveFormatter, OutputChunk, approval_decision_from_reply, watch_live_events
+from lamtools_core.app.cli_live import (
+    CliLiveFormatter,
+    OutputChunk,
+    approval_decision_from_reply,
+    execute_compaction_command_live,
+    format_compaction_result,
+    watch_live_events,
+)
 from lamtools_core.app.core_db import (
     list_core_sessions,
     open_core_app_db,
@@ -26,7 +33,7 @@ from lamtools_core.app.core_db import (
     show_core_session,
 )
 from lamtools_core.app.live_client import CoreAppServerClient
-from lamtools_core.event import CollectingEventSink
+from lamtools_core.event import CollectingEventSink, RunItemEvent
 from lamtools_core.kernel import CoreLoopKernel, LoopPolicy
 from lamtools_core.llm import (
     LLMRequest,
@@ -65,6 +72,8 @@ class CoreCliRunOptions:
     thinking_budget: int = 10000
     shallow_thinking_enabled: bool = False
     max_tokens: int = 4096
+    compact_trigger_tokens: int | None = None
+    compact_limit_tokens: int | None = None
     temperature: float = 0.2
     approval_policy: ApprovalPolicy = "require"
     raw: bool = False
@@ -80,6 +89,16 @@ class CoreCliRunOptions:
             object.__setattr__(self, "config_db", Path(self.config_db))
         object.__setattr__(self, "adapter_dirs", tuple(Path(item) for item in self.adapter_dirs))
         object.__setattr__(self, "plugin_roots", tuple(Path(item) for item in self.plugin_roots))
+        if self.compact_trigger_tokens is not None and self.compact_trigger_tokens <= 0:
+            raise ValueError("compact trigger tokens must be positive")
+        if self.compact_limit_tokens is not None and self.compact_limit_tokens <= 0:
+            raise ValueError("compact limit tokens must be positive")
+        if (
+            self.compact_trigger_tokens is not None
+            and self.compact_limit_tokens is not None
+            and self.compact_limit_tokens > self.compact_trigger_tokens
+        ):
+            raise ValueError("compact limit tokens cannot exceed compact trigger tokens")
 
 
 @dataclass(frozen=True)
@@ -256,6 +275,34 @@ async def run_core_cli_task(
         plugin_assembly["hook_engine"].set_mcp_caller(mcp_registry if mcp_tool_specs else None)
     from lamtools_core.tool.sub_agent_runner import KernelSubAgentRunner
 
+    core_db = await open_core_app_db(core_db_path)
+    await core_db.project_store.ensure_session(
+        work_root,
+        thread_id,
+        title=options.message,
+    )
+    run_id = uuid.uuid4().hex[:12]
+    turn_id = f"{thread_id}:turn:{run_id}"
+    await persist_core_run_items(
+        core_db,
+        [
+            RunItemEvent(
+                kind="message",
+                thread_id=thread_id,
+                event_id=f"{run_id}:user",
+                run_id=run_id,
+                turn_id=turn_id,
+                item_id=f"{turn_id}:user",
+                status="completed",
+                payload={
+                    "type": "userMessage",
+                    "status": "completed",
+                    "content": [{"type": "text", "text": options.message}],
+                },
+                source="core.cli",
+            )
+        ],
+    )
     core_instructions = "You are LamTools Core Agent, a standalone general-purpose agent runtime."
     context_window_tokens = int(getattr(llm_client, "context_window", 0) or 0) or context_window_tokens
     sub_agent_runner = KernelSubAgentRunner(
@@ -272,6 +319,9 @@ async def run_core_cli_task(
         mcp_caller=mcp_registry if mcp_tool_specs else None,
         mcp_tool_specs=mcp_tool_specs,
         context_window_tokens=context_window_tokens,
+        state_store=core_db.runtime_state_store,
+        session_prefix=thread_id,
+        parent_event_sink=sink,
     )
     toolbox = build_core_toolbox(
         work_root=work_root,
@@ -294,7 +344,6 @@ async def run_core_cli_task(
         ),
         toolbox=toolbox,
     )
-    core_db = await open_core_app_db(core_db_path)
     try:
         kernel = CoreLoopKernel(
             kit=kit,
@@ -306,12 +355,16 @@ async def run_core_cli_task(
                 model_retries=3,
                 persist_steps=True,
                 context_window_tokens=context_window_tokens,
+                compact_trigger_tokens=options.compact_trigger_tokens,
+                compact_limit_tokens=options.compact_limit_tokens,
             ),
             hook_engine=plugin_assembly["hook_engine"],
         )
         result = await kernel.run(
             RuntimeTurnInput(
                 user_message=options.message,
+                run_id=run_id,
+                turn_id=turn_id,
                 metadata={
                     "session_id": thread_id,
                     "model_id": resolved_model_id,
@@ -326,7 +379,10 @@ async def run_core_cli_task(
                 },
             )
         )
-        await persist_core_run_items(core_db, core_events_to_run_items(sink.events, thread_id=result.session_id))
+        await persist_core_run_items(
+            core_db,
+            core_events_to_run_items(sink.events, thread_id=result.session_id),
+        )
     finally:
         await mcp_registry.close()
         await core_db.close()
@@ -524,6 +580,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--shallow-thinking", action="store_true", help="Require a prompt-based shallow thinking block")
     run.add_argument("--auto-approve", action="store_true", help="Run approval-gated Core tools without prompting")
     run.add_argument("--max-tokens", type=int, default=4096)
+    run.add_argument("--compact-trigger-tokens", type=int, default=None, help="Session-only automatic compaction trigger")
+    run.add_argument("--compact-limit-tokens", type=int, default=None, help="Session-only post-compaction upper limit")
     run.add_argument("--temperature", type=float, default=0.2)
     run.add_argument("--raw", action="store_true")
     run.add_argument("--verbose", action="store_true")
@@ -552,7 +610,7 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--thinking", choices=("enabled", "disabled"), default="enabled")
     start.add_argument("--thinking-budget", type=int, default=10000)
     start.add_argument("--shallow", action="store_true")
-    start.add_argument("--approval-policy", choices=("require", "auto_approve"), default="require")
+    start.add_argument("--approval-policy", choices=("require", "auto_approve"), default=None)
     start.add_argument("--client-message-id", default="")
     start.add_argument("--watch", action="store_true")
     start.add_argument("--raw", action="store_true")
@@ -658,6 +716,23 @@ def build_parser() -> argparse.ArgumentParser:
     session_show.add_argument("--core-db", default="", help="Core-owned SQLite runtime database")
     session_show.add_argument("--raw", action="store_true")
     session_show.set_defaults(func=cmd_session_show)
+    session_checkpoints = session_sub.add_parser("checkpoints", help="List session rollback checkpoints")
+    session_checkpoints.add_argument("thread_id")
+    _add_live_connection_arguments(session_checkpoints)
+    session_checkpoints.add_argument("--raw", action="store_true")
+    session_checkpoints.set_defaults(func=cmd_session_checkpoints)
+    session_rollback = session_sub.add_parser("rollback", help="Restore conversation and files to a checkpoint")
+    session_rollback.add_argument("thread_id")
+    session_rollback.add_argument("checkpoint_id")
+    _add_live_connection_arguments(session_rollback)
+    session_rollback.add_argument("--raw", action="store_true")
+    session_rollback.set_defaults(func=cmd_session_rollback)
+    session_rollback_undo = session_sub.add_parser("rollback-undo", help="Undo a committed session rollback")
+    session_rollback_undo.add_argument("thread_id")
+    session_rollback_undo.add_argument("operation_id")
+    _add_live_connection_arguments(session_rollback_undo)
+    session_rollback_undo.add_argument("--raw", action="store_true")
+    session_rollback_undo.set_defaults(func=cmd_session_rollback_undo)
 
     project = sub.add_parser("project", help="Manage Core project workspaces")
     project_sub = project.add_subparsers(dest="project_command", required=True)
@@ -856,6 +931,25 @@ async def cmd_command_catalog(args: argparse.Namespace) -> int:
 
 
 async def cmd_command_execute(args: argparse.Namespace) -> int:
+    if args.name == "compact":
+        formatter = CliLiveFormatter()
+
+        def output(chunk: OutputChunk) -> None:
+            print(str(chunk), end=chunk.end, flush=chunk.flush)
+
+        result, saw_terminal = await execute_compaction_command_live(
+            client_factory=lambda: CoreAppServerClient(args.base_url, path=args.ws_path, token=args.token),
+            thread_id=args.thread_id,
+            work_root=args.work_root,
+            formatter=formatter,
+            output=output,
+            raw=bool(args.raw),
+        )
+        if args.raw:
+            print(json.dumps(result, ensure_ascii=False), flush=True)
+        elif not saw_terminal:
+            print(format_compaction_result(result), flush=True)
+        return 0
     result = await _invoke_live(
         args,
         lambda client: client.request(
@@ -903,6 +997,8 @@ async def cmd_run(args: argparse.Namespace) -> int:
             thinking_budget=args.thinking_budget,
             shallow_thinking_enabled=bool(args.shallow_thinking),
             max_tokens=args.max_tokens,
+            compact_trigger_tokens=getattr(args, "compact_trigger_tokens", None),
+            compact_limit_tokens=getattr(args, "compact_limit_tokens", None),
             temperature=args.temperature,
             approval_policy="auto_approve" if bool(args.auto_approve) else "require",
             raw=bool(args.raw),
@@ -973,6 +1069,47 @@ async def cmd_session_list(args: argparse.Namespace) -> int:
                 f"seq={session.get('snapshot_seq') or 0} updated={session.get('updated_at') or '-'}",
                 flush=True,
             )
+    return 0
+
+
+async def cmd_session_checkpoints(args: argparse.Namespace) -> int:
+    result = await _invoke_live(
+        args,
+        lambda client: client.request(
+            "session.checkpoints.list",
+            {"session_id": args.thread_id},
+        ),
+    )
+    message = "\n".join(
+        f"{item.get('id', '-')} {item.get('actor_kind', '-')} turn={item.get('turn_id', '-')}"
+        for item in result.get("checkpoints", [])
+        if isinstance(item, dict)
+    )
+    _print_live_result(args, result, message)
+    return 0
+
+
+async def cmd_session_rollback(args: argparse.Namespace) -> int:
+    result = await _invoke_live(
+        args,
+        lambda client: client.request(
+            "session.rollback",
+            {"session_id": args.thread_id, "checkpoint_id": args.checkpoint_id},
+        ),
+    )
+    _print_live_result(args, result, f"rollback {result.get('status', '-')} ({result.get('operation_id', '-')})")
+    return 0
+
+
+async def cmd_session_rollback_undo(args: argparse.Namespace) -> int:
+    result = await _invoke_live(
+        args,
+        lambda client: client.request(
+            "session.rollback.undo",
+            {"session_id": args.thread_id, "operation_id": args.operation_id},
+        ),
+    )
+    _print_live_result(args, result, f"rollback undo {result.get('status', '-')}")
     return 0
 
 

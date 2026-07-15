@@ -208,6 +208,7 @@ class ApprovalResolutionLifecycle:
             status=status,
             payload={
                 "thread_id": self.thread_id,
+                "run_id": self.state.run_id,
                 "decision": decision,
                 "message": message,
                 "run_items": [item.to_dict() for item in [*self.decision_run_items, *terminal_run_items]],

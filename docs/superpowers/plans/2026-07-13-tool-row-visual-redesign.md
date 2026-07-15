@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace every top-level tool card in the shared chat timeline with one restrained, accessible row system while preserving file diff, terminal, test, and generic result detail structures.
+**Goal:** Replace every non-`run_command` tool card in the shared chat timeline with one restrained, accessible row system while preserving file diff, test, and generic result detail structures. Keep `run_command` unchanged.
 
-**Architecture:** Keep `ChatThread.vue` as the single shared rendering owner for Core and Writer. Reuse its existing tool data, expansion state, diff renderer, command renderer, test renderer, and projection helpers; add only a small status-label helper and shared row semantics, then replace the current category-colored card CSS with neutral row tokens. No backend, protocol, projection, or member-specific implementation changes are required.
+**Architecture:** Keep `ChatThread.vue` as the single shared rendering owner for Core and Writer. Reuse its existing tool data, expansion state, diff renderer, test renderer, generic output renderer, and projection helpers; add only a small status-label helper and shared row semantics, then replace non-command category cards with neutral row tokens. The existing command renderer remains untouched. No backend, protocol, projection, or member-specific implementation changes are required.
 
 **Tech Stack:** Vue 3.5, TypeScript 6, scoped CSS, Vitest 4, Vue Test Utils, Vite 8.
 
@@ -12,11 +12,12 @@
 
 - Default tool presentation has `min-height: 32px` with no decorative card background, rounded outer frame, or shadow.
 - Tool categories use neutral color; semantic color is reserved for running, success, failure, and pending states.
-- File diff, command output, test result, and generic result structures remain available inside the expanded row.
+- File diff, test result, and generic result structures remain available inside the expanded row.
 - Real-time, historical, Core, and Writer views use the same shared implementation.
 - Preserve existing projection, execution, expansion, copy, and wrap behavior; do not add parallel state.
 - Keyboard focus must remain visible, state must not rely on color alone, and reduced-motion mode must disable pulsing and expansion motion.
 - Do not modify the already-confirmed approval behavior or its click-target safety.
+- Do not modify `run_command` markup, spacing, terminal output, or visual styling.
 
 ---
 
@@ -35,7 +36,7 @@
 
 **Interfaces:**
 - Consumes: existing `ChatThread` prop `messages` and internal `togglePartExpand(part, live)`, `toolExpandedIds`, and `toolCollapsedIds` state.
-- Produces: DOM contract `.tool-row`, `.tool-row-name`, `.tool-row-summary`, `.tool-row-status`, and `aria-expanded` for every expandable tool.
+- Produces: DOM contract `.process-tool-row`, `.tool-row-name`, `.tool-row-summary`, `.tool-row-status`, and `aria-expanded` for every expandable non-command tool.
 
 - [ ] **Step 1: Add a failing real-time tool-row semantics test**
 
@@ -53,19 +54,19 @@ it('renders live tools as neutral accessible rows with textual status', async ()
       id: 'p-live-tool-row',
       partType: 'tool_call',
       status: 'running',
-      toolName: 'run_command',
-      toolArgs: { command: 'npm test' },
-      content: 'running npm test',
+      toolName: 'write_file',
+      toolArgs: { path: 'notes.txt' },
+      content: 'writing notes.txt',
     }],
   }];
 
   const wrapper = mount(ChatThread, { props: { messages } });
-  const row = wrapper.find('.tool-row');
+  const row = wrapper.find('.process-tool-row');
 
   expect(row.exists()).toBe(true);
   expect(row.attributes('aria-expanded')).toBe('false');
-  expect(row.find('.tool-row-name').text()).toBe('run_command');
-  expect(row.find('.tool-row-summary').text()).toContain('npm test');
+  expect(row.find('.tool-row-name').text()).toBe('write_file');
+  expect(row.find('.tool-row-summary').text()).toContain('notes.txt');
   expect(row.find('.tool-row-status').text()).toBe('运行中');
   expect(row.classes()).not.toContain('tool-card');
 });
@@ -83,26 +84,28 @@ expect(wrapper.findAll('.tool-row-status').map(node => node.text())).toEqual([
 ]);
 ```
 
-Also assert all three rows share `.tool-row` and none has a category-specific visual tag element:
+Also assert all three rows share `.process-tool-row` and none has a category-specific visual tag or status-dot element:
 
 ```ts
-expect(wrapper.findAll('.tool-row')).toHaveLength(3);
+expect(wrapper.findAll('.process-tool-row')).toHaveLength(3);
 expect(wrapper.findAll('.tool-type-tag')).toHaveLength(0);
+expect(wrapper.findAll('.process-tool-row .process-step-marker')).toHaveLength(0);
 ```
 
 - [ ] **Step 3: Add failing expansion preservation assertions**
 
-Use the existing file, command, and test fixtures and assert their specialized bodies still appear after clicking a row:
+Use the existing file and test fixtures and assert their specialized bodies still appear after clicking a row. Separately assert `run_command` retains `.tool-card-header--command` and `.command-output` without `.process-tool-row`:
 
 ```ts
 await fileRow.trigger('click');
 expect(wrapper.find('.diff-block').exists()).toBe(true);
 
-await commandRow.trigger('click');
-expect(wrapper.find('.command-output').exists()).toBe(true);
-
 await testRow.trigger('click');
 expect(wrapper.find('.test-result-card').exists()).toBe(true);
+
+expect(wrapper.find('.tool-card-header--command').exists()).toBe(true);
+expect(wrapper.find('.command-output').exists()).toBe(true);
+expect(wrapper.find('.tool-card-header--command.process-tool-row').exists()).toBe(false);
 ```
 
 - [ ] **Step 4: Run the focused tests and confirm the new contract fails**
@@ -114,7 +117,7 @@ Set-Location E:\LamTools\core\ui
 npm run test:contract -- --run tests/chat-thread-process.test.ts
 ```
 
-Expected: failure because `.tool-row`, textual status, and `aria-expanded` do not exist yet.
+Expected: failure because `.process-tool-row`, textual status, and `aria-expanded` do not exist yet.
 
 - [ ] **Step 5: Commit the red tests**
 
@@ -131,7 +134,7 @@ git commit -m "test(ui): define unified tool row contract"
 
 **Interfaces:**
 - Consumes: `MessagePart.status`, `toolTypeLabel(part)`, `readableProcessTitle(part)`, `toolArgsPreview(part.toolArgs)`, `hasToolDisplay(part)`, and `shouldShowToolBody(part, live)`.
-- Produces: `toolStatusLabel(part: MessagePart): string` and the shared `.tool-row*` DOM contract.
+- Produces: `toolStatusLabel(part: MessagePart): string` and the shared `.process-tool-row` DOM contract.
 
 - [ ] **Step 1: Add the minimal status-label helper**
 
@@ -225,7 +228,7 @@ git commit -m "feat(ui): unify tool process rows"
 - Test: `core/ui/tests/chat-thread-process.test.ts`
 
 **Interfaces:**
-- Consumes: `.tool-row--running`, `.tool-row--completed`, `.tool-row--error`, and `.tool-row--pending` from Task 2.
+- Consumes: textual state labels from Task 2; non-command rows do not use colored status dots.
 - Produces: neutral row visuals and semantic-state tokens used by every live/history branch.
 
 - [ ] **Step 1: Add source-level anti-card assertions**
@@ -238,7 +241,7 @@ expect(source).not.toContain('.tool-color--read .tool-type-tag');
 expect(source).not.toContain('.tool-color--write .tool-type-tag');
 expect(source).not.toContain('.context-tool-card {');
 expect(source).not.toContain('text-shadow: 0 0 8px');
-expect(source).toContain('.tool-row:focus-visible');
+expect(source).toContain('.process-tool-row:focus-visible');
 expect(source).toContain('@media (max-width: 720px)');
 ```
 
@@ -255,13 +258,14 @@ Use a single restrained row system:
   background: transparent;
 }
 
-.tool-row {
+.process-tool-row {
   width: 100%;
   min-width: 0;
   min-height: 32px;
-  display: grid;
-  grid-template-columns: 10px minmax(92px, max-content) minmax(0, 1fr) max-content 12px;
+  display: flex;
   align-items: center;
+  justify-content: flex-start;
+  flex-wrap: nowrap;
   gap: 8px;
   padding: 4px 6px;
   border: 0;
@@ -272,11 +276,11 @@ Use a single restrained row system:
   transition: background-color 160ms ease-out, color 160ms ease-out;
 }
 
-.tool-row:hover {
+.process-tool-row:hover {
   background: color-mix(in srgb, var(--theme-main-text, #fff) 4%, transparent);
 }
 
-.tool-row:focus-visible {
+.process-tool-row:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--blue) 72%, transparent);
   outline-offset: 1px;
 }
@@ -308,10 +312,6 @@ Use a single restrained row system:
   white-space: nowrap;
 }
 
-.tool-row--running .process-step-marker { background: var(--blue); }
-.tool-row--completed .process-step-marker { background: var(--green); }
-.tool-row--error .process-step-marker { background: var(--red); }
-.tool-row--pending .process-step-marker { background: var(--muted); }
 ```
 
 Delete the category-color tag rules and retain `toolColorClass()` only if another non-visual behavior still consumes it. If it becomes unused, remove the helper and its tests instead of leaving dead code.
@@ -340,36 +340,9 @@ For generic output:
 - [ ] **Step 4: Preserve specialized structures while quieting decoration**
 
 - File diff: keep `.diff-header`, line numbers, add/delete colors, wrap/scroll toggle; remove category-tinted outer background.
-- Command output: keep header, command line, stdout/stderr body; replace gradient chrome, traffic-light emphasis, radial glow, and text shadows with neutral surfaces.
+- Command output: do not modify its header, command line, terminal chrome, stdout/stderr body, spacing, colors, or interaction.
 - Test result: keep passed/failed copy and metadata; remove card-like outer shadow and saturated inactive background.
 - Context tools: use `.context-tool-row` with a subtle bottom divider and no outer frame.
-
-The neutral command structure should follow:
-
-```css
-.command-output {
-  border: 0;
-  border-radius: 6px;
-  background: color-mix(in srgb, #000 58%, var(--bg));
-  box-shadow: none;
-}
-
-.command-terminal-chrome {
-  min-height: 28px;
-  border-bottom: 1px solid color-mix(in srgb, #fff 8%, transparent);
-  background: color-mix(in srgb, #fff 4%, transparent);
-}
-
-.command-terminal-body {
-  background: transparent;
-}
-
-.command-output-command,
-.command-output-result {
-  color: color-mix(in srgb, #fff 78%, transparent);
-  text-shadow: none;
-}
-```
 
 - [ ] **Step 5: Run focused tests and inspect the generated CSS**
 
@@ -399,7 +372,7 @@ git commit -m "style(ui): distill tool process presentation"
 - Verify: `members/writer/frontend/tests/runtime/runtimeResourceWidget.test.ts`
 
 **Interfaces:**
-- Consumes: Task 3 `.tool-row*` and specialized detail styles.
+- Consumes: Task 3 `.process-tool-row` and specialized detail styles.
 - Produces: responsive row collapse and reduced-motion safety shared by both products.
 
 - [ ] **Step 1: Add responsive CSS assertions**
@@ -408,26 +381,16 @@ Assert the source contains a narrow layout that hides no status and truncates on
 
 ```ts
 expect(source).toMatch(/@media \(max-width: 720px\)[\s\S]*\.tool-row-summary/);
-expect(source).toMatch(/prefers-reduced-motion: reduce[\s\S]*\.tool-row/);
+expect(source).toMatch(/prefers-reduced-motion: reduce[\s\S]*\.process-tool-row/);
 ```
 
 - [ ] **Step 2: Implement narrow-screen row behavior**
 
 ```css
 @media (max-width: 720px) {
-  .tool-row {
-    grid-template-columns: 10px minmax(72px, max-content) minmax(0, 1fr) 12px;
-  }
-
-  .tool-row-status {
-    grid-column: 3;
-    grid-row: 2;
-    justify-self: start;
-  }
-
-  .tool-expand-chevron {
-    grid-column: 4;
-    grid-row: 1 / span 2;
+  .process-tool-row {
+    gap: 6px;
+    padding-inline: 2px;
   }
 
   .tool-card-body {
@@ -440,7 +403,7 @@ expect(source).toMatch(/prefers-reduced-motion: reduce[\s\S]*\.tool-row/);
 
 ```css
 @media (prefers-reduced-motion: reduce) {
-  .tool-row,
+  .process-tool-row,
   .tool-card-body,
   .process-step-marker {
     animation: none;

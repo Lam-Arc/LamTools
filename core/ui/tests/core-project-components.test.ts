@@ -73,6 +73,19 @@ describe('CoreProjectCreate', () => {
     await loadingWrapper.get('[data-project-backdrop]').trigger('mousedown')
     expect(loadingWrapper.emitted('cancel')).toBeUndefined()
   })
+
+  it('can cancel the project dialog while the native directory picker is pending', async () => {
+    const wrapper = mount(CoreProjectCreate, {
+      props: { selectWorkRoot: () => new Promise(() => undefined) },
+      global: { stubs: { Teleport: true } },
+    })
+
+    await wrapper.get('[data-project-browse]').trigger('click')
+    expect(wrapper.get('[data-project-browse]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-project-cancel]').trigger('click')
+
+    expect(wrapper.emitted('cancel')).toEqual([[]])
+  })
 })
 
 describe('CoreAgentsEditor', () => {

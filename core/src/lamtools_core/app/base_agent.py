@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -23,6 +24,61 @@ from lamtools_core.snapshot import reduce_run_item_events
 from lamtools_core.tool import ToolCall, ToolResult
 from lamtools_core.tool.default_toolbox import ApprovalPolicy, CoreToolbox, build_core_toolbox
 from lamtools_core.tool.workspace import line_count
+
+
+_MODEL_TOOL_EVIDENCE_LIMIT = 12_000
+_MODEL_EVIDENCE_KEYS = (
+    "cwd",
+    "exit_code",
+    "timed_out",
+    "error_type",
+    "stdout_log",
+    "stderr_log",
+    "log_path",
+)
+_MODEL_SECRET_PATTERNS = (
+    re.compile(r"(?i)(authorization\s*:\s*bearer\s+)[^\s]+"),
+    re.compile(r"(?i)((?:api[_-]?key|access[_-]?token|password|secret)\s*[:=]\s*)[^\s]+"),
+)
+
+
+def _redact_model_tool_evidence(value: str) -> str:
+    redacted = value
+    for pattern in _MODEL_SECRET_PATTERNS:
+        redacted = pattern.sub(r"\1[REDACTED]", redacted)
+    return redacted
+
+
+def _format_model_tool_evidence(result: ToolResult) -> str:
+    metadata = result.metadata if isinstance(result.metadata, dict) else {}
+    lines = [f"status: {result.status}"]
+    if result.content:
+        lines.extend(("content:", result.content))
+    if result.error:
+        lines.append(f"error: {result.error}")
+    for key in _MODEL_EVIDENCE_KEYS:
+        value = metadata.get(key)
+        if value not in (None, ""):
+            lines.append(f"{key}: {value}")
+
+    artifact_metadata = next(
+        (
+            artifact.metadata
+            for artifact in result.artifacts
+            if artifact.kind == "command_output" and isinstance(artifact.metadata, dict)
+        ),
+        {},
+    )
+    content = str(result.content or "")
+    if "[stdout]" not in content and artifact_metadata.get("stdout"):
+        lines.append(f"stdout: {artifact_metadata['stdout']}")
+    if "[stderr]" not in content and artifact_metadata.get("stderr"):
+        lines.append(f"stderr: {artifact_metadata['stderr']}")
+
+    rendered = _redact_model_tool_evidence("\n".join(lines))
+    if len(rendered) > _MODEL_TOOL_EVIDENCE_LIMIT:
+        rendered = rendered[:_MODEL_TOOL_EVIDENCE_LIMIT] + "\n[tool evidence truncated]"
+    return rendered
 
 
 @dataclass(frozen=True)
@@ -81,6 +137,7 @@ class CoreBaseAgentKit:
             self.config.instructions,
             "Use the available tools when they help complete the user's request.",
             "If the user explicitly asks to use a sub-agent, call sub_agent before producing the final result.",
+            "When the user assigns a deliverable to a sub-agent, delegate the complete requested deliverable, including any requested file creation or tool action. The Parent Agent should verify the result instead of recreating that deliverable itself.",
             "When asked to create or modify files, use write_file or edit_file.",
             "When asked for one document or one file, create exactly one final file unless the user explicitly asks for multiple files.",
             "After a requested file is successfully written, stop tool use and answer with the saved path and a concise summary.",
@@ -142,6 +199,11 @@ class CoreBaseAgentKit:
         return KernelTurn(reply=response.content or "", tool_calls=calls)
 
     async def execute_tool(self, state: RuntimeState, call: ToolCall) -> ToolResult:
+        call.metadata["_runtime_session_id"] = state.session_id
+        call.metadata["_runtime_run_id"] = state.run_id
+        if call.name == "sub_agent":
+            call.metadata["parent_run_id"] = state.run_id
+            call.metadata["parent_turn_id"] = str(state.metadata.get("turn_id") or state.run_id)
         result = await self.toolbox.execute(call)
         if result.status == "ok" and call.name in {"write_file", "edit_file"}:
             self._record_written_file(state, result)
@@ -153,7 +215,12 @@ class CoreBaseAgentKit:
         call: ToolCall,
         result: ToolResult,
     ) -> ChatMessage:
-        return ChatMessage(role="tool", name=call.name, tool_call_id=call.id, content=result.content or result.error)
+        return ChatMessage(
+            role="tool",
+            name=call.name,
+            tool_call_id=call.id,
+            content=_format_model_tool_evidence(result),
+        )
 
     async def verify(
         self,
@@ -171,6 +238,46 @@ class CoreBaseAgentKit:
         verification: VerificationResult,
         step: KernelStep,
     ):
+        delegated_wait = next(
+            (
+                result.metadata
+                for tool_step in step.tool_steps
+                if tool_step.result is not None
+                for result in [tool_step.result]
+                if (
+                    result.name == "sub_agent"
+                    and isinstance(result.metadata, dict)
+                    and result.metadata.get("decision") == "wait"
+                )
+            ),
+            None,
+        )
+        if isinstance(delegated_wait, dict):
+            pending = delegated_wait.get("pending_approval")
+            waiting = delegated_wait.get("pending_waiting_request")
+            delegated = delegated_wait.get("delegated_session")
+            if (
+                delegated_wait.get("wait_reason") == "no_progress"
+                and isinstance(waiting, dict)
+                and isinstance(delegated, dict)
+            ):
+                state.metadata["pending_waiting_request"] = dict(waiting)
+                state.metadata["no_progress"] = {
+                    "message": str(waiting.get("message") or "Sub-agent paused after making no progress."),
+                    "recoverable": True,
+                    "delegated_session": dict(delegated),
+                }
+                step.metadata["no_progress"] = dict(state.metadata["no_progress"])
+                return "wait"
+            if isinstance(pending, dict) and isinstance(delegated, dict):
+                state.metadata["pending_approval"] = {
+                    **pending,
+                    "delegated_session": dict(delegated),
+                }
+                if isinstance(waiting, dict):
+                    state.metadata["pending_waiting_request"] = dict(waiting)
+                step.metadata["pending_approval"] = dict(state.metadata["pending_approval"])
+                return "wait"
         if turn.tool_calls:
             return "continue"
         if turn.reply.strip():
@@ -208,10 +315,23 @@ class CoreBaseAgentKit:
         state.metadata["document_line_count"] = int(record.get("line_count") or 0)
 
 
-def core_events_to_run_items(events: list[CoreEvent], *, thread_id: str) -> list[RunItemEvent]:
+def core_events_to_run_items(
+    events: list[CoreEvent],
+    *,
+    thread_id: str,
+    include_transient: bool = False,
+) -> list[RunItemEvent]:
     run_items: list[RunItemEvent] = []
     for index, event in enumerate(events, 1):
+        if event.metadata.get("delivery") == "transient" and not include_transient:
+            continue
         payload = event.payload if isinstance(event.payload, dict) else {}
+        event_thread_id = event.session_id or thread_id
+        event_run_id = event.run_id or "unknown"
+        canonical_prefix = f"{event_thread_id}:turn:"
+        event_turn_id = event.turn_id or (
+            event_run_id if event_run_id.startswith(canonical_prefix) else f"{canonical_prefix}{event_run_id}"
+        )
         text_preview = str(
             payload.get("content")
             or payload.get("summary")
@@ -221,7 +341,7 @@ def core_events_to_run_items(events: list[CoreEvent], *, thread_id: str) -> list
         )
         fact = RuntimeProjectionInput(
             id=event.event_id,
-            thread_id=event.session_id or thread_id,
+            thread_id=event_thread_id,
             group=runtime_group_from_event_name(event.name),
             source=event.source or "core-agent",
             phase=event.name,
@@ -233,7 +353,7 @@ def core_events_to_run_items(events: list[CoreEvent], *, thread_id: str) -> list
             metadata={
                 "payload": payload,
                 "run_id": event.run_id,
-                "turn_id": event.turn_id or f"{event.session_id or thread_id}:turn:{event.run_id or 'unknown'}",
+                "turn_id": event_turn_id,
             },
             created_at=datetime.fromtimestamp(event.timestamp_ms / 1000, timezone.utc),
         )

@@ -103,7 +103,7 @@ function submit() {
 }
 
 function cancel() {
-  if (!props.loading && !selectingRoot.value) emit('cancel')
+  if (!props.loading) emit('cancel')
 }
 
 async function browse() {

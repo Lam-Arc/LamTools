@@ -213,3 +213,32 @@ class TestRuntimeTaskRegistry:
 
         assert reset is event
         assert reset.is_set() is False
+
+    def test_accept_run_clears_stale_cancel_signal(self):
+        registry = RuntimeTaskRegistry()
+        event = registry.get_cancel_event("thread-1")
+        registry.cancel("thread-1")
+
+        assert registry.accept_run("thread-1", "turn-2") is True
+        assert event.is_set() is False
+
+    @pytest.mark.asyncio
+    async def test_shutdown_cancels_and_joins_tracked_tasks(self):
+        registry = RuntimeTaskRegistry()
+        cancelled = asyncio.Event()
+
+        async def run_until_cancelled():
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+
+        task = asyncio.create_task(run_until_cancelled())
+        assert registry.register("thread-1", task, run_id="turn-1") is True
+        await asyncio.sleep(0)
+
+        await registry.shutdown()
+
+        assert task.done()
+        assert cancelled.is_set()
+        assert registry.task("thread-1") is None

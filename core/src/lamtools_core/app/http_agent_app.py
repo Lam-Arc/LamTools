@@ -22,6 +22,7 @@ from lamtools_core.http import create_core_router
 from lamtools_core.llm import LLMRequest
 from lamtools_core.config import build_shared_config_operation_catalog
 from lamtools_core.attachment import CoreAttachmentStore
+from lamtools_core.runtime import RuntimeTaskRegistry
 
 from .core_db import open_core_app_db
 from .core_session_store import CoreDbSessionStore
@@ -141,6 +142,7 @@ def create_core_agent_http_app(
     operations = OperationCatalog()
     app_state: dict[str, Any] = {}
     live_hub = CoreAppEventHub()
+    runtime_task_registry = RuntimeTaskRegistry()
     session_store = CoreDbSessionStore(lambda: app_state["core_db"])
 
     async def execute_core_operation(request: OperationRequest) -> OperationResult:
@@ -165,6 +167,7 @@ def create_core_agent_http_app(
                     "model_record_id": config.model_record_id,
                     "thinking_enabled": thinking_enabled,
                     "thinking_budget": thinking_budget or config.thinking_budget,
+                    "context_window": config.context_window,
                 },
             ),
             paths=CoreAgentPaths(data_dir=resolved_data_dir, work_root=resolved_work_root),
@@ -175,6 +178,8 @@ def create_core_agent_http_app(
             thread_snapshot_store=core_db_handle.snapshot_store,
             app_event_hub=live_hub,
             runtime_state_store=core_db_handle.runtime_state_store,
+            runtime_task_registry=runtime_task_registry,
+            enable_turn_checkpoints=True,
         )
         _register_core_project_operations(agent_operations, project_store=core_db_handle.project_store)
         _register_core_config_operations(agent_operations, config_db_path=config_db_path)
@@ -188,6 +193,7 @@ def create_core_agent_http_app(
         app_state["operations"] = agent_operations
 
     async def shutdown_core_agent() -> None:
+        await runtime_task_registry.shutdown()
         config_engine = app_state.get("config_engine")
         if config_engine is not None:
             await config_engine.dispose()
@@ -206,6 +212,7 @@ def create_core_agent_http_app(
                 session_factory=core_db_handle.session_factory,
                 persistence=core_db_handle.persistence,
                 hub=live_hub,
+                runtime_task_registry=runtime_task_registry,
             ),
         )
 
@@ -269,6 +276,7 @@ def create_core_agent_http_app(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     app.state.core_agent_app_state = app_state
+    app.state.core_agent_runtime_task_registry = runtime_task_registry
     app.state.core_agent_work_root = resolved_work_root
     app.state.core_agent_data_dir = resolved_data_dir
     return app

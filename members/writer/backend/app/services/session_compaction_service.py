@@ -16,9 +16,8 @@ from lamtools_core.llm import ChatMessage, LLMClient
 from lamtools_core.llm.policy import RetryPolicy
 from lamtools_core.llm.retry import ModelRetrySink
 
-MAX_RETAIN_MESSAGE_COUNT = 6
 MAX_SUMMARY_CHARS = 20000
-MANUAL_COMPACTION_TARGET_TOKENS = 6000
+MANUAL_COMPACTION_LIMIT_TOKENS = 6000
 RUNTIME_HISTORY_VISIBLE_MESSAGE_LIMIT = 21
 
 
@@ -72,7 +71,7 @@ async def execute_session_context_compaction(
     llm_client: LLMClient | None,
     model: str = "",
     timeout: float | None = None,
-    on_summary_delta: Any | None = None,
+    on_summary_event: Any | None = None,
     model_retries: int = 1,
     model_timeout_seconds: float | None = None,
     retry_policy: RetryPolicy | None = None,
@@ -85,10 +84,9 @@ async def execute_session_context_compaction(
             llm_client=llm_client,
             model=model,
             timeout=timeout,
-            target_tokens=MANUAL_COMPACTION_TARGET_TOKENS,
-            retain_tail_count=MAX_RETAIN_MESSAGE_COUNT,
+            limit_tokens=MANUAL_COMPACTION_LIMIT_TOKENS,
             existing_summary=plan.existing_summary,
-            on_delta=on_summary_delta,
+            on_event=on_summary_event,
             model_retries=model_retries,
             model_timeout_seconds=model_timeout_seconds,
             retry_policy=retry_policy or RetryPolicy(),
@@ -96,11 +94,25 @@ async def execute_session_context_compaction(
         )
     )
     if result.status != "compacted":
-        raise ValueError("Context compaction did not produce a summary")
+        return result, {
+            **result.display_payload,
+            "session_id": plan.session_id,
+            "compacted_message_ids": list(plan.existing_compacted_ids),
+            "retained_message_ids": list(plan.message_ids),
+            "summary": plan.existing_summary,
+        }
     if len(result.summary) > MAX_SUMMARY_CHARS:
         raise ValueError("Not enough summary space to compact history")
-    compacted_ids = list(plan.message_ids[: result.compacted_count])
-    retained_ids = list(plan.message_ids[-result.retained_count :]) if result.retained_count else []
+    compacted_ids = [
+        str(message.metadata.get("message_id") or "")
+        for message in result.compacted_messages
+        if str(message.metadata.get("message_id") or "")
+    ]
+    retained_ids = [
+        str(message.metadata.get("message_id") or "")
+        for message in result.retained_messages
+        if str(message.metadata.get("message_id") or "")
+    ]
     payload = {
         "status": "compacted",
         "session_id": plan.session_id,
@@ -110,7 +122,8 @@ async def execute_session_context_compaction(
         "retained_message_ids": retained_ids,
         "before_tokens": result.before_tokens,
         "after_tokens": result.after_tokens,
-        "target_tokens": result.target_tokens,
+        "limit_tokens": result.limit_tokens,
+        "segments": result.segment_count,
         "trigger": plan.trigger,
         "summary": result.summary,
     }
@@ -123,6 +136,8 @@ async def apply_session_context_compaction(
     plan: SessionCompactionPlan,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
+    if payload.get("status") != "compacted":
+        return payload
     session = await db.get(WriterSession, plan.session_id)
     if session is None:
         raise LookupError("Session not found")
@@ -146,82 +161,28 @@ async def compact_session_context_response(
     llm_client: LLMClient | None = None,
     model: str = "",
     timeout: float | None = None,
-    on_summary_delta: Any | None = None,
+    on_summary_event: Any | None = None,
     model_retries: int = 1,
     model_timeout_seconds: float | None = None,
     retry_policy: RetryPolicy | None = None,
     on_model_retry: ModelRetrySink | None = None,
     trigger: str = "manual",
 ) -> dict[str, Any]:
-    session = await db.get(WriterSession, session_id)
-    if session is None:
-        raise LookupError("Session not found")
-
-    existing_state = session.runtime_state if isinstance(session.runtime_state, dict) else {}
-    existing_compaction = (
-        existing_state.get("manual_compaction") if isinstance(existing_state.get("manual_compaction"), dict) else {}
+    plan = await prepare_session_context_compaction(db, session_id=session_id, trigger=trigger)
+    _result, payload = await execute_session_context_compaction(
+        plan,
+        llm_client=llm_client,
+        model=model,
+        timeout=timeout,
+        on_summary_event=on_summary_event,
+        model_retries=model_retries,
+        model_timeout_seconds=model_timeout_seconds,
+        retry_policy=retry_policy,
+        on_model_retry=on_model_retry,
     )
-    existing_compacted_ids = [
-        str(message_id)
-        for message_id in (existing_compaction.get("compacted_message_ids") or [])
-        if str(message_id).strip()
-    ]
-    compacted_ids = set(existing_compacted_ids)
-    messages = await _load_active_messages(db, session_id=session_id, compacted_ids=compacted_ids)
-
-    if len(session.context_summary or "") >= MAX_SUMMARY_CHARS:
-        raise ValueError("Not enough summary space to compact history")
-    result = await compact_context(
-        ContextCompactionRequest(
-            trigger=trigger,
-            messages=[_message_to_chat_message(message) for message in messages],
-            llm_client=llm_client,
-            model=model,
-            timeout=timeout,
-            target_tokens=MANUAL_COMPACTION_TARGET_TOKENS,
-            retain_tail_count=MAX_RETAIN_MESSAGE_COUNT,
-            existing_summary=session.context_summary or "",
-            on_delta=on_summary_delta,
-            model_retries=model_retries,
-            model_timeout_seconds=model_timeout_seconds,
-            retry_policy=retry_policy or RetryPolicy(),
-            on_model_retry=on_model_retry,
-        )
-    )
-    if result.status != "compacted":
-        raise ValueError("Context compaction did not produce a summary")
-    compacted = messages[: result.compacted_count]
-    retained = messages[-result.retained_count :] if result.retained_count else []
-    summary = result.summary
-    if len(summary) > MAX_SUMMARY_CHARS:
-        raise ValueError("Not enough summary space to compact history")
-    manual_compaction = {
-        "compacted_at": now().astimezone(timezone.utc).isoformat(),
-        "trigger": trigger,
-        "compacted_message_ids": [
-            *existing_compacted_ids,
-            *[message.id for message in compacted if message.id not in compacted_ids],
-        ],
-        "retained_message_ids": [message.id for message in retained],
-        "retained_message_count": len(retained),
-    }
-    session.context_summary = summary
-    session.runtime_state = {**existing_state, "manual_compaction": manual_compaction}
+    applied = await apply_session_context_compaction(db, plan=plan, payload=payload)
     await db.flush()
-    return {
-        "status": "compacted",
-        "session_id": session_id,
-        "compacted_at": manual_compaction["compacted_at"],
-        "compacted_messages": len(compacted),
-        "retained_messages": len(retained),
-        "compacted_message_ids": manual_compaction["compacted_message_ids"],
-        "retained_message_ids": manual_compaction["retained_message_ids"],
-        "before_tokens": result.before_tokens,
-        "after_tokens": result.after_tokens,
-        "target_tokens": result.target_tokens,
-        "trigger": trigger,
-        "summary": session.context_summary,
-    }
+    return applied
 
 
 async def session_needs_context_compaction(
@@ -269,4 +230,8 @@ async def _load_active_messages(
 
 def _message_to_chat_message(message: WriterMessage) -> ChatMessage:
     role = "assistant" if message.role == "assistant" else "user"
-    return ChatMessage(role=role, content=str(message.content or ""))
+    return ChatMessage(
+        role=role,
+        content=str(message.content or ""),
+        metadata={"message_id": message.id},
+    )

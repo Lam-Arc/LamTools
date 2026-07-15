@@ -7,6 +7,7 @@ export interface CoreExecutionModelSource {
   display_name?: string
   thinking_supported?: boolean
   thinking_budget?: number
+  context_window?: number
 }
 
 export interface CoreExecutionProviderSource {

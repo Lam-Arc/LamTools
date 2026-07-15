@@ -75,7 +75,7 @@ def test_projector_applies_core_run_item_event():
 
     assert state["snapshot_seq"] == 1
     assert state["core"]["items"]["item-1"]["content"] == "ok"
-    assert state["status"] == "completed"
+    assert state["status"] == "running"
     assert state["queue"] == []
 
 
@@ -224,6 +224,33 @@ def test_projector_remove_turns_cleans_generic_records_and_recomputes_status():
     assert state["status"] == "completed"
 
 
+@pytest.mark.asyncio
+async def test_snapshot_load_reconciles_stale_running_status_from_terminal_turns(tmp_path):
+    engine, session_factory = await _session_factory(tmp_path)
+    store = SqlAlchemyThreadSnapshotStore(ThreadSnapshotRow)
+    stale = store.projector.empty("thread-stale")
+    stale["status"] = "running"
+    stale["turns"] = {
+        "turn-1": {"turn_id": "turn-1", "status": "completed", "last_seq": 5, "items": []}
+    }
+    stale["core"]["status"] = "running"
+    stale["core"]["turns"] = {
+        "turn-1": {"turn_id": "turn-1", "status": "completed", "last_seq": 5, "items": []}
+    }
+    try:
+        async with session_factory() as db:
+            db.add(ThreadSnapshotRow(thread_id="thread-stale", snapshot_seq=5, snapshot_json=stale))
+            await db.commit()
+
+        async with session_factory() as db:
+            loaded = await store.load(db, "thread-stale")
+
+        assert loaded["status"] == "completed"
+        assert loaded["core"]["status"] == "completed"
+    finally:
+        await engine.dispose()
+
+
 def test_projector_in_place_replay_matches_copying_apply():
     projector = CoreAppSnapshotProjector(member_defaults={"queue": []})
     events = [
@@ -285,5 +312,49 @@ async def test_sqlalchemy_snapshot_store_load_apply_rebuild(tmp_path):
             assert applied["snapshot_seq"] == 1
             assert rebuilt["snapshot_seq"] == 2
             assert rebuilt["core"]["items"]["item-1"]["content"] == "hello"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_sqlalchemy_snapshot_store_applies_batch_in_one_projection(tmp_path):
+    engine, session_factory = await _session_factory(tmp_path)
+    try:
+        async with session_factory() as db:
+            store = SqlAlchemyThreadSnapshotStore(
+                ThreadSnapshotRow,
+                projector=CoreAppSnapshotProjector(member_defaults={"queue": []}),
+            )
+            first = RunItemEvent(
+                event_id="batch-item-1",
+                kind="message",
+                thread_id="thread-1",
+                run_id="run-1",
+                turn_id="turn-1",
+                item_id="item-1",
+                status="running",
+                payload={"delta": "hel"},
+            )
+            second = RunItemEvent(
+                event_id="batch-item-2",
+                kind="message",
+                thread_id="thread-1",
+                run_id="run-1",
+                turn_id="turn-1",
+                item_id="item-1",
+                status="completed",
+                payload={"content": "hello"},
+            )
+
+            snapshot = await store.apply_many(
+                db,
+                [_envelope(1, first.to_dict()), _envelope(2, second.to_dict())],
+            )
+            loaded = await store.load(db, "thread-1")
+
+            assert snapshot is not None
+            assert snapshot["snapshot_seq"] == 2
+            assert loaded["snapshot_seq"] == 2
+            assert loaded["core"]["items"]["item-1"]["content"] == "hello"
     finally:
         await engine.dispose()

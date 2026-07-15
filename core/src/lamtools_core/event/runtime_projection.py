@@ -250,8 +250,7 @@ def runtime_fact_to_run_item_events(
         created_at=created_at or datetime.now(timezone.utc),
     )
     payload = _payload(fact)
-    if isinstance(payload.get("sub_agent"), dict):
-        return []
+    sub_agent = payload.get("sub_agent") if isinstance(payload.get("sub_agent"), dict) else None
     phase = str(fact.phase or "")
     status = str(fact.status or "")
     run_id = event_run_id(fact.metadata, fallback_run_id="")
@@ -264,28 +263,38 @@ def runtime_fact_to_run_item_events(
         "seq": int(fact.sequence or 0),
         "source": fact.source,
         "created_at_ms": _created_at_ms(fact),
+        "parent_item_id": _sub_agent_parent_item_id(fact, sub_agent),
         "metadata": {
             "runtime_phase": phase,
             "runtime_group": fact.group,
             "run_id": run_id,
             "turn_id": turn_id,
+            **({"sub_agent": sub_agent} if sub_agent is not None else {}),
         },
     }
 
     if phase == "runtime.reply_delta":
         text = _text_from_event(fact, payload)
-        if not text:
-            return []
-        content_base = {**base, "event_id": _content_event_id(fact, "reply-delta", text)}
-        return [
-            RunItemEvent(
+        metrics = _usage_metrics(payload)
+        events: list[RunItemEvent] = []
+        if text:
+            content_base = {**base, "event_id": _content_event_id(fact, "reply-delta", text)}
+            events.append(RunItemEvent(
                 kind="message",
                 item_id=_agent_item_id(fact, payload),
                 status="running",
                 payload={"type": "agentMessage", "delta": text},
                 **content_base,
-            )
-        ]
+            ))
+        if metrics:
+            events.append(RunItemEvent(
+                kind="usage",
+                status="running",
+                payload={"type": "turn", "runtime_metrics": metrics},
+                usage=metrics,
+                **base,
+            ))
+        return events
 
     if phase == "runtime.tool.started":
         arguments = payload.get("arguments") or payload.get("tool_args") or {}
@@ -309,10 +318,16 @@ def runtime_fact_to_run_item_events(
         ]
 
     if phase == "runtime.tool.finished":
-        completed_status = "completed" if status in {"ok", "completed", "done"} else "failed"
+        payload_metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+        completed_status = (
+            "waiting"
+            if payload_metadata.get("decision") == "wait"
+            else "completed"
+            if status in {"ok", "completed", "done"}
+            else "failed"
+        )
         item_id = _tool_item_id(fact, payload)
         result_text = str(payload.get("content") or payload.get("tool_result") or fact.preview or fact.summary or "")
-        payload_metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
         return [
             RunItemEvent(
                 kind="tool_result",
@@ -323,6 +338,7 @@ def runtime_fact_to_run_item_events(
                     "tool_name": _tool_name(payload),
                     "delta": fact.preview or fact.summary or str(payload.get("result") or payload.get("error") or ""),
                     "tool_result": result_text,
+                    "replace": True,
                     "metadata": payload_metadata,
                     "status": completed_status,
                     "error": str(payload.get("error") or "") or None,
@@ -503,6 +519,7 @@ def runtime_fact_to_run_item_events(
                         "tool_name": _tool_name(payload),
                         "delta": result_text,
                         "tool_result": result_text,
+                        "replace": status in TERMINAL_STATUSES,
                         "metadata": payload_metadata,
                         "status": "completed" if status in {"done", "ok"} else _canonical_status(status),
                         "error": str(payload.get("error") or payload.get("tool_error") or "") or None,
@@ -513,9 +530,16 @@ def runtime_fact_to_run_item_events(
         item_type = "agentMessage" if part_type in {"text", "model_text"} else part_type
         item_id = str(payload.get("part_id") or f"{fact.thread_id}:part:{fact.sequence or fact.id}")
         content = _complete_text_from_event(fact, payload) if status in TERMINAL_STATUSES else _text_from_event(fact, payload)
-        if not content or content == "runtime.part":
+        delta = payload.get("delta")
+        if isinstance(delta, str) and delta and status not in TERMINAL_STATUSES:
+            content = delta
+        if (not content and part_type != "compaction") or content == "runtime.part":
             return []
-        item_payload: dict[str, Any] = {"type": item_type, "content": content}
+        item_payload: dict[str, Any] = {"type": item_type}
+        if isinstance(delta, str) and delta and status not in TERMINAL_STATUSES:
+            item_payload["delta"] = delta
+        else:
+            item_payload["content"] = content
         if part_type == "compaction":
             for key in (
                 "label",
@@ -523,13 +547,21 @@ def runtime_fact_to_run_item_events(
                 "before_tokens",
                 "after_tokens",
                 "trigger_tokens",
-                "target_tokens",
+                "limit_tokens",
                 "window_tokens",
                 "removed_messages",
                 "trigger",
+                "phase",
+                "segment",
+                "segments",
+                "reason",
+                "message",
             ):
                 if key in payload:
                     item_payload[key] = payload[key]
+            item_payload["compaction_status"] = str(payload.get("status") or status or "running")
+            if "limit_tokens" not in item_payload and "target_tokens" in payload:
+                item_payload["limit_tokens"] = payload["target_tokens"]
         content_base = {**base, "event_id": _content_event_id(fact, f"runtime-part-{part_type}", content)}
         return [
             RunItemEvent(
@@ -540,6 +572,12 @@ def runtime_fact_to_run_item_events(
                 **content_base,
             )
         ]
+
+    if sub_agent is not None and phase in {"runtime.done", "runtime.failed", "runtime.cancelled"}:
+        # The parent sub_agent tool result owns the delegated run's visible
+        # terminal state. A forwarded child lifecycle must never terminate the
+        # parent turn that carries it.
+        return []
 
     if phase in {"runtime.done", "runtime.failed", "runtime.cancelled"}:
         completed_status = {
@@ -567,6 +605,7 @@ def runtime_fact_to_run_item_events(
                 item_id=f"{run_id}:terminal" if run_id else f"{turn_id}:terminal",
                 status=completed_status,
                 payload=completed_payload,
+                usage=runtime_metrics or {},
                 **base,
             )
         ]
@@ -705,6 +744,25 @@ def _tool_item_id(fact: RuntimeProjectionInput, payload: dict[str, Any]) -> str:
     return f"{fact.thread_id}:{scope_id}:{_tool_call_id(fact, payload)}:tool"
 
 
+def _sub_agent_parent_item_id(
+    fact: RuntimeProjectionInput,
+    sub_agent: dict[str, Any] | None,
+) -> str:
+    if not sub_agent:
+        return ""
+    parent_call_id = str(sub_agent.get("parent_call_id") or "").strip()
+    if not parent_call_id:
+        return ""
+    metadata = _metadata(fact)
+    parent_run_id = str(
+        sub_agent.get("parent_run_id")
+        or metadata.get("run_id")
+        or ""
+    ).strip()
+    scope_id = parent_run_id or _turn_id(fact, _payload(fact))
+    return f"{fact.thread_id}:{scope_id}:{parent_call_id}:tool"
+
+
 def _agent_item_id(fact: RuntimeProjectionInput, payload: dict[str, Any]) -> str:
     direct = payload.get("part_id")
     if direct:
@@ -754,10 +812,11 @@ def _artifact_id(thread_id: str, turn_id: str, item_id: str, artifact: dict[str,
 
 
 def _artifact_payload(thread_id: str, turn_id: str, item_id: str, artifact: dict[str, Any]) -> dict[str, Any]:
-    path = str(artifact.get("path") or artifact.get("file_path") or "")
+    metadata = artifact.get("metadata") if isinstance(artifact.get("metadata"), dict) else {}
+    uri = str(artifact.get("uri") or "")
+    path = str(artifact.get("path") or artifact.get("file_path") or metadata.get("path") or uri)
     name = str(artifact.get("name") or (Path(path).name if path else artifact.get("description") or "artifact"))
     kind = str(artifact.get("kind") or artifact.get("artifact_type") or "file")
-    metadata = artifact.get("metadata") if isinstance(artifact.get("metadata"), dict) else {}
     return {
         "artifact_id": _artifact_id(thread_id, turn_id, item_id, artifact),
         "thread_id": thread_id,
@@ -766,6 +825,8 @@ def _artifact_payload(thread_id: str, turn_id: str, item_id: str, artifact: dict
         "kind": kind,
         "name": name,
         "path": path,
+        "uri": uri or path,
+        "content": artifact.get("content"),
         "mime_type": artifact.get("mime_type") or artifact.get("mimeType"),
         "size_bytes": artifact.get("size_bytes") or artifact.get("sizeBytes"),
         "content_hash": artifact.get("content_hash") or artifact.get("contentHash"),
@@ -839,7 +900,7 @@ def _created_at_ms(fact: RuntimeProjectionInput) -> int:
 
 
 def _canonical_status(status: str) -> str:
-    if status in {"ok", "done", "completed"}:
+    if status in {"ok", "done", "completed", "compacted", "not_needed"}:
         return "completed"
     if status in {"error", "failed"}:
         return "failed"

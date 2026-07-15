@@ -18,6 +18,7 @@ from lamtools_core.app.cli_live import (
     default_input_text as _input_text,
     default_label,
     event_request_id as _event_request_id,
+    execute_compaction_command_live,
     format_compaction_result as _format_compaction_result,
     format_event as _format_event,
     is_done_event as _is_done_event,
@@ -402,16 +403,17 @@ async def cmd_cancel(args: argparse.Namespace) -> int:
 
 
 async def cmd_compact(args: argparse.Namespace) -> int:
-    print("正在压缩上下文...")
-    async with AppServerClient(_base_url(args)) as client:
-        await client.connect(thread_id=args.session_id)
-        result = await client.execute_command(
-            thread_id=args.session_id,
-            command="compact",
-            work_root=args.work_root or "",
-        )
-    print(_format_compaction_result(result))
-    if args.verbose and result.get("summary"):
+    formatter = CliRunFormatter(verbose=bool(args.verbose))
+    result, saw_terminal = await execute_compaction_command_live(
+        client_factory=lambda: AppServerClient(_base_url(args)),
+        thread_id=args.session_id,
+        work_root=args.work_root or "",
+        formatter=formatter,
+        output=_write_live_chunk,
+    )
+    if not saw_terminal:
+        print(_format_compaction_result(result))
+    if args.verbose and not saw_terminal and result.get("summary"):
         print()
         print(str(result.get("summary")))
     return 0

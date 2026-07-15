@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import copy
 import asyncio
+import hashlib
 import json
 import re
 import uuid
@@ -24,6 +25,7 @@ from typing import Any, TYPE_CHECKING
 from lamtools_core.context_compaction import (
     ContextCompactionError,
     ContextCompactionRequest,
+    ContextCompactionResult,
     compact_context,
 )
 from lamtools_core.event import CoreEvent, EventCategory, EventSink
@@ -45,6 +47,7 @@ from lamtools_core.runtime import (
     RuntimeToolStep,
     RuntimeTurnInput,
 )
+from lamtools_core.runtime.audit import build_kernel_audit
 from lamtools_core.tokens import estimate_message_tokens, estimate_text_tokens
 from lamtools_core.tool import ToolCall, ToolResult
 
@@ -56,6 +59,10 @@ from .tracing import NoopTracer, Tracer
 
 if TYPE_CHECKING:
     pass
+
+
+_TOOL_INPUT_PROGRESS_CHARS = 512
+_STREAM_TEXT_PROGRESS_CHARS = 128
 
 
 def _message_reference_ids(messages: list[ChatMessage]) -> list[str]:
@@ -118,6 +125,47 @@ def _chat_message_from_dict(value: Any) -> ChatMessage | None:
     )
 
 
+def _repair_incomplete_tool_history(messages: list[ChatMessage]) -> list[ChatMessage]:
+    repaired: list[ChatMessage] = []
+    pending: dict[str, LLMToolCall] = {}
+
+    def close_pending() -> None:
+        for call in pending.values():
+            repaired.append(ChatMessage(
+                role="tool",
+                name=call.name,
+                tool_call_id=call.id,
+                content=(
+                    "status: failed\n"
+                    "error: Tool execution was interrupted before a result was recorded."
+                ),
+                metadata={"history_repair": "interrupted_tool_call"},
+            ))
+        pending.clear()
+
+    for message in messages:
+        if message.role == "tool":
+            call_id = str(message.tool_call_id or "")
+            if call_id and call_id in pending:
+                repaired.append(message)
+                pending.pop(call_id, None)
+            elif not pending:
+                repaired.append(message)
+            continue
+        if pending:
+            close_pending()
+        repaired.append(message)
+        if message.role == "assistant":
+            pending = {
+                str(call.id): call
+                for call in message.tool_calls
+                if str(call.id or "").strip()
+            }
+    if pending:
+        close_pending()
+    return repaired
+
+
 @dataclass
 class _TurnScopedEventSink:
     delegate: EventSink
@@ -163,6 +211,7 @@ class CoreLoopKernel:
     retry_policy: RetryPolicy = field(default_factory=RetryPolicy)
     tracer: Tracer = field(default_factory=NoopTracer)
     hook_engine: Any | None = None
+    checkpoint_coordinator: Any | None = None
     _cancel_event: asyncio.Event = field(default_factory=asyncio.Event, init=False, repr=False)
     _base_event_sink: EventSink = field(init=False, repr=False)
 
@@ -232,9 +281,29 @@ class CoreLoopKernel:
         state.run_id = str(turn_input.run_id or "").strip() or _new_run_id()
         turn_id = str(turn_input.turn_id or "").strip() or f"{state.session_id}:turn:{state.run_id}"
         state.metadata["turn_id"] = turn_id
+        state.metadata.pop("no_progress", None)
+        state.metadata.pop("failure_diagnosis", None)
+        prior_waiting = state.metadata.get("pending_waiting_request")
+        if isinstance(prior_waiting, dict) and prior_waiting.get("request_kind") == "no_progress":
+            state.metadata.pop("pending_waiting_request", None)
+        state.metadata["runtime_audit"] = build_kernel_audit(
+            policy=self.policy,
+            kernel_module_path=__file__,
+        )
         self.event_sink = _TurnScopedEventSink(self._base_event_sink, turn_id)
         state.loop_state = "continue"
         state.position = ""
+
+        # A checkpoint belongs to the accepted agent turn, not to an
+        # individual model/tool step.  Keeping this seam in Kernel means main
+        # and delegated agents cannot accidentally drift into two policies.
+        if self.checkpoint_coordinator is not None:
+            actor_kind = str(turn_input.metadata.get("actor_kind") or "main")
+            await self.checkpoint_coordinator.begin_turn(
+                session_id=state.session_id,
+                turn_id=turn_id,
+                actor_kind=actor_kind,
+            )
 
         # Start root trace span for this run (after state is loaded so we have ids)
         run_span = self.tracer.start_span(
@@ -262,6 +331,10 @@ class CoreLoopKernel:
         latest_message = ""
         final_decision: LoopDecision = "continue"
         error_msg = ""
+        recent_tool_result_fingerprints: list[str] = []
+        explicit_input_errors: dict[str, ToolResult] = {}
+        diagnosis_failed_calls: dict[str, ToolResult] = {}
+        failure_diagnosis_pending = False
 
         # Emit runtime.started event
         await self._emit_state_event(state, "runtime.started", "run started")
@@ -306,7 +379,7 @@ class CoreLoopKernel:
 
                 # 5.3 Build model request
                 request = await self.kit.build_model_request(state, context)
-                await self._compact_request_if_needed(state, request)
+                await self._compact_request_if_needed(state, request, history=history)
 
                 # 5.4 Call model — try streaming first
                 response = await self._stream_model(request, state, response_index=index)
@@ -336,6 +409,17 @@ class CoreLoopKernel:
                 # 5.5 Parse model output
                 turn = await self.kit.parse_model_output(state, response)
                 step.turn = turn
+                failure_diagnosis_completed = (
+                    failure_diagnosis_pending
+                    and bool(turn.reply.strip())
+                    and not turn.tool_calls
+                )
+                failure_diagnosis_incomplete = (
+                    failure_diagnosis_pending
+                    and bool(turn.reply.strip())
+                    and bool(turn.tool_calls)
+                    and not self._has_failure_diagnosis_structure(turn.reply)
+                )
 
                 # Kernel-level natural-stop signal (OpenAI-style): model
                 # produced a text reply with no tool calls. Kit MAY consume
@@ -346,7 +430,7 @@ class CoreLoopKernel:
                 # 5.6 Emit reply and kit events
                 if turn.reply:
                     latest_message = turn.reply
-                    if turn.tool_calls:
+                    if turn.tool_calls or failure_diagnosis_completed or failure_diagnosis_incomplete:
                         await self._emit_text_part(
                             state,
                             turn.reply,
@@ -392,6 +476,58 @@ class CoreLoopKernel:
                     blocked = await self._apply_pre_tool_hook(state, call)
                     if blocked is not None:
                         blocked_results[call.id] = blocked
+                    prior_failed_call = diagnosis_failed_calls.get(self._tool_call_fingerprint(call))
+                    if (
+                        failure_diagnosis_pending
+                        and prior_failed_call is not None
+                        and self._tool_call_fingerprint(call) not in explicit_input_errors
+                        and call.id not in blocked_results
+                    ):
+                        blocked_results[call.id] = ToolResult(
+                            call_id=call.id,
+                            name=call.name,
+                            status="blocked",
+                            content=prior_failed_call.content,
+                            error=(
+                                "Exact retry blocked while failure diagnosis is pending. "
+                                "Investigate the existing evidence and complete the diagnosis first."
+                            ),
+                            metadata={
+                                "failure_diagnosis_required": True,
+                                "original_error": prior_failed_call.error,
+                            },
+                        )
+                    if (
+                        failure_diagnosis_incomplete
+                        and self._tool_call_fingerprint(call) not in explicit_input_errors
+                        and call.id not in blocked_results
+                    ):
+                        blocked_results[call.id] = ToolResult(
+                            call_id=call.id,
+                            name=call.name,
+                            status="blocked",
+                            error=(
+                                "Failure diagnosis is incomplete. Provide root cause, evidence, two options, "
+                                "the selected option, and a verification signal before executing a solution."
+                            ),
+                            metadata={"failure_diagnosis_required": True, "diagnosis_structure_missing": True},
+                        )
+                for call in turn.tool_calls:
+                    prior_input_error = explicit_input_errors.get(self._tool_call_fingerprint(call))
+                    if call.id in blocked_results or prior_input_error is None:
+                        continue
+                    blocked_results[call.id] = ToolResult(
+                        call_id=call.id,
+                        name=call.name,
+                        status="blocked",
+                        content=prior_input_error.content,
+                        error=prior_input_error.error,
+                        artifacts=list(prior_input_error.artifacts),
+                        metadata={
+                            **dict(prior_input_error.metadata),
+                            "duplicate_input_error": True,
+                        },
+                    )
                 approval_calls = [
                     call
                     for call in turn.tool_calls
@@ -481,6 +617,105 @@ class CoreLoopKernel:
                         history.append(tool_message)
                         await self._save_checkpoint(state, history)
 
+                repeat_observation = self._observe_repeated_tool_failures(
+                    turn.tool_calls,
+                    tool_results,
+                    recent_tool_result_fingerprints,
+                    explicit_input_errors,
+                )
+                observation_audit = repeat_observation.get("audit")
+                if isinstance(observation_audit, dict):
+                    runtime_audit = state.metadata.get("runtime_audit")
+                    if isinstance(runtime_audit, dict):
+                        observations = runtime_audit.setdefault("no_progress_observations", [])
+                        if isinstance(observations, list):
+                            observations.append(observation_audit)
+                            del observations[:-32]
+                no_progress = repeat_observation.get("no_progress")
+                if isinstance(no_progress, str) and no_progress:
+                    step.decision = "wait"
+                    step.metadata["no_progress"] = True
+                    state.metadata["no_progress"] = {
+                        "message": no_progress,
+                        "response_index": index,
+                        "recoverable": True,
+                    }
+                    state.metadata["pending_waiting_request"] = {
+                        "request_kind": "no_progress",
+                        "message": no_progress,
+                    }
+                    final_decision = "wait"
+                    state.loop_state = "wait"
+                    state.turn_count += 1
+                    await self.kit.writeback(
+                        state,
+                        turn,
+                        tool_results,
+                        VerificationResult(passed=False, required=True, summary=no_progress),
+                        "wait",
+                    )
+                    if self.policy.persist_steps:
+                        state.metadata.setdefault("kernel_steps", []).append(self._summarize_step(step))
+                    await self._save_checkpoint(state, history)
+                    break
+                recovery_prompt = repeat_observation.get("recovery_prompt")
+                if isinstance(recovery_prompt, str) and recovery_prompt:
+                    history.append(ChatMessage(role="system", content=recovery_prompt))
+                    step.metadata["no_progress_recovery_required"] = True
+                    state.metadata["no_progress_recovery"] = {
+                        "status": "required",
+                        "response_index": index,
+                    }
+                    await self._save_checkpoint(state, history)
+
+                failed_pairs = [
+                    (call, result)
+                    for call, result in zip(turn.tool_calls, tool_results)
+                    if result.status == "failed"
+                ]
+                if failed_pairs:
+                    for call, result in failed_pairs:
+                        diagnosis_failed_calls[self._tool_call_fingerprint(call)] = result
+                    if not failure_diagnosis_pending:
+                        failure_diagnosis_pending = True
+                        prompt = self._failure_diagnosis_prompt(failed_pairs)
+                        history.append(ChatMessage(role="system", content=prompt))
+                        step.metadata["failure_diagnosis_required"] = True
+                        state.metadata["failure_diagnosis"] = {
+                            "status": "required",
+                            "response_index": index,
+                        }
+                        await self._save_checkpoint(state, history)
+
+                if failure_diagnosis_completed:
+                    failure_diagnosis_pending = False
+                    diagnosis_failed_calls.clear()
+                    step.metadata["failure_diagnosis_completed"] = True
+                    state.metadata["failure_diagnosis"] = {
+                        "status": "completed",
+                        "response_index": index,
+                    }
+                    history.append(ChatMessage(
+                        role="system",
+                        content=(
+                            "[FAILURE_DIAGNOSIS_COMPLETED] The diagnosis is recorded. "
+                            "Continue automatically with the selected approach and verify it using "
+                            "the stated success signal."
+                        ),
+                    ))
+                    await self._save_checkpoint(state, history)
+                elif failure_diagnosis_incomplete:
+                    history.append(ChatMessage(
+                        role="system",
+                        content=(
+                            "[FAILURE_DIAGNOSIS_INCOMPLETE] The visible diagnosis is missing required fields. "
+                            "Respond without tool calls using exactly these headings: [根因] [证据] [方案1] "
+                            "[方案2] [选择] [验证信号]. Field presence is required; do not invent evidence."
+                        ),
+                    ))
+                    step.metadata["failure_diagnosis_incomplete"] = True
+                    await self._save_checkpoint(state, history)
+
                 # 5.10 Verify (non-blocking: verification failure does NOT
                 #     trigger automatic repair retry. The model receives tool
                 #     results directly and self-corrects on the next turn.)
@@ -495,7 +730,13 @@ class CoreLoopKernel:
 
                 # 5.11 Decide next
                 decision = await self.kit.decide_next(state, turn, verification, step)
-                if turn.tool_calls and decision == "done":
+                if failure_diagnosis_completed:
+                    decision = "continue"
+                    step.metadata["failure_diagnosis_force_continue"] = True
+                elif failure_diagnosis_incomplete:
+                    decision = "continue"
+                    step.metadata["failure_diagnosis_retry_required"] = True
+                elif turn.tool_calls and decision == "done":
                     # OpenAI/Claude-style loop contract: tool use is not a
                     # terminal answer. A run may only complete after the model
                     # returns a no-tool final response.
@@ -608,11 +849,140 @@ class CoreLoopKernel:
 
         return result
 
+    @staticmethod
+    def _tool_call_fingerprint(call: ToolCall) -> str:
+        return json.dumps(
+            {"tool": call.name, "arguments": call.arguments},
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+        )
+
+    @staticmethod
+    def _is_explicit_input_error(result: ToolResult) -> bool:
+        metadata = result.metadata if isinstance(result.metadata, dict) else {}
+        return result.status == "failed" and metadata.get("input_error") is True
+
+    @staticmethod
+    def _failure_diagnosis_prompt(
+        failed_pairs: list[tuple[ToolCall, ToolResult]],
+    ) -> str:
+        def bounded(value: Any, limit: int) -> str:
+            text = str(value or "")
+            if len(text) <= limit:
+                return text
+            return f"{text[:limit]}\n...[truncated {len(text) - limit} characters]"
+
+        evidence = [
+            {
+                "tool": call.name,
+                "arguments": bounded(
+                    json.dumps(call.arguments, ensure_ascii=False, sort_keys=True, default=str),
+                    2_000,
+                ),
+                "status": result.status,
+                "content": bounded(result.content, 4_000),
+                "error": bounded(result.error, 4_000),
+                "exit_code": result.metadata.get("exit_code"),
+                "error_type": result.metadata.get("error_type"),
+                "timed_out": result.metadata.get("timed_out"),
+            }
+            for call, result in failed_pairs
+        ]
+        return (
+            "[FAILURE_DIAGNOSIS_REQUIRED] A tool failed. Do not repeat the exact call and do not "
+            "jump directly to another speculative fix. First investigate the real evidence. You may "
+            "use a different tool call to collect missing evidence. Before executing the selected "
+            "solution, produce one visible diagnosis with: 根因、证据、至少两个实质不同的方案、"
+            "明确选择的方案、以及可观察的验证信号. If the evidence is insufficient, say so and "
+            "make the options diagnostic probes rather than inventing a cause.\n"
+            f"Failure evidence:\n{json.dumps(evidence, ensure_ascii=False, sort_keys=True, default=str)}"
+        )
+
+    @staticmethod
+    def _has_failure_diagnosis_structure(reply: str) -> bool:
+        text = str(reply or "").lower()
+        required_groups = (
+            ("根因", "root cause"),
+            ("证据", "evidence"),
+            ("选择", "selected option", "selected approach"),
+            ("验证信号", "verification signal", "success signal"),
+        )
+        if not all(any(marker in text for marker in group) for group in required_groups):
+            return False
+        first_option = re.search(r"(?:方案|option)\s*(?:1|一|a)", text, re.IGNORECASE)
+        second_option = re.search(r"(?:方案|option)\s*(?:2|二|b)", text, re.IGNORECASE)
+        return first_option is not None and second_option is not None
+
+    def _observe_repeated_tool_failures(
+        self,
+        calls: list[ToolCall],
+        results: list[ToolResult],
+        recent_fingerprints: list[str],
+        explicit_input_errors: dict[str, ToolResult],
+    ) -> dict[str, Any]:
+        threshold = self.policy.max_identical_tool_results
+        if threshold is None or threshold <= 0:
+            return {}
+        window = max(threshold, int(self.policy.identical_tool_result_window or threshold))
+        observation: dict[str, Any] = {}
+        for call, result in zip(calls, results):
+            call_fingerprint = self._tool_call_fingerprint(call)
+            if self._is_explicit_input_error(result):
+                explicit_input_errors[call_fingerprint] = result
+            fingerprint = json.dumps(
+                {
+                    "tool": call.name,
+                    "arguments": call.arguments,
+                    "status": "failed" if result.metadata.get("duplicate_input_error") else result.status,
+                    "content": result.content,
+                    "error": result.error,
+                    "exit_code": result.metadata.get("exit_code"),
+                    "error_type": result.metadata.get("error_type"),
+                    "timed_out": result.metadata.get("timed_out"),
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                default=str,
+            )
+            recent_fingerprints.append(fingerprint)
+            if len(recent_fingerprints) > window:
+                del recent_fingerprints[:-window]
+            count = recent_fingerprints.count(fingerprint)
+            audit = {
+                "fingerprint_sha256": hashlib.sha256(fingerprint.encode("utf-8")).hexdigest(),
+                "count": count,
+                "window": window,
+                "threshold": threshold,
+            }
+            if result.status in {"failed", "blocked"} and count >= threshold:
+                return {"audit": audit, "no_progress": (
+                    "No progress observed: the same exact failed tool call and result "
+                    f"occurred {count} times within the last {window} failed tool results. "
+                    "The run is paused and can be resumed after changing the approach or explicitly continuing."
+                )}
+            if result.status not in {"failed", "blocked"} and count >= threshold * 2:
+                return {"audit": audit, "no_progress": (
+                    "No progress observed: the same exact successful tool call and result "
+                    f"occurred {count} times within the last {window} tool results, even after a rethink request. "
+                    "The run is paused and can be resumed after changing the approach or explicitly continuing."
+                )}
+            if result.status not in {"failed", "blocked"} and count == threshold:
+                return {"audit": audit, "recovery_prompt": (
+                    "[NO_PROGRESS_REASSESSMENT_REQUIRED] The same exact tool call returned the same result "
+                    f"{count} times. Before using tools again, explain what new evidence you expected, then choose "
+                    "a materially different investigation or execution approach. Do not repeat the exact call."
+                )}
+            if count > 1:
+                observation["audit"] = audit
+        return observation
+
     async def _load_history(self, session_id: str) -> list[ChatMessage]:
         if not isinstance(self.state_store, RuntimeCheckpointStore):
             return []
         raw_history = await self.state_store.get_history(session_id)
-        return [message for item in raw_history if (message := _chat_message_from_dict(item)) is not None]
+        messages = [message for item in raw_history if (message := _chat_message_from_dict(item)) is not None]
+        return _repair_incomplete_tool_history(messages)
 
     async def _save_checkpoint(self, state: RuntimeState, history: list[ChatMessage]) -> None:
         if isinstance(self.state_store, RuntimeCheckpointStore):
@@ -633,7 +1003,12 @@ class CoreLoopKernel:
             self.llm_client,
             request,
             max_attempts=1,
-            timeout_seconds=self.policy.model_timeout_seconds,
+            # Streaming is bounded per idle gap by _next_stream_event().  A
+            # wall-clock timeout here would cancel long, healthy responses
+            # that keep producing tokens (for example a large write_file
+            # argument).  The non-streaming fallback remains bounded by
+            # model_timeout_seconds.
+            timeout_seconds=None,
             retry_policy=self.retry_policy,
             on_retry=lambda retry: self._emit_model_retry_from_event(
                 retry,
@@ -645,6 +1020,8 @@ class CoreLoopKernel:
 
         accumulated = ""
         thinking = ""
+        emitted_text = ""
+        emitted_thinking = ""
         pending_tool_calls: dict[int, dict] = {}
         emitted_tool_call_indexes: set[int] = set()
         emitted_tool_input_arguments: dict[int, str] = {}
@@ -657,16 +1034,31 @@ class CoreLoopKernel:
                     break
                 if event.kind == "content_delta" and event.content:
                     accumulated += event.content
-                    await self._emit_stream_part(
-                        state,
-                        part_id=f"{state.run_id}:response-{response_index}:text",
-                        part_type="text",
-                        status="running",
-                        label="输出",
-                        content=accumulated,
-                        response_index=response_index,
-                        raw=event.raw,
-                    )
+                    await self.event_sink.emit(CoreEvent(
+                        name="runtime.reply_delta",
+                        category="message",
+                        payload={
+                            "content": event.content,
+                            "part_id": f"{state.run_id}:response-{response_index}:text",
+                            "response_index": response_index,
+                        },
+                        session_id=state.session_id,
+                        run_id=state.run_id,
+                        tags=["reply"],
+                        metadata={"delivery": "transient"},
+                    ))
+                    if not emitted_text or len(accumulated) - len(emitted_text) >= _STREAM_TEXT_PROGRESS_CHARS:
+                        await self._emit_stream_part(
+                            state,
+                            part_id=f"{state.run_id}:response-{response_index}:text",
+                            part_type="text",
+                            status="running",
+                            label="输出",
+                            content=accumulated,
+                            response_index=response_index,
+                            raw=event.raw,
+                        )
+                        emitted_text = accumulated
                 elif event.kind == "thinking_delta" and event.content:
                     thinking += event.content
                     await self._emit_stream_part(
@@ -675,10 +1067,23 @@ class CoreLoopKernel:
                         part_type="reasoning",
                         status="running",
                         label="思考",
-                        content=thinking,
+                        delta=event.content,
                         response_index=response_index,
                         raw=event.raw,
+                        transient=True,
                     )
+                    if not emitted_thinking or len(thinking) - len(emitted_thinking) >= _STREAM_TEXT_PROGRESS_CHARS:
+                        await self._emit_stream_part(
+                            state,
+                            part_id=f"{state.run_id}:response-{response_index}:reasoning",
+                            part_type="reasoning",
+                            status="running",
+                            label="思考",
+                            content=thinking,
+                            response_index=response_index,
+                            raw=event.raw,
+                        )
+                        emitted_thinking = thinking
                 elif event.kind == "refusal_delta" and event.refusal:
                     await self.event_sink.emit(CoreEvent(
                         name="runtime.reply_delta",
@@ -721,17 +1126,32 @@ class CoreLoopKernel:
                             tool_index = int(incoming_tool_delta.get("index") or 0)
                             accumulated_call = pending_tool_calls.get(tool_index)
                             if accumulated_call:
-                                await self._emit_stream_tool_input_delta_part(
-                                    state,
-                                    response_index=response_index,
-                                    tool_index=tool_index,
-                                    accumulated_call=accumulated_call,
-                                    delta=str(argument_delta),
-                                    raw=event.raw,
-                                )
                                 fn = accumulated_call.get("function") if isinstance(accumulated_call, dict) else {}
                                 fn = fn if isinstance(fn, dict) else {}
-                                emitted_tool_input_arguments[tool_index] = str(fn.get("arguments") or "")
+                            arguments_text = str(fn.get("arguments") or "")
+                            previous_arguments = emitted_tool_input_arguments.get(tool_index)
+                            await self._emit_stream_tool_input_delta_part(
+                                state,
+                                response_index=response_index,
+                                tool_index=tool_index,
+                                accumulated_call=accumulated_call,
+                                delta=str(argument_delta),
+                                raw=event.raw,
+                                transient=True,
+                            )
+                            if (
+                                    previous_arguments is None
+                                    or len(arguments_text) - len(previous_arguments) >= _TOOL_INPUT_PROGRESS_CHARS
+                                ):
+                                    await self._emit_stream_tool_input_delta_part(
+                                        state,
+                                        response_index=response_index,
+                                        tool_index=tool_index,
+                                        accumulated_call=accumulated_call,
+                                        delta=str(argument_delta),
+                                        raw=event.raw,
+                                    )
+                                    emitted_tool_input_arguments[tool_index] = arguments_text
                 elif event.kind == "done":
                     # Prefer tool_calls from the done event (some providers
                     # include complete tool_calls in the final chunk);
@@ -747,6 +1167,15 @@ class CoreLoopKernel:
                         response_index=response_index,
                         tool_calls=tool_calls,
                         emitted_arguments=emitted_tool_input_arguments,
+                        raw=event.raw,
+                    )
+                    await self._emit_final_stream_text_parts(
+                        state,
+                        response_index=response_index,
+                        accumulated=accumulated,
+                        thinking=thinking,
+                        emitted_text=emitted_text,
+                        emitted_thinking=emitted_thinking,
                         raw=event.raw,
                     )
                     # Emit a terminal delta so members can format the done chunk
@@ -795,6 +1224,14 @@ class CoreLoopKernel:
             response_index=response_index,
             tool_calls=merged_tool_calls,
             emitted_arguments=emitted_tool_input_arguments,
+        )
+        await self._emit_final_stream_text_parts(
+            state,
+            response_index=response_index,
+            accumulated=accumulated,
+            thinking=thinking,
+            emitted_text=emitted_text,
+            emitted_thinking=emitted_thinking,
         )
         return LLMResponse(
             content=accumulated,
@@ -855,6 +1292,7 @@ class CoreLoopKernel:
         tool_args: dict[str, Any] | None = None,
         delta: str | None = None,
         arguments_text: str | None = None,
+        transient: bool = False,
     ) -> None:
         payload: dict[str, Any] = {
             "part_id": part_id,
@@ -884,6 +1322,7 @@ class CoreLoopKernel:
             session_id=state.session_id,
             run_id=state.run_id,
             tags=["stream", part_type],
+            metadata={"delivery": "transient"} if transient else {},
         ))
 
     async def _emit_stream_tool_call_part(
@@ -929,6 +1368,7 @@ class CoreLoopKernel:
         accumulated_call: dict[str, Any],
         delta: str,
         raw: Any = None,
+        transient: bool = False,
     ) -> None:
         fn = accumulated_call.get("function") if isinstance(accumulated_call, dict) else {}
         fn = fn if isinstance(fn, dict) else {}
@@ -951,6 +1391,7 @@ class CoreLoopKernel:
             call_id=call_id,
             delta=delta,
             arguments_text=arguments_text,
+            transient=transient,
         )
 
     async def _emit_final_stream_tool_input_delta_parts(
@@ -964,8 +1405,6 @@ class CoreLoopKernel:
     ) -> None:
         for tool_index, call in enumerate(tool_calls):
             tool_name = str(call.name or "").strip()
-            if tool_name not in {"write_file", "edit_file"}:
-                continue
             arguments_text = self._tool_call_arguments_text(call)
             if not arguments_text or emitted_arguments.get(tool_index) == arguments_text:
                 continue
@@ -1178,9 +1617,9 @@ class CoreLoopKernel:
             )
         execution = self.kit.execute_tool(state, call)
         timeout = self.policy.tool_timeout_seconds
-        if timeout is None or timeout <= 0:
-            return await execution
         try:
+            if timeout is None or timeout <= 0:
+                return await execution
             return await asyncio.wait_for(execution, timeout=timeout)
         except TimeoutError:
             return ToolResult(
@@ -1188,6 +1627,17 @@ class CoreLoopKernel:
                 name=call.name,
                 status="failed",
                 error=f"Tool timed out after {timeout} seconds",
+            )
+        except Exception as exc:
+            return ToolResult(
+                call_id=call.id,
+                name=call.name,
+                status="failed",
+                error=f"Tool execution failed: {exc}",
+                metadata={
+                    "tool_exception": True,
+                    "error_type": type(exc).__name__,
+                },
             )
 
     async def _apply_pre_tool_hook(
@@ -1207,6 +1657,7 @@ class CoreLoopKernel:
             tool_name=call.name,
             tool_input=dict(call.arguments if isinstance(call.arguments, dict) else {}),
         ))
+
         if decision.updated_input is not None:
             call.arguments = dict(decision.updated_input)
         if decision.additional_context:
@@ -1230,6 +1681,40 @@ class CoreLoopKernel:
         if decision.audit_events:
             call.metadata["hook_audit"] = decision.audit_events
         return None
+
+    async def _emit_final_stream_text_parts(
+        self,
+        state: RuntimeState,
+        *,
+        response_index: int,
+        accumulated: str,
+        thinking: str,
+        emitted_text: str,
+        emitted_thinking: str,
+        raw: Any = None,
+    ) -> None:
+        if accumulated and accumulated != emitted_text:
+            await self._emit_stream_part(
+                state,
+                part_id=f"{state.run_id}:response-{response_index}:text",
+                part_type="text",
+                status="running",
+                label="输出",
+                content=accumulated,
+                response_index=response_index,
+                raw=raw,
+            )
+        if thinking and thinking != emitted_thinking:
+            await self._emit_stream_part(
+                state,
+                part_id=f"{state.run_id}:response-{response_index}:reasoning",
+                part_type="reasoning",
+                status="running",
+                label="思考",
+                content=thinking,
+                response_index=response_index,
+                raw=raw,
+            )
 
     async def _execute_tools_parallel(
         self, state: RuntimeState, calls: list[ToolCall]
@@ -1305,31 +1790,48 @@ class CoreLoopKernel:
         return total
 
     async def _compact_request_if_needed(
-        self, state: RuntimeState, request: LLMRequest
+        self,
+        state: RuntimeState,
+        request: LLMRequest,
+        *,
+        history: list[ChatMessage] | None = None,
     ) -> None:
         """Structurally summarize old context when the request nears budget."""
+        previous_metrics = state.metadata.get("runtime_context_metrics")
+        metrics = dict(previous_metrics) if isinstance(previous_metrics, dict) else {}
+        previous_model = str(metrics.get("model_id") or "").strip()
+        previous_window = int(metrics.get("context_window_tokens") or 0)
+        current_model = str(request.model or "").strip()
+        model_switched = bool(previous_model and current_model and previous_model != current_model)
+        metrics["llm_calls"] = int(metrics.get("llm_calls") or 0) + 1
+        state.metadata["runtime_context_metrics"] = metrics
         window = self.policy.context_window_tokens
         if window is None or window <= 0:
             return
 
         trigger_ratio = min(max(self.policy.compact_trigger_ratio, 0.01), 1.0)
-        target_ratio = min(max(self.policy.compact_target_ratio, 0.01), trigger_ratio)
-        trigger_tokens = int(window * trigger_ratio)
-        target_tokens = int(window * target_ratio)
+        limit_ratio = min(max(self.policy.compact_limit_ratio, 0.01), trigger_ratio)
+        trigger_tokens = int(self.policy.compact_trigger_tokens or int(window * trigger_ratio))
+        limit_tokens = int(self.policy.compact_limit_tokens or int(window * limit_ratio))
+        trigger_tokens = min(max(1, trigger_tokens), window)
+        limit_tokens = min(max(1, limit_tokens), trigger_tokens)
         before_tokens = self._estimate_request_tokens(request)
         request.metadata["estimated_prompt_tokens"] = before_tokens
         request.metadata["context_window_tokens"] = window
         request.metadata["context_compaction_trigger_tokens"] = trigger_tokens
         state.metadata["runtime_context_metrics"] = {
+            **metrics,
             "estimated_prompt_tokens": before_tokens,
             "context_window_tokens": window,
             "context_compaction_trigger_tokens": trigger_tokens,
             "context_compacted": False,
+            "model_id": current_model,
         }
         if before_tokens < trigger_tokens:
             return
 
         before_messages = len(request.messages)
+        request_messages_before_compaction = list(request.messages)
 
         def estimate_compaction_tokens(messages: list[ChatMessage]) -> int:
             original_messages = request.messages
@@ -1339,55 +1841,144 @@ class CoreLoopKernel:
             finally:
                 request.messages = original_messages
 
-        streamed_summary = ""
+        def compaction_input_limit(model_window: int) -> int:
+            output_reserve = min(
+                max(int(request.max_tokens or 0), 256),
+                max(256, model_window // 4),
+            )
+            return max(1, model_window - output_reserve)
 
-        async def on_compaction_delta(delta: str) -> None:
-            nonlocal streamed_summary
-            if not delta:
-                return
-            streamed_summary += delta
-            await self._emit_stream_part(
-                state,
-                part_id=f"{state.run_id}:context-compaction",
-                part_type="compaction",
-                status="running",
-                label="正在压缩",
-                content=streamed_summary[:20_000],
+        async def attempt_compaction(
+            *,
+            model: str,
+            model_window: int,
+            strategy: str,
+            fallback_on_terminal: bool,
+        ) -> ContextCompactionResult:
+            async def on_compaction_delta(delta: str) -> None:
+                await self._emit_stream_part(
+                    state,
+                    part_id=f"{state.run_id}:context-compaction",
+                    part_type="compaction",
+                    status="running",
+                    label="正在压缩上下文",
+                    delta=delta,
+                    transient=True,
+                )
+
+            async def on_compaction_event(payload: dict[str, Any]) -> None:
+                event_payload = dict(payload)
+                if fallback_on_terminal and event_payload.get("status") in {"failed", "not_needed"}:
+                    event_payload.update(
+                        {
+                            "status": "running",
+                            "phase": "fallback",
+                            "label": "原模型压缩未完成 · 正在改用当前模型",
+                        }
+                    )
+                await self.event_sink.emit(
+                    CoreEvent(
+                        name="runtime.part",
+                        category="message",
+                        payload={
+                            "part_id": f"{state.run_id}:context-compaction",
+                            "part_type": "compaction",
+                            "execution_model": model,
+                            "strategy": strategy,
+                            **event_payload,
+                        },
+                        session_id=state.session_id,
+                        run_id=state.run_id,
+                        tags=["stream", "compaction"],
+                    )
+                )
+
+            return await compact_context(
+                ContextCompactionRequest(
+                    trigger="model_switch" if model_switched else "auto",
+                    messages=list(request.messages),
+                    llm_client=self.llm_client,
+                    model=model,
+                    timeout=request.timeout,
+                    limit_tokens=limit_tokens,
+                    input_limit_tokens=compaction_input_limit(model_window),
+                    estimate_tokens=estimate_compaction_tokens,
+                    on_delta=on_compaction_delta,
+                    on_event=on_compaction_event,
+                    model_retries=self.policy.model_retries,
+                    model_timeout_seconds=self.policy.model_timeout_seconds,
+                    retry_policy=self.retry_policy,
+                    on_model_retry=lambda retry: self._emit_model_retry_from_event(
+                        retry,
+                        state=state,
+                        response_index=None,
+                    ),
+                )
             )
 
-        result = await compact_context(
-            ContextCompactionRequest(
-                trigger="auto",
-                messages=list(request.messages),
-                llm_client=self.llm_client,
-                model=request.model,
-                timeout=request.timeout,
-                target_tokens=target_tokens,
-                estimate_tokens=estimate_compaction_tokens,
-                on_delta=on_compaction_delta,
-                model_retries=self.policy.model_retries,
-                model_timeout_seconds=self.policy.model_timeout_seconds,
-                retry_policy=self.retry_policy,
-                on_model_retry=lambda retry: self._emit_model_retry_from_event(
-                    retry,
-                    state=state,
-                    response_index=None,
-                ),
-            )
+        allow_previous = request.metadata.get("allow_previous_model_compaction") is not False
+        used_previous_model = (
+            model_switched
+            and allow_previous
+            and previous_window > 0
+            and before_tokens <= previous_window
         )
+        if used_previous_model:
+            result = await attempt_compaction(
+                model=previous_model,
+                model_window=previous_window,
+                strategy="previous_model_once",
+                fallback_on_terminal=True,
+            )
+        else:
+            result = None
+        if result is None or result.status != "compacted":
+            result = await attempt_compaction(
+                model=current_model,
+                model_window=window,
+                strategy="segmented_current_model" if model_switched else "current_model",
+                fallback_on_terminal=False,
+            )
+            execution_model = current_model
+            compaction_strategy = "segmented_current_model" if model_switched else "current_model"
+        else:
+            execution_model = previous_model
+            compaction_strategy = "previous_model_once"
+        if result.status == "failed":
+            raise ContextCompactionError(
+                str(result.display_payload.get("message") or "Context compaction failed")
+            )
         if result.status != "compacted":
+            request.metadata["context_compaction_status"] = result.status
             return
 
         request.messages[:] = result.replacement_messages
+        if history is not None:
+            history_message_ids = {id(message) for message in history}
+            if any(id(message) in history_message_ids for message in request_messages_before_compaction):
+                request_only_ids = {
+                    id(message)
+                    for message in request_messages_before_compaction
+                    if id(message) not in history_message_ids
+                }
+                history[:] = [
+                    message
+                    for message in result.replacement_messages
+                    if id(message) not in request_only_ids
+                ]
+                await self._save_checkpoint(state, history)
         request.metadata["estimated_prompt_tokens"] = result.after_tokens
 
         request.metadata["context_compacted"] = True
         request.metadata["context_compaction_mode"] = "structured_summary"
+        request.metadata["context_compaction_strategy"] = compaction_strategy
+        request.metadata["context_compaction_execution_model"] = execution_model
         request.metadata["context_tokens_before_compaction"] = result.before_tokens
         request.metadata["context_tokens_after_compaction"] = result.after_tokens
         request.metadata["context_messages_before_compaction"] = before_messages
         request.metadata["context_messages_after_compaction"] = len(request.messages)
         state.metadata["runtime_context_metrics"] = {
+            **metrics,
             "estimated_prompt_tokens": result.after_tokens,
             "context_window_tokens": window,
             "context_compaction_trigger_tokens": trigger_tokens,
@@ -1397,20 +1988,10 @@ class CoreLoopKernel:
             "context_tokens_after_compaction": result.after_tokens,
             "context_messages_before_compaction": before_messages,
             "context_messages_after_compaction": len(request.messages),
+            "context_compaction_strategy": compaction_strategy,
+            "context_compaction_execution_model": execution_model,
+            "model_id": current_model,
         }
-        await self._emit_compaction_part(
-            state,
-            content=result.summary,
-            before_tokens=result.before_tokens,
-            after_tokens=result.after_tokens,
-            trigger_tokens=trigger_tokens,
-            target_tokens=target_tokens,
-            window_tokens=window,
-            removed=result.compacted_count,
-            trigger="auto",
-            compacted_message_ids=_message_reference_ids(result.compacted_messages),
-            retained_message_ids=_message_reference_ids(result.retained_messages),
-        )
         await self._emit_context_compacted(
             state,
             removed=result.compacted_count,
@@ -1419,7 +2000,7 @@ class CoreLoopKernel:
             before_tokens=result.before_tokens,
             after_tokens=result.after_tokens,
             trigger_tokens=trigger_tokens,
-            target_tokens=target_tokens,
+            limit_tokens=limit_tokens,
             window_tokens=window,
             summary=result.summary,
             trigger="auto",
@@ -1666,7 +2247,7 @@ class CoreLoopKernel:
         before_tokens: int,
         after_tokens: int,
         trigger_tokens: int,
-        target_tokens: int,
+        limit_tokens: int,
         window_tokens: int,
         summary: str = "",
         trigger: str = "",
@@ -1684,7 +2265,7 @@ class CoreLoopKernel:
                 "before_tokens": before_tokens,
                 "after_tokens": after_tokens,
                 "trigger_tokens": trigger_tokens,
-                "target_tokens": target_tokens,
+                "limit_tokens": limit_tokens,
                 "window_tokens": window_tokens,
                 "summary": summary[:20_000],
                 "trigger": trigger or "auto",
@@ -1694,48 +2275,6 @@ class CoreLoopKernel:
             session_id=state.session_id,
             run_id=state.run_id,
             tags=["compaction", "token_budget"],
-        )
-        await self.event_sink.emit(event)
-
-    async def _emit_compaction_part(
-        self,
-        state: RuntimeState,
-        *,
-        content: str,
-        before_tokens: int,
-        after_tokens: int,
-        trigger_tokens: int,
-        target_tokens: int,
-        window_tokens: int,
-        removed: int,
-        trigger: str = "",
-        compacted_message_ids: list[str] | None = None,
-        retained_message_ids: list[str] | None = None,
-    ) -> None:
-        """Emit a UI part for compacted context."""
-        event = CoreEvent(
-            name="runtime.part",
-            category="progress",
-            payload={
-                "part_id": f"{state.run_id}:context-compaction",
-                "part_type": "compaction",
-                "status": "completed",
-                "label": "上下文已压缩",
-                "detail": f"{before_tokens} -> {after_tokens} tokens",
-                "content": content[:20_000],
-                "before_tokens": before_tokens,
-                "after_tokens": after_tokens,
-                "trigger_tokens": trigger_tokens,
-                "target_tokens": target_tokens,
-                "window_tokens": window_tokens,
-                "removed_messages": removed,
-                "trigger": trigger or "auto",
-                "compacted_message_ids": list(compacted_message_ids or []),
-                "retained_message_ids": list(retained_message_ids or []),
-            },
-            session_id=state.session_id,
-            run_id=state.run_id,
-            tags=["compaction", "token_budget", "part"],
         )
         await self.event_sink.emit(event)
 
@@ -1794,11 +2333,19 @@ class CoreLoopKernel:
         self, state: RuntimeState, result: KernelResult
     ) -> None:
         """Emit the final terminal event based on decision."""
+        runtime_metrics = (
+            dict(state.metadata.get("runtime_context_metrics"))
+            if isinstance(state.metadata.get("runtime_context_metrics"), dict)
+            else None
+        )
         if result.decision == "done":
             event = CoreEvent(
                 name="runtime.done",
                 category="lifecycle",
-                payload={"message": result.message},
+                payload={
+                    "message": result.message,
+                    **({"runtime_metrics": runtime_metrics} if runtime_metrics else {}),
+                },
                 session_id=state.session_id,
                 run_id=state.run_id,
                 tags=["done"],
@@ -1807,7 +2354,11 @@ class CoreLoopKernel:
             event = CoreEvent(
                 name="runtime.failed",
                 category="error",
-                payload={"error": result.error, "message": result.message},
+                payload={
+                    "error": result.error,
+                    "message": result.message,
+                    **({"runtime_metrics": runtime_metrics} if runtime_metrics else {}),
+                },
                 session_id=state.session_id,
                 run_id=state.run_id,
                 tags=["error"],

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Literal, Protocol, runtime_checkable
 
 from lamtools_core.event import CoreEvent
-from lamtools_core.agent import SUB_AGENT_TOOL_NAME, SUB_AGENT_TOOL_SPEC
+from lamtools_core.agent import SUB_AGENT_TOOL_NAME, SUB_AGENT_TOOL_SPEC, SubAgentRunResult
 from lamtools_core.skills import SkillRegistry
 from lamtools_core.tool import ToolCall, ToolResult, ToolSpec
 from lamtools_core.tool.approval import ApprovalGate
@@ -40,7 +40,10 @@ class SubAgentRunner(Protocol):
         *,
         task: str,
         agent: str = "",
-    ) -> str: ...
+        parent_call_id: str = "",
+        parent_run_id: str = "",
+        parent_turn_id: str = "",
+    ) -> SubAgentRunResult | str: ...
 
 DEFAULT_MAX_WRITE_LENGTH = 500_000
 DEFAULT_COMMAND_TIMEOUT = 120
@@ -455,6 +458,7 @@ class CoreToolbox:
         self.loaded_skill_roots = {Path(item).resolve() for item in loaded_skill_roots or set()}
         self.mcp_caller = mcp_caller
         self.sub_agent_runner = sub_agent_runner
+        self._failed_sub_agent_calls: dict[tuple[str, str], dict[str, Any]] = {}
         self.approval_policy = approval_policy
         self.disabled_tools = set(disabled_tools or set())
         self.tool_permissions = dict(DEFAULT_TOOL_PERMISSIONS)
@@ -604,15 +608,87 @@ class CoreToolbox:
             task = str(args.get("task") or "").strip()
             if not task:
                 return ToolResult(call_id=call.id, name=call.name, status="failed", error="sub_agent requires 'task'")
-            content = await self.sub_agent_runner.run(
+            agent = str(args.get("agent") or "").strip()
+            failure_key = (agent.lower(), task)
+            previous_failure = self._failed_sub_agent_calls.get(failure_key)
+            if previous_failure is not None:
+                error = "Identical sub-agent task already failed; repeated execution was blocked."
+                return ToolResult(
+                    call_id=call.id,
+                    name=call.name,
+                    status="failed",
+                    content=f"SUB_AGENT FAILED: {error}",
+                    error=error,
+                    metadata={**previous_failure, "duplicate_failure_blocked": True},
+                )
+            outcome = await self.sub_agent_runner.run(
                 task=task,
-                agent=str(args.get("agent") or ""),
+                agent=agent,
+                parent_call_id=call.id,
+                parent_run_id=str(call.metadata.get("parent_run_id") or ""),
+                parent_turn_id=str(call.metadata.get("parent_turn_id") or ""),
             )
+            if isinstance(outcome, SubAgentRunResult):
+                metadata = {
+                    "agent": agent,
+                    "sub_session_id": outcome.session_id,
+                    "sub_run_id": outcome.run_id,
+                    "decision": outcome.decision,
+                    "model_id": outcome.model_id,
+                    "tool_call_count": outcome.tool_call_count,
+                    "ended_with_final_response": outcome.ended_with_final_response,
+                }
+                if outcome.decision == "wait":
+                    waiting_request = dict(outcome.pending_waiting_request)
+                    wait_reason = str(waiting_request.get("request_kind") or "approval")
+                    metadata.update({
+                        "pending_approval": dict(outcome.pending_approval),
+                        "pending_waiting_request": waiting_request,
+                        "wait_reason": wait_reason,
+                        "delegated_session": {
+                            "session_id": outcome.session_id,
+                            "agent": agent,
+                            "task": task,
+                            "parent_call_id": call.id,
+                            "parent_run_id": str(call.metadata.get("parent_run_id") or ""),
+                            "parent_turn_id": str(call.metadata.get("parent_turn_id") or ""),
+                        },
+                    })
+                    return ToolResult(
+                        call_id=call.id,
+                        name=call.name,
+                        status="blocked",
+                        content=(
+                            "Sub-agent paused after making no progress."
+                            if wait_reason == "no_progress"
+                            else "Sub-agent is waiting for approval."
+                        ),
+                        metadata=metadata,
+                    )
+                if not outcome.succeeded:
+                    error = outcome.failure_message()
+                    self._failed_sub_agent_calls[failure_key] = dict(metadata)
+                    return ToolResult(
+                        call_id=call.id,
+                        name=call.name,
+                        status="failed",
+                        content=f"SUB_AGENT FAILED: {error}",
+                        error=error,
+                        metadata=metadata,
+                    )
+                self._failed_sub_agent_calls.pop(failure_key, None)
+                return ToolResult(
+                    call_id=call.id,
+                    name=call.name,
+                    status="ok",
+                    content=outcome.message,
+                    metadata=metadata,
+                )
             return ToolResult(
                 call_id=call.id,
                 name=call.name,
                 status="ok",
-                content=str(content),
+                content=str(outcome),
                 metadata={
                     "agent": str(args.get("agent") or ""),
                 },

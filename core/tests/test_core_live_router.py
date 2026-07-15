@@ -4,6 +4,7 @@ import asyncio
 from datetime import datetime
 from types import SimpleNamespace
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import DateTime, Integer, JSON, String, UniqueConstraint
@@ -113,6 +114,34 @@ def test_core_live_connection_closes_on_hub_gap_signal() -> None:
         await asyncio.wait_for(connection._hub_reader(), timeout=0.1)
 
         assert websocket.close_calls == [(1013, "Event stream overflow; reconnect to resume.")]
+
+    asyncio.run(run())
+
+
+def test_core_live_connection_sends_run_item_without_snapshot_reload() -> None:
+    async def run() -> None:
+        connection = CoreLiveConnection(DummyWebSocket(), context=SimpleNamespace())
+        connection.subscription = asyncio.Queue()
+        await connection.subscription.put({
+            "event_id": "delta-1",
+            "thread_id": "thread-1",
+            "seq": 0,
+            "method": "core/runItem",
+            "payload": {},
+            "created_at": "2026-07-15T00:00:00+00:00",
+            "transient": False,
+        })
+        reader = asyncio.create_task(connection._hub_reader())
+        try:
+            notification = await asyncio.wait_for(connection.outbound.get(), timeout=0.1)
+            assert notification["method"] == "core/runItem"
+            assert notification["params"]["method"] == "core/runItem"
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(connection.outbound.get(), timeout=0.02)
+        finally:
+            reader.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await reader
 
     asyncio.run(run())
 

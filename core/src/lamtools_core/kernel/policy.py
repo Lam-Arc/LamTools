@@ -28,12 +28,14 @@ class LoopPolicy:
     # Kernel estimates the full model request before sampling. If the estimate
     # reaches compact_trigger_ratio of the window, it structurally summarizes
     # the current request's compressible context while preserving the stable
-    # system prefix and newest user context. compact_target_ratio is a hard
+    # system prefix and newest user context. compact_limit_ratio is a hard
     # post-compaction upper bound for the estimated request, not a best-effort
     # target. This is an estimate for runtime safety, not billing.
     context_window_tokens: int | None = None
     compact_trigger_ratio: float = 0.8
-    compact_target_ratio: float = 0.6
+    compact_limit_ratio: float = 0.6
+    compact_trigger_tokens: int | None = None
+    compact_limit_tokens: int | None = None
     # Tool execution parallelism (OpenAI Codex defaults to sequential for
     # shell-safety; Agents SDK defaults to parallel with optional cap).
     # parallel_tool_calls=False (default) executes tools strictly in order.
@@ -43,6 +45,11 @@ class LoopPolicy:
     parallel_tool_calls: bool = False
     max_concurrent_tools: int | None = None
     parallel_tool_names: tuple[str, ...] = ()
+    # Last-resort stop for an exact repeated failed tool call/result without a
+    # total step budget. The Kernel does not try to enumerate or semantically
+    # classify every possible failure; model-visible diagnosis handles that.
+    max_identical_tool_results: int | None = 4
+    identical_tool_result_window: int = 12
     # Step persistence (OpenAI Rollout-style): when True, Kernel appends a
     # step summary to state.metadata["kernel_steps"] after each iteration.
     # This enables post-run audit and debugging. Full resume/fork requires

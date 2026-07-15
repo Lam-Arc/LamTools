@@ -125,7 +125,7 @@ def core_event_to_progress_dict(event: CoreEvent) -> dict[str, Any]:
             "before_tokens",
             "after_tokens",
             "trigger_tokens",
-            "target_tokens",
+            "limit_tokens",
             "window_tokens",
             "removed_messages",
             "attempt",
@@ -146,7 +146,7 @@ def core_event_to_progress_dict(event: CoreEvent) -> dict[str, Any]:
                 "before_tokens",
                 "after_tokens",
                 "trigger_tokens",
-                "target_tokens",
+                "limit_tokens",
                 "window_tokens",
                 "removed_messages",
                 "attempt",
@@ -183,7 +183,7 @@ def core_event_to_progress_dict(event: CoreEvent) -> dict[str, Any]:
         d["summary"] = "Repair prompt injected"
     elif event.name == "runtime.context_compacted":
         d["summary"] = "Context compacted"
-        for key in ("before_tokens", "after_tokens", "trigger_tokens", "target_tokens", "window_tokens", "removed"):
+        for key in ("before_tokens", "after_tokens", "trigger_tokens", "limit_tokens", "window_tokens", "removed"):
             if key in payload:
                 d[key] = payload[key]
     elif event.name == "runtime.part":

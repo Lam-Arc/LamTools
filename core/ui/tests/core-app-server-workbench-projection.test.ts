@@ -12,6 +12,106 @@ import {
 import type { CoreAppSnapshot } from '../src/appServer'
 
 describe('core appServer workbench projection', () => {
+  it('preserves canonical compaction state and progress metadata through the workbench projection', () => {
+    const snapshot = hydrateSnapshot({
+      thread_id: 'thread-1',
+      snapshot_seq: 4,
+      core: {
+        thread_id: 'thread-1',
+        snapshot_seq: 4,
+        status: 'running',
+        item_order: ['compact-1'],
+        turns: {
+          'turn-1': { turn_id: 'turn-1', status: 'running', items: ['compact-1'] },
+        },
+        items: {
+          'compact-1': {
+            item_id: 'compact-1',
+            turn_id: 'turn-1',
+            kind: 'message',
+            status: 'completed',
+            payload: {
+              type: 'compaction',
+              compaction_status: 'not_needed',
+              reason: 'no_gain',
+              phase: 'segment',
+              segment: 2,
+              segments: 3,
+              label: '无需压缩',
+              before_tokens: 1800,
+              after_tokens: 1800,
+              limit_tokens: 1200,
+            },
+          },
+        },
+        requests: {},
+      },
+    } satisfies CoreAppSnapshot)
+
+    const part = selectCoreWorkbenchMessages(snapshot)[0]?.parts[0]
+
+    expect(part).toMatchObject({
+      id: 'compact-1',
+      partType: 'compaction',
+      label: '无需压缩',
+      metadata: {
+        compaction_status: 'not_needed',
+        reason: 'no_gain',
+        phase: 'segment',
+        segment: 2,
+        segments: 3,
+        before_tokens: 1800,
+        after_tokens: 1800,
+        limit_tokens: 1200,
+      },
+    })
+  })
+
+  it('keeps one compaction part id while streamed content grows into the final snapshot', () => {
+    const project = (status: 'running' | 'compacted', content: string) => selectCoreWorkbenchMessages(hydrateSnapshot({
+      thread_id: 'thread-1',
+      snapshot_seq: status === 'running' ? 2 : 3,
+      core: {
+        thread_id: 'thread-1',
+        snapshot_seq: status === 'running' ? 2 : 3,
+        status: status === 'running' ? 'running' : 'completed',
+        item_order: ['compact-1'],
+        turns: {
+          'turn-1': { turn_id: 'turn-1', status: status === 'running' ? 'running' : 'completed', items: ['compact-1'] },
+        },
+        items: {
+          'compact-1': {
+            item_id: 'compact-1',
+            turn_id: 'turn-1',
+            kind: 'message',
+            status: status === 'running' ? 'running' : 'completed',
+            content,
+            payload: {
+              type: 'compaction',
+              compaction_status: status,
+              content,
+              label: status === 'running' ? '正在压缩上下文 · 第 1/2 段' : '上下文已压缩',
+              before_tokens: 2400,
+              after_tokens: status === 'running' ? 2400 : 900,
+              limit_tokens: 1000,
+            },
+          },
+        },
+        requests: {},
+      },
+    } satisfies CoreAppSnapshot))[0]?.parts[0]
+
+    const running = project('running', '')
+    const streamed = project('running', '[Compacted Context]\n1. Current Goal')
+    const completed = project('compacted', '[Compacted Context]\n1. Current Goal\n- Continue.')
+
+    expect(running).toMatchObject({ id: 'compact-1', status: 'running', content: '' })
+    expect(streamed).toMatchObject({ id: 'compact-1', status: 'running' })
+    expect(streamed?.content).toContain('Current Goal')
+    expect(completed).toMatchObject({ id: 'compact-1', status: 'completed' })
+    expect(completed?.metadata).toMatchObject({ compaction_status: 'compacted', after_tokens: 900 })
+  })
+
   it('projects snapshot messages into CoreMessage rows with parts and attachment parts', () => {
     const snapshot = hydrateSnapshot({
       thread_id: 'thread-1',
@@ -146,6 +246,236 @@ describe('core appServer workbench projection', () => {
       { id: 'queue-1', text: '/review first', position: 1, status: 'queued' },
       { id: 'queue-2', text: 'second', position: 2, status: 'queued' },
     ])
+  })
+
+  it('projects shallow thinking markers as a reasoning part instead of visible protocol text', () => {
+    const snapshot = hydrateSnapshot({
+      thread_id: 'thread-1',
+      snapshot_seq: 3,
+      core: {
+        thread_id: 'thread-1',
+        snapshot_seq: 3,
+        status: 'completed',
+        item_order: ['assistant-1'],
+        turns: {
+          'turn-1': { turn_id: 'turn-1', status: 'completed', items: ['assistant-1'] },
+        },
+        items: {
+          'assistant-1': {
+            item_id: 'assistant-1',
+            turn_id: 'turn-1',
+            kind: 'message',
+            status: 'completed',
+            payload: {
+              type: 'agentMessage',
+              content: '[>SHALLOW_thinking_START<]\n[结论]\n先确认需求。\n[>SHALLOW_thinking_END<]\n\n最终正文。',
+            },
+          },
+        },
+        requests: {},
+      },
+    } satisfies CoreAppSnapshot)
+
+    const messages = selectCoreWorkbenchMessages(snapshot)
+
+    expect(messages[0]?.content).toBe('最终正文。')
+    expect(messages[0]?.content).not.toContain('SHALLOW_thinking')
+    expect(messages[0]?.parts).toContainEqual(expect.objectContaining({
+      partType: 'reasoning',
+      content: '[结论]\n先确认需求。',
+      status: 'completed',
+    }))
+  })
+
+  it('projects a failed turn status payload as a visible status part', () => {
+    const snapshot = hydrateSnapshot({
+      thread_id: 'thread-1',
+      snapshot_seq: 2,
+      core: {
+        thread_id: 'thread-1',
+        snapshot_seq: 2,
+        status: 'failed',
+        item_order: ['turn-1:terminal'],
+        turns: {
+          'turn-1': { turn_id: 'turn-1', status: 'failed', items: ['turn-1:terminal'] },
+        },
+        items: {
+          'turn-1:terminal': {
+            item_id: 'turn-1:terminal',
+            turn_id: 'turn-1',
+            kind: 'status',
+            status: 'failed',
+            payload: {
+              type: 'turn',
+              status: 'failed',
+              message: 'Invalid tool message sequence',
+            },
+          },
+        },
+        requests: {},
+      },
+    } satisfies CoreAppSnapshot)
+
+    expect(selectCoreWorkbenchMessages(snapshot)[0]?.parts[0]).toMatchObject({
+      partType: 'status',
+      status: 'error',
+      content: 'Invalid tool message sequence',
+    })
+  })
+
+  it('nests real child run items under the sub-agent call', () => {
+    const parentId = 'thread-1:run-parent:call-sub:tool'
+    const snapshot = hydrateSnapshot({
+      thread_id: 'thread-1',
+      snapshot_seq: 12,
+      core: {
+        thread_id: 'thread-1',
+        snapshot_seq: 12,
+        status: 'completed',
+        item_order: [parentId, 'child-reasoning', 'child-write', 'child-text', 'main-text'],
+        turns: {
+          'turn-1': {
+            turn_id: 'turn-1',
+            status: 'completed',
+            items: [parentId, 'child-reasoning', 'child-write', 'child-text', 'main-text'],
+          },
+        },
+        items: {
+          [parentId]: {
+            item_id: parentId,
+            turn_id: 'turn-1',
+            kind: 'tool_result',
+            status: 'completed',
+            payload: {
+              type: 'dynamicToolCall',
+              tool_name: 'sub_agent',
+              arguments: { agent: 'writer', task: 'write a story' },
+              tool_result: 'Child saved story.txt.',
+              metadata: { agent: 'writer', sub_session_id: 'child-session' },
+            },
+          },
+          'child-reasoning': {
+            item_id: 'child-reasoning',
+            parent_item_id: parentId,
+            turn_id: 'turn-1',
+            kind: 'thinking',
+            status: 'completed',
+            payload: { type: 'reasoning', content: 'Plan the delegated write.' },
+          },
+          'child-write': {
+            item_id: 'child-write',
+            parent_item_id: parentId,
+            turn_id: 'turn-1',
+            kind: 'tool_result',
+            status: 'completed',
+            payload: {
+              type: 'dynamicToolCall',
+              tool_name: 'write_file',
+              arguments: { path: 'story.txt' },
+              tool_result: 'Wrote story.txt',
+            },
+          },
+          'child-text': {
+            item_id: 'child-text',
+            parent_item_id: parentId,
+            turn_id: 'turn-1',
+            kind: 'message',
+            status: 'completed',
+            payload: { type: 'agentMessage', content: 'Child saved story.txt.' },
+          },
+          'main-text': {
+            item_id: 'main-text',
+            turn_id: 'turn-1',
+            kind: 'message',
+            status: 'completed',
+            payload: { type: 'agentMessage', content: 'Main received the child result.' },
+          },
+        },
+      },
+    } satisfies CoreAppSnapshot)
+
+    const messages = selectCoreWorkbenchMessages(snapshot)
+
+    expect(messages).toHaveLength(1)
+    expect(messages[0]?.content).toBe('Main received the child result.')
+    expect(messages[0]?.parts).toHaveLength(1)
+    expect(messages[0]?.parts[0]).toMatchObject({
+      id: parentId,
+      partType: 'agent_summary',
+      toolName: 'sub_agent',
+      metadata: {
+        subLineParts: [
+          { id: 'child-reasoning', partType: 'reasoning', content: 'Plan the delegated write.' },
+          { id: 'child-write', partType: 'tool_call', toolName: 'write_file', toolResult: 'Wrote story.txt' },
+          { id: 'child-text', partType: 'model_text', content: 'Child saved story.txt.' },
+        ],
+      },
+    })
+  })
+
+  it('shows an identical sub-agent handoff only inside the nested child timeline', () => {
+    const parentId = 'thread-1:run-parent:call-sub:tool'
+    const handoff = '任务已完成。\n\n**文件保存路径：** `story.txt`'
+    const snapshot = hydrateSnapshot({
+      thread_id: 'thread-1',
+      snapshot_seq: 20,
+      core: {
+        thread_id: 'thread-1',
+        snapshot_seq: 20,
+        status: 'completed',
+        item_order: [parentId, 'child-text', 'main-text'],
+        turns: {
+          'turn-1': {
+            turn_id: 'turn-1',
+            status: 'completed',
+            items: [parentId, 'child-text', 'main-text'],
+          },
+        },
+        items: {
+          [parentId]: {
+            item_id: parentId,
+            turn_id: 'turn-1',
+            kind: 'tool_result',
+            status: 'completed',
+            content: handoff,
+            payload: {
+              type: 'dynamicToolCall',
+              tool_name: 'sub_agent',
+              tool_result: handoff,
+            },
+          },
+          'child-text': {
+            item_id: 'child-text',
+            parent_item_id: parentId,
+            turn_id: 'turn-1',
+            kind: 'message',
+            status: 'completed',
+            payload: { type: 'agentMessage', content: handoff },
+          },
+          'main-text': {
+            item_id: 'main-text',
+            turn_id: 'turn-1',
+            kind: 'message',
+            status: 'completed',
+            payload: { type: 'agentMessage', content: handoff },
+          },
+        },
+      },
+    } satisfies CoreAppSnapshot)
+
+    const messages = selectCoreWorkbenchMessages(snapshot)
+
+    expect(messages).toHaveLength(1)
+    expect(messages[0]?.content).toBe('')
+    expect(messages[0]?.parts).toHaveLength(1)
+    expect(messages[0]?.parts[0]).toMatchObject({
+      id: parentId,
+      metadata: {
+        subLineParts: [
+          { id: 'child-text', partType: 'model_text', content: handoff },
+        ],
+      },
+    })
   })
 
   it('plans live process expansion for active assistant messages with process parts', () => {

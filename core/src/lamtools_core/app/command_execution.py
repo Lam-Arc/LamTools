@@ -10,8 +10,7 @@ from lamtools_core.runtime import RuntimeCheckpointStore, RuntimeState, RuntimeS
 
 
 CommandActionHandler = Callable[..., dict[str, Any] | Awaitable[dict[str, Any]]]
-MAX_RETAIN_MESSAGE_COUNT = 6
-MANUAL_COMPACTION_TARGET_TOKENS = 6_000
+MANUAL_COMPACTION_LIMIT_TOKENS = 6_000
 
 
 async def execute_command_action(
@@ -20,7 +19,7 @@ async def execute_command_action(
     thread_id: str,
     handlers: Mapping[str, CommandActionHandler],
     work_root: str = "",
-    on_delta: Callable[[str], Any] | None = None,
+    on_event: Callable[[dict[str, Any]], Any] | None = None,
 ) -> dict[str, Any]:
     handler = handlers.get(command)
     if handler is None:
@@ -28,7 +27,7 @@ async def execute_command_action(
     kwargs = {
         "thread_id": thread_id,
         "work_root": work_root,
-        "on_delta": on_delta,
+        "on_event": on_event,
     }
     accepted = _accepted_kwargs(handler, kwargs)
     result = handler(**accepted)
@@ -45,7 +44,7 @@ async def compact_runtime_history(
     thread_id: str,
     llm_client: LLMClient | None = None,
     model: str = "",
-    on_delta: Callable[[str], Any] | None = None,
+    on_event: Callable[[dict[str, Any]], Any] | None = None,
 ) -> dict[str, Any]:
     if not isinstance(runtime_state_store, RuntimeCheckpointStore):
         raise RuntimeError("Runtime history storage does not support manual compaction")
@@ -57,13 +56,16 @@ async def compact_runtime_history(
             messages=messages,
             llm_client=llm_client,
             model=model,
-            target_tokens=MANUAL_COMPACTION_TARGET_TOKENS,
-            retain_tail_count=MAX_RETAIN_MESSAGE_COUNT,
-            on_delta=on_delta,
+            limit_tokens=MANUAL_COMPACTION_LIMIT_TOKENS,
+            on_event=on_event,
         )
     )
     if result.status != "compacted":
-        raise ValueError("Context compaction did not produce a summary")
+        return {
+            **result.display_payload,
+            "session_id": thread_id,
+            "summary": result.summary,
+        }
     state = await runtime_state_store.get(thread_id) or RuntimeState(session_id=thread_id)
     await runtime_state_store.save_checkpoint(
         state,
@@ -76,7 +78,7 @@ async def compact_runtime_history(
         "retained_messages": result.retained_count,
         "before_tokens": result.before_tokens,
         "after_tokens": result.after_tokens,
-        "target_tokens": result.target_tokens,
+        "limit_tokens": result.limit_tokens,
         "trigger": "manual",
         "summary": result.summary,
     }
@@ -125,8 +127,7 @@ def _chat_message_from_dict(value: Any) -> ChatMessage | None:
 
 __all__ = [
     "CommandActionHandler",
-    "MANUAL_COMPACTION_TARGET_TOKENS",
-    "MAX_RETAIN_MESSAGE_COUNT",
+    "MANUAL_COMPACTION_LIMIT_TOKENS",
     "compact_runtime_history",
     "execute_command_action",
 ]

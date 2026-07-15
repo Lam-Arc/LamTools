@@ -32,7 +32,9 @@ from lamtools_core.app.live_operations import (
     handle_turn_cancel_operation,
     handle_turn_start_operation,
     handle_turn_steer_operation,
+    handle_command_execute_operation,
 )
+from lamtools_core.app.live_member import DefaultCoreLiveMemberHooks
 from lamtools_core.event import RunItemEvent
 from lamtools_core.app.snapshot_store import SqlAlchemyThreadSnapshotStore
 import lamtools_core.app.live_operations as live_operations_module
@@ -139,6 +141,52 @@ async def test_approval_respond_uses_operation_catalog_without_member_lifecycle_
 
 
 @pytest.mark.asyncio
+async def test_denied_approval_releases_stale_runtime_claim_before_next_turn(tmp_path):
+    engine, context = await _context(tmp_path)
+    stale_release = asyncio.Event()
+    next_release = _register_blocking_turn_start(context)
+    stale_task = asyncio.create_task(stale_release.wait())
+    assert context.runtime_task_registry.accept_run("thread-deny", "turn-denied")
+    assert context.runtime_task_registry.register("thread-deny", stale_task, run_id="turn-denied")
+
+    async def respond(request):
+        return OperationResult(
+            name=request.name,
+            payload={"thread_id": "thread-deny", "run_id": "turn-denied", "decision": "denied"},
+        )
+
+    context.operations.register("approval.respond", respond)
+    try:
+        denied = await context.host.execute(
+            "approval.respond",
+            request_id=1,
+            params={"thread_id": "thread-deny", "request_id": "request-1", "decision": "deny"},
+            context=context,
+        )
+        assert denied.response["result"]["decision"] == "denied"
+        assert context.runtime_task_registry.active_run_id("thread-deny") is None
+
+        started = await handle_turn_start_operation(
+            request_id=2,
+            params={
+                "thread_id": "thread-deny",
+                "client_message_id": "client-after-deny",
+                "input": [{"type": "text", "text": "continue"}],
+            },
+            context=context,
+        )
+        assert "result" in started.response
+    finally:
+        stale_release.set()
+        next_release.set()
+        await stale_task
+        next_task = context.runtime_task_registry.task("thread-deny")
+        if next_task is not None:
+            await next_task
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_thread_start_retries_whole_member_event_snapshot_transaction(tmp_path):
     engine, context = await _context(tmp_path)
     async with engine.begin() as conn:
@@ -182,6 +230,66 @@ def test_core_live_host_rejects_base_operation_executor_override(tmp_path, opera
             persistence=SimpleNamespace(bind_session_factory=lambda _factory: None),
             product_operation_executors={operation_name: forbidden_override},
         )
+
+
+@pytest.mark.asyncio
+async def test_core_compact_command_failure_persists_terminal_projection(tmp_path):
+    engine, context = await _context(tmp_path)
+
+    class Hooks(DefaultCoreLiveMemberHooks):
+        def command_action_handlers(self):
+            async def fail(**_kwargs):
+                raise RuntimeError("compact failed")
+
+            return {"compact": fail}
+
+    context.host.member_hooks = Hooks()
+    try:
+        outcome = await handle_command_execute_operation(
+            request_id=1,
+            params={"thread_id": "thread-compact-fail", "command": "compact"},
+            context=context,
+        )
+        async with context.session_factory() as db:
+            snapshot = await context.persistence.load(db, "thread-compact-fail")
+
+        assert outcome.response["error"]["message"] == "compact failed"
+        turn = next(iter(snapshot["core"]["turns"].values()))
+        assert turn["status"] == "failed"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_core_compact_command_can_omit_large_snapshot_from_response(tmp_path):
+    engine, context = await _context(tmp_path)
+
+    class Hooks(DefaultCoreLiveMemberHooks):
+        def command_action_handlers(self):
+            async def compact(**_kwargs):
+                return {"status": "not_needed", "reason": "no_gain"}
+
+            return {"compact": compact}
+
+    context.host.member_hooks = Hooks()
+    try:
+        outcome = await handle_command_execute_operation(
+            request_id=1,
+            params={
+                "thread_id": "thread-compact-small-response",
+                "command": "compact",
+                "include_snapshot": False,
+            },
+            context=context,
+        )
+
+        assert outcome.response["result"]["result"] == {
+            "status": "not_needed",
+            "reason": "no_gain",
+        }
+        assert "snapshot" not in outcome.response["result"]
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -331,6 +439,7 @@ async def test_core_live_turn_start_accepts_input_before_runtime_completion(tmp_
                 "thinking_enabled": True,
                 "thinking_budget": 6000,
                 "shallow_thinking_enabled": True,
+                "context_window_tokens": 256000,
                 "model_id": "xopkimik26",
             },
             context=context,
@@ -345,6 +454,7 @@ async def test_core_live_turn_start_accepts_input_before_runtime_completion(tmp_
         assert result["runtime_start"]["thinking_enabled"] is True
         assert result["runtime_start"]["thinking_budget"] == 6000
         assert result["runtime_start"]["shallow_thinking_enabled"] is True
+        assert result["runtime_start"]["context_window_tokens"] == 256000
         assert result["runtime_start"]["model_id"] == "xopkimik26"
 
         resumed = await handle_thread_resume_operation(
@@ -356,6 +466,47 @@ async def test_core_live_turn_start_accepts_input_before_runtime_completion(tmp_
         assert methods == ["turn/accepted", "item/started", "core/runItem"]
     finally:
         task = context.runtime_task_registry.task("thread-1")
+        release.set()
+        if task is not None:
+            await task
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_turn_start_uses_shared_auto_allow_setting_when_policy_is_omitted(tmp_path):
+    engine, context = await _context(tmp_path)
+    release = _register_blocking_turn_start(context)
+
+    async def get_settings(request):
+        assert request.payload == {"namespace": "core.runtimeControls"}
+        return OperationResult(
+            name=request.name,
+            payload={
+                "namespace": "core.runtimeControls",
+                "value": {
+                    "command_policies": {
+                        "regular": "auto_allow",
+                        "dangerous": "auto_allow",
+                    },
+                },
+            },
+        )
+
+    context.operations.register("settings.get", get_settings)
+    try:
+        outcome = await handle_turn_start_operation(
+            request_id=1,
+            params={
+                "thread_id": "thread-auto-allow",
+                "client_message_id": "client-auto-allow",
+                "input": [{"type": "text", "text": "write a file"}],
+            },
+            context=context,
+        )
+
+        assert outcome.response["result"]["runtime_start"]["approval_policy"] == "auto_approve"
+    finally:
+        task = context.runtime_task_registry.task("thread-auto-allow")
         release.set()
         if task is not None:
             await task
@@ -1051,6 +1202,54 @@ async def test_core_live_turn_cancel_publishes_interrupting_status(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_core_live_turn_cancel_closes_persisted_run_without_live_task(tmp_path):
+    engine, context = await _context(tmp_path)
+    _register_blocking_turn_start(context)
+    task = None
+    try:
+        started = await handle_turn_start_operation(
+            request_id=1,
+            params={
+                "thread_id": "thread-stale-running",
+                "client_message_id": "client-stale-running",
+                "input": [{"type": "text", "text": "hello"}],
+            },
+            context=context,
+        )
+        turn_id = started.response["result"]["runtime_start"]["turn_id"]
+        task = context.runtime_task_registry.task("thread-stale-running", run_id=turn_id)
+        assert task is not None
+
+        # Simulate a process restart: persistence still says running, while the
+        # new process has no in-memory task capable of emitting a terminal item.
+        context.runtime_task_registry.release_run("thread-stale-running", run_id=turn_id)
+
+        outcome = await handle_turn_cancel_operation(
+            request_id=2,
+            params={"thread_id": "thread-stale-running", "turn_id": turn_id},
+            context=context,
+        )
+
+        result = outcome.response["result"]
+        assert [event["method"] for event in result["events"]] == [
+            "turn/interrupted",
+            "core/runItem",
+            "core/runItem",
+        ]
+        assert result["events"][-1]["payload"]["status"] == "cancelled"
+        assert result["snapshot"]["turns"][turn_id]["status"] == "cancelled"
+        assert result["snapshot"]["core"]["turns"][turn_id]["status"] == "cancelled"
+    finally:
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_force_cancel_persists_and_publishes_cancelled_terminal(tmp_path):
     llm = BlockingCoreLLM()
     engine, context = await _live_core_context(tmp_path, llm)
@@ -1115,6 +1314,49 @@ async def test_force_cancel_persists_and_publishes_cancelled_terminal(tmp_path):
         assert context.runtime_task_registry.task(thread_id, run_id=turn_id) is None
     finally:
         context.hub.unsubscribe(thread_id, subscription)
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_internal_cancelled_error_is_failed_not_user_interrupted(tmp_path):
+    engine, context = await _context(tmp_path)
+
+    async def turn_start(_request):
+        raise asyncio.CancelledError("provider stream cancelled internally")
+
+    context.operations.register("turn.start", turn_start)
+    thread_id = "thread-internal-cancel"
+    try:
+        started = await handle_turn_start_operation(
+            request_id=1,
+            params={
+                "thread_id": thread_id,
+                "client_message_id": "client-internal-cancel",
+                "input": [{"type": "text", "text": "start"}],
+            },
+            context=context,
+        )
+        turn_id = started.response["result"]["runtime_start"]["turn_id"]
+        task = context.runtime_task_registry.task(thread_id, run_id=turn_id)
+        assert task is not None
+        await task
+
+        resumed = await handle_thread_resume_operation(
+            request_id=2,
+            params={"thread_id": thread_id, "last_seen_seq": 0},
+            context=context,
+        )
+        events = resumed.response["result"]["events"]
+        terminal = [
+            event for event in events
+            if event["method"] == "core/runItem"
+            and event["payload"].get("kind") == "status"
+            and event["payload"].get("status") in {"failed", "cancelled"}
+        ]
+
+        assert [event["payload"]["status"] for event in terminal] == ["failed"]
+        assert not any(event["method"] == "turn/interrupted" for event in events)
+    finally:
         await engine.dispose()
 
 

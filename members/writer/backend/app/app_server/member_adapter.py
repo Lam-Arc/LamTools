@@ -41,16 +41,16 @@ class WriterLiveMemberAdapter:
             "fork": self._fork_command,
         }
 
-    async def _compact_command(self, *, thread_id: str, on_delta=None):
+    async def _compact_command(self, *, thread_id: str, on_event=None):
         writer_service = self._runtime.writer_service_or_none()
         compact = writer_service.get("compact_session_context") if isinstance(writer_service, dict) else None
         if callable(compact):
-            return await compact(session_id=thread_id, on_summary_delta=on_delta)
+            return await compact(session_id=thread_id, on_summary_event=on_event)
         async with self._session_factory() as db:
             result = await compact_session_context_response(
                 db,
                 session_id=thread_id,
-                on_summary_delta=on_delta,
+                on_summary_event=on_event,
             )
             await db.commit()
             return result

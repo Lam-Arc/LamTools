@@ -1,5 +1,13 @@
 import { hydrateSnapshot as defaultHydrateSnapshot } from './snapshot.ts'
-import type { CoreAppCommandCatalogItem, CoreAppInputItem, CoreAppSnapshot } from './protocol.ts'
+import type {
+  CoreAppCommandCatalogItem,
+  CoreAppEvent,
+  CoreAppInputItem,
+  CoreAppSnapshot,
+  CoreRuntimeItem,
+  CoreRuntimeSnapshot,
+  CoreAppThreadStatus,
+} from './protocol.ts'
 
 export interface CoreAppServerRuntimeClient {
   connect(params?: { threadId?: string; lastSeenSeq?: number }): Promise<void>
@@ -29,12 +37,14 @@ export interface CoreAppServerRuntimeControllerOptions<
 > {
   createClient(params: {
     apiBase: string
+    onEvent: (event: CoreAppEvent) => void
     onSnapshot: (snapshot: Snapshot) => void
     onConnectionState: (state: CoreAppServerRuntimeState<Snapshot, Client>['connectionState']) => void
   }): Promise<Client> | Client
   hydrateSnapshot?: (snapshot: Snapshot) => Snapshot
   reconnectBaseMs?: number
   reconnectMaxMs?: number
+  scheduleFrame?: (callback: () => void) => unknown
 }
 
 export function createCoreAppServerRuntimeState<
@@ -66,6 +76,9 @@ export function createCoreAppServerRuntimeController<
   const reconnectBaseMs = options.reconnectBaseMs ?? 25
   const reconnectMaxMs = options.reconnectMaxMs ?? 2_000
   const hydrateSnapshot = options.hydrateSnapshot ?? ((snapshot: Snapshot) => defaultHydrateSnapshot(snapshot) as Snapshot)
+  const scheduleFrame = options.scheduleFrame ?? defaultScheduleFrame
+  const pendingEvents: CoreAppEvent[] = []
+  let eventFrameScheduled = false
 
   async function connect(apiBase: string, threadId?: string) {
     clearReconnectTimer()
@@ -80,6 +93,7 @@ export function createCoreAppServerRuntimeController<
     runtime.client?.close()
     const client = await options.createClient({
       apiBase,
+      onEvent: (event) => enqueueEvent(event),
       onSnapshot: (snapshot) => hydrate(snapshot),
       onConnectionState: (state) => {
         if (runtime.connectionGeneration !== generation) return
@@ -107,6 +121,7 @@ export function createCoreAppServerRuntimeController<
     runtime.client?.close()
     runtime.client = null
     runtime.state = null
+    pendingEvents.length = 0
     runtime.connectionState = 'closed'
   }
 
@@ -139,6 +154,23 @@ export function createCoreAppServerRuntimeController<
 
   function hydrate(snapshot: Snapshot) {
     runtime.state = hydrateSnapshot(snapshot)
+  }
+
+  function enqueueEvent(event: CoreAppEvent) {
+    if (event.method !== 'core/runItem') return
+    pendingEvents.push(event)
+    if (eventFrameScheduled) return
+    eventFrameScheduled = true
+    scheduleFrame(() => {
+      eventFrameScheduled = false
+      const events = pendingEvents.splice(0)
+      if (!runtime.state) return
+      let next = runtime.state as CoreAppSnapshot
+      for (const pending of events) {
+        next = applyCoreRunItemEvent(next, pending)
+      }
+      runtime.state = next as Snapshot
+    })
   }
 
   function applyResponse(response: Record<string, unknown>) {
@@ -250,21 +282,17 @@ export function createCoreAppServerRuntimeController<
     applyResponse(response)
   }
 
-  async function interruptTurn(threadId: string) {
+  async function interruptTurn(threadId: string, turnId?: string) {
     await ensureClient()
     const response = await runtime.client!.request('turn/interrupt', {
       thread_id: threadId,
+      ...(turnId ? { turn_id: turnId } : {}),
     })
     applyResponse(response)
   }
 
   async function respondApproval(requestId: string, decision: string, guidance?: string) {
     await ensureClient()
-    const sentResponse = runtime.client!.respondServerRequest?.(requestId, {
-      decision,
-      guidance,
-    })
-    if (sentResponse) return
     const response = await runtime.client!.request('approval/respond', {
       request_id: requestId,
       decision,
@@ -305,6 +333,129 @@ export function createCoreAppServerRuntimeController<
     steerTurn,
     updateQueueInput,
   }
+}
+
+function defaultScheduleFrame(callback: () => void) {
+  if (typeof requestAnimationFrame === 'function') {
+    requestAnimationFrame(callback)
+    return
+  }
+  queueMicrotask(callback)
+}
+
+function applyCoreRunItemEvent(snapshot: CoreAppSnapshot, event: CoreAppEvent): CoreAppSnapshot {
+  const value = event.payload
+  const itemId = typeof value.item_id === 'string' ? value.item_id : event.item_id || ''
+  const kind = typeof value.kind === 'string' ? value.kind : ''
+  if (!kind) return snapshot
+  const eventId = typeof value.event_id === 'string' ? value.event_id : event.event_id
+  const currentCore = snapshot.core ?? emptyCoreSnapshot(snapshot.thread_id)
+  if (currentCore.seen_event_ids?.includes(eventId)) return snapshot
+  const runPayload = isRecord(value.payload) ? value.payload : {}
+  const turnId = typeof value.turn_id === 'string' ? value.turn_id : event.turn_id || ''
+  const seen = [...(currentCore.seen_event_ids ?? []), eventId].slice(-2000)
+  if (kind === 'status') {
+    const rawStatus = typeof runPayload.status === 'string'
+      ? runPayload.status
+      : typeof value.status === 'string'
+        ? value.status
+        : currentCore.status
+    const status = isCoreAppThreadStatus(rawStatus) ? rawStatus : currentCore.status
+    const turns = { ...(currentCore.turns ?? {}) }
+    if (turnId) {
+      const turn = turns[turnId] ?? { turn_id: turnId, status: status || 'running', items: [] }
+      turns[turnId] = { ...turn, status: status || turn.status }
+    }
+    return {
+      ...snapshot,
+      core: { ...currentCore, seen_event_ids: seen, turns, status },
+    }
+  }
+  if (kind === 'usage') {
+    const turns = { ...(currentCore.turns ?? {}) }
+    if (turnId) {
+      const turn = turns[turnId] ?? { turn_id: turnId, status: 'running', items: [] }
+      const usage = isRecord(value.usage) ? value.usage : {}
+      turns[turnId] = { ...turn, usage: { ...(turn.usage ?? {}), ...usage } }
+    }
+    return { ...snapshot, core: { ...currentCore, seen_event_ids: seen, turns } }
+  }
+  if (!itemId) return snapshot
+
+  const items = { ...(currentCore.items ?? {}) }
+  const existing = items[itemId] ?? { item_id: itemId, content: '', deltas: [] }
+  const delta = typeof runPayload.delta === 'string' ? runPayload.delta : undefined
+  const content = typeof runPayload.content === 'string' ? runPayload.content : undefined
+  const item: CoreRuntimeItem = {
+    ...existing,
+    item_id: itemId,
+    turn_id: typeof value.turn_id === 'string' ? value.turn_id : existing.turn_id,
+    parent_item_id: typeof value.parent_item_id === 'string' ? value.parent_item_id : existing.parent_item_id,
+    kind: kind === 'tool_result' ? 'tool_result' : existing.kind || kind,
+    last_kind: kind,
+    status: typeof value.status === 'string' ? value.status : existing.status,
+    payload: { ...(existing.payload ?? {}), ...runPayload },
+  }
+  if (delta !== undefined) {
+    item.deltas = [...(existing.deltas ?? []), delta]
+    item.content = `${existing.content ?? ''}${delta}`
+  } else if (content !== undefined) {
+    item.content = content
+  }
+  items[itemId] = item
+
+  const itemOrder = [...(currentCore.item_order ?? [])]
+  if (!itemOrder.includes(itemId)) itemOrder.push(itemId)
+  const turns = { ...(currentCore.turns ?? {}) }
+  const itemStatus = typeof value.status === 'string' ? value.status : existing.status
+  if (turnId) {
+    const turn = turns[turnId] ?? { turn_id: turnId, status: 'running', items: [] }
+    const turnItems = [...(turn.items ?? [])]
+    if (!turnItems.includes(itemId)) turnItems.push(itemId)
+    turns[turnId] = {
+      ...turn,
+      items: turnItems,
+      ...(itemStatus === 'waiting' ? { status: 'waiting' } : {}),
+    }
+  }
+  return {
+    ...snapshot,
+    core: {
+      ...currentCore,
+      seen_event_ids: seen,
+      turns,
+      items,
+      item_order: itemOrder,
+      ...(itemStatus === 'waiting' ? { status: 'waiting' } : {}),
+    },
+  }
+}
+
+function emptyCoreSnapshot(threadId: string): CoreRuntimeSnapshot {
+  return {
+    thread_id: threadId,
+    snapshot_seq: 0,
+    seen_event_ids: [],
+    turns: {},
+    items: {},
+    item_order: [],
+    requests: {},
+    artifacts: {},
+    status: 'idle',
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
+}
+
+function isCoreAppThreadStatus(value: unknown): value is CoreAppThreadStatus {
+  return value === 'idle'
+    || value === 'running'
+    || value === 'waiting'
+    || value === 'completed'
+    || value === 'failed'
+    || value === 'cancelled'
 }
 
 function isCoreAppSnapshot(value: unknown): value is CoreAppSnapshot {

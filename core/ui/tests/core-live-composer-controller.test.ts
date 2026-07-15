@@ -279,7 +279,6 @@ describe('useCoreLiveComposerController', () => {
       },
       messages: {
         queued: 'Queued by member',
-        sent: 'Sent by member',
         stopping: 'Stopping by member',
       },
     })
@@ -310,14 +309,14 @@ describe('useCoreLiveComposerController', () => {
     text.value = ''
     await controller.submit({ clearComposer: true })
     expect(calls).toContain('stop:thread-1')
-    expect(statusText.value).toBe('Stopping by member')
+    expect(statusText.value).toBe('')
 
     status.value = 'idle'
     text.value = 'write a test'
     attachments.value = [{ type: 'attachment', attachment_id: 'a-1' }]
     await controller.submit({ clearComposer: true })
     expect(calls).toContain('start:thread-1:[{"type":"text","text":"write a test"},{"type":"attachment","attachment_id":"a-1"}]')
-    expect(statusText.value).toBe('Sent by member')
+    expect(statusText.value).toBe('')
     expect(clearedAttachments).toBe(1)
   })
 

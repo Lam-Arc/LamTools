@@ -81,6 +81,40 @@ describe('SessionSidebar sections', () => {
     expect(menu.text()).toContain('删除项目')
   })
 
+  it('keeps the menu mounted through pointerdown and dispatches every project action', async () => {
+    const wrapper = mount(SessionSidebar, {
+      props: {
+        projectGroups: groups,
+        allowProjectDelete: true,
+        allowProjectContextMenu: true,
+      },
+      attachTo: document.body,
+    })
+
+    for (const [selector, event] of [
+      ['[data-project-new="recent-new"]', 'new-session'],
+      ['[data-project-pin="recent-new"]', null],
+      ['[data-project-menu="recent-new"] button:nth-last-of-type(2)', 'project-context-menu'],
+      ['[data-project-menu="recent-new"] button:last-of-type', 'delete-project'],
+    ] as const) {
+      await wrapper.get('[data-project-menu-trigger="recent-new"]').trigger('click')
+      const action = wrapper.get(selector)
+      await action.trigger('pointerdown')
+      expect(wrapper.find('[data-project-menu="recent-new"]').exists()).toBe(true)
+      await action.trigger('click')
+      if (event) expect(wrapper.emitted(event)?.at(-1)).toEqual(['recent-new'])
+    }
+  })
+
+  it('selects a session when its title text is clicked', async () => {
+    const wrapper = mount(SessionSidebar, { props: { projectGroups: groups } })
+
+    await wrapper.get('.conversation strong').trigger('click')
+
+    expect(wrapper.emitted('select-session')).toEqual([['s1']])
+    expect(wrapper.find('.session-name-input').exists()).toBe(false)
+  })
+
   it('pins a session from its hover actions and keeps its original ordinal', async () => {
     const wrapper = mount(SessionSidebar, {
       props: {

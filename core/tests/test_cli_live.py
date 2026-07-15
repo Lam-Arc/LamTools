@@ -7,6 +7,7 @@ import pytest
 
 from lamtools_core.app.cli_live import (
     CliLiveFormatter,
+    execute_compaction_command_live,
     watch_live_events,
 )
 from lamtools_core.cli import build_parser
@@ -59,14 +60,27 @@ def test_live_formatter_formats_approval_and_compaction_compatibly() -> None:
             "message",
             {
                 "type": "compaction",
+                "compaction_status": "compacted",
                 "label": "\u4e0a\u4e0b\u6587\u5df2\u538b\u7f29",
                 "before_tokens": 18000,
                 "after_tokens": 7200,
-                "compacted_messages": 8,
+                "segments": 3,
             },
             status="completed",
         )
-    ) == ["[00:00] done \u4e0a\u4e0b\u6587\u5df2\u538b\u7f29\uff1a18000 -> 7200 tokens\uff0c\u538b\u7f29 8 \u6761\u6d88\u606f\u3002"]
+    ) == ["[00:00] done \u4e0a\u4e0b\u6587\u5df2\u538b\u7f29 \u00b7 18000 \u2192 7200 tokens \u00b7 3 \u6bb5"]
+
+    assert formatter.format(
+        core_run_item(
+            "message",
+            {
+                "type": "compaction",
+                "compaction_status": "not_needed",
+                "reason": "no_gain",
+            },
+            status="completed",
+        )
+    ) == ["[00:00] done \u65e0\u9700\u538b\u7f29 \u00b7 \u672a\u83b7\u5f97\u6536\u76ca \u00b7 \u539f\u4e0a\u4e0b\u6587\u5df2\u4fdd\u7559"]
 
 
 def test_core_cli_exposes_generic_live_watch() -> None:
@@ -289,6 +303,61 @@ def test_formatter_closes_inline_delta_before_a_line_event() -> None:
     assert [(str(chunk), chunk.end) for chunk in chunks] == [
         ("\n", ""),
         ("[00:00] done", "\n"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_execute_compaction_command_streams_new_deltas_and_terminal_state_inline() -> None:
+    class LiveClient:
+        def __init__(self) -> None:
+            self.queue: asyncio.Queue[dict] = asyncio.Queue()
+            self.connected_with = None
+
+        async def connect(self, **kwargs):
+            self.connected_with = kwargs
+
+        async def execute_command(self, *, thread_id: str, command: str, work_root: str):
+            assert (thread_id, command, work_root) == ("thread-1", "compact", "E:\\Work")
+            await self.queue.put(core_run_item("message", {
+                "type": "compaction", "status": "running", "label": "正在压缩上下文",
+            }, status="running"))
+            await asyncio.sleep(0)
+            await self.queue.put(core_run_item("message", {
+                "type": "compaction", "status": "running", "delta": "摘要片段",
+            }, status="running"))
+            await asyncio.sleep(0)
+            await self.queue.put(core_run_item("message", {
+                "type": "compaction", "status": "compacted", "label": "上下文已压缩",
+                "before_tokens": 1800, "after_tokens": 900,
+            }, status="completed"))
+            return {"status": "compacted", "before_tokens": 1800, "after_tokens": 900}
+
+        async def events(self):
+            while True:
+                yield await self.queue.get()
+
+        async def close(self):
+            return None
+
+    live = LiveClient()
+    output: list[object] = []
+
+    result, saw_terminal = await execute_compaction_command_live(
+        client_factory=lambda: live,
+        thread_id="thread-1",
+        work_root="E:\\Work",
+        formatter=CliLiveFormatter(),
+        output=output.append,
+    )
+
+    assert result["status"] == "compacted"
+    assert saw_terminal is True
+    assert live.connected_with == {}
+    assert [(str(chunk), chunk.end) for chunk in output] == [
+        ("[00:00] phase 正在压缩上下文", "\n"),
+        ("摘要片段", ""),
+        ("\n", ""),
+        ("[00:00] done 上下文已压缩 · 1800 → 900 tokens", "\n"),
     ]
 
 

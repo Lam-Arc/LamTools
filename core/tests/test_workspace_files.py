@@ -62,6 +62,34 @@ async def test_search_files_and_content_respect_limits(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_search_tools_treat_null_optional_path_as_workspace_root(tmp_path):
+    work_root = tmp_path / "project"
+    work_root.mkdir()
+    (work_root / "note.md").write_text("searchable text\n", encoding="utf-8")
+    tools = WorkspaceReadOnlyTools(work_root)
+
+    files = await tools.search_files(
+        ToolCall(
+            id="search-files-null-path",
+            name="search_files",
+            arguments={"path": None, "pattern": "*.md"},
+        )
+    )
+    content = await tools.search_content(
+        ToolCall(
+            id="search-content-null-path",
+            name="search_content",
+            arguments={"path": None, "pattern": "searchable"},
+        )
+    )
+
+    assert files.status == "ok"
+    assert files.content == "note.md"
+    assert content.status == "ok"
+    assert "note.md:1: searchable text" in content.content
+
+
+@pytest.mark.asyncio
 async def test_write_and_edit_file_are_bounded_to_workspace(tmp_path):
     work_root = tmp_path / "project"
     work_root.mkdir()
@@ -88,6 +116,10 @@ async def test_write_and_edit_file_are_bounded_to_workspace(tmp_path):
 
     assert created.status == "ok"
     assert edited.status == "ok"
+    diff_lines = str(edited.artifacts[0].content).splitlines()
+    assert diff_lines[:3] == ["--- a/note.txt", "+++ b/note.txt", "@@ -1 +1 @@"]
+    assert "-hello" in diff_lines
+    assert "+hello world" in diff_lines
     assert (work_root / "note.txt").read_text(encoding="utf-8") == "hello world\n"
     assert escaped.status == "failed"
     assert "outside work_root" in escaped.error

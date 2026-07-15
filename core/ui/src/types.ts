@@ -272,6 +272,7 @@ export type WorkspaceSlotName =
   | 'main-content'
   | 'thread-content'
   | 'composer-preamble'
+  | 'composer-status'
   | 'composer-textarea'
   | 'composer-tools'
   | 'composer-action'
@@ -287,6 +288,7 @@ export const WORKSPACE_SLOT_NAMES: readonly WorkspaceSlotName[] = [
   'main-content',
   'thread-content',
   'composer-preamble',
+  'composer-status',
   'composer-textarea',
   'composer-tools',
   'composer-action',

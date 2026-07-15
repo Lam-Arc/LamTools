@@ -290,19 +290,18 @@ class WriterRuntimeRunner:
         session_id: str,
         result: dict[str, Any],
     ) -> None:
-        summary = str(result.get("summary") or "").strip()
-        if not summary:
-            return
+        summary = str(result.get("summary") or result.get("content") or "").strip()
+        compaction_status = str(result.get("status") or "failed")
         run_id = f"{session_id}:pre-run-compaction"
         compacted_messages = _int_result(result, "compacted_messages")
         retained_messages = _int_result(result, "retained_messages")
         before_tokens = _int_result(result, "before_tokens")
         after_tokens = _int_result(result, "after_tokens")
-        target_tokens = _int_result(result, "target_tokens")
+        limit_tokens = _int_result(result, "limit_tokens")
         common_payload = {
             "before_tokens": before_tokens,
             "after_tokens": after_tokens,
-            "target_tokens": target_tokens,
+            "limit_tokens": limit_tokens,
             "trigger_tokens": 0,
             "window_tokens": 0,
             "trigger": "auto",
@@ -317,8 +316,9 @@ class WriterRuntimeRunner:
                     **common_payload,
                     "part_id": f"{run_id}:context-compaction",
                     "part_type": "compaction",
-                    "status": "completed",
-                    "label": "上下文已压缩",
+                    "status": "completed" if compaction_status in {"compacted", "not_needed"} else "failed",
+                    "compaction_status": compaction_status,
+                    "label": str(result.get("label") or ("无需压缩" if compaction_status == "not_needed" else "压缩未完成" if compaction_status == "failed" else "上下文已压缩")),
                     "detail": f"{before_tokens} -> {after_tokens} tokens",
                     "content": summary[:20_000],
                     "compacted_messages": compacted_messages,
@@ -330,6 +330,8 @@ class WriterRuntimeRunner:
                 tags=["compaction", "token_budget", "part"],
             )
         )
+        if compaction_status != "compacted":
+            return
         await recorder.record_core_event(
             CoreEvent(
                 name="runtime.context_compacted",

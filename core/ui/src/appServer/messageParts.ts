@@ -55,6 +55,9 @@ export function coreAppItemPartStatus(rawStatus: string): MessagePart['status'] 
 }
 
 export function coreAppItemPartLabel(item: CoreAppItem, partType: MessagePart['partType']): string {
+  if (partType === 'compaction' && typeof item.label === 'string' && item.label.trim()) {
+    return item.label.trim()
+  }
   if (partType === 'model_text') return '正文'
   if (partType === 'tool_call') return String(item.tool_name || item.kind || 'tool')
   if (partType === 'reasoning') return 'thinking'

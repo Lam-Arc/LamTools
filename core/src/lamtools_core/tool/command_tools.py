@@ -6,6 +6,10 @@ from pathlib import Path
 from typing import Awaitable, Callable
 
 from lamtools_core.event import CoreEvent
+from lamtools_core.runtime.background_processes import (
+    BackgroundProcessRegistry,
+    default_background_process_registry,
+)
 from lamtools_core.tool import ToolArtifact, ToolCall, ToolResult
 from lamtools_core.tool.command import CommandExecution as _CommandExecution
 from lamtools_core.tool.command import detect_test_command
@@ -46,11 +50,15 @@ class CommandToolHandlers:
         command_timeout: int,
         loaded_skill_roots: set[Path],
         core_event_callback: Callable[[CoreEvent], Awaitable[None]] | None = None,
+        background_process_registry: BackgroundProcessRegistry | None = None,
     ) -> None:
         self._work_root = work_root
         self._command_timeout = command_timeout
         self._loaded_skill_roots = loaded_skill_roots
         self._core_event_callback = core_event_callback
+        self._background_process_registry = (
+            background_process_registry or default_background_process_registry()
+        )
 
     async def run_command(self, call: ToolCall) -> ToolResult:
         """Execute a shell command inside *work_root*.
@@ -200,11 +208,16 @@ class CommandToolHandlers:
                             )
             if execution is None:
                 if run_in_background:
+                    runtime_session_id = str(call.metadata.get("_runtime_session_id") or "")
+                    runtime_run_id = str(call.metadata.get("_runtime_run_id") or "")
                     execution = await _run_background_subprocess(
                         argv,
                         cwd=self._work_root,
                         command=command,
                         http_probe=http_probe,
+                        process_registry=self._background_process_registry,
+                        session_id=runtime_session_id,
+                        run_id=runtime_run_id,
                     )
                 else:
                     async def _emit_command_progress(stdout: str, stderr: str) -> None:

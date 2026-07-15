@@ -45,12 +45,20 @@ export type {
 
 export { WORKSPACE_SLOT_NAMES } from './types';
 
+export {
+  buildCoreResourceSummary,
+  CORE_CONTEXT_COMPACTION_TRIGGER_RATIO,
+  type CoreResourceSummary,
+} from './runtime/resources';
+export { buildCurrentTurnChecklistGroups } from './runtime/checklist';
+
 // Components
 export { default as WorkspaceShell } from './components/WorkspaceShell.vue';
 export { default as SessionSidebar } from './components/SessionSidebar.vue';
 export { default as ChatThread } from './components/ChatThread.vue';
 export { default as ComposerBar } from './components/ComposerBar.vue';
 export { default as CoreExecutionControls } from './components/CoreExecutionControls.vue';
+export { default as CoreResourceStats } from './components/CoreResourceStats.vue';
 export { default as MarkdownRenderer } from './components/MarkdownRenderer.vue';
 export { default as UiSelect } from './components/UiSelect.vue';
 export { default as CoreQueuedInputTray } from './components/CoreQueuedInputTray.vue';
@@ -62,6 +70,13 @@ export { default as ThemeEditor } from './components/ThemeEditor.vue';
 export { default as ThemeAreaEditor } from './components/ThemeAreaEditor.vue';
 export { default as CoreSettings } from './components/CoreSettings.vue';
 export { default as CoreProjectCreate } from './components/CoreProjectCreate.vue';
+export { default as CoreSessionTitleEditor } from './components/CoreSessionTitleEditor.vue';
+export { default as CoreSessionRollback } from './components/CoreSessionRollback.vue';
+export type {
+  CoreSessionCheckpoint,
+  CoreSessionRollbackResult,
+  CoreSessionOperationRequest,
+} from './components/CoreSessionRollback.vue';
 export { default as CoreAgentsEditor } from './components/CoreAgentsEditor.vue';
 export type {
   CoreSettingsDensity,

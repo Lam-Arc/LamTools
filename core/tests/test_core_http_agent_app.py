@@ -15,7 +15,6 @@ from lamtools_core.app.http_agent_app import (
 from lamtools_core.cli import CoreHttpLLMClient, list_core_cli_sessions
 from lamtools_core.llm import LLMRequest, LLMStreamEvent
 from lamtools_core.app.base_agent import CoreBaseAgentKit
-from lamtools_core.runtime import default_runtime_task_registry
 
 
 def _write_config_db(path: Path) -> None:
@@ -432,8 +431,6 @@ def test_core_http_websocket_active_turn_steer_and_second_start_matrix(tmp_path:
         yield LLMStreamEvent(kind="done")
 
     monkeypatch.setattr(CoreHttpLLMClient, "stream", fake_stream)
-    registry = default_runtime_task_registry()
-    registry.clear()
     app = create_core_agent_http_app(
         model_id="model-record",
         config_db=config_db,
@@ -441,6 +438,7 @@ def test_core_http_websocket_active_turn_steer_and_second_start_matrix(tmp_path:
         data_dir=tmp_path / "core-data",
         work_root=tmp_path / "workspace",
     )
+    registry = app.state.core_agent_runtime_task_registry
     try:
         with TestClient(app) as client:
             with client.websocket_connect("/api/core/app-server") as websocket:
@@ -514,8 +512,6 @@ def test_core_http_websocket_rejects_steer_after_kernel_seal_before_task_done(tm
 
     monkeypatch.setattr(CoreHttpLLMClient, "stream", fake_stream)
     monkeypatch.setattr(CoreBaseAgentKit, "writeback", blocking_writeback)
-    registry = default_runtime_task_registry()
-    registry.clear()
     app = create_core_agent_http_app(
         model_id="model-record",
         config_db=config_db,
@@ -523,6 +519,7 @@ def test_core_http_websocket_rejects_steer_after_kernel_seal_before_task_done(tm
         data_dir=tmp_path / "core-data",
         work_root=tmp_path / "workspace",
     )
+    registry = app.state.core_agent_runtime_task_registry
     try:
         with TestClient(app) as client:
             with client.websocket_connect("/api/core/app-server") as websocket:
@@ -539,7 +536,10 @@ def test_core_http_websocket_rejects_steer_after_kernel_seal_before_task_done(tm
                 started = _receive_rpc_response(websocket, 3)
                 turn_id = started["result"]["runtime_start"]["turn_id"]
                 assert sealed_window.wait(timeout=2)
-                assert registry.task("sealed-transport-thread", run_id=turn_id) is not None
+                runtime_task = registry.task("sealed-transport-thread", run_id=turn_id)
+                assert runtime_task is not None
+                runtime_done = threading.Event()
+                runtime_task.add_done_callback(lambda _task: runtime_done.set())
 
                 websocket.send_json({
                     "id": 4,
@@ -555,6 +555,7 @@ def test_core_http_websocket_rejects_steer_after_kernel_seal_before_task_done(tm
                 assert rejected["result"]["applied"] is False
                 assert rejected["result"]["reason"] == "run_not_active"
                 release_writeback.set()
+                assert runtime_done.wait(timeout=2)
     finally:
         release_writeback.set()
         registry.clear()

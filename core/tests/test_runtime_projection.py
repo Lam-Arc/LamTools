@@ -319,6 +319,43 @@ def test_runtime_projection_preserves_tool_result_metadata():
     assert event.payload["tool_result"] == "agent result"
 
 
+def test_runtime_projection_preserves_file_artifact_content():
+    diff = "--- a/notes.txt\n+++ b/notes.txt\n@@ -1 +1 @@\n-old\n+new"
+    events = runtime_fact_to_run_item_events(
+        thread_id="thread-1",
+        event_id="event-1",
+        group="tool",
+        source="core",
+        phase="runtime.tool.finished",
+        status="ok",
+        sequence=8,
+        preview="done",
+        metadata={
+            "run_id": "run-1",
+            "payload": {
+                "turn_id": "turn-1",
+                "tool_name": "edit_file",
+                "call_id": "call-1",
+                "content": "Edited notes.txt",
+                "artifacts": [{
+                    "kind": "file_change",
+                    "uri": "notes.txt",
+                    "content": diff,
+                    "metadata": {"path": "notes.txt", "action": "edit"},
+                }],
+            }
+        },
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+
+    assert events is not None
+    artifact = events[0].artifacts[0]
+    assert artifact["uri"] == "notes.txt"
+    assert artifact["path"] == "notes.txt"
+    assert artifact["content"] == diff
+    assert artifact["metadata"]["action"] == "edit"
+
+
 def test_runtime_part_tool_result_projects_as_running_tool_result():
     events = runtime_fact_to_run_item_events(
         thread_id="thread-1",
@@ -452,7 +489,7 @@ def test_runtime_projection_keeps_tool_call_and_result_part_on_same_run_item():
     assert call_events[0].item_id == progress_events[0].item_id
 
 
-def test_runtime_projection_omits_forwarded_sub_agent_events_from_main_timeline():
+def test_runtime_projection_nests_forwarded_sub_agent_text_under_parent_call():
     events = runtime_fact_to_run_item_events(
         thread_id="thread-1",
         event_id="event-1",
@@ -463,16 +500,58 @@ def test_runtime_projection_omits_forwarded_sub_agent_events_from_main_timeline(
         sequence=9,
         preview="nested result",
         metadata={
+            "run_id": "run-1",
             "payload": {
                 "turn_id": "turn-1",
                 "part_id": "child-run:response-0:text",
                 "part_type": "text",
                 "content": "nested result",
                 "sub_agent": {
-                    "sub_line_id": "subline-1",
                     "agent": "reviewer",
+                    "session_id": "child-session-1",
+                    "run_id": "child-run-1",
+                    "parent_call_id": "call-sub-1",
                 },
             }
+        },
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+
+    assert events is not None
+    assert len(events) == 1
+    assert events[0].kind == "message"
+    assert events[0].payload == {"type": "agentMessage", "content": "nested result"}
+    assert events[0].parent_item_id == "thread-1:run-1:call-sub-1:tool"
+    assert events[0].metadata["sub_agent"] == {
+        "agent": "reviewer",
+        "session_id": "child-session-1",
+        "run_id": "child-run-1",
+        "parent_call_id": "call-sub-1",
+    }
+
+
+def test_forwarded_sub_agent_lifecycle_does_not_set_parent_turn_terminal():
+    events = runtime_fact_to_run_item_events(
+        thread_id="thread-1",
+        event_id="child-done",
+        group="system",
+        source="sub_agent",
+        phase="runtime.done",
+        status="completed",
+        sequence=10,
+        preview="child finished",
+        metadata={
+            "run_id": "parent-run",
+            "turn_id": "parent-turn",
+            "payload": {
+                "message": "child finished",
+                "sub_agent": {
+                    "agent": "qa",
+                    "session_id": "thread-1:sub:qa",
+                    "run_id": "child-run",
+                    "parent_call_id": "call-sub-1",
+                },
+            },
         },
         created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
     )
@@ -512,6 +591,7 @@ def test_runtime_projection_maps_terminal_status():
         "message": "finished",
         "runtime_metrics": {"total_tokens": 42},
     }
+    assert event.usage == {"total_tokens": 42}
 
 
 def test_runtime_projection_maps_usage_metrics():
@@ -550,6 +630,32 @@ def test_runtime_projection_maps_usage_metrics():
     }
 
 
+def test_runtime_projection_keeps_stream_terminal_usage_without_text():
+    events = runtime_fact_to_run_item_events(
+        thread_id="thread-1",
+        event_id="event-usage",
+        group="message",
+        source="core",
+        phase="runtime.reply_delta",
+        status="completed",
+        sequence=4,
+        metadata={
+            "payload": {
+                "turn_id": "turn-1",
+                "content": "",
+                "usage": {"prompt_tokens": 12, "completion_tokens": 3, "total_tokens": 15},
+            }
+        },
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+
+    assert events is not None
+    assert len(events) == 1
+    assert events[0].kind == "usage"
+    assert events[0].usage["input_tokens"] == 12
+    assert events[0].usage["output_tokens"] == 3
+
+
 def test_runtime_projection_buffer_reuses_first_fact_id_and_updates_content():
     buffer = RuntimeProjectionBuffer()
 
@@ -585,7 +691,7 @@ def test_runtime_projection_preserves_compaction_display_metadata():
                 "label": "上下文已压缩",
                 "before_tokens": 351051,
                 "after_tokens": 153000,
-                "target_tokens": 153600,
+                "limit_tokens": 153600,
                 "removed_messages": 42,
                 "trigger": "auto",
             }
@@ -600,7 +706,7 @@ def test_runtime_projection_preserves_compaction_display_metadata():
     assert run_items[0].payload["label"] == "上下文已压缩"
     assert run_items[0].payload["before_tokens"] == 351051
     assert run_items[0].payload["after_tokens"] == 153000
-    assert run_items[0].payload["target_tokens"] == 153600
+    assert run_items[0].payload["limit_tokens"] == 153600
     assert run_items[0].payload["removed_messages"] == 42
     assert run_items[0].payload["trigger"] == "auto"
 

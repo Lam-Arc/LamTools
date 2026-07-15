@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import datetime
 import re
 import socket
 import subprocess
 import sys
 import time
+import threading
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -58,6 +60,10 @@ def _run_background_subprocess_blocking(
     cwd: Path,
     command: str,
     http_probe: _BackgroundHttpProbe | None = None,
+    process_registry: Any | None = None,
+    session_id: str = "",
+    run_id: str = "",
+    cancel_event: threading.Event | None = None,
 ) -> _CommandExecution:
     started_at = time.monotonic()
     log_dir = cwd / ".lamtools" / "background"
@@ -98,7 +104,18 @@ def _run_background_subprocess_blocking(
         finally:
             stderr_handle.close()
 
-    time.sleep(0.5)
+    if cancel_event is not None and cancel_event.wait(0.5):
+        _terminate_process_tree(process)
+        return _CommandExecution(
+            exit_code=-1,
+            background=True,
+            duration_seconds=time.monotonic() - started_at,
+            error="Command cancelled by user",
+            error_type="CancelledError",
+            metadata={"pid": process.pid},
+        )
+    if cancel_event is None:
+        time.sleep(0.5)
     if process.poll() is not None:
         stdout = stdout_path.read_text(encoding="utf-8", errors="replace") if stdout_path.exists() else ""
         stderr = stderr_path.read_text(encoding="utf-8", errors="replace") if stderr_path.exists() else ""
@@ -131,7 +148,7 @@ def _run_background_subprocess_blocking(
         )
 
     if http_probe is not None:
-        probe_result = _wait_for_background_http_probe(http_probe)
+        probe_result = _wait_for_background_http_probe(http_probe, cancel_event=cancel_event)
         if not probe_result.ok:
             _terminate_process_tree(process)
             stdout = stdout_path.read_text(encoding="utf-8", errors="replace") if stdout_path.exists() else ""
@@ -154,6 +171,36 @@ def _run_background_subprocess_blocking(
                     "readiness_text_checked": bool(http_probe.expected_text),
                     **probe_result.metadata,
                 },
+            )
+
+    if cancel_event is not None and cancel_event.is_set():
+        _terminate_process_tree(process)
+        return _CommandExecution(
+            exit_code=-1,
+            background=True,
+            duration_seconds=time.monotonic() - started_at,
+            error="Command cancelled by user",
+            error_type="CancelledError",
+            metadata={"pid": process.pid},
+        )
+
+    if process_registry is not None:
+        try:
+            process_registry.register(
+                process,
+                session_id=session_id,
+                run_id=run_id,
+                work_root=cwd,
+            )
+        except Exception as exc:
+            _terminate_process_tree(process)
+            return _CommandExecution(
+                exit_code=1,
+                background=True,
+                duration_seconds=time.monotonic() - started_at,
+                error=f"Cannot register background process ownership: {_exception_summary(exc)}",
+                error_type="BackgroundOwnershipRegistrationFailed",
+                metadata={"pid": process.pid},
             )
 
     return _CommandExecution(
@@ -185,14 +232,34 @@ async def _run_background_subprocess(
     cwd: Path,
     command: str,
     http_probe: _BackgroundHttpProbe | None = None,
+    process_registry: Any | None = None,
+    session_id: str = "",
+    run_id: str = "",
 ) -> _CommandExecution:
-    return await asyncio.to_thread(
-        _run_background_subprocess_blocking,
-        argv,
-        cwd=cwd,
-        command=command,
-        http_probe=http_probe,
+    cancel_event = threading.Event()
+    future = asyncio.create_task(
+        asyncio.to_thread(
+            _run_background_subprocess_blocking,
+            argv,
+            cwd=cwd,
+            command=command,
+            http_probe=http_probe,
+            process_registry=process_registry,
+            session_id=session_id,
+            run_id=run_id,
+            cancel_event=cancel_event,
+        )
     )
+    try:
+        return await asyncio.shield(future)
+    except asyncio.CancelledError:
+        cancel_event.set()
+        with contextlib.suppress(BaseException):
+            await asyncio.shield(future)
+        cleanup_run = getattr(process_registry, "cleanup_run", None)
+        if callable(cleanup_run):
+            cleanup_run(session_id, run_id)
+        raise
 
 def _looks_like_python_http_server(command: str) -> bool:
     lowered = command.strip().lower()
@@ -317,7 +384,11 @@ def _cleanup_background_http_probe(probe: _BackgroundHttpProbe | None) -> None:
         pass
 
 
-def _wait_for_background_http_probe(probe: _BackgroundHttpProbe) -> _BackgroundProbeResult:
+def _wait_for_background_http_probe(
+    probe: _BackgroundHttpProbe,
+    *,
+    cancel_event: threading.Event | None = None,
+) -> _BackgroundProbeResult:
     import urllib.error
     import urllib.request
 
@@ -332,6 +403,13 @@ def _wait_for_background_http_probe(probe: _BackgroundHttpProbe) -> _BackgroundP
         probe_path=probe.path,
     )
     while time.monotonic() < deadline:
+        if cancel_event is not None and cancel_event.is_set():
+            return _BackgroundProbeResult(
+                ok=False,
+                error="Command cancelled by user",
+                error_type="CancelledError",
+                metadata={"error_kind": "cancelled", "retryable": False},
+            )
         try:
             with urllib.request.urlopen(probe.url, timeout=0.75) as response:
                 body = response.read().decode("utf-8", errors="replace")
@@ -394,7 +472,10 @@ def _wait_for_background_http_probe(probe: _BackgroundHttpProbe) -> _BackgroundP
                 probe_url=probe.url,
                 probe_path=probe.path,
             )
-        time.sleep(0.2)
+        if cancel_event is not None:
+            cancel_event.wait(0.2)
+        else:
+            time.sleep(0.2)
     return _BackgroundProbeResult(
         ok=False,
         error=last_error or f"HTTP probe {probe.url} did not become reachable.",

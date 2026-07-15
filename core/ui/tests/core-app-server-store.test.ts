@@ -4,10 +4,57 @@ import {
   createCoreAppServerRuntimeController,
   createCoreAppServerRuntimeState,
   type CoreAppServerRuntimeClient,
+  type CoreAppEvent,
   type CoreAppSnapshot,
 } from '../src/appServer'
 
 describe('core appServer runtime store', () => {
+  it('applies native run-item deltas in order with one render-frame flush', async () => {
+    const runtime = createCoreAppServerRuntimeState()
+    const frames: Array<() => void> = []
+    let onEvent: ((event: CoreAppEvent) => void) | undefined
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: (callbacks) => {
+        onEvent = callbacks.onEvent
+        return fakeClient(async (method) => method === 'thread/resume'
+          ? { snapshot: snapshot(1, 'running') }
+          : {})
+      },
+      scheduleFrame: (callback) => frames.push(callback),
+    })
+    await controller.connect('http://127.0.0.1:6173', 'thread-1')
+
+    onEvent?.(runItemDelta('delta-1', 'hel'))
+    onEvent?.(runItemDelta('delta-2', 'lo'))
+
+    expect(frames).toHaveLength(1)
+    expect(runtime.state?.core?.items?.['response-1']).toBeUndefined()
+    frames[0]()
+    expect(runtime.state?.core?.items?.['response-1']?.content).toBe('hello')
+  })
+
+  it('applies a run-item turn terminal state without requiring an item id', async () => {
+    const runtime = createCoreAppServerRuntimeState()
+    const frames: Array<() => void> = []
+    let onEvent: ((event: CoreAppEvent) => void) | undefined
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: (callbacks) => {
+        onEvent = callbacks.onEvent
+        return fakeClient(async (method) => method === 'thread/resume'
+          ? { snapshot: snapshot(1, 'running') }
+          : {})
+      },
+      scheduleFrame: (callback) => frames.push(callback),
+    })
+    await controller.connect('http://127.0.0.1:6173', 'thread-1')
+
+    onEvent?.(runStatusEvent('done-1', 'completed'))
+    frames[0]()
+
+    expect(runtime.state?.core?.turns?.['turn-1']?.status).toBe('completed')
+    expect(runtime.state?.core?.status).toBe('completed')
+  })
+
   it('uses response snapshots as the authoritative frontend state', () => {
     const runtime = createCoreAppServerRuntimeState()
     const controller = createCoreAppServerRuntimeController(runtime, {
@@ -61,6 +108,32 @@ describe('core appServer runtime store', () => {
       },
     })
     expect(runtime.state?.snapshot_seq).toBe(3)
+  })
+
+  it('responds through the explicit approval operation with the logical request id', async () => {
+    const runtime = createCoreAppServerRuntimeState()
+    const calls: Array<{ method: string; params: Record<string, unknown> }> = []
+    runtime.client = fakeClient(async (method, params) => {
+      calls.push({ method, params })
+      return { snapshot: snapshot(4, 'running') }
+    })
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: () => fakeClient(),
+    })
+
+    await controller.respondApproval('functions.write_file:0', 'approve_once', '')
+
+    expect(calls).toEqual([
+      {
+        method: 'approval/respond',
+        params: {
+          request_id: 'functions.write_file:0',
+          decision: 'approve_once',
+          guidance: '',
+        },
+      },
+    ])
+    expect(runtime.state?.snapshot_seq).toBe(4)
   })
 
   it('reconnects after socket close and resumes from last snapshot sequence', async () => {
@@ -138,5 +211,46 @@ function snapshot(seq: number, status: CoreAppSnapshot['status']): CoreAppSnapsh
     queue: [],
     requests: {},
     artifacts: {},
+  }
+}
+
+function runItemDelta(eventId: string, delta: string): CoreAppEvent {
+  return {
+    event_id: eventId,
+    thread_id: 'thread-1',
+    seq: 0,
+    method: 'core/runItem',
+    created_at: '2026-07-15T00:00:00Z',
+    transient: true,
+    item_id: 'response-1',
+    turn_id: 'turn-1',
+    payload: {
+      event_id: eventId,
+      thread_id: 'thread-1',
+      item_id: 'response-1',
+      turn_id: 'turn-1',
+      kind: 'message',
+      status: 'running',
+      payload: { type: 'agentMessage', delta },
+    },
+  }
+}
+
+function runStatusEvent(eventId: string, status: string): CoreAppEvent {
+  return {
+    event_id: eventId,
+    thread_id: 'thread-1',
+    seq: 2,
+    method: 'core/runItem',
+    created_at: '2026-07-15T00:00:01Z',
+    turn_id: 'turn-1',
+    payload: {
+      event_id: eventId,
+      thread_id: 'thread-1',
+      turn_id: 'turn-1',
+      kind: 'status',
+      status,
+      payload: { type: 'turn', status },
+    },
   }
 }

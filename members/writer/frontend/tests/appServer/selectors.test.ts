@@ -211,7 +211,8 @@ test('selectors keep automatic compaction items visible', () => {
   assert.equal(messages[1].parts[0].content, '[Compacted Context]\n1. Current Goal\n- Continue.')
   assert.equal(messages[1].parts[0].before_tokens, 1800)
   assert.equal(messages[1].parts[0].after_tokens, 1100)
-  assert.equal(messages[1].parts[0].target_tokens, 1200)
+  assert.equal(messages[1].parts[0].limit_tokens, 1200)
+  assert.equal('target_tokens' in messages[1].parts[0], false)
 })
 
 test('selectors keep manual compact command at the latest position', () => {

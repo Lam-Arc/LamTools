@@ -123,9 +123,10 @@ async def handle_command_execute_operation(
         return CoreLiveOperationOutcome(
             response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc))
         )
-    return CoreLiveOperationOutcome(
-        response=rpc_result(request_id, {"result": result, "snapshot": snapshot})
-    )
+    response_payload: dict[str, Any] = {"result": result}
+    if params.get("include_snapshot") is not False:
+        response_payload["snapshot"] = snapshot
+    return CoreLiveOperationOutcome(response=rpc_result(request_id, response_payload))
 
 
 async def handle_attachment_operation(
@@ -545,6 +546,7 @@ async def handle_turn_start_operation(
         return write_result
     accepted, user, running, snapshot, materialized = write_result
 
+    approval_policy = await _resolve_turn_approval_policy(context=context, params=params)
     runtime_start = {
         "thread_id": thread_id,
         "turn_id": turn_id,
@@ -552,13 +554,20 @@ async def handle_turn_start_operation(
         "text": prepared.runtime_text,
         "input": prepared.runtime_input,
         "work_root": prepared.work_root,
-        "approval_policy": params.get("approval_policy") or params.get("approvalPolicy") or "require",
+        "approval_policy": approval_policy,
         "model_id": str(params.get("model_id") or params.get("modelId") or ""),
         "thinking_enabled": params.get("thinking_enabled") if isinstance(params.get("thinking_enabled"), bool) else None,
         "thinking_budget": params.get("thinking_budget") if isinstance(params.get("thinking_budget"), int) else None,
         "shallow_thinking_enabled": (
             params.get("shallow_thinking_enabled")
             if isinstance(params.get("shallow_thinking_enabled"), bool)
+            else None
+        ),
+        "context_window_tokens": (
+            params.get("context_window_tokens")
+            if isinstance(params.get("context_window_tokens"), int)
+            and not isinstance(params.get("context_window_tokens"), bool)
+            and params.get("context_window_tokens") > 0
             else None
         ),
         **prepared.runtime_extras,
@@ -583,6 +592,28 @@ async def handle_turn_start_operation(
         notify_events=events,
         runtime_start=runtime_start,
     )
+
+
+async def _resolve_turn_approval_policy(*, context: "CoreLiveContext", params: dict[str, Any]) -> str:
+    explicit = params.get("approval_policy") or params.get("approvalPolicy")
+    if explicit is not None:
+        return "auto_approve" if explicit == "auto_approve" else "require"
+    if not context.operations.has("settings.get"):
+        return "require"
+    try:
+        result = await context.operations.execute(
+            "settings.get",
+            {"namespace": "core.runtimeControls"},
+            metadata={"source": "core_live"},
+        )
+    except Exception:
+        return "require"
+    if result.status != "ok":
+        return "require"
+    value = result.payload.get("value") if isinstance(result.payload, dict) else None
+    raw_policies = value.get("command_policies") if isinstance(value, dict) else None
+    policies = normalize_command_policies(raw_policies if isinstance(raw_policies, dict) else None)
+    return "auto_approve" if all(policy == "auto_allow" for policy in policies.values()) else "require"
 
 
 async def handle_turn_cancel_operation(
@@ -637,10 +668,21 @@ async def handle_turn_cancel_operation(
     if isinstance(write_result, CoreLiveOperationOutcome):
         return write_result
     interrupted, status, snapshot, turn_id = write_result
+    had_live_task = context.host.runtime_task_registry.is_running(thread_id, run_id=turn_id)
     context.host.runtime_task_registry.cancel(thread_id, run_id=turn_id or None, force=True)
     events = [interrupted, status]
     for event in events:
         await context.hub.publish(event)
+    if not had_live_task:
+        terminal = await _persist_cancelled_terminal(
+            context=context,
+            thread_id=thread_id,
+            turn_id=turn_id,
+        )
+        if terminal is not None:
+            events.append(terminal)
+            async with context.session_factory() as db:
+                snapshot = await context.persistence.load(db, thread_id)
     return CoreLiveOperationOutcome(
         response=rpc_result(
             request_id,
@@ -760,12 +802,97 @@ async def handle_approval_respond_operation(
         return CoreLiveOperationOutcome(
             response=rpc_error(request_id, code=INVALID_REQUEST, message="approval.respond operation is unavailable")
         )
-    result = await context.operations.execute("approval.respond", params, metadata={"source": "core_live"})
+    loop = asyncio.get_running_loop()
+    decision_ready: asyncio.Future[dict[str, Any]] = loop.create_future()
+
+    async def decision_durable(info: dict[str, Any]) -> None:
+        thread_id = str(info.get("thread_id") or "").strip()
+        run_id = str(info.get("run_id") or info.get("turn_id") or "").strip()
+        task = asyncio.current_task()
+        if str(info.get("decision") or "") != "deny":
+            if task is None or not thread_id or not run_id:
+                raise RuntimeError("approval continuation identity is unavailable")
+            prior_task = context.host.runtime_task_registry.task(thread_id, run_id=run_id)
+            if prior_task is not None and prior_task is not task:
+                context.host.runtime_task_registry.release_run(thread_id, run_id=run_id)
+            if not context.host.runtime_task_registry.accept_run(thread_id, run_id):
+                raise RuntimeError("approval continuation runtime claim failed")
+            if not context.host.runtime_task_registry.register(thread_id, task, run_id=run_id):
+                context.host.runtime_task_registry.release_run(thread_id, run_id=run_id)
+                raise RuntimeError("approval continuation task registration failed")
+            if not decision_ready.done():
+                decision_ready.set_result(dict(info))
+
+    async def continue_approval() -> OperationResult:
+        thread_id = ""
+        run_id = ""
+        try:
+            result = await context.operations.execute(
+                "approval.respond",
+                params,
+                metadata={
+                    "source": "core_live",
+                    "approval_decision_durable": decision_durable,
+                },
+            )
+            payload = dict(result.payload or {})
+            thread_id = str(payload.get("thread_id") or "").strip()
+            run_id = str(payload.get("run_id") or payload.get("turn_id") or "").strip()
+            if result.status == "ok" and str(payload.get("decision") or "") == "done" and thread_id:
+                info = decision_ready.result() if decision_ready.done() and not decision_ready.cancelled() else {}
+                await _dispatch_next_queue_item(
+                    context=context,
+                    thread_id=thread_id,
+                    work_root=str(info.get("work_root") or ""),
+                    completed_turn_id=run_id,
+                )
+            return result
+        except asyncio.CancelledError:
+            info = decision_ready.result() if decision_ready.done() and not decision_ready.cancelled() else {}
+            thread_id = thread_id or str(info.get("thread_id") or "").strip()
+            run_id = run_id or str(info.get("run_id") or info.get("turn_id") or "").strip()
+            if thread_id and run_id:
+                await asyncio.shield(
+                    _persist_cancelled_terminal(
+                        context=context,
+                        thread_id=thread_id,
+                        turn_id=run_id,
+                    )
+                )
+            raise
+
+    task = loop.create_task(continue_approval())
+    done, _pending = await asyncio.wait(
+        {decision_ready, task},
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+    if decision_ready in done:
+        info = decision_ready.result()
+        return CoreLiveOperationOutcome(
+            response=rpc_result(
+                request_id,
+                {
+                    "thread_id": info.get("thread_id"),
+                    "run_id": info.get("run_id"),
+                    "turn_id": info.get("turn_id"),
+                    "decision": info.get("decision"),
+                    "status": "accepted",
+                    "snapshot": info.get("snapshot"),
+                },
+            )
+        )
+
+    result = task.result()
     payload = dict(result.payload or {})
     if result.status != "ok":
         return CoreLiveOperationOutcome(
             response=rpc_error(request_id, code=INVALID_REQUEST, message=str(payload.get("error") or result.status), data=payload)
         )
+    if str(payload.get("decision") or "") in {"deny", "denied"}:
+        thread_id = str(payload.get("thread_id") or _thread_id_from_params(params)).strip()
+        run_id = str(payload.get("run_id") or payload.get("turn_id") or "").strip()
+        if thread_id and run_id:
+            context.host.runtime_task_registry.release_run(thread_id, run_id=run_id)
     return CoreLiveOperationOutcome(response=rpc_result(request_id, payload))
 
 
@@ -1181,6 +1308,19 @@ async def _fail_runtime_start(
                 if event.turn_id == turn_id and event.method == CORE_RUN_ITEM_METHOD
             )
             return event, snapshot
+        core = snapshot.get("core") if isinstance(snapshot.get("core"), dict) else {}
+        requests = core.get("requests") if isinstance(core, dict) else {}
+        denied_request = any(
+            isinstance(pending, dict)
+            and str(pending.get("turn_id") or "") == turn_id
+            and str(pending.get("status") or "") == "resolved"
+            and str(pending.get("decision") or pending.get("action") or "") in {"deny", "denied"}
+            for pending in (requests.values() if isinstance(requests, dict) else [])
+        )
+        if denied_request:
+            prior_events = await context.persistence.list_after(db, thread_id=thread_id, after_seq=0)
+            prior = next(event for event in reversed(prior_events) if event.turn_id == turn_id)
+            return prior, snapshot
         event = await _append_run_item(
             db,
             context=context,
@@ -1230,21 +1370,20 @@ async def _run_core_turn(*, context: CoreLiveContext, runtime_start: dict[str, A
         )
         if isinstance(result, OperationResult):
             await _persist_operation_result(context=context, thread_id=thread_id, turn_id=turn_id, result=result)
-        context.host.runtime_task_registry.release_run(thread_id, run_id=turn_id)
         await _dispatch_next_queue_item(
             context=context,
             thread_id=thread_id,
             work_root=str(runtime_start.get("work_root") or ""),
+            completed_turn_id=turn_id,
         )
+        context.host.runtime_task_registry.release_run(thread_id, run_id=turn_id)
     except BaseException as exc:
         cancel_requested = context.host.runtime_task_registry.get_cancel_event(thread_id).is_set()
-        if isinstance(exc, asyncio.CancelledError) or cancel_requested:
-            await asyncio.shield(
-                _persist_cancelled_terminal(
-                    context=context,
-                    thread_id=thread_id,
-                    turn_id=turn_id,
-                )
+        if cancel_requested:
+            await _persist_cancelled_terminal(
+                context=context,
+                thread_id=thread_id,
+                turn_id=turn_id,
             )
             raise
         await asyncio.shield(
@@ -1257,11 +1396,19 @@ async def _run_core_turn(*, context: CoreLiveContext, runtime_start: dict[str, A
         )
 
 
-async def _dispatch_next_queue_item(*, context: CoreLiveContext, thread_id: str, work_root: str) -> None:
+async def _dispatch_next_queue_item(
+    *,
+    context: CoreLiveContext,
+    thread_id: str,
+    work_root: str,
+    completed_turn_id: str,
+) -> None:
     async with context.session_factory() as db:
         current_snapshot = await context.persistence.load(db, thread_id)
     if next_dispatchable_queue_item(current_snapshot) is None:
         return
+    context.host.runtime_task_registry.release_run(thread_id, run_id=completed_turn_id)
+    approval_policy = await _resolve_turn_approval_policy(context=context, params={})
     claimed_turn_id = ""
 
     async def write(db: AsyncSession):
@@ -1327,6 +1474,7 @@ async def _dispatch_next_queue_item(*, context: CoreLiveContext, thread_id: str,
                 "text": prepared.runtime_text,
                 "input": prepared.runtime_input,
                 "work_root": prepared.work_root,
+                "approval_policy": approval_policy,
                 **prepared.runtime_extras,
                 **materialized.runtime_extras,
             }
@@ -1441,7 +1589,7 @@ async def _execute_live_command_action(
     work_root: str,
     actions: dict[str, Any],
     params: dict[str, Any],
-    on_delta: Callable[[str], Any] | None = None,
+    on_event: Callable[[dict[str, Any]], Any] | None = None,
 ) -> dict[str, Any]:
     if command in actions:
         return await execute_command_action(
@@ -1449,7 +1597,7 @@ async def _execute_live_command_action(
             thread_id=thread_id,
             work_root=work_root,
             handlers=actions,
-            on_delta=on_delta,
+            on_event=on_event,
         )
     if not context.operations.has("command.execute"):
         raise ValueError(f"Command is not executable as an action: {command}")
@@ -1478,18 +1626,29 @@ async def _execute_compact_live_command(
         event=_compact_command_event(thread_id, {}, ids=ids, status="running"),
     )
 
-    async def on_delta(delta: str) -> None:
-        if not delta:
-            return
-        await _persist_command_run_item(
+    terminal_emitted = False
+    latest_snapshot = snapshot
+
+    async def on_event(payload: dict[str, Any]) -> None:
+        nonlocal terminal_emitted, latest_snapshot
+        business_status = str(payload.get("status") or "running")
+        event_status = (
+            "failed"
+            if business_status == "failed"
+            else "completed"
+            if business_status in {"compacted", "not_needed"}
+            else "running"
+        )
+        _, latest_snapshot = await _persist_command_run_item(
             context=context,
             event=_compact_command_event(
                 thread_id,
-                {"delta": delta},
+                payload,
                 ids=ids,
-                status="running",
+                status=event_status,
             ),
         )
+        terminal_emitted = event_status in {"completed", "failed"}
 
     try:
         result = await _execute_live_command_action(
@@ -1499,7 +1658,7 @@ async def _execute_compact_live_command(
             work_root=work_root,
             actions=actions,
             params=params,
-            on_delta=on_delta,
+            on_event=on_event,
         )
     except BaseException as exc:
         await _persist_command_run_item(
@@ -1516,6 +1675,8 @@ async def _execute_compact_live_command(
             event=_compact_command_terminal_event(thread_id, ids=ids, error=str(exc)),
         )
         raise
+    if terminal_emitted:
+        return result, latest_snapshot
     _, snapshot = await _persist_command_run_item(
         context=context,
         event=_compact_command_event(thread_id, result, ids=ids, status="completed"),
@@ -1547,11 +1708,13 @@ def _compact_command_event(
     ids: dict[str, str],
     status: str,
 ) -> RunItemEvent:
-    content = str(result.get("summary") or result.get("content") or result.get("error") or "")
+    content = str(result.get("content") or result.get("summary") or result.get("error") or "")
+    business_status = str(result.get("status") or status)
     payload: dict[str, Any] = {
         "type": "compaction",
-        "label": "正在压缩" if status == "running" else "压缩失败" if status == "failed" else "上下文已压缩",
+        "label": str(result.get("label") or ("正在压缩上下文" if status == "running" else "压缩未完成" if status == "failed" else "上下文已压缩")),
         "trigger": "manual",
+        "compaction_status": business_status,
     }
     if content:
         payload["content"] = content
@@ -1559,9 +1722,18 @@ def _compact_command_event(
         payload["delta"] = str(result["delta"])
     if result.get("error"):
         payload["error"] = str(result["error"])
-    if result.get("status"):
-        payload["compaction_status"] = result["status"]
-    for key in ("compacted_messages", "retained_messages", "before_tokens", "after_tokens", "target_tokens"):
+    for key in (
+        "compacted_messages",
+        "retained_messages",
+        "before_tokens",
+        "after_tokens",
+        "limit_tokens",
+        "phase",
+        "segment",
+        "segments",
+        "reason",
+        "message",
+    ):
         if result.get(key) is not None:
             payload[key] = result[key]
     return RunItemEvent(

@@ -16,12 +16,24 @@ def pick_project_directory() -> str:
 def _pick_directory_windows() -> str:
     script = r"""
 Add-Type -AssemblyName System.Windows.Forms
+$owner = New-Object System.Windows.Forms.Form
+$owner.ShowInTaskbar = $false
+$owner.TopMost = $true
+$owner.Opacity = 0
+$owner.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
+$owner.Show()
+$owner.Activate()
 $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
 $dialog.Description = '选择项目目录'
 $dialog.ShowNewFolderButton = $true
-if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-  [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
-  Write-Output $dialog.SelectedPath
+try {
+  if ($dialog.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) {
+    [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+    Write-Output $dialog.SelectedPath
+  }
+} finally {
+  $owner.Close()
+  $owner.Dispose()
 }
 """
     startupinfo = None

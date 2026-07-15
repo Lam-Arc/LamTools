@@ -174,7 +174,7 @@ class RuntimeFactRecorder:
             "retained_message_ids": retained_ids,
             "retained_message_count": len(retained_ids),
         }
-        for key in ("before_tokens", "after_tokens", "target_tokens", "trigger_tokens", "window_tokens"):
+        for key in ("before_tokens", "after_tokens", "limit_tokens", "trigger_tokens", "window_tokens"):
             if key in payload:
                 manual_compaction[key] = payload.get(key)
 

@@ -581,7 +581,7 @@ def writer_orchestrate(
         db: AsyncSession | None = None,
         *,
         session_id: str,
-        on_summary_delta: Any | None = None,
+        on_summary_event: Any | None = None,
     ) -> dict[str, Any]:
         del db
         loop_policy = LoopPolicy()
@@ -598,7 +598,7 @@ def writer_orchestrate(
             plan,
             llm_client=resolved_client,
             model=str(model_context.get("model") or ""),
-            on_summary_delta=on_summary_delta,
+            on_summary_event=on_summary_event,
             model_retries=loop_policy.model_retries,
             model_timeout_seconds=loop_policy.model_timeout_seconds,
             retry_policy=RetryPolicy(),

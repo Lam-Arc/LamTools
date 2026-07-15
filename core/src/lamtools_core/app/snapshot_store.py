@@ -222,6 +222,15 @@ class CoreAppSnapshotProjector:
         self._recompute_thread_status(state)
         return state
 
+    def reconcile_status(self, state: dict[str, Any]) -> dict[str, Any]:
+        """Rebuild derived status fields after loading an older persisted projection."""
+        core = state.get("core")
+        if isinstance(core, dict):
+            self._recompute_thread_status(core)
+            self._sync_turns_from_core(state)
+        self._recompute_thread_status(state)
+        return state
+
     def _append_item_order(self, state: dict[str, Any], item_id: str) -> None:
         order = state.setdefault("item_order", [])
         if item_id not in order:
@@ -387,9 +396,7 @@ class SqlAlchemyThreadSnapshotStore:
         row = await db.get(self.snapshot_model, thread_id)
         if row is None:
             return self.projector.empty(thread_id)
-        state = dict(row.snapshot_json or self.projector.empty(thread_id))
-        state["snapshot_seq"] = row.snapshot_seq
-        return state
+        return self._state_from_row(row, thread_id)
 
     async def apply(self, db: AsyncSession, event: AppEventEnvelope) -> dict[str, Any]:
         row = await db.get(self.snapshot_model, event.thread_id)
@@ -399,6 +406,31 @@ class SqlAlchemyThreadSnapshotStore:
         state = self.projector.apply(base, event)
         if row is None:
             row = self.snapshot_model(thread_id=event.thread_id)
+            db.add(row)
+        self._assign(row, state)
+        await db.flush()
+        return state
+
+    async def apply_many(
+        self, db: AsyncSession, events: list[AppEventEnvelope]
+    ) -> dict[str, Any] | None:
+        if not events:
+            return None
+        thread_id = events[0].thread_id
+        if any(event.thread_id != thread_id for event in events):
+            raise ValueError("Snapshot batches must contain one thread")
+        row = await db.get(self.snapshot_model, thread_id)
+        state = (
+            dict(row.snapshot_json)
+            if row is not None and row.snapshot_json
+            else self.projector.empty(thread_id)
+        )
+        for event in sorted(events, key=lambda item: item.seq):
+            if int(state.get("snapshot_seq") or 0) >= int(event.seq or 0):
+                continue
+            self.projector.apply_in_place(state, event)
+        if row is None:
+            row = self.snapshot_model(thread_id=thread_id)
             db.add(row)
         self._assign(row, state)
         await db.flush()
@@ -432,7 +464,7 @@ class SqlAlchemyThreadSnapshotStore:
     def _state_from_row(self, row: Any, thread_id: str) -> dict[str, Any]:
         state = dict(row.snapshot_json or self.projector.empty(thread_id))
         state["snapshot_seq"] = row.snapshot_seq
-        return state
+        return self.projector.reconcile_status(state)
 
     async def rebuild(
         self,

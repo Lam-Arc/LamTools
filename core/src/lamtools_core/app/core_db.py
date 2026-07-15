@@ -69,6 +69,51 @@ class CoreRuntimeSession(CoreDbBase):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
 
 
+class CoreCheckpoint(CoreDbBase):
+    __tablename__ = "core_checkpoints"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    root_session_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    session_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    turn_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    actor_kind: Mapped[str] = mapped_column(String(32), nullable=False, default="main")
+    work_root: Mapped[str] = mapped_column(String(2048), nullable=False)
+    manifest_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    conversation_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="ready")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+
+
+class CoreWorkspaceManifest(CoreDbBase):
+    __tablename__ = "core_workspace_manifests"
+
+    hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    entries_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+
+
+class CoreCheckpointBlob(CoreDbBase):
+    __tablename__ = "core_checkpoint_blobs"
+
+    hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    size: Mapped[int] = mapped_column(Integer, nullable=False)
+    storage_path: Mapped[str] = mapped_column(String(2048), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+
+
+class CoreRestoreOperation(CoreDbBase):
+    __tablename__ = "core_restore_operations"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    root_session_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    target_checkpoint_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    undo_checkpoint_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="prepared")
+    error: Mapped[str] = mapped_column(String(2048), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+
+
 class CoreProject(CoreDbBase):
     __tablename__ = "core_projects"
 
@@ -254,9 +299,12 @@ async def persist_core_run_items(db: CoreAppDb, run_items: list[RunItemEvent]) -
     snapshot: dict[str, Any] | None = None
     async def write(session):
         snapshot: dict[str, Any] | None = None
+        envelopes_by_thread: dict[str, list[Any]] = {}
         for item in run_items:
             envelope = await db.event_store.append_run_item_event(session, item)
-            snapshot = await db.snapshot_store.apply(session, envelope)
+            envelopes_by_thread.setdefault(envelope.thread_id, []).append(envelope)
+        for envelopes in envelopes_by_thread.values():
+            snapshot = await db.snapshot_store.apply_many(session, envelopes)
         return snapshot
 
     return await db.persistence.write(write)
@@ -322,9 +370,13 @@ __all__ = [
     "CoreAppDb",
     "CoreAppEvent",
     "CoreAttachment",
+    "CoreCheckpoint",
+    "CoreCheckpointBlob",
     "CoreProject",
+    "CoreRestoreOperation",
     "CoreRuntimeSession",
     "CoreThreadSnapshot",
+    "CoreWorkspaceManifest",
     "RuntimeStateConflictError",
     "SqlAlchemyRuntimeStateStore",
     "list_core_sessions",

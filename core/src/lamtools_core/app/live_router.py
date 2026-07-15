@@ -10,6 +10,7 @@ from typing import Any
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 
+from .event_store import CORE_RUN_ITEM_METHOD
 from .live_hub import CoreAppEventGap
 from .live_approval import normalize_approval_request
 from .live_operations import (
@@ -184,6 +185,9 @@ class CoreLiveConnection:
             if event is None:
                 continue
             await self._send(event_notification(event))
+            event_method = event.get("method") if isinstance(event, dict) else getattr(event, "method", "")
+            if event_method == CORE_RUN_ITEM_METHOD:
+                continue
             await self._send_snapshot(_event_thread_id(event))
 
     async def _send_snapshot(self, thread_id: str) -> None:

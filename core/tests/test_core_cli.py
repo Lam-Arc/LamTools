@@ -97,6 +97,50 @@ class ScriptedCoreCliAnswerOnlyLLM:
         yield LLMStreamEvent(kind="done", usage=LLMUsage(prompt_tokens=5, completion_tokens=7))
 
 
+class FailingCoreCliLLM:
+    async def complete(self, request: LLMRequest) -> LLMResponse:
+        raise RuntimeError("model unavailable")
+
+    async def stream(self, request: LLMRequest):
+        raise RuntimeError("model unavailable")
+        yield
+
+
+class ScriptedCoreCliSubAgentLLM:
+    def __init__(self) -> None:
+        self.requests: list[LLMRequest] = []
+
+    async def complete(self, request: LLMRequest) -> LLMResponse:
+        raise AssertionError("core CLI should use streaming when available")
+
+    async def stream(self, request: LLMRequest):
+        self.requests.append(request)
+        if len(self.requests) == 1:
+            yield LLMStreamEvent(kind="done", tool_calls=[
+                LLMToolCall(
+                    id="call-cli-sub",
+                    name="sub_agent",
+                    arguments={"task": "write delegated.txt", "agent": "writer"},
+                )
+            ])
+            return
+        if len(self.requests) == 2:
+            yield LLMStreamEvent(kind="done", tool_calls=[
+                LLMToolCall(
+                    id="call-cli-child-write",
+                    name="write_file",
+                    arguments={"path": "delegated.txt", "content": "delegated content"},
+                )
+            ])
+            return
+        if len(self.requests) == 3:
+            yield LLMStreamEvent(kind="content_delta", content="Child saved delegated.txt.")
+            yield LLMStreamEvent(kind="done")
+            return
+        yield LLMStreamEvent(kind="content_delta", content="Main received the delegated result.")
+        yield LLMStreamEvent(kind="done")
+
+
 class CapturingCoreCliLLM:
     def __init__(self) -> None:
         self.requests: list[LLMRequest] = []
@@ -285,6 +329,7 @@ def test_core_cli_parser_exposes_live_control_commands(tmp_path: Path) -> None:
         "--thinking-budget", "512", "--shallow", "--approval-policy", "auto_approve",
         "--client-message-id", "message-1", "--raw",
     ])
+    inherited_start = parser.parse_args(["start", "thread-2", "use shared defaults"])
     cancel = parser.parse_args(["cancel", "thread-1", "--turn-id", "turn-1", "--raw"])
     steer = parser.parse_args(["steer", "thread-1", "turn-1", "change course", "--raw"])
     queue_create = parser.parse_args(["queue", "create", "thread-1", "next task", "--raw"])
@@ -292,11 +337,14 @@ def test_core_cli_parser_exposes_live_control_commands(tmp_path: Path) -> None:
     queue_delete = parser.parse_args(["queue", "delete", "thread-1", "queue-1", "--raw"])
     queue_guide = parser.parse_args(["queue", "guide", "thread-1", "turn-1", "queue-1", "guide", "--raw"])
     approval = parser.parse_args(["approval", "respond", "thread-1", "approve", "yes", "--raw"])
+    command_execute = parser.parse_args(["command", "execute", "thread-1", "compact", "--raw"])
+    attachment_upload = parser.parse_args(["attachment", "upload", "thread-1", str(tmp_path / "note.txt"), "--raw"])
 
     assert (serve.command, serve.host, serve.port, serve.thinking, serve.raw) == ("serve", "0.0.0.0", 7123, "disabled", True)
     assert (start.command, start.thread_id, start.message, start.thinking, start.shallow, start.approval_policy, start.raw) == (
         "start", "thread-1", ["start work"], "disabled", True, "auto_approve", True,
     )
+    assert inherited_start.approval_policy is None
     assert (cancel.command, cancel.turn_id, cancel.raw) == ("cancel", "turn-1", True)
     assert (steer.command, steer.turn_id, steer.message, steer.raw) == ("steer", "turn-1", ["change course"], True)
     assert (queue_create.queue_command, queue_update.queue_command, queue_delete.queue_command, queue_guide.queue_command) == (
@@ -305,6 +353,12 @@ def test_core_cli_parser_exposes_live_control_commands(tmp_path: Path) -> None:
     assert queue_create.raw and queue_update.raw and queue_delete.raw and queue_guide.raw
     assert (approval.command, approval.approval_command, approval.thread_id, approval.action, approval.response, approval.raw) == (
         "approval", "respond", "thread-1", "approve", ["yes"], True,
+    )
+    assert (command_execute.command, command_execute.command_action, command_execute.name) == (
+        "command", "execute", "compact",
+    )
+    assert (attachment_upload.command, attachment_upload.attachment_action, attachment_upload.thread_id) == (
+        "attachment", "upload", "thread-1",
     )
 
 
@@ -365,6 +419,7 @@ async def test_core_cli_live_commands_call_core_app_server_operations(monkeypatc
         ["queue", "delete", "thread-1", "queue-1", "--raw"],
         ["queue", "guide", "thread-1", "turn-1", "queue-1", "guide", "--raw"],
         ["approval", "respond", "thread-1", "approve", "yes", "--raw"],
+        ["command", "execute", "thread-1", "help", "--raw"],
     ]:
         args = parser.parse_args(argv)
         assert await args.func(args) == 0
@@ -446,6 +501,14 @@ def test_core_cli_wrapper_does_not_default_to_member_database() -> None:
     assert "members/writer/data/lamwriter.db" not in content
     assert "if not defined lamtools_core_db" in content
     assert "if not defined lamtools_core_db" in (root / "core.cmd").read_text(encoding="utf-8").lower()
+
+
+def test_core_cli_wrapper_does_not_repeat_failed_tasks_with_another_python() -> None:
+    root = Path(__file__).resolve().parents[2]
+    content = (root / "scripts" / "core.cmd").read_text(encoding="utf-8").lower()
+
+    assert content.count("-m lamtools_core.cli %*") == 1
+    assert "if %errorlevel% equ 0 exit /b 0" not in content
 
 
 def test_load_llm_config_can_read_shared_config_when_sqlite_is_locked(tmp_path: Path) -> None:
@@ -647,13 +710,99 @@ async def test_core_cli_run_uses_core_kernel_tool_loop(tmp_path: Path) -> None:
             "select snapshot_seq,snapshot_json from core_thread_snapshots where thread_id=?",
             ("thread-cli-tool-loop",),
         ).fetchone()
+        project_row = con.execute(
+            "select id,name,work_root from core_projects",
+        ).fetchone()
+        snapshot_count = con.execute("select count(*) from core_thread_snapshots").fetchone()[0]
 
     assert events
     assert {row[0] for row in events} == {"core/runItem"}
     assert any("write_file" in str(row[1]) for row in events)
+    user_events = [json.loads(row[1]) for row in events if '"userMessage"' in str(row[1])]
+    assert len(user_events) == 1
+    assert user_events[0]["payload"]["content"] == [
+        {"type": "text", "text": "写一个文档，超过 10 行，随便写。"}
+    ]
     assert snapshot_row is not None
+    assert snapshot_count == 1
     assert int(snapshot_row[0]) == len(events)
     assert '"status": "completed"' in str(snapshot_row[1])
+    snapshot = json.loads(snapshot_row[1])
+    assert snapshot["session"]["title"] == "写一个文档，超过 10 行，随便写。"
+    assert snapshot["session"]["metadata"]["work_root"] == str((tmp_path / "workspace").resolve())
+    assert snapshot["session"]["metadata"]["project_id"] == project_row[0]
+    assert project_row[1] == "workspace"
+    assert project_row[2] == str((tmp_path / "workspace").resolve())
+
+
+@pytest.mark.asyncio
+async def test_core_cli_persists_user_message_before_model_execution(tmp_path: Path) -> None:
+    core_db = tmp_path / "core.db"
+
+    summary = await run_core_cli_task(
+        CoreCliRunOptions(
+            message="must remain visible after interruption",
+            model_id="fake-model",
+            work_root=tmp_path / "workspace",
+            run_dir=tmp_path / "run",
+            core_db=core_db,
+            thread_id="thread-cli-interrupted",
+            approval_policy="auto_approve",
+        ),
+        llm_client=FailingCoreCliLLM(),
+    )
+
+    assert summary["result"]["decision"] == "failed"
+
+    with sqlite3.connect(core_db) as con:
+        payloads = [
+            json.loads(row[0])
+            for row in con.execute(
+                "select payload_json from core_app_events where thread_id=? order by seq",
+                ("thread-cli-interrupted",),
+            )
+        ]
+
+    user_payloads = [payload for payload in payloads if payload["payload"].get("type") == "userMessage"]
+    assert [payload["payload"]["content"] for payload in user_payloads] == [
+        [{"type": "text", "text": "must remain visible after interruption"}]
+    ]
+
+
+@pytest.mark.asyncio
+async def test_core_cli_sub_agent_uses_durable_child_session_and_parent_timeline(tmp_path: Path) -> None:
+    core_db = tmp_path / "core.db"
+    thread_id = "thread-cli-sub-agent"
+
+    summary = await run_core_cli_task(
+        CoreCliRunOptions(
+            message="delegate",
+            model_id="fake-model",
+            work_root=tmp_path / "workspace",
+            run_dir=tmp_path / "run",
+            core_db=core_db,
+            thread_id=thread_id,
+            approval_policy="auto_approve",
+        ),
+        llm_client=ScriptedCoreCliSubAgentLLM(),
+    )
+
+    with sqlite3.connect(core_db) as con:
+        child = con.execute(
+            "select runtime_state_json,history_json from core_runtime_sessions where thread_id=?",
+            (f"{thread_id}:sub:writer",),
+        ).fetchone()
+        write_events = con.execute(
+            "select payload_json from core_app_events where thread_id=? and payload_json like '%write_file%'",
+            (thread_id,),
+        ).fetchall()
+
+    assert summary["result"]["decision"] == "done"
+    assert (tmp_path / "workspace" / "delegated.txt").read_text(encoding="utf-8") == "delegated content"
+    assert child is not None
+    assert json.loads(child[0])["status"] == "completed"
+    assert not json.loads(child[1])[-1].get("tool_calls")
+    assert write_events
 
 
 @pytest.mark.asyncio

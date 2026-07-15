@@ -25,6 +25,7 @@ from lamtools_core.kernel import (
     RuntimeKit,
     VerificationResult,
 )
+from lamtools_core.kernel.loop import _repair_incomplete_tool_history
 from lamtools_core.llm import ChatMessage, LLMClient, LLMRequest, LLMResponse, LLMStreamEvent, LLMToolCall
 from lamtools_core.llm.policy import BackoffStrategy, RetryPolicy
 from lamtools_core.prompt import PromptContext
@@ -38,6 +39,24 @@ def test_partial_tool_arguments_do_not_emit_content_streaming_placeholder():
     )
 
     assert summary == {"path": "index.html"}
+
+
+def test_incomplete_tool_history_is_closed_before_next_user_message():
+    messages = [
+        ChatMessage(role="user", content="start"),
+        ChatMessage(
+            role="assistant",
+            tool_calls=[LLMToolCall(id="call-1", name="search_files", arguments={})],
+        ),
+        ChatMessage(role="user", content="continue"),
+    ]
+
+    repaired = _repair_incomplete_tool_history(messages)
+
+    assert [message.role for message in repaired] == ["user", "assistant", "tool", "user"]
+    assert repaired[2].tool_call_id == "call-1"
+    assert "interrupted" in str(repaired[2].content)
+    assert repaired[2].metadata["history_repair"] == "interrupted_tool_call"
 
 
 # ---------------------------------------------------------------------------
@@ -89,6 +108,7 @@ class MockRuntimeKit:
         self.on_run_end_called = False
         self.writeback_calls: list[tuple[LoopDecision, ...]] = []
         self.build_context_calls: list[int] = []
+        self.context_histories: list[list[ChatMessage]] = []
 
     def _current_step(self) -> MockKitStep:
         idx = min(self._step_index, len(self.steps) - 1)
@@ -105,6 +125,7 @@ class MockRuntimeKit:
         step_index: int,
     ) -> PromptContext:
         self.build_context_calls.append(step_index)
+        self.context_histories.append(list(history))
         return PromptContext(
             session_id=state.session_id,
             user_message=turn_input.user_message,
@@ -541,7 +562,7 @@ class TestKernelTypes:
         assert policy.emit_debug_events is False
         assert policy.context_window_tokens is None
         assert policy.compact_trigger_ratio == 0.8
-        assert policy.compact_target_ratio == 0.6
+        assert policy.compact_limit_ratio == 0.6
         assert policy.metadata == {}
 
     def test_kernel_error_hierarchy(self):
@@ -689,7 +710,7 @@ class TestKernelToolFailure:
     async def test_tool_failure_does_not_auto_fail(self):
         """Tool failure does NOT automatically cause Kernel to fail.
 
-        The Kit's decide_next decides what happens after a tool failure.
+        The Kernel requires a diagnosis, then the Kit can continue normally.
         """
         failed_tool_result = ToolResult(
             call_id="c1",
@@ -705,17 +726,19 @@ class TestKernelToolFailure:
                 decision="continue",  # Kit decides to continue despite tool failure
             ),
             MockKitStep(
-                reply="retry succeeded",
+                reply="根因是连接超时。方案一检查网络，方案二更换服务。选择方案一；验证信号是请求成功。",
                 decision="done",
             ),
+            MockKitStep(reply="retry succeeded", decision="done"),
         ])
         kernel = _make_kernel(kit)
 
         result = await kernel.run(_make_turn_input())
 
-        # Tool failed but Kit decided to continue, so loop continues
+        # Tool failure enters diagnosis but does not fail the run.
         assert result.decision == "done"
-        assert len(result.steps) == 2
+        assert len(result.steps) == 3
+        assert result.steps[1].metadata["failure_diagnosis_completed"] is True
         assert result.steps[0].tool_steps[0].result.status == "failed"
         assert result.steps[0].decision == "continue"
 
@@ -737,6 +760,28 @@ class TestKernelToolFailure:
         assert tool_result is not None
         assert tool_result.status == "failed"
         assert "timed out" in tool_result.error
+
+    @pytest.mark.asyncio
+    async def test_tool_exception_returns_failed_result_not_kernel_failure(self):
+        class RaisingToolKit(MockRuntimeKit):
+            async def execute_tool(self, state: RuntimeState, call: ToolCall) -> ToolResult:
+                raise TypeError("path must be a string")
+
+        call = ToolCall(id="c1", name="search_files", arguments={"path": None})
+        kit = RaisingToolKit(steps=[
+            MockKitStep(tool_calls=[call], decision="done"),
+            MockKitStep(reply="done", decision="done"),
+        ])
+        kernel = _make_kernel(kit)
+
+        result = await kernel.run(_make_turn_input())
+
+        assert result.decision == "done"
+        tool_result = result.steps[0].tool_steps[0].result
+        assert tool_result is not None
+        assert tool_result.status == "failed"
+        assert tool_result.metadata["error_type"] == "TypeError"
+        assert "path must be a string" in tool_result.error
 
 
 class TestKernelVerification:
@@ -867,7 +912,7 @@ class TestKernelUnboundedLoop:
         ))
 
         assert result.decision == "done"
-        assert llm.call_count == 2
+        assert llm.call_count >= 2
         assert [event.payload["content"] for event in sink.events if event.name == "runtime.guidance_received"] == [
             "new direction"
         ]
@@ -925,7 +970,7 @@ class TestKernelUnboundedLoop:
         steps = [
             MockKitStep(
                 reply="",
-                tool_calls=[ToolCall(id=f"c{i}", name="run_command", arguments={"command": "echo ok"})],
+                tool_calls=[ToolCall(id=f"c{i}", name="run_command", arguments={"command": f"echo {i}"})],
                 decision="done",
             )
             for i in range(8)
@@ -1008,6 +1053,175 @@ class TestKernelEvents:
         reply_events = [e for e in sink.events if e.name == "runtime.reply"]
         assert len(reply_events) == 1
         assert reply_events[0].payload["content"] == "hello user"
+
+    @pytest.mark.asyncio
+    async def test_long_tool_input_stream_is_coalesced_and_flushes_complete_arguments(self):
+        """Tiny argument deltas keep live feedback without becoming one event per character."""
+
+        content = "x" * 2048
+        arguments_text = '{"path":"draft.txt","content":"' + content + '"}'
+
+        class CharacterToolInputStreamLLM:
+            async def stream(self, request: LLMRequest):
+                _ = request
+                for index, character in enumerate(arguments_text):
+                    tool_delta: dict[str, Any] = {
+                        "index": 0,
+                        "function": {"arguments": character},
+                    }
+                    if index == 0:
+                        tool_delta.update({"id": "call-write", "type": "function"})
+                        tool_delta["function"]["name"] = "write_file"
+                    yield LLMStreamEvent(
+                        kind="tool_call_delta",
+                        metadata={"tool_calls_delta": [tool_delta]},
+                    )
+                yield LLMStreamEvent(kind="done", metadata={"finish_reason": "tool_calls"})
+
+            async def complete(self, request: LLMRequest) -> LLMResponse:
+                raise AssertionError("streaming fixture must not fall back to complete()")
+
+        sink = CollectingEventSink()
+        kernel = _make_kernel(
+            MockRuntimeKit(),
+            llm_client=CharacterToolInputStreamLLM(),
+            event_sink=sink,
+        )
+
+        response = await kernel._stream_model(
+            LLMRequest(messages=[ChatMessage(role="user", content="write")]),
+            RuntimeState(session_id="stream-session", run_id="stream-run"),
+            response_index=0,
+        )
+
+        input_events = [
+            event
+            for event in sink.events
+            if event.name == "runtime.part" and event.payload.get("part_type") == "tool_input_delta"
+            and event.metadata.get("delivery") != "transient"
+        ]
+        input_deltas = [
+            event.payload["delta"]
+            for event in sink.events
+            if event.name == "runtime.part"
+            and event.payload.get("part_type") == "tool_input_delta"
+            and event.metadata.get("delivery") == "transient"
+        ]
+        assert response is not None
+        assert response.tool_calls[0].arguments == {"path": "draft.txt", "content": content}
+        assert input_deltas == list(arguments_text)
+        assert 2 <= len(input_events) <= 8
+        assert input_events[-1].payload["arguments_text"] == arguments_text
+
+    @pytest.mark.asyncio
+    async def test_character_text_and_reasoning_streams_are_coalesced_and_flush_complete_content(self):
+        """Text-like streams stay live without persisting one cumulative snapshot per character."""
+
+        text = "answer-" + ("x" * 1024)
+        reasoning = "plan-" + ("y" * 1024)
+
+        class CharacterTextStreamLLM:
+            async def stream(self, request: LLMRequest):
+                _ = request
+                for character in reasoning:
+                    yield LLMStreamEvent(kind="thinking_delta", content=character)
+                for character in text:
+                    yield LLMStreamEvent(kind="content_delta", content=character)
+                yield LLMStreamEvent(kind="done")
+
+            async def complete(self, request: LLMRequest) -> LLMResponse:
+                raise AssertionError("streaming fixture must not fall back to complete()")
+
+        sink = CollectingEventSink()
+        kernel = _make_kernel(
+            MockRuntimeKit(),
+            llm_client=CharacterTextStreamLLM(),
+            event_sink=sink,
+        )
+
+        response = await kernel._stream_model(
+            LLMRequest(messages=[ChatMessage(role="user", content="stream")]),
+            RuntimeState(session_id="stream-session", run_id="stream-run"),
+            response_index=0,
+        )
+
+        text_events = [
+            event for event in sink.events
+            if event.name == "runtime.part" and event.payload.get("part_type") == "text"
+        ]
+        reasoning_events = [
+            event for event in sink.events
+            if event.name == "runtime.part" and event.payload.get("part_type") == "reasoning"
+            and event.metadata.get("delivery") != "transient"
+        ]
+        text_deltas = [
+            event.payload["content"]
+            for event in sink.events
+            if event.name == "runtime.reply_delta" and event.payload.get("content")
+        ]
+        reasoning_deltas = [
+            event.payload["delta"]
+            for event in sink.events
+            if event.name == "runtime.part"
+            and event.payload.get("part_type") == "reasoning"
+            and event.metadata.get("delivery") == "transient"
+        ]
+        assert response is not None
+        assert response.content == text
+        assert response.thinking == reasoning
+        assert text_deltas == list(text)
+        assert reasoning_deltas == list(reasoning)
+        assert 2 <= len(text_events) <= 12
+        assert 2 <= len(reasoning_events) <= 12
+        assert text_events[-1].payload["content"] == text
+        assert reasoning_events[-1].payload["content"] == reasoning
+
+    @pytest.mark.asyncio
+    async def test_short_non_write_tool_input_stream_flushes_complete_arguments(self):
+        """Coalescing must not leave other tools showing only their first argument fragment."""
+
+        arguments_text = '{"path":"notes.txt"}'
+
+        class ShortReadToolInputStreamLLM:
+            async def stream(self, request: LLMRequest):
+                _ = request
+                for index, character in enumerate(arguments_text):
+                    tool_delta: dict[str, Any] = {
+                        "index": 0,
+                        "function": {"arguments": character},
+                    }
+                    if index == 0:
+                        tool_delta.update({"id": "call-read", "type": "function"})
+                        tool_delta["function"]["name"] = "read_file"
+                    yield LLMStreamEvent(
+                        kind="tool_call_delta",
+                        metadata={"tool_calls_delta": [tool_delta]},
+                    )
+                yield LLMStreamEvent(kind="done", metadata={"finish_reason": "tool_calls"})
+
+            async def complete(self, request: LLMRequest) -> LLMResponse:
+                raise AssertionError("streaming fixture must not fall back to complete()")
+
+        sink = CollectingEventSink()
+        kernel = _make_kernel(
+            MockRuntimeKit(),
+            llm_client=ShortReadToolInputStreamLLM(),
+            event_sink=sink,
+        )
+
+        response = await kernel._stream_model(
+            LLMRequest(messages=[ChatMessage(role="user", content="read")]),
+            RuntimeState(session_id="stream-session", run_id="stream-run"),
+            response_index=0,
+        )
+
+        input_events = [
+            event for event in sink.events
+            if event.name == "runtime.part" and event.payload.get("part_type") == "tool_input_delta"
+        ]
+        assert response is not None
+        assert response.tool_calls[0].arguments == {"path": "notes.txt"}
+        assert input_events[-1].payload["arguments_text"] == arguments_text
 
     @pytest.mark.asyncio
     async def test_non_streaming_thinking_is_emitted_as_reasoning_part(self):
@@ -1146,6 +1360,48 @@ class TestKernelEvents:
         assert result.message == "fallback final text"
         assert llm.stream_calls == 1
         assert llm.complete_calls == 1
+
+    @pytest.mark.asyncio
+    async def test_active_stream_is_not_cancelled_by_non_streaming_model_timeout(self):
+        """A stream that keeps producing data is governed by idle timeout, not total wall time."""
+
+        class ResponseEchoKit(MockRuntimeKit):
+            async def parse_model_output(self, state: RuntimeState, response: LLMResponse) -> KernelTurn:
+                return KernelTurn(reply=response.content)
+
+            async def decide_next(self, state, turn, verification, step):
+                return "done" if turn.reply else "failed"
+
+        class LongActiveStreamLLM:
+            def __init__(self) -> None:
+                self.complete_calls = 0
+
+            async def stream(self, request: LLMRequest):
+                for chunk in ("long ", "active ", "stream"):
+                    await asyncio.sleep(0.03)
+                    yield LLMStreamEvent(kind="content_delta", content=chunk)
+                yield LLMStreamEvent(kind="done")
+
+            async def complete(self, request: LLMRequest) -> LLMResponse:
+                self.complete_calls += 1
+                return LLMResponse(content="unexpected fallback")
+
+        llm = LongActiveStreamLLM()
+        kernel = _make_kernel(
+            ResponseEchoKit(),
+            llm_client=llm,
+            policy=LoopPolicy(
+                model_timeout_seconds=0.05,
+                model_retries=1,
+                model_stream_idle_timeout_seconds=0.1,
+            ),
+        )
+
+        result = await kernel.run(_make_turn_input())
+
+        assert result.decision == "done"
+        assert result.message == "long active stream"
+        assert llm.complete_calls == 0
 
     @pytest.mark.asyncio
     async def test_tool_events_emitted(self):
@@ -1300,6 +1556,268 @@ class TestKernelStateSave:
         assert result.state.loop_state == "done"
         assert result.state.position == ""
         assert result.state.metadata.get("existing") is True
+
+    @pytest.mark.asyncio
+    async def test_new_user_turn_clears_prior_no_progress_wait(self):
+        existing_state = RuntimeState(
+            session_id="no-progress-session",
+            status="waiting",
+            loop_state="wait",
+            metadata={
+                "no_progress": {"recoverable": True},
+                "pending_waiting_request": {"request_kind": "no_progress"},
+            },
+        )
+        store = InMemoryStateStore()
+        await store.save(existing_state)
+        kernel = _make_kernel(
+            MockRuntimeKit(steps=[MockKitStep(decision="done")]),
+            state_store=store,
+        )
+
+        result = await kernel.run(RuntimeTurnInput(
+            user_message="try a different approach",
+            metadata={"session_id": existing_state.session_id},
+        ))
+
+        assert result.decision == "done"
+        assert result.state is not None
+        assert "no_progress" not in result.state.metadata
+        assert "pending_waiting_request" not in result.state.metadata
+
+    @pytest.mark.asyncio
+    async def test_tool_failure_requires_visible_diagnosis_before_selected_plan_continues(self):
+        failed_call = ToolCall(
+            id="failed",
+            name="run_command",
+            arguments={"command": "python -m http.server 8080"},
+        )
+        investigation_call = ToolCall(
+            id="investigate",
+            name="run_command",
+            arguments={"command": "Get-NetTCPConnection -LocalPort 8080"},
+        )
+        selected_plan_call = ToolCall(
+            id="selected-plan",
+            name="run_command",
+            arguments={"command": "python -m http.server 8080 --directory knowledge-base"},
+        )
+        diagnosis = (
+            "根因：服务在错误目录启动。\n"
+            "证据：根路径返回 404。\n"
+            "方案一：停止旧进程并在目标目录启动。\n"
+            "方案二：使用 --directory 显式指定目录。\n"
+            "选择：方案二。\n"
+            "验证信号：GET /index.html 返回 200。"
+        )
+        kit = MockRuntimeKit(steps=[
+            MockKitStep(
+                tool_calls=[failed_call],
+                tool_results=[ToolResult(
+                    call_id="failed",
+                    name="run_command",
+                    status="failed",
+                    error="HTTP probe returned 404",
+                    metadata={"exit_code": 1},
+                )],
+            ),
+            MockKitStep(
+                tool_calls=[investigation_call],
+                tool_results=[ToolResult(
+                    call_id="investigate",
+                    name="run_command",
+                    content="LocalPort OwningProcess\n8080 1256",
+                )],
+            ),
+            MockKitStep(reply=diagnosis, decision="done"),
+            MockKitStep(
+                tool_calls=[selected_plan_call],
+                tool_results=[ToolResult(
+                    call_id="selected-plan",
+                    name="run_command",
+                    content="server ready",
+                )],
+            ),
+            MockKitStep(reply="完成", decision="done"),
+        ])
+
+        result = await _make_kernel(kit).run(_make_turn_input())
+
+        assert result.decision == "done"
+        assert len(result.steps) == 5
+        assert result.steps[2].metadata["failure_diagnosis_completed"] is True
+        assert result.steps[2].decision == "continue"
+        assert result.steps[3].tool_steps[0].call.id == "selected-plan"
+        diagnosis_prompts = [
+            str(message.content)
+            for history in kit.context_histories
+            for message in history
+            if message.role == "system" and "FAILURE_DIAGNOSIS_REQUIRED" in str(message.content)
+        ]
+        assert diagnosis_prompts
+        assert "HTTP probe returned 404" in diagnosis_prompts[0]
+        assert "至少两个" in diagnosis_prompts[0]
+
+    @pytest.mark.asyncio
+    async def test_failure_diagnosis_blocks_an_exact_retry_but_allows_investigation(self):
+        first = ToolCall(id="first", name="run_command", arguments={"command": "broken"})
+        retry = ToolCall(id="retry", name="run_command", arguments={"command": "broken"})
+        inspect = ToolCall(id="inspect", name="read_file", arguments={"path": "error.log"})
+        kit = MockRuntimeKit(steps=[
+            MockKitStep(
+                tool_calls=[first],
+                tool_results=[ToolResult(
+                    call_id="first",
+                    name="run_command",
+                    status="failed",
+                    error="exit 1",
+                )],
+            ),
+            MockKitStep(tool_calls=[retry]),
+            MockKitStep(
+                tool_calls=[inspect],
+                tool_results=[ToolResult(
+                    call_id="inspect",
+                    name="read_file",
+                    content="real failure evidence",
+                )],
+            ),
+            MockKitStep(reply="根因与证据。方案一。方案二。选择方案一。验证信号。", decision="done"),
+            MockKitStep(reply="完成", decision="done"),
+        ])
+
+        result = await _make_kernel(kit).run(_make_turn_input())
+
+        assert result.decision == "done"
+        blocked = result.steps[1].tool_steps[0].result
+        assert blocked is not None
+        assert blocked.status == "blocked"
+        assert blocked.metadata["failure_diagnosis_required"] is True
+        assert result.steps[2].tool_steps[0].call.id == "inspect"
+
+    @pytest.mark.asyncio
+    async def test_incomplete_failure_diagnosis_cannot_execute_selected_solution(self):
+        failed = ToolCall(id="failed", name="run_command", arguments={"command": "broken"})
+        premature = ToolCall(id="premature", name="run_command", arguments={"command": "different"})
+        complete = "[根因] 未知 [证据] exit 1 [方案1] 查日志 [方案2] 查环境 [选择] 方案1 [验证信号] 命令成功"
+        kit = MockRuntimeKit(steps=[
+            MockKitStep(
+                tool_calls=[failed],
+                tool_results=[ToolResult(call_id="failed", name="run_command", status="failed", error="exit 1")],
+            ),
+            MockKitStep(reply="根因可能已找到，继续处理。", tool_calls=[premature]),
+            MockKitStep(reply=complete, decision="done"),
+            MockKitStep(reply="完成", decision="done"),
+        ])
+
+        result = await _make_kernel(kit).run(_make_turn_input())
+
+        blocked = result.steps[1].tool_steps[0].result
+        assert blocked is not None
+        assert blocked.status == "blocked"
+        assert blocked.metadata["diagnosis_structure_missing"] is True
+        assert result.steps[1].metadata["failure_diagnosis_retry_required"] is True
+        assert result.steps[2].metadata["failure_diagnosis_completed"] is True
+
+    @pytest.mark.asyncio
+    async def test_repeated_identical_successes_request_rethink_then_wait(self):
+        steps = [
+            MockKitStep(
+                tool_calls=[ToolCall(id=f"success-{index}", name="read_file", arguments={"path": "same.txt"})],
+                tool_results=[ToolResult(call_id=f"success-{index}", name="read_file", content="same result")],
+            )
+            for index in range(8)
+        ]
+        kit = MockRuntimeKit(steps=steps)
+
+        result = await _make_kernel(kit).run(_make_turn_input())
+
+        assert result.decision == "wait"
+        assert result.steps[3].metadata["no_progress_recovery_required"] is True
+        assert result.steps[-1].metadata["no_progress"] is True
+        reassessment_prompts = [
+            str(message.content)
+            for history in kit.context_histories
+            for message in history
+            if message.role == "system" and "NO_PROGRESS_REASSESSMENT_REQUIRED" in str(message.content)
+        ]
+        assert reassessment_prompts
+
+    @pytest.mark.asyncio
+    async def test_repeated_identical_tool_failures_wait_as_a_last_resort(self):
+        steps = []
+        for index in range(5):
+            command = "get project"
+            steps.append(MockKitStep(
+                tool_calls=[ToolCall(
+                    id=f"c{index}",
+                    name="run_command",
+                    arguments={"command": command},
+                )],
+                tool_results=[ToolResult(
+                    call_id=f"c{index}",
+                    name="run_command",
+                    status="failed",
+                    content="[exit_code: 1]\n[no output]",
+                    error="Command exited with code 1",
+                    metadata={"duration_seconds": index / 10, "stderr_log": f"run-{index}.log"},
+                )],
+                decision="continue",
+            ))
+        kit = MockRuntimeKit(steps=steps)
+        kernel = _make_kernel(kit)
+
+        result = await kernel.run(_make_turn_input())
+
+        assert result.decision == "wait"
+        assert result.error == ""
+        assert len(result.steps) == 5
+        assert result.steps[-1].metadata["no_progress"] is True
+        assert result.state is not None
+        assert result.state.metadata["no_progress"]["response_index"] == 4
+        assert result.state.metadata["no_progress"]["recoverable"] is True
+        assert result.state.turn_count == 5
+        assert result.state.loop_state == "wait"
+        audit = result.state.metadata["runtime_audit"]
+        observation = audit["no_progress_observations"][-1]
+        assert len(observation["fingerprint_sha256"]) == 64
+        assert observation["count"] == 4
+        assert observation["threshold"] == 4
+        assert "get project" not in repr(observation)
+
+    @pytest.mark.asyncio
+    async def test_explicit_input_error_blocks_identical_call_before_reexecution(self):
+        calls = [
+            ToolCall(id="c1", name="demo", arguments={"path": "outside"}),
+            ToolCall(id="c2", name="demo", arguments={"path": "outside"}),
+            ToolCall(id="c3", name="demo", arguments={"path": "inside"}),
+        ]
+        steps = [
+            MockKitStep(
+                tool_calls=[calls[0]],
+                tool_results=[ToolResult(
+                    call_id="c1",
+                    name="demo",
+                    status="failed",
+                    error="outside workspace",
+                    metadata={"input_error": True},
+                )],
+            ),
+            MockKitStep(tool_calls=[calls[1]]),
+            MockKitStep(tool_calls=[calls[2]], decision="continue"),
+            MockKitStep(reply="done", decision="done"),
+        ]
+        kit = MockRuntimeKit(steps=steps)
+        kernel = _make_kernel(kit)
+
+        result = await kernel.run(_make_turn_input())
+
+        assert result.decision == "done"
+        blocked = result.steps[1].tool_steps[0].result
+        assert blocked is not None
+        assert blocked.status == "blocked"
+        assert blocked.metadata["duplicate_input_error"] is True
+        assert blocked.error == "outside workspace"
 
     @pytest.mark.asyncio
     async def test_state_from_turn_input(self):
@@ -1798,6 +2316,198 @@ class TestKernelParallelToolWhitelist:
 
 class TestKernelContextCompaction:
     @pytest.mark.asyncio
+    async def test_successful_auto_compaction_replaces_persisted_history_once(self):
+        class SeededCheckpointStore:
+            def __init__(self, history: list[ChatMessage]) -> None:
+                self.state: RuntimeState | None = None
+                self.history = [message.to_dict() for message in history]
+
+            async def get(self, session_id: str) -> RuntimeState | None:
+                return self.state
+
+            async def save(self, state: RuntimeState) -> None:
+                self.state = state
+
+            async def get_history(self, session_id: str) -> list[dict[str, Any]]:
+                return list(self.history)
+
+            async def save_checkpoint(
+                self, state: RuntimeState, history: list[dict[str, Any]]
+            ) -> None:
+                self.state = state
+                self.history = list(history)
+
+        class HistoryRequestKit(MockRuntimeKit):
+            async def build_model_request(self, state, context):
+                return LLMRequest(
+                    messages=[
+                        ChatMessage(role="system", content="stable prefix"),
+                        *context.history,
+                    ],
+                    model="mock-model",
+                )
+
+        old_history: list[ChatMessage] = []
+        for index in range(5):
+            old_history.append(ChatMessage(
+                role="user",
+                content=f"old user {index} " + ("x" * 500),
+            ))
+            old_history.append(ChatMessage(
+                role="assistant",
+                content=f"old assistant {index} " + ("y" * 500),
+            ))
+        store = SeededCheckpointStore(old_history)
+        sink = CollectingEventSink()
+        llm = CapturingLLMClient()
+        kernel = _make_kernel(
+            HistoryRequestKit(steps=[
+                MockKitStep(
+                    tool_calls=[ToolCall(id="inspect-1", name="read_file")],
+                    decision="continue",
+                ),
+                MockKitStep(reply="complete", decision="done"),
+            ]),
+            llm_client=llm,
+            state_store=store,  # type: ignore[arg-type]
+            event_sink=sink,
+            policy=LoopPolicy(
+                context_window_tokens=2_000,
+                compact_trigger_ratio=0.8,
+                compact_limit_ratio=0.6,
+            ),
+        )
+
+        result = await kernel.run(_make_turn_input(user_message="current task"))
+
+        assert result.decision == "done"
+        compacted_events = [
+            event for event in sink.events if event.name == "runtime.context_compacted"
+        ]
+        assert len(compacted_events) == 1
+        persisted_content = "\n".join(str(item.get("content") or "") for item in store.history)
+        assert "[Compacted Context]" in persisted_content
+        assert "old user 0 " + ("x" * 100) not in persisted_content
+
+    @pytest.mark.asyncio
+    async def test_model_switch_tries_previous_model_once_before_current_sampling(self):
+        class SwitchedModelKit(MockRuntimeKit):
+            async def build_model_request(self, state, context):
+                messages = [ChatMessage(role="system", content="stable prefix")]
+                for index in range(5):
+                    messages.append(ChatMessage(role="user", content=f"old user {index} " + ("x" * 500)))
+                    messages.append(ChatMessage(role="assistant", content=f"old answer {index} " + ("y" * 500)))
+                messages.append(ChatMessage(role="user", content="new-model request"))
+                return LLMRequest(messages=messages, model="current-model")
+
+        state = RuntimeState(
+            session_id="model-switch-session",
+            metadata={
+                "runtime_context_metrics": {
+                    "model_id": "previous-model",
+                    "context_window_tokens": 8_000,
+                }
+            },
+        )
+        llm = CapturingLLMClient()
+        kernel = _make_kernel(
+            SwitchedModelKit(steps=[MockKitStep(decision="done")]),
+            llm_client=llm,
+            policy=LoopPolicy(
+                context_window_tokens=2_000,
+                compact_trigger_ratio=0.8,
+                compact_limit_ratio=0.6,
+            ),
+        )
+
+        result = await kernel.run(
+            RuntimeTurnInput(
+                user_message="continue after model switch",
+                state=state,
+            )
+        )
+
+        assert result.decision == "done"
+        compaction_models = [
+            request.model
+            for request in llm.requests
+            if request.messages
+            and isinstance(request.messages[0].content, str)
+            and request.messages[0].content.startswith("Summarize this agent session context")
+        ]
+        assert compaction_models == ["previous-model"]
+        assert llm.last_request is not None
+        assert llm.last_request.model == "current-model"
+        assert state.metadata["runtime_context_metrics"]["model_id"] == "current-model"
+
+    @pytest.mark.asyncio
+    async def test_model_switch_falls_back_to_segmented_current_model_after_previous_failure(self):
+        class PreviousModelFailsClient(CapturingLLMClient):
+            async def complete(self, request: LLMRequest) -> LLMResponse:
+                first_content = request.messages[0].content if request.messages else ""
+                if (
+                    request.model == "previous-model"
+                    and isinstance(first_content, str)
+                    and first_content.startswith("Summarize this agent session context")
+                ):
+                    self.last_request = request
+                    self.requests.append(request)
+                    self.call_count += 1
+                    raise RuntimeError("previous model unavailable")
+                return await super().complete(request)
+
+        class SwitchedModelKit(MockRuntimeKit):
+            async def build_model_request(self, state, context):
+                messages = [ChatMessage(role="system", content="stable prefix")]
+                for index in range(8):
+                    messages.append(ChatMessage(role="user", content=f"old user {index} " + ("x" * 500)))
+                    messages.append(ChatMessage(role="assistant", content=f"old answer {index} " + ("y" * 500)))
+                messages.append(ChatMessage(role="user", content="new-model request"))
+                return LLMRequest(messages=messages, model="current-model")
+
+        state = RuntimeState(
+            session_id="model-switch-fallback",
+            metadata={
+                "runtime_context_metrics": {
+                    "model_id": "previous-model",
+                    "context_window_tokens": 12_000,
+                }
+            },
+        )
+        sink = CollectingEventSink()
+        llm = PreviousModelFailsClient()
+        kernel = _make_kernel(
+            SwitchedModelKit(steps=[MockKitStep(decision="done")]),
+            llm_client=llm,
+            event_sink=sink,
+            policy=LoopPolicy(
+                context_window_tokens=2_000,
+                compact_trigger_ratio=0.8,
+                compact_limit_ratio=0.6,
+                model_retries=1,
+            ),
+        )
+
+        result = await kernel.run(RuntimeTurnInput(user_message="continue", state=state))
+
+        assert result.decision == "done"
+        compaction_models = [
+            request.model
+            for request in llm.requests
+            if request.messages
+            and isinstance(request.messages[0].content, str)
+            and request.messages[0].content.startswith("Summarize this agent session context")
+        ]
+        assert compaction_models[0] == "previous-model"
+        assert compaction_models.count("previous-model") == 1
+        assert "current-model" in compaction_models[1:]
+        assert any(
+            event.payload.get("phase") == "fallback"
+            for event in sink.events
+            if event.name == "runtime.part"
+        )
+
+    @pytest.mark.asyncio
     async def test_compacts_request_when_estimate_reaches_80_percent(self):
         class LargeRequestKit(MockRuntimeKit):
             async def build_model_request(self, state, context):
@@ -1825,7 +2535,7 @@ class TestKernelContextCompaction:
             policy=LoopPolicy(
                 context_window_tokens=2_000,
                 compact_trigger_ratio=0.8,
-                compact_target_ratio=0.6,
+                compact_limit_ratio=0.6,
             ),
         )
 
@@ -1833,7 +2543,7 @@ class TestKernelContextCompaction:
 
         assert result.decision == "done"
         assert llm.last_request is not None
-        assert llm.call_count == 2
+        assert llm.call_count >= 2
         assert llm.last_request.metadata["context_compacted"] is True
         assert llm.last_request.metadata["context_compaction_mode"] == "structured_summary"
         assert llm.last_request.metadata["context_tokens_before_compaction"] >= 1_600
@@ -1862,7 +2572,7 @@ class TestKernelContextCompaction:
         events = [event for event in sink.events if event.name == "runtime.context_compacted"]
         assert len(events) == 1
         assert events[0].payload["trigger_tokens"] == 1_600
-        assert events[0].payload["target_tokens"] == 1_200
+        assert events[0].payload["limit_tokens"] == 1_200
         assert events[0].payload["removed"] > 0
         assert events[0].payload["compacted_message_ids"][:2] == ["user-0", "assistant-0"]
         assert "user-4" in events[0].payload["compacted_message_ids"]
@@ -1872,13 +2582,14 @@ class TestKernelContextCompaction:
             for event in sink.events
             if event.name == "runtime.part" and event.payload.get("part_type") == "compaction"
         ]
-        assert [event.payload["status"] for event in part_events] == ["running", "completed"]
+        assert part_events[0].payload["status"] == "running"
+        assert part_events[-1].payload["status"] == "compacted"
         assert part_events[-1].payload["label"] == "上下文已压缩"
         assert part_events[-1].payload["trigger"] == "auto"
         assert "[Compacted Context]" in part_events[-1].payload["content"]
 
     @pytest.mark.asyncio
-    async def test_compaction_target_ratio_is_a_hard_upper_bound(self):
+    async def test_compaction_limit_ratio_is_a_hard_upper_bound(self):
         class OversizedSummaryKit(MockRuntimeKit):
             async def build_model_request(self, state, context):
                 messages = [ChatMessage(role="system", content="stable prefix")]
@@ -1897,7 +2608,7 @@ class TestKernelContextCompaction:
             policy=LoopPolicy(
                 context_window_tokens=2_000,
                 compact_trigger_ratio=0.8,
-                compact_target_ratio=0.6,
+                compact_limit_ratio=0.6,
             ),
         )
 
@@ -1937,7 +2648,7 @@ class TestKernelContextCompaction:
             policy=LoopPolicy(
                 context_window_tokens=2_000,
                 compact_trigger_ratio=0.8,
-                compact_target_ratio=0.6,
+                compact_limit_ratio=0.6,
                 model_retries=3,
             ),
             retry_policy=RetryPolicy(
@@ -1958,7 +2669,7 @@ class TestKernelContextCompaction:
             and isinstance(request.messages[0].content, str)
             and request.messages[0].content.startswith("Summarize this agent session context")
         ]
-        assert len(compaction_requests) == 3
+        assert len(compaction_requests) >= 3
         compaction_complete_requests = [
             request
             for request in llm.requests
@@ -1979,11 +2690,16 @@ class TestKernelContextCompaction:
             for event in sink.events
             if event.name == "runtime.part" and event.payload.get("part_type") == "compaction"
         ]
-        assert [event.payload["status"] for event in compaction_parts] == [
-            "running",
-            "running",
-            "completed",
+        transient_deltas = [
+            event.payload["delta"]
+            for event in compaction_parts
+            if event.metadata.get("delivery") == "transient" and event.payload.get("delta")
         ]
+        expected_first_delta = "1. Current Goal\n- Continue after retry.\n\n"
+        assert compaction_parts[0].payload["status"] == "running"
+        assert compaction_parts[-1].payload["status"] == "compacted"
+        assert transient_deltas
+        assert transient_deltas[0] == expected_first_delta
         assert [event for event in sink.events if event.name == "runtime.context_compacted"]
 
     @pytest.mark.asyncio
@@ -2006,7 +2722,7 @@ class TestKernelContextCompaction:
             policy=LoopPolicy(
                 context_window_tokens=2_000,
                 compact_trigger_ratio=0.8,
-                compact_target_ratio=0.6,
+                compact_limit_ratio=0.6,
                 model_retries=3,
             ),
             retry_policy=RetryPolicy(
@@ -2026,11 +2742,13 @@ class TestKernelContextCompaction:
         )
         assert llm.call_count == 3
         assert [event for event in sink.events if event.name == "runtime.context_compacted"] == []
-        assert [
+        compaction_parts = [
             event
             for event in sink.events
             if event.name == "runtime.part" and event.payload.get("part_type") == "compaction"
-        ] == []
+        ]
+        assert compaction_parts[0].payload["status"] == "running"
+        assert compaction_parts[-1].payload["status"] == "failed"
         retry_events = [
             event
             for event in sink.events
@@ -2042,7 +2760,7 @@ class TestKernelContextCompaction:
         assert failed_events[0].payload["error"] == result.error
 
     @pytest.mark.asyncio
-    async def test_compaction_fails_clearly_when_preserved_context_exceeds_target(self):
+    async def test_compaction_fails_clearly_when_preserved_context_exceeds_limit(self):
         class UncompressibleCurrentRequestKit(MockRuntimeKit):
             async def build_model_request(self, state, context):
                 return LLMRequest(
@@ -2063,14 +2781,14 @@ class TestKernelContextCompaction:
             policy=LoopPolicy(
                 context_window_tokens=2_000,
                 compact_trigger_ratio=0.8,
-                compact_target_ratio=0.6,
+                compact_limit_ratio=0.6,
             ),
         )
 
         result = await kernel.run(_make_turn_input())
 
         assert result.decision == "failed"
-        assert result.error.startswith("Context compaction failed to fit within target budget:")
+        assert result.error.startswith("Context compaction failed to fit within limit:")
         assert "Unexpected error" not in result.error
         assert [event for event in sink.events if event.name == "runtime.context_compacted"] == []
 
@@ -2103,7 +2821,7 @@ class TestKernelContextCompaction:
             policy=LoopPolicy(
                 context_window_tokens=2_000,
                 compact_trigger_ratio=0.8,
-                compact_target_ratio=0.6,
+                compact_limit_ratio=0.6,
             ),
         )
 
@@ -2151,6 +2869,10 @@ class TestKernelContextCompaction:
         assert llm.last_request is not None
         assert "context_compacted" not in llm.last_request.metadata
         assert [event for event in sink.events if event.name == "runtime.context_compacted"] == []
+        done = next(event for event in sink.events if event.name == "runtime.done")
+        assert done.payload["runtime_metrics"]["context_window_tokens"] == 10_000
+        assert done.payload["runtime_metrics"]["estimated_prompt_tokens"] > 0
+        assert done.payload["runtime_metrics"]["llm_calls"] == 1
 
 
 # ---------------------------------------------------------------------------

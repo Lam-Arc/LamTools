@@ -95,6 +95,14 @@ class CliLiveFormatter:
         return []
 
     def format_chunks(self, event: dict[str, Any]) -> list[OutputChunk]:
+        compaction = compaction_event_details(event)
+        if compaction is not None:
+            run_item, payload, status = compaction
+            item_id = str(run_item.get("item_id") or run_item.get("event_id") or "")
+            delta = str(payload.get("delta") or "")
+            if status == "running" and delta and item_id in self._seen_running_compactions:
+                self._inline_delta_active = True
+                return [OutputChunk(delta, end="")]
         if str(event.get("event") or "") == "display":
             display_event = CoreDisplayEvent.from_dict(event_data(event))
             if display_event.metadata.get("delta") and display_event.content:
@@ -192,16 +200,16 @@ class CliLiveFormatter:
         return []
 
     def _format_compaction_run_item(self, run_item: dict[str, Any], payload: dict[str, Any]) -> list[str]:
-        status = run_item_status(run_item, payload)
+        status = compaction_business_status(run_item, payload)
         if status == "running":
             item_id = str(run_item.get("item_id") or run_item.get("event_id") or "")
             if item_id and item_id in self._seen_running_compactions:
                 delta = str(payload.get("delta") or "")
-                return [self.line("debug", shorten(delta, 220))] if self.verbose and delta else []
+                return [delta] if delta else []
             if item_id:
                 self._seen_running_compactions.add(item_id)
             self.last_status = "compacting"
-            return [self.line("phase", "\u6b63\u5728\u538b\u7f29\u4e0a\u4e0b\u6587...")]
+            return [self.line("phase", str(payload.get("label") or "\u6b63\u5728\u538b\u7f29\u4e0a\u4e0b\u6587"))]
         if status in {"failed", "error", "cancelled"}:
             self.last_status = "compaction_failed"
             return [self.line("failed", format_compaction_failure(payload))]
@@ -321,6 +329,69 @@ async def watch_live_events(
                 logger.warning("Failed to close live client", exc_info=True)
 
 
+async def execute_compaction_command_live(
+    *,
+    client_factory: ClientFactory,
+    thread_id: str,
+    work_root: str,
+    formatter: CliLiveFormatter,
+    output: OutputCallback,
+    raw: bool = False,
+) -> tuple[dict[str, Any], bool]:
+    """Execute /compact while consuming only its new compaction events."""
+    client = client_factory()
+    event_task: asyncio.Task[dict[str, Any]] | None = None
+    operation_task: asyncio.Task[dict[str, Any]] | None = None
+    saw_terminal = False
+    try:
+        await client.connect()
+        operation_task = asyncio.create_task(
+            client.execute_command(thread_id=thread_id, command="compact", work_root=work_root)
+        )
+        events = client.events().__aiter__()
+        event_task = asyncio.create_task(anext(events))
+
+        while True:
+            waiters: set[asyncio.Task[Any]] = {operation_task}
+            if event_task is not None:
+                waiters.add(event_task)
+            done, _pending = await asyncio.wait(
+                waiters,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if event_task in done:
+                try:
+                    event = event_task.result()
+                except StopAsyncIteration:
+                    event_task = None
+                else:
+                    details = compaction_event_details(event)
+                    if details is not None:
+                        if raw:
+                            await emit_output(output, OutputChunk(json.dumps(event, ensure_ascii=False)))
+                        else:
+                            for chunk in formatter.format_chunks(event):
+                                await emit_output(output, chunk)
+                        saw_terminal = details[2] in {
+                            "compacted", "completed", "not_needed", "skipped", "failed", "error", "cancelled",
+                        }
+                    event_task = asyncio.create_task(anext(events))
+
+            if operation_task.done():
+                await asyncio.sleep(0)
+                if event_task is not None and event_task.done():
+                    continue
+                break
+
+        return await operation_task, saw_terminal
+    finally:
+        if event_task is not None and not event_task.done():
+            event_task.cancel()
+        if operation_task is not None and not operation_task.done():
+            operation_task.cancel()
+        await client.close()
+
+
 async def emit_output(output: OutputCallback, value: OutputChunk) -> None:
     result = output(value)
     if inspect.isawaitable(result):
@@ -385,23 +456,51 @@ def run_item_artifact(run_item: dict[str, Any], payload: dict[str, Any]) -> dict
 
 
 def format_compaction_failure(payload: dict[str, Any]) -> str:
-    message = str(payload.get("error") or payload.get("message") or payload.get("reason") or "\u538b\u7f29\u5931\u8d25").strip()
-    return f"\u538b\u7f29\u5931\u8d25\uff1a{message}" if not message.startswith("\u538b\u7f29\u5931\u8d25") else message
+    message = str(payload.get("error") or payload.get("message") or payload.get("reason") or "").strip()
+    return f"\u538b\u7f29\u672a\u5b8c\u6210{f'\uff1a{message}' if message else ''} \u00b7 \u539f\u4e0a\u4e0b\u6587\u5df2\u4fdd\u7559"
 
 
 def format_compaction_result(payload: dict[str, Any]) -> str:
     status = str(payload.get("compaction_status") or payload.get("compactionStatus") or payload.get("status") or "")
-    if status == "skipped":
-        return str(payload.get("message") or payload.get("reason") or "\u6682\u65e0\u53ef\u538b\u7f29\u4e0a\u4e0b\u6587")
+    if status in {"skipped", "not_needed"}:
+        reason = str(payload.get("reason") or "")
+        gain = " \u00b7 \u672a\u83b7\u5f97\u6536\u76ca" if reason == "no_gain" else ""
+        return f"\u65e0\u9700\u538b\u7f29{gain} \u00b7 \u539f\u4e0a\u4e0b\u6587\u5df2\u4fdd\u7559"
+    if status in {"failed", "error", "cancelled"}:
+        return format_compaction_failure(payload)
     label = str(payload.get("label") or "\u4e0a\u4e0b\u6587\u5df2\u538b\u7f29").strip() or "\u4e0a\u4e0b\u6587\u5df2\u538b\u7f29"
     before, after = payload.get("before_tokens"), payload.get("after_tokens")
-    count = payload.get("compacted_messages", payload.get("removed_messages"))
+    segments = payload.get("segments")
     pieces: list[str] = []
     if isinstance(before, int) and isinstance(after, int):
-        pieces.append(f"{before} -> {after} tokens")
-    if isinstance(count, int):
-        pieces.append(f"\u538b\u7f29 {count} \u6761\u6d88\u606f")
-    return f"{label}\uff1a" + "\uff0c".join(pieces) + "\u3002" if pieces else label
+        pieces.append(f"{before} \u2192 {after} tokens")
+    if isinstance(segments, int) and segments > 1:
+        pieces.append(f"{segments} \u6bb5")
+    return " \u00b7 ".join([label, *pieces]) if pieces else label
+
+
+def compaction_business_status(run_item: dict[str, Any], payload: dict[str, Any]) -> str:
+    return str(
+        payload.get("compaction_status")
+        or payload.get("compactionStatus")
+        or payload.get("status")
+        or run_item.get("status")
+        or ""
+    )
+
+
+def compaction_event_details(
+    event: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], str] | None:
+    if str(event.get("event") or "") != "app_server_event":
+        return None
+    method, run_item = app_server_method_payload(event_data(event))
+    if method != "core/runItem":
+        return None
+    payload = run_item_payload(run_item)
+    if payload.get("type") != "compaction":
+        return None
+    return run_item, payload, compaction_business_status(run_item, payload)
 
 
 def action_path(params: dict[str, Any]) -> str:
@@ -516,7 +615,7 @@ def format_run_item_event(run_item: dict[str, Any]) -> str | None:
     kind = str(run_item.get("kind") or "")
     payload = run_item_payload(run_item)
     if payload.get("type") == "compaction":
-        status = run_item_status(run_item, payload)
+        status = compaction_business_status(run_item, payload)
         if status == "running":
             return "\u6b63\u5728\u538b\u7f29\u4e0a\u4e0b\u6587..."
         return format_compaction_failure(payload) if status in {"failed", "error", "cancelled"} else format_compaction_result(payload)
@@ -557,6 +656,8 @@ __all__ = [
     "default_input_text",
     "default_label",
     "event_request_id",
+    "execute_compaction_command_live",
+    "format_compaction_result",
     "format_event",
     "format_run_item_event",
     "is_done_event",

@@ -1679,14 +1679,16 @@
   place-items: center;
 }
 .modal-card {
+  --text: var(--theme-main-text);
   min-width: 360px;
   max-width: 90vw;
   padding: 24px;
   display: grid;
   gap: 18px;
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--theme-main-text) 14%, transparent);
   border-radius: 16px;
-  background: var(--panel);
+  background: var(--theme-main-background);
+  color: var(--theme-main-text);
 }
 .modal-card.wide { width: min(680px, 90vw); }
 .modal-card h2 { font-size: 18px; }

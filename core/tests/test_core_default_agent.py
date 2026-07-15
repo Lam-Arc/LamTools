@@ -7,20 +7,101 @@ import pytest
 from lamtools_core.app.default_agent import (
     CoreAgentPaths,
     CoreAgentSpec,
+    _persist_core_event_live,
     create_core_agent_operations,
 )
-from lamtools_core.app.base_agent import build_core_plugin_operation_catalog
+from lamtools_core.app.live_hub import CoreAppEventHub
+from lamtools_core.app.base_agent import build_core_plugin_operation_catalog, core_events_to_run_items
+from lamtools_core.event import CoreEvent
 from lamtools_core.llm import LLMRequest, LLMResponse, LLMStreamEvent, LLMToolCall
 from lamtools_core.llm.shallow_thinking import SHALLOW_THINKING_PROMPT
 from lamtools_core.plugins.hook_config import HookRegistry
 from lamtools_core.plugins.registry import PluginRegistry
 from lamtools_core.plugins.trust import HookTrustStore
+from lamtools_core.runtime import InMemoryRuntimeStateStore, RuntimeState
 
 
 async def _fake_model(turn):
     from lamtools_core.app import ModelTurnOutput
 
     return ModelTurnOutput(message=f"core handled: {turn.user_message}")
+
+
+def test_core_event_projection_preserves_canonical_live_turn_id():
+    turn_id = "thread-live:turn:turn-1"
+    items = core_events_to_run_items(
+        [
+            CoreEvent(
+                name="runtime.cancelled",
+                category="lifecycle",
+                session_id="thread-live",
+                run_id=turn_id,
+                payload={"message": "approval denied"},
+            )
+        ],
+        thread_id="thread-live",
+    )
+
+    assert {item.turn_id for item in items} == {turn_id}
+
+
+@pytest.mark.asyncio
+async def test_transient_model_delta_reaches_live_hub_without_becoming_history():
+    hub = CoreAppEventHub()
+    queue = hub.subscribe("thread-live")
+    event = CoreEvent(
+        name="runtime.reply_delta",
+        category="message",
+        session_id="thread-live",
+        run_id="run-live",
+        payload={
+            "content": "hel",
+            "part_id": "run-live:response-0:text",
+            "response_index": 0,
+        },
+        metadata={"delivery": "transient"},
+    )
+
+    await _persist_core_event_live(
+        event,
+        thread_id="thread-live",
+        db_session_factory=None,
+        app_event_store=None,
+        thread_snapshot_store=None,
+        app_event_hub=hub,
+    )
+
+    published = queue.get_nowait()
+    assert published.method == "core/runItem"
+    assert published.seq == 0
+    assert published.payload["payload"]["delta"] == "hel"
+    assert core_events_to_run_items([event], thread_id="thread-live") == []
+
+
+def test_transient_reasoning_delta_projects_as_append_only_run_item():
+    event = CoreEvent(
+        name="runtime.part",
+        category="message",
+        session_id="thread-live",
+        run_id="run-live",
+        payload={
+            "part_id": "run-live:response-0:reasoning",
+            "part_type": "reasoning",
+            "status": "running",
+            "delta": "think ",
+        },
+        metadata={"delivery": "transient"},
+    )
+
+    items = core_events_to_run_items(
+        [event],
+        thread_id="thread-live",
+        include_transient=True,
+    )
+
+    assert len(items) == 1
+    assert items[0].payload["delta"] == "think "
+    assert "content" not in items[0].payload
 
 
 class ScriptedCoreAgentLLM:
@@ -69,6 +150,60 @@ class ScriptedApprovalLLM:
             )
             return
         yield LLMStreamEvent(kind="content_delta", content="Saved approved.md.")
+        yield LLMStreamEvent(kind="done")
+
+
+class ScriptedRepeatedSubAgentApprovalLLM:
+    def __init__(self) -> None:
+        self.requests: list[LLMRequest] = []
+
+    async def complete(self, request: LLMRequest) -> LLMResponse:
+        raise AssertionError("core agent operation should use streaming when available")
+
+    async def stream(self, request: LLMRequest):
+        self.requests.append(request)
+        request_number = len(self.requests)
+        if request_number == 1:
+            yield LLMStreamEvent(
+                kind="done",
+                tool_calls=[
+                    LLMToolCall(
+                        id="call-parent-sub-agent",
+                        name="sub_agent",
+                        arguments={"task": "write two delegated files", "agent": "writer"},
+                    )
+                ],
+            )
+            return
+        if request_number == 2:
+            yield LLMStreamEvent(
+                kind="done",
+                tool_calls=[
+                    LLMToolCall(
+                        id="call-child-write-one",
+                        name="write_file",
+                        arguments={"path": "first.md", "content": "first\n"},
+                    )
+                ],
+            )
+            return
+        if request_number == 3:
+            yield LLMStreamEvent(
+                kind="done",
+                tool_calls=[
+                    LLMToolCall(
+                        id="call-child-write-two",
+                        name="write_file",
+                        arguments={"path": "second.md", "content": "second\n"},
+                    )
+                ],
+            )
+            return
+        if request_number == 4:
+            yield LLMStreamEvent(kind="content_delta", content="Child saved both files.")
+            yield LLMStreamEvent(kind="done")
+            return
+        yield LLMStreamEvent(kind="content_delta", content="Parent received the completed files.")
         yield LLMStreamEvent(kind="done")
 
 
@@ -176,17 +311,59 @@ async def test_core_agent_operations_expose_command_catalog(tmp_path):
     result = await catalog.execute("command.catalog", {})
 
     assert result.status == "ok"
-    assert result.payload["commands"] == [
-        {
-            "name": "inspect",
-            "title": "Inspect",
-            "description": "Inspect context",
-            "icon": "search",
-            "action": "insert_token",
-            "source": "core",
-            "accepts_args": False,
-        }
+    commands = {item["name"]: item for item in result.payload["commands"]}
+    assert commands["inspect"] == {
+        "name": "inspect",
+        "title": "Inspect",
+        "description": "Inspect context",
+        "icon": "search",
+        "action": "insert_token",
+        "source": "core",
+        "accepts_args": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_core_agent_command_execute_compacts_runtime_history(tmp_path):
+    core_root = tmp_path / "core-root"
+    command_dir = core_root / "command"
+    command_dir.mkdir(parents=True)
+    (command_dir / "compact.json").write_text(
+        json.dumps(
+            {
+                "name": "compact",
+                "title": "Compact",
+                "description": "Compact context",
+                "icon": "archive",
+                "action": "run_action",
+            }
+        ),
+        encoding="utf-8",
+    )
+    state_store = InMemoryRuntimeStateStore()
+    state = RuntimeState(session_id="thread-compact")
+    history = [
+        {"role": "user" if index % 2 == 0 else "assistant", "content": f"message-{index}"}
+        for index in range(8)
     ]
+    await state_store.save_checkpoint(state, history)
+    catalog = create_core_agent_operations(
+        spec=CoreAgentSpec(),
+        paths=CoreAgentPaths(data_dir=tmp_path / "data", work_root=tmp_path / "work"),
+        model_provider=_fake_model,
+        command_core_roots=[core_root],
+        runtime_state_store=state_store,
+    )
+
+    result = await catalog.execute(
+        "command.execute",
+        {"thread_id": "thread-compact", "command": "compact"},
+    )
+
+    assert result.status == "ok"
+    assert result.payload["result"]["status"] == "not_needed"
+    compacted_history = await state_store.get_history("thread-compact")
+    assert compacted_history == history
 
 
 def test_core_agent_spec_accepts_member_paths_without_product_names(tmp_path):
@@ -223,6 +400,34 @@ async def test_core_agent_operation_runs_kernel_tool_loop_and_projects_snapshot(
     assert any(item["kind"] == "tool_result" for item in result.payload["run_items"])
     assert len(llm.requests) == 2
     assert {tool["function"]["name"] for tool in llm.requests[0].tools or []} >= {"read_file", "write_file"}
+
+
+@pytest.mark.asyncio
+async def test_core_agent_turn_uses_request_work_root(tmp_path):
+    default_root = tmp_path / "default-work"
+    runtime_root = tmp_path / "project-work"
+    default_root.mkdir()
+    runtime_root.mkdir()
+    (runtime_root / "input.txt").write_text("project scoped\n", encoding="utf-8")
+    llm = ScriptedCoreAgentLLM()
+    catalog = create_core_agent_operations(
+        spec=CoreAgentSpec(),
+        paths=CoreAgentPaths(data_dir=tmp_path / "data", work_root=default_root),
+        model_provider=llm,
+    )
+
+    result = await catalog.execute(
+        "turn.start",
+        {
+            "thread_id": "thread-project-root",
+            "message": "read the project file",
+            "work_root": str(runtime_root),
+        },
+    )
+
+    tool_result = next(item for item in result.payload["run_items"] if item["kind"] == "tool_result")
+    assert tool_result["status"] == "completed"
+    assert "project scoped" in tool_result["payload"]["tool_result"]
 
 
 @pytest.mark.asyncio
@@ -283,6 +488,7 @@ async def test_core_agent_operation_applies_per_turn_model_and_shallow_thinking(
             "thinking_enabled": False,
             "thinking_budget": 1234,
             "shallow_thinking_enabled": True,
+            "context_window_tokens": 128_000,
         },
     )
 
@@ -291,7 +497,30 @@ async def test_core_agent_operation_applies_per_turn_model_and_shallow_thinking(
     assert llm.requests[0].model == "turn-model"
     assert llm.requests[0].metadata["thinking_enabled"] is False
     assert llm.requests[0].metadata["thinking_budget"] == 1234
+    assert llm.requests[0].metadata["context_window_tokens"] == 128_000
+    terminal = next(item for item in result.payload["run_items"] if item["kind"] == "status")
+    assert terminal["usage"]["context_window_tokens"] == 128_000
+    assert terminal["usage"]["estimated_prompt_tokens"] > 0
     assert any(message.content == SHALLOW_THINKING_PROMPT for message in llm.requests[0].messages)
+
+
+@pytest.mark.asyncio
+async def test_core_agent_instructs_parent_to_delegate_complete_deliverable(tmp_path):
+    llm = CapturingCoreAgentLLM()
+    catalog = create_core_agent_operations(
+        spec=CoreAgentSpec(),
+        paths=CoreAgentPaths(data_dir=tmp_path / "data", work_root=tmp_path / "work"),
+        model_provider=llm,
+    )
+
+    await catalog.execute(
+        "turn.start",
+        {"thread_id": "thread-complete-delegation", "message": "delegate a file deliverable"},
+    )
+
+    system_prompt = llm.requests[0].messages[0].content
+    assert "delegate the complete requested deliverable" in system_prompt
+    assert "Parent Agent should verify the result" in system_prompt
 
 
 @pytest.mark.asyncio
@@ -469,8 +698,97 @@ async def test_core_agent_approval_respond_executes_pending_tool_and_continues(t
     assert approved.status == "ok"
     assert approved.payload["decision"] == "done"
     assert approved.payload["message"] == "Saved approved.md."
+    assert approved.payload["run_id"] == waiting.payload["run_id"]
+    assert approved.payload["turn_id"] == waiting.payload["turn_id"]
+    assert {item["turn_id"] for item in approved.payload["run_items"]} == {waiting.payload["turn_id"]}
     assert (work_root / "approved.md").read_text(encoding="utf-8") == "approved content\n"
     assert len(llm.requests) == 2
+
+
+@pytest.mark.asyncio
+async def test_core_agent_approval_continues_in_request_work_root(tmp_path):
+    default_root = tmp_path / "default-work"
+    runtime_root = tmp_path / "project-work"
+    default_root.mkdir()
+    runtime_root.mkdir()
+    llm = ScriptedApprovalLLM()
+    catalog = create_core_agent_operations(
+        spec=CoreAgentSpec(),
+        paths=CoreAgentPaths(data_dir=tmp_path / "data", work_root=default_root),
+        model_provider=llm,
+    )
+
+    waiting = await catalog.execute(
+        "turn.start",
+        {
+            "thread_id": "thread-project-approval",
+            "message": "write a file",
+            "work_root": str(runtime_root),
+        },
+    )
+    approved = await catalog.execute(
+        "approval.respond",
+        {"thread_id": "thread-project-approval", "action": "approve"},
+    )
+
+    assert waiting.payload["decision"] == "wait"
+    assert approved.payload["decision"] == "done"
+    assert (runtime_root / "approved.md").read_text(encoding="utf-8") == "approved content\n"
+    assert not (default_root / "approved.md").exists()
+
+
+@pytest.mark.asyncio
+async def test_core_agent_sub_agent_can_request_approval_twice_before_completing(tmp_path):
+    work_root = tmp_path / "work"
+    work_root.mkdir()
+    state_store = InMemoryRuntimeStateStore()
+    llm = ScriptedRepeatedSubAgentApprovalLLM()
+    catalog = create_core_agent_operations(
+        spec=CoreAgentSpec(),
+        paths=CoreAgentPaths(data_dir=tmp_path / "data", work_root=work_root),
+        model_provider=llm,
+        runtime_state_store=state_store,
+    )
+
+    first_wait = await catalog.execute(
+        "turn.start",
+        {"thread_id": "thread-repeated-sub-approval", "message": "delegate two files"},
+    )
+    second_wait = await catalog.execute(
+        "approval.respond",
+        {"thread_id": "thread-repeated-sub-approval", "action": "approve"},
+    )
+    parent_state = await state_store.get("thread-repeated-sub-approval")
+
+    assert first_wait.payload["decision"] == "wait"
+    assert second_wait.status == "ok"
+    assert second_wait.payload["decision"] == "wait"
+    assert parent_state is not None
+    assert parent_state.status == "waiting"
+    assert parent_state.metadata["pending_approval"]["tool_call"]["id"] == "call-child-write-two"
+    assert parent_state.metadata["pending_approval"]["delegated_session"]["session_id"].endswith(":sub:writer")
+    assert any(
+        event["name"] == "runtime.approval_request"
+        and event["payload"]["tool_call_id"] == "call-child-write-two"
+        for event in second_wait.payload["events"]
+    )
+    assert not any(event["name"] == "runtime.approval_response" for event in second_wait.payload["events"])
+    assert sum(item["kind"] == "approval_response" for item in second_wait.payload["run_items"]) == 1
+    assert (work_root / "first.md").read_text(encoding="utf-8") == "first\n"
+    assert not (work_root / "second.md").exists()
+
+    completed = await catalog.execute(
+        "approval.respond",
+        {"thread_id": "thread-repeated-sub-approval", "action": "approve"},
+    )
+
+    assert completed.status == "ok"
+    assert completed.payload["decision"] == "done"
+    assert completed.payload["message"] == "Parent received the completed files."
+    assert not any(event["name"] == "runtime.approval_response" for event in completed.payload["events"])
+    assert sum(item["kind"] == "approval_response" for item in completed.payload["run_items"]) == 1
+    assert (work_root / "second.md").read_text(encoding="utf-8") == "second\n"
+    assert len(llm.requests) == 5
 
 
 @pytest.mark.asyncio

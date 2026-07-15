@@ -86,6 +86,21 @@ def test_latest_active_turn_id_uses_newest_active_turn() -> None:
     assert latest_active_turn_id(snapshot) == "turn-3"
 
 
+def test_latest_active_turn_id_ignores_stale_waiting_turn_after_thread_cancelled() -> None:
+    snapshot = {
+        "status": "cancelled",
+        "core": {
+            "status": "cancelled",
+            "turns": {
+                "turn-stale": {"turn_id": "turn-stale", "status": "waiting", "last_seq": 10},
+                "turn-cancelled": {"turn_id": "turn-cancelled", "status": "cancelled", "last_seq": 11},
+            },
+        },
+    }
+
+    assert latest_active_turn_id(snapshot) is None
+
+
 def test_next_dispatchable_queue_item_requires_idle_or_completed_thread() -> None:
     running_snapshot = {
         "status": "running",

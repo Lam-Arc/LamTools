@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import os
 from dataclasses import replace
 from typing import Any, Protocol
+from urllib.parse import urlparse
 
 import httpx
 
@@ -118,7 +120,15 @@ class HookEngine:
             return HookDecision(), audit
         payload = self._payload(hook, event)
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(hook.handler.timeout)) as client:
+            host = urlparse(hook.handler.url).hostname or ""
+            try:
+                is_loopback = ipaddress.ip_address(host).is_loopback
+            except ValueError:
+                is_loopback = host.lower() == "localhost"
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(hook.handler.timeout),
+                trust_env=not is_loopback,
+            ) as client:
                 response = await client.post(hook.handler.url, json=payload)
             audit = {
                 "hook_id": hook.id,

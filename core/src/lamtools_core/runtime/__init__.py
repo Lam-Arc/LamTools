@@ -8,6 +8,10 @@ from typing import Any, Callable, Literal, Protocol, runtime_checkable
 from lamtools_core.llm import LLMResponse
 from lamtools_core.tool import ToolCall, ToolResult
 from lamtools_core.event import CoreEvent
+from .background_processes import (
+    BackgroundProcessRegistry,
+    default_background_process_registry,
+)
 
 RuntimeStatus = Literal["idle", "running", "waiting", "completed", "failed", "cancelled"]
 RuntimeLoopState = Literal["continue", "wait", "done", "failed"]
@@ -206,9 +210,12 @@ class _RuntimeTaskEntry:
 class RuntimeTaskRegistry:
     """Track active runtime tasks, cancellation signals, and transient guidance."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, background_process_registry: BackgroundProcessRegistry | None = None) -> None:
         self._entries: dict[str, _RuntimeTaskEntry] = {}
         self._cancel_events: dict[str, asyncio.Event] = {}
+        self._background_process_registry = (
+            background_process_registry or default_background_process_registry()
+        )
 
     def get_cancel_event(self, thread_id: str) -> asyncio.Event:
         if thread_id not in self._cancel_events:
@@ -229,6 +236,7 @@ class RuntimeTaskRegistry:
         entry = self._entries.get(thread_id)
         if entry is not None:
             return entry.run_id == run_id
+        self.reset_cancel_event(thread_id)
         self._entries[thread_id] = _RuntimeTaskEntry(run_id=run_id)
         return True
 
@@ -254,6 +262,7 @@ class RuntimeTaskRegistry:
             current = self._entries.get(thread_id)
             if current is not None and current.run_id == run_id and current.task is done_task:
                 self._entries.pop(thread_id, None)
+                self._background_process_registry.cleanup_session(thread_id)
 
         task.add_done_callback(_cleanup)
         return True
@@ -274,8 +283,8 @@ class RuntimeTaskRegistry:
         self._drop_done_entry(thread_id)
         entry = self._entries.get(thread_id)
         if entry is None:
-            if run_id is None:
-                self.get_cancel_event(thread_id).set()
+            self.get_cancel_event(thread_id).set()
+            self._background_process_registry.cleanup_session(thread_id)
             return
         if run_id is not None and entry.run_id != run_id:
             return
@@ -285,6 +294,7 @@ class RuntimeTaskRegistry:
         entry.guidance.clear()
         entry.guidance_ids.clear()
         self._entries.pop(thread_id, None)
+        self._background_process_registry.cleanup_session(thread_id)
         if not force:
             return
         if task is not None and not task.done():
@@ -376,6 +386,7 @@ class RuntimeTaskRegistry:
         entry = self._entries.get(thread_id)
         if entry is not None and entry.run_id == run_id:
             self._entries.pop(thread_id, None)
+            self._background_process_registry.cleanup_session(thread_id)
 
     def _drop_done_entry(self, thread_id: str) -> None:
         entry = self._entries.get(thread_id)
@@ -385,6 +396,18 @@ class RuntimeTaskRegistry:
     def clear(self) -> None:
         self._entries.clear()
         self._cancel_events.clear()
+
+    async def shutdown(self) -> None:
+        """Cancel and join every tracked task before its event loop is closed."""
+
+        entries = list(self._entries.items())
+        tasks = [entry.task for _thread_id, entry in entries if entry.task is not None]
+        for thread_id, entry in entries:
+            self.cancel(thread_id, run_id=entry.run_id, force=True)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self.clear()
+        self._background_process_registry.shutdown()
 
 
 _DEFAULT_TASK_REGISTRY = RuntimeTaskRegistry()
@@ -419,6 +442,8 @@ __all__ = [
     "RuntimeStateConflictError",
     "InMemoryRuntimeStateStore",
     "RuntimeTaskRegistry",
+    "BackgroundProcessRegistry",
+    "default_background_process_registry",
     "default_runtime_task_registry",
     "CompletionGate",
     "RuntimeDriver",

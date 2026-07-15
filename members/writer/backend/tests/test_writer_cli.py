@@ -417,6 +417,13 @@ async def test_cli_messages_reads_thread_operation(monkeypatch, capsys):
         async def connect(self, *, thread_id=None, last_seen_seq=0):
             calls.append(("connect", thread_id, last_seen_seq))
 
+        async def close(self):
+            calls.append(("close",))
+
+        async def events(self):
+            await asyncio.Event().wait()
+            yield {}
+
         async def read_thread(self, *, thread_id):
             calls.append(("thread.read", thread_id))
             return {
@@ -614,6 +621,13 @@ async def test_cli_compact_executes_app_server_command(monkeypatch, capsys):
         async def connect(self, *, thread_id=None, last_seen_seq=0):
             calls.append(("connect", thread_id, last_seen_seq))
 
+        async def close(self):
+            calls.append(("close",))
+
+        async def events(self):
+            await asyncio.Event().wait()
+            yield {}
+
         async def execute_command(self, *, thread_id, command, work_root=""):
             calls.append(("command.execute", thread_id, command, work_root))
             return {
@@ -639,13 +653,12 @@ async def test_cli_compact_executes_app_server_command(monkeypatch, capsys):
     assert result == 0
     assert calls == [
         ("init", "http://writer.test"),
-        ("connect", "session-1", 0),
+        ("connect", None, 0),
         ("command.execute", "session-1", "compact", "E:\\LamTools"),
-        ("exit",),
+        ("close",),
     ]
     output = capsys.readouterr().out
-    assert "正在压缩上下文..." in output
-    assert "上下文已压缩：18000 -> 7200 tokens，压缩 8 条消息。" in output
+    assert "上下文已压缩 · 18000 → 7200 tokens" in output
     assert "[Compacted Context]" not in output
 
 
@@ -663,6 +676,16 @@ async def test_cli_compact_verbose_prints_summary(monkeypatch, capsys):
 
         async def connect(self, *, thread_id=None, last_seen_seq=0):
             pass
+
+        async def read_thread(self, *, thread_id):
+            return {"snapshot": {"snapshot_seq": 0}}
+
+        async def close(self):
+            pass
+
+        async def events(self):
+            await asyncio.Event().wait()
+            yield {}
 
         async def execute_command(self, *, thread_id, command, work_root=""):
             return {
@@ -972,7 +995,7 @@ def test_app_server_core_run_item_compaction_formats_status_not_summary():
         status="completed",
     )
 
-    assert _format_event(event) == "上下文已压缩：18000 -> 7200 tokens，压缩 8 条消息。"
+    assert _format_event(event) == "上下文已压缩 · 18000 → 7200 tokens"
 
 
 def test_app_server_core_run_item_compaction_formats_skipped_business_status():
@@ -987,7 +1010,7 @@ def test_app_server_core_run_item_compaction_formats_skipped_business_status():
         status="completed",
     )
 
-    assert _format_event(event) == "Not enough history to compact"
+    assert _format_event(event) == "无需压缩 · 原上下文已保留"
 
 
 def test_cli_run_formatter_formats_compaction_as_process_line():
@@ -1007,7 +1030,7 @@ def test_cli_run_formatter_formats_compaction_as_process_line():
         )
     )
 
-    assert lines == ["[00:00] done 上下文已压缩：18000 -> 7200 tokens，压缩 8 条消息。"]
+    assert lines == ["[00:00] done 上下文已压缩 · 18000 → 7200 tokens"]
 
 
 def test_app_server_turn_lifecycle_event_is_hidden():

@@ -197,7 +197,8 @@ describe('CoreExecutionControls', () => {
     await wrapper.findAll('.ui-select-option')[1].trigger('click');
     await triggers[1].trigger('click');
     await wrapper.findAll('.ui-select-option')[1].trigger('click');
-    await wrapper.find('.composer-shallow-toggle').trigger('click');
+    await triggers[1].trigger('click');
+    await wrapper.findAll('.ui-select-option').at(-1)!.trigger('click');
 
     expect(wrapper.emitted('update:modelValue')?.[0]).toEqual(['model-1']);
     expect(wrapper.emitted('update:thinkingMode')?.[0]).toEqual(['max']);

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from lamtools_core.agent import SubAgentRunResult
 from lamtools_core.tool import ToolCall
 from lamtools_core.tool.default_toolbox import build_core_toolbox
 
@@ -19,14 +20,59 @@ class FakeSubAgentRunner:
     def __init__(self) -> None:
         self.calls = []
 
-    async def run(self, *, task, agent=""):
+    async def run(
+        self,
+        *,
+        task,
+        agent="",
+        parent_call_id="",
+        parent_run_id="",
+        parent_turn_id="",
+    ):
         self.calls.append(
             {
                 "task": task,
                 "agent": agent,
+                "parent_call_id": parent_call_id,
+                "parent_run_id": parent_run_id,
+                "parent_turn_id": parent_turn_id,
             }
         )
         return f"sub:{task}"
+
+
+class FailingSubAgentRunner:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def run(
+        self,
+        *,
+        task,
+        agent="",
+        parent_call_id="",
+        parent_run_id="",
+        parent_turn_id="",
+    ):
+        self.calls += 1
+        return SubAgentRunResult(
+            session_id="parent:sub:worker",
+            run_id=f"child-run-{self.calls}",
+            decision="failed",
+        )
+
+
+class NoProgressSubAgentRunner:
+    async def run(self, **_kwargs):
+        return SubAgentRunResult(
+            session_id="parent:sub:worker",
+            run_id="child-run-wait",
+            decision="wait",
+            pending_waiting_request={
+                "request_kind": "no_progress",
+                "message": "same failure observed four times",
+            },
+        )
 
 
 class FakeSkillRegistry:
@@ -164,6 +210,45 @@ async def test_core_toolbox_executes_injected_sub_agent_runner(tmp_path):
     assert result.status == "ok"
     assert result.content == "sub:inspect"
     assert runner.calls[0]["agent"] == "reader"
+
+
+@pytest.mark.asyncio
+async def test_core_toolbox_does_not_rerun_identical_failed_sub_agent_task(tmp_path):
+    runner = FailingSubAgentRunner()
+    toolbox = build_core_toolbox(work_root=tmp_path, sub_agent_runner=runner)
+
+    first = await toolbox.execute(ToolCall(
+        id="sub-failed-1",
+        name="sub_agent",
+        arguments={"task": "inspect", "agent": "worker"},
+    ))
+    second = await toolbox.execute(ToolCall(
+        id="sub-failed-2",
+        name="sub_agent",
+        arguments={"task": "inspect", "agent": "worker"},
+    ))
+
+    assert first.status == "failed"
+    assert second.status == "failed"
+    assert runner.calls == 1
+    assert second.metadata["duplicate_failure_blocked"] is True
+
+
+@pytest.mark.asyncio
+async def test_core_toolbox_propagates_sub_agent_no_progress_without_calling_it_approval(tmp_path):
+    toolbox = build_core_toolbox(work_root=tmp_path, sub_agent_runner=NoProgressSubAgentRunner())
+
+    result = await toolbox.execute(ToolCall(
+        id="sub-wait-1",
+        name="sub_agent",
+        arguments={"task": "inspect", "agent": "worker"},
+    ))
+
+    assert result.status == "blocked"
+    assert result.content == "Sub-agent paused after making no progress."
+    assert result.metadata["wait_reason"] == "no_progress"
+    assert result.metadata["pending_approval"] == {}
+    assert result.metadata["pending_waiting_request"]["request_kind"] == "no_progress"
 
 
 @pytest.mark.asyncio

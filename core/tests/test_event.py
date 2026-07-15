@@ -112,6 +112,24 @@ class TestCollectingEventSink:
         assert forwarded == [event]
 
     @pytest.mark.asyncio
+    async def test_can_forward_transient_events_without_retaining_them(self):
+        forwarded = []
+        sink = CollectingEventSink(
+            live_callback=forwarded.append,
+            should_collect=lambda event: event.metadata.get("delivery") != "transient",
+        )
+        transient = CoreEvent(
+            name="runtime.reply_delta",
+            category="message",
+            metadata={"delivery": "transient"},
+        )
+
+        await sink.emit(transient)
+
+        assert forwarded == [transient]
+        assert sink.events == []
+
+    @pytest.mark.asyncio
     async def test_clear(self):
         sink = CollectingEventSink()
         await sink.emit(CoreEvent(name="progress", category="progress"))

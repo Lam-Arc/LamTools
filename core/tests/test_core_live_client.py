@@ -195,6 +195,65 @@ async def test_core_app_server_client_uses_caller_stable_client_message_id():
 
 
 @pytest.mark.asyncio
+async def test_core_app_server_client_execute_command_returns_result_and_queues_response_events():
+    class CommandWebSocket(FakeWebSocket):
+        async def send_json(self, payload: dict) -> None:
+            await super().send_json(payload)
+            method = payload["method"]
+            if method == "initialize":
+                result = {"protocolVersion": "core.app_server.v1"}
+            elif method == "initialized":
+                result = {"ok": True}
+            else:
+                result = {
+                    "result": {
+                        "status": "not_needed",
+                        "reason": "no_gain",
+                        "before_tokens": 1200,
+                        "after_tokens": 1200,
+                    },
+                    "events": [{
+                        "event_id": "compact-final",
+                        "thread_id": "thread-1",
+                        "seq": 9,
+                        "method": "core/runItem",
+                        "payload": {
+                            "item_id": "compact-1",
+                            "kind": "message",
+                            "status": "completed",
+                            "payload": {
+                                "type": "compaction",
+                                "compaction_status": "not_needed",
+                                "reason": "no_gain",
+                            },
+                        },
+                    }],
+                }
+            await self.inbound.put({"id": payload["id"], "result": result})
+
+    websocket = CommandWebSocket()
+
+    async def connect(_url: str):
+        return websocket
+
+    client = CoreAppServerClient("http://core.test", websocket_connect=connect)
+    await client.connect()
+
+    result = await client.execute_command(thread_id="thread-1", command="compact")
+    event = await asyncio.wait_for(client._events.get(), timeout=1)
+
+    assert result == {
+        "status": "not_needed",
+        "reason": "no_gain",
+        "before_tokens": 1200,
+        "after_tokens": 1200,
+    }
+    assert websocket.sent[-1]["params"]["include_snapshot"] is False
+    assert event["data"]["event_id"] == "compact-final"
+    await client.close()
+
+
+@pytest.mark.asyncio
 async def test_core_app_server_client_sends_live_turn_options_and_queue_operations():
     client = CoreAppServerClient("http://core.test")
     calls: list[tuple[str, dict]] = []

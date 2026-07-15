@@ -4,39 +4,34 @@ import { resolve } from 'node:path'
 import test from 'node:test'
 
 const viewSource = readFileSync(resolve('src/views/CoreWorkbenchView.vue'), 'utf8')
+const coreComponentSource = readFileSync(resolve('../../../core/ui/src/components/CoreResourceStats.vue'), 'utf8')
+const coreResourceSource = readFileSync(resolve('../../../core/ui/src/runtime/resources.ts'), 'utf8')
 
-test('runtime resource widget combines context and call stats in one right-panel block', () => {
-  assert.match(viewSource, /class="[^"]*runtime-resource-widget[^"]*"/)
-  assert.match(viewSource, />资源</)
-  assert.doesNotMatch(viewSource, />上下文统计</)
-  assert.doesNotMatch(viewSource, />调用统计</)
-  assert.doesNotMatch(viewSource, /data-action="demo-update"/)
+test('Writer delegates panel and composer resource statistics to Core', () => {
+  assert.match(viewSource, /CoreResourceStats/)
+  assert.match(viewSource, /#composer-status/)
+  assert.match(viewSource, /variant="composer"/)
+  assert.match(viewSource, /#right-panel[\s\S]*CoreResourceStats/)
+  assert.doesNotMatch(viewSource, /runtimeResourceSummary|contextResourceStats|runtime-resource-widget/)
 })
 
-test('runtime resource widget renders waterline motion and hover hint', () => {
-  assert.match(viewSource, /runtimeResourceSummary/)
-  assert.match(viewSource, /--runtime-resource-used/)
-  assert.match(viewSource, /class="runtime-resource-bar"/)
-  assert.match(viewSource, /当前\s+\{\{\s*runtimeResourceSummary\.currentPct\s*\}\}%\s+·\s+\{\{\s*runtimeResourceSummary\.thresholdPct\s*\}\}%\s+后自动压缩/)
-  assert.match(viewSource, /\.runtime-resource-used\s*\{[^}]*transition:\s*transform 180ms/s)
-  assert.match(viewSource, /\.runtime-resource-values\s+strong\s*\{[^}]*transition:\s*opacity 120ms/s)
-  assert.match(viewSource, /prefers-reduced-motion:\s*reduce/)
+test('Core owns the shared resource panel and composer percentage line', () => {
+  assert.match(coreComponentSource, /class="runtime-widget core-resource-widget"/)
+  assert.match(coreComponentSource, /class="core-resource-line"/)
+  assert.match(coreComponentSource, /role="meter"/)
+  assert.match(coreComponentSource, /prefers-reduced-motion:\s*reduce/)
 })
 
-test('runtime resource widget does not treat cumulative token usage as current context', () => {
-  const contextStats = viewSource.match(/const contextResourceStats = computed\(\(\) => \{[\s\S]*?\n\}\)/)?.[0] || ''
-
-  assert.match(contextStats, /metrics\.estimated_prompt_tokens/)
-  assert.match(contextStats, /metrics\.context_window_tokens/)
-  assert.doesNotMatch(contextStats, /metrics\.input_tokens/)
-  assert.doesNotMatch(contextStats, /metrics\.prompt_tokens/)
+test('Core context usage excludes cumulative input and output totals', () => {
+  const contextMetrics = coreResourceSource.match(/const current = firstNumber\([\s\S]*?\n\s*\)/)?.[0] || ''
+  assert.match(contextMetrics, /latest\.estimated_prompt_tokens/)
+  assert.match(contextMetrics, /latest\.context_tokens/)
+  assert.doesNotMatch(contextMetrics, /input_tokens|prompt_tokens(?!\b)/)
 })
 
-test('runtime resource widget separates over-threshold state from completed compaction', () => {
-  const resourceSummary = viewSource.match(/const runtimeResourceSummary = computed\(\(\) => \{[\s\S]*?\n\}\)/)?.[0] || ''
-
-  assert.match(resourceSummary, /contextCompacted/)
-  assert.match(resourceSummary, /'已压缩'/)
-  assert.match(resourceSummary, /'需压缩'/)
-  assert.doesNotMatch(resourceSummary, /currentPct >= thresholdPct \? '已压缩'/)
+test('Core separates over-threshold state from completed compaction', () => {
+  assert.match(coreResourceSource, /contextCompacted/)
+  assert.match(coreResourceSource, /'已压缩'/)
+  assert.match(coreResourceSource, /'需压缩'/)
+  assert.doesNotMatch(coreResourceSource, /currentPct >= thresholdPct \? '已压缩'/)
 })

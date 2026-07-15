@@ -53,7 +53,8 @@ function save() {
   gap: 8px;
   margin-top: 10px;
   padding: 10px;
-  border-top: 1px solid color-mix(in srgb, var(--theme-backdrop-text) 14%, transparent);
+  color: var(--theme-main-text, currentColor);
+  border-top: 1px solid color-mix(in srgb, var(--theme-main-text, currentColor) 14%, transparent);
 }
 
 .core-agents-editor-head,
@@ -68,8 +69,8 @@ function save() {
   width: 28px;
   height: 28px;
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--theme-backdrop-text) 8%, transparent);
-  color: var(--theme-backdrop-text);
+  background: color-mix(in srgb, var(--theme-main-text, currentColor) 8%, transparent);
+  color: var(--theme-main-text, currentColor);
   font-size: 18px;
   line-height: 1;
 }
@@ -83,10 +84,10 @@ function save() {
   width: 100%;
   min-height: 180px;
   resize: vertical;
-  border: 1px solid color-mix(in srgb, var(--theme-backdrop-text) 20%, transparent);
+  border: 1px solid color-mix(in srgb, var(--theme-main-text, currentColor) 20%, transparent);
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--theme-backdrop-text) 6%, transparent);
-  color: var(--theme-backdrop-text);
+  background: color-mix(in srgb, var(--theme-main-text, currentColor) 6%, transparent);
+  color: var(--theme-main-text, currentColor);
   font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.5;

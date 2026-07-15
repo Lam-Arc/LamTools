@@ -101,6 +101,34 @@ class ScriptedApprovalLLM:
         yield LLMStreamEvent(kind="done")
 
 
+class BlockingApprovalContinuationLLM:
+    def __init__(self) -> None:
+        self.release = asyncio.Event()
+        self.requests: list[LLMRequest] = []
+
+    async def complete(self, request: LLMRequest) -> LLMResponse:
+        raise AssertionError("Core operation should use streaming")
+
+    async def stream(self, request: LLMRequest):
+        self.requests.append(request)
+        if len(self.requests) == 1:
+            yield LLMStreamEvent(
+                kind="done",
+                tool_calls=[
+                    LLMToolCall(
+                        id="call-write",
+                        name="write_file",
+                        arguments={"path": "approved.md", "content": "approved\n"},
+                    )
+                ],
+            )
+            return
+        yield LLMStreamEvent(kind="thinking_delta", content="continuing after approval")
+        await self.release.wait()
+        yield LLMStreamEvent(kind="content_delta", content="Saved approved.md.")
+        yield LLMStreamEvent(kind="done")
+
+
 class BlockingLiveLLM:
     def __init__(self) -> None:
         self.release = asyncio.Event()
@@ -167,9 +195,14 @@ def test_core_event_projection_keeps_protocol_json_out_of_visible_messages():
 
     run_items = core_events_to_run_items(events, thread_id="thread-visible")
 
-    assert len(run_items) == 1
-    assert run_items[0].payload["content"] == "最终 **正文**"
-    assert "finish_reason" not in run_items[0].payload["content"]
+    visible_items = [item for item in run_items if item.kind != "usage"]
+    usage_items = [item for item in run_items if item.kind == "usage"]
+
+    assert len(visible_items) == 1
+    assert visible_items[0].payload["content"] == "最终 **正文**"
+    assert "finish_reason" not in visible_items[0].payload["content"]
+    assert len(usage_items) == 1
+    assert usage_items[0].usage["total_tokens"] == 15
 
 
 @pytest.mark.asyncio
@@ -228,6 +261,7 @@ async def test_core_operation_publishes_run_items_while_turn_is_running(tmp_path
         live_event = await asyncio.wait_for(subscription.get(), timeout=1)
 
         assert live_event.method == CORE_RUN_ITEM_METHOD
+        assert live_event.seq == 0
         assert live_event.payload["kind"] == "thinking"
         assert not task.done()
 
@@ -235,8 +269,9 @@ async def test_core_operation_publishes_run_items_while_turn_is_running(tmp_path
             events = await event_store.list_thread(db, thread_id="thread-live")
             snapshot = await snapshot_store.load(db, "thread-live")
 
-        assert any(event.event_id == live_event.event_id for event in events)
-        assert snapshot["status"] == "running"
+        assert all(event.event_id != live_event.event_id for event in events)
+        assert snapshot["status"] == "idle"
+        assert snapshot["snapshot_seq"] == 0
 
         llm.release.set()
         result = await task
@@ -325,10 +360,59 @@ async def test_core_approval_continuation_persists_approved_tool_and_final_snaps
 
         assert waiting.payload["decision"] == "wait"
         assert approved.status == "ok"
+        assert approved.payload["turn_id"] == waiting.payload["turn_id"]
         assert (work_root / "approved.md").read_text(encoding="utf-8") == "approved\n"
         assert len(events) == len(waiting.payload["run_items"]) + len(approved.payload["run_items"])
+        assert {event.turn_id for event in events if event.turn_id} == {waiting.payload["turn_id"]}
         assert any(event.payload.get("kind") == "tool_result" for event in events)
         assert snapshot["status"] == "completed"
         assert snapshot["core"]["status"] == "completed"
     finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_core_approval_response_is_published_before_continuation_finishes(tmp_path):
+    engine, session_factory, event_store, snapshot_store = await _persistence(tmp_path)
+    hub = CoreAppEventHub()
+    subscription = hub.subscribe("thread-approval-live")
+    approval_task = None
+    llm = BlockingApprovalContinuationLLM()
+    try:
+        work_root = tmp_path / "work"
+        work_root.mkdir()
+        catalog = create_core_agent_operations(
+            spec=CoreAgentSpec(),
+            paths=CoreAgentPaths(data_dir=tmp_path / "data", work_root=work_root),
+            model_provider=llm,
+            db_session_factory=session_factory,
+            app_event_store=event_store,
+            thread_snapshot_store=snapshot_store,
+            app_event_hub=hub,
+        )
+
+        waiting = await catalog.execute(
+            "turn.start", {"thread_id": "thread-approval-live", "message": "write"}
+        )
+        while not subscription.empty():
+            subscription.get_nowait()
+
+        approval_task = asyncio.create_task(
+            catalog.execute(
+                "approval.respond",
+                {"thread_id": "thread-approval-live", "action": "approve"},
+            )
+        )
+        live_event = await asyncio.wait_for(subscription.get(), timeout=1)
+
+        assert waiting.payload["decision"] == "wait"
+        assert live_event.method == CORE_RUN_ITEM_METHOD
+        assert live_event.payload["kind"] == "approval_response"
+        assert live_event.payload["status"] == "completed"
+        assert not approval_task.done()
+    finally:
+        llm.release.set()
+        if approval_task is not None:
+            await approval_task
+        hub.unsubscribe("thread-approval-live", subscription)
         await engine.dispose()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import inspect
 from collections.abc import Awaitable, Callable
@@ -40,6 +41,7 @@ class ContextCompactionError(RuntimeError):
 
 
 CompactionDeltaSink = Callable[[str], Awaitable[None] | None]
+CompactionEventSink = Callable[[dict[str, Any]], Awaitable[None] | None]
 CompactionTokenEstimator = Callable[[list[ChatMessage]], int]
 
 
@@ -52,10 +54,11 @@ class ContextCompactionRequest:
     llm_client: LLMClient | None = None
     model: str = ""
     timeout: float | None = None
-    target_tokens: int = 4096
+    limit_tokens: int = 4096
+    input_limit_tokens: int = 0
     existing_summary: str = ""
     on_delta: CompactionDeltaSink | None = None
-    retain_tail_count: int = 0
+    on_event: CompactionEventSink | None = None
     preserve_latest_user: bool = True
     estimate_tokens: CompactionTokenEstimator | None = None
     model_retries: int = 1
@@ -78,7 +81,8 @@ class ContextCompactionResult:
     replacement_messages: list[ChatMessage] = field(default_factory=list)
     before_tokens: int = 0
     after_tokens: int = 0
-    target_tokens: int = 0
+    limit_tokens: int = 0
+    segment_count: int = 0
     display_payload: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -99,46 +103,87 @@ class _ContextCompactionLayout:
 
 async def compact_context(request: ContextCompactionRequest) -> ContextCompactionResult:
     """Compact context and return both replacement messages and display data."""
+    await _emit_compaction_event(
+        request,
+        {
+            "status": "running",
+            "phase": "preparing",
+            "label": "正在压缩上下文",
+            "content": "",
+        },
+    )
     layout = select_context_compaction_layout(
         request.messages,
-        retain_tail_count=request.retain_tail_count,
         preserve_latest_user=request.preserve_latest_user,
+        limit_tokens=request.limit_tokens,
+        estimate_tokens=lambda messages: _estimate_compaction_tokens(request, messages),
     )
     before_tokens = _estimate_compaction_tokens(request, request.messages)
     if layout is None:
-        return ContextCompactionResult(
-            status="skipped",
+        result = ContextCompactionResult(
+            status="not_needed",
             trigger=request.trigger,
             replacement_messages=list(request.messages),
             before_tokens=before_tokens,
             after_tokens=before_tokens,
-            target_tokens=request.target_tokens,
+            limit_tokens=request.limit_tokens,
             display_payload={
                 "type": "compaction",
                 "trigger": request.trigger,
-                "status": "skipped",
-                "label": "暂无可压缩上下文",
+                "status": "not_needed",
+                "reason": "no_content",
+                "label": "无需压缩",
                 "before_tokens": before_tokens,
                 "after_tokens": before_tokens,
-                "target_tokens": request.target_tokens,
+                "limit_tokens": request.limit_tokens,
                 "compacted_messages": 0,
                 "retained_messages": len(request.messages),
                 "removed_messages": 0,
             },
         )
+        await _emit_compaction_event(request, result.display_payload)
+        return result
 
-    summary = await summarize_context_messages(
-        layout.compacted_messages,
-        llm_client=request.llm_client,
-        model=request.model,
-        timeout=request.timeout,
-        target_tokens=request.target_tokens,
-        existing_summary=request.existing_summary,
-        on_delta=request.on_delta,
-        model_retries=request.model_retries,
-        model_timeout_seconds=request.model_timeout_seconds,
-        retry_policy=request.retry_policy,
-        on_model_retry=request.on_model_retry,
+    try:
+        summary, segment_count = await summarize_context_messages(
+            layout.compacted_messages,
+            llm_client=request.llm_client,
+            model=request.model,
+            timeout=request.timeout,
+            limit_tokens=request.limit_tokens,
+            input_limit_tokens=request.input_limit_tokens,
+            existing_summary=request.existing_summary,
+            on_delta=request.on_delta,
+            on_event=lambda payload: _emit_compaction_event(request, payload),
+            model_retries=request.model_retries,
+            model_timeout_seconds=request.model_timeout_seconds,
+            retry_policy=request.retry_policy,
+            on_model_retry=request.on_model_retry,
+        )
+    except asyncio.CancelledError:
+        result = _failed_compaction_result(
+            request,
+            before_tokens=before_tokens,
+            reason="cancelled",
+            message="上下文压缩已取消",
+        )
+        await _emit_compaction_event(request, result.display_payload)
+        raise
+    except ContextCompactionError as exc:
+        result = _failed_compaction_result(
+            request,
+            before_tokens=before_tokens,
+            message=str(exc),
+        )
+        await _emit_compaction_event(request, result.display_payload)
+        return result
+    summary = _inherit_prior_user_instructions(
+        summary,
+        [request.existing_summary, *(
+            str(message.content or "")
+            for message in layout.compacted_messages
+            if message.metadata.get("key") == "context_compaction_summary"
+        )],
     )
     summary_message = ChatMessage(
         role="system",
@@ -155,31 +200,66 @@ async def compact_context(request: ContextCompactionRequest) -> ContextCompactio
         summary_message,
         *layout.retained_messages,
     ]
-    after_tokens = _fit_replacement_to_target(
+    after_tokens = _fit_replacement_to_limit(
         request,
         replacement_messages,
         summary_message,
     )
-    if after_tokens > request.target_tokens:
-        raise ContextCompactionError(
-            f"Context compaction failed to fit within target budget: {after_tokens} > {request.target_tokens} tokens"
+    if after_tokens >= before_tokens:
+        result = ContextCompactionResult(
+            status="not_needed",
+            trigger=request.trigger,
+            replacement_messages=list(request.messages),
+            before_tokens=before_tokens,
+            after_tokens=before_tokens,
+            limit_tokens=request.limit_tokens,
+            segment_count=segment_count,
+            display_payload={
+                "type": "compaction",
+                "trigger": request.trigger,
+                "status": "not_needed",
+                "reason": "no_gain",
+                "label": "无需压缩",
+                "before_tokens": before_tokens,
+                "after_tokens": before_tokens,
+                "limit_tokens": request.limit_tokens,
+                "segments": segment_count,
+                "compacted_messages": 0,
+                "retained_messages": len(request.messages),
+                "removed_messages": 0,
+            },
         )
+        await _emit_compaction_event(request, result.display_payload)
+        return result
+    if after_tokens > request.limit_tokens:
+        result = _failed_compaction_result(
+            request,
+            before_tokens=before_tokens,
+            reason="over_limit",
+            message=(
+                "Context compaction failed to fit within limit: "
+                f"{after_tokens} > {request.limit_tokens} tokens"
+            ),
+        )
+        await _emit_compaction_event(request, result.display_payload)
+        return result
 
     summary_content = str(summary_message.content or "")
     display_payload = {
         "type": "compaction",
         "trigger": request.trigger,
-        "status": "completed",
+        "status": "compacted",
         "label": "上下文已压缩",
         "content": summary_content[:20_000],
         "before_tokens": before_tokens,
         "after_tokens": after_tokens,
-        "target_tokens": request.target_tokens,
+        "limit_tokens": request.limit_tokens,
+        "segments": segment_count,
         "compacted_messages": len(layout.compacted_messages),
         "retained_messages": len(layout.retained_messages),
         "removed_messages": len(layout.compacted_messages),
     }
-    return ContextCompactionResult(
+    result = ContextCompactionResult(
         status="compacted",
         trigger=request.trigger,
         summary=summary_content,
@@ -190,7 +270,44 @@ async def compact_context(request: ContextCompactionRequest) -> ContextCompactio
         replacement_messages=replacement_messages,
         before_tokens=before_tokens,
         after_tokens=after_tokens,
-        target_tokens=request.target_tokens,
+        limit_tokens=request.limit_tokens,
+        segment_count=segment_count,
+        display_payload=display_payload,
+    )
+    await _emit_compaction_event(request, display_payload)
+    return result
+
+
+def _failed_compaction_result(
+    request: ContextCompactionRequest,
+    *,
+    before_tokens: int,
+    message: str,
+    reason: str = "",
+) -> ContextCompactionResult:
+    display_payload = {
+        "type": "compaction",
+        "trigger": request.trigger,
+        "status": "failed",
+        "phase": "failed",
+        "label": "压缩未完成",
+        "message": message,
+        "before_tokens": before_tokens,
+        "after_tokens": before_tokens,
+        "limit_tokens": request.limit_tokens,
+        "compacted_messages": 0,
+        "retained_messages": len(request.messages),
+        "removed_messages": 0,
+    }
+    if reason:
+        display_payload["reason"] = reason
+    return ContextCompactionResult(
+        status="failed",
+        trigger=request.trigger,
+        replacement_messages=list(request.messages),
+        before_tokens=before_tokens,
+        after_tokens=before_tokens,
+        limit_tokens=request.limit_tokens,
         display_payload=display_payload,
     )
 
@@ -198,8 +315,9 @@ async def compact_context(request: ContextCompactionRequest) -> ContextCompactio
 def select_context_compaction_layout(
     messages: list[ChatMessage],
     *,
-    retain_tail_count: int = 0,
     preserve_latest_user: bool = True,
+    limit_tokens: int = 0,
+    estimate_tokens: CompactionTokenEstimator | None = None,
 ) -> _ContextCompactionLayout | None:
     """Return stable prefix, compacted messages, and raw retained messages."""
     prefix_end = 0
@@ -212,39 +330,54 @@ def select_context_compaction_layout(
 
     body = list(messages[prefix_end:])
     if not body:
-        if retain_tail_count > 0:
-            return _ContextCompactionLayout(
-                prefix_messages=list(messages[:prefix_end]),
-                compacted_messages=[],
-                retained_messages=[],
-            )
         return None
 
-    retained_body_indexes: set[int] = set()
-    if retain_tail_count > 0:
-        retained_count = min(retain_tail_count, max(0, len(body) - 1))
-        start = len(body) - retained_count
-        retained_body_indexes.update(range(start, len(body)))
-    elif preserve_latest_user:
-        for index in range(len(body) - 1, -1, -1):
-            if body[index].role == "user":
-                retained_body_indexes.add(index)
-                break
+    estimator = estimate_tokens or (
+        lambda values: estimate_message_tokens([message.to_dict() for message in values])
+    )
+    prefix_messages = list(messages[:prefix_end])
+    fixed_tokens = estimator(prefix_messages)
+    retained_budget = max(0, limit_tokens - fixed_tokens - _summary_output_limit(limit_tokens))
+    groups = _semantic_message_groups(body)
+    retained_ids: set[int] = set()
 
-    compacted_messages = [
-        message
-        for index, message in enumerate(body)
-        if index not in retained_body_indexes
-    ]
+    def retained_values(extra: list[ChatMessage] | None = None) -> list[ChatMessage]:
+        selected = set(retained_ids)
+        selected.update(id(message) for message in (extra or []))
+        return [message for message in body if id(message) in selected]
+
+    def retained_token_count(extra: list[ChatMessage] | None = None) -> int:
+        return max(0, estimator([*prefix_messages, *retained_values(extra)]) - fixed_tokens)
+
+    latest_group_index = len(groups) - 1
+    if preserve_latest_user:
+        latest_user = next((message for message in reversed(body) if message.role == "user"), None)
+        if latest_user is not None:
+            latest_group_index = next(
+                index for index, group in enumerate(groups) if any(message is latest_user for message in group)
+            )
+            latest_group = groups[latest_group_index]
+            required = (
+                latest_group
+                if retained_token_count(latest_group) <= retained_budget
+                else [latest_user]
+            )
+            retained_ids.update(id(message) for message in required)
+
+    start_index = latest_group_index if preserve_latest_user else len(groups)
+    for group in reversed(groups[:start_index]):
+        if len(retained_ids) + len(group) >= len(body):
+            continue
+        if retained_token_count(group) > retained_budget:
+            break
+        retained_ids.update(id(message) for message in group)
+
+    retained_messages = retained_values()
+    compacted_messages = [message for message in body if id(message) not in retained_ids]
     if not compacted_messages:
         return None
-    retained_messages = [
-        message
-        for index, message in enumerate(body)
-        if index in retained_body_indexes
-    ]
     return _ContextCompactionLayout(
-        prefix_messages=list(messages[:prefix_end]),
+        prefix_messages=prefix_messages,
         compacted_messages=compacted_messages,
         retained_messages=retained_messages,
     )
@@ -259,17 +392,17 @@ def _estimate_compaction_tokens(
     return estimate_message_tokens([message.to_dict() for message in messages])
 
 
-def _fit_replacement_to_target(
+def _fit_replacement_to_limit(
     request: ContextCompactionRequest,
     replacement_messages: list[ChatMessage],
     summary_message: ChatMessage,
 ) -> int:
     after_tokens = _estimate_compaction_tokens(request, replacement_messages)
-    while request.target_tokens > 0 and after_tokens > request.target_tokens:
+    while request.limit_tokens > 0 and after_tokens > request.limit_tokens:
         summary_tokens = estimate_text_tokens(str(summary_message.content or ""))
         if summary_tokens <= 0:
             break
-        next_budget = max(0, summary_tokens - (after_tokens - request.target_tokens) - 64)
+        next_budget = max(0, summary_tokens - (after_tokens - request.limit_tokens) - 64)
         next_content = compress_structured_compaction_summary(
             str(summary_message.content or ""),
             next_budget,
@@ -294,19 +427,249 @@ async def summarize_context_messages(
     llm_client: LLMClient | None = None,
     model: str = "",
     timeout: float | None = None,
-    target_tokens: int = 4096,
+    limit_tokens: int = 4096,
+    input_limit_tokens: int = 0,
     existing_summary: str = "",
     on_delta: CompactionDeltaSink | None = None,
+    on_event: CompactionEventSink | None = None,
     model_retries: int = 1,
     model_timeout_seconds: float | None = None,
     retry_policy: RetryPolicy | None = None,
     on_model_retry: ModelRetrySink | None = None,
-) -> str:
-    """Return a structured summary for replacing compacted context."""
+) -> tuple[str, int]:
+    """Return a structured summary and the number of source segments used."""
+    chunks = _split_compaction_messages(
+        messages,
+        input_limit_tokens=input_limit_tokens,
+        existing_summary=existing_summary,
+    )
+    segment_count = len(chunks)
+    summaries: list[str] = []
+    for index, chunk in enumerate(chunks, start=1):
+        await _emit_event_sink(
+            on_event,
+            {
+                "status": "running",
+                "phase": "segment",
+                "segment": index,
+                "segments": segment_count,
+                "label": f"正在压缩上下文 · 第 {index}/{segment_count} 段",
+                "content": "",
+            },
+        )
+        summary = await _summarize_compaction_chunk(
+            chunk,
+            llm_client=llm_client,
+            model=model,
+            timeout=timeout,
+            output_tokens=_summary_output_limit(limit_tokens),
+            input_limit_tokens=input_limit_tokens,
+            existing_summary=existing_summary if index == 1 else "",
+            on_delta=on_delta,
+            on_event=on_event,
+            phase="segment",
+            segment=index,
+            segments=segment_count,
+            model_retries=model_retries,
+            model_timeout_seconds=model_timeout_seconds,
+            retry_policy=retry_policy,
+            on_model_retry=on_model_retry,
+        )
+        summaries.append(summary)
+
+    merge_round = 0
+    while len(summaries) > 1:
+        merge_round += 1
+        if merge_round > 12:
+            raise ContextCompactionError("Context compaction failed: segmented summaries did not converge")
+        summary_messages = [
+            ChatMessage(
+                role="assistant",
+                content=value,
+                metadata={"key": "compaction_segment_summary"},
+            )
+            for value in summaries
+        ]
+        merge_chunks = _split_compaction_messages(
+            summary_messages,
+            input_limit_tokens=input_limit_tokens,
+            existing_summary="",
+        )
+        if len(merge_chunks) >= len(summaries):
+            merge_chunks = _pair_compaction_messages(summary_messages, input_limit_tokens)
+        await _emit_event_sink(
+            on_event,
+            {
+                "status": "running",
+                "phase": "merge",
+                "segments": segment_count,
+                "merge_round": merge_round,
+                "label": f"正在整理压缩结果 · {segment_count} 段",
+                "content": "",
+            },
+        )
+        merged: list[str] = []
+        for index, chunk in enumerate(merge_chunks, start=1):
+            merged.append(
+                await _summarize_compaction_chunk(
+                    chunk,
+                    llm_client=llm_client,
+                    model=model,
+                    timeout=timeout,
+                    output_tokens=_summary_output_limit(limit_tokens),
+                    input_limit_tokens=input_limit_tokens,
+                    existing_summary="",
+                    on_delta=on_delta,
+                    on_event=on_event,
+                    phase="merge",
+                    segment=index,
+                    segments=len(merge_chunks),
+                    model_retries=model_retries,
+                    model_timeout_seconds=model_timeout_seconds,
+                    retry_policy=retry_policy,
+                    on_model_retry=on_model_retry,
+                )
+            )
+        summaries = merged
+
+    summary = summaries[0] if summaries else with_compaction_prefix(
+        fallback_structured_compaction_summary(messages, existing_summary=existing_summary)
+    )
+    return summary, max(1, segment_count)
+
+
+def _summary_output_limit(limit_tokens: int) -> int:
+    return max(256, min(4096, limit_tokens // 3 if limit_tokens > 0 else 4096))
+
+
+def _semantic_message_groups(messages: list[ChatMessage]) -> list[list[ChatMessage]]:
+    groups: list[list[ChatMessage]] = []
+    current: list[ChatMessage] = []
+    for message in messages:
+        starts_group = message.role == "user" or message.metadata.get("key") == "compaction_segment_summary"
+        if starts_group and current:
+            groups.append(current)
+            current = []
+        current.append(message)
+    if current:
+        groups.append(current)
+    return groups
+
+
+def _compaction_request_tokens(messages: list[ChatMessage], existing_summary: str = "") -> int:
     transcript = format_messages_for_compaction(messages, existing_summary=existing_summary)
-    summary_budget = max(512, min(4096, target_tokens // 3 if target_tokens > 0 else 4096))
+    return estimate_message_tokens(
+        [
+            ChatMessage(role="system", content=COMPACTION_PROMPT).to_dict(),
+            ChatMessage(role="user", content=transcript).to_dict(),
+        ]
+    )
+
+
+def _split_compaction_messages(
+    messages: list[ChatMessage],
+    *,
+    input_limit_tokens: int,
+    existing_summary: str,
+) -> list[list[ChatMessage]]:
+    if not messages:
+        return [[]]
+    if input_limit_tokens <= 0 or _compaction_request_tokens(messages, existing_summary) <= input_limit_tokens:
+        return [list(messages)]
+
+    chunks: list[list[ChatMessage]] = []
+    current: list[ChatMessage] = []
+    semantic_groups: list[list[ChatMessage]] = []
+    for group in _semantic_message_groups(messages):
+        group_existing = existing_summary if not semantic_groups else ""
+        if _compaction_request_tokens(group, group_existing) > input_limit_tokens:
+            semantic_groups.extend(_split_oversized_semantic_group(group))
+        else:
+            semantic_groups.append(group)
+
+    for group in semantic_groups:
+        candidate = [*current, *group]
+        candidate_existing = existing_summary if not chunks else ""
+        if current and _compaction_request_tokens(candidate, candidate_existing) > input_limit_tokens:
+            chunks.append(current)
+            current = list(group)
+        else:
+            current = candidate
+        current_existing = existing_summary if not chunks else ""
+        if _compaction_request_tokens(current, current_existing) > input_limit_tokens:
+            raise ContextCompactionError(
+                "Context compaction failed: one complete conversation turn exceeds the model input limit"
+            )
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def _split_oversized_semantic_group(messages: list[ChatMessage]) -> list[list[ChatMessage]]:
+    """Split one oversized turn while keeping assistant/tool-result units intact."""
+    groups: list[list[ChatMessage]] = []
+    index = 0
+    while index < len(messages):
+        message = messages[index]
+        if message.role != "assistant":
+            groups.append([message])
+            index += 1
+            continue
+        unit = [message]
+        index += 1
+        while index < len(messages) and messages[index].role == "tool":
+            unit.append(messages[index])
+            index += 1
+        groups.append(unit)
+    return groups
+
+
+def _pair_compaction_messages(
+    messages: list[ChatMessage], input_limit_tokens: int
+) -> list[list[ChatMessage]]:
+    pairs: list[list[ChatMessage]] = []
+    for index in range(0, len(messages), 2):
+        pair = messages[index : index + 2]
+        if input_limit_tokens > 0 and _compaction_request_tokens(pair) > input_limit_tokens:
+            budget = max(64, (input_limit_tokens - _compaction_request_tokens([])) // max(1, len(pair)))
+            pair = [
+                ChatMessage(
+                    role=message.role,
+                    content=compress_structured_compaction_summary(str(message.content or ""), budget),
+                )
+                for message in pair
+            ]
+        if input_limit_tokens > 0 and _compaction_request_tokens(pair) > input_limit_tokens:
+            raise ContextCompactionError(
+                "Context compaction failed: intermediate summaries exceed the model input limit"
+            )
+        pairs.append(pair)
+    return pairs
+
+
+async def _summarize_compaction_chunk(
+    messages: list[ChatMessage],
+    *,
+    llm_client: LLMClient | None,
+    model: str,
+    timeout: float | None,
+    output_tokens: int,
+    input_limit_tokens: int,
+    existing_summary: str,
+    on_delta: CompactionDeltaSink | None,
+    on_event: CompactionEventSink | None,
+    phase: str,
+    segment: int,
+    segments: int,
+    model_retries: int,
+    model_timeout_seconds: float | None,
+    retry_policy: RetryPolicy | None,
+    on_model_retry: ModelRetrySink | None,
+) -> str:
+    transcript = format_messages_for_compaction(messages, existing_summary=existing_summary)
     content = ""
     emitted_delta = False
+    pending_event_delta = ""
     if llm_client is not None:
         summary_request = LLMRequest(
             messages=[
@@ -315,29 +678,89 @@ async def summarize_context_messages(
             ],
             model=model,
             temperature=0,
-            max_tokens=summary_budget,
+            max_tokens=output_tokens,
             timeout=timeout,
         )
+        request_tokens = estimate_message_tokens([message.to_dict() for message in summary_request.messages])
+        if input_limit_tokens > 0 and request_tokens > input_limit_tokens:
+            raise ContextCompactionError(
+                f"Context compaction request exceeds model input limit: {request_tokens} > {input_limit_tokens} tokens"
+            )
+
+        async def emit_delta(delta: str) -> None:
+            nonlocal content, pending_event_delta
+            content += delta
+            pending_event_delta += delta
+            if on_delta is not None:
+                await _emit_compaction_delta(on_delta, delta)
+            if len(pending_event_delta) < 64:
+                return
+            event_delta = pending_event_delta
+            pending_event_delta = ""
+            await _emit_event_sink(
+                on_event,
+                {
+                    "status": "running",
+                    "phase": phase,
+                    "segment": segment,
+                    "segments": segments,
+                    "label": (
+                        f"正在压缩上下文 · 第 {segment}/{segments} 段"
+                        if phase == "segment"
+                        else f"正在整理压缩结果 · {segments} 段"
+                    ),
+                    "delta": event_delta,
+                    "content": content[:20_000],
+                },
+            )
+
+        async def flush_pending_event_delta() -> None:
+            nonlocal pending_event_delta
+            if not pending_event_delta:
+                return
+            event_delta = pending_event_delta
+            pending_event_delta = ""
+            await _emit_event_sink(
+                on_event,
+                {
+                    "status": "running",
+                    "phase": phase,
+                    "segment": segment,
+                    "segments": segments,
+                    "label": (
+                        f"正在压缩上下文 · 第 {segment}/{segments} 段"
+                        if phase == "segment"
+                        else f"正在整理压缩结果 · {segments} 段"
+                    ),
+                    "delta": event_delta,
+                    "content": content[:20_000],
+                },
+            )
+
         try:
-            content, emitted_delta = await _stream_compaction_content(
+            streamed, emitted_delta = await _stream_compaction_content(
                 llm_client,
                 summary_request,
-                on_delta=on_delta,
+                on_delta=emit_delta,
                 model_retries=model_retries,
                 model_timeout_seconds=model_timeout_seconds,
                 retry_policy=retry_policy,
                 on_model_retry=on_model_retry,
             )
+            if streamed:
+                content = streamed
+            await flush_pending_event_delta()
         except (AttributeError, NotImplementedError):
             content = ""
         except ModelRetryExhausted as exc:
-            if exc.attempts <= 1:
-                raise ContextCompactionError(f"Context compaction failed: {exc.last_error}") from exc
-            raise ContextCompactionError(f"Context compaction failed: {exc}") from exc
+            detail = exc.last_error if exc.attempts <= 1 else exc
+            raise ContextCompactionError(f"Context compaction failed: {detail}") from exc
+        except ContextCompactionError:
+            raise
         except Exception as exc:
             raise ContextCompactionError(f"Context compaction failed: {exc}") from exc
-        try:
-            if not content:
+        if not content:
+            try:
                 response = await complete_with_retry(
                     llm_client,
                     summary_request,
@@ -347,20 +770,62 @@ async def summarize_context_messages(
                     on_retry=on_model_retry,
                 )
                 content = (response.content or "").strip()
-        except ModelRetryExhausted as exc:
-            if exc.attempts <= 1:
-                raise ContextCompactionError(f"Context compaction failed: {exc.last_error}") from exc
-            raise ContextCompactionError(f"Context compaction failed: {exc}") from exc
-        except Exception as exc:
-            raise ContextCompactionError(f"Context compaction failed: {exc}") from exc
+            except ModelRetryExhausted as exc:
+                detail = exc.last_error if exc.attempts <= 1 else exc
+                raise ContextCompactionError(f"Context compaction failed: {detail}") from exc
+            except Exception as exc:
+                raise ContextCompactionError(f"Context compaction failed: {exc}") from exc
         if not content:
             raise ContextCompactionError("Context compaction failed: model returned an empty summary")
     if not content:
         content = fallback_structured_compaction_summary(messages, existing_summary=existing_summary)
     summary = with_compaction_prefix(content)
-    if on_delta is not None and not emitted_delta:
-        await _emit_compaction_delta(on_delta, summary)
+    if estimate_text_tokens(summary) > output_tokens:
+        summary = compress_structured_compaction_summary(summary, output_tokens)
+    if not emitted_delta:
+        if on_delta is not None:
+            await _emit_compaction_delta(on_delta, summary)
+        await _emit_event_sink(
+            on_event,
+            {
+                "status": "running",
+                "phase": phase,
+                "segment": segment,
+                "segments": segments,
+                "label": (
+                    f"正在压缩上下文 · 第 {segment}/{segments} 段"
+                    if phase == "segment"
+                    else f"正在整理压缩结果 · {segments} 段"
+                ),
+                "delta": summary,
+                "content": summary[:20_000],
+            },
+        )
     return summary
+
+
+async def _emit_event_sink(
+    sink: CompactionEventSink | None, payload: dict[str, Any]
+) -> None:
+    if sink is None:
+        return
+    result = sink(payload)
+    if inspect.isawaitable(result):
+        await result
+
+
+async def _emit_compaction_event(
+    request: ContextCompactionRequest, payload: dict[str, Any]
+) -> None:
+    await _emit_event_sink(
+        request.on_event,
+        {
+            "type": "compaction",
+            "trigger": request.trigger,
+            "limit_tokens": request.limit_tokens,
+            **payload,
+        },
+    )
 
 
 async def _emit_compaction_delta(on_delta: CompactionDeltaSink, text: str) -> None:
@@ -402,6 +867,74 @@ def with_compaction_prefix(content: str) -> str:
     if text.startswith(COMPACTION_PREFIX):
         return text
     return f"{COMPACTION_PREFIX}\n{text}".strip()
+
+
+def _inherit_prior_user_instructions(summary: str, prior_summaries: list[str]) -> str:
+    inherited: list[str] = []
+    for prior_summary in prior_summaries:
+        section = _numbered_summary_section(prior_summary, 2)
+        for line in section:
+            normalized = " ".join(line.split())
+            if normalized and normalized not in inherited:
+                inherited.append(normalized)
+    if not inherited:
+        return summary
+
+    current = [
+        line
+        for line in _numbered_summary_section(summary, 2)
+        if not _denies_user_instructions(line)
+    ]
+    merged = [*inherited, *(line for line in current if " ".join(line.split()) not in inherited)]
+    lines = summary.splitlines()
+    start, end = _numbered_summary_section_bounds(lines, 2)
+    section = ["2. User History, Instructions, And Decisions", *merged]
+    if start is None:
+        return "\n".join([*lines, "", *section]).strip()
+    return "\n".join([*lines[:start], *section, "", *lines[end:]]).strip()
+
+
+def _numbered_summary_section(text: str, number: int) -> list[str]:
+    lines = str(text or "").splitlines()
+    start, end = _numbered_summary_section_bounds(lines, number)
+    if start is None:
+        return []
+    return [line.strip() for line in lines[start + 1 : end] if line.strip()]
+
+
+def _numbered_summary_section_bounds(lines: list[str], number: int) -> tuple[int | None, int]:
+    prefix = f"{number}. "
+    start = next((index for index, line in enumerate(lines) if line.strip().startswith(prefix)), None)
+    if start is None:
+        return None, len(lines)
+    end = next(
+        (
+            index
+            for index in range(start + 1, len(lines))
+            if lines[index].strip()
+            and lines[index].strip()[0].isdigit()
+            and ". " in lines[index].strip()[:4]
+        ),
+        len(lines),
+    )
+    while end > start + 1 and not lines[end - 1].strip():
+        end -= 1
+    return start, end
+
+
+def _denies_user_instructions(line: str) -> bool:
+    normalized = " ".join(line.lower().split())
+    return any(
+        marker in normalized
+        for marker in (
+            "no explicit user instruction",
+            "no prior user instruction",
+            "no user instruction",
+            "无明确用户指令",
+            "没有明确用户指令",
+            "无用户指令",
+        )
+    )
 
 
 def format_messages_for_compaction(
@@ -502,16 +1035,20 @@ def compress_structured_compaction_summary(text: str, max_tokens: int) -> str:
         compacted_lines.extend(["", title])
         kept = 0
         omitted = False
+        is_user_instruction_section = title.startswith("2. ")
         for line in lines:
             stripped = " ".join(line.strip().split())
             if not stripped:
                 continue
             if len(stripped) > 260:
-                omitted = True
-                continue
+                if is_user_instruction_section:
+                    stripped = stripped[:260]
+                else:
+                    omitted = True
+                    continue
             compacted_lines.append(stripped)
             kept += 1
-            if kept >= 3:
+            if kept >= 3 and not is_user_instruction_section:
                 break
         if omitted:
             compacted_lines.append("- Details omitted because this section exceeded the compaction budget.")
@@ -528,12 +1065,23 @@ def compress_structured_compaction_summary(text: str, max_tokens: int) -> str:
             (
                 index
                 for index in range(len(lines) - 1, -1, -1)
-                if lines[index].startswith("- ") and "User History, Instructions, And Decisions" not in lines[index]
+                if lines[index].startswith("- ") and not _line_is_in_numbered_section(lines, index, 2)
             ),
-            len(lines) - 1,
+            next(
+                (index for index in range(len(lines) - 1, -1, -1) if lines[index].startswith("- ")),
+                len(lines) - 1,
+            ),
         )
         lines.pop(removable)
     return "\n".join(lines).strip()
+
+
+def _line_is_in_numbered_section(lines: list[str], index: int, number: int) -> bool:
+    for line in reversed(lines[:index]):
+        stripped = line.strip()
+        if stripped and stripped[0].isdigit() and ". " in stripped[:4]:
+            return stripped.startswith(f"{number}. ")
+    return False
 
 
 def truncate_text_to_tokens(text: str, max_tokens: int) -> str:

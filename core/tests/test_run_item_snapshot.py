@@ -80,7 +80,85 @@ def test_snapshot_accumulates_message_deltas_and_turn_items():
     assert snapshot["items"]["message-1"]["content"] == "hello"
     assert snapshot["items"]["message-1"]["deltas"] == ["hel", "lo"]
     assert snapshot["turns"]["turn-1"]["items"] == ["message-1"]
-    assert snapshot["status"] == "completed"
+    assert snapshot["status"] == "running"
+
+
+def test_completed_intermediate_message_does_not_complete_the_turn():
+    events = [
+        RunItemEvent(
+            kind="message",
+            thread_id="thread-1",
+            event_id="message-completed",
+            turn_id="turn-1",
+            item_id="message-1",
+            seq=1,
+            status="completed",
+            payload={"type": "agentMessage", "content": "I will continue with tools."},
+        ),
+        RunItemEvent(
+            kind="tool_call",
+            thread_id="thread-1",
+            event_id="tool-started",
+            turn_id="turn-1",
+            item_id="tool-1",
+            seq=2,
+            status="running",
+            payload={"type": "dynamicToolCall", "tool_name": "read_file"},
+        ),
+    ]
+
+    snapshot = reduce_run_item_events("thread-1", events)
+
+    assert snapshot["turns"]["turn-1"]["status"] == "running"
+    assert snapshot["status"] == "running"
+
+
+def test_snapshot_persists_terminal_status_usage_on_the_turn():
+    event = RunItemEvent(
+        kind="status",
+        thread_id="thread-1",
+        event_id="event-terminal",
+        turn_id="turn-1",
+        item_id="turn-1:terminal",
+        status="completed",
+        payload={"status": "completed"},
+        usage={"estimated_prompt_tokens": 120, "context_window_tokens": 128_000},
+    )
+
+    snapshot = apply_run_item_event(None, event)
+
+    assert snapshot["turns"]["turn-1"]["usage"] == event.usage
+
+
+def test_terminal_status_metrics_preserve_exact_usage_without_double_counting_calls():
+    usage = RunItemEvent(
+        kind="usage",
+        thread_id="thread-1",
+        event_id="event-usage",
+        turn_id="turn-1",
+        seq=1,
+        usage={"input_tokens": 20, "output_tokens": 5, "llm_calls": 1},
+    )
+    terminal = RunItemEvent(
+        kind="status",
+        thread_id="thread-1",
+        event_id="event-terminal",
+        turn_id="turn-1",
+        seq=2,
+        status="completed",
+        payload={"status": "completed"},
+        usage={"estimated_prompt_tokens": 30, "context_window_tokens": 128_000, "llm_calls": 1},
+    )
+
+    snapshot = reduce_run_item_events("thread-1", [usage, terminal])
+
+    assert snapshot["turns"]["turn-1"]["usage"] == {
+        "input_tokens": 20,
+        "output_tokens": 5,
+        "estimated_prompt_tokens": 30,
+        "context_window_tokens": 128_000,
+        "llm_calls": 1,
+    }
 
 
 def test_snapshot_tracks_tool_call_and_result_items():
@@ -113,6 +191,36 @@ def test_snapshot_tracks_tool_call_and_result_items():
     assert snapshot["items"]["tool-1"]["payload"]["name"] == "read_file"
     assert snapshot["items"]["tool-result-1"]["parent_item_id"] == "tool-1"
     assert snapshot["items"]["tool-result-1"]["content"] == "ok"
+
+
+def test_terminal_tool_result_replaces_waiting_content_for_the_same_item():
+    events = [
+        RunItemEvent(
+            kind="tool_result",
+            thread_id="thread-1",
+            event_id="event-waiting",
+            turn_id="turn-1",
+            item_id="sub-agent-1",
+            seq=1,
+            status="waiting",
+            payload={"delta": "Sub-agent is waiting for approval."},
+        ),
+        RunItemEvent(
+            kind="tool_result",
+            thread_id="thread-1",
+            event_id="event-completed",
+            turn_id="turn-1",
+            item_id="sub-agent-1",
+            seq=2,
+            status="completed",
+            payload={"delta": "Child completed the task.", "replace": True},
+        ),
+    ]
+
+    snapshot = reduce_run_item_events("thread-1", events)
+
+    assert snapshot["items"]["sub-agent-1"]["content"] == "Child completed the task."
+    assert snapshot["items"]["sub-agent-1"]["deltas"] == ["Child completed the task."]
 
 
 def test_snapshot_preserves_tool_input_preview():
@@ -274,7 +382,8 @@ def test_snapshot_resolves_approval_request():
 
     assert waiting["status"] == "waiting"
     assert waiting["requests"]["request-1"]["status"] == "open"
-    assert resolved["status"] == "completed"
+    assert resolved["status"] == "running"
+    assert resolved["turns"]["turn-1"]["status"] == "running"
     assert resolved["requests"]["request-1"]["status"] == "resolved"
     assert resolved["requests"]["request-1"]["approved"] is True
 
@@ -296,6 +405,87 @@ def test_snapshot_tracks_error_as_failed_thread():
     assert snapshot["turns"]["turn-1"]["status"] == "failed"
     assert snapshot["items"]["error-1"]["status"] == "failed"
     assert snapshot["last_error"] == {"type": "runtime", "message": "boom"}
+
+
+def test_snapshot_persists_terminal_status_error_for_reconnect_display():
+    event = RunItemEvent(
+        kind="status",
+        thread_id="thread-1",
+        event_id="event-terminal",
+        turn_id="turn-1",
+        item_id="turn-1:terminal",
+        status="failed",
+        payload={
+            "type": "turn",
+            "status": "failed",
+            "raw_end_reason": "invalid_tool_arguments",
+            "message": "Invalid tool arguments: path must be a string",
+        },
+    )
+
+    snapshot = apply_run_item_event(None, event)
+
+    assert snapshot["status"] == "failed"
+    assert snapshot["turns"]["turn-1"]["items"] == ["turn-1:terminal"]
+    assert snapshot["items"]["turn-1:terminal"]["payload"]["message"] == (
+        "Invalid tool arguments: path must be a string"
+    )
+    assert snapshot["last_error"]["raw_end_reason"] == "invalid_tool_arguments"
+
+
+def test_cancelled_turn_closes_running_items_and_ignores_late_child_events():
+    events = [
+        RunItemEvent(
+            kind="tool_call",
+            thread_id="thread-1",
+            event_id="sub-agent-started",
+            run_id="parent-run",
+            turn_id="turn-1",
+            item_id="sub-agent-tool",
+            seq=1,
+            status="running",
+            payload={"type": "dynamicToolCall", "tool_name": "sub_agent"},
+        ),
+        RunItemEvent(
+            kind="status",
+            thread_id="thread-1",
+            event_id="parent-cancelled",
+            run_id="parent-run",
+            turn_id="turn-1",
+            item_id="turn-1:cancelled",
+            seq=2,
+            status="cancelled",
+            payload={"type": "turn", "status": "cancelled", "raw_end_reason": "user_interrupt"},
+        ),
+        RunItemEvent(
+            kind="status",
+            thread_id="thread-1",
+            event_id="late-child-done",
+            run_id="parent-run",
+            turn_id="turn-1",
+            item_id="child-terminal",
+            seq=3,
+            status="completed",
+            payload={"type": "turn", "status": "completed"},
+        ),
+        RunItemEvent(
+            kind="tool_result",
+            thread_id="thread-1",
+            event_id="late-child-output",
+            run_id="parent-run",
+            turn_id="turn-1",
+            item_id="sub-agent-tool",
+            seq=4,
+            status="running",
+            payload={"type": "dynamicToolCall", "delta": "late output"},
+        ),
+    ]
+
+    snapshot = reduce_run_item_events("thread-1", events)
+
+    assert snapshot["status"] == "cancelled"
+    assert snapshot["turns"]["turn-1"]["status"] == "cancelled"
+    assert snapshot["items"]["sub-agent-tool"]["status"] == "cancelled"
 
 
 def test_recoverable_item_error_does_not_fail_running_turn():

@@ -28,12 +28,21 @@ export function selectCoreWorkbenchMessages(
   const lastAssistantIndex = sourceMessages.findLastIndex(message => message.role === 'assistant')
   return sourceMessages.map((message, index) => {
     const activeAssistant = Boolean(options.active && message.role === 'assistant' && index === lastAssistantIndex)
+    const shallow = splitShallowThinking(message.content)
     return {
       id: message.id,
       role: message.role,
-      content: message.content,
+      content: shallow.content,
       timestamp: '',
       parts: [
+        ...(shallow.thinking ? [{
+          id: `${message.id}:shallow-thinking`,
+          partType: 'reasoning' as const,
+          status: activeAssistant ? 'running' as const : 'completed' as const,
+          content: shallow.thinking,
+          label: 'Shallow thinking',
+          metadata: { shallowThinking: true },
+        }] : []),
         ...message.parts.map(item => coreAppItemToWorkbenchPart(snapshot, item, options)),
         ...(message.attachments || []).map(attachment => ({
           id: `${message.id}:attachment:${attachment.id}`,
@@ -54,6 +63,34 @@ export function selectCoreWorkbenchMessages(
   })
 }
 
+const SHALLOW_THINKING_START = '[>SHALLOW_thinking_START<]'
+const SHALLOW_THINKING_END = '[>SHALLOW_thinking_END<]'
+
+function splitShallowThinking(text: string): { thinking: string; content: string } {
+  const start = text.indexOf(SHALLOW_THINKING_START)
+  const end = text.indexOf(SHALLOW_THINKING_END, Math.max(0, start))
+  if (start >= 0) {
+    const thinkingStart = start + SHALLOW_THINKING_START.length
+    if (end >= thinkingStart) {
+      return {
+        thinking: text.slice(thinkingStart, end).trim(),
+        content: `${text.slice(0, start)}${text.slice(end + SHALLOW_THINKING_END.length)}`.trim(),
+      }
+    }
+    return {
+      thinking: text.slice(thinkingStart).trim(),
+      content: text.slice(0, start).trim(),
+    }
+  }
+  if (end >= 0) {
+    return {
+      thinking: text.slice(0, end).trim(),
+      content: text.slice(end + SHALLOW_THINKING_END.length).trim(),
+    }
+  }
+  return { thinking: '', content: text }
+}
+
 export function coreAppItemToWorkbenchPart(
   snapshot: CoreAppSnapshot,
   item: CoreAppItem,
@@ -67,8 +104,14 @@ export function coreAppItemToWorkbenchPart(
   const waitingResponse = requestState?.status === 'resolved'
     ? coreDecisionToWaitingResponse(String(requestState.decision || ''), String(requestState.guidance || ''))
     : undefined
+  const basePart = coreAppItemToMessagePart(item, { status })
+  const itemMetadata = isRecord(item.metadata) ? item.metadata : {}
+  const subLineItems = Array.isArray(itemMetadata.subLineItems)
+    ? itemMetadata.subLineItems.filter(isRecord) as CoreAppItem[]
+    : []
+  const subLineParts = subLineItems.map(child => coreAppItemToWorkbenchPart(snapshot, child, options))
   return {
-    ...coreAppItemToMessagePart(item, { status }),
+    ...basePart,
     toolArgs: Array.isArray(item.options)
       ? {
           ...(isRecord(item.arguments) ? item.arguments : {}),
@@ -77,9 +120,11 @@ export function coreAppItemToWorkbenchPart(
       : isRecord(item.arguments)
         ? item.arguments
         : undefined,
-    toolResult: typeof item.content === 'string' ? item.content : undefined,
+    toolResult: typeof item.content === 'string' ? item.content : basePart.toolResult,
     metadata: {
-      ...(isRecord(item.metadata) ? item.metadata : {}),
+      ...(isRecord(basePart.metadata) ? basePart.metadata : {}),
+      ...itemMetadata,
+      ...(subLineParts.length > 0 ? { subLineParts } : {}),
       request_id: requestId || undefined,
       title: item.title,
       question: item.question,

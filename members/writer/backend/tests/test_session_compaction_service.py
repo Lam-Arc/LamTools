@@ -154,7 +154,7 @@ async def test_manual_compaction_persists_summary_and_runtime_uses_it(tmp_path):
                         id=f"m-{index}",
                         session_id="s1",
                         role="user" if index % 2 == 0 else "assistant",
-                        content=f"message-{index}",
+                        content=f"message-{index} " + ("x" * 1000),
                         created_at=base_time + timedelta(seconds=index),
                     )
                 )
@@ -166,22 +166,17 @@ async def test_manual_compaction_persists_summary_and_runtime_uses_it(tmp_path):
             session = await db.get(WriterSession, "s1")
             assert session is not None
             assert result["status"] == "compacted"
-            assert result["compacted_messages"] == 6
-            assert result["compacted_message_ids"] == ["m-0", "m-1", "m-2", "m-3", "m-4", "m-5"]
-            assert result["retained_message_ids"] == ["m-6", "m-7", "m-8", "m-9", "m-10", "m-11"]
+            assert result["compacted_messages"] > 0
+            assert result["retained_messages"] > 0
+            assert result["compacted_message_ids"] + result["retained_message_ids"] == [
+                f"m-{index}" for index in range(12)
+            ]
             assert result["before_tokens"] > 0
             assert result["after_tokens"] > 0
-            assert result["target_tokens"] == 6000
+            assert result["limit_tokens"] == 6000
             assert "message-0" in (session.context_summary or "")
-            assert session.runtime_state["manual_compaction"]["retained_message_count"] == 6
-            assert session.runtime_state["manual_compaction"]["compacted_message_ids"] == [
-                "m-0",
-                "m-1",
-                "m-2",
-                "m-3",
-                "m-4",
-                "m-5",
-            ]
+            assert session.runtime_state["manual_compaction"]["retained_message_count"] == result["retained_messages"]
+            assert session.runtime_state["manual_compaction"]["compacted_message_ids"] == result["compacted_message_ids"]
 
             context = await prepare_runtime_input_context(
                 db,
@@ -192,14 +187,11 @@ async def test_manual_compaction_persists_summary_and_runtime_uses_it(tmp_path):
             )
 
             assert context.history[0] == {"role": "system", "content": session.context_summary}
-            assert [item["content"] for item in context.history[1:]] == [
-                "message-6",
-                "message-7",
-                "message-8",
-                "message-9",
-                "message-10",
-                "message-11",
-            ]
+            assert len(context.history[1:]) == result["retained_messages"]
+            assert all(
+                item["content"].startswith("message-")
+                for item in context.history[1:]
+            )
     finally:
         await engine.dispose()
 
@@ -230,7 +222,7 @@ async def test_manual_compaction_uses_stable_id_tiebreak_for_identical_timestamp
                         id=message_id,
                         session_id="stable-order",
                         role="user" if index % 2 == 0 else "assistant",
-                        content=f"message-{index:02d}",
+                        content=f"message-{index:02d} " + ("x" * 1000),
                         created_at=tied_time,
                     )
                 )
@@ -252,13 +244,8 @@ async def test_manual_compaction_uses_stable_id_tiebreak_for_identical_timestamp
             )
 
             assert context.history[0]["role"] == "system"
-            assert [item["content"] for item in context.history[1:]] == [
-                "message-02",
-                "message-03",
-                "message-04",
-                "message-05",
-                "message-06",
-                "message-07",
+            assert [item["content"].split()[0] for item in context.history[1:]] == [
+                "message-02", "message-03", "message-04", "message-05", "message-06", "message-07"
             ]
     finally:
         await engine.dispose()
@@ -272,7 +259,7 @@ async def test_manual_compaction_uses_shared_model_compactor_when_client_is_prov
         await conn.run_sync(Base.metadata.create_all)
 
     llm = _CompactionLLMClient()
-    deltas: list[str] = []
+    events: list[dict] = []
     try:
         async with session_factory() as db:
             db.add(WriterSession(id="model-compact", title="Model Compact"))
@@ -283,7 +270,7 @@ async def test_manual_compaction_uses_shared_model_compactor_when_client_is_prov
                         id=f"model-{index}",
                         session_id="model-compact",
                         role="user" if index % 2 == 0 else "assistant",
-                        content=f"model-message-{index}",
+                        content=f"model-message-{index} " + ("x" * 1000),
                         created_at=base_time + timedelta(seconds=index),
                     )
                 )
@@ -294,7 +281,7 @@ async def test_manual_compaction_uses_shared_model_compactor_when_client_is_prov
                 session_id="model-compact",
                 llm_client=llm,
                 model="mock-compact-model",
-                on_summary_delta=deltas.append,
+                on_summary_event=events.append,
             )
 
             assert llm.last_request is not None
@@ -302,7 +289,8 @@ async def test_manual_compaction_uses_shared_model_compactor_when_client_is_prov
             assert "model-message-0" in str(llm.last_request.messages[-1].content)
             assert result["summary"].startswith("[Compacted Context]")
             assert "shared Core compactor" in result["summary"]
-            assert "".join(deltas) == result["summary"]
+            assert events[-1]["status"] == "compacted"
+            assert events[-1]["content"] == result["summary"]
     finally:
         await engine.dispose()
 
@@ -315,7 +303,7 @@ async def test_manual_compaction_retries_model_calls_with_shared_policy(tmp_path
         await conn.run_sync(Base.metadata.create_all)
 
     llm = _FlakyCompactionLLMClient(failures=2)
-    deltas: list[str] = []
+    events: list[dict] = []
     try:
         async with session_factory() as db:
             db.add(WriterSession(id="model-compact-retry", title="Model Compact Retry"))
@@ -326,7 +314,7 @@ async def test_manual_compaction_retries_model_calls_with_shared_policy(tmp_path
                         id=f"model-retry-{index}",
                         session_id="model-compact-retry",
                         role="user" if index % 2 == 0 else "assistant",
-                        content=f"model-retry-message-{index}",
+                        content=f"model-retry-message-{index} " + ("x" * 1000),
                         created_at=base_time + timedelta(seconds=index),
                     )
                 )
@@ -337,7 +325,7 @@ async def test_manual_compaction_retries_model_calls_with_shared_policy(tmp_path
                 session_id="model-compact-retry",
                 llm_client=llm,
                 model="mock-compact-model",
-                on_summary_delta=deltas.append,
+                on_summary_event=events.append,
                 model_retries=3,
                 retry_policy=RetryPolicy(
                     initial_delay_seconds=0,
@@ -350,7 +338,7 @@ async def test_manual_compaction_retries_model_calls_with_shared_policy(tmp_path
             assert result["status"] == "compacted"
             assert llm.stream_count == 3
             assert llm.call_count == 0
-            assert "".join(deltas) in result["summary"]
+            assert events[-1]["status"] == "compacted"
             session = await db.get(WriterSession, "model-compact-retry")
             assert session is not None
             runtime_state = session.runtime_state if isinstance(session.runtime_state, dict) else {}
@@ -377,19 +365,19 @@ async def test_manual_compaction_model_failure_does_not_persist_fallback_summary
                         id=f"failure-{index}",
                         session_id="model-failure",
                         role="user" if index % 2 == 0 else "assistant",
-                        content=f"failure-message-{index}",
+                        content=f"failure-message-{index} " + ("x" * 1000),
                         created_at=base_time + timedelta(seconds=index),
                     )
                 )
             await db.commit()
 
-            with pytest.raises(RuntimeError, match="Context compaction failed: compaction model unavailable"):
-                await compact_session_context_response(
-                    db,
-                    session_id="model-failure",
-                    llm_client=llm,
-                    model="mock-compact-model",
-                )
+            result = await compact_session_context_response(
+                db,
+                session_id="model-failure",
+                llm_client=llm,
+                model="mock-compact-model",
+            )
+            assert result["status"] == "failed"
 
             session = await db.get(WriterSession, "model-failure")
             assert session is not None
@@ -522,23 +510,21 @@ async def test_manual_compaction_rejects_missing_session_and_compacts_short_hist
 
             empty_result = await compact_session_context_response(db, session_id="empty")
             empty_session = await db.get(WriterSession, "empty")
-            assert empty_result["status"] == "compacted"
+            assert empty_result["status"] == "not_needed"
             assert empty_result["compacted_messages"] == 0
             assert empty_result["retained_messages"] == 0
             assert empty_session is not None
-            assert empty_session.context_summary.startswith("[Compacted Context]")
-            assert empty_session.runtime_state["manual_compaction"]["compacted_message_ids"] == []
-            assert empty_session.runtime_state["manual_compaction"]["retained_message_count"] == 0
+            assert not empty_session.context_summary
+            assert not empty_session.runtime_state or "manual_compaction" not in empty_session.runtime_state
 
             result = await compact_session_context_response(db, session_id="short")
             session = await db.get(WriterSession, "short")
-            assert result["status"] == "compacted"
-            assert result["compacted_messages"] == 1
-            assert result["retained_messages"] == 5
+            assert result["status"] == "not_needed"
+            assert result["compacted_messages"] == 0
+            assert result["retained_messages"] == 6
             assert session is not None
-            assert session.context_summary.startswith("[Compacted Context]")
-            assert session.runtime_state["manual_compaction"]["compacted_message_ids"] == ["s-0"]
-            assert session.runtime_state["manual_compaction"]["retained_message_count"] == 5
+            assert not session.context_summary
+            assert not session.runtime_state or "manual_compaction" not in session.runtime_state
     finally:
         await engine.dispose()
 

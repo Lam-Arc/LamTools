@@ -43,6 +43,7 @@ describe('useCoreLiveTurnController', () => {
     const calls: string[] = []
     const controller = useCoreLiveTurnController({
       activeThreadId: ref<string | null>('thread-1'),
+      activeTurnId: ref('thread-1:turn:active'),
       connectedThreadId: ref('thread-1'),
       connectionState: ref<'connecting' | 'open' | 'closed' | 'error'>('open'),
       connect: async () => {
@@ -51,13 +52,13 @@ describe('useCoreLiveTurnController', () => {
       startTurn: async () => {
         throw new Error('not used')
       },
-      interruptTurn: async (threadId) => {
-        calls.push(`interrupt:${threadId}`)
+      interruptTurn: async (threadId, turnId) => {
+        calls.push(`interrupt:${threadId}:${turnId}`)
       },
     })
 
     expect(await controller.interruptActiveTurn()).toBe(true)
-    expect(calls).toEqual(['interrupt:thread-1'])
+    expect(calls).toEqual(['interrupt:thread-1:thread-1:turn:active'])
   })
 
   it('starts an explicitly captured thread without rereading the active thread', async () => {

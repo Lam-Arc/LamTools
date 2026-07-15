@@ -54,6 +54,9 @@ CORE_WORKBENCH_OPERATION_NAMES: tuple[str, ...] = (
     "project.agents_md.get",
     "project.agents_md.update",
     "project.directory.pick",
+    "session.checkpoints.list",
+    "session.rollback",
+    "session.rollback.undo",
 )
 
 

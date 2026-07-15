@@ -174,7 +174,12 @@ export function useCoreExecutionControlsState<
     payload,
     selectModel,
     selectThinkingMode,
-    turnOptions: () => ({ ...payload.value }),
+    turnOptions: () => ({
+      ...payload.value,
+      ...(Number(activeModel.value?.context_window || 0) > 0
+        ? { context_window_tokens: Number(activeModel.value?.context_window) }
+        : {}),
+    }),
   }
 }
 

@@ -9,6 +9,9 @@ type SelectOption = {
   selectedLabel?: string
   group?: string
   disabled?: boolean
+  selected?: boolean
+  separatorBefore?: boolean
+  activeAccent?: boolean
 }
 
 const props = defineProps<{
@@ -18,6 +21,7 @@ const props = defineProps<{
   ariaLabel?: string
   /** Direction the menu opens: 'down' (default) or 'up' */
   direction?: 'up' | 'down'
+  hideArrow?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -83,7 +87,7 @@ onUnmounted(() => {
       @click="toggle"
     >
       <span>{{ selectedLabel }}</span>
-      <span class="ui-select-arrow"></span>
+      <span v-if="!hideArrow" class="ui-select-arrow"></span>
     </button>
     <div v-if="open" class="ui-select-menu">
       <div v-for="group in groupedOptions" :key="group.group || 'default'" class="ui-select-group">
@@ -92,7 +96,12 @@ onUnmounted(() => {
           v-for="option in group.options"
           :key="option.value"
           class="ui-select-option"
-          :class="{ active: option.value === modelValue, disabled: option.disabled }"
+          :class="{
+            active: option.selected ?? option.value === modelValue,
+            'active-accent': option.activeAccent,
+            'separator-before': option.separatorBefore,
+            disabled: option.disabled,
+          }"
           type="button"
           @click="selectOption(option)"
         >
@@ -212,6 +221,26 @@ onUnmounted(() => {
 
 .ui-select-option.active {
   background: color-mix(in srgb, currentColor 9%, transparent);
+}
+
+.ui-select-option.active.active-accent {
+  background: transparent;
+  color: var(--green, #5fca87);
+}
+
+.ui-select-option.separator-before {
+  position: relative;
+  margin-top: 7px;
+}
+
+.ui-select-option.separator-before::before {
+  content: '';
+  position: absolute;
+  left: 9px;
+  right: 9px;
+  top: -4px;
+  height: 1px;
+  background: color-mix(in srgb, currentColor 16%, transparent);
 }
 
 .ui-select-option.disabled {

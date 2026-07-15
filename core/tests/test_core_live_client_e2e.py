@@ -67,7 +67,6 @@ async def test_core_app_server_client_runs_live_operation_matrix_against_real_we
     release_cancelled_turn = asyncio.Event()
     steered_stream_started = asyncio.Event()
     cancelled_stream_started = asyncio.Event()
-
     async def stream(self, request):
         user_text = "\n".join(str(message.content or "") for message in request.messages if message.role == "user")
         if "approval" in user_text:
@@ -194,6 +193,7 @@ async def test_core_app_server_client_runs_live_operation_matrix_against_real_we
             )
             assert approval["snapshot"]["core"]["requests"]["call-approval"]["status"] == "resolved"
             assert approval["snapshot"]["core"]["status"] == "cancelled"
+
         finally:
             await asyncio.wait_for(client.close(), timeout=1)
     finally:

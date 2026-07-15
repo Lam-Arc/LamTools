@@ -76,7 +76,6 @@
         @new-session="createProjectSession"
         @delete-project="deleteProject"
         @project-context-menu="openProjectActions"
-        @rename-session="renameSession"
         @delete-session="deleteSession"
       />
       <section v-if="selectedProject" class="core-project-management" :aria-busy="projectActionLoading">
@@ -102,6 +101,16 @@
         @save="saveAgents"
         @close="closeAgentsEditor"
       />
+    </template>
+
+    <template #main-header>
+      <div v-if="activeSessionId" class="thread-header">
+        <CoreSessionTitleEditor
+          :title="activeSessionTitle"
+          :session-id="activeSessionId"
+          :rename="renameActiveSession"
+        />
+      </div>
     </template>
 
     <template #main-content>
@@ -169,6 +178,14 @@
       </div>
     </template>
 
+    <template #composer-status>
+      <CoreResourceStats
+        :messages="messages"
+        :context-window="executionControls.activeModel.value?.context_window"
+        variant="composer"
+      />
+    </template>
+
     <template #composer-tools>
       <CoreExecutionControls
         :model-value="selectedModelId"
@@ -188,7 +205,20 @@
     </template>
 
     <template #right-panel>
-      <RuntimePanel :events="events" :step-groups="stepGroups" />
+      <CoreResourceStats
+        :messages="messages"
+        :context-window="executionControls.activeModel.value?.context_window"
+      />
+      <RuntimePanel :step-groups="stepGroups" />
+      <CoreSessionRollback
+        v-if="activeSessionId"
+        :key="activeSessionId"
+        :session-id="activeSessionId"
+        :request="requestConfigOperation"
+        :active-turn="rollbackActiveTurn"
+        @restored="refreshAfterRollback"
+        @undone="refreshAfterRollback"
+      />
     </template>
   </WorkspaceShell>
 </template>
@@ -206,8 +236,6 @@ import {
 } from 'vue'
 import type {
   CoreAttachment,
-  CoreRuntimeEvent,
-  CoreRuntimeStepGroup,
   CoreSessionListItem,
 } from '../types'
 import {
@@ -226,11 +254,11 @@ import {
   selectCoreQueuedInputs,
   selectLatestActiveTurnId,
   selectLatestTurnStatus,
-  type CoreAppEvent,
   type CoreAppSnapshot,
   type CoreQueuedInput,
 } from '../appServer'
 import { buildCoreComposerHighlightSegments } from '../composer/inputItems'
+import { buildCurrentTurnChecklistGroups } from '../runtime/checklist'
 import {
   useCoreApprovalController,
   useCoreAutoFollowScroll,
@@ -246,9 +274,12 @@ import AttachmentTray from '../components/AttachmentTray.vue'
 import ChatThread from '../components/ChatThread.vue'
 import CommandPalette from '../components/CommandPalette.vue'
 import CoreExecutionControls from '../components/CoreExecutionControls.vue'
+import CoreResourceStats from '../components/CoreResourceStats.vue'
 import CoreQueuedInputTray from '../components/CoreQueuedInputTray.vue'
 import CoreAgentsEditor from '../components/CoreAgentsEditor.vue'
 import CoreProjectCreate from '../components/CoreProjectCreate.vue'
+import CoreSessionTitleEditor from '../components/CoreSessionTitleEditor.vue'
+import CoreSessionRollback from '../components/CoreSessionRollback.vue'
 import CoreSettings, {
   type CoreSettingsModelPayload,
   type CoreSettingsProviderPayload,
@@ -295,7 +326,6 @@ const sessions = ref<CoreSessionListItem[]>([])
 const activeSessionId = ref<string | null>(null)
 const runtime = reactive(createCoreAppServerRuntimeState<CoreAppSnapshot, CoreAppServerClient>())
 const snapshot = computed(() => runtime.state)
-const events = ref<CoreRuntimeEvent[]>([])
 const composerText = ref('')
 const composerCursor = ref(0)
 const composerTextareaEl = ref<HTMLTextAreaElement | null>(null)
@@ -348,25 +378,13 @@ const {
 } = executionControls
 
 const latestStatus = computed(() => snapshot.value ? selectLatestTurnStatus(snapshot.value) : 'idle')
-
-const stepGroups = computed<CoreRuntimeStepGroup[]>(() => {
-  if (!snapshot.value || latestStatus.value === 'idle') return []
-  const active = latestStatus.value === 'running' || latestStatus.value === 'waiting'
-  return [{
-    id: 'core-live',
-    label: 'Core',
-    status: active ? 'running' : latestStatus.value === 'failed' ? 'failed' : 'completed',
-    steps: events.value.slice(-20).map((event) => ({
-      id: event.id,
-      title: event.type,
-      status: event.type.includes('interrupted') ? 'failed' : active ? 'running' : 'completed',
-      timestamp: event.timestamp,
-      metadata: { event },
-    })),
-  }]
-})
+const activeTurnId = computed(() => snapshot.value ? selectLatestActiveTurnId(snapshot.value) : '')
+const rollbackActiveTurn = computed(() => ['running', 'waiting'].includes(latestStatus.value))
 
 const projectGroups = computed(() => buildCoreProjectGroups(projects.value, sessions.value))
+const activeSessionTitle = computed(() => (
+  sessions.value.find((session) => session.id === activeSessionId.value)?.title || 'Session'
+))
 const selectedProject = computed(() => (
   projects.value.find((project) => project.id === selectedProjectId.value) || null
 ))
@@ -381,11 +399,11 @@ const busyProjectIds = projectWorkspace.busyProjectIds
 
 const runtimeController = createCoreAppServerRuntimeController(runtime, {
   hydrateSnapshot,
-  createClient: ({ apiBase: frontendBase, onSnapshot, onConnectionState }) => new CoreAppServerClient({
+  createClient: ({ apiBase: frontendBase, onEvent, onSnapshot, onConnectionState }) => new CoreAppServerClient({
     url: appServerUrl(frontendBase, { path: '/api/core/app-server' }),
     clientInfo: { name: 'lamtools_core_frontend', title: 'LamTools Core Frontend', version: '0.1.0' },
+    onEvent,
     onSnapshot,
-    onEvent: appendLiveEvent,
     onConnectionState: (state) => {
       onConnectionState(state)
       if (state === 'error') {
@@ -399,6 +417,7 @@ const runtimeController = createCoreAppServerRuntimeController(runtime, {
 
 const liveComposerController = useCoreLiveComposerController({
   activeThreadId: activeSessionId,
+  activeTurnId,
   connectedThreadId: computed(() => runtime.activeThreadId),
   connectionState: computed(() => runtime.connectionState),
   text: composerText,
@@ -407,7 +426,7 @@ const liveComposerController = useCoreLiveComposerController({
   attachments: attachmentInputItems,
   connect: connectLive,
   startTurn: (threadId, input, workRoot, options) => runtimeController.startTurn(threadId, input, workRoot, options),
-  interruptTurn: (threadId) => runtimeController.interruptTurn(threadId),
+  interruptTurn: (threadId, turnId) => runtimeController.interruptTurn(threadId, turnId),
   queueInput: (threadId, input) => runtimeController.queueInput(threadId, input),
   listCommands: (workRoot) => runtimeController.listCommands(workRoot),
   getWorkRoot: currentWorkRoot,
@@ -434,7 +453,6 @@ const liveComposerController = useCoreLiveComposerController({
     commandCatalogLoadFailed: (error) => `命令列表加载失败：${error}`,
     noActiveThread: '请先选择会话',
     queued: '已加入待发送',
-    sent: '已发送',
     stopping: '正在停止',
     stopFailed: '停止失败',
     sendFailed: '发送失败',
@@ -466,6 +484,7 @@ const projectionController = useCoreWorkbenchProjectionController({
   onStatusChange: ({ status }) => syncActiveSessionStatus(status),
 })
 const { messages, processExpandedIds, toggleProcess } = projectionController
+const stepGroups = computed(() => buildCurrentTurnChecklistGroups(messages.value))
 
 const approvalController = useCoreApprovalController({
   messages,
@@ -492,7 +511,6 @@ const queuedInputs = computed<CoreQueuedInput[]>(() => {
   if (!snapshot.value || snapshot.value.thread_id !== activeSessionId.value) return []
   return selectCoreQueuedInputs(snapshot.value)
 })
-const activeTurnId = computed(() => snapshot.value ? selectLatestActiveTurnId(snapshot.value) : '')
 const queueController = useCoreQueuedInputController({
   activeTurnId,
   ensureConnected: async (threadId) => {
@@ -617,7 +635,6 @@ async function deleteProject(projectId: string) {
       runtimeController.disconnect()
       liveComposerController.resetForThreadChange()
       activeSessionId.value = null
-      events.value = []
       if (sessions.value[0]) await selectSession(sessions.value[0].id)
     }
   } catch (error) {
@@ -678,6 +695,11 @@ async function renameSession(sessionId: string, title: string) {
   sessions.value = sessions.value.map((session) => session.id === sessionId ? updated : session)
 }
 
+async function renameActiveSession(title: string) {
+  if (!activeSessionId.value) return
+  await renameSession(activeSessionId.value, title)
+}
+
 async function deleteSession(sessionId: string) {
   try {
     await requestJson(`/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' })
@@ -690,7 +712,6 @@ async function deleteSession(sessionId: string) {
     runtimeController.disconnect()
     liveComposerController.resetForThreadChange()
     activeSessionId.value = null
-    events.value = []
   }
   await refreshSessions()
   if (deletedActiveSession && sessions.value[0]) await selectSession(sessions.value[0].id)
@@ -700,12 +721,18 @@ async function selectSession(id: string) {
   activeSessionId.value = id
   runtimeController.disconnect()
   liveComposerController.resetForThreadChange()
-  events.value = []
   composerErrorText.value = ''
   runtimeStatusText.value = ''
   await connectLive(id)
   await liveComposerController.loadCommandCatalog(id)
   await threadScroll.scrollToBottom(true)
+}
+
+async function refreshAfterRollback() {
+  const sessionId = activeSessionId.value
+  if (!sessionId) return
+  await refreshSessions()
+  await selectSession(sessionId)
 }
 
 async function connectLive(threadId: string) {
@@ -928,17 +955,6 @@ async function loadModelOptions() {
     availableModels.value = []
     availableProviders.value = []
   }
-}
-
-function appendLiveEvent(event: CoreAppEvent) {
-  const runtimeEvent: CoreRuntimeEvent = {
-    id: event.event_id,
-    type: event.method,
-    timestamp: event.created_at,
-    data: event.payload,
-  }
-  if (events.value.some((item) => item.id === runtimeEvent.id)) return
-  events.value = [...events.value, runtimeEvent].sort((a, b) => a.timestamp.localeCompare(b.timestamp))
 }
 
 function syncThreadResizeObserver() {

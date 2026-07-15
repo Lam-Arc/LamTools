@@ -54,18 +54,38 @@ def apply_run_item_event_in_place(state: dict[str, Any], event: RunItemEvent) ->
 
     if event.kind == "status":
         status = event.payload.get("status") or event.status
+        existing_turn = (state.get("turns") or {}).get(event.turn_id) if event.turn_id else None
+        existing_status = str(existing_turn.get("status") or "") if isinstance(existing_turn, dict) else ""
+        turn = _upsert_turn(state, event)
+        if existing_status in TERMINAL_STATUSES and status != existing_status:
+            if turn is not None and event.usage:
+                turn["usage"] = {**dict(turn.get("usage") or {}), **event.usage}
+            _recompute_thread_status(state)
+            return state
         if status:
             state["status"] = status
-        turn = _upsert_turn(state, event)
         if turn is not None and status:
             turn["status"] = status
+        if turn is not None and event.usage:
+            turn["usage"] = {**dict(turn.get("usage") or {}), **event.usage}
+        if status in {"failed", "cancelled", "error"} and (
+            event.payload.get("message") or event.payload.get("raw_end_reason")
+        ):
+            item = _upsert_item(state, event)
+            if turn is not None and item["item_id"] not in turn.setdefault("items", []):
+                turn["items"].append(item["item_id"])
+            state["last_error"] = dict(event.payload)
+        if turn is not None and status in TERMINAL_STATUSES:
+            _close_turn_items(state, turn, status)
         return state
 
     if event.kind == "approval_response":
         _apply_approval_response(state, event)
         turn = _upsert_turn(state, event)
-        if turn is not None and event.status in TERMINAL_STATUSES:
-            turn["status"] = event.status
+        if turn is not None and str(turn.get("status") or "") not in {"failed", "cancelled", "skipped"}:
+            # Resolving a server request resumes the existing turn; it does not
+            # complete that turn.  A later lifecycle/status item owns terminality.
+            turn["status"] = "running"
         _recompute_thread_status(state)
         return state
 
@@ -81,7 +101,21 @@ def apply_run_item_event_in_place(state: dict[str, Any], event: RunItemEvent) ->
     if event.kind == "artifact" or event.artifacts:
         _apply_artifact(state, event)
 
+    existing_turn = (state.get("turns") or {}).get(event.turn_id) if event.turn_id else None
+    terminal_turn_status = (
+        str(existing_turn.get("status") or "")
+        if isinstance(existing_turn, dict)
+        and str(existing_turn.get("status") or "") in TERMINAL_STATUSES
+        else ""
+    )
     item = _upsert_item(state, event)
+    if terminal_turn_status:
+        item["status"] = terminal_turn_status
+        turn = _upsert_turn(state, event)
+        if event.item_id and turn is not None and event.item_id not in turn.setdefault("items", []):
+            turn["items"].append(event.item_id)
+        _recompute_thread_status(state)
+        return state
     if event.kind == "approval_request":
         item["status"] = "waiting"
         state["status"] = "waiting"
@@ -179,15 +213,24 @@ def _upsert_turn(state: dict[str, Any], event: RunItemEvent) -> dict[str, Any] |
     return turn
 
 
+def _close_turn_items(state: dict[str, Any], turn: dict[str, Any], status: str) -> None:
+    items = state.get("items") or {}
+    for item_id in turn.get("items") or []:
+        item = items.get(item_id)
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("status") or "") not in TERMINAL_STATUSES:
+            item["status"] = status
+
+
 def _is_turn_terminal_event(event: RunItemEvent) -> bool:
     if event.status not in TERMINAL_STATUSES:
         return False
     if event.kind == "error":
         return _is_terminal_error_event(event)
-    if event.kind == "message":
-        return event.status == "completed"
-    if event.kind == "verification":
-        return event.status == "completed"
+    # Item completion is not turn completion. Intermediate assistant text,
+    # verification, and tool items may all complete before more work begins.
+    # The dedicated turn status event owns successful terminality.
     return False
 
 
@@ -232,8 +275,12 @@ def _upsert_item(state: dict[str, Any], event: RunItemEvent) -> dict[str, Any]:
     delta = event.payload.get("delta")
     content = event.payload.get("content", event.payload.get("text"))
     if isinstance(delta, str):
-        item.setdefault("deltas", []).append(delta)
-        item["content"] = f"{item.get('content', '')}{delta}"
+        if event.payload.get("replace") is True:
+            item["deltas"] = [delta]
+            item["content"] = delta
+        else:
+            item.setdefault("deltas", []).append(delta)
+            item["content"] = f"{item.get('content', '')}{delta}"
     elif isinstance(content, str):
         item["content"] = content
 
@@ -291,7 +338,9 @@ def _recompute_thread_status(state: dict[str, Any]) -> None:
     latest_status = str((turns[0] if turns else {}).get("status") or "")
     if latest_status == "completed":
         state["status"] = "completed"
-    elif latest_status in {"failed", "cancelled"}:
+    elif latest_status == "cancelled":
+        state["status"] = "cancelled"
+    elif latest_status == "failed":
         state["status"] = "failed"
     else:
         state["status"] = "idle"

@@ -53,7 +53,7 @@ describe('useCoreExecutionControlsState', () => {
 
   it('keeps a valid selected model and falls back when the model list removes it', async () => {
     const models = ref([
-      { id: 'model-1', provider_id: 'provider-1', thinking_supported: true },
+      { id: 'model-1', provider_id: 'provider-1', thinking_supported: true, context_window: 128_000 },
       { id: 'model-2', provider_id: 'provider-2', thinking_supported: true },
     ])
     const state = useCoreExecutionControlsState({
@@ -113,7 +113,13 @@ describe('useCoreExecutionControlsState', () => {
 
   it('builds turn payloads and keeps the newest local model after quick changes', async () => {
     const models = ref([
-      { id: 'model-1', provider_id: 'provider-1', thinking_supported: true, thinking_budget: 6_000 },
+      {
+        id: 'model-1',
+        provider_id: 'provider-1',
+        thinking_supported: true,
+        thinking_budget: 6_000,
+        context_window: 128_000,
+      },
       { id: 'model-2', provider_id: 'provider-2', thinking_supported: true },
     ])
     const selected = ref<string[]>([])
@@ -131,6 +137,7 @@ describe('useCoreExecutionControlsState', () => {
       thinking_enabled: true,
       thinking_budget: 10_000,
       shallow_thinking_enabled: true,
+      context_window_tokens: 128_000,
     })
 
     state.selectModel('model-1')

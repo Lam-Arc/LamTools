@@ -82,6 +82,7 @@
     >
       <slot name="composer-preamble" />
       <div class="composer-main-card">
+        <slot name="composer-status" />
         <slot name="composer-textarea">
           <textarea
             :placeholder="composerPlaceholder"

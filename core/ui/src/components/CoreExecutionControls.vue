@@ -9,37 +9,29 @@
       :placeholder="modelAriaLabel"
       :aria-label="modelAriaLabel"
       direction="up"
+      hide-arrow
       @update:model-value="$emit('update:modelValue', $event)"
     />
     <UiSelect
       class="composer-thinking-select"
       :model-value="thinkingMode"
-      :options="thinkingModeOptions"
+      :options="combinedThinkingOptions"
       :placeholder="thinkingAriaLabel"
       :aria-label="thinkingAriaLabel"
       direction="up"
-      @update:model-value="$emit('update:thinkingMode', $event)"
+      hide-arrow
+      @update:model-value="selectThinkingOption"
     />
-    <button
-      class="core-execution-toggle composer-shallow-toggle"
-      :class="{ active: shallowThinkingEnabled }"
-      type="button"
-      :title="shallowTitle"
-      :aria-label="shallowTitle"
-      :aria-pressed="shallowThinkingEnabled"
-      @click="$emit('update:shallowThinkingEnabled', !shallowThinkingEnabled)"
-    >
-      {{ shallowLabel }}
-    </button>
     <slot name="trailing" />
   </div>
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import type { CoreSelectOption, CoreThinkingMode, CoreThinkingModeOption } from '../composer/execution'
 import UiSelect from './UiSelect.vue'
 
-withDefaults(defineProps<{
+const props = withDefaults(defineProps<{
   modelValue?: string
   modelOptions?: CoreSelectOption[]
   thinkingMode: CoreThinkingMode | string
@@ -59,23 +51,42 @@ withDefaults(defineProps<{
   shallowTitle: 'Shallow thinking',
 })
 
-defineEmits<{
+const emit = defineEmits<{
   'update:modelValue': [value: string]
   'update:thinkingMode': [value: string]
   'update:shallowThinkingEnabled': [value: boolean]
 }>()
+
+const SHALLOW_OPTION_VALUE = '__shallow__'
+const combinedThinkingOptions = computed(() => [
+  ...props.thinkingModeOptions,
+  {
+    value: SHALLOW_OPTION_VALUE,
+    label: props.shallowLabel,
+    selected: props.shallowThinkingEnabled,
+    separatorBefore: true,
+    activeAccent: true,
+  },
+])
+
+function selectThinkingOption(value: string) {
+  if (value === SHALLOW_OPTION_VALUE) {
+    emit('update:shallowThinkingEnabled', !props.shallowThinkingEnabled)
+    return
+  }
+  emit('update:thinkingMode', value)
+}
 </script>
 
 <style scoped>
-.core-execution-controls {
+.core-execution-controls.composer-model-row {
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 0;
 }
 
-.composer-model-select,
-.composer-thinking-select {
+.core-execution-controls :deep(.ui-select) {
   min-width: 0;
   width: auto;
 }
@@ -89,7 +100,7 @@ defineEmits<{
   border: 0;
   border-radius: 6px;
   background: transparent;
-  padding: 0 26px 0 8px;
+  padding: 0 8px;
   color: color-mix(in srgb, var(--theme-composer-text, currentColor) 76%, transparent);
   font-size: 12px;
   font-weight: 600;
@@ -106,42 +117,11 @@ defineEmits<{
   outline-offset: 2px;
 }
 
-:deep(.ui-select-arrow) {
-  right: 10px;
-}
-
 :deep(.ui-select-menu) {
   z-index: var(--z-popover, 60);
-}
-
-.core-execution-toggle {
-  height: 28px;
-  padding: 0 10px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: color-mix(in srgb, var(--theme-composer-text, currentColor) 70%, transparent);
-  box-shadow: none;
-  font: inherit;
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 28px;
-  cursor: pointer;
-}
-
-.core-execution-toggle:hover {
-  background: color-mix(in srgb, var(--theme-composer-text, currentColor) 8%, transparent);
-  color: var(--theme-composer-text, currentColor);
-}
-
-.core-execution-toggle.active {
-  background: transparent;
-  color: var(--green, #5fca87);
-}
-
-.core-execution-toggle:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--theme-composer-text, currentColor) 26%, transparent);
-  outline-offset: 2px;
+  width: max-content;
+  min-width: 100%;
+  max-width: min(280px, calc(100vw - 24px));
 }
 
 :global(.floating-composer:has(.core-execution-controls .ui-select.open)) {
@@ -149,10 +129,6 @@ defineEmits<{
 }
 
 @media (max-width: 560px) {
-  .core-execution-controls {
-    gap: 4px;
-  }
-
   :deep(.ui-select-trigger) {
     max-width: 34vw;
   }

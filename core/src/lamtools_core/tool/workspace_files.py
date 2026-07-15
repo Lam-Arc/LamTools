@@ -68,7 +68,7 @@ def unified_diff(old_content: str, new_content: str, rel_path: str) -> str:
             new_content.splitlines(keepends=True),
             fromfile=f"a/{rel_path}",
             tofile=f"b/{rel_path}",
-            lineterm="",
+            lineterm="\n",
         )
     )
 
@@ -203,8 +203,11 @@ class WorkspaceReadOnlyTools:
         return ToolResult(call_id=call.id, name=call.name, status="ok", content="\n".join(lines))
 
     async def search_files(self, call: ToolCall) -> ToolResult:
-        pattern = call.arguments.get("pattern", "*") if isinstance(call.arguments, dict) else "*"
-        path_str = call.arguments.get("path", ".") if isinstance(call.arguments, dict) else "."
+        args = call.arguments if isinstance(call.arguments, dict) else {}
+        raw_pattern = args.get("pattern")
+        pattern = raw_pattern if isinstance(raw_pattern, str) and raw_pattern.strip() else "*"
+        raw_path = args.get("path")
+        path_str = raw_path if isinstance(raw_path, str) and raw_path.strip() else "."
         try:
             search_root, access_root = resolve_read_resource_path(path_str, self._work_root, self.resource_roots())
         except ValueError as exc:
@@ -248,7 +251,8 @@ class WorkspaceReadOnlyTools:
         pattern = call.arguments.get("pattern", "") if isinstance(call.arguments, dict) else ""
         if not pattern:
             return ToolResult(call_id=call.id, name=call.name, status="failed", error="Missing 'pattern' argument")
-        path_str = call.arguments.get("path", ".") if isinstance(call.arguments, dict) else "."
+        raw_path = call.arguments.get("path") if isinstance(call.arguments, dict) else None
+        path_str = raw_path if isinstance(raw_path, str) and raw_path.strip() else "."
         try:
             search_root, access_root = resolve_read_resource_path(path_str, self._work_root, self.resource_roots())
         except ValueError as exc:

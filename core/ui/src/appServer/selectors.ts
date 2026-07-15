@@ -70,11 +70,18 @@ export function selectChatMessages(state: CoreAppSnapshot): CoreAppServerChatMes
   const messages: CoreAppServerChatMessage[] = []
   const itemOrder = mergedItemOrder(state)
   const artifactsByItem = artifactsGroupedByItem(state)
+  const subAgentChildren = subAgentChildrenByParentId(state, itemOrder, artifactsByItem)
+  const nestedChildItemIds = new Set(
+    [...subAgentChildren.values()].flatMap(items => items.map(item => item.item_id)),
+  )
   const suppressedItemIds = duplicateSubAgentChildItemIds(state, itemOrder)
   for (const itemId of itemOrder) {
-    if (suppressedItemIds.has(itemId)) continue
+    if (suppressedItemIds.has(itemId) || nestedChildItemIds.has(itemId)) continue
     const rawItem = canonicalItemForId(state, itemId) ?? outerProductItemForId(state, itemId)
-    const item = rawItem ? withItemArtifacts(rawItem, artifactsByItem.get(itemId)) : undefined
+    const itemWithArtifacts = rawItem ? withItemArtifacts(rawItem, artifactsByItem.get(itemId)) : undefined
+    const item = itemWithArtifacts
+      ? withSubAgentChildren(itemWithArtifacts, subAgentChildren.get(itemId))
+      : undefined
     if (!item) continue
     if (!isRenderableItem(item)) continue
     if (item.type === 'userMessage') {
@@ -114,6 +121,45 @@ export function selectChatMessages(state: CoreAppSnapshot): CoreAppServerChatMes
     || message.parts.length > 0
     || Boolean(message.metadata?.initialWaiting)
   ))
+}
+
+function subAgentChildrenByParentId(
+  state: CoreAppSnapshot,
+  itemOrder: string[],
+  artifactsByItem: Map<string, Array<Record<string, unknown>>>,
+): Map<string, CoreAppItem[]> {
+  const subAgentParentIds = new Set<string>()
+  const orderedItems: CoreAppItem[] = []
+  for (const itemId of itemOrder) {
+    const rawItem = canonicalItemForId(state, itemId) ?? outerProductItemForId(state, itemId)
+    if (!rawItem) continue
+    const item = withItemArtifacts(rawItem, artifactsByItem.get(itemId))
+    orderedItems.push(item)
+    if (item.type === 'agent_summary' && item.tool_name === 'sub_agent') {
+      subAgentParentIds.add(item.item_id)
+    }
+  }
+
+  const children = new Map<string, CoreAppItem[]>()
+  for (const item of orderedItems) {
+    const parentId = typeof item.parent_item_id === 'string' ? item.parent_item_id : ''
+    if (!parentId || !subAgentParentIds.has(parentId)) continue
+    const siblings = children.get(parentId) ?? []
+    siblings.push(item)
+    children.set(parentId, siblings)
+  }
+  return children
+}
+
+function withSubAgentChildren(item: CoreAppItem, children: CoreAppItem[] | undefined): CoreAppItem {
+  if (!children?.length || item.type !== 'agent_summary' || item.tool_name !== 'sub_agent') return item
+  return {
+    ...item,
+    metadata: {
+      ...(isRecord(item.metadata) ? item.metadata : {}),
+      subLineItems: children,
+    },
+  }
 }
 
 function isProtocolEnvelopeText(content: string): boolean {
@@ -189,12 +235,15 @@ function mergedItemOrder(state: CoreAppSnapshot): string[] {
 
   const outerItems = state.items ?? {}
   const coreItems = state.core?.items ?? {}
-  const turnOrder = new Map<string, number>()
   const turnItems = new Map<string, { outer: string[]; core: string[] }>()
+  const outerTurnOrder: string[] = []
+  const outerTurnIds = new Set<string>()
+  const coreTurnOrder: string[] = []
+  const coreTurnIds = new Set<string>()
   const looseOuter: string[] = []
   const looseCore: string[] = []
 
-  for (const [index, itemId] of (state.item_order ?? []).entries()) {
+  for (const itemId of state.item_order ?? []) {
     const item = outerItems[itemId]
     const turnId = typeof item?.turn_id === 'string' ? item.turn_id : ''
     if (!turnId) {
@@ -204,13 +253,13 @@ function mergedItemOrder(state: CoreAppSnapshot): string[] {
     const group = turnItems.get(turnId) ?? { outer: [], core: [] }
     group.outer.push(itemId)
     turnItems.set(turnId, group)
-    const seq = Number(item?.seq ?? item?.last_seq ?? index)
-    if (!turnOrder.has(turnId) || seq < Number(turnOrder.get(turnId))) {
-      turnOrder.set(turnId, seq)
+    if (!outerTurnIds.has(turnId)) {
+      outerTurnIds.add(turnId)
+      outerTurnOrder.push(turnId)
     }
   }
 
-  for (const [index, itemId] of (state.core?.item_order ?? []).entries()) {
+  for (const itemId of state.core?.item_order ?? []) {
     const item = coreItems[itemId]
     const turnId = typeof item?.turn_id === 'string' ? item.turn_id : ''
     if (!turnId) {
@@ -220,25 +269,42 @@ function mergedItemOrder(state: CoreAppSnapshot): string[] {
     const group = turnItems.get(turnId) ?? { outer: [], core: [] }
     group.core.push(itemId)
     turnItems.set(turnId, group)
-    if (!turnOrder.has(turnId)) {
-      turnOrder.set(turnId, Number(item?.seq ?? item?.last_seq ?? index))
+    if (!coreTurnIds.has(turnId)) {
+      coreTurnIds.add(turnId)
+      coreTurnOrder.push(turnId)
     }
   }
 
-  const turnIds = [...turnItems.keys()].sort((a, b) => {
-    const aOrder = Number(turnOrder.get(a) ?? Number.MAX_SAFE_INTEGER)
-    const bOrder = Number(turnOrder.get(b) ?? Number.MAX_SAFE_INTEGER)
-    if (aOrder !== bOrder) return aOrder - bOrder
-    return a.localeCompare(b)
-  })
+  const continuationsByOuterTurn = new Map<string, string[]>()
+  let precedingOuterTurn = ''
+  for (const turnId of coreTurnOrder) {
+    if (outerTurnIds.has(turnId)) {
+      precedingOuterTurn = turnId
+      continue
+    }
+    if (!precedingOuterTurn) continue
+    const continuations = continuationsByOuterTurn.get(precedingOuterTurn) ?? []
+    continuations.push(turnId)
+    continuationsByOuterTurn.set(precedingOuterTurn, continuations)
+  }
 
   for (const itemId of [...looseOuter, ...looseCore]) {
     pushOnce(order, seen, itemId)
   }
-  for (const turnId of turnIds) {
+  for (const turnId of outerTurnOrder) {
     const group = turnItems.get(turnId)
     if (!group) continue
     for (const itemId of [...group.outer, ...group.core]) {
+      pushOnce(order, seen, itemId)
+    }
+    for (const continuationTurnId of continuationsByOuterTurn.get(turnId) ?? []) {
+      for (const itemId of turnItems.get(continuationTurnId)?.core ?? []) {
+        pushOnce(order, seen, itemId)
+      }
+    }
+  }
+  for (const turnId of coreTurnOrder) {
+    for (const itemId of turnItems.get(turnId)?.core ?? []) {
       pushOnce(order, seen, itemId)
     }
   }
@@ -314,6 +380,7 @@ function coreItemToAppItem(item: CoreRuntimeItem): CoreAppItem {
 }
 
 function normalizeCoreItemDisplayType(payload: Record<string, unknown>, fallback: string): string {
+  if (fallback === 'status' || fallback === 'error') return fallback
   const type = String(payload.type || fallback)
   if (type === 'dynamicToolCall' && String(payload.tool_name || '') === 'sub_agent') {
     return 'agent_summary'
@@ -323,8 +390,15 @@ function normalizeCoreItemDisplayType(payload: Record<string, unknown>, fallback
 
 function normalizeLegacyDeliveryFields(payload: Record<string, unknown>): Record<string, unknown> {
   const metadata = normalizeMetadataDelivery(payload.metadata)
-  if (metadata === payload.metadata) return payload
-  return { ...payload, metadata }
+  let normalized = metadata === payload.metadata ? payload : { ...payload, metadata }
+  if (!("limit_tokens" in normalized) && "target_tokens" in normalized) {
+    normalized = { ...normalized, limit_tokens: normalized.target_tokens }
+  }
+  if ("target_tokens" in normalized) {
+    const { target_tokens: _legacyTargetTokens, ...current } = normalized
+    normalized = current
+  }
+  return normalized
 }
 
 function normalizeMetadataDelivery(value: unknown): unknown {

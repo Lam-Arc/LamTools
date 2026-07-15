@@ -4,11 +4,12 @@ export type CoreLiveConnectionState = 'connecting' | 'open' | 'closed' | 'error'
 
 export interface UseCoreLiveTurnControllerOptions<Input> {
   activeThreadId: Readonly<Ref<string | null>>
+  activeTurnId?: Readonly<Ref<string>>
   connectedThreadId: Readonly<Ref<string>>
   connectionState: Readonly<Ref<CoreLiveConnectionState>>
   connect(threadId: string): Promise<void>
   startTurn(threadId: string, input: Input, workRoot?: string, options?: Record<string, unknown>): Promise<void>
-  interruptTurn(threadId: string): Promise<void>
+  interruptTurn(threadId: string, turnId?: string): Promise<void>
 }
 
 export function useCoreLiveTurnController<Input>(options: UseCoreLiveTurnControllerOptions<Input>) {
@@ -65,7 +66,7 @@ export function useCoreLiveTurnController<Input>(options: UseCoreLiveTurnControl
     const threadId = options.activeThreadId.value || ''
     if (!await ensureConnected(threadId)) return false
     try {
-      await options.interruptTurn(threadId)
+      await options.interruptTurn(threadId, options.activeTurnId?.value || undefined)
       lastError.value = ''
       return true
     } catch (error) {

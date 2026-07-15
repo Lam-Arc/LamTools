@@ -143,12 +143,18 @@ class InMemoryEventLog:
 class CollectingEventSink:
     """In-memory ``EventSink`` that stores events and optionally forwards them."""
 
-    def __init__(self, live_callback: Any | None = None) -> None:
+    def __init__(
+        self,
+        live_callback: Any | None = None,
+        should_collect: Any | None = None,
+    ) -> None:
         self._events: list[CoreEvent] = []
         self._live_callback = live_callback
+        self._should_collect = should_collect
 
     async def emit(self, event: CoreEvent) -> None:
-        self._events.append(event)
+        if self._should_collect is None or self._should_collect(event):
+            self._events.append(event)
         if self._live_callback is None:
             return
         result = self._live_callback(event)

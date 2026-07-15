@@ -18,7 +18,6 @@ export interface CoreLiveComposerMessages {
   commandCatalogLoadFailed?: (error: string) => string
   noActiveThread?: string
   queued?: string
-  sent?: string
   sendFailed?: string
   stopping?: string
   stopFailed?: string
@@ -26,6 +25,7 @@ export interface CoreLiveComposerMessages {
 
 export interface UseCoreLiveComposerControllerOptions {
   activeThreadId: Readonly<Ref<string | null>>
+  activeTurnId?: Readonly<Ref<string>>
   connectedThreadId: Readonly<Ref<string>>
   connectionState: Readonly<Ref<CoreLiveConnectionState>>
   text: Ref<string>
@@ -34,7 +34,7 @@ export interface UseCoreLiveComposerControllerOptions {
   attachments: Readonly<Ref<CoreInputItem[]>>
   connect(threadId: string): Promise<void>
   startTurn(threadId: string, input: CoreInputItem[], workRoot?: string, options?: Record<string, unknown>): Promise<void>
-  interruptTurn(threadId: string): Promise<void>
+  interruptTurn(threadId: string, turnId?: string): Promise<void>
   queueInput(threadId: string, input: CoreInputItem[]): Promise<void>
   listCommands(workRoot?: string): Promise<unknown[]>
   getWorkRoot(): string
@@ -61,6 +61,7 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
   let commandCatalogGeneration = 0
   const liveTurnController = useCoreLiveTurnController<CoreInputItem[]>({
     activeThreadId: options.activeThreadId,
+    activeTurnId: options.activeTurnId,
     connectedThreadId: options.connectedThreadId,
     connectionState: options.connectionState,
     connect: options.connect,
@@ -174,7 +175,8 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
   async function stop(): Promise<boolean> {
     options.setStatusText?.(options.messages?.stopping || 'Stopping')
     const ok = await liveTurnController.interruptActiveTurn()
-    if (!ok) reportError(liveTurnController.lastError.value || options.messages?.stopFailed || 'Unable to stop turn')
+    if (ok) options.setStatusText?.('')
+    else reportError(liveTurnController.lastError.value || options.messages?.stopFailed || 'Unable to stop turn')
     return ok
   }
 
@@ -208,7 +210,6 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
             turnOptions,
           )
           if (started) {
-            options.setStatusText?.(options.messages?.sent || 'Sent')
             notifyTurnStarted()
           } else {
             reportError(liveTurnController.lastError.value || options.messages?.sendFailed || 'Unable to send message')

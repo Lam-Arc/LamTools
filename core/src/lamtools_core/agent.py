@@ -27,6 +27,38 @@ class CoreAgentSpec:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class SubAgentRunResult:
+    session_id: str
+    run_id: str
+    decision: str
+    model_id: str = ""
+    message: str = ""
+    error: str = ""
+    tool_call_count: int = 0
+    ended_with_final_response: bool = False
+    pending_approval: dict[str, Any] = field(default_factory=dict)
+    pending_waiting_request: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def succeeded(self) -> bool:
+        return (
+            self.decision == "done"
+            and bool(self.message.strip())
+            and self.ended_with_final_response
+            and not self.error
+        )
+
+    def failure_message(self) -> str:
+        if self.error.strip():
+            return self.error.strip()
+        if self.decision == "wait":
+            return "Sub-agent is waiting and did not produce a final response."
+        if self.decision == "done":
+            return "Sub-agent ended without a final response after tool use."
+        return "Sub-agent failed without a final response."
+
+
 SUB_AGENT_SPEC = CoreAgentSpec(
     name=SUB_AGENT_NAME,
     tool_name=SUB_AGENT_TOOL_NAME,
@@ -42,7 +74,10 @@ SUB_AGENT_TOOL_SPEC: dict[str, Any] = {
         "type": "object",
         "additionalProperties": False,
         "properties": {
-            "task": {"type": "string", "description": "Self-contained task for the sub-agent."},
+            "task": {
+                "type": "string",
+                "description": "Self-contained complete task for the sub-agent, including every delegated deliverable and required tool action.",
+            },
             "agent": {
                 "type": ["string", "null"],
                 "description": "Stable sub-session name chosen by the running agent; leave null to use the default sub session.",
@@ -58,6 +93,7 @@ SUB_AGENT_TOOL_SPEC: dict[str, Any] = {
 
 __all__ = [
     "CoreAgentSpec",
+    "SubAgentRunResult",
     "SUB_AGENT_NAME",
     "SUB_AGENT_TOOL_NAME",
     "SUB_AGENT_SPEC",

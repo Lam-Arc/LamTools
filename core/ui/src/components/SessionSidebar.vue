@@ -61,19 +61,7 @@
         >
           <span class="conversation-dot">{{ sessionOrdinal(group, s) }}</span>
           <span class="conversation-main">
-            <strong
-              v-if="renamingId !== s.id"
-              @click.stop="startRename(s)"
-            >{{ s.title || `Session ${s.id.slice(0, 8)}` }}</strong>
-            <input
-              v-else
-              :ref="(el) => setRenameRef(el as HTMLInputElement | null)"
-              v-model="editTitle"
-              class="session-name-input"
-              @blur="submitRename(s)"
-              @keydown.enter.prevent="submitRename(s)"
-              @keydown.escape.prevent="cancelRename"
-            />
+            <strong>{{ s.title || `Session ${s.id.slice(0, 8)}` }}</strong>
             <span v-if="s.meta">{{ s.meta }}</span>
           </span>
           <span class="conversation-actions">
@@ -127,6 +115,7 @@
         role="menu"
         :aria-label="`${group.name} 项目操作`"
         :data-project-menu="group.id"
+        @pointerdown.stop
         @click.stop
         @keydown.escape.prevent="closeProjectMenu"
       >
@@ -164,7 +153,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, reactive, nextTick, onBeforeUnmount, onMounted } from 'vue'
+import { computed, ref, reactive, onBeforeUnmount, onMounted } from 'vue'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -196,8 +185,6 @@ const props = withDefaults(
     activeSessionId?: string
     /** Max sessions visible per project before fold (0 = no limit) */
     projectSessionLimit?: number
-    /** Allow inline rename on session title click */
-    allowRename?: boolean
     /** Show + button per project */
     allowProjectNewSession?: boolean
     /** Show × delete button per project */
@@ -215,7 +202,6 @@ const props = withDefaults(
   }>(),
   {
     projectSessionLimit: 0,
-    allowRename: true,
     allowProjectNewSession: true,
     allowProjectDelete: false,
     allowSessionDelete: false,
@@ -233,7 +219,6 @@ const emit = defineEmits<{
   'delete-project': [projectGroupId: string]
   'delete-session': [sessionId: string]
   'project-context-menu': [projectGroupId: string]
-  'rename-session': [sessionId: string, newTitle: string]
 }>()
 
 // ---------------------------------------------------------------------------
@@ -426,39 +411,6 @@ function statusLabel(status: string): string {
   return status
 }
 
-// ---------------------------------------------------------------------------
-// Inline rename
-// ---------------------------------------------------------------------------
-const renamingId = ref<string | null>(null)
-const editTitle = ref('')
-const renameInputRef = ref<HTMLInputElement | null>(null)
-
-function setRenameRef(el: HTMLInputElement | null) {
-  if (el) {
-    renameInputRef.value = el
-    nextTick(() => el.focus())
-  }
-}
-
-function startRename(session: SessionItem) {
-  if (!props.allowRename) return
-  renamingId.value = session.id
-  editTitle.value = session.title
-}
-
-function submitRename(session: SessionItem) {
-  if (renamingId.value !== session.id) return
-  const title = editTitle.value.trim()
-  renamingId.value = null
-  if (title && title !== session.title) {
-    emit('rename-session', session.id, title)
-  }
-}
-
-function cancelRename() {
-  renamingId.value = null
-  editTitle.value = ''
-}
 </script>
 
 <style scoped>
@@ -474,17 +426,6 @@ function cancelRename() {
 .conversation-more:hover {
   background: color-mix(in srgb, var(--theme-backdrop-text) 7%, transparent);
   color: var(--theme-backdrop-text);
-}
-.session-name-input {
-  width: 100%;
-  min-width: 0;
-  border: 1px solid color-mix(in srgb, var(--theme-backdrop-text) 30%, var(--blue));
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--theme-backdrop-text) 8%, transparent);
-  color: var(--theme-backdrop-text);
-  padding: 2px 6px;
-  font-size: 13px;
-  outline: none;
 }
 .project-name {
   width: 100%;

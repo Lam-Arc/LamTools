@@ -12,6 +12,7 @@ export interface CoreAppEvent {
   item_id?: string | null
   parent_item_id?: string | null
   client_message_id?: string | null
+  transient?: boolean
 }
 
 export interface CoreAppSnapshot {
