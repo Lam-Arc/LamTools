@@ -336,6 +336,7 @@ class CoreLoopKernel:
         explicit_input_errors: dict[str, ToolResult] = {}
         diagnosis_failed_calls: dict[str, ToolResult] = {}
         failure_diagnosis_pending = False
+        failure_investigation_rounds = 0
 
         # Emit runtime.started event
         await self._emit_state_event(state, "runtime.started", "run started")
@@ -497,6 +498,25 @@ class CoreLoopKernel:
                                 "original_error": prior_failed_call.error,
                             },
                         )
+                    if (
+                        failure_diagnosis_pending
+                        and not failure_diagnosis_completed
+                        and failure_investigation_rounds >= 1
+                        and call.id not in blocked_results
+                    ):
+                        blocked_results[call.id] = ToolResult(
+                            call_id=call.id,
+                            name=call.name,
+                            status="blocked",
+                            error=(
+                                "Failure investigation already collected one round of evidence. "
+                                "Complete the visible diagnosis before using more tools."
+                            ),
+                            metadata={
+                                "failure_diagnosis_required": True,
+                                "investigation_budget_exhausted": True,
+                            },
+                        )
                 for call in turn.tool_calls:
                     prior_input_error = explicit_input_errors.get(self._tool_call_fingerprint(call))
                     if call.id in blocked_results or prior_input_error is None:
@@ -602,6 +622,13 @@ class CoreLoopKernel:
                         history.append(tool_message)
                         await self._save_checkpoint(state, history)
 
+                if (
+                    failure_diagnosis_pending
+                    and not failure_diagnosis_completed
+                    and any(result.status != "blocked" for result in tool_results)
+                ):
+                    failure_investigation_rounds += 1
+
                 repeat_observation = self._observe_repeated_tool_failures(
                     turn.tool_calls,
                     tool_results,
@@ -658,29 +685,16 @@ class CoreLoopKernel:
                     for call, result in zip(turn.tool_calls, tool_results)
                     if result.status == "failed"
                 ]
-                if failed_pairs:
-                    for call, result in failed_pairs:
-                        diagnosis_failed_calls[self._tool_call_fingerprint(call)] = result
-                    if not failure_diagnosis_pending:
-                        failure_diagnosis_pending = True
-                        prompt = self._failure_diagnosis_prompt(failed_pairs)
-                        history.append(ChatMessage(role="system", content=prompt))
-                        step.metadata["failure_diagnosis_required"] = True
-                        state.metadata["failure_diagnosis"] = {
-                            "status": "required",
-                            "response_index": index,
-                        }
-                        await self._save_checkpoint(state, history)
-
                 if failure_diagnosis_completed:
                     failure_diagnosis_pending = False
+                    failure_investigation_rounds = 0
                     diagnosis_failed_calls.clear()
                     step.metadata["failure_diagnosis_completed"] = True
                     state.metadata["failure_diagnosis"] = {
                         "status": "completed",
                         "response_index": index,
                     }
-                    if turn.tool_calls:
+                    if turn.tool_calls and not failed_pairs:
                         history.append(ChatMessage(
                             role="system",
                             content=(
@@ -702,6 +716,21 @@ class CoreLoopKernel:
                     ))
                     step.metadata["failure_diagnosis_incomplete"] = True
                     await self._save_checkpoint(state, history)
+
+                if failed_pairs:
+                    for call, result in failed_pairs:
+                        diagnosis_failed_calls[self._tool_call_fingerprint(call)] = result
+                    if not failure_diagnosis_pending:
+                        failure_diagnosis_pending = True
+                        failure_investigation_rounds = 0
+                        prompt = self._failure_diagnosis_prompt(failed_pairs)
+                        history.append(ChatMessage(role="system", content=prompt))
+                        step.metadata["failure_diagnosis_required"] = True
+                        state.metadata["failure_diagnosis"] = {
+                            "status": "required",
+                            "response_index": index,
+                        }
+                        await self._save_checkpoint(state, history)
 
                 # 5.10 Verify (non-blocking: verification failure does NOT
                 #     trigger automatic repair retry. The model receives tool
@@ -876,7 +905,8 @@ class CoreLoopKernel:
         return (
             "[FAILURE_DIAGNOSIS_REQUIRED] A tool failed. Do not repeat the exact call and do not "
             "jump directly to another speculative fix. First investigate the real evidence. You may "
-            "use a different tool call to collect missing evidence. Before executing the selected "
+            "use one round of different tool calls to collect missing evidence; after that round, "
+            "stop using tools until the diagnosis is visible. Before executing the selected "
             "solution, produce one visible diagnosis with: 根因、证据、至少两个实质不同的方案、"
             "明确选择的方案、以及可观察的验证信号. If the evidence is insufficient, say so and "
             "make the options diagnostic probes rather than inventing a cause. A verification signal "

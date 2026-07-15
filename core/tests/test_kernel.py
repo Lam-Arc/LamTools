@@ -1763,6 +1763,96 @@ class TestKernelStateSave:
         assert result.steps[2].metadata["failure_diagnosis_completed"] is True
 
     @pytest.mark.asyncio
+    async def test_failure_diagnosis_allows_one_investigation_round_then_requires_diagnosis(self):
+        failed = ToolCall(id="failed", name="run_command", arguments={"command": "probe service"})
+        first_probe = ToolCall(id="first-probe", name="run_command", arguments={"command": "inspect process"})
+        drifting_probe = ToolCall(id="drifting-probe", name="run_command", arguments={"command": "inspect another port"})
+        diagnosis = (
+            "[根因] 服务尚未启动 [证据] 进程检查没有目标服务 "
+            "[方案1] 从工作区启动服务 [方案2] 使用静态文件直接验收 "
+            "[选择] 方案1 [验证信号] 目标页面返回 200"
+        )
+        kit = MockRuntimeKit(steps=[
+            MockKitStep(
+                tool_calls=[failed],
+                tool_results=[ToolResult(
+                    call_id="failed",
+                    name="run_command",
+                    status="failed",
+                    error="connection refused",
+                )],
+            ),
+            MockKitStep(
+                tool_calls=[first_probe],
+                tool_results=[ToolResult(
+                    call_id="first-probe",
+                    name="run_command",
+                    content="no matching process",
+                )],
+            ),
+            MockKitStep(tool_calls=[drifting_probe]),
+            MockKitStep(reply=diagnosis, decision="done"),
+        ])
+
+        result = await _make_kernel(kit).run(_make_turn_input())
+
+        assert result.decision == "done"
+        first_result = result.steps[1].tool_steps[0].result
+        assert first_result is not None
+        assert first_result.status == "ok"
+        blocked = result.steps[2].tool_steps[0].result
+        assert blocked is not None
+        assert blocked.status == "blocked"
+        assert blocked.metadata["failure_diagnosis_required"] is True
+        assert blocked.metadata["investigation_budget_exhausted"] is True
+        assert result.steps[3].metadata["failure_diagnosis_completed"] is True
+
+    @pytest.mark.asyncio
+    async def test_failed_selected_solution_starts_a_new_diagnosis_cycle(self):
+        first_failure = ToolCall(id="first-failure", name="run_command", arguments={"command": "probe"})
+        selected_solution = ToolCall(id="selected-solution", name="run_command", arguments={"command": "start service"})
+        first_diagnosis = (
+            "[根因] 服务未启动 [证据] probe 失败 [方案1] 启动服务 [方案2] 使用静态文件 "
+            "[选择] 方案1 [验证信号] 页面返回 200"
+        )
+        second_diagnosis = (
+            "[根因] 启动命令本身失败 [证据] start service 返回 exit 1 "
+            "[方案1] 检查启动输出 [方案2] 改用静态文件 [选择] 方案2 [验证信号] 页面可打开"
+        )
+        kit = MockRuntimeKit(steps=[
+            MockKitStep(
+                tool_calls=[first_failure],
+                tool_results=[ToolResult(
+                    call_id="first-failure",
+                    name="run_command",
+                    status="failed",
+                    error="connection refused",
+                )],
+            ),
+            MockKitStep(
+                reply=first_diagnosis,
+                tool_calls=[selected_solution],
+                tool_results=[ToolResult(
+                    call_id="selected-solution",
+                    name="run_command",
+                    status="failed",
+                    error="exit 1",
+                )],
+            ),
+            MockKitStep(reply="完成", decision="done"),
+            MockKitStep(reply=second_diagnosis, decision="done"),
+        ])
+
+        result = await _make_kernel(kit).run(_make_turn_input())
+
+        assert result.decision == "done"
+        assert len(result.steps) == 4
+        assert result.steps[1].metadata["failure_diagnosis_completed"] is True
+        assert result.steps[1].metadata["failure_diagnosis_required"] is True
+        assert result.steps[2].metadata["failure_diagnosis_retry_required"] is True
+        assert result.steps[3].metadata["failure_diagnosis_completed"] is True
+
+    @pytest.mark.asyncio
     async def test_plain_text_does_not_complete_required_failure_diagnosis(self):
         failed = ToolCall(id="failed", name="run_command", arguments={"command": "broken"})
         complete = "[根因] 未知 [证据] exit 1 [方案1] 查日志 [方案2] 查环境 [选择] 方案1 [验证信号] 命令成功"
