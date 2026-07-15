@@ -350,6 +350,7 @@ const uiPreferences = useCoreUiPreferences(settingsStorageKey)
 const { density, contentWidth, theme } = uiPreferences
 const availableModels = ref<RawModel[]>([])
 const availableProviders = ref<RawProvider[]>([])
+const defaultModelId = ref('')
 const commandPolicies = ref<Record<'regular' | 'dangerous', 'auto_allow' | 'ask_user'>>({
   regular: 'auto_allow',
   dangerous: 'ask_user',
@@ -361,7 +362,9 @@ const COMPOSER_MAX_ROWS = 5
 let threadResizeObserver: ResizeObserver | null = null
 let configClient: CoreAppServerClient | null = null
 
-const defaultModel = computed(() => availableModels.value[0] || null)
+const defaultModel = computed(() => (
+  availableModels.value.find((model) => model.id === defaultModelId.value) || null
+))
 const executionControls = useCoreExecutionControlsState({
   models: availableModels,
   providers: availableProviders,
@@ -436,7 +439,6 @@ const liveComposerController = useCoreLiveComposerController({
   },
   canExecuteCommand: () => latestStatus.value !== 'running' && latestStatus.value !== 'waiting',
   turnOptions: () => ({
-    ...(selectedModelId.value ? { model_id: selectedModelId.value } : {}),
     ...executionControls.turnOptions(),
   }),
   clearComposer: clearComposerAfterPersisted,
@@ -951,9 +953,13 @@ async function loadModelOptions() {
     availableModels.value = Array.isArray(modelsResponse.models)
       ? modelsResponse.models as RawModel[]
       : []
+    defaultModelId.value = typeof modelsResponse.default_model_id === 'string'
+      ? modelsResponse.default_model_id
+      : ''
   } catch {
     availableModels.value = []
     availableProviders.value = []
+    defaultModelId.value = ''
   }
 }
 

@@ -1,4 +1,4 @@
-import { ref } from 'vue'
+import { nextTick, ref } from 'vue'
 import { describe, expect, it } from 'vitest'
 import { useCoreLiveComposerController } from '../src/composables'
 import type { CoreInputItem } from '../src'
@@ -309,6 +309,9 @@ describe('useCoreLiveComposerController', () => {
     text.value = ''
     await controller.submit({ clearComposer: true })
     expect(calls).toContain('stop:thread-1')
+    expect(statusText.value).toBe('Stopping by member')
+    status.value = 'cancelled'
+    await nextTick()
     expect(statusText.value).toBe('')
 
     status.value = 'idle'

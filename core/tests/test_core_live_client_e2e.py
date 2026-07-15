@@ -11,7 +11,6 @@ import uvicorn
 from lamtools_core.app import CoreAppServerClient
 from lamtools_core.app.http_agent_app import CoreConfigRoutingLLMClient, create_core_agent_http_app
 from lamtools_core.llm import LLMStreamEvent, LLMToolCall
-from lamtools_core.runtime import default_runtime_task_registry
 
 
 def _write_config_db(path: Path) -> None:
@@ -50,15 +49,6 @@ async def _wait_for_terminal(client: CoreAppServerClient, thread_id: str) -> Non
     raise AssertionError(f"{thread_id} did not reach a terminal state: {last_snapshot}")
 
 
-async def _wait_for_runtime_release(thread_id: str) -> None:
-    registry = default_runtime_task_registry()
-    for _ in range(100):
-        if registry.active_run_id(thread_id) is None:
-            return
-        await asyncio.sleep(0.01)
-    raise AssertionError(f"{thread_id} runtime task did not release")
-
-
 @pytest.mark.asyncio
 async def test_core_app_server_client_runs_live_operation_matrix_against_real_websocket_server(tmp_path, monkeypatch) -> None:
     config_db = tmp_path / "config.db"
@@ -69,6 +59,8 @@ async def test_core_app_server_client_runs_live_operation_matrix_against_real_we
     cancelled_stream_started = asyncio.Event()
     async def stream(self, request):
         user_text = "\n".join(str(message.content or "") for message in request.messages if message.role == "user")
+        if "fail-model" in user_text:
+            raise RuntimeError("provider unavailable")
         if "approval" in user_text:
             yield LLMStreamEvent(
                 kind="done",
@@ -92,7 +84,11 @@ async def test_core_app_server_client_runs_live_operation_matrix_against_real_we
         yield LLMStreamEvent(kind="content_delta", content="done")
         yield LLMStreamEvent(kind="done")
 
+    async def complete(self, request):
+        raise RuntimeError("provider unavailable")
+
     monkeypatch.setattr(CoreConfigRoutingLLMClient, "stream", stream)
+    monkeypatch.setattr(CoreConfigRoutingLLMClient, "complete", complete)
     app = create_core_agent_http_app(
         model_id="model-record",
         config_db=config_db,
@@ -175,7 +171,27 @@ async def test_core_app_server_client_runs_live_operation_matrix_against_real_we
                 timeout=5,
             )
             assert [event["method"] for event in cancelled["events"]] == ["turn/interrupted", "core/runItem"]
+            cancelled_turn_id = cancelling["runtime_start"]["turn_id"]
+            assert cancelled["snapshot"]["core"]["turns"][cancelled_turn_id]["status"] == "interrupting"
+            await _wait_for_terminal(client, "thread-cancel")
+            cancelled_snapshot = (await client.read_thread(thread_id="thread-cancel"))["snapshot"]
+            cancelled_turn = cancelled_snapshot["core"]["turns"][cancelled_turn_id]
+            assert cancelled_turn["status"] == "cancelled"
+            assert cancelled_turn["usage"]["context_window_tokens"] == 128_000
+            assert cancelled_turn["usage"]["estimated_prompt_tokens"] > 0
             assert next_started["runtime_start"]["thread_id"] == "thread-next"
+
+            failed = await client.start_turn(
+                thread_id="thread-failed",
+                client_message_id="start-failed",
+                input_items=[{"type": "text", "text": "fail-model"}],
+            )
+            await _wait_for_terminal(client, "thread-failed")
+            failed_snapshot = (await client.read_thread(thread_id="thread-failed"))["snapshot"]
+            failed_turn = failed_snapshot["core"]["turns"][failed["runtime_start"]["turn_id"]]
+            assert failed_turn["status"] == "failed"
+            assert failed_turn["usage"]["context_window_tokens"] == 128_000
+            assert failed_turn["usage"]["estimated_prompt_tokens"] > 0
 
             await client.start_turn(
                 thread_id="thread-approval",
@@ -183,7 +199,7 @@ async def test_core_app_server_client_runs_live_operation_matrix_against_real_we
                 input_items=[{"type": "text", "text": "approval"}],
             )
             await _wait_for_waiting(client, "thread-approval")
-            await _wait_for_runtime_release("thread-approval")
+            assert app.state.core_agent_runtime_task_registry.active_run_id("thread-approval") is not None
             approval = await client.request(
                 "approval.respond",
                 {

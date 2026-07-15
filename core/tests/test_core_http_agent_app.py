@@ -626,6 +626,7 @@ def test_core_agent_http_app_exposes_config_catalog_over_live_operations(tmp_pat
 
     assert models["id"] == 3
     assert models["result"]["models"][0]["id"] == "model-record"
+    assert models["result"]["default_model_id"] == "model-record"
     assert providers["id"] == 4
     assert providers["result"]["providers"] == [
         {

@@ -23,6 +23,7 @@ export interface CoreExecutionControlsStorage {
 }
 
 export const CORE_EXECUTION_CONTROLS_STORAGE_KEYS = {
+  modelId: 'lamtools.core.executionControls.modelId',
   thinkingMode: 'lamtools.core.executionControls.thinkingMode',
   shallowThinking: 'lamtools.core.executionControls.shallowThinking',
 } as const
@@ -75,7 +76,11 @@ export function useCoreExecutionControlsState<
     ...CORE_EXECUTION_CONTROLS_STORAGE_KEYS,
     ...options.storageKeys,
   }
-  const selectedModelId = ref(options.initial?.modelId || '')
+  const selectedModelId = ref(readStoredModelId(
+    options.storage,
+    storageKeys.modelId,
+    options.initial?.modelId || '',
+  ))
   const selectedThinkingMode = ref(readStoredCoreThinkingMode(
     options.storage,
     storageKeys.thinkingMode,
@@ -125,7 +130,11 @@ export function useCoreExecutionControlsState<
       thinkingModeOptions,
     ],
     () => {
-      if (selectedModelId.value && !options.models.value.some((model) => model.id === selectedModelId.value)) {
+      if (
+        options.models.value.length > 0
+        && selectedModelId.value
+        && !options.models.value.some((model) => model.id === selectedModelId.value)
+      ) {
         selectedModelId.value = ''
       }
       if (thinkingModeOptions.value.some((option) => option.value === selectedThinkingMode.value)) return
@@ -139,6 +148,9 @@ export function useCoreExecutionControlsState<
   })
   watch(shallowThinkingEnabled, (enabled) => {
     writeStoredCoreShallowThinking(options.storage, storageKeys.shallowThinking, enabled)
+  })
+  watch(selectedModelId, (modelId) => {
+    writeStoredModelId(options.storage, storageKeys.modelId, modelId)
   })
 
   let modelSelectionGeneration = 0
@@ -176,10 +188,35 @@ export function useCoreExecutionControlsState<
     selectThinkingMode,
     turnOptions: () => ({
       ...payload.value,
+      ...(activeModel.value?.id ? { model_id: activeModel.value.id } : {}),
       ...(Number(activeModel.value?.context_window || 0) > 0
         ? { context_window_tokens: Number(activeModel.value?.context_window) }
         : {}),
     }),
+  }
+}
+
+function readStoredModelId(
+  storage: CoreExecutionControlsStorage | null | undefined,
+  key: string,
+  fallback: string,
+): string {
+  try {
+    return storage?.getItem(key) || fallback
+  } catch {
+    return fallback
+  }
+}
+
+function writeStoredModelId(
+  storage: CoreExecutionControlsStorage | null | undefined,
+  key: string,
+  modelId: string,
+): void {
+  try {
+    storage?.setItem(key, modelId)
+  } catch {
+    // Storage can be unavailable in hardened desktop/browser contexts.
   }
 }
 

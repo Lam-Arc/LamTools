@@ -27,6 +27,47 @@ function createDeferred<T = void>() {
 }
 
 describe('useCoreExecutionControlsState', () => {
+  it('restores a valid model selection and persists later changes', async () => {
+    const storage = createStorage({
+      [CORE_EXECUTION_CONTROLS_STORAGE_KEYS.modelId]: 'model-2',
+    })
+    const models = ref([
+      { id: 'model-1', provider_id: 'provider-1', thinking_supported: true, context_window: 128_000 },
+      { id: 'model-2', provider_id: 'provider-2', thinking_supported: true, context_window: 256_000 },
+    ])
+    const state = useCoreExecutionControlsState({
+      models,
+      providers,
+      defaultModel: ref(models.value[0]),
+      storage,
+    })
+
+    expect(state.selectedModelId.value).toBe('model-2')
+    expect(state.turnOptions()).toMatchObject({ context_window_tokens: 256_000 })
+
+    state.selectModel('model-1')
+    await nextTick()
+    expect(storage.getItem(CORE_EXECUTION_CONTROLS_STORAGE_KEYS.modelId)).toBe('model-1')
+    expect(state.turnOptions()).toMatchObject({ context_window_tokens: 128_000 })
+  })
+
+  it('keeps a stored model selection while the model catalog is loading', async () => {
+    const storage = createStorage({
+      [CORE_EXECUTION_CONTROLS_STORAGE_KEYS.modelId]: 'model-2',
+    })
+    const models = ref<Array<{ id: string; provider_id: string; thinking_supported: boolean }>>([])
+    const defaultModel = ref<{ id: string; provider_id: string; thinking_supported: boolean } | null>(null)
+    const state = useCoreExecutionControlsState({ models, providers, defaultModel, storage })
+
+    expect(state.selectedModelId.value).toBe('model-2')
+    models.value = [{ id: 'model-2', provider_id: 'provider-2', thinking_supported: true }]
+    defaultModel.value = models.value[0]
+    await nextTick()
+
+    expect(state.selectedModelId.value).toBe('model-2')
+    expect(state.turnOptions()).toMatchObject({ model_id: 'model-2' })
+  })
+
   it('restores thinking preferences and persists later changes', async () => {
     const storage = createStorage({
       [CORE_EXECUTION_CONTROLS_STORAGE_KEYS.thinkingMode]: 'low',
@@ -134,6 +175,7 @@ describe('useCoreExecutionControlsState', () => {
     })
 
     expect(state.turnOptions()).toEqual({
+      model_id: 'model-1',
       thinking_enabled: true,
       thinking_budget: 10_000,
       shallow_thinking_enabled: true,

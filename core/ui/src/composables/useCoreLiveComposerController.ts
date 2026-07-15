@@ -2,6 +2,7 @@ import { computed, ref, watch, type Ref } from 'vue'
 import {
   coreComposerActionMode,
   coreComposerSubmissionEffects,
+  isCoreActiveTurnStatus,
   normalizeCoreCommandCatalogItem,
   submitCoreComposerTask,
   type CoreWorkbenchTurnStatus,
@@ -59,6 +60,7 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
   const dismissedText = ref('')
   const lastEnterHandledAt = ref(0)
   let commandCatalogGeneration = 0
+  let stopPending = false
   const liveTurnController = useCoreLiveTurnController<CoreInputItem[]>({
     activeThreadId: options.activeThreadId,
     activeTurnId: options.activeTurnId,
@@ -84,6 +86,11 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
 
   watch(options.text, () => {
     if (dismissedText.value && dismissedText.value !== options.text.value) dismissedText.value = ''
+  })
+  watch(options.status, (status) => {
+    if (!stopPending || isCoreActiveTurnStatus(status)) return
+    stopPending = false
+    options.setStatusText?.('')
   })
 
   async function loadCommandCatalog(threadId = options.activeThreadId.value || ''): Promise<boolean> {
@@ -123,6 +130,7 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
     commandCatalogLoading.value = false
     dismissedText.value = ''
     commandPalette.reset()
+    stopPending = false
   }
 
   function replaceActiveSlash(command: CoreCommandCatalogItem, replacement?: string): void {
@@ -173,10 +181,13 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
   }
 
   async function stop(): Promise<boolean> {
+    stopPending = true
     options.setStatusText?.(options.messages?.stopping || 'Stopping')
     const ok = await liveTurnController.interruptActiveTurn()
-    if (ok) options.setStatusText?.('')
-    else reportError(liveTurnController.lastError.value || options.messages?.stopFailed || 'Unable to stop turn')
+    if (!ok) {
+      stopPending = false
+      reportError(liveTurnController.lastError.value || options.messages?.stopFailed || 'Unable to stop turn')
+    }
     return ok
   }
 

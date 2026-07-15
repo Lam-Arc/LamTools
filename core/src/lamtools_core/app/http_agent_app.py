@@ -182,7 +182,11 @@ def create_core_agent_http_app(
             enable_turn_checkpoints=True,
         )
         _register_core_project_operations(agent_operations, project_store=core_db_handle.project_store)
-        _register_core_config_operations(agent_operations, config_db_path=config_db_path)
+        _register_core_config_operations(
+            agent_operations,
+            config_db_path=config_db_path,
+            default_model_id=config.model_record_id,
+        )
         config_engine = create_async_engine(f"sqlite+aiosqlite:///{config_db_path}")
         config_session_factory = async_sessionmaker(config_engine, expire_on_commit=False)
         _register_missing_operations(
@@ -391,10 +395,21 @@ def _project_id(request: OperationRequest) -> str:
     return str(request.payload.get("project_id") or request.payload.get("projectId") or request.payload.get("id") or "")
 
 
-def _register_core_config_operations(catalog: OperationCatalog, *, config_db_path: Path) -> None:
+def _register_core_config_operations(
+    catalog: OperationCatalog,
+    *,
+    config_db_path: Path,
+    default_model_id: str,
+) -> None:
     async def config_models_list(request: OperationRequest) -> OperationResult:
         del request
-        return OperationResult(name="config.models.list", payload={"models": list_llm_model_configs(config_db_path)})
+        return OperationResult(
+            name="config.models.list",
+            payload={
+                "models": list_llm_model_configs(config_db_path),
+                "default_model_id": default_model_id,
+            },
+        )
 
     async def config_providers_list(request: OperationRequest) -> OperationResult:
         del request

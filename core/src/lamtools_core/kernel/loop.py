@@ -539,6 +539,7 @@ class CoreLoopKernel:
                         "request_id": approval_call.id,
                         "tool_call": approval_call.to_dict(),
                         "response_index": index,
+                        "status": "waiting",
                     }
                     state.metadata["pending_waiting_request"] = {
                         "request_kind": "permission",
@@ -549,13 +550,6 @@ class CoreLoopKernel:
                         "message": self._approval_request_message(approval_call),
                     }
                     step.metadata["pending_approval"] = state.metadata["pending_approval"]
-                    await self._save_checkpoint(state, history)
-                    await self._emit_tool_waiting_for_approval(
-                        state,
-                        approval_call,
-                        response_index=index,
-                    )
-                    await self._emit_approval_request(state, approval_call, response_index=index)
                     decision = "wait"
                     step.decision = decision
                     final_decision = decision
@@ -566,6 +560,12 @@ class CoreLoopKernel:
                         steps_log = state.metadata.setdefault("kernel_steps", [])
                         steps_log.append(self._summarize_step(step))
                     await self._save_checkpoint(state, history)
+                    await self._emit_tool_waiting_for_approval(
+                        state,
+                        approval_call,
+                        response_index=index,
+                    )
+                    await self._emit_approval_request(state, approval_call, response_index=index)
                     break
                 parallel_names = set(self.policy.parallel_tool_names)
                 can_parallelize_named_tools = (
@@ -1789,6 +1789,28 @@ class CoreLoopKernel:
             total += estimate_text_tokens(json.dumps(request.response_format, ensure_ascii=False))
         return total
 
+    async def _persist_runtime_context_metrics(
+        self,
+        state: RuntimeState,
+        *,
+        history: list[ChatMessage] | None,
+    ) -> None:
+        metrics = state.metadata.get("runtime_context_metrics")
+        if not isinstance(metrics, dict):
+            return
+        if history is None:
+            await self.state_store.save(state)
+        else:
+            await self._save_checkpoint(state, history)
+        await self.event_sink.emit(CoreEvent(
+            name="runtime.metrics",
+            category="progress",
+            payload={"runtime_metrics": dict(metrics)},
+            session_id=state.session_id,
+            run_id=state.run_id,
+            tags=["progress"],
+        ))
+
     async def _compact_request_if_needed(
         self,
         state: RuntimeState,
@@ -1827,6 +1849,7 @@ class CoreLoopKernel:
             "context_compacted": False,
             "model_id": current_model,
         }
+        await self._persist_runtime_context_metrics(state, history=history)
         if before_tokens < trigger_tokens:
             return
 
@@ -1950,6 +1973,11 @@ class CoreLoopKernel:
             )
         if result.status != "compacted":
             request.metadata["context_compaction_status"] = result.status
+            state.metadata["runtime_context_metrics"] = {
+                **dict(state.metadata["runtime_context_metrics"]),
+                "context_compaction_status": result.status,
+            }
+            await self._persist_runtime_context_metrics(state, history=history)
             return
 
         request.messages[:] = result.replacement_messages
@@ -1992,6 +2020,7 @@ class CoreLoopKernel:
             "context_compaction_execution_model": execution_model,
             "model_id": current_model,
         }
+        await self._persist_runtime_context_metrics(state, history=history)
         await self._emit_context_compacted(
             state,
             removed=result.compacted_count,

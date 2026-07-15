@@ -402,25 +402,55 @@ def create_core_agent_operations(
                 )
             except ValueError as exc:
                 return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
+            for claim_attempt in range(2):
+                claimed_pending = dict(pending)
+                claimed_pending["status"] = "executing"
+                claimed_pending["decision"] = decision.action
+                state.metadata["pending_approval"] = claimed_pending
+                try:
+                    await runtime_state_store.save(state)
+                    break
+                except RuntimeStateConflictError:
+                    if claim_attempt > 0:
+                        return OperationResult(
+                            name=request.name,
+                            status="error",
+                            payload={"error": "approval already resolving"},
+                        )
+                    refreshed = await runtime_state_store.get(thread_id)
+                    refreshed_pending = (
+                        refreshed.metadata.get("pending_approval")
+                        if refreshed is not None and isinstance(refreshed.metadata, dict)
+                        else None
+                    )
+                    refreshed_call = (
+                        refreshed_pending.get("tool_call")
+                        if isinstance(refreshed_pending, dict)
+                        else None
+                    )
+                    if (
+                        refreshed is None
+                        or not isinstance(refreshed_pending, dict)
+                        or not isinstance(refreshed_call, dict)
+                        or str(refreshed_pending.get("status") or "") != "waiting"
+                        or str(refreshed_pending.get("request_id") or refreshed_call.get("id") or "")
+                        != (expected_request_id or approval_request_id)
+                    ):
+                        return OperationResult(
+                            name=request.name,
+                            status="error",
+                            payload={"error": "approval already resolving"},
+                        )
+                    state = refreshed
+                    pending = refreshed_pending
+                    pending_call = refreshed_call
+
             runtime_options = _runtime_options_from_state(spec, state)
             runtime_work_root = _work_root_from_state(paths, state)
             runtime_model_provider = _model_provider_for_runtime(
                 model_provider,
                 runtime_options=runtime_options,
             )
-
-            claimed_pending = dict(pending)
-            claimed_pending["status"] = "executing"
-            claimed_pending["decision"] = decision.action
-            state.metadata["pending_approval"] = claimed_pending
-            try:
-                await runtime_state_store.save(state)
-            except RuntimeStateConflictError:
-                return OperationResult(
-                    name=request.name,
-                    status="error",
-                    payload={"error": "approval already resolving"},
-                )
 
             lifecycle = ApprovalResolutionLifecycle(
                 operation_name=request.name,

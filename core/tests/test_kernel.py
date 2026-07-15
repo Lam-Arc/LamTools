@@ -2841,6 +2841,9 @@ class TestKernelContextCompaction:
         assert "CURRENT_TOOL_RESULT_SENTINEL" not in "\n".join(raw_messages)
         assert llm.last_request.messages[-1].role == "user"
         assert llm.last_request.messages[-1].content == "current long task with exact acceptance criteria"
+        metrics_events = [event for event in sink.events if event.name == "runtime.metrics"]
+        assert len(metrics_events) >= 2
+        assert metrics_events[-1].payload["runtime_metrics"]["estimated_prompt_tokens"] == llm.last_request.metadata["context_tokens_after_compaction"]
 
     @pytest.mark.asyncio
     async def test_does_not_compact_below_80_percent(self):
@@ -2869,6 +2872,8 @@ class TestKernelContextCompaction:
         assert llm.last_request is not None
         assert "context_compacted" not in llm.last_request.metadata
         assert [event for event in sink.events if event.name == "runtime.context_compacted"] == []
+        metrics = next(event for event in sink.events if event.name == "runtime.metrics")
+        assert metrics.payload["runtime_metrics"]["context_window_tokens"] == 10_000
         done = next(event for event in sink.events if event.name == "runtime.done")
         assert done.payload["runtime_metrics"]["context_window_tokens"] == 10_000
         assert done.payload["runtime_metrics"]["estimated_prompt_tokens"] > 0

@@ -668,7 +668,7 @@ async def handle_turn_cancel_operation(
     if isinstance(write_result, CoreLiveOperationOutcome):
         return write_result
     interrupted, status, snapshot, turn_id = write_result
-    had_live_task = context.host.runtime_task_registry.is_running(thread_id, run_id=turn_id)
+    had_live_task = context.host.runtime_task_registry.active_run_id(thread_id) == turn_id
     context.host.runtime_task_registry.cancel(thread_id, run_id=turn_id or None, force=True)
     events = [interrupted, status]
     for event in events:
