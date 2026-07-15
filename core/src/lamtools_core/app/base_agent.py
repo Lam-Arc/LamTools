@@ -263,22 +263,9 @@ class CoreBaseAgentKit:
         )
         if isinstance(delegated_wait, dict):
             pending = delegated_wait.get("pending_approval")
-            waiting = delegated_wait.get("pending_waiting_request")
             delegated = delegated_wait.get("delegated_session")
-            if (
-                delegated_wait.get("wait_reason") == "no_progress"
-                and isinstance(waiting, dict)
-                and isinstance(delegated, dict)
-            ):
-                state.metadata["pending_waiting_request"] = dict(waiting)
-                state.metadata["no_progress"] = {
-                    "message": str(waiting.get("message") or "Sub-agent paused after making no progress."),
-                    "recoverable": True,
-                    "delegated_session": dict(delegated),
-                }
-                step.metadata["no_progress"] = dict(state.metadata["no_progress"])
-                return "wait"
             if isinstance(pending, dict) and isinstance(delegated, dict):
+                waiting = delegated_wait.get("pending_waiting_request")
                 state.metadata["pending_approval"] = {
                     **pending,
                     "delegated_session": dict(delegated),

@@ -93,7 +93,7 @@ async def test_tool_evidence_is_redacted_and_truncated(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_base_agent_propagates_delegated_no_progress_as_wait(tmp_path):
+async def test_base_agent_returns_delegated_no_progress_to_parent_loop(tmp_path):
     kit = CoreBaseAgentKit(work_root=tmp_path)
     state = RuntimeState(session_id="parent")
     call = ToolCall(id="sub-1", name="sub_agent")
@@ -124,7 +124,7 @@ async def test_base_agent_propagates_delegated_no_progress_as_wait(tmp_path):
         step,
     )
 
-    assert decision == "wait"
-    assert state.metadata["no_progress"]["delegated_session"]["session_id"] == "parent:sub:worker"
-    assert state.metadata["pending_waiting_request"]["request_kind"] == "no_progress"
+    assert decision == "continue"
+    assert "no_progress" not in state.metadata
+    assert "pending_waiting_request" not in state.metadata
     assert "pending_approval" not in state.metadata
