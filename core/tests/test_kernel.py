@@ -726,7 +726,10 @@ class TestKernelToolFailure:
                 decision="continue",  # Kit decides to continue despite tool failure
             ),
             MockKitStep(
-                reply="根因是连接超时。方案一检查网络，方案二更换服务。选择方案一；验证信号是请求成功。",
+                reply=(
+                    "根因是连接超时。证据是工具返回 connection timeout。"
+                    "方案一检查网络，方案二更换服务。选择方案一；验证信号是请求成功。"
+                ),
                 decision="done",
             ),
             MockKitStep(reply="retry succeeded", decision="done"),
@@ -748,6 +751,13 @@ class TestKernelToolFailure:
         call = ToolCall(id="c1", name="slow_tool", arguments={})
         kit = SlowToolKit(steps=[
             MockKitStep(tool_calls=[call], decision="done"),
+            MockKitStep(
+                reply=(
+                    "[根因] 工具超时 [证据] timed out [方案1] 缩小任务 "
+                    "[方案2] 调整超时 [选择] 方案1 [验证信号] 工具按时返回"
+                ),
+                decision="done",
+            ),
             MockKitStep(reply="done", decision="done"),
         ])
         policy = LoopPolicy(tool_timeout_seconds=0.001)
@@ -770,6 +780,14 @@ class TestKernelToolFailure:
         call = ToolCall(id="c1", name="search_files", arguments={"path": None})
         kit = RaisingToolKit(steps=[
             MockKitStep(tool_calls=[call], decision="done"),
+            MockKitStep(
+                reply=(
+                    "[根因] 参数类型错误 [证据] path must be a string "
+                    "[方案1] 修正参数 [方案2] 改进输入校验 [选择] 方案1 "
+                    "[验证信号] 工具调用成功"
+                ),
+                decision="done",
+            ),
             MockKitStep(reply="done", decision="done"),
         ])
         kernel = _make_kernel(kit)
@@ -1696,7 +1714,7 @@ class TestKernelStateSave:
         assert result.steps[2].tool_steps[0].call.id == "inspect"
 
     @pytest.mark.asyncio
-    async def test_incomplete_failure_diagnosis_cannot_execute_selected_solution(self):
+    async def test_incomplete_failure_diagnosis_allows_a_different_investigation_call(self):
         failed = ToolCall(id="failed", name="run_command", arguments={"command": "broken"})
         premature = ToolCall(id="premature", name="run_command", arguments={"command": "different"})
         complete = "[根因] 未知 [证据] exit 1 [方案1] 查日志 [方案2] 查环境 [选择] 方案1 [验证信号] 命令成功"
@@ -1712,12 +1730,54 @@ class TestKernelStateSave:
 
         result = await _make_kernel(kit).run(_make_turn_input())
 
-        blocked = result.steps[1].tool_steps[0].result
-        assert blocked is not None
-        assert blocked.status == "blocked"
-        assert blocked.metadata["diagnosis_structure_missing"] is True
+        investigation = result.steps[1].tool_steps[0].result
+        assert investigation is not None
+        assert investigation.status == "ok"
         assert result.steps[1].metadata["failure_diagnosis_retry_required"] is True
         assert result.steps[2].metadata["failure_diagnosis_completed"] is True
+
+    @pytest.mark.asyncio
+    async def test_plain_text_does_not_complete_required_failure_diagnosis(self):
+        failed = ToolCall(id="failed", name="run_command", arguments={"command": "broken"})
+        complete = "[根因] 未知 [证据] exit 1 [方案1] 查日志 [方案2] 查环境 [选择] 方案1 [验证信号] 命令成功"
+        kit = MockRuntimeKit(steps=[
+            MockKitStep(
+                tool_calls=[failed],
+                tool_results=[ToolResult(call_id="failed", name="run_command", status="failed", error="exit 1")],
+            ),
+            MockKitStep(reply="我先猜测一下原因。", decision="done"),
+            MockKitStep(reply=complete, decision="done"),
+            MockKitStep(reply="完成", decision="done"),
+        ])
+
+        result = await _make_kernel(kit).run(_make_turn_input())
+
+        assert result.steps[1].metadata["failure_diagnosis_retry_required"] is True
+        assert result.steps[2].metadata["failure_diagnosis_completed"] is True
+        assert result.decision == "done"
+
+    @pytest.mark.asyncio
+    async def test_identical_side_effect_tool_calls_in_one_turn_are_not_merged(self):
+        calls = [
+            ToolCall(id="write-1", name="write_file", arguments={"path": "same.txt", "content": "value"}),
+            ToolCall(id="write-2", name="write_file", arguments={"path": "same.txt", "content": "value"}),
+        ]
+
+        class RecordingKit(MockRuntimeKit):
+            def __init__(self) -> None:
+                super().__init__(steps=[MockKitStep(tool_calls=calls), MockKitStep(reply="完成", decision="done")])
+                self.executed_call_ids: list[str] = []
+
+            async def execute_tool(self, state: RuntimeState, call: ToolCall) -> ToolResult:
+                self.executed_call_ids.append(call.id)
+                return await super().execute_tool(state, call)
+
+        kit = RecordingKit()
+
+        result = await _make_kernel(kit).run(_make_turn_input())
+
+        assert result.decision == "done"
+        assert kit.executed_call_ids == ["write-1", "write-2"]
 
     @pytest.mark.asyncio
     async def test_repeated_identical_successes_request_rethink_then_wait(self):
@@ -1805,6 +1865,14 @@ class TestKernelStateSave:
             ),
             MockKitStep(tool_calls=[calls[1]]),
             MockKitStep(tool_calls=[calls[2]], decision="continue"),
+            MockKitStep(
+                reply=(
+                    "[根因] 路径越界 [证据] outside workspace "
+                    "[方案1] 改用工作区内路径 [方案2] 请求扩大范围 "
+                    "[选择] 方案1 [验证信号] 工具调用成功"
+                ),
+                decision="done",
+            ),
             MockKitStep(reply="done", decision="done"),
         ]
         kit = MockRuntimeKit(steps=steps)
@@ -2293,6 +2361,14 @@ class TestKernelParallelToolWhitelist:
         kit = PreflightBlockingToolKit([
             MockKitStep(
                 tool_calls=calls,
+                decision="done",
+            ),
+            MockKitStep(
+                reply=(
+                    "[根因] 预检拒绝执行 [证据] 两个调用均返回 failed "
+                    "[方案1] 修正请求 [方案2] 请求用户授权 [选择] 方案1 "
+                    "[验证信号] 预检通过"
+                ),
                 decision="done",
             ),
             MockKitStep(reply="done", decision="done"),

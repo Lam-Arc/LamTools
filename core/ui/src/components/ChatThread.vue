@@ -91,29 +91,15 @@
                   :key="part.id"
                 >
                   <div v-if="part.partType === 'text' && part.content" class="assistant-answer">
-                    <AnimatedStreamText :text-key="part.id" :text="part.content" :active="true" v-slot="{ text, animating }">
-                      <slot name="assistant-content" :content="text">
-                        <MarkdownRenderer
-                          class="part-text-content"
-                          :class="{ 'part-text-content--streaming': animating }"
-                          :content="text"
-                          :streaming="animating"
-                        />
-                      </slot>
-                    </AnimatedStreamText>
+                    <slot name="assistant-content" :content="part.content">
+                      <MarkdownRenderer class="part-text-content part-text-content--streaming" :content="part.content" :streaming="true" />
+                    </slot>
                   </div>
 
                   <div v-else-if="part.partType === 'model_text' && part.content" class="assistant-answer assistant-answer--process">
-                    <AnimatedStreamText :text-key="part.id" :text="part.content" :active="true" v-slot="{ text, animating }">
-                      <slot name="assistant-content" :content="text">
-                        <MarkdownRenderer
-                          class="part-text-content"
-                          :class="{ 'part-text-content--streaming': animating }"
-                          :content="text"
-                          :streaming="animating"
-                        />
-                      </slot>
-                    </AnimatedStreamText>
+                    <slot name="assistant-content" :content="part.content">
+                      <MarkdownRenderer class="part-text-content part-text-content--streaming" :content="part.content" :streaming="true" />
+                    </slot>
                   </div>
 
                   <div
@@ -131,16 +117,9 @@
                       <span class="tool-expand-chevron">{{ isPartExpanded(part, true) ? '▾' : '▸' }}</span>
                     </button>
                     <div v-if="isPartExpanded(part, true)" class="reasoning-body">
-                      <AnimatedStreamText :text-key="part.id" :text="part.content" :active="true" v-slot="{ text, animating }">
-                        <slot name="reasoning-content" :content="text" :live="true">
-                          <MarkdownRenderer
-                            class="process-step-detail"
-                            :class="{ 'part-text-content--streaming': animating }"
-                            :content="text"
-                            :streaming="animating"
-                          />
-                        </slot>
-                      </AnimatedStreamText>
+                      <slot name="reasoning-content" :content="part.content" :live="true">
+                        <MarkdownRenderer class="process-step-detail part-text-content--streaming" :content="part.content" :streaming="true" />
+                      </slot>
                     </div>
                   </div>
 
@@ -686,16 +665,9 @@
 
             <template v-if="isLiveMessage(msg)">
               <div v-if="answerContent(msg)" class="assistant-answer">
-                <AnimatedStreamText :text-key="answerTextKey(msg)" :text="answerContent(msg)" :active="true" v-slot="{ text, animating }">
-                  <slot name="assistant-content" :content="text">
-                    <MarkdownRenderer
-                      class="part-text-content"
-                      :class="{ 'part-text-content--streaming': animating }"
-                      :content="text"
-                      :streaming="animating"
-                    />
-                  </slot>
-                </AnimatedStreamText>
+                <slot name="assistant-content" :content="answerContent(msg)">
+                  <MarkdownRenderer class="part-text-content part-text-content--streaming" :content="answerContent(msg)" :streaming="true" />
+                </slot>
               </div>
               <template v-else>
                 <div
@@ -703,16 +675,9 @@
                   :key="'live-txt-' + gi"
                   class="assistant-answer"
                 >
-                  <AnimatedStreamText :text-key="`group-${msg.id}-${gi}`" :text="group.content" :active="true" v-slot="{ text, animating }">
-                    <slot name="assistant-content" :content="text">
-                      <MarkdownRenderer
-                        class="part-text-content"
-                        :class="{ 'part-text-content--streaming': animating }"
-                        :content="text"
-                        :streaming="animating"
-                      />
-                    </slot>
-                  </AnimatedStreamText>
+                  <slot name="assistant-content" :content="group.content">
+                    <MarkdownRenderer class="part-text-content part-text-content--streaming" :content="group.content" :streaming="true" />
+                  </slot>
                 </div>
               </template>
             </template>
@@ -1123,7 +1088,7 @@
 
 <script setup lang="ts">
 import type { CoreAttachment, CoreMessage, MessagePart, MessagePartStatus } from '../types'
-import { computed, defineComponent, h, onBeforeUnmount, ref, watch } from 'vue'
+import { ref } from 'vue'
 import MarkdownRenderer from './MarkdownRenderer.vue'
 
 defineOptions({ name: 'ChatThread' })
@@ -1136,135 +1101,6 @@ defineSlots<{
   'reasoning-content'?: (props: { content: string; live?: boolean }) => unknown
   'message-footer'?: (props: { message: CoreMessage }) => unknown
 }>()
-
-const STREAM_BASE_CHARS_PER_SECOND = 44
-const STREAM_FAST_CHARS_PER_SECOND = 96
-const STREAM_CATCH_UP_THRESHOLD = 80
-const STREAM_MAX_FRAME_CHARS = 6
-const STREAM_MAX_ELAPSED_MS = 120
-const STREAM_FIRST_PAINT_CHARS = 1
-
-function streamCharLength(value: string): number {
-  return Array.from(value).length
-}
-
-function streamSlice(value: string, end: number): string {
-  return Array.from(value).slice(0, end).join('')
-}
-
-const AnimatedStreamText = defineComponent({
-  name: 'AnimatedStreamText',
-  props: {
-    textKey: { type: String, required: true },
-    text: { type: String, default: '' },
-    active: { type: Boolean, default: false },
-  },
-  setup(componentProps, { slots }) {
-    const displayText = ref(componentProps.active ? '' : componentProps.text)
-    const targetText = ref(componentProps.text)
-    const carry = ref(0)
-    const lastFrameAt = ref(0)
-    const frameId = ref<number | null>(null)
-    const canAnimate = typeof window !== 'undefined'
-      && typeof window.matchMedia === 'function'
-      && typeof window.requestAnimationFrame === 'function'
-      && typeof window.cancelAnimationFrame === 'function'
-    const reducedMotion = canAnimate
-      ? window.matchMedia('(prefers-reduced-motion: reduce)')
-      : null
-
-    const animating = computed(() => (
-      componentProps.active
-      && !reducedMotion?.matches
-      && streamCharLength(displayText.value) < streamCharLength(targetText.value)
-      && targetText.value.startsWith(displayText.value)
-    ))
-
-    function stopFrame() {
-      if (frameId.value !== null && canAnimate) {
-        window.cancelAnimationFrame(frameId.value)
-      }
-      frameId.value = null
-      lastFrameAt.value = 0
-      carry.value = 0
-    }
-
-    function revealFrame(now: number) {
-      frameId.value = null
-      if (!componentProps.active || !canAnimate || reducedMotion?.matches) {
-        displayText.value = targetText.value
-        stopFrame()
-        return
-      }
-      if (!targetText.value.startsWith(displayText.value)) {
-        displayText.value = targetText.value
-        stopFrame()
-        return
-      }
-      const displayLength = streamCharLength(displayText.value)
-      const targetLength = streamCharLength(targetText.value)
-      const backlog = targetLength - displayLength
-      if (backlog <= 0) {
-        stopFrame()
-        return
-      }
-
-      const elapsed = lastFrameAt.value > 0
-        ? Math.min(STREAM_MAX_ELAPSED_MS, Math.max(0, now - lastFrameAt.value))
-        : 16
-      lastFrameAt.value = now
-      const rate = backlog > STREAM_CATCH_UP_THRESHOLD
-        ? STREAM_FAST_CHARS_PER_SECOND
-        : STREAM_BASE_CHARS_PER_SECOND
-      carry.value += (elapsed / 1000) * rate
-      const take = Math.min(STREAM_MAX_FRAME_CHARS, Math.max(1, Math.floor(carry.value)))
-      carry.value = Math.max(0, carry.value - take)
-      displayText.value = streamSlice(targetText.value, Math.min(targetLength, displayLength + take))
-      scheduleFrame()
-    }
-
-    function scheduleFrame() {
-      if (frameId.value !== null || !canAnimate) return
-      frameId.value = window.requestAnimationFrame(revealFrame)
-    }
-
-    watch(
-      () => [componentProps.textKey, componentProps.text, componentProps.active] as const,
-      ([nextKey, nextText, active], previousValue) => {
-        const previousKey = previousValue?.[0] || ''
-        targetText.value = nextText || ''
-        if (nextKey !== previousKey) {
-          displayText.value = ''
-        }
-        if (!active || !canAnimate || reducedMotion?.matches) {
-          displayText.value = targetText.value
-          stopFrame()
-          return
-        }
-        if (!targetText.value.startsWith(displayText.value)) {
-          displayText.value = ''
-        }
-        if (!displayText.value && targetText.value) {
-          displayText.value = streamSlice(targetText.value, STREAM_FIRST_PAINT_CHARS)
-        }
-        if (streamCharLength(targetText.value) > streamCharLength(displayText.value)) {
-          scheduleFrame()
-        }
-      },
-      { immediate: true },
-    )
-
-    onBeforeUnmount(stopFrame)
-
-    return () => {
-      const slot = slots.default
-      if (slot) {
-        return slot({ text: displayText.value, animating: animating.value })
-      }
-      return h('span', displayText.value)
-    }
-  },
-})
 
 const props = withDefaults(
   defineProps<{

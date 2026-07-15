@@ -171,7 +171,7 @@ async def test_watch_resumes_from_last_seen_sequence_after_disconnect() -> None:
     assert result.last_seen_seq == 5
     assert first.connect_calls == [("thread-1", 0)]
     assert second.connect_calls == [("thread-1", 4)]
-    assert output == ["[00:00] reply part", "[00:00] error socket closed", "[00:00] done"]
+    assert output == ["part", "\n", "[00:00] error socket closed", "[00:00] done"]
     assert first.closed is True
     assert second.closed is True
 
@@ -293,6 +293,20 @@ def test_formatter_inserts_one_explicit_newline_after_inline_deltas() -> None:
     ]
 
 
+def test_formatter_streams_app_server_reply_deltas_without_reprinting_cumulative_parts() -> None:
+    formatter = CliLiveFormatter()
+    delta = core_run_item("message", {"type": "agentMessage", "delta": "Hello"})
+    cumulative = core_run_item("message", {"type": "agentMessage", "content": "Hello"})
+    delta["data"]["payload"]["item_id"] = "response-1:text"
+    cumulative["data"]["payload"]["item_id"] = "response-1:text"
+
+    assert [(str(chunk), chunk.end) for chunk in formatter.format_chunks(delta)] == [("Hello", "")]
+    assert formatter.format_chunks(cumulative) == []
+    assert [(str(chunk), chunk.end) for chunk in formatter.format_chunks(
+        core_run_item("status", {"type": "turn"}, status="completed")
+    )] == [("\n", ""), ("[00:00] done", "\n")]
+
+
 def test_formatter_closes_inline_delta_before_a_line_event() -> None:
     formatter = CliLiveFormatter()
     delta = {"event": "display", "data": {"kind": "reply", "content": "partial", "metadata": {"delta": True}}}
@@ -352,7 +366,7 @@ async def test_execute_compaction_command_streams_new_deltas_and_terminal_state_
 
     assert result["status"] == "compacted"
     assert saw_terminal is True
-    assert live.connected_with == {}
+    assert live.connected_with == {"thread_id": "thread-1", "last_seen_seq": 0}
     assert [(str(chunk), chunk.end) for chunk in output] == [
         ("[00:00] phase 正在压缩上下文", "\n"),
         ("摘要片段", ""),

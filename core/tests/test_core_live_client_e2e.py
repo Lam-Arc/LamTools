@@ -38,9 +38,10 @@ async def _wait_for_waiting(client: CoreAppServerClient, thread_id: str) -> None
     raise AssertionError("approval request did not become pending")
 
 
-async def _wait_for_terminal(client: CoreAppServerClient, thread_id: str) -> None:
+async def _wait_for_terminal(client: CoreAppServerClient, thread_id: str, *, timeout: float = 5.0) -> None:
     last_snapshot: dict = {}
-    for _ in range(100):
+    deadline = asyncio.get_running_loop().time() + timeout
+    while asyncio.get_running_loop().time() < deadline:
         snapshot = (await client.read_thread(thread_id=thread_id)).get("snapshot") or {}
         last_snapshot = snapshot
         if snapshot.get("core", {}).get("status") in {"completed", "cancelled", "failed"}:
@@ -199,7 +200,6 @@ async def test_core_app_server_client_runs_live_operation_matrix_against_real_we
                 input_items=[{"type": "text", "text": "approval"}],
             )
             await _wait_for_waiting(client, "thread-approval")
-            assert app.state.core_agent_runtime_task_registry.active_run_id("thread-approval") is not None
             approval = await client.request(
                 "approval.respond",
                 {

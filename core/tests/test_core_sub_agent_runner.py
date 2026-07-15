@@ -127,6 +127,17 @@ class EmptySubAgentResultLLM:
         tool_messages = [message for message in request.messages if message.role == "tool"]
         assert tool_messages
         assert "failed" in tool_messages[-1].content.lower()
+        if len(self.requests) == 3:
+            yield LLMStreamEvent(
+                kind="content_delta",
+                content=(
+                    "[根因] 子 Agent 返回空结果 [证据] 工具状态为 failed "
+                    "[方案1] 主 Agent 接管 [方案2] 重新委派 [选择] 方案1 "
+                    "[验证信号] 主 Agent 给出有效答复"
+                ),
+            )
+            yield LLMStreamEvent(kind="done")
+            return
         yield LLMStreamEvent(kind="content_delta", content="main handled sub-agent failure")
         yield LLMStreamEvent(kind="done")
 

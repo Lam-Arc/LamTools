@@ -413,11 +413,11 @@ class CoreLoopKernel:
                     failure_diagnosis_pending
                     and bool(turn.reply.strip())
                     and not turn.tool_calls
+                    and self._has_failure_diagnosis_structure(turn.reply)
                 )
                 failure_diagnosis_incomplete = (
                     failure_diagnosis_pending
                     and bool(turn.reply.strip())
-                    and bool(turn.tool_calls)
                     and not self._has_failure_diagnosis_structure(turn.reply)
                 )
 
@@ -496,21 +496,6 @@ class CoreLoopKernel:
                                 "failure_diagnosis_required": True,
                                 "original_error": prior_failed_call.error,
                             },
-                        )
-                    if (
-                        failure_diagnosis_incomplete
-                        and self._tool_call_fingerprint(call) not in explicit_input_errors
-                        and call.id not in blocked_results
-                    ):
-                        blocked_results[call.id] = ToolResult(
-                            call_id=call.id,
-                            name=call.name,
-                            status="blocked",
-                            error=(
-                                "Failure diagnosis is incomplete. Provide root cause, evidence, two options, "
-                                "the selected option, and a verification signal before executing a solution."
-                            ),
-                            metadata={"failure_diagnosis_required": True, "diagnosis_structure_missing": True},
                         )
                 for call in turn.tool_calls:
                     prior_input_error = explicit_input_errors.get(self._tool_call_fingerprint(call))

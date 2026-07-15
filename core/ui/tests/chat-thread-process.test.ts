@@ -10,6 +10,13 @@ import type { CoreMessage } from '../src/types';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 describe('ChatThread process cards', () => {
+  it('renders live text directly without an artificial character-rate queue', () => {
+    const source = readFileSync(resolve(__dirname, '../src/components/ChatThread.vue'), 'utf8');
+    expect(source).not.toContain('AnimatedStreamText');
+    expect(source).not.toContain('STREAM_BASE_CHARS_PER_SECOND');
+    expect(source).toContain(':content="part.content"');
+  });
+
   it('shows a terminal failure without requiring the process panel to be expanded', () => {
     const wrapper = mount(ChatThread, {
       props: {

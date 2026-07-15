@@ -70,6 +70,7 @@ class CliLiveFormatter:
         self.llm_call_count = 0
         self._counted_usage_event_ids: set[str] = set()
         self._seen_running_compactions: set[str] = set()
+        self._streamed_message_text: dict[str, str] = {}
         self._inline_delta_active = False
 
     def line(self, tag: str, text: str = "") -> str:
@@ -95,6 +96,26 @@ class CliLiveFormatter:
         return []
 
     def format_chunks(self, event: dict[str, Any]) -> list[OutputChunk]:
+        data = event_data(event)
+        method, run_item = app_server_method_payload(data)
+        if method == "core/runItem" and str(run_item.get("kind") or "") == "message":
+            payload = run_item_payload(run_item)
+            if payload.get("type") != "compaction":
+                item_id = str(run_item.get("item_id") or "")
+                delta = str(payload.get("delta") or "")
+                if item_id and delta:
+                    self._streamed_message_text[item_id] = self._streamed_message_text.get(item_id, "") + delta
+                    self._inline_delta_active = True
+                    return [OutputChunk(delta, end="")]
+                content = str(payload.get("content") or "")
+                streamed = self._streamed_message_text.get(item_id) if item_id else None
+                if streamed is not None and content.startswith(streamed):
+                    suffix = content[len(streamed):]
+                    self._streamed_message_text[item_id] = content
+                    if suffix:
+                        self._inline_delta_active = True
+                        return [OutputChunk(suffix, end="")]
+                    return []
         compaction = compaction_event_details(event)
         if compaction is not None:
             run_item, payload, status = compaction
@@ -344,7 +365,7 @@ async def execute_compaction_command_live(
     operation_task: asyncio.Task[dict[str, Any]] | None = None
     saw_terminal = False
     try:
-        await client.connect()
+        await client.connect(thread_id=thread_id, last_seen_seq=0)
         operation_task = asyncio.create_task(
             client.execute_command(thread_id=thread_id, command="compact", work_root=work_root)
         )

@@ -605,32 +605,20 @@ def test_load_llm_config_uses_first_shared_model_when_core_routing_is_missing(tm
 
 
 @pytest.mark.asyncio
-async def test_core_cli_run_prints_session_before_starting_non_raw_task(monkeypatch, capsys, tmp_path: Path) -> None:
-    observed: dict[str, str] = {}
+async def test_core_cli_run_starts_and_watches_one_live_connection(monkeypatch, capsys, tmp_path: Path) -> None:
+    observed: dict[str, object] = {}
 
-    async def fake_run(options: CoreCliRunOptions):
-        observed["thread_id"] = options.thread_id
+    class Client:
+        async def start_turn(self, **kwargs):
+            observed["start"] = kwargs
+
+    async def fake_watch(args, *, thread_id, on_connected=None):
+        observed["thread_id"] = thread_id
         observed["pre_run_output"] = capsys.readouterr().out
-        return {
-            "ok": True,
-            "model": {"display_name": "Fake Model"},
-            "result": {
-                "session_id": options.thread_id,
-                "decision": "done",
-                "steps_count": 2,
-            },
-            "proof": {
-                "has_reasoning_block": True,
-                "has_text_block": True,
-                "tool_names": ["write_file"],
-                "response_indexes": [0, 1],
-                "document_path": "",
-                "document_line_count": 0,
-            },
-            "artifacts": {"summary_json": str(tmp_path / "summary.json")},
-        }
+        await on_connected(Client())
+        return 0
 
-    monkeypatch.setattr(core_cli, "run_core_cli_task", fake_run)
+    monkeypatch.setattr(core_cli, "_watch_live_cli", fake_watch)
 
     result = await core_cli.cmd_run(
         SimpleNamespace(
@@ -655,10 +643,18 @@ async def test_core_cli_run_prints_session_before_starting_non_raw_task(monkeypa
     )
 
     assert result == 0
-    assert observed["thread_id"].startswith("core-cli-")
+    assert str(observed["thread_id"]).startswith("core-cli-")
     assert observed["pre_run_output"] == f"[session] {observed['thread_id']}\n"
-    output = capsys.readouterr().out
-    assert "[done] decision=done steps=2" in output
+    assert observed["start"] == {
+        "thread_id": observed["thread_id"],
+        "input_items": [{"type": "text", "text": "write doc"}],
+        "work_root": str(tmp_path),
+        "model_id": "fake-model",
+        "thinking_enabled": True,
+        "thinking_budget": 10000,
+        "shallow_thinking_enabled": False,
+        "approval_policy": "auto_approve",
+    }
 
 
 @pytest.mark.asyncio

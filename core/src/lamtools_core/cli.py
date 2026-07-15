@@ -585,6 +585,12 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--temperature", type=float, default=0.2)
     run.add_argument("--raw", action="store_true")
     run.add_argument("--verbose", action="store_true")
+    _add_live_connection_arguments(run)
+    run.add_argument("--heartbeat-interval", type=int, default=30)
+    run.add_argument("--event-timeout", type=_positive_timeout_or_none, default=None)
+    run.add_argument("--max-reconnects", type=int, default=3)
+    run.add_argument("--interactive-decisions", action="store_true")
+    run.add_argument("--approval-decision", choices=("approve_once", "deny", "other_guidance"))
     run.set_defaults(func=cmd_run)
 
     watch = sub.add_parser("watch", help="Watch a Core app-server thread")
@@ -982,52 +988,34 @@ async def cmd_run(args: argparse.Namespace) -> int:
     thread_id = _resolve_thread_id(args.thread_id)
     if not args.raw:
         print(f"[session] {thread_id}", flush=True)
-    summary = await run_core_cli_task(
-        CoreCliRunOptions(
-            message=" ".join(args.message),
-            model_id=args.model_id,
-            config_db=args.config_db or None,
-            core_db=args.core_db or None,
+    async def start(client: CoreAppServerClient) -> None:
+        await client.start_turn(
             thread_id=thread_id,
+            input_items=[{"type": "text", "text": " ".join(args.message)}],
             work_root=args.work_root or _default_work_root(),
-            run_dir=args.run_dir or None,
-            adapter_dirs=tuple(args.adapter_dir or ()),
-            plugin_roots=tuple(args.plugin_root or ()),
+            model_id=args.model_id or None,
             thinking_enabled=not bool(args.no_thinking),
             thinking_budget=args.thinking_budget,
             shallow_thinking_enabled=bool(args.shallow_thinking),
-            max_tokens=args.max_tokens,
-            compact_trigger_tokens=getattr(args, "compact_trigger_tokens", None),
-            compact_limit_tokens=getattr(args, "compact_limit_tokens", None),
-            temperature=args.temperature,
             approval_policy="auto_approve" if bool(args.auto_approve) else "require",
-            raw=bool(args.raw),
-            verbose=bool(args.verbose),
         )
-    )
-    if args.raw:
-        print(json.dumps(summary, ensure_ascii=False, indent=2), flush=True)
-    else:
-        print(f"[done] decision={summary['result']['decision']} steps={summary['result']['steps_count']}")
-        print(f"[model] {summary['model'].get('display_name') or summary['model'].get('model_id')}")
-        proof = summary["proof"]
-        print(
-            "[proof] "
-            f"thinking={proof['has_reasoning_block']} "
-            f"text={proof['has_text_block']} "
-            f"tool={','.join(proof['tool_names']) or '-'} "
-            f"rounds={len(proof['response_indexes'])}"
-        )
-        if proof.get("document_path"):
-            print(f"[file] {proof['document_path']} lines={proof['document_line_count']}")
-        print(f"[summary] {summary['artifacts']['summary_json']}")
-    return 0 if summary.get("ok") else 2
+
+    return await _watch_live_cli(args, thread_id=thread_id, on_connected=start)
 
 
 async def cmd_watch(args: argparse.Namespace) -> int:
+    return await _watch_live_cli(args, thread_id=args.thread_id)
+
+
+async def _watch_live_cli(
+    args: argparse.Namespace,
+    *,
+    thread_id: str,
+    on_connected: Any | None = None,
+) -> int:
     formatter = CliLiveFormatter(
-        verbose=bool(args.verbose),
-        heartbeat_interval=int(args.heartbeat_interval or 30),
+        verbose=bool(getattr(args, "verbose", False)),
+        heartbeat_interval=int(getattr(args, "heartbeat_interval", 30) or 30),
     )
 
     def output(chunk: OutputChunk) -> None:
@@ -1035,25 +1023,26 @@ async def cmd_watch(args: argparse.Namespace) -> int:
 
     approval = None
     approval_decision = None
-    if args.approval_decision:
+    if getattr(args, "approval_decision", None):
         approval = lambda: args.approval_decision
         approval_decision = lambda value: value
-    elif not args.raw and (args.interactive_decisions or sys.stdin.isatty()):
+    elif not args.raw and (getattr(args, "interactive_decisions", False) or sys.stdin.isatty()):
         approval = lambda: asyncio.to_thread(input, "reply> ")
         approval_decision = approval_decision_from_reply
 
     if not args.raw:
-        output(OutputChunk(formatter.line("watch", args.thread_id)))
+        output(OutputChunk(formatter.line("watch", thread_id)))
     result = await watch_live_events(
         client_factory=lambda: CoreAppServerClient(args.base_url, path=args.ws_path, token=args.token),
-        thread_id=args.thread_id,
+        thread_id=thread_id,
         formatter=formatter,
         output=output,
         raw=bool(args.raw),
         approval=approval,
         approval_decision=approval_decision,
-        event_timeout=args.event_timeout,
-        max_reconnects=int(args.max_reconnects),
+        on_connected=on_connected,
+        event_timeout=getattr(args, "event_timeout", None),
+        max_reconnects=int(getattr(args, "max_reconnects", 3)),
     )
     return result.exit_code
 
