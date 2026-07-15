@@ -143,6 +143,15 @@ class CoreBaseAgentKit:
             "After a requested file is successfully written, stop tool use and answer with the saved path and a concise summary.",
             "Use load_skill when an available skill matches the task.",
             "After tool results are returned, continue with the next useful step or final answer.",
+            (
+                "Treat successful tool results as reusable evidence. Before querying the same file, URL, process, "
+                "port, or other resource again with different syntax, state the exact missing fact and why the "
+                "existing result does not answer it; otherwise reuse the existing result."
+            ),
+            (
+                "After several tool-only steps, briefly report confirmed facts, remaining uncertainty, and the next "
+                "action before calling more tools. Keep this progress note concise and do not repeat prior evidence."
+            ),
             "Final answers should summarize the outcome and mention important saved paths.",
         ]
         skill_index = self.toolbox.skill_index()

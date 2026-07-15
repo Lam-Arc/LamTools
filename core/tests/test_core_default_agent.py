@@ -570,6 +570,8 @@ async def test_core_agent_instructs_parent_to_delegate_complete_deliverable(tmp_
     system_prompt = llm.requests[0].messages[0].content
     assert "delegate the complete requested deliverable" in system_prompt
     assert "Parent Agent should verify the result" in system_prompt
+    assert "Treat successful tool results as reusable evidence" in system_prompt
+    assert "confirmed facts, remaining uncertainty, and the next action" in system_prompt
 
 
 @pytest.mark.asyncio
