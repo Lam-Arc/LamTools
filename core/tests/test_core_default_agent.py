@@ -473,10 +473,12 @@ async def test_core_agent_direct_turn_generates_its_own_run_id(tmp_path):
 @pytest.mark.asyncio
 async def test_core_agent_operation_applies_per_turn_model_and_shallow_thinking(tmp_path):
     llm = CapturingCoreAgentLLM()
+    state_store = InMemoryRuntimeStateStore()
     catalog = create_core_agent_operations(
         spec=CoreAgentSpec(default_model="default-model"),
         paths=CoreAgentPaths(data_dir=tmp_path / "data", work_root=tmp_path / "work"),
         model_provider=llm,
+        runtime_state_store=state_store,
     )
 
     result = await catalog.execute(
@@ -489,6 +491,10 @@ async def test_core_agent_operation_applies_per_turn_model_and_shallow_thinking(
             "thinking_budget": 1234,
             "shallow_thinking_enabled": True,
             "context_window_tokens": 128_000,
+            "max_tokens": 777,
+            "temperature": 0.4,
+            "compact_trigger_tokens": 100_000,
+            "compact_limit_tokens": 75_000,
         },
     )
 
@@ -498,6 +504,13 @@ async def test_core_agent_operation_applies_per_turn_model_and_shallow_thinking(
     assert llm.requests[0].metadata["thinking_enabled"] is False
     assert llm.requests[0].metadata["thinking_budget"] == 1234
     assert llm.requests[0].metadata["context_window_tokens"] == 128_000
+    assert llm.requests[0].max_tokens == 777
+    assert llm.requests[0].temperature == 0.4
+    state = await state_store.get("thread-runtime-options")
+    assert state is not None
+    policy = state.metadata["runtime_audit"]["loop_policy"]
+    assert policy["compact_trigger_tokens"] == 100_000
+    assert policy["compact_limit_tokens"] == 75_000
     terminal = next(item for item in result.payload["run_items"] if item["kind"] == "status")
     assert terminal["usage"]["context_window_tokens"] == 128_000
     assert terminal["usage"]["estimated_prompt_tokens"] > 0

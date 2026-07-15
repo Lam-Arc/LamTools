@@ -85,6 +85,10 @@ class CoreAppServerClient:
         thinking_budget: int | None = None,
         shallow_thinking_enabled: bool | None = None,
         context_window_tokens: int | None = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+        compact_trigger_tokens: int | None = None,
+        compact_limit_tokens: int | None = None,
         approval_policy: str | None = None,
         client_message_id: str | None = None,
     ) -> dict[str, Any]:
@@ -107,6 +111,14 @@ class CoreAppServerClient:
             params["shallow_thinking_enabled"] = shallow_thinking_enabled
         if context_window_tokens is not None:
             params["context_window_tokens"] = context_window_tokens
+        if max_tokens is not None:
+            params["max_tokens"] = max_tokens
+        if temperature is not None:
+            params["temperature"] = temperature
+        if compact_trigger_tokens is not None:
+            params["compact_trigger_tokens"] = compact_trigger_tokens
+        if compact_limit_tokens is not None:
+            params["compact_limit_tokens"] = compact_limit_tokens
         if approval_policy:
             params["approval_policy"] = approval_policy
         response = await self.request("turn.start", params)
@@ -212,7 +224,14 @@ class CoreAppServerClient:
     async def read_thread(self, *, thread_id: str) -> dict[str, Any]:
         return await self.request("thread.read", {"thread_id": thread_id})
 
-    async def execute_command(self, *, thread_id: str, command: str, work_root: str = "") -> dict[str, Any]:
+    async def execute_command(
+        self,
+        *,
+        thread_id: str,
+        command: str,
+        work_root: str = "",
+        client_command_id: str = "",
+    ) -> dict[str, Any]:
         response = await self._request_result(
             "command.execute",
             {
@@ -220,6 +239,7 @@ class CoreAppServerClient:
                 "command": command,
                 "work_root": work_root,
                 "include_snapshot": False,
+                **({"client_command_id": client_command_id} if client_command_id else {}),
             },
         )
         for event in response.get("events") or []:

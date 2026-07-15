@@ -5,6 +5,7 @@ import inspect
 import json
 import logging
 import time
+import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
@@ -18,7 +19,7 @@ OutputCallback = Callable[["OutputChunk"], Any]
 ApprovalCallback = Callable[[], str | Awaitable[str]]
 ApprovalDecisionCallback = Callable[[str], str]
 ClientFactory = Callable[[], Any]
-ConnectedCallback = Callable[[Any], Awaitable[None]]
+ConnectedCallback = Callable[[Any], Awaitable[Any]]
 
 logger = logging.getLogger(__name__)
 
@@ -283,13 +284,15 @@ async def watch_live_events(
     failed = False
     started = False
     approval_prompted = False
+    target_turn_id = ""
 
     while True:
         client = client_factory()
         try:
             await client.connect(thread_id=thread_id, last_seen_seq=last_seen_seq)
             if not started and on_connected is not None:
-                await on_connected(client)
+                start_result = await on_connected(client)
+                target_turn_id = started_turn_id(start_result)
             started = True
             events = client.events().__aiter__()
             while True:
@@ -298,9 +301,12 @@ async def watch_live_events(
                 except StopAsyncIteration as exc:
                     raise ConnectionError("app-server connection closed") from exc
                 last_seen_seq = max(last_seen_seq, event_sequence(event))
+                if target_turn_id and event_turn_id(event) != target_turn_id:
+                    continue
                 failed = failed or is_failed_event(event)
                 if raw:
-                    await emit_output(output, OutputChunk(json.dumps(event, ensure_ascii=False)))
+                    if raw_watch_event_visible(event):
+                        await emit_output(output, OutputChunk(json.dumps(event, ensure_ascii=False)))
                 else:
                     for chunk in formatter.format_chunks(event):
                         await emit_output(output, chunk)
@@ -364,10 +370,17 @@ async def execute_compaction_command_live(
     event_task: asyncio.Task[dict[str, Any]] | None = None
     operation_task: asyncio.Task[dict[str, Any]] | None = None
     saw_terminal = False
+    client_command_id = uuid.uuid4().hex
+    target_turn_id = f"{thread_id}:command:compact:{client_command_id}"
     try:
         await client.connect(thread_id=thread_id, last_seen_seq=0)
         operation_task = asyncio.create_task(
-            client.execute_command(thread_id=thread_id, command="compact", work_root=work_root)
+            client.execute_command(
+                thread_id=thread_id,
+                command="compact",
+                work_root=work_root,
+                client_command_id=client_command_id,
+            )
         )
         events = client.events().__aiter__()
         event_task = asyncio.create_task(anext(events))
@@ -387,7 +400,7 @@ async def execute_compaction_command_live(
                     event_task = None
                 else:
                     details = compaction_event_details(event)
-                    if details is not None:
+                    if details is not None and event_turn_id(event) == target_turn_id:
                         if raw:
                             await emit_output(output, OutputChunk(json.dumps(event, ensure_ascii=False)))
                         else:
@@ -399,10 +412,10 @@ async def execute_compaction_command_live(
                     event_task = asyncio.create_task(anext(events))
 
             if operation_task.done():
-                await asyncio.sleep(0)
-                if event_task is not None and event_task.done():
-                    continue
-                break
+                if operation_task.cancelled() or operation_task.exception() is not None or saw_terminal:
+                    break
+                if event_task is None:
+                    break
 
         return await operation_task, saw_terminal
     finally:
@@ -554,8 +567,40 @@ def is_failed_event(event: dict[str, Any]) -> bool:
     method, run_item = app_server_method_payload(event_data(event))
     if method != "core/runItem":
         return False
+    kind = str(run_item.get("kind") or "")
     status = run_item_status(run_item, run_item_payload(run_item))
-    return str(run_item.get("kind") or "") == "error" or status in {"failed", "cancelled", "error"}
+    return kind == "error" or (kind == "status" and status in {"failed", "cancelled", "error"})
+
+
+def event_turn_id(event: dict[str, Any]) -> str:
+    method, payload = app_server_method_payload(event_data(event))
+    if method == "core/runItem":
+        return str(payload.get("turn_id") or payload.get("turnId") or "")
+    return str(payload.get("turn_id") or payload.get("turnId") or "")
+
+
+def started_turn_id(result: Any) -> str:
+    if not isinstance(result, dict):
+        return ""
+    runtime_start = result.get("runtime_start")
+    if isinstance(runtime_start, dict):
+        return str(runtime_start.get("turn_id") or runtime_start.get("turnId") or "")
+    return str(result.get("turn_id") or result.get("turnId") or "")
+
+
+def raw_watch_event_visible(event: dict[str, Any]) -> bool:
+    if str(event.get("event") or "") != "app_server_event":
+        return False
+    method, run_item = app_server_method_payload(event_data(event))
+    if method != "core/runItem":
+        return False
+    kind = str(run_item.get("kind") or "")
+    payload = run_item_payload(run_item)
+    if kind == "message":
+        return bool(payload.get("delta"))
+    return kind == "status" and run_item_status(run_item, payload) in {
+        "completed", "failed", "cancelled", "error",
+    }
 
 
 def is_done_event(event: dict[str, Any]) -> bool:

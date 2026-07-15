@@ -611,11 +611,12 @@ async def test_core_cli_run_starts_and_watches_one_live_connection(monkeypatch, 
     class Client:
         async def start_turn(self, **kwargs):
             observed["start"] = kwargs
+            return {"runtime_start": {"turn_id": "turn-new"}}
 
     async def fake_watch(args, *, thread_id, on_connected=None):
         observed["thread_id"] = thread_id
         observed["pre_run_output"] = capsys.readouterr().out
-        await on_connected(Client())
+        observed["start_result"] = await on_connected(Client())
         return 0
 
     monkeypatch.setattr(core_cli, "_watch_live_cli", fake_watch)
@@ -653,8 +654,43 @@ async def test_core_cli_run_starts_and_watches_one_live_connection(monkeypatch, 
         "thinking_enabled": True,
         "thinking_budget": 10000,
         "shallow_thinking_enabled": False,
+        "max_tokens": 4096,
+        "temperature": 0.2,
+        "compact_trigger_tokens": None,
+        "compact_limit_tokens": None,
         "approval_policy": "auto_approve",
     }
+    assert observed["start_result"] == {"runtime_start": {"turn_id": "turn-new"}}
+
+
+@pytest.mark.asyncio
+async def test_core_cli_start_watch_uses_one_connection_and_binds_started_turn(monkeypatch) -> None:
+    observed: dict[str, object] = {}
+
+    class Client:
+        async def start_turn(self, **kwargs):
+            observed["start"] = kwargs
+            return {"runtime_start": {"turn_id": "turn-new"}}
+
+    async def fake_watch(args, *, thread_id, on_connected=None):
+        observed["thread_id"] = thread_id
+        observed["start_result"] = await on_connected(Client())
+        return 0
+
+    monkeypatch.setattr(core_cli, "_watch_live_cli", fake_watch)
+    args = build_parser().parse_args(["start", "thread-1", "hello", "--watch", "--raw"])
+
+    assert await args.func(args) == 0
+    assert observed["thread_id"] == "thread-1"
+    assert observed["start_result"] == {"runtime_start": {"turn_id": "turn-new"}}
+
+
+@pytest.mark.asyncio
+async def test_core_cli_run_fails_fast_for_service_only_options(tmp_path: Path) -> None:
+    args = build_parser().parse_args(["run", "hello", "--config-db", str(tmp_path / "config.db")])
+
+    with pytest.raises(ValueError, match="--config-db.*core serve"):
+        await args.func(args)
 
 
 @pytest.mark.asyncio

@@ -595,7 +595,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     watch = sub.add_parser("watch", help="Watch a Core app-server thread")
     watch.add_argument("thread_id")
-    watch.add_argument("--base-url", default=os.environ.get("LAMTOOLS_CORE_API_URL", "http://127.0.0.1:6173"))
+    watch.add_argument("--base-url", default=os.environ.get("LAMTOOLS_CORE_API_URL", "http://127.0.0.1:5172"))
     watch.add_argument("--ws-path", default=os.environ.get("LAMTOOLS_CORE_WS_PATH", "/api/core/app-server"))
     watch.add_argument("--token", default=os.environ.get("LAMTOOLS_CORE_TOKEN", ""))
     watch.add_argument("--raw", action="store_true")
@@ -778,7 +778,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _add_live_connection_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--base-url", default=os.environ.get("LAMTOOLS_CORE_API_URL", "http://127.0.0.1:6173"))
+    parser.add_argument("--base-url", default=os.environ.get("LAMTOOLS_CORE_API_URL", "http://127.0.0.1:5172"))
     parser.add_argument("--ws-path", default=os.environ.get("LAMTOOLS_CORE_WS_PATH", "/api/core/app-server"))
     parser.add_argument("--token", default=os.environ.get("LAMTOOLS_CORE_TOKEN", ""))
 
@@ -825,9 +825,8 @@ async def cmd_serve(args: argparse.Namespace) -> int:
 
 
 async def cmd_start(args: argparse.Namespace) -> int:
-    result = await _invoke_live(
-        args,
-        lambda client: client.start_turn(
+    async def start(client: CoreAppServerClient) -> dict[str, Any]:
+        return await client.start_turn(
             thread_id=args.thread_id,
             input_items=[{"type": "text", "text": " ".join(args.message)}],
             work_root=args.work_root,
@@ -837,10 +836,13 @@ async def cmd_start(args: argparse.Namespace) -> int:
             shallow_thinking_enabled=bool(args.shallow),
             approval_policy=args.approval_policy,
             client_message_id=args.client_message_id or None,
-        ),
-    )
+        )
+
+    if args.watch:
+        return await _watch_live_cli(args, thread_id=args.thread_id, on_connected=start)
+    result = await _invoke_live(args, start)
     _print_live_result(args, result, f"started {args.thread_id}")
-    return await cmd_watch(args) if args.watch else 0
+    return 0
 
 
 async def cmd_cancel(args: argparse.Namespace) -> int:
@@ -985,11 +987,39 @@ async def cmd_attachment_upload(args: argparse.Namespace) -> int:
 
 
 async def cmd_run(args: argparse.Namespace) -> int:
+    unsupported = [
+        flag
+        for flag, value in (
+            ("--config-db", getattr(args, "config_db", "")),
+            ("--core-db", getattr(args, "core_db", "")),
+            ("--run-dir", getattr(args, "run_dir", "")),
+            ("--adapter-dir", getattr(args, "adapter_dir", [])),
+            ("--plugin-root", getattr(args, "plugin_root", [])),
+        )
+        if value
+    ]
+    if unsupported:
+        raise ValueError(
+            f"{', '.join(unsupported)} configure the Core service and cannot be applied per turn; "
+            "pass them to core serve instead"
+        )
+    compact_trigger_tokens = getattr(args, "compact_trigger_tokens", None)
+    compact_limit_tokens = getattr(args, "compact_limit_tokens", None)
+    if compact_trigger_tokens is not None and compact_trigger_tokens <= 0:
+        raise ValueError("--compact-trigger-tokens must be positive")
+    if compact_limit_tokens is not None and compact_limit_tokens <= 0:
+        raise ValueError("--compact-limit-tokens must be positive")
+    if (
+        compact_trigger_tokens is not None
+        and compact_limit_tokens is not None
+        and compact_limit_tokens > compact_trigger_tokens
+    ):
+        raise ValueError("--compact-limit-tokens cannot exceed --compact-trigger-tokens")
     thread_id = _resolve_thread_id(args.thread_id)
     if not args.raw:
         print(f"[session] {thread_id}", flush=True)
-    async def start(client: CoreAppServerClient) -> None:
-        await client.start_turn(
+    async def start(client: CoreAppServerClient) -> dict[str, Any]:
+        return await client.start_turn(
             thread_id=thread_id,
             input_items=[{"type": "text", "text": " ".join(args.message)}],
             work_root=args.work_root or _default_work_root(),
@@ -997,6 +1027,10 @@ async def cmd_run(args: argparse.Namespace) -> int:
             thinking_enabled=not bool(args.no_thinking),
             thinking_budget=args.thinking_budget,
             shallow_thinking_enabled=bool(args.shallow_thinking),
+            max_tokens=int(args.max_tokens),
+            temperature=float(args.temperature),
+            compact_trigger_tokens=compact_trigger_tokens,
+            compact_limit_tokens=compact_limit_tokens,
             approval_policy="auto_approve" if bool(args.auto_approve) else "require",
         )
 

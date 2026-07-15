@@ -189,9 +189,17 @@ async def test_core_app_server_client_uses_caller_stable_client_message_id():
         thread_id="thread-1",
         input_items=[{"type": "text", "text": "hello"}],
         client_message_id="turn-message-1",
+        max_tokens=8192,
+        temperature=0.3,
+        compact_trigger_tokens=150000,
+        compact_limit_tokens=100000,
     )
 
     assert calls[0][1]["client_message_id"] == "turn-message-1"
+    assert calls[0][1]["max_tokens"] == 8192
+    assert calls[0][1]["temperature"] == 0.3
+    assert calls[0][1]["compact_trigger_tokens"] == 150000
+    assert calls[0][1]["compact_limit_tokens"] == 100000
 
 
 @pytest.mark.asyncio

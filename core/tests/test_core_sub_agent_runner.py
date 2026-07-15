@@ -133,7 +133,7 @@ class EmptySubAgentResultLLM:
                 content=(
                     "[根因] 子 Agent 返回空结果 [证据] 工具状态为 failed "
                     "[方案1] 主 Agent 接管 [方案2] 重新委派 [选择] 方案1 "
-                    "[验证信号] 主 Agent 给出有效答复"
+                    "[验证信号] 主 Agent 给出有效答复\nmain handled sub-agent failure"
                 ),
             )
             yield LLMStreamEvent(kind="done")
@@ -382,7 +382,7 @@ async def test_core_agent_operation_reports_empty_sub_agent_result_as_failed(tmp
         if item["kind"] == "tool_result" and item["payload"].get("tool_name") == "sub_agent"
     ]
     assert result.status == "ok"
-    assert result.payload["message"] == "main handled sub-agent failure"
+    assert result.payload["message"].endswith("main handled sub-agent failure")
     assert len(sub_agent_results) == 1
     assert sub_agent_results[0]["status"] == "failed"
     assert sub_agent_results[0]["payload"]["error"]

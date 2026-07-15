@@ -570,6 +570,33 @@ async def handle_turn_start_operation(
             and params.get("context_window_tokens") > 0
             else None
         ),
+        "max_tokens": (
+            params.get("max_tokens")
+            if isinstance(params.get("max_tokens"), int)
+            and not isinstance(params.get("max_tokens"), bool)
+            and params.get("max_tokens") > 0
+            else None
+        ),
+        "temperature": (
+            float(params.get("temperature"))
+            if isinstance(params.get("temperature"), (int, float))
+            and not isinstance(params.get("temperature"), bool)
+            else None
+        ),
+        "compact_trigger_tokens": (
+            params.get("compact_trigger_tokens")
+            if isinstance(params.get("compact_trigger_tokens"), int)
+            and not isinstance(params.get("compact_trigger_tokens"), bool)
+            and params.get("compact_trigger_tokens") > 0
+            else None
+        ),
+        "compact_limit_tokens": (
+            params.get("compact_limit_tokens")
+            if isinstance(params.get("compact_limit_tokens"), int)
+            and not isinstance(params.get("compact_limit_tokens"), bool)
+            and params.get("compact_limit_tokens") > 0
+            else None
+        ),
         **prepared.runtime_extras,
         **materialized.runtime_extras,
     }
@@ -1603,7 +1630,7 @@ async def _execute_live_command_action(
         raise ValueError(f"Command is not executable as an action: {command}")
     result = await context.operations.execute(
         "command.execute",
-        {**params, "thread_id": thread_id, "command": command},
+        {**params, "thread_id": thread_id, "command": command, "_on_event": on_event},
         metadata={"source": "core_live"},
     )
     if result.status != "ok":
@@ -1620,7 +1647,10 @@ async def _execute_compact_live_command(
     actions: dict[str, Any],
     params: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    ids = _compact_command_ids(thread_id)
+    ids = _compact_command_ids(
+        thread_id,
+        client_command_id=str(params.get("client_command_id") or params.get("clientCommandId") or ""),
+    )
     _, snapshot = await _persist_command_run_item(
         context=context,
         event=_compact_command_event(thread_id, {}, ids=ids, status="running"),
@@ -1632,9 +1662,12 @@ async def _execute_compact_live_command(
     async def on_event(payload: dict[str, Any]) -> None:
         nonlocal terminal_emitted, latest_snapshot
         business_status = str(payload.get("status") or "running")
+        cancelled = business_status == "cancelled" or str(payload.get("reason") or "") == "cancelled"
         event_status = (
-            "failed"
-            if business_status == "failed"
+            "cancelled"
+            if cancelled
+            else "failed"
+            if business_status in {"failed", "error"}
             else "completed"
             if business_status in {"compacted", "not_needed"}
             else "running"
@@ -1648,7 +1681,17 @@ async def _execute_compact_live_command(
                 status=event_status,
             ),
         )
-        terminal_emitted = event_status in {"completed", "failed"}
+        if event_status in {"completed", "failed", "cancelled"} and not terminal_emitted:
+            _, latest_snapshot = await _persist_command_run_item(
+                context=context,
+                event=_compact_command_terminal_event(
+                    thread_id,
+                    ids=ids,
+                    status=event_status,
+                    error=str(payload.get("error") or payload.get("message") or ""),
+                ),
+            )
+            terminal_emitted = True
 
     try:
         result = await _execute_live_command_action(
@@ -1660,6 +1703,10 @@ async def _execute_compact_live_command(
             params=params,
             on_event=on_event,
         )
+    except asyncio.CancelledError:
+        if not terminal_emitted:
+            await on_event({"status": "cancelled", "reason": "cancelled", "message": "上下文压缩已取消"})
+        raise
     except BaseException as exc:
         await _persist_command_run_item(
             context=context,
@@ -1672,7 +1719,9 @@ async def _execute_compact_live_command(
         )
         await _persist_command_run_item(
             context=context,
-            event=_compact_command_terminal_event(thread_id, ids=ids, error=str(exc)),
+            event=_compact_command_terminal_event(
+                thread_id, ids=ids, status="failed", error=str(exc)
+            ),
         )
         raise
     if terminal_emitted:
@@ -1680,6 +1729,10 @@ async def _execute_compact_live_command(
     _, snapshot = await _persist_command_run_item(
         context=context,
         event=_compact_command_event(thread_id, result, ids=ids, status="completed"),
+    )
+    _, snapshot = await _persist_command_run_item(
+        context=context,
+        event=_compact_command_terminal_event(thread_id, ids=ids, status="completed"),
     )
     return result, snapshot
 
@@ -1696,8 +1749,11 @@ async def _persist_command_run_item(
     return envelope, snapshot
 
 
-def _compact_command_ids(thread_id: str) -> dict[str, str]:
-    run_id = f"{thread_id}:command:compact:{uuid.uuid4().hex[:12]}"
+def _compact_command_ids(thread_id: str, *, client_command_id: str = "") -> dict[str, str]:
+    suffix = client_command_id.strip()
+    if not suffix or len(suffix) > 64 or not suffix.isalnum():
+        suffix = uuid.uuid4().hex[:12]
+    run_id = f"{thread_id}:command:compact:{suffix}"
     return {"run_id": run_id, "turn_id": run_id, "item_id": f"{run_id}:summary"}
 
 
@@ -1754,19 +1810,20 @@ def _compact_command_terminal_event(
     thread_id: str,
     *,
     ids: dict[str, str],
-    error: str,
+    status: str,
+    error: str = "",
 ) -> RunItemEvent:
     return RunItemEvent(
         kind="status",
         thread_id=thread_id,
-        event_id=f"compact:failed-status:{uuid.uuid4().hex[:16]}",
+        event_id=f"compact:{status}-status:{uuid.uuid4().hex[:16]}",
         run_id=ids["run_id"],
         turn_id=ids["turn_id"],
-        status="failed",
+        status=status,
         payload={
             "type": "turn",
-            "status": "failed",
-            "raw_end_reason": "command_failed",
+            "status": status,
+            "raw_end_reason": "command_failed" if status == "failed" else status,
             "message": error,
         },
         source="command.execute",

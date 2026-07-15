@@ -412,7 +412,6 @@ class CoreLoopKernel:
                 failure_diagnosis_completed = (
                     failure_diagnosis_pending
                     and bool(turn.reply.strip())
-                    and not turn.tool_calls
                     and self._has_failure_diagnosis_structure(turn.reply)
                 )
                 failure_diagnosis_incomplete = (
@@ -680,14 +679,15 @@ class CoreLoopKernel:
                         "status": "completed",
                         "response_index": index,
                     }
-                    history.append(ChatMessage(
-                        role="system",
-                        content=(
-                            "[FAILURE_DIAGNOSIS_COMPLETED] The diagnosis is recorded. "
-                            "Continue automatically with the selected approach and verify it using "
-                            "the stated success signal."
-                        ),
-                    ))
+                    if turn.tool_calls:
+                        history.append(ChatMessage(
+                            role="system",
+                            content=(
+                                "[FAILURE_DIAGNOSIS_RECORDED] The complete diagnosis is already visible. "
+                                "After the selected tool calls, report only new verification evidence and "
+                                "the final outcome; do not repeat the diagnosis body."
+                            ),
+                        ))
                     await self._save_checkpoint(state, history)
                 elif failure_diagnosis_incomplete:
                     history.append(ChatMessage(
@@ -695,7 +695,8 @@ class CoreLoopKernel:
                         content=(
                             "[FAILURE_DIAGNOSIS_INCOMPLETE] The visible diagnosis is missing required fields. "
                             "Respond without tool calls using exactly these headings: [根因] [证据] [方案1] "
-                            "[方案2] [选择] [验证信号]. Field presence is required; do not invent evidence."
+                            "[方案2] [选择] [验证信号]. Field presence is required; do not invent evidence "
+                            "or describe an unexecuted tool result as if it already happened."
                         ),
                     ))
                     step.metadata["failure_diagnosis_incomplete"] = True
@@ -715,10 +716,7 @@ class CoreLoopKernel:
 
                 # 5.11 Decide next
                 decision = await self.kit.decide_next(state, turn, verification, step)
-                if failure_diagnosis_completed:
-                    decision = "continue"
-                    step.metadata["failure_diagnosis_force_continue"] = True
-                elif failure_diagnosis_incomplete:
+                if failure_diagnosis_incomplete:
                     decision = "continue"
                     step.metadata["failure_diagnosis_retry_required"] = True
                 elif turn.tool_calls and decision == "done":
@@ -880,7 +878,9 @@ class CoreLoopKernel:
             "use a different tool call to collect missing evidence. Before executing the selected "
             "solution, produce one visible diagnosis with: 根因、证据、至少两个实质不同的方案、"
             "明确选择的方案、以及可观察的验证信号. If the evidence is insufficient, say so and "
-            "make the options diagnostic probes rather than inventing a cause.\n"
+            "make the options diagnostic probes rather than inventing a cause. A verification signal "
+            "is a future success criterion unless it was actually observed; never claim an unexecuted "
+            "tool result as evidence.\n"
             f"Failure evidence:\n{json.dumps(evidence, ensure_ascii=False, sort_keys=True, default=str)}"
         )
 
@@ -890,14 +890,19 @@ class CoreLoopKernel:
         required_groups = (
             ("根因", "root cause"),
             ("证据", "evidence"),
-            ("选择", "selected option", "selected approach"),
+            ("选择", "明确选择", "selection", "chosen solution", "selected option", "selected approach"),
             ("验证信号", "verification signal", "success signal"),
         )
         if not all(any(marker in text for marker in group) for group in required_groups):
             return False
         first_option = re.search(r"(?:方案|option)\s*(?:1|一|a)", text, re.IGNORECASE)
         second_option = re.search(r"(?:方案|option)\s*(?:2|二|b)", text, re.IGNORECASE)
-        return first_option is not None and second_option is not None
+        if first_option is not None and second_option is not None:
+            return True
+        has_options_heading = "options" in text or "方案" in text
+        numbered_first = re.search(r"^\s*(?:[-*]\s*)?1[.)]\s+", text, re.MULTILINE)
+        numbered_second = re.search(r"^\s*(?:[-*]\s*)?2[.)]\s+", text, re.MULTILINE)
+        return has_options_heading and numbered_first is not None and numbered_second is not None
 
     def _observe_repeated_tool_failures(
         self,

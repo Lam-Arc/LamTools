@@ -59,6 +59,31 @@ def test_incomplete_tool_history_is_closed_before_next_user_message():
     assert repaired[2].metadata["history_repair"] == "interrupted_tool_call"
 
 
+def test_failure_diagnosis_structure_accepts_common_english_selection_heading():
+    reply = (
+        "Root Cause: missing file. Evidence: file not found. "
+        "Option A: create it. Option B: search elsewhere. "
+        "Selection: Option B. Verification Signal: recursive search returns no match."
+    )
+
+    assert CoreLoopKernel._has_failure_diagnosis_structure(reply) is True
+
+
+def test_failure_diagnosis_structure_accepts_numbered_list_under_options_heading():
+    reply = """**Diagnosis**
+
+- **Root cause**: missing file.
+- **Evidence**: read failed and directory listing did not contain it.
+- **Options**:
+  1. **Search deeper** — inspect subdirectories.
+  2. **Stop** — accept that the file is absent.
+- **Selected option**: Option 1.
+- **Verification signal**: a recursive search returns no match.
+"""
+
+    assert CoreLoopKernel._has_failure_diagnosis_structure(reply) is True
+
+
 # ---------------------------------------------------------------------------
 # Mock implementations
 # ---------------------------------------------------------------------------
@@ -740,8 +765,9 @@ class TestKernelToolFailure:
 
         # Tool failure enters diagnosis but does not fail the run.
         assert result.decision == "done"
-        assert len(result.steps) == 3
+        assert len(result.steps) == 2
         assert result.steps[1].metadata["failure_diagnosis_completed"] is True
+        assert result.message.startswith("根因是连接超时")
         assert result.steps[0].tool_steps[0].result.status == "failed"
         assert result.steps[0].decision == "continue"
 
@@ -1647,7 +1673,7 @@ class TestKernelStateSave:
                     content="LocalPort OwningProcess\n8080 1256",
                 )],
             ),
-            MockKitStep(reply=diagnosis, decision="done"),
+            MockKitStep(reply=diagnosis, decision="continue"),
             MockKitStep(
                 tool_calls=[selected_plan_call],
                 tool_results=[ToolResult(
@@ -1755,6 +1781,36 @@ class TestKernelStateSave:
         assert result.steps[1].metadata["failure_diagnosis_retry_required"] is True
         assert result.steps[2].metadata["failure_diagnosis_completed"] is True
         assert result.decision == "done"
+
+    @pytest.mark.asyncio
+    async def test_complete_diagnosis_with_investigation_tool_is_recorded_once(self):
+        failed = ToolCall(id="failed", name="read_file", arguments={"path": "missing.txt"})
+        investigate = ToolCall(id="search", name="search_files", arguments={"pattern": "missing.txt"})
+        diagnosis = (
+            "[根因] 文件不存在 [证据] read_file failed [方案1] 搜索 [方案2] 询问用户 "
+            "[选择] 方案1 [验证信号] 搜索无结果"
+        )
+        kit = MockRuntimeKit(steps=[
+            MockKitStep(
+                tool_calls=[failed],
+                tool_results=[ToolResult(call_id="failed", name="read_file", status="failed", error="missing")],
+            ),
+            MockKitStep(reply=diagnosis, tool_calls=[investigate]),
+            MockKitStep(reply="验证结果：搜索无结果。", decision="done"),
+        ])
+
+        result = await _make_kernel(kit).run(_make_turn_input())
+
+        assert result.decision == "done"
+        assert result.steps[1].metadata["failure_diagnosis_completed"] is True
+        assert result.message == "验证结果：搜索无结果。"
+        recorded_prompts = [
+            str(message.content)
+            for history in kit.context_histories
+            for message in history
+            if message.role == "system" and "FAILURE_DIAGNOSIS_RECORDED" in str(message.content)
+        ]
+        assert recorded_prompts
 
     @pytest.mark.asyncio
     async def test_identical_side_effect_tool_calls_in_one_turn_are_not_merged(self):

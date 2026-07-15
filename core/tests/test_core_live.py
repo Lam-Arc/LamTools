@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime
 from types import SimpleNamespace
 
@@ -288,6 +289,98 @@ async def test_core_compact_command_can_omit_large_snapshot_from_response(tmp_pa
             "reason": "no_gain",
         }
         assert "snapshot" not in outcome.response["result"]
+        async with context.session_factory() as db:
+            snapshot = await context.persistence.load(db, "thread-compact-small-response")
+        turn = next(iter(snapshot["core"]["turns"].values()))
+        assert turn["status"] == "completed"
+        release = _register_blocking_turn_start(context)
+        started = await handle_turn_start_operation(
+            request_id=2,
+            params={
+                "thread_id": "thread-compact-small-response",
+                "client_message_id": "after-compact",
+                "input": [{"type": "text", "text": "continue"}],
+            },
+            context=context,
+        )
+        assert "error" not in started.response
+        task = context.runtime_task_registry.task("thread-compact-small-response")
+        release.set()
+        if task is not None:
+            await task
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_core_compact_command_forwards_operation_delta_to_live_events(tmp_path):
+    engine, context = await _context(tmp_path)
+
+    async def execute(request):
+        on_event = request.payload.get("_on_event")
+        assert callable(on_event)
+        await on_event({"status": "running", "phase": "segment", "delta": "摘要增量"})
+        return OperationResult(
+            name=request.name,
+            payload={"result": {"status": "compacted", "before_tokens": 1000, "after_tokens": 500}},
+        )
+
+    context.operations.register("command.execute", execute)
+    try:
+        outcome = await handle_command_execute_operation(
+            request_id=1,
+            params={
+                "thread_id": "thread-compact-delta",
+                "command": "compact",
+                "client_command_id": "current123",
+            },
+            context=context,
+        )
+        async with context.session_factory() as db:
+            rows = (
+                await db.execute(
+                    text(
+                        "select payload_json from test_core_live_app_events "
+                        "where thread_id='thread-compact-delta' order by seq"
+                    )
+                )
+            ).scalars().all()
+
+        assert outcome.response["result"]["result"]["status"] == "compacted"
+        payloads = [json.loads(row) if isinstance(row, str) else row for row in rows]
+        assert any(row.get("payload", {}).get("delta") == "摘要增量" for row in payloads)
+        assert {
+            row.get("turn_id") for row in payloads
+        } == {"thread-compact-delta:command:compact:current123"}
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_core_compact_command_cancelled_releases_active_projection(tmp_path):
+    engine, context = await _context(tmp_path)
+
+    class Hooks(DefaultCoreLiveMemberHooks):
+        def command_action_handlers(self):
+            async def compact(on_event=None, **_kwargs):
+                await on_event({"status": "failed", "reason": "cancelled", "message": "cancelled"})
+                raise asyncio.CancelledError
+
+            return {"compact": compact}
+
+    context.host.member_hooks = Hooks()
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await handle_command_execute_operation(
+                request_id=1,
+                params={"thread_id": "thread-compact-cancelled", "command": "compact"},
+                context=context,
+            )
+        async with context.session_factory() as db:
+            snapshot = await context.persistence.load(db, "thread-compact-cancelled")
+
+        turn = next(iter(snapshot["core"]["turns"].values()))
+        assert turn["status"] == "cancelled"
     finally:
         await engine.dispose()
 
@@ -441,6 +534,10 @@ async def test_core_live_turn_start_accepts_input_before_runtime_completion(tmp_
                 "shallow_thinking_enabled": True,
                 "context_window_tokens": 256000,
                 "model_id": "xopkimik26",
+                "max_tokens": 8192,
+                "temperature": 0.3,
+                "compact_trigger_tokens": 150000,
+                "compact_limit_tokens": 100000,
             },
             context=context,
         )
@@ -456,6 +553,10 @@ async def test_core_live_turn_start_accepts_input_before_runtime_completion(tmp_
         assert result["runtime_start"]["shallow_thinking_enabled"] is True
         assert result["runtime_start"]["context_window_tokens"] == 256000
         assert result["runtime_start"]["model_id"] == "xopkimik26"
+        assert result["runtime_start"]["max_tokens"] == 8192
+        assert result["runtime_start"]["temperature"] == 0.3
+        assert result["runtime_start"]["compact_trigger_tokens"] == 150000
+        assert result["runtime_start"]["compact_limit_tokens"] == 100000
 
         resumed = await handle_thread_resume_operation(
             request_id=2,

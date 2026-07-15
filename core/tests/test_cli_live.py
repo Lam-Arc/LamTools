@@ -177,6 +177,67 @@ async def test_watch_resumes_from_last_seen_sequence_after_disconnect() -> None:
 
 
 @pytest.mark.asyncio
+async def test_started_watch_ignores_history_and_raw_emits_only_target_delta_and_terminal() -> None:
+    historical_terminal = core_run_item(
+        "status", {"type": "turn", "raw_end_reason": "llm_error"}, turn_id="turn-old", status="failed"
+    )
+    snapshot = {"event": "snapshot", "data": {"thread_id": "thread-1", "status": "completed"}}
+    target_delta = core_run_item(
+        "message", {"type": "agentMessage", "delta": "new text"}, turn_id="turn-new", status="running"
+    )
+    target_cumulative = core_run_item(
+        "message", {"type": "agentMessage", "content": "new text"}, turn_id="turn-new", status="running"
+    )
+    target_terminal = core_run_item(
+        "status", {"type": "turn"}, turn_id="turn-new", status="completed"
+    )
+    client = FakeClient([historical_terminal, snapshot, target_delta, target_cumulative, target_terminal])
+    output: list[object] = []
+
+    async def start(_client):
+        return {"runtime_start": {"turn_id": "turn-new"}}
+
+    result = await watch_live_events(
+        client_factory=lambda: client,
+        thread_id="thread-1",
+        formatter=CliLiveFormatter(),
+        output=output.append,
+        raw=True,
+        on_connected=start,
+    )
+
+    payloads = [json.loads(str(chunk)) for chunk in output]
+    assert result.completed is True
+    assert result.failed is False
+    assert [item["data"]["payload"]["kind"] for item in payloads] == ["message", "status"]
+    assert payloads[0]["data"]["payload"]["payload"]["delta"] == "new text"
+    assert payloads[1]["data"]["payload"]["turn_id"] == "turn-new"
+
+
+@pytest.mark.asyncio
+async def test_completed_turn_exits_zero_after_a_tool_failure_and_prints_reply_once() -> None:
+    tool_failure = core_run_item(
+        "tool_result",
+        {"type": "dynamicToolCall", "tool_name": "read_file", "error": "missing"},
+        status="failed",
+    )
+    delta = core_run_item("message", {"type": "agentMessage", "delta": "诊断正文"}, status="running")
+    cumulative = core_run_item("message", {"type": "agentMessage", "content": "诊断正文"}, status="completed")
+    terminal = core_run_item("status", {"type": "turn"}, status="completed")
+    output: list[object] = []
+
+    result = await watch_live_events(
+        client_factory=lambda: FakeClient([tool_failure, delta, cumulative, terminal]),
+        thread_id="thread-1",
+        formatter=CliLiveFormatter(),
+        output=output.append,
+    )
+
+    assert result.exit_code == 0
+    assert "".join(str(chunk) for chunk in output).count("诊断正文") == 1
+
+
+@pytest.mark.asyncio
 async def test_watch_uses_injected_approval_callback_and_resets_after_resume() -> None:
     client = FakeClient([
         core_run_item("approval_request", {"request_id": "req-1", "message": "Approve?"}, status="waiting"),
@@ -244,7 +305,7 @@ async def test_raw_watch_still_responds_to_approval_through_injected_callback() 
 
     assert result.exit_code == 0
     assert client.approval_responses == [("req-1", "approve_once", "approve_once")]
-    assert [json.loads(value)["event"] for value in output] == ["app_server_event", "app_server_event"]
+    assert [json.loads(value)["data"]["payload"]["kind"] for value in output] == ["status"]
 
 
 @pytest.mark.asyncio
@@ -330,20 +391,31 @@ async def test_execute_compaction_command_streams_new_deltas_and_terminal_state_
         async def connect(self, **kwargs):
             self.connected_with = kwargs
 
-        async def execute_command(self, *, thread_id: str, command: str, work_root: str):
+        async def execute_command(
+            self,
+            *,
+            thread_id: str,
+            command: str,
+            work_root: str,
+            client_command_id: str,
+        ):
             assert (thread_id, command, work_root) == ("thread-1", "compact", "E:\\Work")
+            turn_id = f"thread-1:command:compact:{client_command_id}"
+            await self.queue.put(core_run_item("message", {
+                "type": "compaction", "status": "compacted", "label": "历史压缩",
+            }, status="completed", turn_id="thread-1:command:compact:historical"))
             await self.queue.put(core_run_item("message", {
                 "type": "compaction", "status": "running", "label": "正在压缩上下文",
-            }, status="running"))
+            }, status="running", turn_id=turn_id))
             await asyncio.sleep(0)
             await self.queue.put(core_run_item("message", {
                 "type": "compaction", "status": "running", "delta": "摘要片段",
-            }, status="running"))
+            }, status="running", turn_id=turn_id))
             await asyncio.sleep(0)
             await self.queue.put(core_run_item("message", {
                 "type": "compaction", "status": "compacted", "label": "上下文已压缩",
                 "before_tokens": 1800, "after_tokens": 900,
-            }, status="completed"))
+            }, status="completed", turn_id=turn_id))
             return {"status": "compacted", "before_tokens": 1800, "after_tokens": 900}
 
         async def events(self):

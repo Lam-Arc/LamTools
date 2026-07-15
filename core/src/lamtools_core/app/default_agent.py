@@ -83,6 +83,10 @@ class CoreAgentRuntimeOptions:
     thinking_budget: int | None = None
     shallow_thinking_enabled: bool = False
     context_window_tokens: int | None = None
+    max_tokens: int = 4096
+    temperature: float = 0.2
+    compact_trigger_tokens: int | None = None
+    compact_limit_tokens: int | None = None
 
 
 def create_core_agent_operations(
@@ -217,6 +221,8 @@ def create_core_agent_operations(
                 context_window_tokens=runtime_options.context_window_tokens,
                 thinking_enabled=runtime_options.thinking_enabled,
                 thinking_budget=runtime_options.thinking_budget,
+                temperature=runtime_options.temperature,
+                max_tokens=runtime_options.max_tokens,
                 sub_agent_state_store=runtime_state_store,
                 sub_agent_session_prefix=thread_id,
                 sub_agent_event_sink=sink,
@@ -231,6 +237,8 @@ def create_core_agent_operations(
                             instructions=spec.instructions,
                             thinking_enabled=runtime_options.thinking_enabled,
                             thinking_budget=runtime_options.thinking_budget,
+                            temperature=runtime_options.temperature,
+                            max_tokens=runtime_options.max_tokens,
                             approval_policy=approval_policy,  # type: ignore[arg-type]
                         ),
                         toolbox=toolbox,
@@ -243,6 +251,8 @@ def create_core_agent_operations(
                         model_retries=3,
                         persist_steps=True,
                         context_window_tokens=runtime_options.context_window_tokens,
+                        compact_trigger_tokens=runtime_options.compact_trigger_tokens,
+                        compact_limit_tokens=runtime_options.compact_limit_tokens,
                     ),
                     hook_engine=plugin_assembly["hook_engine"],
                     checkpoint_coordinator=turn_checkpoint_coordinator,
@@ -267,6 +277,18 @@ def create_core_agent_operations(
                             "data_dir": str(paths.data_dir),
                             "work_root": str(runtime_work_root),
                             "model_id": runtime_options.model_id,
+                            "max_tokens": runtime_options.max_tokens,
+                            "temperature": runtime_options.temperature,
+                            **(
+                                {"compact_trigger_tokens": runtime_options.compact_trigger_tokens}
+                                if runtime_options.compact_trigger_tokens is not None
+                                else {}
+                            ),
+                            **(
+                                {"compact_limit_tokens": runtime_options.compact_limit_tokens}
+                                if runtime_options.compact_limit_tokens is not None
+                                else {}
+                            ),
                             **(
                                 {"thinking_enabled": runtime_options.thinking_enabled}
                                 if runtime_options.thinking_enabled is not None
@@ -530,6 +552,8 @@ def create_core_agent_operations(
                         context_window_tokens=runtime_options.context_window_tokens,
                         thinking_enabled=runtime_options.thinking_enabled,
                         thinking_budget=runtime_options.thinking_budget,
+                        temperature=runtime_options.temperature,
+                        max_tokens=runtime_options.max_tokens,
                         sub_agent_state_store=runtime_state_store,
                         sub_agent_session_prefix=thread_id,
                         sub_agent_event_sink=sink,
@@ -629,6 +653,8 @@ def create_core_agent_operations(
                                 instructions=spec.instructions,
                                 thinking_enabled=runtime_options.thinking_enabled,
                                 thinking_budget=runtime_options.thinking_budget,
+                                temperature=runtime_options.temperature,
+                                max_tokens=runtime_options.max_tokens,
                             ),
                             toolbox=toolbox,
                         ),
@@ -640,6 +666,8 @@ def create_core_agent_operations(
                             model_retries=3,
                             persist_steps=True,
                             context_window_tokens=runtime_options.context_window_tokens,
+                            compact_trigger_tokens=runtime_options.compact_trigger_tokens,
+                            compact_limit_tokens=runtime_options.compact_limit_tokens,
                         ),
                         hook_engine=plugin_assembly["hook_engine"],
                     )
@@ -751,6 +779,8 @@ def create_core_agent_operations(
                         context_window_tokens=runtime_options.context_window_tokens,
                         thinking_enabled=runtime_options.thinking_enabled,
                         thinking_budget=runtime_options.thinking_budget,
+                        temperature=runtime_options.temperature,
+                        max_tokens=runtime_options.max_tokens,
                         sub_agent_state_store=runtime_state_store,
                         sub_agent_session_prefix=thread_id,
                     )
@@ -858,6 +888,8 @@ def create_core_agent_operations(
                     context_window_tokens=runtime_options.context_window_tokens,
                     thinking_enabled=runtime_options.thinking_enabled,
                     thinking_budget=runtime_options.thinking_budget,
+                    temperature=runtime_options.temperature,
+                    max_tokens=runtime_options.max_tokens,
                     sub_agent_state_store=runtime_state_store,
                     sub_agent_session_prefix=thread_id,
                     sub_agent_event_sink=sink,
@@ -870,6 +902,8 @@ def create_core_agent_operations(
                             instructions=spec.instructions,
                             thinking_enabled=runtime_options.thinking_enabled,
                             thinking_budget=runtime_options.thinking_budget,
+                            temperature=runtime_options.temperature,
+                            max_tokens=runtime_options.max_tokens,
                         ),
                         toolbox=toolbox,
                     ),
@@ -881,6 +915,8 @@ def create_core_agent_operations(
                         model_retries=3,
                         persist_steps=True,
                         context_window_tokens=runtime_options.context_window_tokens,
+                        compact_trigger_tokens=runtime_options.compact_trigger_tokens,
+                        compact_limit_tokens=runtime_options.compact_limit_tokens,
                     ),
                     hook_engine=plugin_assembly["hook_engine"],
                 )
@@ -1028,11 +1064,13 @@ def create_core_agent_operations(
             ),
         )
         try:
+            on_event = request.payload.get("_on_event")
             result = await execute_command_action(
                 command=command,
                 thread_id=thread_id,
                 work_root=str(request.payload.get("work_root") or request.payload.get("workRoot") or paths.work_root),
                 handlers=handlers,
+                on_event=on_event if callable(on_event) else None,
             )
         except (LookupError, RuntimeError, TypeError, ValueError) as exc:
             return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
@@ -1125,18 +1163,39 @@ def _runtime_options_from_request(spec: CoreAgentSpec, request: OperationRequest
         metadata.get("context_window"),
         spec.metadata.get("context_window"),
     )
+    max_tokens = _optional_int(
+        payload.get("max_tokens"), payload.get("maxTokens"), metadata.get("max_tokens")
+    ) or 4096
+    temperature = _optional_float(
+        payload.get("temperature"), metadata.get("temperature")
+    )
+    compact_trigger_tokens = _optional_int(
+        payload.get("compact_trigger_tokens"),
+        payload.get("compactTriggerTokens"),
+        metadata.get("compact_trigger_tokens"),
+    )
+    compact_limit_tokens = _optional_int(
+        payload.get("compact_limit_tokens"),
+        payload.get("compactLimitTokens"),
+        metadata.get("compact_limit_tokens"),
+    )
     return CoreAgentRuntimeOptions(
         model_id=model_id,
         thinking_enabled=thinking_enabled,
         thinking_budget=thinking_budget,
         shallow_thinking_enabled=shallow_thinking_enabled,
         context_window_tokens=context_window_tokens,
+        max_tokens=max_tokens,
+        temperature=0.2 if temperature is None else temperature,
+        compact_trigger_tokens=compact_trigger_tokens,
+        compact_limit_tokens=compact_limit_tokens,
     )
 
 
 def _runtime_options_from_state(spec: CoreAgentSpec, state: Any) -> CoreAgentRuntimeOptions:
     metadata = state.metadata if isinstance(getattr(state, "metadata", None), dict) else {}
     model_id = str(metadata.get("model_id") or spec.default_model or "")
+    temperature = _optional_float(metadata.get("temperature"))
     return CoreAgentRuntimeOptions(
         model_id=model_id,
         thinking_enabled=_optional_bool(metadata.get("thinking_enabled"), spec.metadata.get("thinking_enabled")),
@@ -1152,6 +1211,10 @@ def _runtime_options_from_state(spec: CoreAgentSpec, state: Any) -> CoreAgentRun
             metadata.get("context_window"),
             spec.metadata.get("context_window"),
         ),
+        max_tokens=_optional_int(metadata.get("max_tokens")) or 4096,
+        temperature=0.2 if temperature is None else temperature,
+        compact_trigger_tokens=_optional_int(metadata.get("compact_trigger_tokens")),
+        compact_limit_tokens=_optional_int(metadata.get("compact_limit_tokens")),
     )
 
 
@@ -1166,6 +1229,13 @@ def _optional_int(*values: Any) -> int | None:
     for value in values:
         if isinstance(value, int) and not isinstance(value, bool):
             return value
+    return None
+
+
+def _optional_float(*values: Any) -> float | None:
+    for value in values:
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return float(value)
     return None
 
 
