@@ -50,6 +50,10 @@ class LoopPolicy:
     # classify every possible failure; model-visible diagnosis handles that.
     max_identical_tool_results: int | None = 4
     identical_tool_result_window: int = 12
+    # Periodic evidence-convergence checkpoint for long tool-only streaks.
+    # This does not classify tool semantics or stop the run; it only requires
+    # a concise visible progress note before more tools are allowed.
+    max_tool_only_rounds_without_progress: int | None = 8
     # Step persistence (OpenAI Rollout-style): when True, Kernel appends a
     # step summary to state.metadata["kernel_steps"] after each iteration.
     # This enables post-run audit and debugging. Full resume/fork requires

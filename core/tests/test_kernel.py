@@ -1853,6 +1853,39 @@ class TestKernelStateSave:
         assert result.steps[3].metadata["failure_diagnosis_completed"] is True
 
     @pytest.mark.asyncio
+    async def test_tool_only_streak_requires_visible_progress_before_more_tools(self):
+        calls = [
+            ToolCall(id=f"read-{index}", name="run_command", arguments={"command": f"read chunk {index}"})
+            for index in range(4)
+        ]
+        progress = (
+            "[已确认事实] 已读取前两段。"
+            "[剩余不确定性] 后两段尚未检查。"
+            "[下一步] 只读取剩余区间后进入验收。"
+        )
+        kit = MockRuntimeKit(steps=[
+            MockKitStep(reply="", tool_calls=[calls[0]]),
+            MockKitStep(reply="", tool_calls=[calls[1]]),
+            MockKitStep(reply="", tool_calls=[calls[2]]),
+            MockKitStep(reply=progress, decision="continue"),
+            MockKitStep(reply="", tool_calls=[calls[3]]),
+            MockKitStep(reply="完成", decision="done"),
+        ])
+        policy = LoopPolicy(max_tool_only_rounds_without_progress=2)
+
+        result = await _make_kernel(kit, policy=policy).run(_make_turn_input())
+
+        assert result.decision == "done"
+        blocked = result.steps[2].tool_steps[0].result
+        assert blocked is not None
+        assert blocked.status == "blocked"
+        assert blocked.metadata["tool_progress_required"] is True
+        assert result.steps[3].metadata["tool_progress_completed"] is True
+        resumed = result.steps[4].tool_steps[0].result
+        assert resumed is not None
+        assert resumed.status == "ok"
+
+    @pytest.mark.asyncio
     async def test_plain_text_does_not_complete_required_failure_diagnosis(self):
         failed = ToolCall(id="failed", name="run_command", arguments={"command": "broken"})
         complete = "[根因] 未知 [证据] exit 1 [方案1] 查日志 [方案2] 查环境 [选择] 方案1 [验证信号] 命令成功"

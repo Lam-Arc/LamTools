@@ -10,6 +10,7 @@ def test_kernel_audit_records_effective_policy_without_arbitrary_metadata(tmp_pa
     policy = LoopPolicy(
         max_identical_tool_results=7,
         identical_tool_result_window=19,
+        max_tool_only_rounds_without_progress=11,
         metadata={"api_key": "must-not-leak"},
     )
 
@@ -19,4 +20,5 @@ def test_kernel_audit_records_effective_policy_without_arbitrary_metadata(tmp_pa
     assert len(audit["kernel_module_sha256"]) == 64
     assert audit["loop_policy"]["max_identical_tool_results"] == 7
     assert audit["loop_policy"]["identical_tool_result_window"] == 19
+    assert audit["loop_policy"]["max_tool_only_rounds_without_progress"] == 11
     assert "must-not-leak" not in repr(audit)

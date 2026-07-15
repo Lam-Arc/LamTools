@@ -32,6 +32,7 @@ def build_kernel_audit(*, policy: Any, kernel_module_path: str) -> dict[str, Any
             "tool_timeout_seconds": policy.tool_timeout_seconds,
             "max_identical_tool_results": policy.max_identical_tool_results,
             "identical_tool_result_window": policy.identical_tool_result_window,
+            "max_tool_only_rounds_without_progress": policy.max_tool_only_rounds_without_progress,
             "parallel_tool_calls": policy.parallel_tool_calls,
             "max_concurrent_tools": policy.max_concurrent_tools,
             "context_window_tokens": policy.context_window_tokens,

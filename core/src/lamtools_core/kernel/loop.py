@@ -337,6 +337,9 @@ class CoreLoopKernel:
         diagnosis_failed_calls: dict[str, ToolResult] = {}
         failure_diagnosis_pending = False
         failure_investigation_rounds = 0
+        tool_only_rounds = 0
+        tool_progress_pending = False
+        tool_progress_blocked_rounds = 0
 
         # Emit runtime.started event
         await self._emit_state_event(state, "runtime.started", "run started")
@@ -421,6 +424,25 @@ class CoreLoopKernel:
                     and bool(turn.reply.strip())
                     and not self._has_failure_diagnosis_structure(turn.reply)
                 )
+                tool_progress_structured = (
+                    tool_progress_pending
+                    and bool(turn.reply.strip())
+                    and self._has_tool_progress_structure(turn.reply)
+                )
+                tool_progress_completed = (
+                    tool_progress_pending
+                    and bool(turn.reply.strip())
+                    and (
+                        not turn.tool_calls
+                        or tool_progress_structured
+                    )
+                )
+                tool_progress_incomplete = (
+                    tool_progress_pending
+                    and bool(turn.reply.strip())
+                    and bool(turn.tool_calls)
+                    and not tool_progress_completed
+                )
 
                 # Kernel-level natural-stop signal (OpenAI-style): model
                 # produced a text reply with no tool calls. Kit MAY consume
@@ -497,6 +519,21 @@ class CoreLoopKernel:
                                 "failure_diagnosis_required": True,
                                 "original_error": prior_failed_call.error,
                             },
+                        )
+                    if (
+                        tool_progress_pending
+                        and not tool_progress_completed
+                        and call.id not in blocked_results
+                    ):
+                        blocked_results[call.id] = ToolResult(
+                            call_id=call.id,
+                            name=call.name,
+                            status="blocked",
+                            error=(
+                                "A tool progress checkpoint is required before more tools. "
+                                "Report confirmed facts, remaining uncertainty, and the next action."
+                            ),
+                            metadata={"tool_progress_required": True},
                         )
                     if (
                         failure_diagnosis_pending
@@ -622,12 +659,45 @@ class CoreLoopKernel:
                         history.append(tool_message)
                         await self._save_checkpoint(state, history)
 
-                if (
-                    failure_diagnosis_pending
-                    and not failure_diagnosis_completed
-                    and any(result.status != "blocked" for result in tool_results)
-                ):
+                executed_tool_round = any(result.status != "blocked" for result in tool_results)
+                if failure_diagnosis_pending and not failure_diagnosis_completed and executed_tool_round:
                     failure_investigation_rounds += 1
+
+                progress_gate_blocked = any(
+                    bool(result.metadata.get("tool_progress_required")) for result in tool_results
+                )
+                if progress_gate_blocked:
+                    tool_progress_blocked_rounds += 1
+                    if tool_progress_blocked_rounds >= 2:
+                        message = (
+                            "Tool progress did not converge after two reminders. The run is paused and can be "
+                            "resumed after reporting confirmed facts, remaining uncertainty, and the next action."
+                        )
+                        step.decision = "wait"
+                        step.metadata["tool_progress_no_progress"] = True
+                        state.metadata["tool_progress"] = {
+                            "status": "waiting",
+                            "response_index": index,
+                            "recoverable": True,
+                        }
+                        state.metadata["pending_waiting_request"] = {
+                            "request_kind": "no_progress",
+                            "message": message,
+                        }
+                        final_decision = "wait"
+                        state.loop_state = "wait"
+                        state.turn_count += 1
+                        await self.kit.writeback(
+                            state,
+                            turn,
+                            tool_results,
+                            VerificationResult(passed=False, required=True, summary=message),
+                            "wait",
+                        )
+                        if self.policy.persist_steps:
+                            state.metadata.setdefault("kernel_steps", []).append(self._summarize_step(step))
+                        await self._save_checkpoint(state, history)
+                        break
 
                 repeat_observation = self._observe_repeated_tool_failures(
                     turn.tool_calls,
@@ -679,6 +749,49 @@ class CoreLoopKernel:
                         "response_index": index,
                     }
                     await self._save_checkpoint(state, history)
+
+                if tool_progress_completed:
+                    tool_progress_pending = False
+                    tool_only_rounds = 0
+                    tool_progress_blocked_rounds = 0
+                    step.metadata["tool_progress_completed"] = True
+                    state.metadata["tool_progress"] = {
+                        "status": "completed",
+                        "response_index": index,
+                    }
+                    await self._save_checkpoint(state, history)
+                elif tool_progress_incomplete:
+                    history.append(ChatMessage(
+                        role="system",
+                        content=(
+                            "[TOOL_PROGRESS_INCOMPLETE] Respond with these three headings before more tools: "
+                            "[已确认事实] [剩余不确定性] [下一步]. Keep it concise and reuse existing evidence."
+                        ),
+                    ))
+                    step.metadata["tool_progress_incomplete"] = True
+                    await self._save_checkpoint(state, history)
+                elif turn.tool_calls and not turn.reply.strip() and executed_tool_round:
+                    tool_only_rounds += 1
+                    limit = self.policy.max_tool_only_rounds_without_progress
+                    if limit is not None and limit > 0 and tool_only_rounds >= limit:
+                        tool_progress_pending = True
+                        history.append(ChatMessage(
+                            role="system",
+                            content=(
+                                "[TOOL_PROGRESS_REQUIRED] Before using more tools, briefly report "
+                                "[已确认事实] [剩余不确定性] [下一步]. Do not repeat prior evidence, and do not "
+                                "claim a result that has not been observed."
+                            ),
+                        ))
+                        step.metadata["tool_progress_required"] = True
+                        state.metadata["tool_progress"] = {
+                            "status": "required",
+                            "response_index": index,
+                            "tool_only_rounds": tool_only_rounds,
+                        }
+                        await self._save_checkpoint(state, history)
+                elif turn.reply.strip() and not tool_progress_pending:
+                    tool_only_rounds = 0
 
                 failed_pairs = [
                     (call, result)
@@ -746,7 +859,11 @@ class CoreLoopKernel:
 
                 # 5.11 Decide next
                 decision = await self.kit.decide_next(state, turn, verification, step)
-                if failure_diagnosis_incomplete:
+                if tool_progress_incomplete or (tool_progress_completed and tool_progress_structured):
+                    decision = "continue"
+                    if tool_progress_incomplete:
+                        step.metadata["tool_progress_retry_required"] = True
+                elif failure_diagnosis_incomplete:
                     decision = "continue"
                     step.metadata["failure_diagnosis_retry_required"] = True
                 elif turn.tool_calls and decision == "done":
@@ -934,6 +1051,16 @@ class CoreLoopKernel:
         numbered_first = re.search(r"^\s*(?:[-*]\s*)?1[.)]\s+", text, re.MULTILINE)
         numbered_second = re.search(r"^\s*(?:[-*]\s*)?2[.)]\s+", text, re.MULTILINE)
         return has_options_heading and numbered_first is not None and numbered_second is not None
+
+    @staticmethod
+    def _has_tool_progress_structure(reply: str) -> bool:
+        text = str(reply or "").lower()
+        required_groups = (
+            ("已确认事实", "confirmed facts"),
+            ("剩余不确定性", "remaining uncertainty"),
+            ("下一步", "next action", "next step"),
+        )
+        return all(any(marker in text for marker in group) for group in required_groups)
 
     def _observe_repeated_tool_failures(
         self,
