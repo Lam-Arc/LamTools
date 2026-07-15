@@ -228,6 +228,16 @@ class CoreLoopKernel:
         self._cancel_event.set()
 
     async def run(self, turn_input: RuntimeTurnInput) -> KernelResult:
+        try:
+            return await self._run(turn_input)
+        except asyncio.CancelledError:
+            # task.cancel() bypasses the cooperative cancel check below. Keep
+            # terminal persistence in Kernel so main, delegated, and CLI runs
+            # all converge through the same state boundary.
+            await asyncio.shield(self._persist_external_cancellation(turn_input))
+            raise
+
+    async def _run(self, turn_input: RuntimeTurnInput) -> KernelResult:
         """Execute the main loop.
 
         One run() call = one Task (OpenAI Codex terminology). A Task is the
@@ -333,6 +343,7 @@ class CoreLoopKernel:
         final_decision: LoopDecision = "continue"
         error_msg = ""
         recent_tool_result_fingerprints: list[str] = []
+        recent_successful_payloads: list[dict[str, Any]] = []
         explicit_input_errors: dict[str, ToolResult] = {}
         diagnosis_failed_calls: dict[str, ToolResult] = {}
         failure_diagnosis_pending = False
@@ -495,10 +506,40 @@ class CoreLoopKernel:
                 # 5.8 Execute tool calls
                 tool_results: list[ToolResult] = []
                 blocked_results: dict[str, ToolResult] = {}
+                payload_matches: dict[str, tuple[dict[str, Any], dict[str, Any] | None]] = {}
                 for call in turn.tool_calls:
+                    payload = self._substantive_tool_payload(call)
+                    prior_payload = next(
+                        (
+                            prior
+                            for prior in reversed(recent_successful_payloads)
+                            if payload is not None and self._substantive_payloads_match(payload, prior)
+                        ),
+                        None,
+                    )
+                    if payload is not None:
+                        payload_matches[call.id] = (payload, prior_payload)
                     blocked = await self._apply_pre_tool_hook(state, call)
                     if blocked is not None:
                         blocked_results[call.id] = blocked
+                    if (
+                        prior_payload is not None
+                        and bool(prior_payload.get("challenged"))
+                        and call.id not in blocked_results
+                    ):
+                        blocked_results[call.id] = ToolResult(
+                            call_id=call.id,
+                            name=call.name,
+                            status="blocked",
+                            error=(
+                                "A materially identical large payload was already used successfully. "
+                                "Reuse the existing artifact or result, or choose a materially different approach."
+                            ),
+                            metadata={
+                                "duplicate_substantive_payload": True,
+                                "tool_progress_required": True,
+                            },
+                        )
                     prior_failed_call = diagnosis_failed_calls.get(self._tool_call_fingerprint(call))
                     if (
                         failure_diagnosis_pending
@@ -659,6 +700,37 @@ class CoreLoopKernel:
                         history.append(tool_message)
                         await self._save_checkpoint(state, history)
 
+                payload_reassessment_required = False
+                duplicate_payload_blocked = any(
+                    bool(result.metadata.get("duplicate_substantive_payload"))
+                    for result in tool_results
+                )
+                for call, result in zip(turn.tool_calls, tool_results):
+                    matched = payload_matches.get(call.id)
+                    if matched is None or result.status in {"failed", "blocked"}:
+                        continue
+                    payload, prior_payload = matched
+                    payload = {**payload, "challenged": False}
+                    if prior_payload is not None and not bool(prior_payload.get("challenged")):
+                        prior_payload["challenged"] = True
+                        payload["challenged"] = True
+                        payload_reassessment_required = True
+                    recent_successful_payloads.append(payload)
+                    del recent_successful_payloads[:-int(self.policy.identical_tool_result_window or 12)]
+                if payload_reassessment_required:
+                    tool_progress_pending = True
+                    history.append(ChatMessage(
+                        role="system",
+                        content=(
+                            "[SUBSTANTIVE_PAYLOAD_REASSESSMENT_REQUIRED] A successful tool call reused a "
+                            "materially identical large payload under different arguments. Reuse the existing "
+                            "artifact or result, or explain what genuinely new evidence another call would add "
+                            "before choosing a materially different action."
+                        ),
+                    ))
+                    step.metadata["substantive_payload_reassessment_required"] = True
+                    await self._save_checkpoint(state, history)
+
                 executed_tool_round = any(result.status != "blocked" for result in tool_results)
                 if failure_diagnosis_pending and not failure_diagnosis_completed and executed_tool_round:
                     failure_investigation_rounds += 1
@@ -750,7 +822,7 @@ class CoreLoopKernel:
                     }
                     await self._save_checkpoint(state, history)
 
-                if tool_progress_completed:
+                if tool_progress_completed and not payload_reassessment_required and not duplicate_payload_blocked:
                     tool_progress_pending = False
                     tool_only_rounds = 0
                     tool_progress_blocked_rounds = 0
@@ -979,6 +1051,23 @@ class CoreLoopKernel:
 
         return result
 
+    async def _persist_external_cancellation(self, turn_input: RuntimeTurnInput) -> None:
+        state = turn_input.state
+        if state is None:
+            session_id = str(turn_input.metadata.get("session_id") or "")
+            state = await self.state_store.get(session_id) if session_id else None
+        if state is None:
+            return
+        expected_run_id = str(turn_input.run_id or "").strip()
+        if expected_run_id and state.run_id != expected_run_id:
+            return
+        state.status = "cancelled"
+        state.loop_state = "failed"
+        state.metadata.pop("pending_approval", None)
+        state.metadata.pop("pending_waiting_request", None)
+        history = await self._load_history(state.session_id)
+        await self._save_checkpoint(state, history)
+
     @staticmethod
     def _tool_call_fingerprint(call: ToolCall) -> str:
         return json.dumps(
@@ -987,6 +1076,52 @@ class CoreLoopKernel:
             sort_keys=True,
             default=str,
         )
+
+    @staticmethod
+    def _substantive_tool_payload(call: ToolCall) -> dict[str, Any] | None:
+        values: list[str] = []
+
+        def collect(value: Any) -> None:
+            if isinstance(value, str):
+                if len(value) >= _TOOL_INPUT_PROGRESS_CHARS:
+                    values.append(value)
+                return
+            if isinstance(value, dict):
+                for nested in value.values():
+                    collect(nested)
+                return
+            if isinstance(value, list):
+                for nested in value:
+                    collect(nested)
+
+        collect(call.arguments)
+        if not values:
+            return None
+        exact = hashlib.sha256(
+            json.dumps(values, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        ).hexdigest()
+        lines = {
+            hashlib.sha256(line.strip().encode("utf-8")).hexdigest()
+            for value in values
+            for line in value.splitlines()
+            if line.strip()
+        }
+        return {"tool": call.name, "exact": exact, "lines": lines}
+
+    @staticmethod
+    def _substantive_payloads_match(left: dict[str, Any], right: dict[str, Any]) -> bool:
+        if left.get("tool") != right.get("tool"):
+            return False
+        if left.get("exact") == right.get("exact"):
+            return True
+        left_lines = left.get("lines")
+        right_lines = right.get("lines")
+        if not isinstance(left_lines, set) or not isinstance(right_lines, set):
+            return False
+        smaller = min(len(left_lines), len(right_lines))
+        if smaller < 8:
+            return False
+        return len(left_lines & right_lines) / smaller >= 0.98
 
     @staticmethod
     def _is_explicit_input_error(result: ToolResult) -> bool:

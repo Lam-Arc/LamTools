@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from lamtools_core.app import CoreAgentPaths, CoreAgentSpec, create_core_agent_operations
@@ -98,6 +100,20 @@ class FollowUpSubAgentLLM:
         self.requests.append(request)
         yield LLMStreamEvent(kind="content_delta", content=f"answer-{len(self.requests)}")
         yield LLMStreamEvent(kind="done")
+
+
+class BlockingSubAgentLLM:
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+
+    async def complete(self, request: LLMRequest) -> LLMResponse:
+        raise AssertionError("Sub-agent runner should use streaming")
+
+    async def stream(self, request: LLMRequest):
+        self.started.set()
+        await asyncio.Event().wait()
+        if False:
+            yield LLMStreamEvent(kind="done")
 
 
 class EmptySubAgentResultLLM:
@@ -281,6 +297,30 @@ async def test_kernel_sub_agent_runner_reuses_named_sub_session_history(tmp_path
         ("assistant", "answer-1"),
         ("user", "follow up"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_kernel_sub_agent_runner_external_cancel_persists_cancelled_state(tmp_path):
+    llm = BlockingSubAgentLLM()
+    state_store = InMemoryRuntimeStateStore()
+    runner = KernelSubAgentRunner(
+        work_root=tmp_path,
+        llm_client=llm,
+        model_id="fake-model",
+        state_store=state_store,
+        session_prefix="parent-thread",
+    )
+    task = asyncio.create_task(runner.run(task="inspect", agent="qa"))
+
+    await asyncio.wait_for(llm.started.wait(), timeout=1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    state = await state_store.get("parent-thread:sub:qa")
+    assert state is not None
+    assert state.status == "cancelled"
+    assert state.loop_state == "failed"
 
 
 @pytest.mark.asyncio

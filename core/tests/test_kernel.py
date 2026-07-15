@@ -1983,6 +1983,44 @@ class TestKernelStateSave:
         assert reassessment_prompts
 
     @pytest.mark.asyncio
+    async def test_repeated_large_payload_is_reconsidered_then_blocked_before_third_write(self):
+        base = "\n".join(f"line {index}: stable probe body" for index in range(80))
+        revised = base.replace("line 12:", "line 12: clarified")
+        calls = [
+            ToolCall(id="write-1", name="write_file", arguments={"path": "probe1.py", "content": base}),
+            ToolCall(id="write-2", name="write_file", arguments={"path": "probe2.py", "content": revised}),
+            ToolCall(id="write-3", name="write_file", arguments={"path": "probe3.py", "content": revised}),
+        ]
+
+        class RecordingKit(MockRuntimeKit):
+            def __init__(self) -> None:
+                progress = "[已确认事实] 探针已存在 [剩余不确定性] 无 [下一步] 复用现有结果"
+                super().__init__(steps=[
+                    MockKitStep(reply="writing first", tool_calls=[calls[0]]),
+                    MockKitStep(reply=progress, tool_calls=[calls[1]]),
+                    MockKitStep(reply=progress, tool_calls=[calls[2]]),
+                    MockKitStep(reply="完成", decision="done"),
+                ])
+                self.executed: list[str] = []
+
+            async def execute_tool(self, state: RuntimeState, call: ToolCall) -> ToolResult:
+                self.executed.append(call.id)
+                return ToolResult(call_id=call.id, name=call.name, content=f"Created {call.arguments['path']}")
+
+        kit = RecordingKit()
+        policy = LoopPolicy(max_tool_only_rounds_without_progress=20)
+
+        result = await _make_kernel(kit, policy=policy).run(_make_turn_input())
+
+        assert result.decision == "done"
+        assert kit.executed == ["write-1", "write-2"]
+        assert result.steps[1].metadata["substantive_payload_reassessment_required"] is True
+        blocked = result.steps[2].tool_steps[0].result
+        assert blocked is not None
+        assert blocked.status == "blocked"
+        assert blocked.metadata["duplicate_substantive_payload"] is True
+
+    @pytest.mark.asyncio
     async def test_repeated_identical_tool_failures_wait_as_a_last_resort(self):
         steps = []
         for index in range(5):
@@ -3197,6 +3235,33 @@ class TestKernelLoopPhase:
 
 
 class TestKernelCancellation:
+    @pytest.mark.asyncio
+    async def test_external_task_cancel_persists_cancelled_state(self):
+        """Cancelling the asyncio task must converge the shared runtime state."""
+        started = asyncio.Event()
+
+        class BlockingStartKit(MockRuntimeKit):
+            async def on_run_start(self, state, turn_input):
+                await super().on_run_start(state, turn_input)
+                started.set()
+                await asyncio.Event().wait()
+
+        store = InMemoryStateStore()
+        kernel = _make_kernel(BlockingStartKit(), state_store=store)
+        task = asyncio.create_task(kernel.run(_make_turn_input(session_id="externally-cancelled")))
+
+        await asyncio.wait_for(started.wait(), timeout=1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        saved = await store.get("externally-cancelled")
+        assert saved is not None
+        assert saved.status == "cancelled"
+        assert saved.loop_state == "failed"
+        assert "pending_approval" not in saved.metadata
+        assert "pending_waiting_request" not in saved.metadata
+
     @pytest.mark.asyncio
     async def test_cancel_stops_loop(self):
         """Calling cancel() during an async gap causes the kernel to stop with error='cancelled'."""
