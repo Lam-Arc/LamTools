@@ -225,6 +225,44 @@ describe('useCoreLiveComposerController', () => {
     expect(calls).toEqual(['connect:thread-a', 'command:thread-a:compact:E:\\A'])
   })
 
+  it('clears a running action command immediately and exposes stop until it settles', async () => {
+    const text = ref('/compact')
+    const status = ref('running')
+    let resolveCommand: (value: boolean) => void = () => undefined
+    const commandResult = new Promise<boolean>((resolve) => {
+      resolveCommand = resolve
+    })
+    const controller = useCoreLiveComposerController({
+      activeThreadId: ref<string | null>('thread-1'),
+      activeTurnId: ref('thread-1:command:compact:running'),
+      connectedThreadId: ref('thread-1'),
+      connectionState: ref<'connecting' | 'open' | 'closed' | 'error'>('open'),
+      text,
+      cursor: ref(text.value.length),
+      status,
+      attachments: ref<CoreInputItem[]>([]),
+      connect: async () => undefined,
+      startTurn: async () => undefined,
+      interruptTurn: async () => undefined,
+      queueInput: async () => undefined,
+      listCommands: async () => commands,
+      getWorkRoot: () => 'E:\\LamTools',
+      executeCommand: async () => commandResult,
+    })
+    controller.commandCatalog.value = [...commands]
+
+    const submission = controller.submit({ clearComposer: true })
+    await Promise.resolve()
+
+    expect(text.value).toBe('')
+    expect(controller.actionMode.value).toBe('stop')
+
+    status.value = 'completed'
+    resolveCommand(true)
+    await submission
+    expect(controller.actionMode.value).toBe('send')
+  })
+
   it('owns command loading, palette selection, and live submission effects', async () => {
     const calls: string[] = []
     const activeThreadId = ref<string | null>('thread-1')

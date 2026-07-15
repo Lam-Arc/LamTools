@@ -5,7 +5,7 @@ from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocketDisconnect
 from fastapi.testclient import TestClient
 from sqlalchemy import DateTime, Integer, JSON, String, UniqueConstraint
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -14,7 +14,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from lamtools_core.app import CoreAppSnapshotProjector, OperationCatalog, OperationRequest, OperationResult
 from lamtools_core.app.event_store import SqlAlchemyAppEventStore
 from lamtools_core.app.live_hub import CoreAppEventGap, CoreAppEventHub
-from lamtools_core.app.live_operations import CoreLiveContext
+from lamtools_core.app.live_operations import CoreLiveContext, CoreLiveOperationOutcome
 from lamtools_core.app.live_operations import handle_thread_resume_operation
 from lamtools_core.app.live_router import (
     CoreLiveConnection,
@@ -68,6 +68,79 @@ class DummyWebSocket:
 
     async def close(self, code=1000, reason=""):
         self.close_calls.append((code, reason))
+
+
+def test_core_live_connection_processes_interrupt_while_long_command_is_running() -> None:
+    async def run() -> None:
+        class QueueWebSocket(DummyWebSocket):
+            def __init__(self) -> None:
+                super().__init__()
+                self.incoming: asyncio.Queue[dict | None] = asyncio.Queue()
+                self.sent: list[dict] = []
+
+            async def receive_json(self):
+                message = await self.incoming.get()
+                if message is None:
+                    raise WebSocketDisconnect()
+                return message
+
+            async def send_json(self, message):
+                self.sent.append(message)
+
+        class Hub:
+            def subscribe(self, _thread_id: str):
+                return asyncio.Queue()
+
+            def unsubscribe(self, _thread_id: str, _subscription) -> None:
+                return None
+
+        command_started = asyncio.Event()
+        command_release = asyncio.Event()
+        interrupt_handled = asyncio.Event()
+
+        class Host:
+            def operation_handlers(self):
+                return {"command.execute", "turn.cancel"}
+
+            async def execute(self, method, *, request_id, params, context):
+                del params, context
+                if method == "command.execute":
+                    command_started.set()
+                    await command_release.wait()
+                elif method == "turn.cancel":
+                    interrupt_handled.set()
+                    command_release.set()
+                return CoreLiveOperationOutcome(
+                    response={"id": request_id, "result": {"ok": True}},
+                )
+
+        websocket = QueueWebSocket()
+        context = SimpleNamespace(
+            host=Host(),
+            hub=Hub(),
+            operations=SimpleNamespace(has=lambda _method: False),
+        )
+        connection = CoreLiveConnection(websocket, context=context)
+        connection.initialized = True
+        serving = asyncio.create_task(connection.run())
+        await websocket.incoming.put({
+            "id": 1,
+            "method": "command.execute",
+            "params": {"thread_id": "thread-1", "command": "compact"},
+        })
+        await command_started.wait()
+
+        await websocket.incoming.put({
+            "id": 2,
+            "method": "turn/interrupt",
+            "params": {"thread_id": "thread-1", "turn_id": "turn-command"},
+        })
+        await asyncio.wait_for(interrupt_handled.wait(), timeout=0.1)
+
+        await websocket.incoming.put(None)
+        await serving
+
+    asyncio.run(run())
 
 
 def test_core_live_client_response_uses_approval_operation_and_sends_snapshot() -> None:

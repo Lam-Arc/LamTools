@@ -370,12 +370,12 @@ async def test_core_compact_command_cancelled_releases_active_projection(tmp_pat
 
     context.host.member_hooks = Hooks()
     try:
-        with pytest.raises(asyncio.CancelledError):
-            await handle_command_execute_operation(
-                request_id=1,
-                params={"thread_id": "thread-compact-cancelled", "command": "compact"},
-                context=context,
-            )
+        outcome = await handle_command_execute_operation(
+            request_id=1,
+            params={"thread_id": "thread-compact-cancelled", "command": "compact"},
+            context=context,
+        )
+        assert outcome.response["result"]["result"]["status"] == "cancelled"
         async with context.session_factory() as db:
             snapshot = await context.persistence.load(db, "thread-compact-cancelled")
             events = await context.persistence.list_thread(db, thread_id="thread-compact-cancelled")
@@ -493,8 +493,8 @@ async def test_core_compact_stop_cancels_the_real_operation_without_late_failure
             params={"thread_id": "thread-compact-stop", "turn_id": run_id},
             context=context,
         )
-        with pytest.raises(asyncio.CancelledError):
-            await asyncio.wait_for(operation, timeout=1)
+        cancelled = await asyncio.wait_for(operation, timeout=1)
+        assert cancelled.response["result"]["result"]["status"] == "cancelled"
         assert handler_cancelled.is_set()
 
         async with context.session_factory() as db:

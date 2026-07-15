@@ -182,13 +182,11 @@ describe('ChatThread process cards', () => {
     }];
 
     const wrapper = mount(ChatThread, {
-      props: {
-        messages,
-        processExpandedIds: new Set(['m-compaction']),
-      },
+      props: { messages },
     });
 
     const row = wrapper.find('.compaction-step');
+    expect(wrapper.find('.process-toggle').exists()).toBe(false);
     expect(row.text()).toContain('上下文已压缩');
     expect(row.text()).toContain('351051 → 153000 tokens');
     expect(row.text()).toContain('5 段');
@@ -453,7 +451,7 @@ describe('ChatThread process cards', () => {
     expect(wrapper.find('.diff-block--wrap').exists()).toBe(true);
   });
 
-  it('auto-expands running compaction and streams the summary accessibly', () => {
+  it('auto-expands running compaction and streams the summary accessibly without external expansion state', () => {
     const messages: CoreMessage[] = [{
       id: 'm-compaction-running',
       role: 'assistant',
@@ -474,7 +472,7 @@ describe('ChatThread process cards', () => {
     }];
 
     const wrapper = mount(ChatThread, {
-      props: { messages, processExpandedIds: new Set(['m-compaction-running']) },
+      props: { messages },
     });
 
     expect(wrapper.find('.compaction-step').text()).toContain('正在压缩上下文 · 第 2/5 段');

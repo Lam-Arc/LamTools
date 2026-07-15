@@ -142,6 +142,7 @@ class CoreLiveConnection:
         self.thread_id: str | None = None
         self.subscription: asyncio.Queue[Any | None] | None = None
         self.outbound: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=outbound_limit)
+        self.request_tasks: set[asyncio.Task[None]] = set()
 
     async def run(self) -> None:
         await self.websocket.accept()
@@ -153,11 +154,32 @@ class CoreLiveConnection:
                     raw = await self.websocket.receive_json()
                 except WebSocketDisconnect:
                     break
-                await self._handle_raw(raw)
+                if not self.initialized:
+                    await self._handle_raw(raw)
+                    continue
+                task = asyncio.create_task(self._handle_raw(raw))
+                self.request_tasks.add(task)
+                task.add_done_callback(self._request_task_done)
         finally:
             sender.cancel()
             hub_reader.cancel()
+            pending = list(self.request_tasks)
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
             self._unsubscribe()
+
+    def _request_task_done(self, task: asyncio.Task[None]) -> None:
+        self.request_tasks.discard(task)
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            logger.error(
+                "Core app-server request task failed",
+                exc_info=(type(error), error, error.__traceback__),
+            )
 
     async def _sender(self) -> None:
         while True:

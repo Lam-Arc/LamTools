@@ -59,6 +59,7 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
   const commandCatalogLoading = ref(false)
   const dismissedText = ref('')
   const lastEnterHandledAt = ref(0)
+  const commandRunning = ref(false)
   let commandCatalogGeneration = 0
   let stopPending = false
   const liveTurnController = useCoreLiveTurnController<CoreInputItem[]>({
@@ -78,11 +79,13 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
   const paletteVisible = computed(() => (
     commandPalette.open.value && dismissedText.value !== options.text.value
   ))
-  const actionMode = computed(() => coreComposerActionMode({
-    status: options.status.value,
-    text: options.text.value,
-    pendingAttachmentCount: options.attachments.value.length,
-  }))
+  const actionMode = computed(() => commandRunning.value
+    ? 'stop'
+    : coreComposerActionMode({
+        status: options.status.value,
+        text: options.text.value,
+        pendingAttachmentCount: options.attachments.value.length,
+      }))
 
   watch(options.text, () => {
     if (dismissedText.value && dismissedText.value !== options.text.value) dismissedText.value = ''
@@ -165,6 +168,8 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
       return false
     }
     const workRoot = options.getWorkRoot()
+    const submittedCommand = options.text.value.trim()
+    const clearRunningCommand = submittedCommand === `/${command}`
     if (options.canExecuteCommand && !options.canExecuteCommand()) {
       reportError(options.commandUnavailableMessage || 'Command is unavailable while the turn is active')
       return false
@@ -173,10 +178,18 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
       if (!await liveTurnController.ensureConnected(threadId)) {
         throw new Error(liveTurnController.lastError.value)
       }
-      return await options.executeCommand(threadId, command, workRoot)
+      commandPalette.reset()
+      if (clearRunningCommand) options.text.value = ''
+      commandRunning.value = true
+      const ok = await options.executeCommand(threadId, command, workRoot)
+      if (!ok && clearRunningCommand && !options.text.value) options.text.value = submittedCommand
+      return ok
     } catch (error) {
+      if (clearRunningCommand && !options.text.value) options.text.value = submittedCommand
       reportError(errorMessage(error))
       return false
+    } finally {
+      commandRunning.value = false
     }
   }
 

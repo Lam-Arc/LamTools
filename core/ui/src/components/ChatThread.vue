@@ -277,7 +277,7 @@
 
               <template v-else>
                 <button
-                  v-if="processSummary(msg).count > 0"
+                  v-if="processSummary(msg).count > 0 && !isCompactionOnlyMessage(msg)"
                   type="button"
                   class="process-toggle"
                   @click="emit('toggle-process', msg.id)"
@@ -684,7 +684,7 @@
 
             <!-- Completed process summary; reasoning remains visible by default. -->
             <button
-              v-if="!isTimelineMessage(msg) && !isLiveMessage(msg) && processSummary(msg).count > 0"
+              v-if="!isTimelineMessage(msg) && !isLiveMessage(msg) && processSummary(msg).count > 0 && !isCompactionOnlyMessage(msg)"
               type="button"
               class="process-toggle"
               @click="emit('toggle-process', msg.id)"
@@ -1591,8 +1591,18 @@ function systemIcon(msg: CoreMessage): string {
 function isProcessExpanded(msg: CoreMessage): boolean {
   // During live streaming: auto-expand so user sees process unfolding (like GPT)
   if (isLiveMessage(msg)) return true
+  // Compaction is already a concise status row. Keep it visible so native
+  // summary deltas and the terminal result are never hidden by a second,
+  // redundant process disclosure.
+  if (isCompactionOnlyMessage(msg)) return true
   // Completed process is collapsed by default; user can reopen it explicitly.
   return props.processExpandedIds?.has(msg.id) ?? false
+}
+
+function isCompactionOnlyMessage(msg: CoreMessage): boolean {
+  const meaningfulParts = processParts(msg).filter(part => part.partType !== 'status')
+  return meaningfulParts.length > 0
+    && meaningfulParts.every(part => part.partType === 'compaction')
 }
 
 function isControlTool(part: MessagePart): boolean {

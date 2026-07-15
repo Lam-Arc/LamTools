@@ -1736,9 +1736,14 @@ async def _execute_claimed_compact_live_command(
             on_event=on_event,
         )
     except asyncio.CancelledError:
+        cancelled_result = {
+            "status": "cancelled",
+            "reason": "cancelled",
+            "message": "上下文压缩已取消",
+        }
         if not terminal_emitted:
-            await on_event({"status": "cancelled", "reason": "cancelled", "message": "上下文压缩已取消"})
-        raise
+            await on_event(cancelled_result)
+        return cancelled_result, latest_snapshot
     except BaseException as exc:
         await _persist_command_run_item(
             context=context,
