@@ -17,22 +17,25 @@ from lamtools_core.tokens import estimate_message_tokens, estimate_text_tokens
 COMPACTION_PREFIX = "[Compacted Context]"
 
 COMPACTION_PROMPT = (
-    "Summarize this agent session context for continuation. Preserve only high-value "
-    "state needed to continue the task. Be concise, factual, and structured.\n\n"
+    "Compact for continuation.\n\n"
     f"Output format: the first line must be exactly {COMPACTION_PREFIX}.\n\n"
     "Required sections:\n"
-    "1. Current Goal\n"
-    "2. User History, Instructions, And Decisions\n"
-    "3. Completed Work\n"
-    "4. Key Decisions And Constraints\n"
-    "5. Files, APIs, Commands, And Results\n"
-    "6. Open Issues Or Risks\n"
-    "7. Next Best Actions\n\n"
-    "Rules: user messages are high-value context. Preserve every explicit user instruction, "
-    "correction, business decision, acceptance criterion, permission choice, and scope change. "
-    "Keep exact wording when it is short or decision-bearing. Preserve exact file paths, "
-    "identifiers, commands, failing errors, approval/permission state, and test results. "
-    "Drop redundant chatter and long raw outputs."
+    "1. Current Objective And Done Criteria\n"
+    "2. Active User Instructions\n"
+    "3. External Action Authorization\n"
+    "4. Confirmed Facts And Decisions\n"
+    "5. Current Execution State\n"
+    "6. Verification Evidence\n"
+    "7. Open Issues, Risks, And Hypotheses\n"
+    "8. Rejected Or Superseded Directions\n"
+    "9. Next Actions\n\n"
+    "Rules:\n"
+    "- Never invent state, permission, completion.\n"
+    "- Preserve user requirements, corrections, and done criteria. The latest explicit user instruction wins; "
+    "quote prohibitions and permissions.\n"
+    "- Separate outcomes from external authorization; facts/evidence/done/not-done from plans/hypotheses. Put rejections in section 8.\n"
+    "- Keep artifacts, results, errors, and approvals; order actions.\n"
+    "- Use the user's language; keep headings."
 )
 
 
@@ -186,7 +189,7 @@ async def compact_context(request: ContextCompactionRequest) -> ContextCompactio
         )
         await _emit_compaction_event(request, result.display_payload)
         return result
-    summary = _inherit_prior_user_instructions(
+    summary = _inherit_prior_protected_context(
         summary,
         [request.existing_summary, *(
             str(message.content or "")
@@ -640,14 +643,19 @@ def _pair_compaction_messages(
     for index in range(0, len(messages), 2):
         pair = messages[index : index + 2]
         if input_limit_tokens > 0 and _compaction_request_tokens(pair) > input_limit_tokens:
-            budget = max(64, (input_limit_tokens - _compaction_request_tokens([])) // max(1, len(pair)))
-            pair = [
-                ChatMessage(
-                    role=message.role,
-                    content=compress_structured_compaction_summary(str(message.content or ""), budget),
-                )
-                for message in pair
-            ]
+            source_pair = pair
+            budget = max(16, (input_limit_tokens - _compaction_request_tokens([])) // max(1, len(pair)))
+            while True:
+                pair = [
+                    ChatMessage(
+                        role=message.role,
+                        content=compress_structured_compaction_summary(str(message.content or ""), budget),
+                    )
+                    for message in source_pair
+                ]
+                if _compaction_request_tokens(pair) <= input_limit_tokens or budget <= 16:
+                    break
+                budget = max(16, budget - max(8, budget // 8))
         if input_limit_tokens > 0 and _compaction_request_tokens(pair) > input_limit_tokens:
             raise ContextCompactionError(
                 "Context compaction failed: intermediate summaries exceed the model input limit"
@@ -848,29 +856,50 @@ def with_compaction_prefix(content: str) -> str:
     return f"{COMPACTION_PREFIX}\n{text}".strip()
 
 
-def _inherit_prior_user_instructions(summary: str, prior_summaries: list[str]) -> str:
-    inherited: list[str] = []
-    for prior_summary in prior_summaries:
-        section = _numbered_summary_section(prior_summary, 2)
-        for line in section:
-            normalized = " ".join(line.split())
-            if normalized and normalized not in inherited:
-                inherited.append(normalized)
-    if not inherited:
-        return summary
+def _inherit_prior_protected_context(summary: str, prior_summaries: list[str]) -> str:
+    protected_sections = (
+        (
+            2,
+            "2. Active User Instructions",
+            ("2. Active User Instructions", "2. User History, Instructions, And Decisions"),
+            _denies_user_instructions,
+        ),
+        (
+            3,
+            "3. External Action Authorization",
+            ("3. External Action Authorization",),
+            _denies_external_action_authorization,
+        ),
+    )
+    result = summary
+    for number, title, accepted_titles, denies_content in protected_sections:
+        inherited: list[str] = []
+        for prior_summary in prior_summaries:
+            if _numbered_summary_section_title(prior_summary, number) not in accepted_titles:
+                continue
+            for line in _numbered_summary_section(prior_summary, number):
+                normalized = " ".join(line.split())
+                if normalized and normalized not in inherited:
+                    inherited.append(normalized)
+        if not inherited:
+            continue
 
-    current = [
-        line
-        for line in _numbered_summary_section(summary, 2)
-        if not _denies_user_instructions(line)
-    ]
-    merged = [*inherited, *(line for line in current if " ".join(line.split()) not in inherited)]
-    lines = summary.splitlines()
-    start, end = _numbered_summary_section_bounds(lines, 2)
-    section = ["2. User History, Instructions, And Decisions", *merged]
-    if start is None:
-        return "\n".join([*lines, "", *section]).strip()
-    return "\n".join([*lines[:start], *section, "", *lines[end:]]).strip()
+        current = []
+        if _numbered_summary_section_title(result, number) in accepted_titles:
+            current = [
+                line
+                for line in _numbered_summary_section(result, number)
+                if not denies_content(line)
+            ]
+        merged = [*inherited, *(line for line in current if " ".join(line.split()) not in inherited)]
+        lines = result.splitlines()
+        start, end = _numbered_summary_section_bounds(lines, number)
+        section = [title, *merged]
+        if start is None:
+            result = "\n".join([*lines, "", *section]).strip()
+        else:
+            result = "\n".join([*lines[:start], *section, "", *lines[end:]]).strip()
+    return result
 
 
 def _numbered_summary_section(text: str, number: int) -> list[str]:
@@ -879,6 +908,12 @@ def _numbered_summary_section(text: str, number: int) -> list[str]:
     if start is None:
         return []
     return [line.strip() for line in lines[start + 1 : end] if line.strip()]
+
+
+def _numbered_summary_section_title(text: str, number: int) -> str:
+    lines = str(text or "").splitlines()
+    start, _ = _numbered_summary_section_bounds(lines, number)
+    return lines[start].strip() if start is not None else ""
 
 
 def _numbered_summary_section_bounds(lines: list[str], number: int) -> tuple[int | None, int]:
@@ -912,6 +947,22 @@ def _denies_user_instructions(line: str) -> bool:
             "无明确用户指令",
             "没有明确用户指令",
             "无用户指令",
+        )
+    )
+
+
+def _denies_external_action_authorization(line: str) -> bool:
+    normalized = " ".join(line.lower().split())
+    return any(
+        marker in normalized
+        for marker in (
+            "none confirmed",
+            "no external action authorization",
+            "no action authorization",
+            "no authorization confirmed",
+            "无外部操作授权",
+            "未确认外部操作授权",
+            "未获得外部操作授权",
         )
     )
 
@@ -1019,20 +1070,20 @@ def compress_structured_compaction_summary(text: str, max_tokens: int) -> str:
         compacted_lines.extend(["", title])
         kept = 0
         omitted = False
-        is_user_instruction_section = title.startswith("2. ")
+        is_protected_section = title.startswith(("2. ", "3. "))
         for line in lines:
             stripped = " ".join(line.strip().split())
             if not stripped:
                 continue
             if len(stripped) > 260:
-                if is_user_instruction_section:
+                if is_protected_section:
                     stripped = stripped[:260]
                 else:
                     omitted = True
                     continue
             compacted_lines.append(stripped)
             kept += 1
-            if kept >= 3 and not is_user_instruction_section:
+            if kept >= 3 and not is_protected_section:
                 break
         if omitted:
             compacted_lines.append("- Details omitted because this section exceeded the compaction budget.")
@@ -1049,22 +1100,37 @@ def compress_structured_compaction_summary(text: str, max_tokens: int) -> str:
             (
                 index
                 for index in range(len(lines) - 1, -1, -1)
-                if lines[index].startswith("- ") and not _line_is_in_numbered_section(lines, index, 2)
+                if lines[index].startswith("- ")
+                and not _line_is_in_numbered_sections(lines, index, {2, 3})
             ),
             next(
-                (index for index in range(len(lines) - 1, -1, -1) if lines[index].startswith("- ")),
-                len(lines) - 1,
+                (
+                    index
+                    for index in range(len(lines) - 1, -1, -1)
+                    if _numbered_section_number(lines[index]) not in {None, 2, 3}
+                ),
+                next(
+                    (index for index in range(len(lines) - 1, -1, -1) if lines[index].startswith("- ")),
+                    len(lines) - 1,
+                ),
             ),
         )
         lines.pop(removable)
     return "\n".join(lines).strip()
 
 
-def _line_is_in_numbered_section(lines: list[str], index: int, number: int) -> bool:
+def _numbered_section_number(line: str) -> int | None:
+    stripped = line.strip()
+    if not stripped or not stripped[0].isdigit() or ". " not in stripped[:4]:
+        return None
+    return int(stripped.split(".", 1)[0])
+
+
+def _line_is_in_numbered_sections(lines: list[str], index: int, numbers: set[int]) -> bool:
     for line in reversed(lines[:index]):
-        stripped = line.strip()
-        if stripped and stripped[0].isdigit() and ". " in stripped[:4]:
-            return stripped.startswith(f"{number}. ")
+        number = _numbered_section_number(line)
+        if number is not None:
+            return number in numbers
     return False
 
 

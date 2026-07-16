@@ -8,6 +8,7 @@ from lamtools_core.context_compaction import (
     COMPACTION_PREFIX,
     ContextCompactionRequest,
     compact_context,
+    compress_structured_compaction_summary,
 )
 from lamtools_core.llm import ChatMessage, LLMResponse, LLMStreamEvent
 from lamtools_core.tokens import estimate_message_tokens
@@ -106,14 +107,17 @@ class _LosesPriorUserInstructionsClient:
     async def complete(self, request):
         return LLMResponse(
             content=(
-                "1. Current Goal\n- Continue.\n\n"
-                "2. User History, Instructions, And Decisions\n"
+                "1. Current Objective And Done Criteria\n- Continue.\n\n"
+                "2. Active User Instructions\n"
                 "- No explicit user instructions.\n\n"
-                "3. Completed Work\n- Prior work was summarized.\n\n"
-                "4. Key Decisions And Constraints\n- None.\n\n"
-                "5. Files, APIs, Commands, And Results\n- None.\n\n"
-                "6. Open Issues Or Risks\n- None.\n\n"
-                "7. Next Best Actions\n- Continue."
+                "3. External Action Authorization\n"
+                "- None confirmed.\n\n"
+                "4. Confirmed Facts And Decisions\n- None.\n\n"
+                "5. Current Execution State\n- Prior work was summarized.\n\n"
+                "6. Verification Evidence\n- None.\n\n"
+                "7. Open Issues, Risks, And Hypotheses\n- None.\n\n"
+                "8. Rejected Or Superseded Directions\n- None.\n\n"
+                "9. Next Actions\n- Continue."
             ),
             finish_reason="stop",
         )
@@ -211,6 +215,38 @@ async def test_compact_context_fallback_produces_minimum_sufficient_continuation
 
 
 @pytest.mark.asyncio
+async def test_model_compaction_requests_the_continuation_contract_from_the_adapter():
+    llm = _CompactionClient()
+    messages = [
+        ChatMessage(role="user", content="Do not deploy. " + ("requirement " * 220)),
+        ChatMessage(role="assistant", content="Implementation in progress. " + ("result " * 220)),
+        ChatMessage(role="user", content="Continue with the failing test."),
+    ]
+
+    await compact_context(
+        ContextCompactionRequest(
+            trigger="auto",
+            messages=messages,
+            llm_client=llm,
+            model="mock-model",
+            limit_tokens=1200,
+            estimate_tokens=_estimate,
+        )
+    )
+
+    prompt = str(llm.last_request.messages[0].content)
+    assert "Compact for continuation" in prompt
+    assert "2. Active User Instructions" in prompt
+    assert "3. External Action Authorization" in prompt
+    assert "5. Current Execution State" in prompt
+    assert "6. Verification Evidence" in prompt
+    assert "8. Rejected Or Superseded Directions" in prompt
+    assert "Never invent" in prompt
+    assert "latest explicit user instruction" in prompt
+    assert "hypoth" in prompt.lower()
+
+
+@pytest.mark.asyncio
 async def test_compact_context_manual_reuses_same_entry_and_retains_tail_messages():
     llm = _CompactionClient()
     messages = [
@@ -253,16 +289,18 @@ async def test_compact_context_manual_reuses_same_entry_and_retains_tail_message
 async def test_recursive_compaction_does_not_erase_prior_user_instructions():
     prior_summary = (
         "[Compacted Context]\n\n"
-        "1. Current Goal\n- Finish acceptance.\n\n"
-        "2. User History, Instructions, And Decisions\n"
-        "- Do not commit or publish.\n"
+        "1. Current Objective And Done Criteria\n- Finish acceptance.\n\n"
+        "2. Active User Instructions\n"
         "- Use Kimi-K2.6 without thinking.\n"
         "- Preserve user messages in the visible transcript.\n\n"
-        "3. Completed Work\n- " + ("verified work " * 200) + "\n\n"
-        "4. Key Decisions And Constraints\n- Keep one compaction interface.\n\n"
-        "5. Files, APIs, Commands, And Results\n- core.db\n\n"
-        "6. Open Issues Or Risks\n- Recheck the GUI.\n\n"
-        "7. Next Best Actions\n- Continue."
+        "3. External Action Authorization\n"
+        "- Do not commit, publish, or deploy without user confirmation.\n\n"
+        "4. Confirmed Facts And Decisions\n- Keep one compaction interface.\n\n"
+        "5. Current Execution State\n- " + ("verified work " * 200) + "\n\n"
+        "6. Verification Evidence\n- core.db\n\n"
+        "7. Open Issues, Risks, And Hypotheses\n- Recheck the GUI.\n\n"
+        "8. Rejected Or Superseded Directions\n- None.\n\n"
+        "9. Next Actions\n- Continue."
     )
     messages = [
         ChatMessage(
@@ -285,10 +323,33 @@ async def test_recursive_compaction_does_not_erase_prior_user_instructions():
     )
 
     assert result.status == "compacted"
-    assert "Do not commit or publish." in result.summary
     assert "Use Kimi-K2.6 without thinking." in result.summary
     assert "Preserve user messages in the visible transcript." in result.summary
+    assert "Do not commit, publish, or deploy without user confirmation." in result.summary
+    assert "2. Active User Instructions" in result.summary
+    assert "3. External Action Authorization" in result.summary
     assert "No explicit user instructions" not in result.summary
+    assert "None confirmed" not in result.summary
+
+
+def test_summary_budget_preserves_user_instructions_and_external_authorization_first():
+    summary = (
+        "[Compacted Context]\n\n"
+        "1. Current Objective And Done Criteria\n- Finish the task.\n\n"
+        "2. Active User Instructions\n- Keep the public interface unchanged.\n\n"
+        "3. External Action Authorization\n- Do not commit, push, deploy, or create a PR.\n\n"
+        "4. Confirmed Facts And Decisions\n- " + ("confirmed detail " * 80) + "\n\n"
+        "5. Current Execution State\n- " + ("execution detail " * 80) + "\n\n"
+        "6. Verification Evidence\n- " + ("verification detail " * 80) + "\n\n"
+        "7. Open Issues, Risks, And Hypotheses\n- " + ("open issue " * 80) + "\n\n"
+        "8. Rejected Or Superseded Directions\n- " + ("rejected detail " * 80) + "\n\n"
+        "9. Next Actions\n- Continue."
+    )
+
+    compressed = compress_structured_compaction_summary(summary, 100)
+
+    assert "Keep the public interface unchanged." in compressed
+    assert "Do not commit, push, deploy, or create a PR." in compressed
 
 
 @pytest.mark.asyncio

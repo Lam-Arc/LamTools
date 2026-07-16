@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 
+from lamtools_core.context_compaction import COMPACTION_PROMPT
 from lamtools_core.event import CollectingEventSink, CoreEvent, EventSink
 from lamtools_core.app.base_agent import core_events_to_run_items
 from lamtools_core.kernel import (
@@ -31,6 +32,10 @@ from lamtools_core.llm.policy import BackoffStrategy, RetryPolicy
 from lamtools_core.prompt import PromptContext
 from lamtools_core.runtime import RuntimeState, RuntimeStateStore, RuntimeTaskRegistry, RuntimeToolStep, RuntimeTurnInput
 from lamtools_core.tool import ToolCall, ToolResult
+
+
+def _is_compaction_request(request: LLMRequest) -> bool:
+    return bool(request.messages and request.messages[0].content == COMPACTION_PROMPT)
 
 
 def test_partial_tool_arguments_do_not_emit_content_streaming_placeholder():
@@ -313,23 +318,26 @@ class CapturingLLMClient:
         self.last_request = request
         self.requests.append(request)
         self.call_count += 1
-        first_content = request.messages[0].content if request.messages else ""
-        if isinstance(first_content, str) and first_content.startswith("Summarize this agent session context"):
+        if _is_compaction_request(request):
             return LLMResponse(content=(
-                "1. Current Goal\n"
+                "1. Current Objective And Done Criteria\n"
                 "- Continue the current task.\n\n"
-                "2. User History, Instructions, And Decisions\n"
+                "2. Active User Instructions\n"
                 "- old user 0 requested an earlier constraint.\n"
                 "- old user 1 refined the expected behavior.\n\n"
-                "3. Completed Work\n"
-                "- Old context was reviewed and condensed.\n\n"
-                "4. Key Decisions And Constraints\n"
+                "3. External Action Authorization\n"
+                "- None confirmed.\n\n"
+                "4. Confirmed Facts And Decisions\n"
                 "- Preserve user decisions and exact paths.\n\n"
-                "5. Files, APIs, Commands, And Results\n"
+                "5. Current Execution State\n"
+                "- Old context was reviewed and condensed.\n\n"
+                "6. Verification Evidence\n"
                 "- No command results in this fixture.\n\n"
-                "6. Open Issues Or Risks\n"
+                "7. Open Issues, Risks, And Hypotheses\n"
                 "- None.\n\n"
-                "7. Next Best Actions\n"
+                "8. Rejected Or Superseded Directions\n"
+                "- None.\n\n"
+                "9. Next Actions\n"
                 "- Continue from the latest user message."
             ))
         return LLMResponse(content="done")
@@ -345,22 +353,25 @@ class VerboseCompactionLLMClient(CapturingLLMClient):
         self.last_request = request
         self.requests.append(request)
         self.call_count += 1
-        first_content = request.messages[0].content if request.messages else ""
-        if isinstance(first_content, str) and first_content.startswith("Summarize this agent session context"):
+        if _is_compaction_request(request):
             return LLMResponse(content=(
-                "1. Current Goal\n"
+                "1. Current Objective And Done Criteria\n"
                 "- Continue the current task.\n\n"
-                "2. User History, Instructions, And Decisions\n"
+                "2. Active User Instructions\n"
                 "- Keep the critical user requirement.\n\n"
-                "3. Completed Work\n"
-                "- " + ("verbose summary " * 900) + "\n\n"
-                "4. Key Decisions And Constraints\n"
+                "3. External Action Authorization\n"
+                "- None confirmed.\n\n"
+                "4. Confirmed Facts And Decisions\n"
                 "- Preserve only effective information.\n\n"
-                "5. Files, APIs, Commands, And Results\n"
+                "5. Current Execution State\n"
+                "- " + ("verbose summary " * 900) + "\n\n"
+                "6. Verification Evidence\n"
                 "- " + ("tool output " * 900) + "\n\n"
-                "6. Open Issues Or Risks\n"
+                "7. Open Issues, Risks, And Hypotheses\n"
                 "- None.\n\n"
-                "7. Next Best Actions\n"
+                "8. Rejected Or Superseded Directions\n"
+                "- None.\n\n"
+                "9. Next Actions\n"
                 "- Continue."
             ))
         return LLMResponse(content="done")
@@ -371,8 +382,7 @@ class FailingCompactionOnlyLLMClient(CapturingLLMClient):
         self.last_request = request
         self.requests.append(request)
         self.call_count += 1
-        first_content = request.messages[0].content if request.messages else ""
-        if isinstance(first_content, str) and first_content.startswith("Summarize this agent session context"):
+        if _is_compaction_request(request):
             raise RuntimeError("compaction model unavailable")
         return LLMResponse(content="done")
 
@@ -385,26 +395,29 @@ class FlakyStreamingCompactionLLMClient(CapturingLLMClient):
 
     async def stream(self, request: LLMRequest):
         self.stream_requests.append(request)
-        first_content = request.messages[0].content if request.messages else ""
-        if isinstance(first_content, str) and first_content.startswith("Summarize this agent session context"):
+        if _is_compaction_request(request):
             if self.compaction_failures > 0:
                 self.compaction_failures -= 1
                 raise RuntimeError("transient compaction model unavailable")
-            yield LLMStreamEvent(kind="content_delta", content="1. Current Goal\n- Continue after retry.\n\n")
+            yield LLMStreamEvent(kind="content_delta", content="1. Current Objective And Done Criteria\n- Continue after retry.\n\n")
             yield LLMStreamEvent(
                 kind="content_delta",
                 content=(
-                    "2. User History, Instructions, And Decisions\n"
+                    "2. Active User Instructions\n"
                     "- Preserve the compacted user constraints.\n\n"
-                    "3. Completed Work\n"
-                    "- Compaction retried through the shared model path.\n\n"
-                    "4. Key Decisions And Constraints\n"
+                    "3. External Action Authorization\n"
+                    "- None confirmed.\n\n"
+                    "4. Confirmed Facts And Decisions\n"
                     "- Use one retry policy for model calls.\n\n"
-                    "5. Files, APIs, Commands, And Results\n"
+                    "5. Current Execution State\n"
+                    "- Compaction retried through the shared model path.\n\n"
+                    "6. Verification Evidence\n"
                     "- None.\n\n"
-                    "6. Open Issues Or Risks\n"
+                    "7. Open Issues, Risks, And Hypotheses\n"
                     "- None.\n\n"
-                    "7. Next Best Actions\n"
+                    "8. Rejected Or Superseded Directions\n"
+                    "- None.\n\n"
+                    "9. Next Actions\n"
                     "- Continue."
                 ),
             )
@@ -2906,9 +2919,7 @@ class TestKernelContextCompaction:
         compaction_models = [
             request.model
             for request in llm.requests
-            if request.messages
-            and isinstance(request.messages[0].content, str)
-            and request.messages[0].content.startswith("Summarize this agent session context")
+            if _is_compaction_request(request)
         ]
         assert compaction_models == ["previous-model"]
         assert llm.last_request is not None
@@ -2919,12 +2930,7 @@ class TestKernelContextCompaction:
     async def test_model_switch_falls_back_to_segmented_current_model_after_previous_failure(self):
         class PreviousModelFailsClient(CapturingLLMClient):
             async def complete(self, request: LLMRequest) -> LLMResponse:
-                first_content = request.messages[0].content if request.messages else ""
-                if (
-                    request.model == "previous-model"
-                    and isinstance(first_content, str)
-                    and first_content.startswith("Summarize this agent session context")
-                ):
+                if request.model == "previous-model" and _is_compaction_request(request):
                     self.last_request = request
                     self.requests.append(request)
                     self.call_count += 1
@@ -2969,9 +2975,7 @@ class TestKernelContextCompaction:
         compaction_models = [
             request.model
             for request in llm.requests
-            if request.messages
-            and isinstance(request.messages[0].content, str)
-            and request.messages[0].content.startswith("Summarize this agent session context")
+            if _is_compaction_request(request)
         ]
         assert compaction_models[0] == "previous-model"
         assert compaction_models.count("previous-model") == 1
@@ -3031,10 +3035,11 @@ class TestKernelContextCompaction:
         ]
         assert len(summary_messages) == 1
         assert "[Compacted Context]" in summary_messages[0].content
-        assert "Current Goal" in summary_messages[0].content
-        assert "User History, Instructions, And Decisions" in summary_messages[0].content
+        assert "Current Objective And Done Criteria" in summary_messages[0].content
+        assert "Active User Instructions" in summary_messages[0].content
+        assert "External Action Authorization" in summary_messages[0].content
         assert "old user 0 requested an earlier constraint" in summary_messages[0].content
-        assert "Next Best Actions" in summary_messages[0].content
+        assert "Next Actions" in summary_messages[0].content
         raw_messages = [
             str(m.content)
             for m in llm.last_request.messages
@@ -3098,7 +3103,7 @@ class TestKernelContextCompaction:
             if message.metadata.get("key") == "context_compaction_summary"
         ]
         assert len(summary_messages) == 1
-        assert "User History, Instructions, And Decisions" in summary_messages[0].content
+        assert "Active User Instructions" in summary_messages[0].content
         assert "effective information" in summary_messages[0].content
         assert "verbose summary " not in summary_messages[0].content
         assert "tool output " not in summary_messages[0].content
@@ -3140,17 +3145,13 @@ class TestKernelContextCompaction:
         compaction_requests = [
             request
             for request in llm.stream_requests
-            if request.messages
-            and isinstance(request.messages[0].content, str)
-            and request.messages[0].content.startswith("Summarize this agent session context")
+            if _is_compaction_request(request)
         ]
         assert len(compaction_requests) >= 3
         compaction_complete_requests = [
             request
             for request in llm.requests
-            if request.messages
-            and isinstance(request.messages[0].content, str)
-            and request.messages[0].content.startswith("Summarize this agent session context")
+            if _is_compaction_request(request)
         ]
         assert compaction_complete_requests == []
         retry_events = [
@@ -3170,7 +3171,7 @@ class TestKernelContextCompaction:
             for event in compaction_parts
             if event.metadata.get("delivery") == "transient" and event.payload.get("delta")
         ]
-        expected_first_delta = "1. Current Goal\n- Continue after retry.\n\n"
+        expected_first_delta = "1. Current Objective And Done Criteria\n- Continue after retry.\n\n"
         assert compaction_parts[0].payload["status"] == "running"
         assert compaction_parts[-1].payload["status"] == "compacted"
         assert transient_deltas

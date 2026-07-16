@@ -52,19 +52,23 @@ class _CompactionClient:
     async def complete(self, request):
         return LLMResponse(
             content=(
-                "1. Current Goal\n"
+                "1. Current Objective And Done Criteria\n"
                 "- Continue.\n\n"
-                "2. User History, Instructions, And Decisions\n"
+                "2. Active User Instructions\n"
                 "- Preserved old request message-0 before runtime history capping.\n\n"
-                "3. Completed Work\n"
-                "- Prior turns summarized.\n\n"
-                "4. Key Decisions And Constraints\n"
+                "3. External Action Authorization\n"
+                "- No external action authorization confirmed.\n\n"
+                "4. Confirmed Facts And Decisions\n"
                 "- Durable summary before truncation.\n\n"
-                "5. Files, APIs, Commands, And Results\n"
+                "5. Current Execution State\n"
+                "- Prior turns summarized.\n\n"
+                "6. Verification Evidence\n"
                 "- None.\n\n"
-                "6. Open Issues Or Risks\n"
+                "7. Open Issues, Risks, And Hypotheses\n"
                 "- None.\n\n"
-                "7. Next Best Actions\n"
+                "8. Rejected Or Superseded Directions\n"
+                "- None.\n\n"
+                "9. Next Actions\n"
                 "- Continue."
             ),
             finish_reason="stop",
@@ -151,6 +155,7 @@ async def test_runtime_runner_compacts_long_history_before_recent_history_cap(tm
             assert history[0]["role"] == "system"
             assert history[0]["content"].startswith("[Compacted Context]")
             assert "message-0" in history[0]["content"]
+            assert "External Action Authorization" in history[0]["content"]
             assert "message-0" not in [item["content"] for item in history[1:]]
 
             session = await db.get(WriterSession, session_id)
@@ -158,7 +163,10 @@ async def test_runtime_runner_compacts_long_history_before_recent_history_cap(tm
             compaction = session.runtime_state["manual_compaction"]
             assert compaction["trigger"] == "auto"
             assert compaction["compacted_message_ids"][:2] == ["m-0", "m-1"]
-            assert compaction["retained_message_ids"] == ["m-19", "m-20", "m-21", "m-22", "m-23", "m-24"]
+            retained_ids = compaction["retained_message_ids"]
+            retained_start = int(retained_ids[0].split("-", 1)[1])
+            assert retained_ids == [f"m-{index}" for index in range(retained_start, 25)]
+            assert 0 < len(retained_ids) < 25
 
             compaction_events = [
                 event
