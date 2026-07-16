@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import DateTime, Integer, JSON, String, UniqueConstraint, select, update
+from sqlalchemy import DateTime, Integer, JSON, String, UniqueConstraint, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -269,6 +269,7 @@ async def open_core_app_db(path: Path | str) -> CoreAppDb:
     configure_sqlite_engine(engine)
     async with engine.begin() as conn:
         await conn.run_sync(CoreDbBase.metadata.create_all)
+        await _migrate_core_app_schema(conn)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     write_coordinator = SQLiteWriteCoordinator(session_factory)
     from .project_store import CoreProjectStore
@@ -340,6 +341,23 @@ def _snapshot_summary(row: CoreThreadSnapshot) -> dict[str, Any]:
 
 def _sqlite_url(path: Path) -> str:
     return f"sqlite+aiosqlite:///{path.resolve().as_posix()}"
+
+
+async def _migrate_core_app_schema(connection: Any) -> None:
+    checkpoint_columns = {
+        row["name"]
+        for row in (await connection.execute(text("PRAGMA table_info(core_checkpoints)"))).mappings()
+    }
+    if "work_root" in checkpoint_columns:
+        return
+    await connection.execute(text(
+        "ALTER TABLE core_checkpoints "
+        "ADD COLUMN work_root VARCHAR(2048) NOT NULL DEFAULT ''"
+    ))
+    # Legacy checkpoints did not record their workspace and cannot be restored safely.
+    await connection.execute(text(
+        "UPDATE core_checkpoints SET status = 'unavailable' WHERE work_root = ''"
+    ))
 
 
 def _runtime_state_payloads(state: RuntimeState) -> tuple[dict[str, Any], dict[str, Any]]:

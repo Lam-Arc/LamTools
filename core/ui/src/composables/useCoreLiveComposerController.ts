@@ -181,7 +181,7 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
         throw new Error(liveTurnController.lastError.value)
       }
       commandPalette.reset()
-      if (clearRunningCommand) options.text.value = ''
+      if (clearRunningCommand) clearCommandComposer(submittedCommand)
       commandRunning.value = true
       const ok = await options.executeCommand(threadId, command, workRoot)
       if (!ok && clearRunningCommand && !options.text.value) options.text.value = submittedCommand
@@ -311,6 +311,11 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
     if (plan.restoreText !== undefined) options.text.value = plan.restoreText
     if (plan.clearAttachments) options.clearAttachments?.()
     if (plan.statusText) options.setStatusText?.(plan.statusText)
+  }
+
+  function clearCommandComposer(submittedCommand: string): void {
+    options.clearComposer?.(submittedCommand)
+    if (options.text.value.trim() === submittedCommand) options.text.value = ''
   }
 
   function reportError(message: string): void {

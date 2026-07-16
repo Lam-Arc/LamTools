@@ -228,6 +228,7 @@ describe('useCoreLiveComposerController', () => {
   it('clears a running action command immediately and exposes stop until it settles', async () => {
     const text = ref('/compact')
     const status = ref('running')
+    const clearedTexts: string[] = []
     let resolveCommand: (value: boolean) => void = () => undefined
     const commandResult = new Promise<boolean>((resolve) => {
       resolveCommand = resolve
@@ -248,6 +249,10 @@ describe('useCoreLiveComposerController', () => {
       listCommands: async () => commands,
       getWorkRoot: () => 'E:\\LamTools',
       executeCommand: async () => commandResult,
+      clearComposer: (submittedText) => {
+        clearedTexts.push(submittedText)
+        if (text.value.trim() === submittedText) text.value = ''
+      },
     })
     controller.commandCatalog.value = [...commands]
 
@@ -255,6 +260,7 @@ describe('useCoreLiveComposerController', () => {
     await Promise.resolve()
 
     expect(text.value).toBe('')
+    expect(clearedTexts).toEqual(['/compact'])
     expect(controller.actionMode.value).toBe('stop')
 
     status.value = 'completed'

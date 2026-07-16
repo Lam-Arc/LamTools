@@ -16,21 +16,9 @@ describe('CommandPalette', () => {
       props: { commands, activeIndex: 0 },
     })
     expect(wrapper.text()).toContain('/compact')
-    expect(wrapper.text()).toContain('Action')
-    expect(wrapper.text()).toContain('Skill')
     expect(wrapper.text()).toContain('Enter')
     expect(wrapper.text()).toContain('Esc')
-    await wrapper.find('[data-command-name="compact"]').trigger('mousedown')
-    expect(wrapper.emitted('select')?.[0]?.[0]).toMatchObject({ name: 'compact' })
-  })
-
-  it('emits select on normal click as well as mousedown', async () => {
-    const wrapper = mount(CommandPalette, {
-      props: { commands, activeIndex: 0 },
-    })
-
     await wrapper.find('[data-command-name="compact"]').trigger('click')
-
     expect(wrapper.emitted('select')?.[0]?.[0]).toMatchObject({ name: 'compact' })
   })
 

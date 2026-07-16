@@ -2288,6 +2288,8 @@ class CoreLoopKernel:
 
             async def on_compaction_event(payload: dict[str, Any]) -> None:
                 event_payload = dict(payload)
+                if event_payload.get("status") == "running" and event_payload.get("delta"):
+                    return
                 if fallback_on_terminal and event_payload.get("status") in {"failed", "not_needed"}:
                     event_payload.update(
                         {

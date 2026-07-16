@@ -11,19 +11,10 @@
         :aria-selected="index === activeIndex"
         :aria-label="commandLabel(command)"
         :data-command-name="command.name"
-        @mousedown.prevent="$emit('select', command)"
         @click.prevent="$emit('select', command)"
       >
-        <span
-          class="command-icon"
-          :data-command-kind="command.action === 'insert_token' ? 'skill' : 'action'"
-          aria-hidden="true"
-        >{{ iconLabel(command.icon, command.action) }}</span>
         <span class="command-copy">
-          <span class="command-title-row">
-            <strong>/{{ command.name }}</strong>
-            <span class="command-kind">{{ kindLabel(command.action) }}</span>
-          </span>
+          <strong>/{{ command.name }}</strong>
           <small>{{ command.description || command.title }}</small>
         </span>
       </button>
@@ -49,52 +40,40 @@ defineEmits<{
 }>()
 
 function commandLabel(command: CoreCommandCatalogItem): string {
-  const detail = command.description || command.title || kindLabel(command.action)
+  const detail = command.description || command.title || command.name
   return `/${command.name}: ${detail}`
 }
 
-function kindLabel(action: CoreCommandCatalogItem['action']): string {
-  return action === 'insert_token' ? 'Skill' : 'Action'
-}
-
-function iconLabel(icon: string, action: CoreCommandCatalogItem['action']): string {
-  if (icon === 'git-branch') return '↱'
-  if (icon === 'archive') return '↓'
-  if (icon === 'sparkles' || action === 'insert_token') return '✦'
-  return '/'
-}
 </script>
 
 <style scoped>
 .command-palette {
   position: absolute;
   left: 0;
-  width: min(520px, 100%);
-  bottom: calc(100% + 8px);
+  width: min(380px, 100%);
+  bottom: calc(100% + 6px);
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--theme-composer-text, currentColor) 13%, transparent);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--theme-composer-background, #111) 98%, var(--theme-composer-text, white) 2%);
-  box-shadow: 0 8px 14px rgba(0, 0, 0, 0.18);
+  border: 1px solid color-mix(in srgb, var(--theme-composer-text, currentColor) 16%, transparent);
+  border-radius: 8px;
+  background: var(--theme-composer-background, #111);
+  box-shadow: 0 6px 12px rgba(0, 0, 0, 0.14);
   z-index: 20;
 }
 
 .command-list {
   max-height: min(320px, calc(100vh - 180px));
   overflow-y: auto;
-  padding: 5px;
+  padding: 4px;
 }
 
 .command-item {
   width: 100%;
-  display: grid;
-  grid-template-columns: 30px minmax(0, 1fr);
-  gap: 10px;
+  display: block;
   align-items: center;
   border: 0;
-  border-radius: 7px;
-  min-height: 48px;
-  padding: 6px 8px;
+  border-radius: 5px;
+  min-height: 42px;
+  padding: 7px 9px;
   background: transparent;
   color: var(--theme-composer-text, currentColor);
   text-align: left;
@@ -103,38 +82,13 @@ function iconLabel(icon: string, action: CoreCommandCatalogItem['action']): stri
 
 .command-item.active,
 .command-item:hover {
-  background: color-mix(in srgb, var(--theme-composer-text, currentColor) 9%, transparent);
-}
-
-.command-icon {
-  display: grid;
-  place-items: center;
-  width: 24px;
-  height: 24px;
-  border-radius: 6px;
   background: color-mix(in srgb, var(--theme-composer-text, currentColor) 7%, transparent);
-  color: color-mix(in srgb, var(--theme-composer-text, currentColor) 76%, transparent);
-  font-size: 13px;
-  font-weight: 700;
-  line-height: 1;
-}
-
-.command-icon[data-command-kind="skill"] {
-  background: color-mix(in srgb, #8ecbff 16%, transparent);
-  color: #8ecbff;
 }
 
 .command-copy {
   min-width: 0;
   display: grid;
-  gap: 3px;
-}
-
-.command-title-row {
-  min-width: 0;
-  display: flex;
-  gap: 8px;
-  align-items: baseline;
+  gap: 2px;
 }
 
 .command-copy strong,
@@ -147,21 +101,15 @@ function iconLabel(icon: string, action: CoreCommandCatalogItem['action']): stri
 .command-copy strong {
   min-width: 0;
   color: var(--theme-composer-text, currentColor);
-  font-size: 14px;
-  font-weight: 650;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .command-copy small {
-  color: color-mix(in srgb, var(--theme-composer-text, currentColor) 68%, transparent);
-  font-size: 12px;
-  line-height: 1.25;
-}
-
-.command-kind {
-  flex: 0 0 auto;
-  color: color-mix(in srgb, var(--theme-composer-text, currentColor) 52%, transparent);
+  color: color-mix(in srgb, var(--theme-composer-text, currentColor) 62%, transparent);
   font-size: 11px;
-  line-height: 1;
+  line-height: 1.25;
 }
 
 .command-footer {
@@ -170,9 +118,9 @@ function iconLabel(icon: string, action: CoreCommandCatalogItem['action']): stri
   gap: 10px;
   align-items: center;
   border-top: 1px solid color-mix(in srgb, var(--theme-composer-text, currentColor) 9%, transparent);
-  padding: 6px 10px 7px;
-  color: color-mix(in srgb, var(--theme-composer-text, currentColor) 52%, transparent);
-  font-size: 11px;
+  padding: 5px 9px 6px;
+  color: color-mix(in srgb, var(--theme-composer-text, currentColor) 50%, transparent);
+  font-size: 10px;
 }
 
 .command-footer span {

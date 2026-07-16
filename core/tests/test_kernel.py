@@ -3062,6 +3062,9 @@ class TestKernelContextCompaction:
             for event in sink.events
             if event.name == "runtime.part" and event.payload.get("part_type") == "compaction"
         ]
+        delta_events = [event for event in part_events if event.payload.get("delta")]
+        assert delta_events
+        assert all(event.metadata.get("delivery") == "transient" for event in delta_events)
         assert part_events[0].payload["status"] == "running"
         assert part_events[-1].payload["status"] == "compacted"
         assert part_events[-1].payload["label"] == "上下文已压缩"

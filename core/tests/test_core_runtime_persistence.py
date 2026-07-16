@@ -109,6 +109,74 @@ async def test_core_database_applies_wal_busy_timeout_and_normal_synchronous(tmp
 
 
 @pytest.mark.asyncio
+async def test_core_database_migrates_legacy_checkpoint_table_before_runtime_use(tmp_path) -> None:
+    db_path = tmp_path / "legacy-checkpoints.db"
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE core_checkpoints (
+                id VARCHAR(64) PRIMARY KEY,
+                root_session_id VARCHAR(128) NOT NULL,
+                session_id VARCHAR(128) NOT NULL,
+                turn_id VARCHAR(128) NOT NULL,
+                actor_kind VARCHAR(32) NOT NULL,
+                manifest_hash VARCHAR(64) NOT NULL,
+                conversation_json JSON NOT NULL,
+                status VARCHAR(32) NOT NULL,
+                created_at DATETIME NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO core_checkpoints (
+                id, root_session_id, session_id, turn_id, actor_kind,
+                manifest_hash, conversation_json, status, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "legacy-checkpoint",
+                "legacy-session",
+                "legacy-session",
+                "legacy-turn",
+                "main",
+                "manifest",
+                "{}",
+                "ready",
+                "2026-07-16 00:00:00",
+            ),
+        )
+
+    db = await open_core_app_db(db_path)
+    try:
+        async with db.engine.begin() as connection:
+            columns = (await connection.execute(text("PRAGMA table_info(core_checkpoints)"))).mappings().all()
+            legacy_status = (
+                await connection.execute(
+                    text("SELECT status FROM core_checkpoints WHERE id = 'legacy-checkpoint'")
+                )
+            ).scalar_one()
+            await connection.execute(
+                text(
+                    """
+                    INSERT INTO core_checkpoints (
+                        id, root_session_id, session_id, turn_id, actor_kind, work_root,
+                        manifest_hash, conversation_json, status, created_at
+                    ) VALUES (
+                        'new-checkpoint', 'new-session', 'new-session', 'new-turn', 'main',
+                        'E:/workspace', 'manifest', '{}', 'ready', '2026-07-16 00:00:01'
+                    )
+                    """
+                )
+            )
+
+        assert "work_root" in {column["name"] for column in columns}
+        assert legacy_status == "unavailable"
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
 async def test_core_single_writer_keeps_concurrent_event_sequences_contiguous(tmp_path) -> None:
     db = await open_core_app_db(tmp_path / "concurrent-events.db")
     try:
