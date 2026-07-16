@@ -4450,8 +4450,8 @@ class TestRunCommandFailure:
         assert elapsed < 5
 
     @pytest.mark.asyncio
-    async def test_run_command_service_requires_explicit_background(self, tmp_path):
-        """Service-looking commands still obey foreground semantics unless background=true."""
+    async def test_run_command_python_http_server_infers_background(self, tmp_path):
+        """Writer reuses Core's automatic lifecycle handling for Python HTTP servers."""
         work_root = tmp_path / "project"
         work_root.mkdir()
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -4471,10 +4471,32 @@ class TestRunCommandFailure:
             )
         )
 
-        assert result.status == "failed"
-        assert result.metadata["background"] is False
-        assert result.metadata["timed_out"] is True
-        assert "timed out" in result.error.lower()
+        try:
+            assert result.status == "ok"
+            assert result.metadata["background"] is True
+            assert result.metadata["background_requested"] is False
+            assert result.metadata["background_inferred"] is True
+            assert result.metadata["process_state"] == "running"
+            assert result.metadata["shell_state"] == "running"
+            assert result.metadata["readiness_state"] == "ready"
+            assert result.metadata["timed_out"] is False
+            assert "[background_requested: false]" in result.content
+            assert "[background_inferred: true]" in result.content
+        finally:
+            pid = result.metadata.get("pid") if result.metadata else None
+            if pid:
+                if sys.platform == "win32":
+                    subprocess.run(
+                        ["taskkill", "/PID", str(pid), "/T", "/F"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        check=False,
+                    )
+                else:
+                    try:
+                        os.kill(int(pid), 9)
+                    except OSError:
+                        pass
 
     @pytest.mark.asyncio
     async def test_run_command_background_process_returns_immediately(self, tmp_path):

@@ -27,6 +27,7 @@ from lamtools_core.tool.command_runner import (
     _make_background_http_probe,
     _make_readiness_http_probe,
     _normalize_windows_shell_command,
+    _python_http_server_root,
     resolve_command_shell,
     _resolve_skill_script_paths,
     _run_background_subprocess,
@@ -41,6 +42,42 @@ def split_command_for_path_validation(command: str) -> list[str]:
         return shlex.split(command, posix=False)
     except ValueError:
         return command.split()
+
+
+def _command_lifecycle_metadata(
+    execution: _CommandExecution,
+    *,
+    readiness_requested: bool,
+) -> dict[str, str]:
+    if execution.background:
+        has_process = isinstance(execution.metadata.get("pid"), int)
+        if not execution.error:
+            process_state = "running"
+            shell_state = "running"
+        elif not has_process:
+            process_state = "not_started"
+            shell_state = "not_started"
+        elif execution.error_type == "BackgroundExited":
+            process_state = "exited"
+            shell_state = "exited"
+        else:
+            process_state = "terminated"
+            shell_state = "exited"
+    elif execution.timed_out or execution.error_type == "CancelledError":
+        process_state = "terminated"
+        shell_state = "exited"
+    else:
+        process_state = "exited"
+        shell_state = "exited"
+
+    readiness_state = "not_requested"
+    if readiness_requested:
+        readiness_state = "failed" if execution.error else "ready"
+    return {
+        "process_state": process_state,
+        "shell_state": shell_state,
+        "readiness_state": readiness_state,
+    }
 
 class CommandToolHandlers:
     def __init__(
@@ -98,7 +135,8 @@ class CommandToolHandlers:
                 status="failed", error="'readiness_text' must be a string or null",
             )
         readiness_text = readiness_text or ""
-        if readiness_url and not background:
+        background_inferred = not background and _looks_like_python_http_server(command)
+        if readiness_url and not (background or background_inferred):
             return ToolResult(
                 call_id=call.id, name=call.name,
                 status="failed", error="'readiness_url' requires background=true",
@@ -168,7 +206,7 @@ class CommandToolHandlers:
                 status="failed", error=str(exc),
             )
 
-        run_in_background = background
+        run_in_background = background or background_inferred
         http_probe: _BackgroundHttpProbe | None = None
         execution: _CommandExecution | None = None
         try:
@@ -194,7 +232,8 @@ class CommandToolHandlers:
                         )
                     else:
                         try:
-                            http_probe = _make_background_http_probe(self._work_root, requested_port)
+                            probe_root = _python_http_server_root(command, self._work_root)
+                            http_probe = _make_background_http_probe(probe_root, requested_port)
                         except OSError as exc:
                             return ToolResult(
                                 call_id=call.id,
@@ -263,6 +302,10 @@ class CommandToolHandlers:
             for key, value in dict(call.metadata or {}).items()
             if not str(key).startswith("_runtime_")
         }
+        lifecycle = _command_lifecycle_metadata(
+            execution,
+            readiness_requested=http_probe is not None,
+        )
         output = _format_command_output(
             execution.stdout,
             execution.stderr,
@@ -270,6 +313,9 @@ class CommandToolHandlers:
             command,
             timed_out=execution.timed_out,
             timeout_val=timeout,
+            **lifecycle,
+            background_requested=background,
+            background_inferred=background_inferred,
         )
         metadata = {
             **public_call_metadata,
@@ -280,7 +326,10 @@ class CommandToolHandlers:
             "exit_code": execution.exit_code,
             "timed_out": execution.timed_out,
             "background": execution.background,
+            "background_requested": background,
+            "background_inferred": background_inferred,
             "duration_seconds": execution.duration_seconds,
+            **lifecycle,
             **({"readiness_url": readiness_url} if readiness_url else {}),
             **({"readiness_text": readiness_text} if readiness_url and readiness_text else {}),
             **execution.metadata,
@@ -298,7 +347,10 @@ class CommandToolHandlers:
                 "exit_code": execution.exit_code,
                 "timed_out": execution.timed_out,
                 "background": execution.background,
+                "background_requested": background,
+                "background_inferred": background_inferred,
                 "duration_seconds": execution.duration_seconds,
+                **lifecycle,
                 "stdout": execution.stdout,
                 "stderr": execution.stderr,
                 **({"error": execution.error} if execution.error else {}),
@@ -342,7 +394,6 @@ class CommandToolHandlers:
             artifacts=[artifact],
             metadata=metadata,
         )
-
     async def run_tests(self, call: ToolCall) -> ToolResult:
         """Run tests and return a structured test-result contract."""
         args = call.arguments if isinstance(call.arguments, dict) else {}

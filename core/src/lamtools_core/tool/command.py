@@ -339,6 +339,11 @@ def format_command_output(
     *,
     timed_out: bool = False,
     timeout_val: int | None = None,
+    process_state: str = "",
+    shell_state: str = "",
+    readiness_state: str = "",
+    background_requested: bool | None = None,
+    background_inferred: bool | None = None,
     max_length: int = DEFAULT_MAX_TEXT_LENGTH,
 ) -> str:
     sections: list[str] = [f"[command] {command}"]
@@ -346,6 +351,16 @@ def format_command_output(
         sections.append(f"[exit_code: -1] [TIMED OUT after {timeout_val}s]")
     else:
         sections.append(f"[exit_code: {exit_code}]")
+    if process_state:
+        sections.append(f"[process_state: {process_state}]")
+    if shell_state:
+        sections.append(f"[shell_state: {shell_state}]")
+    if readiness_state:
+        sections.append(f"[readiness_state: {readiness_state}]")
+    if background_requested is not None:
+        sections.append(f"[background_requested: {str(background_requested).lower()}]")
+    if background_inferred is not None:
+        sections.append(f"[background_inferred: {str(background_inferred).lower()}]")
     if stdout:
         sections.append("[stdout]")
         sections.append(stdout.rstrip("\n"))
@@ -367,7 +382,13 @@ def format_running_command_output(
     *,
     max_length: int = DEFAULT_MAX_TEXT_LENGTH,
 ) -> str:
-    sections: list[str] = [f"[command] {command}", "[status: running]"]
+    sections: list[str] = [
+        f"[command] {command}",
+        "[status: running]",
+        "[process_state: running]",
+        "[shell_state: running]",
+        "[readiness_state: not_requested]",
+    ]
     if stdout:
         sections.append("[stdout]")
         sections.append(stdout.rstrip("\n"))

@@ -231,7 +231,7 @@
                           </div>
                           <pre v-if="testResultOutput(part)" class="test-result-output">{{ testResultOutput(part) }}</pre>
                         </div>
-                        <div v-else-if="displayToolInputPreview(part)" class="tool-output tool-input-preview">
+                        <div v-else-if="displayToolInputPreview(part)" v-auto-follow-scroll="displayToolInputPreview(part)" class="tool-output tool-input-preview">
                           <div class="tool-output-meta">
                             <span>{{ toolInputPreviewMeta(part) }}</span>
                           </div>
@@ -385,7 +385,7 @@
                             </div>
                             <pre v-if="testResultOutput(group.part)" class="test-result-output">{{ testResultOutput(group.part) }}</pre>
                           </div>
-                          <div v-else-if="displayToolInputPreview(group.part)" class="tool-output tool-input-preview">
+                          <div v-else-if="displayToolInputPreview(group.part)" v-auto-follow-scroll="displayToolInputPreview(group.part)" class="tool-output tool-input-preview">
                             <div class="tool-output-meta">
                               <span>{{ toolInputPreviewMeta(group.part) }}</span>
                             </div>
@@ -815,7 +815,7 @@
                         </div>
                         <pre v-if="testResultOutput(group.part)" class="test-result-output">{{ testResultOutput(group.part) }}</pre>
                       </div>
-                      <div v-else-if="displayToolInputPreview(group.part)" class="tool-output tool-input-preview">
+                        <div v-else-if="displayToolInputPreview(group.part)" v-auto-follow-scroll="displayToolInputPreview(group.part)" class="tool-output tool-input-preview">
                         <div class="tool-output-meta">
                           <span>{{ toolInputPreviewMeta(group.part) }}</span>
                         </div>
@@ -1090,6 +1090,7 @@
 import type { CoreAttachment, CoreMessage, MessagePart, MessagePartStatus } from '../types'
 import { ref } from 'vue'
 import MarkdownRenderer from './MarkdownRenderer.vue'
+import { autoFollowScrollDirective as vAutoFollowScroll } from '../directives/autoFollowScroll'
 
 defineOptions({ name: 'ChatThread' })
 

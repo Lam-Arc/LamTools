@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { mount } from '@vue/test-utils';
-import { h } from 'vue';
+import { h, nextTick } from 'vue';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
@@ -591,6 +591,57 @@ describe('ChatThread process cards', () => {
     expect(body.exists()).toBe(true);
     expect(wrapper.find('.tool-card-header').text()).toContain('index.html');
     expect(body.text()).toContain('<body>Live</body>');
+  });
+
+  it('follows streaming write and edit previews until the user scrolls upward', async () => {
+    const message = (content: string, toolName: 'write_file' | 'edit_file'): CoreMessage => ({
+      id: 'm-streaming-file-preview',
+      role: 'assistant',
+      content: '',
+      timestamp: '2026-07-16T00:00:00.000Z',
+      metadata: { timeline: true },
+      parts: [{
+        id: 'p-streaming-file-preview',
+        partType: 'tool_call',
+        status: 'running',
+        label: toolName,
+        toolName,
+        toolArgs: { path: 'site/app.js' },
+        inputPreview: {
+          field: toolName === 'write_file' ? 'content' : 'new_string',
+          content,
+          chars: content.length,
+          truncated: false,
+        },
+      }],
+    });
+    const wrapper = mount(ChatThread, {
+      props: {
+        messages: [message('line 1', 'write_file')],
+        processExpandedIds: new Set(['m-streaming-file-preview']),
+      },
+    });
+    await wrapper.find('.tool-card-header').trigger('click');
+
+    const preview = wrapper.find<HTMLElement>('.tool-input-preview');
+    let scrollHeight = 360;
+    Object.defineProperties(preview.element, {
+      clientHeight: { configurable: true, get: () => 100 },
+      scrollHeight: { configurable: true, get: () => scrollHeight },
+      scrollTop: { configurable: true, writable: true, value: 260 },
+    });
+
+    await wrapper.setProps({ messages: [message('line 1\nline 2', 'write_file')] });
+    await nextTick();
+    expect(preview.element.scrollTop).toBe(360);
+
+    preview.element.scrollTop = 100;
+    await preview.trigger('wheel', { deltaY: -1 });
+    await preview.trigger('scroll');
+    scrollHeight = 520;
+    await wrapper.setProps({ messages: [message('line 1\nline 2\nline 3', 'edit_file')] });
+    await nextTick();
+    expect(preview.element.scrollTop).toBe(100);
   });
 
   it('prefers even a tiny running write input preview over progress detail', async () => {

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import socket
 import sys
 import time
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -20,6 +22,7 @@ import lamtools_core.tool.command_runner as command_runner
 import lamtools_core.tool.command_tools as command_tools_module
 from lamtools_core.tool import ToolCall
 from lamtools_core.tool.command_tools import CommandToolHandlers
+from lamtools_core.runtime.background_processes import BackgroundProcessRegistry
 
 
 def test_command_execution_defaults_are_tool_friendly():
@@ -119,6 +122,92 @@ async def test_run_command_uses_resolved_shell_and_reports_it(monkeypatch, tmp_p
     ]
     assert result.metadata["shell"] == "Git Bash"
     assert result.metadata["shell_executable"] == shell.executable
+    assert result.metadata["process_state"] == "exited"
+    assert result.metadata["shell_state"] == "exited"
+    assert result.metadata["readiness_state"] == "not_requested"
+    assert "[process_state: exited]" in result.content
+
+
+@pytest.mark.asyncio
+async def test_python_http_server_is_inferred_as_background_and_probes_served_directory(
+    monkeypatch,
+    tmp_path: Path,
+):
+    site = tmp_path / "site"
+    site.mkdir()
+    captured: dict[str, object] = {}
+
+    async def fake_background(argv, **kwargs):
+        captured["argv"] = argv
+        captured["http_probe"] = kwargs["http_probe"]
+        return CommandExecution(
+            exit_code=0,
+            background=True,
+            stdout="Background process started (pid 4321).",
+            metadata={"pid": 4321, "server_probe_url": kwargs["http_probe"].url},
+        )
+
+    monkeypatch.setattr(command_tools_module, "_run_background_subprocess", fake_background)
+    handlers = CommandToolHandlers(
+        work_root=tmp_path,
+        command_timeout=2,
+        loaded_skill_roots=set(),
+    )
+
+    result = await handlers.run_command(ToolCall(
+        id="server-call",
+        name="run_command",
+        arguments={"command": "python -m http.server 8765 --directory site"},
+    ))
+
+    probe = captured["http_probe"]
+    assert probe is not None
+    assert probe.file_path is not None
+    assert probe.file_path.parent == site
+    assert result.status == "ok"
+    assert result.metadata["background_requested"] is False
+    assert result.metadata["background_inferred"] is True
+    assert result.metadata["process_state"] == "running"
+    assert result.metadata["shell_state"] == "running"
+    assert result.metadata["readiness_state"] == "ready"
+    assert "[readiness_state: ready]" in result.content
+    assert "[background_requested: false]" in result.content
+    assert "[background_inferred: true]" in result.content
+
+
+@pytest.mark.asyncio
+async def test_python_http_server_lifecycle_contract_with_real_process(tmp_path: Path):
+    site = tmp_path / "site"
+    site.mkdir()
+    (site / "index.html").write_text("ready from served directory", encoding="utf-8")
+    with socket.socket() as free_socket:
+        free_socket.bind(("127.0.0.1", 0))
+        port = int(free_socket.getsockname()[1])
+
+    registry = BackgroundProcessRegistry()
+    handlers = CommandToolHandlers(
+        work_root=tmp_path,
+        command_timeout=4,
+        loaded_skill_roots=set(),
+        background_process_registry=registry,
+    )
+    result = await handlers.run_command(ToolCall(
+        id="real-server-call",
+        name="run_command",
+        arguments={"command": f"python -m http.server {port} --directory site"},
+        metadata={"_runtime_session_id": "server-test", "_runtime_run_id": "turn-test"},
+    ))
+    try:
+        assert result.status == "ok", result.error
+        assert result.metadata["process_state"] == "running"
+        assert result.metadata["shell_state"] == "running"
+        assert result.metadata["readiness_state"] == "ready"
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=2) as response:
+            assert "ready from served directory" in response.read().decode("utf-8")
+    finally:
+        registry.cleanup_run("server-test", "turn-test")
+
+    assert registry.list() == []
 
 
 def test_format_command_output_keeps_stdout_and_stderr_separate():

@@ -5,6 +5,7 @@ import contextlib
 import datetime
 import os
 import re
+import shlex
 import shutil
 import socket
 import subprocess
@@ -49,7 +50,7 @@ class _BackgroundHttpProbe:
     port: int | None = None
     path: str = ""
     file_path: Path | None = None
-    timeout_seconds: float = 4.0
+    timeout_seconds: float = 10.0
 
     @property
     def url(self) -> str:
@@ -598,6 +599,28 @@ def _git_bash_path() -> Path | None:
         if candidate.is_file():
             return candidate.resolve()
     return None
+
+
+def _python_http_server_root(command: str, work_root: Path) -> Path:
+    """Resolve http.server's served directory for a same-root readiness probe."""
+    try:
+        tokens = shlex.split(command, posix=True)
+    except ValueError:
+        tokens = command.split()
+    directory = ""
+    for index, token in enumerate(tokens):
+        if token == "--directory" and index + 1 < len(tokens):
+            directory = tokens[index + 1]
+        elif token.startswith("--directory="):
+            directory = token.split("=", 1)[1]
+    if not directory:
+        return work_root.resolve()
+    candidate = (work_root / directory).resolve()
+    try:
+        candidate.relative_to(work_root.resolve())
+    except ValueError:
+        return work_root.resolve()
+    return candidate
 
 
 def resolve_command_shell() -> CommandShell:

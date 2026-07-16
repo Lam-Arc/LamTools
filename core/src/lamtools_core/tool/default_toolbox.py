@@ -274,12 +274,19 @@ DEFAULT_TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
     },
     {
         "name": "run_command",
-        "description": "Run a shell command inside the workspace.",
+        "description": (
+            "Run a shell command inside the workspace. Servers and watchers must use background=true; "
+            "do not append &, nohup, or start. Results separately report process_state, shell_state, "
+            "and readiness_state."
+        ),
         "input_schema": _schema(
             {
                 "command": {"type": "string", "description": "Command to run"},
                 "timeout": {"type": "integer", "description": "Timeout in seconds"},
-                "background": {"type": "boolean", "description": "Start a long-running background process"},
+                "background": {
+                    "type": "boolean",
+                    "description": "Start a server/watcher as a tracked background process instead of shell-level detachment",
+                },
                 "readiness_url": {"type": "string", "description": "HTTP URL to check when background=true"},
                 "readiness_text": {"type": "string", "description": "Optional text expected at readiness_url"},
             },
