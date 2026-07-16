@@ -47,6 +47,13 @@ def test_live_formatter_keeps_writer_compatible_run_item_lines() -> None:
     assert formatter.format(
         core_run_item("status", {"type": "turn", "raw_end_reason": "llm_error"}, status="failed")
     ) == ["[00:00] failed llm_error"]
+    assert formatter.format(
+        core_run_item(
+            "status",
+            {"type": "turn", "raw_end_reason": "failed", "message": "任务失败。"},
+            status="failed",
+        )
+    ) == ["[00:00] failed 任务失败。"]
 
 
 def test_live_formatter_formats_approval_and_compaction_compatibly() -> None:

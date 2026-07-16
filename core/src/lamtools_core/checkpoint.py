@@ -10,6 +10,7 @@ user's Git index.
 from __future__ import annotations
 
 import asyncio
+import copy
 from dataclasses import dataclass
 from datetime import datetime
 import hashlib
@@ -23,10 +24,11 @@ from typing import Any, Literal, Protocol
 import uuid
 from weakref import WeakValueDictionary
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from lamtools_core.app.core_db import (
+    CoreAppEvent,
     CoreCheckpoint,
     CoreCheckpointBlob,
     CoreRestoreOperation,
@@ -34,6 +36,8 @@ from lamtools_core.app.core_db import (
     CoreThreadSnapshot,
     CoreWorkspaceManifest,
 )
+from lamtools_core.app.event_store import SqlAlchemyAppEventStore
+from lamtools_core.app.snapshot_store import CoreAppSnapshotProjector
 from lamtools_core.app.sqlite_write import SQLiteWriteCoordinator
 from lamtools_core.app.operation_catalog import OperationCatalog, OperationRequest, OperationResult
 
@@ -179,7 +183,7 @@ class CoreCheckpointCoordinator:
     async def _capture(self, *, session_id: str, turn_id: str, actor_kind: str) -> CheckpointRef:
         manifest_hash, entries, blobs = await asyncio.to_thread(self._capture_workspace)
         root_session_id = _root_session_id(session_id)
-        conversation = await self._read_conversation(root_session_id)
+        conversation = await self._read_conversation(root_session_id, exclude_turn_id=turn_id)
         checkpoint_id = uuid.uuid4().hex
         created_at = datetime.now()
 
@@ -208,13 +212,32 @@ class CoreCheckpointCoordinator:
 
         return await self.write_coordinator.run(write)
 
-    async def _read_conversation(self, root_session_id: str) -> dict[str, Any]:
+    async def _read_conversation(
+        self,
+        root_session_id: str,
+        *,
+        exclude_turn_id: str = "",
+    ) -> dict[str, Any]:
         async with self.session_factory() as db:
             runtime = await db.get(CoreRuntimeSession, root_session_id)
             snapshot = await db.get(CoreThreadSnapshot, root_session_id)
+            events = await SqlAlchemyAppEventStore(CoreAppEvent).list_thread(
+                db,
+                thread_id=root_session_id,
+            )
+        kept_events = [
+            event
+            for event in events
+            if not exclude_turn_id or str(event.turn_id or "") != exclude_turn_id
+        ]
         return {
             "runtime": _runtime_payload(runtime),
-            "projection": _projection_payload(snapshot),
+            "projection": _projection_payload_without_turn(
+                snapshot,
+                excluded_turn_id=exclude_turn_id,
+                kept_events=kept_events,
+            ),
+            "events": [event.to_dict() for event in kept_events],
         }
 
     def _capture_workspace(self) -> tuple[str, dict[str, Any], list[tuple[str, int, str]]]:
@@ -360,6 +383,7 @@ class CoreCheckpointCoordinator:
         conversation = dict(target.conversation_json or {})
         runtime_payload = conversation.get("runtime")
         projection_payload = conversation.get("projection")
+        events_payload = conversation.get("events")
 
         async def write(db: Any) -> None:
             runtime = await db.get(CoreRuntimeSession, target.root_session_id)
@@ -386,6 +410,15 @@ class CoreCheckpointCoordinator:
                 projection.updated_at = datetime.now()
             elif projection is not None:
                 await db.delete(projection)
+
+            if isinstance(events_payload, list):
+                await db.execute(
+                    delete(CoreAppEvent).where(CoreAppEvent.thread_id == target.root_session_id)
+                )
+                for event_payload in events_payload:
+                    if not isinstance(event_payload, dict):
+                        continue
+                    db.add(_app_event_row(event_payload, thread_id=target.root_session_id))
 
             operation = await db.get(CoreRestoreOperation, operation_id)
             if operation is None:
@@ -592,6 +625,55 @@ def _projection_payload(row: CoreThreadSnapshot | None) -> dict[str, Any] | None
         "snapshot_seq": int(row.snapshot_seq or 0),
         "snapshot_json": dict(row.snapshot_json or {}),
     }
+
+
+def _projection_payload_without_turn(
+    row: CoreThreadSnapshot | None,
+    *,
+    excluded_turn_id: str,
+    kept_events: list[Any],
+) -> dict[str, Any] | None:
+    payload = _projection_payload(row)
+    if payload is None or not excluded_turn_id:
+        return payload
+    state = copy.deepcopy(payload.get("snapshot_json") or {})
+    CoreAppSnapshotProjector().remove_turns(state, {excluded_turn_id})
+    kept_event_ids = {str(event.event_id) for event in kept_events}
+    state["seen_event_ids"] = [
+        event_id for event_id in list(state.get("seen_event_ids") or []) if str(event_id) in kept_event_ids
+    ]
+    snapshot_seq = max((int(event.seq or 0) for event in kept_events), default=0)
+    state["snapshot_seq"] = snapshot_seq
+    core = state.get("core")
+    if isinstance(core, dict):
+        core["seen_event_ids"] = [
+            event_id for event_id in list(core.get("seen_event_ids") or []) if str(event_id) in kept_event_ids
+        ]
+        core["snapshot_seq"] = snapshot_seq
+    return {
+        "snapshot_seq": snapshot_seq,
+        "snapshot_json": state,
+    }
+
+
+def _app_event_row(payload: dict[str, Any], *, thread_id: str) -> CoreAppEvent:
+    created_at_value = payload.get("created_at")
+    try:
+        created_at = datetime.fromisoformat(str(created_at_value)) if created_at_value else datetime.now()
+    except ValueError:
+        created_at = datetime.now()
+    return CoreAppEvent(
+        event_id=str(payload.get("event_id") or uuid.uuid4().hex[:16]),
+        thread_id=thread_id,
+        seq=int(payload.get("seq") or 0),
+        turn_id=str(payload.get("turn_id") or "") or None,
+        item_id=str(payload.get("item_id") or "") or None,
+        parent_item_id=str(payload.get("parent_item_id") or "") or None,
+        client_message_id=str(payload.get("client_message_id") or "") or None,
+        method=str(payload.get("method") or ""),
+        payload_json=dict(payload.get("payload") or {}),
+        created_at=created_at,
+    )
 
 
 def _safe_workspace_path(work_root: Path, relative: str) -> Path:

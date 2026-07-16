@@ -207,7 +207,13 @@ class CliLiveFormatter:
                 detail = f"\u6a21\u578b\u8c03\u7528 {self.llm_call_count} \u6b21" if self.llm_call_count else ""
                 return [self.line("done", detail)]
             if status in {"failed", "cancelled", "error"}:
-                reason = str(payload.get("raw_end_reason") or payload.get("reason") or status)
+                reason = str(
+                    payload.get("error")
+                    or payload.get("message")
+                    or payload.get("raw_end_reason")
+                    or payload.get("reason")
+                    or status
+                )
                 self.last_status = f"failed:{reason}"
                 return [self.line("failed", reason)]
             if status:

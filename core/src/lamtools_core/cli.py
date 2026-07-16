@@ -568,13 +568,8 @@ def build_parser() -> argparse.ArgumentParser:
     run = sub.add_parser("run", help="Start a Core Agent task")
     run.add_argument("message", nargs="+")
     run.add_argument("--model-id", default="", help="Model record id, provider model id, or display name")
-    run.add_argument("--config-db", default="", help="SQLite config database containing llm_providers/llm_models")
-    run.add_argument("--core-db", default="", help="Core-owned SQLite runtime database")
     run.add_argument("--thread-id", default="", help="Stable Core thread/session id")
     run.add_argument("--work-root", "--project", dest="work_root", default="")
-    run.add_argument("--run-dir", default="")
-    run.add_argument("--adapter-dir", action="append", default=[])
-    run.add_argument("--plugin-root", action="append", default=[], help="Plugin root containing */plugin.json")
     run.add_argument("--thinking-budget", type=int, default=10000)
     run.add_argument("--no-thinking", action="store_true")
     run.add_argument("--shallow-thinking", action="store_true", help="Require a prompt-based shallow thinking block")
@@ -987,22 +982,6 @@ async def cmd_attachment_upload(args: argparse.Namespace) -> int:
 
 
 async def cmd_run(args: argparse.Namespace) -> int:
-    unsupported = [
-        flag
-        for flag, value in (
-            ("--config-db", getattr(args, "config_db", "")),
-            ("--core-db", getattr(args, "core_db", "")),
-            ("--run-dir", getattr(args, "run_dir", "")),
-            ("--adapter-dir", getattr(args, "adapter_dir", [])),
-            ("--plugin-root", getattr(args, "plugin_root", [])),
-        )
-        if value
-    ]
-    if unsupported:
-        raise ValueError(
-            f"{', '.join(unsupported)} configure the Core service and cannot be applied per turn; "
-            "pass them to core serve instead"
-        )
     compact_trigger_tokens = getattr(args, "compact_trigger_tokens", None)
     compact_limit_tokens = getattr(args, "compact_limit_tokens", None)
     if compact_trigger_tokens is not None and compact_trigger_tokens <= 0:
@@ -1022,7 +1001,7 @@ async def cmd_run(args: argparse.Namespace) -> int:
         return await client.start_turn(
             thread_id=thread_id,
             input_items=[{"type": "text", "text": " ".join(args.message)}],
-            work_root=args.work_root or _default_work_root(),
+            work_root=str(args.work_root or _default_work_root()),
             model_id=args.model_id or None,
             thinking_enabled=not bool(args.no_thinking),
             thinking_budget=args.thinking_budget,

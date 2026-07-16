@@ -7,10 +7,11 @@ from typing import Any
 
 import pytest
 
-from lamtools_core.app import open_core_app_db
+from lamtools_core.app import AppEventInput, open_core_app_db
 from lamtools_core.app.base_agent import CoreBaseAgentConfig, CoreBaseAgentKit
+from lamtools_core.app.core_db import show_core_session
 from lamtools_core.app.core_session_store import CoreDbSessionStore
-from lamtools_core.event import CollectingEventSink
+from lamtools_core.event import CollectingEventSink, RunItemEvent
 from lamtools_core.kernel import CoreLoopKernel
 from lamtools_core.llm import LLMRequest, LLMResponse, LLMStreamEvent
 from lamtools_core.runtime import InMemoryRuntimeStateStore, RuntimeState, RuntimeTurnInput
@@ -85,6 +86,76 @@ def _assert_workspace_after_turn(work_root: Path) -> None:
     assert (work_root / "created.txt").read_text(encoding="utf-8") == "created-after\n"
     assert (work_root / "ignored.txt").read_text(encoding="utf-8") == "ignored-after\n"
     assert (work_root / "created-ignored.txt").read_text(encoding="utf-8") == "created-ignored-after\n"
+
+
+async def _append_turn_start(db: Any, *, session_id: str, turn_id: str, text: str) -> None:
+    async def write(session: Any) -> None:
+        await db.persistence.append_many(
+            session,
+            [
+                AppEventInput(
+                    thread_id=session_id,
+                    turn_id=turn_id,
+                    method="turn/accepted",
+                    payload={"type": "turn", "status": "running", "input": [{"type": "text", "text": text}]},
+                ),
+                AppEventInput(
+                    thread_id=session_id,
+                    turn_id=turn_id,
+                    item_id=f"{turn_id}:user",
+                    method="item/started",
+                    payload={
+                        "type": "userMessage",
+                        "status": "completed",
+                        "content": [{"type": "text", "text": text}],
+                    },
+                ),
+                AppEventInput(
+                    thread_id=session_id,
+                    turn_id=turn_id,
+                    item_id=f"{turn_id}:running",
+                    method="core/runItem",
+                    payload=RunItemEvent(
+                        kind="status",
+                        thread_id=session_id,
+                        turn_id=turn_id,
+                        item_id=f"{turn_id}:running",
+                        status="running",
+                        payload={"type": "turn", "status": "running"},
+                    ).to_dict(),
+                ),
+            ],
+        )
+
+    await db.persistence.write(write)
+
+
+async def _append_turn_completed(db: Any, *, session_id: str, turn_id: str, message: str) -> None:
+    async def write(session: Any) -> None:
+        await db.persistence.append_run_item(
+            session,
+            RunItemEvent(
+                kind="message",
+                thread_id=session_id,
+                turn_id=turn_id,
+                item_id=f"{turn_id}:assistant",
+                status="completed",
+                payload={"type": "agentMessage", "content": message},
+            ),
+        )
+        await db.persistence.append_run_item(
+            session,
+            RunItemEvent(
+                kind="status",
+                thread_id=session_id,
+                turn_id=turn_id,
+                item_id=f"{turn_id}:terminal",
+                status="completed",
+                payload={"type": "turn", "status": "completed", "message": message},
+            ),
+        )
+
+    await db.persistence.write(write)
 
 
 @pytest.mark.asyncio
@@ -167,6 +238,80 @@ async def test_checkpoint_restores_conversation_and_all_workspace_file_classes_a
             {"role": "assistant", "content": "second turn"},
         ]
         _assert_workspace_after_turn(work_root)
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_restore_and_undo_keep_runtime_projection_and_events_consistent(tmp_path: Path) -> None:
+    session_id = "session-live-rollback"
+    first_turn = "turn-1"
+    second_turn = "turn-2"
+    work_root = tmp_path / "workspace"
+    work_root.mkdir()
+    db = await open_core_app_db(tmp_path / "core.db")
+    coordinator = _checkpoint_coordinator_type()(
+        work_root=work_root,
+        session_factory=db.session_factory,
+        write_coordinator=db.persistence.write_coordinator,
+        storage_root=tmp_path / "checkpoint-data",
+    )
+    try:
+        await _append_turn_start(db, session_id=session_id, turn_id=first_turn, text="first")
+        await _append_turn_completed(db, session_id=session_id, turn_id=first_turn, message="FIRST_OK")
+        await db.runtime_state_store.save_checkpoint(
+            RuntimeState(session_id=session_id, run_id=first_turn, status="completed"),
+            [{"role": "user", "content": "first"}, {"role": "assistant", "content": "FIRST_OK"}],
+        )
+
+        await _append_turn_start(db, session_id=session_id, turn_id=second_turn, text="second")
+        checkpoint = await coordinator.begin_turn(
+            session_id=session_id,
+            turn_id=second_turn,
+            actor_kind="main",
+        )
+        await _append_turn_completed(db, session_id=session_id, turn_id=second_turn, message="SECOND_OK")
+        state = await db.runtime_state_store.get(session_id)
+        assert state is not None
+        state.run_id = second_turn
+        state.status = "completed"
+        await db.runtime_state_store.save_checkpoint(
+            state,
+            [
+                {"role": "user", "content": "first"},
+                {"role": "assistant", "content": "FIRST_OK"},
+                {"role": "user", "content": "second"},
+                {"role": "assistant", "content": "SECOND_OK"},
+            ],
+        )
+
+        restored = await coordinator.restore(checkpoint.id)
+        restored_detail = await show_core_session(db, session_id)
+
+        assert restored_detail["snapshot"]["status"] == "completed"
+        assert {event["turn_id"] for event in restored_detail["events"]} == {first_turn}
+        assert await db.runtime_state_store.get_history(session_id) == [
+            {"role": "user", "content": "first"},
+            {"role": "assistant", "content": "FIRST_OK"},
+        ]
+
+        restarted_coordinator = _checkpoint_coordinator_type()(
+            work_root=work_root,
+            session_factory=db.session_factory,
+            write_coordinator=db.persistence.write_coordinator,
+            storage_root=tmp_path / "checkpoint-data",
+        )
+        await restarted_coordinator.undo(restored.operation_id)
+        undone_detail = await show_core_session(db, session_id)
+
+        assert undone_detail["snapshot"]["status"] == "completed"
+        assert {event["turn_id"] for event in undone_detail["events"]} == {first_turn, second_turn}
+        assert await db.runtime_state_store.get_history(session_id) == [
+            {"role": "user", "content": "first"},
+            {"role": "assistant", "content": "FIRST_OK"},
+            {"role": "user", "content": "second"},
+            {"role": "assistant", "content": "SECOND_OK"},
+        ]
     finally:
         await db.close()
 

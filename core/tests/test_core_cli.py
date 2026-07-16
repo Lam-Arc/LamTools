@@ -14,6 +14,11 @@ from lamtools_core.llm import LLMRequest, LLMResponse, LLMStreamEvent, LLMToolCa
 from lamtools_core.llm.shallow_thinking import SHALLOW_THINKING_PROMPT
 
 
+@pytest.fixture(autouse=True)
+def isolate_core_cli_default_database(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("LAMTOOLS_CORE_DB", str(tmp_path / "default-core.db"))
+
+
 class ScriptedCoreCliLLM:
     def __init__(self) -> None:
         self.requests: list[LLMRequest] = []
@@ -222,8 +227,6 @@ def test_core_cli_parser_exposes_agent_run_options(tmp_path: Path) -> None:
             "xopkimik26",
             "--work-root",
             str(tmp_path),
-            "--core-db",
-            str(tmp_path / "core.db"),
             "--thread-id",
             "thread-cli",
             "--shallow-thinking",
@@ -235,7 +238,6 @@ def test_core_cli_parser_exposes_agent_run_options(tmp_path: Path) -> None:
     assert args.message == ["write a document"]
     assert args.model_id == "xopkimik26"
     assert args.work_root == str(tmp_path)
-    assert args.core_db == str(tmp_path / "core.db")
     assert args.thread_id == "thread-cli"
     assert args.shallow_thinking is True
     assert args.raw is True
@@ -664,6 +666,27 @@ async def test_core_cli_run_starts_and_watches_one_live_connection(monkeypatch, 
 
 
 @pytest.mark.asyncio
+async def test_core_cli_run_serializes_the_default_work_root(monkeypatch, tmp_path: Path) -> None:
+    observed: dict[str, object] = {}
+
+    class Client:
+        async def start_turn(self, **kwargs):
+            observed["start"] = kwargs
+            return {"runtime_start": {"turn_id": "turn-new"}}
+
+    async def fake_watch(args, *, thread_id, on_connected=None):
+        await on_connected(Client())
+        return 0
+
+    monkeypatch.setattr(core_cli, "_watch_live_cli", fake_watch)
+    monkeypatch.setattr(core_cli, "_default_work_root", lambda: tmp_path)
+    args = build_parser().parse_args(["run", "hello", "--raw"])
+
+    assert await args.func(args) == 0
+    assert observed["start"]["work_root"] == str(tmp_path)
+
+
+@pytest.mark.asyncio
 async def test_core_cli_start_watch_uses_one_connection_and_binds_started_turn(monkeypatch) -> None:
     observed: dict[str, object] = {}
 
@@ -685,12 +708,10 @@ async def test_core_cli_start_watch_uses_one_connection_and_binds_started_turn(m
     assert observed["start_result"] == {"runtime_start": {"turn_id": "turn-new"}}
 
 
-@pytest.mark.asyncio
-async def test_core_cli_run_fails_fast_for_service_only_options(tmp_path: Path) -> None:
-    args = build_parser().parse_args(["run", "hello", "--config-db", str(tmp_path / "config.db")])
-
-    with pytest.raises(ValueError, match="--config-db.*core serve"):
-        await args.func(args)
+@pytest.mark.parametrize("flag", ["--config-db", "--core-db", "--run-dir", "--adapter-dir", "--plugin-root"])
+def test_core_cli_run_does_not_advertise_service_only_options(flag: str, tmp_path: Path) -> None:
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["run", "hello", flag, str(tmp_path / "value")])
 
 
 @pytest.mark.asyncio
@@ -969,6 +990,7 @@ async def test_core_cli_run_loads_plugin_skill_roots(tmp_path: Path) -> None:
             model_id="fake-model",
             work_root=tmp_path / "workspace",
             run_dir=tmp_path / "run",
+            core_db=tmp_path / "core.db",
             plugin_roots=(plugin_root,),
         ),
         llm_client=llm,
@@ -977,3 +999,4 @@ async def test_core_cli_run_loads_plugin_skill_roots(tmp_path: Path) -> None:
     events = Path(summary["artifacts"]["events_redacted_json"]).read_text(encoding="utf-8")
     assert summary["result"]["decision"] == "done"
     assert "plugin skill resource" in events
+    assert Path(summary["artifacts"]["core_db"]).parent == tmp_path
