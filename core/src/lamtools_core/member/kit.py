@@ -22,6 +22,14 @@ class PromptFragment:
 
 @dataclass(frozen=True)
 class VerificationPolicy:
+    """Member completion policy consumed by the shared runtime Kit.
+
+    ``required`` establishes the minimum runtime invariant: a task cannot
+    complete without a successful, non-empty tool observation. Members may
+    narrow eligible tools or categories and tune attempts through metadata;
+    semantic claim checks remain member-owned workflows.
+    """
+
     name: str = "default"
     required: bool = False
     metadata: dict[str, Any] = field(default_factory=dict)

@@ -1,0 +1,6 @@
+{
+  "name": "sage-builtin",
+  "version": "0.1.0",
+  "description": "Built-in evidence-first research workflows for LamSage.",
+  "skills": ["./skills"]
+}

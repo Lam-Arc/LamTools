@@ -210,8 +210,9 @@ class ScriptedRepeatedSubAgentApprovalLLM:
 
 
 class ScriptedLoadSkillLLM:
-    def __init__(self) -> None:
+    def __init__(self, *, skill_name: str = "sample") -> None:
         self.requests: list[LLMRequest] = []
+        self.skill_name = skill_name
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
         raise AssertionError("core agent operation should use streaming when available")
@@ -222,13 +223,19 @@ class ScriptedLoadSkillLLM:
             tool_names = {tool["function"]["name"] for tool in request.tools or []}
             assert "load_skill" in tool_names
             assert "Available skills:" in request.messages[0].content
-            assert "<name>sample</name>" in request.messages[0].content
+            assert f"<name>{self.skill_name}</name>" in request.messages[0].content
             yield LLMStreamEvent(
                 kind="done",
-                tool_calls=[LLMToolCall(id="call-skill", name="load_skill", arguments={"name": "sample"})],
+                tool_calls=[
+                    LLMToolCall(
+                        id="call-skill",
+                        name="load_skill",
+                        arguments={"name": self.skill_name},
+                    )
+                ],
             )
             return
-        yield LLMStreamEvent(kind="content_delta", content="Loaded sample skill.")
+        yield LLMStreamEvent(kind="content_delta", content=f"Loaded {self.skill_name} skill.")
         yield LLMStreamEvent(kind="done")
 
 
@@ -655,6 +662,29 @@ async def test_core_agent_operation_exposes_load_skill_to_model(tmp_path):
     assert tool_results
     assert "<skill_content name=\"sample\">" in tool_results[0]["payload"]["tool_result"]
     assert len(llm.requests) == 2
+
+
+@pytest.mark.asyncio
+async def test_core_agent_operation_exposes_builtin_observer_skill_outside_repo(tmp_path):
+    work_root = tmp_path / "external-workspace"
+    work_root.mkdir()
+    llm = ScriptedLoadSkillLLM(skill_name="observe-events")
+    catalog = create_core_agent_operations(
+        spec=CoreAgentSpec(),
+        paths=CoreAgentPaths(data_dir=tmp_path / "data", work_root=work_root),
+        model_provider=llm,
+    )
+
+    result = await catalog.execute(
+        "turn.start",
+        {"thread_id": "thread-observe-events", "message": "monitor external events"},
+    )
+
+    tool_result = next(item for item in result.payload["run_items"] if item["kind"] == "tool_result")
+    assert result.status == "ok"
+    assert result.payload["message"] == "Loaded observe-events skill."
+    assert tool_result["status"] == "completed"
+    assert '<skill_content name="observe-events">' in tool_result["payload"]["tool_result"]
 
 
 @pytest.mark.asyncio

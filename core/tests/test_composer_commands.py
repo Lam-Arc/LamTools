@@ -1,7 +1,10 @@
 from pathlib import Path
 
+import lamtools_core.composer_commands as composer_commands
 from lamtools_core.composer_commands import (
     build_composer_command_catalog,
+    default_core_resource_roots,
+    default_core_skill_roots,
     load_command_catalog,
     prepare_composer_input,
 )
@@ -11,6 +14,26 @@ from lamtools_core.skills import SkillRegistry
 def write_json(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
+
+
+def test_default_core_resource_roots_prefers_packaged_resources(monkeypatch, tmp_path: Path):
+    package_root = tmp_path / "site-packages" / "lamtools_core"
+    module_path = package_root / "composer_commands.py"
+    resource_root = package_root / "resources"
+    resource_root.mkdir(parents=True)
+    monkeypatch.setattr(composer_commands, "__file__", str(module_path))
+
+    assert default_core_resource_roots() == [resource_root]
+
+
+def test_default_core_skill_roots_do_not_expose_the_whole_core_package(monkeypatch, tmp_path: Path):
+    package_root = tmp_path / "site-packages" / "lamtools_core"
+    module_path = package_root / "composer_commands.py"
+    skill_root = package_root / "resources" / "skills"
+    skill_root.mkdir(parents=True)
+    monkeypatch.setattr(composer_commands, "__file__", str(module_path))
+
+    assert default_core_skill_roots() == [skill_root]
 
 
 def test_catalog_loads_core_before_member_and_blocks_overrides(tmp_path: Path):

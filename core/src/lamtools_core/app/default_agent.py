@@ -15,10 +15,11 @@ from lamtools_core.llm import ChatMessage
 from lamtools_core.composer_commands import (
     build_composer_command_catalog,
     default_core_resource_roots,
+    default_core_skill_roots,
     normalize_command_name,
 )
 from lamtools_core.checkpoint import CoreCheckpointCoordinator, register_checkpoint_operations
-from lamtools_core.member import PromptFragment, StaticMemberKit
+from lamtools_core.member import MemberKit, PromptFragment, StaticMemberKit
 from lamtools_core.runtime import (
     InMemoryRuntimeStateStore,
     RuntimeApprovalStore,
@@ -94,6 +95,7 @@ class CoreAgentRuntimeOptions:
 def create_core_agent_operations(
     *,
     spec: CoreAgentSpec | None = None,
+    member_kit: MemberKit | None = None,
     paths: CoreAgentPaths,
     model_provider: ModelProvider | ModelProviderCallable,
     plugin_roots: list[Path | str] | None = None,
@@ -115,7 +117,7 @@ def create_core_agent_operations(
     spec = spec or CoreAgentSpec()
     runtime_state_store = runtime_state_store or InMemoryRuntimeStateStore()
     runtime_task_registry = runtime_task_registry or default_runtime_task_registry()
-    kit = StaticMemberKit(
+    kit = member_kit or StaticMemberKit(
         id=spec.member_id,
         display_name=spec.name,
         prompts=spec.prompt_fragments,
@@ -278,6 +280,7 @@ def create_core_agent_operations(
                     kit=CoreBaseAgentKit(
                         work_root=runtime_work_root,
                         config=CoreBaseAgentConfig(
+                            agent_id=spec.id,
                             model_id=runtime_options.model_id,
                             instructions=spec.instructions,
                             thinking_enabled=runtime_options.thinking_enabled,
@@ -287,6 +290,7 @@ def create_core_agent_operations(
                             approval_policy=approval_policy,  # type: ignore[arg-type]
                         ),
                         toolbox=toolbox,
+                        verification_policy=kit.verification_policy(),
                     ),
                     llm_client=runtime_model_provider,  # type: ignore[arg-type]
                     state_store=runtime_state_store,
@@ -703,6 +707,7 @@ def create_core_agent_operations(
                         kit=CoreBaseAgentKit(
                             work_root=runtime_work_root,
                             config=CoreBaseAgentConfig(
+                                agent_id=spec.id,
                                 model_id=runtime_options.model_id,
                                 instructions=spec.instructions,
                                 thinking_enabled=runtime_options.thinking_enabled,
@@ -711,6 +716,7 @@ def create_core_agent_operations(
                                 max_tokens=runtime_options.max_tokens,
                             ),
                             toolbox=toolbox,
+                            verification_policy=kit.verification_policy(),
                         ),
                         llm_client=runtime_model_provider,  # type: ignore[arg-type]
                         state_store=runtime_state_store,
@@ -964,6 +970,7 @@ def create_core_agent_operations(
                     kit=CoreBaseAgentKit(
                         work_root=runtime_work_root,
                         config=CoreBaseAgentConfig(
+                            agent_id=spec.id,
                             model_id=runtime_options.model_id,
                             instructions=spec.instructions,
                             thinking_enabled=runtime_options.thinking_enabled,
@@ -972,6 +979,7 @@ def create_core_agent_operations(
                             max_tokens=runtime_options.max_tokens,
                         ),
                         toolbox=toolbox,
+                        verification_policy=kit.verification_policy(),
                     ),
                     llm_client=runtime_model_provider,  # type: ignore[arg-type]
                     state_store=runtime_state_store,
@@ -1496,7 +1504,10 @@ async def _build_core_runtime_toolbox(
     if hook_engine is not None:
         hook_engine.set_mcp_caller(registry if mcp_tool_specs else None)
     normalized_policy = approval_policy if approval_policy in {"require", "auto_approve"} else "require"
-    skill_roots = set(plugin_assembly.get("skill_roots") or [])
+    skill_roots = {
+        *default_core_skill_roots(),
+        *(plugin_assembly.get("skill_roots") or []),
+    }
     sub_agent_runner = None
     if llm_client is not None:
         sub_agent_runner = KernelSubAgentRunner(

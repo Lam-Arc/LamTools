@@ -8,7 +8,6 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),
-      '@lamtools/ui': fileURLToPath(new URL('../../../core/ui/src/index.ts', import.meta.url)),
     },
   },
   server: {
@@ -17,6 +16,7 @@ export default defineConfig({
       '/api': {
         target: process.env.VITE_API_TARGET || 'http://127.0.0.1:__BACKEND_PORT__',
         changeOrigin: true,
+        ws: true,
       },
     },
   },

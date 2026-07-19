@@ -50,8 +50,24 @@ def test_auto_allow_tools_are_read_only():
 
 def test_ask_user_tools_are_mutable():
     ask_tools = [name for name, tier in WRITER_TOOL_PERMISSIONS.items() if tier == ASK_USER]
-    expected = {"write_file", "edit_file", "run_command", "web_fetch", "run_tests", "mcp_tool"}
+    expected = {
+        "write_file",
+        "edit_file",
+        "document_normalize",
+        "run_command",
+        "web_fetch",
+        "run_tests",
+        "mcp_tool",
+        "arrange",
+    }
     assert set(ask_tools) == expected
+
+
+def test_goal_and_arrange_are_model_visible_core_tools():
+    specs = {spec["name"]: spec for spec in WRITER_TOOL_SPECS}
+
+    assert specs["goal"]["permission"] == AUTO_ALLOW
+    assert specs["arrange"]["permission"] == ASK_USER
 
 
 def test_writer_tool_spec_returns_correct_spec():

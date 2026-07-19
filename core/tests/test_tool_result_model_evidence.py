@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import pytest
 
-from lamtools_core.app.base_agent import CoreBaseAgentKit
+from lamtools_core.app.base_agent import CoreBaseAgentConfig, CoreBaseAgentKit
 from lamtools_core.kernel import KernelStep, KernelTurn, VerificationResult
-from lamtools_core.runtime import RuntimeState, RuntimeToolStep
+from lamtools_core.runtime import RuntimeState, RuntimeToolStep, RuntimeTurnInput
 from lamtools_core.prompt import PromptContext
 from lamtools_core.tool import ToolArtifact, ToolCall, ToolResult
 
@@ -25,6 +25,20 @@ class _CapturingToolbox:
 
     def skill_index(self):
         return ""
+
+
+@pytest.mark.asyncio
+async def test_base_agent_records_the_configured_agent_identity(tmp_path):
+    state = RuntimeState(session_id="sage-identity")
+    kit = CoreBaseAgentKit(
+        work_root=tmp_path,
+        config=CoreBaseAgentConfig(agent_id="sage-agent"),
+        toolbox=_CapturingToolbox(),  # type: ignore[arg-type]
+    )
+
+    await kit.on_run_start(state, RuntimeTurnInput(user_message="research"))
+
+    assert state.metadata["agent_id"] == "sage-agent"
 
 
 @pytest.mark.asyncio

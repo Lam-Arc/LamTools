@@ -33,6 +33,7 @@ export function useShellLayout(options: ShellLayoutOptions) {
   const rightOpen = ref(false)
   const leftPinned = ref(true)
   const rightPinned = ref(false)
+  const isNarrowViewport = ref(false)
   const density = ref<DensityMode>(options.density ?? 'standard')
   const contentWidth = ref(options.contentWidth ?? 780)
   const theme = ref<ThemeData>(options.theme ?? { ...DEFAULT_THEME })
@@ -70,6 +71,31 @@ export function useShellLayout(options: ShellLayoutOptions) {
 
   function onRightDrawerLeave() {
     if (!rightPinned.value) rightOpen.value = false
+  }
+
+  function openLeftDrawer() {
+    if (isNarrowViewport.value) rightOpen.value = false
+    leftOpen.value = true
+  }
+
+  function openRightDrawer() {
+    if (isNarrowViewport.value) leftOpen.value = false
+    rightOpen.value = true
+  }
+
+  function toggleLeftDrawer() {
+    if (leftOpen.value) leftOpen.value = false
+    else openLeftDrawer()
+  }
+
+  function toggleRightDrawer() {
+    if (rightOpen.value) rightOpen.value = false
+    else openRightDrawer()
+  }
+
+  function closeDrawers() {
+    leftOpen.value = false
+    rightOpen.value = false
   }
 
   function onPointerDown(event: PointerEvent) {
@@ -121,10 +147,22 @@ export function useShellLayout(options: ShellLayoutOptions) {
     }
     // Escape → close drawers
     if (event.key === 'Escape') {
-      if (!leftPinned.value) leftOpen.value = false
-      if (!rightPinned.value) rightOpen.value = false
+      if (isNarrowViewport.value) closeDrawers()
+      else {
+        if (!leftPinned.value) leftOpen.value = false
+        if (!rightPinned.value) rightOpen.value = false
+      }
       return
     }
+  }
+
+  let narrowMediaQuery: MediaQueryList | undefined
+  function syncViewportMode(event: MediaQueryList | MediaQueryListEvent) {
+    isNarrowViewport.value = event.matches
+    if (!event.matches) return
+    leftPinned.value = false
+    rightPinned.value = false
+    closeDrawers()
   }
 
   // --- auto-save with debounce ---
@@ -137,12 +175,18 @@ export function useShellLayout(options: ShellLayoutOptions) {
   onMounted(() => {
     document.addEventListener('pointerdown', onPointerDown)
     document.addEventListener('keydown', onKeydown)
+    narrowMediaQuery = window.matchMedia?.('(max-width: 640px)')
+    if (narrowMediaQuery) {
+      syncViewportMode(narrowMediaQuery)
+      narrowMediaQuery.addEventListener('change', syncViewportMode)
+    }
     loadSettings()
   })
 
   onUnmounted(() => {
     document.removeEventListener('pointerdown', onPointerDown)
     document.removeEventListener('keydown', onKeydown)
+    narrowMediaQuery?.removeEventListener('change', syncViewportMode)
     clearTimeout(saveTimer)
   })
 
@@ -177,6 +221,7 @@ export function useShellLayout(options: ShellLayoutOptions) {
     rightOpen,
     leftPinned,
     rightPinned,
+    isNarrowViewport,
     density,
     contentWidth,
     theme,
@@ -188,6 +233,11 @@ export function useShellLayout(options: ShellLayoutOptions) {
     toggleRightPinned,
     onLeftDrawerLeave,
     onRightDrawerLeave,
+    openLeftDrawer,
+    openRightDrawer,
+    toggleLeftDrawer,
+    toggleRightDrawer,
+    closeDrawers,
     goSettings: options.onSettings ?? (() => {}),
     // persistence
     loadSettings,

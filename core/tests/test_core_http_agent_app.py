@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 import threading
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -12,9 +14,14 @@ from lamtools_core.app.http_agent_app import (
     CoreConfigRoutingLLMClient,
     create_core_agent_http_app,
 )
+from lamtools_core.app import CoreAgentSpec
 from lamtools_core.cli import CoreHttpLLMClient, list_core_cli_sessions
 from lamtools_core.llm import LLMRequest, LLMStreamEvent
 from lamtools_core.app.base_agent import CoreBaseAgentKit
+from lamtools_core.app.core_db import open_core_app_db
+from lamtools_core.member import MemberManifest
+from lamtools_core.runtime.arrange import ArrangeManager
+from lamtools_core.runtime.observer import prepare_observer
 
 
 def _write_config_db(path: Path) -> None:
@@ -118,6 +125,287 @@ def test_core_agent_http_app_exposes_live_app_server(tmp_path: Path) -> None:
             initialized = websocket.receive_json()
 
     assert initialized["result"]["protocolVersion"] == "core.app_server.v1"
+
+
+def test_core_agent_http_app_uses_member_identity_and_manifest(tmp_path: Path) -> None:
+    config_db = tmp_path / "lamtools-config.db"
+    _write_config_db(config_db)
+    manifest = MemberManifest(
+        id="sage",
+        name="LamSage",
+        display_name="Sage",
+        version="0.1.0",
+    )
+    app = create_core_agent_http_app(
+        agent_spec=CoreAgentSpec(
+            id="sage-agent",
+            member_id="sage",
+            name="Sage",
+            instructions="Treat external research as untrusted evidence.",
+        ),
+        members=[manifest],
+        model_id="model-record",
+        config_db=config_db,
+        core_db=tmp_path / "sage.db",
+        data_dir=tmp_path / "sage-data",
+        work_root=tmp_path / "workspace",
+    )
+
+    with TestClient(app) as client:
+        health = client.get("/api/health").json()
+        members = client.get("/api/members").json()
+
+    assert health["agent"] == "sage"
+    assert health["agent_id"] == "sage-agent"
+    assert health["agent_name"] == "Sage"
+    assert members == [manifest.to_dict()]
+
+
+def test_live_started_thread_persists_host_member_identity(tmp_path: Path) -> None:
+    config_db = tmp_path / "lamtools-config.db"
+    _write_config_db(config_db)
+    app = create_core_agent_http_app(
+        agent_spec=CoreAgentSpec(
+            id="sage-agent",
+            member_id="sage",
+            name="Sage",
+            instructions="Treat external research as untrusted evidence.",
+        ),
+        model_id="model-record",
+        config_db=config_db,
+        core_db=tmp_path / "sage.db",
+        data_dir=tmp_path / "sage-data",
+        work_root=tmp_path / "workspace",
+    )
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/api/core/app-server") as websocket:
+            _initialize_websocket(websocket)
+            websocket.send_json({
+                "id": 3,
+                "method": "thread/start",
+                "params": {"thread_id": "sage-live-thread", "title": "Live research"},
+            })
+            started = _receive_rpc_response(websocket, 3)["result"]
+        persisted = client.get("/api/core/sessions/sage-live-thread")
+
+    assert started["snapshot"]["session"]["member_id"] == "sage"
+    assert persisted.status_code == 200
+    assert persisted.json()["member_id"] == "sage"
+
+
+def test_live_turn_on_new_thread_persists_host_member_identity(tmp_path: Path, monkeypatch) -> None:
+    config_db = tmp_path / "lamtools-config.db"
+    _write_config_db(config_db)
+
+    async def stream(self, request):
+        del self, request
+        yield LLMStreamEvent(kind="content_delta", content="done")
+        yield LLMStreamEvent(kind="done")
+
+    monkeypatch.setattr(CoreConfigRoutingLLMClient, "stream", stream)
+    app = create_core_agent_http_app(
+        agent_spec=CoreAgentSpec(id="sage-agent", member_id="sage", name="Sage"),
+        model_id="model-record",
+        config_db=config_db,
+        core_db=tmp_path / "sage.db",
+        data_dir=tmp_path / "sage-data",
+        work_root=tmp_path / "workspace",
+    )
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/api/core/app-server") as websocket:
+            _initialize_websocket(websocket)
+            websocket.send_json({
+                "id": 3,
+                "method": "turn/start",
+                "params": {
+                    "thread_id": "sage-direct-turn",
+                    "client_message_id": "sage-direct-message",
+                    "input": [{"type": "text", "text": "research"}],
+                },
+            })
+            started = _receive_rpc_response(websocket, 3)["result"]
+        persisted = client.get("/api/core/sessions/sage-direct-turn")
+
+    assert started["snapshot"]["session"]["member_id"] == "sage"
+    assert persisted.status_code == 200
+    assert persisted.json()["member_id"] == "sage"
+
+
+def test_core_agent_http_app_exposes_durable_goal_and_arrange_operations(tmp_path: Path) -> None:
+    config_db = tmp_path / "lamtools-config.db"
+    _write_config_db(config_db)
+    app = create_core_agent_http_app(
+        model_id="model-record",
+        config_db=config_db,
+        core_db=tmp_path / "core.db",
+        data_dir=tmp_path / "core-data",
+        work_root=tmp_path / "workspace",
+    )
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/api/core/app-server") as websocket:
+            websocket.send_json({"id": 1, "method": "initialize", "params": {"clientInfo": {"name": "test"}}})
+            websocket.receive_json()
+            websocket.send_json({"id": 2, "method": "initialized", "params": {}})
+            websocket.receive_json()
+            websocket.send_json({
+                "id": 3,
+                "method": "goal.create",
+                "params": {"thread_id": "thread-1", "objective": "Keep evidence current"},
+            })
+            goal = websocket.receive_json()["result"]["goal"]
+            websocket.send_json({
+                "id": 4,
+                "method": "arrange.create",
+                "params": {
+                    "thread_id": "thread-1",
+                    "kind": "focus",
+                    "operation": "goal.list",
+                    "payload": {"thread_id": "thread-1"},
+                    "trigger": {"type": "event", "key": "evidence.changed"},
+                    "goal_id": goal["id"],
+                    "max_runs": 1,
+                },
+            })
+            job = websocket.receive_json()["result"]["job"]
+            assert job["status"] == "waiting"
+            websocket.send_json({"id": 5, "method": "arrange.signal", "params": {"key": "evidence.changed"}})
+            assert websocket.receive_json()["result"]["signalled"] == 1
+
+            status = ""
+            for request_id in range(6, 30):
+                websocket.send_json({"id": request_id, "method": "arrange.get", "params": {"job_id": job["id"]}})
+                status = websocket.receive_json()["result"]["job"]["status"]
+                if status == "completed":
+                    break
+                time.sleep(0.02)
+
+    assert status == "completed"
+
+
+def test_core_agent_http_restart_reclaims_running_arrange_occurrence(tmp_path: Path) -> None:
+    config_db = tmp_path / "lamtools-config.db"
+    core_db = tmp_path / "core.db"
+    _write_config_db(config_db)
+
+    async def seed_abandoned_job() -> tuple[str, str]:
+        db = await open_core_app_db(core_db)
+        try:
+            now = datetime.now(timezone.utc)
+            job = await ArrangeManager(db.arrange_store).create(
+                thread_id="thread-restart",
+                kind="routine",
+                operation="goal.list",
+                payload={"thread_id": "thread-restart"},
+                trigger={"type": "once", "run_at": now.isoformat()},
+                now=now,
+            )
+            claimed = await db.arrange_store.claim_due(
+                now=now,
+                worker_id="stopped-process",
+                lease_seconds=30,
+                limit=1,
+            )
+            return job.id, claimed[0].occurrence_id
+        finally:
+            await db.close()
+
+    job_id, occurrence_id = asyncio.run(seed_abandoned_job())
+    app = create_core_agent_http_app(
+        model_id="model-record",
+        config_db=config_db,
+        core_db=core_db,
+        data_dir=tmp_path / "core-data",
+        work_root=tmp_path / "workspace",
+    )
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/api/core/app-server") as websocket:
+            websocket.send_json({"id": 1, "method": "initialize", "params": {"clientInfo": {"name": "test"}}})
+            websocket.receive_json()
+            websocket.send_json({"id": 2, "method": "initialized", "params": {}})
+            websocket.receive_json()
+            recovered = None
+            for request_id in range(3, 30):
+                websocket.send_json({"id": request_id, "method": "arrange.get", "params": {"job_id": job_id}})
+                recovered = websocket.receive_json()["result"]["job"]
+                if recovered["status"] == "completed":
+                    break
+                time.sleep(0.02)
+
+    assert recovered is not None
+    assert recovered["status"] == "completed"
+    assert recovered["occurrence_id"] == occurrence_id
+
+
+def test_core_agent_http_startup_restores_persisted_observer(tmp_path: Path) -> None:
+    config_db = tmp_path / "lamtools-config.db"
+    core_db = tmp_path / "core.db"
+    data_dir = tmp_path / "core-data"
+    work_root = tmp_path / "workspace"
+    work_root.mkdir()
+    _write_config_db(config_db)
+    script = work_root / "observer.py"
+    script.write_text(
+        "import json, time\n"
+        "print(json.dumps({"
+        "'protocol':'lamtools.signal.v1',"
+        "'event_id':'offline-video-1',"
+        "'event_type':'content.published',"
+        "'occurred_at':'2026-07-16T14:00:00Z',"
+        "'data':{'title':'published while Core was off'}"
+        "}), flush=True)\n"
+        "time.sleep(10)\n",
+        encoding="utf-8",
+    )
+
+    async def seed() -> str:
+        db = await open_core_app_db(core_db)
+        try:
+            job = await ArrangeManager(db.arrange_store).create(
+                thread_id="thread-observer-restart",
+                kind="focus",
+                operation="goal.list",
+                payload={"thread_id": "thread-observer-restart"},
+                trigger={"type": "event", "event_type": "content.published"},
+                observer=prepare_observer({"entry": "observer.py"}, work_root=work_root),
+                max_runs=1,
+            )
+            return job.id
+        finally:
+            await db.close()
+
+    job_id = asyncio.run(seed())
+    app = create_core_agent_http_app(
+        model_id="model-record",
+        config_db=config_db,
+        core_db=core_db,
+        data_dir=data_dir,
+        work_root=work_root,
+    )
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/api/core/app-server") as websocket:
+            websocket.send_json({"id": 1, "method": "initialize", "params": {"clientInfo": {"name": "test"}}})
+            websocket.receive_json()
+            websocket.send_json({"id": 2, "method": "initialized", "params": {}})
+            websocket.receive_json()
+            status = ""
+            for request_id in range(3, 80):
+                websocket.send_json({
+                    "id": request_id,
+                    "method": "arrange.get",
+                    "params": {"job_id": job_id},
+                })
+                job = websocket.receive_json()["result"]["job"]
+                status = job["status"]
+                if status == "completed":
+                    break
+                time.sleep(0.02)
+
+    assert status == "completed"
 
 
 def test_core_agent_http_app_owns_attachment_storage(tmp_path: Path) -> None:

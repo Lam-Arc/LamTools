@@ -1,0 +1,10 @@
+# LamSage Backend Dependencies
+# Install lamtools-core in editable mode:
+#   pip install -e ../../../core
+fastapi>=0.137.2
+uvicorn[standard]>=0.49.0
+pydantic>=2.13.4
+pydantic-settings>=2.14.2
+sqlalchemy>=2.0.51
+aiosqlite>=0.22.1
+pytest-asyncio>=1.4.0

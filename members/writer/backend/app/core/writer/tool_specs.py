@@ -62,6 +62,7 @@ INTERNAL_ONLY_TOOLS = frozenset({
 
 MODEL_TOOL_ORDER: tuple[str, ...] = (
     "read_file",
+    "document_normalize",
     "write_file",
     "edit_file",
     "search_content",

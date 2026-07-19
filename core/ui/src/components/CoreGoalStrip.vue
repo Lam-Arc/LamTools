@@ -9,7 +9,7 @@ defineEmits<{ cancel: [goal: CoreGoal] }>()
   <div class="core-goal-strip" :data-status="goal.status" role="status">
     <span aria-hidden="true">◎</span>
     <span class="core-goal-objective">{{ goal.objective }}</span>
-    <span class="core-goal-status">{{ goal.status === 'blocked' ? '已暂停' : '进行中' }}</span>
+    <span class="core-goal-status">{{ goal.status === 'blocked' ? '已暂停' : goal.status === 'pending' ? '待开始' : '进行中' }}</span>
     <button type="button" @click="$emit('cancel', goal)">取消</button>
   </div>
 </template>

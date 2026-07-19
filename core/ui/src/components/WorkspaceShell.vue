@@ -1,8 +1,44 @@
 <template>
   <div class="workspace-shell" :class="shellClass" :style="shellStyle">
     <!-- Notifications -->
-    <div v-if="errorText" class="error-toast">{{ errorText }}</div>
-    <div v-if="noticeText" class="notice-toast">{{ noticeText }}</div>
+    <div v-if="errorText" class="error-toast" role="alert" aria-atomic="true">{{ errorText }}</div>
+    <div v-if="noticeText" class="notice-toast" role="status" aria-atomic="true">{{ noticeText }}</div>
+
+    <nav class="mobile-shell-nav" aria-label="工作区面板">
+      <button
+        ref="leftToggleButton"
+        class="mobile-shell-button"
+        type="button"
+        data-mobile-left-toggle
+        :aria-controls="leftDrawerId"
+        :aria-expanded="leftOpen"
+        :aria-label="leftOpen ? '关闭会话与导航' : '打开会话与导航'"
+        @click="toggleLeftDrawer"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /></svg>
+      </button>
+      <button
+        v-if="showRightPanel"
+        ref="rightToggleButton"
+        class="mobile-shell-button"
+        type="button"
+        data-mobile-right-toggle
+        :aria-controls="rightDrawerId"
+        :aria-expanded="rightOpen"
+        :aria-label="rightOpen ? '关闭运行状态' : '打开运行状态'"
+        @click="toggleRightDrawer"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4zM15 5v14M7 9h5M7 13h5" /></svg>
+      </button>
+    </nav>
+
+    <button
+      v-if="isNarrowViewport && (leftOpen || rightOpen)"
+      class="mobile-drawer-backdrop"
+      type="button"
+      aria-label="关闭面板"
+      @click="closeDrawers"
+    ></button>
 
     <!-- Edge hover triggers -->
     <div
@@ -10,26 +46,30 @@
       role="button"
       tabindex="0"
       aria-label="打开左侧会话栏"
-      @mouseenter="!leftPinned && (leftOpen = true)"
-      @focus="!leftPinned && (leftOpen = true)"
-      @keydown.enter.prevent="leftOpen = true"
-      @keydown.space.prevent="leftOpen = true"
+      @mouseenter="!leftPinned && openLeftDrawer()"
+      @focus="!leftPinned && openLeftDrawer()"
+      @keydown.enter.prevent="openLeftDrawer"
+      @keydown.space.prevent="openLeftDrawer"
     ></div>
     <div
       class="edge edge-right"
       role="button"
       tabindex="0"
       aria-label="打开右侧面板"
-      @mouseenter="rightOpen = true"
-      @focus="rightOpen = true"
-      @keydown.enter.prevent="rightOpen = true"
-      @keydown.space.prevent="rightOpen = true"
+      @mouseenter="openRightDrawer"
+      @focus="openRightDrawer"
+      @keydown.enter.prevent="openRightDrawer"
+      @keydown.space.prevent="openRightDrawer"
     ></div>
 
     <!-- ===== Left Drawer ===== -->
     <aside
+      :id="leftDrawerId"
+      data-workspace-left-drawer
       class="workspace-drawer drawer-left"
       :class="{ open: leftOpen, pinned: leftPinned }"
+      :inert="!leftOpen || undefined"
+      :aria-hidden="!leftOpen"
       @mouseleave="onLeftDrawerLeave"
     >
       <header class="drawer-head">
@@ -112,8 +152,12 @@
     <!-- ===== Right Drawer ===== -->
     <aside
       v-if="showRightPanel"
+      :id="rightDrawerId"
+      data-workspace-right-drawer
       class="workspace-drawer drawer-right"
       :class="{ open: rightOpen, pinned: rightPinned }"
+      :inert="!rightOpen || undefined"
+      :aria-hidden="!rightOpen"
       @mouseleave="onRightDrawerLeave"
     >
       <header class="drawer-head">
@@ -148,6 +192,7 @@
  * Uses useShellLayout for all drawer/pin/theme/density state.
  * Product provides slots for actual content.
  */
+import { ref, useId, watch } from 'vue'
 import { useShellLayout } from '../composables/useShellLayout'
 import type { ThemeData } from '../composables/useShellLayout'
 
@@ -197,17 +242,29 @@ const emit = defineEmits<{
   'composer-drop': [event: DragEvent]
 }>()
 
+const drawerId = useId()
+const leftDrawerId = `${drawerId}-left-drawer`
+const rightDrawerId = `${drawerId}-right-drawer`
+const leftToggleButton = ref<HTMLButtonElement | null>(null)
+const rightToggleButton = ref<HTMLButtonElement | null>(null)
+
 const {
   leftOpen,
   rightOpen,
   leftPinned,
   rightPinned,
+  isNarrowViewport,
   shellClass,
   shellStyle,
   toggleLeftPinned,
   toggleRightPinned,
   onLeftDrawerLeave,
   onRightDrawerLeave,
+  openLeftDrawer,
+  openRightDrawer,
+  toggleLeftDrawer,
+  toggleRightDrawer,
+  closeDrawers,
 } = useShellLayout({
   storageKey: props.storageKey,
   density: props.density,
@@ -215,6 +272,18 @@ const {
   theme: props.theme,
   showRightPanel: props.showRightPanel,
 })
+
+let lastMobileDrawer: 'left' | 'right' | null = null
+watch([leftOpen, rightOpen], ([left, right], [previousLeft, previousRight]) => {
+  if (!isNarrowViewport.value) return
+  if (!previousLeft && left) lastMobileDrawer = 'left'
+  if (!previousRight && right) lastMobileDrawer = 'right'
+  if (left || right || lastMobileDrawer === null) return
+
+  const target = lastMobileDrawer === 'left' ? leftToggleButton : rightToggleButton
+  lastMobileDrawer = null
+  target.value?.focus()
+}, { flush: 'post' })
 </script>
 
 <style scoped>

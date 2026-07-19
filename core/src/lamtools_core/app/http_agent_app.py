@@ -26,6 +26,7 @@ from lamtools_core.runtime import RuntimeTaskRegistry
 from lamtools_core.runtime.arrange import ArrangeManager, ArrangeRunner, arranged_operation_payload
 from lamtools_core.runtime.goal import GoalManager
 from lamtools_core.runtime.observer import ObserverSupervisor
+from lamtools_core.member import MemberKit, MemberManifest
 
 from .core_db import open_core_app_db
 from .core_session_store import CoreDbSessionStore
@@ -115,6 +116,9 @@ class CoreConfigRoutingLLMClient:
 
 def create_core_agent_http_app(
     *,
+    agent_spec: CoreAgentSpec | None = None,
+    member_kit: MemberKit | None = None,
+    members: list[MemberManifest] | None = None,
     model_id: str = "",
     config_db: Path | str | None = None,
     core_db: Path | str | None = None,
@@ -135,6 +139,22 @@ def create_core_agent_http_app(
         thinking_budget=thinking_budget or config.thinking_budget,
         max_tokens=max_tokens,
         temperature=temperature if temperature is not None else config.temperature,
+    )
+    runtime_spec = agent_spec or CoreAgentSpec(
+        default_model=config.model_id,
+        instructions="You are LamTools Core Agent, a standalone general-purpose agent runtime.",
+    )
+    runtime_spec = replace(
+        runtime_spec,
+        default_model=runtime_spec.default_model or config.model_id,
+        metadata={
+            **runtime_spec.metadata,
+            "provider": config.provider_name,
+            "model_record_id": config.model_record_id,
+            "thinking_enabled": thinking_enabled,
+            "thinking_budget": thinking_budget or config.thinking_budget,
+            "context_window": config.context_window,
+        },
     )
 
     core_db_path = _resolve_core_db(core_db)
@@ -159,23 +179,17 @@ def create_core_agent_http_app(
     operations.register("approval.respond", execute_core_operation)
 
     async def startup_core_agent() -> None:
-        core_db_handle = await open_core_app_db(core_db_path)
+        core_db_handle = await open_core_app_db(
+            core_db_path,
+            member_defaults={"session": {"member_id": runtime_spec.member_id}},
+        )
         app_state["core_db"] = core_db_handle
         app_state["attachment_store"] = CoreAttachmentStore(core_db_handle.session_factory, resolved_data_dir)
         goal_manager = GoalManager(core_db_handle.goal_store)
         arrange_manager = ArrangeManager(core_db_handle.arrange_store)
         agent_operations = create_core_agent_operations(
-            spec=CoreAgentSpec(
-                default_model=config.model_id,
-                instructions="You are LamTools Core Agent, a standalone general-purpose agent runtime.",
-                metadata={
-                    "provider": config.provider_name,
-                    "model_record_id": config.model_record_id,
-                    "thinking_enabled": thinking_enabled,
-                    "thinking_budget": thinking_budget or config.thinking_budget,
-                    "context_window": config.context_window,
-                },
-            ),
+            spec=runtime_spec,
+            member_kit=member_kit,
             paths=CoreAgentPaths(data_dir=resolved_data_dir, work_root=resolved_work_root),
             model_provider=llm_client,
             plugin_roots=[Path(item) for item in plugin_roots],
@@ -272,11 +286,14 @@ def create_core_agent_http_app(
         )
 
     app = create_app(
-        title="LamTools Core Agent",
+        members=members,
+        title=runtime_spec.name,
         enable_core_routes=False,
         health_payload=lambda: {
             "status": "ok",
-            "agent": "core",
+            "agent": runtime_spec.member_id,
+            "agent_id": runtime_spec.id,
+            "agent_name": runtime_spec.name,
             "model": config.display_name or config.model_id,
             "work_root": str(resolved_work_root),
             "core_db": str(core_db_path),

@@ -3,7 +3,7 @@
   LamTools monorepo unified dev entry point.
 .DESCRIPTION
   Usage:
-    .\scripts\dev.ps1 [core|writer] [backend|frontend]
+    .\scripts\dev.ps1 [core|writer|sage] [backend|frontend]
     .\scripts\dev.ps1 all              # start all backends + frontends
 #>
 param(
@@ -44,12 +44,35 @@ function Start-Dev {
                 Start-Process -FilePath "npm.cmd" -ArgumentList "run","dev" -WorkingDirectory "$Root\members\writer\frontend"
             }
         }
-        default { Write-Host "Unknown component: $Comp. Use: core, writer, or all" -ForegroundColor Red; exit 1 }
+        "sage" {
+            $bPort = $Ports.sage.backend
+            $fPort = $Ports.sage.frontend_dev
+            $previousPythonPath = $env:PYTHONPATH
+            $env:PYTHONPATH = if ($previousPythonPath) { "$Root\core\src;$previousPythonPath" } else { "$Root\core\src" }
+            try {
+                if ($Lyr -eq "all" -or $Lyr -eq "backend") {
+                    Write-Host "[sage/backend] uvicorn --port $bPort" -ForegroundColor Cyan
+                    Start-Process -FilePath "py" -ArgumentList "-3.14","-m","uvicorn","app.main:app","--reload","--port",$bPort -WorkingDirectory "$Root\members\sage\backend" -WindowStyle Hidden
+                }
+                if ($Lyr -eq "all" -or $Lyr -eq "frontend") {
+                    if (-not (Test-Path "$Root\core\ui\dist\index.d.ts")) {
+                        Write-Host "[core/ui] building shared UI for Sage" -ForegroundColor Cyan
+                        & npm.cmd --prefix "$Root\core\ui" run build
+                        if ($LASTEXITCODE -ne 0) { throw "Core UI build failed" }
+                    }
+                    Write-Host "[sage/frontend] npm run dev (port $fPort)" -ForegroundColor Cyan
+                    Start-Process -FilePath "npm.cmd" -ArgumentList "run","dev" -WorkingDirectory "$Root\members\sage\frontend" -WindowStyle Hidden
+                }
+            } finally {
+                $env:PYTHONPATH = $previousPythonPath
+            }
+        }
+        default { Write-Host "Unknown component: $Comp. Use: core, writer, sage, or all" -ForegroundColor Red; exit 1 }
     }
 }
 
 if ($Component -eq "all") {
-    @("core","writer") | ForEach-Object { Start-Dev $_ $Layer }
+    @("core","writer","sage") | ForEach-Object { Start-Dev $_ $Layer }
 } else {
     Start-Dev $Component $Layer
 }

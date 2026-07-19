@@ -7,7 +7,13 @@ name = "lamtools-core"
 version = "0.1.0"
 description = "LamTools Core SDK - protocols, types, and base interfaces"
 requires-python = ">=3.14"
-dependencies = ["httpx>=0.28.1", "sqlalchemy>=2.0.51", "aiosqlite>=0.22.1"]
+dependencies = [
+    "httpx>=0.28.1",
+    "sqlalchemy>=2.0.51",
+    "aiosqlite>=0.22.1",
+    "python-docx>=1.2.0",
+    "pypdf>=6.10.0",
+]
 
 [project.optional-dependencies]
 dev = ["pytest>=9.1.1", "pytest-asyncio>=1.4.0", "fastapi>=0.137.2"]
@@ -15,6 +21,10 @@ server = ["uvicorn>=0.49.0", "fastapi>=0.137.2"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/lamtools_core"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"command" = "lamtools_core/resources/command"
+"skills" = "lamtools_core/resources/skills"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -12,7 +12,23 @@ CommandSource = Literal["core", "member"]
 
 
 def default_core_resource_roots() -> list[Path]:
-    return [Path(__file__).resolve().parents[2]]
+    module_root = Path(__file__).resolve().parent
+    packaged_root = module_root / "resources"
+    if packaged_root.is_dir():
+        return [packaged_root]
+
+    source_root = module_root.parents[1]
+    if (source_root / "command").is_dir() or (source_root / "skills").is_dir():
+        return [source_root]
+    return []
+
+
+def default_core_skill_roots() -> list[Path]:
+    return [
+        skill_root
+        for root in default_core_resource_roots()
+        if (skill_root := root / "skills").is_dir()
+    ]
 
 
 @dataclass(frozen=True)

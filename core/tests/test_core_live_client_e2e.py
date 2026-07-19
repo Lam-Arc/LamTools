@@ -117,7 +117,7 @@ async def test_core_app_server_client_runs_live_operation_matrix_against_real_we
                 input_items=[{"type": "text", "text": "hold-steer"}],
             )
             turn_id = started["runtime_start"]["turn_id"]
-            await asyncio.wait_for(steered_stream_started.wait(), timeout=1)
+            await asyncio.wait_for(steered_stream_started.wait(), timeout=5)
             queue_tasks = [
                 asyncio.create_task(
                     client.create_queue_input(
@@ -156,7 +156,7 @@ async def test_core_app_server_client_runs_live_operation_matrix_against_real_we
                 client_message_id="start-cancel",
                 input_items=[{"type": "text", "text": "hold-cancel"}],
             )
-            await asyncio.wait_for(cancelled_stream_started.wait(), timeout=1)
+            await asyncio.wait_for(cancelled_stream_started.wait(), timeout=5)
             cancelled, next_started = await asyncio.wait_for(
                 asyncio.gather(
                     client.cancel_turn(

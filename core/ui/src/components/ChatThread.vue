@@ -4189,7 +4189,7 @@ function formatContextSummary(c: ContextCounts): string {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 11px;
-  color: color-mix(in srgb, var(--theme-main-text, #fff) 42%, transparent);
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 60%, transparent);
   font-style: normal;
 }
 .reasoning-body {

@@ -7,6 +7,10 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from lamtools_core.tool import ToolArtifact, ToolCall, ToolResult
+from lamtools_core.tool.document_normalize import (
+    DocumentNormalizationError,
+    normalize_document,
+)
 from lamtools_core.tool.workspace import (
     format_file_size,
     is_within_path,
@@ -115,10 +119,33 @@ class WorkspaceReadOnlyTools:
         if not resolved.is_file():
             return ToolResult(call_id=call.id, name=call.name, status="failed", error=f"File not found: {path_str}")
 
+        document_metadata: dict[str, Any] = {}
         try:
-            content = resolved.read_text(encoding="utf-8", errors="replace")
-        except OSError as exc:
-            return ToolResult(call_id=call.id, name=call.name, status="failed", error=f"Read error: {exc}")
+            normalized = normalize_document(
+                resolved,
+                workspace_root=self._work_root,
+                max_text_length=self._max_text_length,
+            )
+        except DocumentNormalizationError as exc:
+            return ToolResult(
+                call_id=call.id,
+                name=call.name,
+                status="failed",
+                error=f"Document normalize error for {path_str}: {exc}",
+            )
+        if normalized is not None:
+            content = normalized.markdown
+            document_metadata = {
+                "document_format": normalized.document_format,
+                "content_trust": "untrusted",
+                "warnings": list(normalized.warnings),
+                "assets": list(normalized.asset_paths),
+            }
+        else:
+            try:
+                content = resolved.read_text(encoding="utf-8", errors="replace")
+            except OSError as exc:
+                return ToolResult(call_id=call.id, name=call.name, status="failed", error=f"Read error: {exc}")
 
         try:
             stat = resolved.stat()
@@ -153,6 +180,7 @@ class WorkspaceReadOnlyTools:
                         "size_bytes": file_size,
                         "modified": mtime,
                         "truncated": truncated,
+                        **document_metadata,
                     },
                 )
             ],
@@ -162,6 +190,7 @@ class WorkspaceReadOnlyTools:
                 "size_bytes": file_size,
                 "modified": mtime,
                 "truncated": truncated,
+                **document_metadata,
             },
         )
 
@@ -316,6 +345,91 @@ def make_write_file_handler(
         return await write_file_tool(call, work_root=work_root, max_write_length=max_write_length)
 
     return write_file
+
+
+def make_document_normalize_handler(
+    work_root: Path,
+    *,
+    max_text_length: int,
+) -> Callable[[ToolCall], Awaitable[ToolResult]]:
+    async def document_normalize(call: ToolCall) -> ToolResult:
+        return await document_normalize_tool(
+            call,
+            work_root=work_root,
+            max_text_length=max_text_length,
+        )
+
+    return document_normalize
+
+
+async def document_normalize_tool(
+    call: ToolCall,
+    *,
+    work_root: Path,
+    max_text_length: int,
+) -> ToolResult:
+    args = call.arguments if isinstance(call.arguments, dict) else {}
+    path_str = args.get("path", "")
+    if not isinstance(path_str, str) or not path_str.strip():
+        return ToolResult(call_id=call.id, name=call.name, status="failed", error="Missing 'path' argument")
+
+    try:
+        resolved, access_root = resolve_read_resource_path(path_str, work_root)
+    except ValueError as exc:
+        return ToolResult(call_id=call.id, name=call.name, status="failed", error=str(exc))
+    if not resolved.is_file():
+        return ToolResult(call_id=call.id, name=call.name, status="failed", error=f"File not found: {path_str}")
+
+    try:
+        normalized = normalize_document(
+            resolved,
+            workspace_root=work_root,
+            extract_assets=True,
+            max_text_length=max_text_length,
+        )
+    except DocumentNormalizationError as exc:
+        return ToolResult(
+            call_id=call.id,
+            name=call.name,
+            status="failed",
+            error=f"Document normalize error for {path_str}: {exc}",
+        )
+    if normalized is None:
+        return ToolResult(
+            call_id=call.id,
+            name=call.name,
+            status="failed",
+            error="document_normalize supports DOCX and PDF files only",
+        )
+
+    content = normalized.markdown
+    truncated = len(content) > max_text_length
+    if truncated:
+        content = content[:max_text_length]
+    rel = relative_workspace_uri(resolved, access_root)
+    metadata = {
+        "path": rel,
+        "document_format": normalized.document_format,
+        "content_trust": "untrusted",
+        "warnings": list(normalized.warnings),
+        "assets": list(normalized.asset_paths),
+        "truncated": truncated,
+    }
+    return ToolResult(
+        call_id=call.id,
+        name=call.name,
+        status="ok",
+        content=content + ("\n[... truncated]" if truncated else ""),
+        artifacts=[
+            ToolArtifact(
+                kind="document_normalized",
+                uri=rel,
+                content=content,
+                metadata=metadata,
+            )
+        ],
+        metadata=metadata,
+    )
 
 
 def make_edit_file_handler(
@@ -557,7 +671,9 @@ __all__ = [
     "DEFAULT_MAX_TEXT_LENGTH",
     "SKIP_SEARCH_DIRS",
     "WorkspaceReadOnlyTools",
+    "document_normalize_tool",
     "edit_file_tool",
+    "make_document_normalize_handler",
     "make_edit_file_handler",
     "make_write_file_handler",
     "resolve_read_resource_path",

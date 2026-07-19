@@ -139,4 +139,23 @@ describe('SessionSidebar sections', () => {
     expect(localStorage.getItem('test.sidebar.pins.sessions')).toBe('["newer"]')
     expect(wrapper.get('[data-session-pin="newer"]').attributes('aria-pressed')).toBe('true')
   })
+
+  it('keeps session actions separate from the session selection button', async () => {
+    const wrapper = mount(SessionSidebar, {
+      props: {
+        projectGroups: groups,
+        allowSessionDelete: true,
+      },
+    })
+
+    const row = wrapper.get('[data-session-row="s1"]')
+    const selector = row.get('[data-session-select="s1"]')
+    const pin = row.get('[data-session-pin="s1"]')
+
+    expect(selector.element.tagName).toBe('BUTTON')
+    expect(selector.find('[data-session-pin="s1"]').exists()).toBe(false)
+
+    await pin.trigger('keydown', { key: 'Enter' })
+    expect(wrapper.emitted('select-session')).toBeUndefined()
+  })
 })

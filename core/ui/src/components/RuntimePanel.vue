@@ -133,7 +133,7 @@ function formatPanelValue(value: unknown): string {
 .runtime-panel__group-status { color: var(--green); font-size: 12px; font-weight: 700; }
 .runtime-panel__step { padding: 3px 0; color: color-mix(in srgb, var(--theme-backdrop-text) 72%, transparent); font-size: 12px; }
 .runtime-panel__step-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.runtime-panel__step-status { color: color-mix(in srgb, var(--theme-backdrop-text) 48%, transparent); }
+.runtime-panel__step-status { color: color-mix(in srgb, var(--theme-backdrop-text) 60%, transparent); }
 .runtime-panel__more { justify-self: start; border: 0; background: transparent; color: color-mix(in srgb, var(--theme-backdrop-text) 58%, transparent); padding: 2px 0; font: inherit; font-size: 12px; cursor: pointer; }
 .runtime-panel__more:hover { color: var(--theme-backdrop-text); }
 .runtime-panel__more:focus-visible { outline: 2px solid color-mix(in srgb, var(--green) 48%, transparent); outline-offset: 3px; }

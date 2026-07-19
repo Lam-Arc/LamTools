@@ -2,9 +2,10 @@
 
 ## Quick Start
 
-1. Backend: `cd backend && py -3.14 -m uvicorn app.main:app --reload --port __BACKEND_PORT__`
-2. Frontend: `cd frontend && npm install && npm run dev`
-3. Open http://localhost:__FRONTEND_PORT__
+1. Shared UI, from the repository root: `npm.cmd install --prefix core/ui`, then `npm.cmd run build --prefix core/ui`.
+2. Backend: `cd backend`, then `py -3.14 -m uvicorn app.main:app --reload --port __BACKEND_PORT__`.
+3. Frontend: `cd frontend`, then `npm.cmd install` and `npm.cmd run dev`.
+4. Open http://localhost:__FRONTEND_PORT__
 
 ## Core Integration
 

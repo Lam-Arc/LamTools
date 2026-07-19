@@ -102,6 +102,7 @@ def test_core_toolbox_exposes_generic_tool_specs(tmp_path):
     specs = {spec.name: spec for spec in toolbox.tool_specs()}
 
     assert "read_file" in names
+    assert "document_normalize" in names
     assert "write_file" in names
     assert "run_command" in names
     assert "git_diff" in names
@@ -111,7 +112,10 @@ def test_core_toolbox_exposes_generic_tool_specs(tmp_path):
     assert "sub_agent" in names
     assert toolbox.tool_permissions["write_file"] == "ask_user"
     assert toolbox.tool_permissions["read_file"] == "auto_allow"
+    assert toolbox.tool_permissions["document_normalize"] == "ask_user"
     assert toolbox.tool_permissions["load_skill"] == "auto_allow"
+    assert "DOCX" in specs["read_file"].description
+    assert "PDF" in specs["read_file"].description
     assert "path_outside_root" in {
         item["type"] for item in specs["write_file"].metadata["failure_modes"]
     }
@@ -138,11 +142,16 @@ def test_core_toolbox_marks_approval_required_tools(tmp_path):
     mcp_call = toolbox.prepare_call(
         ToolCall(id="mcp-1", name="mcp_tool", arguments={"tool_name": "server.tool", "arguments": {}})
     )
+    normalize_call = toolbox.prepare_call(
+        ToolCall(id="doc-1", name="document_normalize", arguments={"path": "report.docx"})
+    )
 
     assert write_call.requires_approval is True
     assert write_call.metadata["approval"]["tier"] == "ask_user"
     assert mcp_call.requires_approval is True
     assert mcp_call.metadata["approval"]["tier"] == "ask_user"
+    assert normalize_call.requires_approval is True
+    assert normalize_call.metadata["approval"]["tier"] == "ask_user"
 
 
 def test_core_toolbox_auto_approve_keeps_hard_blocks(tmp_path):

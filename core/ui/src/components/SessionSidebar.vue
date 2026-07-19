@@ -52,18 +52,21 @@
           :key="s.id"
           class="conversation"
           :class="{ active: s.id === activeSessionId }"
-          role="button"
-          tabindex="0"
-          :aria-label="`打开会话 ${s.title || s.id.slice(0, 8)}`"
-          @click.stop="emit('select-session', s.id)"
-          @keydown.enter.prevent.stop="emit('select-session', s.id)"
-          @keydown.space.prevent.stop="emit('select-session', s.id)"
+          :data-session-row="s.id"
         >
-          <span class="conversation-dot">{{ sessionOrdinal(group, s) }}</span>
-          <span class="conversation-main">
-            <strong>{{ s.title || `Session ${s.id.slice(0, 8)}` }}</strong>
-            <span v-if="s.meta">{{ s.meta }}</span>
-          </span>
+          <button
+            class="conversation-select"
+            type="button"
+            :data-session-select="s.id"
+            :aria-label="`打开会话 ${s.title || s.id.slice(0, 8)}，第 ${sessionOrdinal(group, s)} 个`"
+            @click="emit('select-session', s.id)"
+          >
+            <span class="conversation-dot">{{ sessionOrdinal(group, s) }}</span>
+            <span class="conversation-main">
+              <strong>{{ s.title || `Session ${s.id.slice(0, 8)}` }}</strong>
+              <span v-if="s.meta">{{ s.meta }}</span>
+            </span>
+          </button>
           <span class="conversation-actions">
             <span
               v-if="s.status"
@@ -82,7 +85,7 @@
                 :aria-label="`${isSessionPinned(s.id) ? '取消置顶' : '置顶'}会话 ${s.title || s.id.slice(0, 8)}`"
                 :aria-pressed="isSessionPinned(s.id)"
                 :data-session-pin="s.id"
-                @click.stop="toggleSessionPin(s.id)"
+                @click="toggleSessionPin(s.id)"
               >
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 4 6 6-3 1-3 4 1 3-1 1-4-4-5 5-1-1 5-5-4-4 1-1 3 1 4-3 1-3Z" /></svg>
               </button>
@@ -93,7 +96,7 @@
                 title="删除会话"
                 :aria-label="`删除会话 ${s.title || s.id.slice(0, 8)}`"
                 :data-session-delete="s.id"
-                @click.stop="emit('delete-session', s.id)"
+                @click="emit('delete-session', s.id)"
               >
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M9 7V4h6v3m2 0-1 13H8L7 7m3 4v5m4-5v5" /></svg>
               </button>

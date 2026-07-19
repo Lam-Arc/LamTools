@@ -14,7 +14,7 @@
 
 ```text
 core/      通用协议、运行骨架、共享 UI、基础能力
-members/   当前仅 Writer；未来成员必须从脚手架重新接入
+members/   当前包括 Writer 与 Sage；未来成员必须从脚手架重新接入
 scripts/   跨组件脚本和命令分发
 docs/      monorepo 级文档
 ```
@@ -35,12 +35,15 @@ docs/      monorepo 级文档
 
 ```powershell
 .\scripts\dev.ps1 writer all
+.\scripts\dev.ps1 sage all
 .\scripts\build.ps1 all
 .\scripts\test.ps1 all
 .\scripts\scaffold-member.ps1 -Id editor -Name LamEditor -DisplayName LamEditor -Capabilities code,git
 
 .\writer.cmd run 任务描述
 .\writer.cmd session list
+.\sage.cmd run 研究任务
+.\sage.cmd session list
 ```
 
 未来可在此之上增加 `lam run ...` 智能路由层。

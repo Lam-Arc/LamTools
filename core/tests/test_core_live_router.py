@@ -299,11 +299,20 @@ def test_core_live_router_accepts_turn_start_over_websocket(tmp_path):
                 "input": [{"type": "text", "text": "hello"}],
             },
         })
-        accepted = websocket.receive_json()
-        assert accepted["id"] == 2
-        assert accepted["result"]["snapshot"]["status"] == "running"
+        accepted = None
+        snapshot = None
+        for _ in range(9):
+            message = websocket.receive_json()
+            if message.get("id") == 2:
+                accepted = message
+            elif message.get("method") == "thread/snapshot":
+                snapshot = message
+            if accepted is not None and snapshot is not None:
+                break
 
-        snapshot = websocket.receive_json()
+        assert accepted is not None
+        assert accepted["result"]["snapshot"]["status"] == "running"
+        assert snapshot is not None
         assert snapshot["method"] == "thread/snapshot"
         assert snapshot["params"]["thread_id"] == "thread-1"
 

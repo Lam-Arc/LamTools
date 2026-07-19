@@ -258,7 +258,11 @@ class CoreAppDb:
         await self.engine.dispose()
 
 
-async def open_core_app_db(path: Path | str) -> CoreAppDb:
+async def open_core_app_db(
+    path: Path | str,
+    *,
+    member_defaults: dict[str, Any] | None = None,
+) -> CoreAppDb:
     db_path = Path(path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     engine = create_async_engine(
@@ -275,7 +279,10 @@ async def open_core_app_db(path: Path | str) -> CoreAppDb:
     from .project_store import CoreProjectStore
 
     event_store = SqlAlchemyAppEventStore(CoreAppEvent)
-    snapshot_store = SqlAlchemyThreadSnapshotStore(CoreThreadSnapshot, projector=CoreAppSnapshotProjector())
+    snapshot_store = SqlAlchemyThreadSnapshotStore(
+        CoreThreadSnapshot,
+        projector=CoreAppSnapshotProjector(member_defaults=dict(member_defaults or {})),
+    )
     persistence = AppPersistenceHost(
         event_store,
         snapshot_store,

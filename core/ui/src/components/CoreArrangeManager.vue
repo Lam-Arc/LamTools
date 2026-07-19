@@ -68,7 +68,7 @@ onMounted(loadJobs)
 </script>
 
 <template>
-  <main class="arrange-page">
+  <main class="arrange-page" :aria-busy="loading">
     <header class="arrange-header">
       <div>
         <button class="text-button" @click="$emit('back')">← 返回</button>
@@ -77,8 +77,12 @@ onMounted(loadJobs)
       </div>
       <button class="quiet-button" :disabled="loading" @click="loadJobs">{{ loading ? '刷新中…' : '刷新' }}</button>
     </header>
-    <p v-if="error" class="arrange-error" role="alert">{{ error }}</p>
-    <div v-if="!loading && orderedJobs.length === 0" class="arrange-empty">还没有安排。可从项目菜单创建，或直接告诉 Agent“安排一下……”。</div>
+    <p v-if="loading" class="arrange-loading" role="status">正在读取安排…</p>
+    <div v-else-if="error" class="arrange-error" role="alert">
+      <span>{{ error }}</span>
+      <button type="button" data-arrange-retry @click="loadJobs">重试</button>
+    </div>
+    <div v-else-if="orderedJobs.length === 0" class="arrange-empty">还没有安排。可以直接告诉 Agent“安排一下……”。</div>
     <div v-else class="job-list" role="list" aria-label="安排列表">
       <article v-for="job in orderedJobs" :key="job.id" class="job-row" role="listitem">
         <div class="job-main">
@@ -102,7 +106,7 @@ onMounted(loadJobs)
 h1 { margin: 18px 0 6px; font-size: 30px; letter-spacing: -.025em; } p { margin: 0; } .arrange-header p, .job-meta, .text-button { color: var(--muted); }
 button { font: inherit; } .text-button, .quiet-button, .job-actions button { border: 0; background: transparent; color: inherit; cursor: pointer; }
 .text-button { padding: 0; } .quiet-button { padding: 7px 12px; border: 1px solid var(--line); border-radius: 8px; }
-.job-list, .arrange-empty, .arrange-error { max-width: 1040px; margin-inline: auto; } .job-list { border-top: 1px solid var(--line); }
+.job-list, .arrange-empty, .arrange-error, .arrange-loading { max-width: 1040px; margin-inline: auto; } .job-list { border-top: 1px solid var(--line); }
 .job-row { display: flex; align-items: center; gap: 24px; padding: 18px 4px; border-bottom: 1px solid var(--line); } .job-main { min-width: 0; flex: 1; }
 .job-title-line { display: flex; align-items: center; gap: 10px; } .job-title-line strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .job-status { flex: none; padding: 2px 7px; border-radius: 999px; font-size: 12px; color: var(--muted); background: color-mix(in srgb, var(--text) 7%, transparent); }
@@ -110,7 +114,10 @@ button { font: inherit; } .text-button, .quiet-button, .job-actions button { bor
 .job-meta { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 7px; font-size: 13px; } .job-actions { display: flex; gap: 4px; }
 .job-actions button { padding: 6px 9px; border-radius: 7px; color: var(--muted); } .job-actions button:hover { background: color-mix(in srgb, var(--text) 7%, transparent); color: var(--text); }
 .job-actions button:focus-visible, .quiet-button:focus-visible, .text-button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
-.danger, .job-error, .arrange-error { color: var(--red); } .job-error { margin-top: 8px; font-size: 13px; } .arrange-empty { padding: 28px 0; color: var(--muted); border-top: 1px solid var(--line); }
+.danger, .job-error, .arrange-error { color: var(--red); } .job-error { margin-top: 8px; font-size: 13px; } .arrange-empty, .arrange-loading { padding: 28px 0; color: var(--muted); border-top: 1px solid var(--line); }
+.arrange-error { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 0; border-top: 1px solid var(--line); }
+.arrange-error button { flex: none; min-height: 36px; padding: 6px 11px; border: 1px solid currentColor; border-radius: 8px; background: transparent; color: inherit; cursor: pointer; }
+.arrange-error button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 button:disabled { cursor: default; opacity: .5; }
 @media (max-width: 700px) { .arrange-page { padding: 24px 18px; } .job-row { align-items: flex-start; flex-direction: column; gap: 10px; } .text-button, .quiet-button, .job-actions button { min-height: 44px; } }
 </style>

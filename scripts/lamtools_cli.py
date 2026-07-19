@@ -74,19 +74,21 @@ def _frontend_url(target: str) -> str | None:
         return f"http://127.0.0.1:{ports['core']['frontend_dev']}"
     if target == "writer":
         return f"http://127.0.0.1:{ports[target]['frontend_dev']}"
+    if target == "sage":
+        return f"http://127.0.0.1:{ports[target]['frontend_dev']}"
     return None
 
 
 def _backend_health_url(target: str) -> str | None:
     ports = _load_ports()
-    if target == "writer":
+    if target in {"writer", "sage"}:
         return f"http://127.0.0.1:{ports[target]['backend']}/api/health"
     return None
 
 
 def _targets(value: str) -> list[str]:
     if value == "all":
-        return ["core", "writer"]
+        return ["core", "writer", "sage"]
     return [value]
 
 
@@ -268,25 +270,25 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     dev = sub.add_parser("dev", help="Start development services")
-    dev.add_argument("component", nargs="?", default="all", choices=["core", "writer", "all"])
+    dev.add_argument("component", nargs="?", default="all", choices=["core", "writer", "sage", "all"])
     dev.add_argument("layer", nargs="?", default="all", choices=["backend", "frontend", "all"])
     dev.add_argument("--open", action="store_true", help="Open frontend URL after starting")
     dev.set_defaults(func=cmd_dev)
 
     build = sub.add_parser("build", help="Build frontend packages")
-    build.add_argument("component", nargs="?", default="all", choices=["core", "writer", "all"])
+    build.add_argument("component", nargs="?", default="all", choices=["core", "writer", "sage", "all"])
     build.set_defaults(func=cmd_build)
 
     test = sub.add_parser("test", help="Run test suites")
-    test.add_argument("component", nargs="?", default="all", choices=["core", "writer", "all"])
+    test.add_argument("component", nargs="?", default="all", choices=["core", "writer", "sage", "all"])
     test.set_defaults(func=cmd_test)
 
     open_cmd = sub.add_parser("open", help="Open a running frontend")
-    open_cmd.add_argument("target", choices=["core", "writer", "all"])
+    open_cmd.add_argument("target", choices=["core", "writer", "sage", "all"])
     open_cmd.set_defaults(func=cmd_open)
 
     doctor = sub.add_parser("doctor", help="Check local runtime health")
-    doctor.add_argument("target", nargs="?", default="all", choices=["core", "writer", "all"])
+    doctor.add_argument("target", nargs="?", default="all", choices=["core", "writer", "sage", "all"])
     doctor.add_argument("--json", action="store_true", help="Print machine-readable output")
     doctor.set_defaults(func=cmd_doctor)
 
