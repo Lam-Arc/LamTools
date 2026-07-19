@@ -103,7 +103,6 @@ from lamtools_core.sub_session import SubSessionRuntimeStateStore, normalize_sub
 from lamtools_core.tool import ToolCall, ToolResult
 from lamtools_core.tool.command import run_subprocess as _run_subprocess
 from lamtools_core.tool.command import validate_command_paths as _validate_command_paths
-from lamtools_core.tool.mcp_tools import execute_mcp_tool_call
 from lamtools_core.tool.verification import verify_written_tool_results
 from lamtools_core.tool.workspace import is_within_path as _is_within_path
 from lamtools_core.tool.workspace import validate_workspace_path as _validate_path
@@ -807,17 +806,6 @@ class WriterKit:
         return {}
 
     # -- Agent dispatch --------------------------------------------------------
-
-    async def _execute_mcp_tool(
-        self, state: RuntimeState, call: ToolCall
-    ) -> ToolResult:
-        """Route mcp_tool / mcp__* calls to MCPRegistry."""
-        _ = state
-        return await execute_mcp_tool_call(
-            call,
-            caller=self._mcp_registry,
-            unavailable_error="MCP not available (no work_root configured)",
-        )
 
     async def format_tool_result_for_model(
         self, state: RuntimeState, call: ToolCall, result: ToolResult
