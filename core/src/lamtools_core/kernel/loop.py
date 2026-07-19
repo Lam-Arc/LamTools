@@ -213,6 +213,7 @@ class CoreLoopKernel:
     tracer: Tracer = field(default_factory=NoopTracer)
     hook_engine: Any | None = None
     checkpoint_coordinator: Any | None = None
+    completion_gate: Any | None = None
     _cancel_event: asyncio.Event = field(default_factory=asyncio.Event, init=False, repr=False)
     _base_event_sink: EventSink = field(init=False, repr=False)
 

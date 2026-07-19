@@ -138,6 +138,7 @@ from app.core.writer.tool_failure import (
     tool_failure_signature,
 )
 from app.core.writer.tool_outcomes import record_tool_outcomes
+from app.core.writer.tool_feedback import format_tool_result_for_model as _format_tool_result_for_model
 from app.core.writer.tools import ReadWriteToolExecutor, resolve_tool_executor as _resolve_tool_executor
 logger = logging.getLogger(__name__)
 
@@ -600,7 +601,6 @@ class WriterKit:
           wait-signalling action types.  Since this is a text-only response
           we treat it as ``done`` unless the content contains a wait signal.
         - If finish_reason is "length" → continue.
-        - Empty reply detection delegates to Core's _resolve_empty_stop.
         """
         if state.metadata is None:
             state.metadata = {}
@@ -650,7 +650,27 @@ class WriterKit:
                 decision_hint = "wait"
                 wait_reason = "Model text signals wait"
             elif not content.strip():
-                decision_hint, wait_reason = self._resolve_empty_stop(state)
+                attempts = int((state.metadata or {}).get("empty_stop_count", 0))
+                has_delivery = _has_delivery_progress(state.metadata or {})
+                if attempts <= 0:
+                    state.metadata["empty_stop_count"] = 1
+                    state.metadata["empty_stop_retry_instruction"] = (
+                        "The previous model turn stopped with no final text and no tool calls. "
+                        + (
+                            "Deliverables already exist, so provide a concise visible final answer "
+                            "summarizing completed files, verification, and any caveats. Do not call "
+                            "more tools unless required to verify the final answer."
+                            if has_delivery
+                            else
+                            "Continue the task now: either call the needed tools to create and verify "
+                            "deliverables, or provide a visible failure reason if the task cannot proceed."
+                        )
+                    )
+                    decision_hint = "continue"
+                else:
+                    state.metadata["empty_stop_count"] = attempts + 1
+                    decision_hint = "failed"
+                    wait_reason = "Model stopped twice with no content and no tools."
             else:
                 state.metadata.pop("empty_stop_count", None)
                 state.metadata.pop("empty_stop_without_delivery_count", None)
@@ -675,9 +695,6 @@ class WriterKit:
             decision_hint=decision_hint,
             wait_reason=wait_reason,
         )
-
-    def _detect_delivery_progress(self, state: RuntimeState) -> bool:
-        return _has_delivery_progress(state.metadata or {})
 
     async def execute_tool(
         self, state: RuntimeState, call: ToolCall
@@ -750,6 +767,7 @@ class WriterKit:
                     "_runtime_session_id": state.session_id,
                     "_runtime_run_id": state.run_id,
                 }
+                sentinel = object()
                 previous = {key: call.metadata.get(key, sentinel) for key in runtime_keys}
                 call.metadata.update(runtime_keys)
                 try:
