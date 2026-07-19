@@ -74,35 +74,15 @@ async def runtime_capabilities_response(
     shared_db: AsyncSession | None = None,
 ) -> dict[str, Any]:
     from app.core.prompt_assembler import WRITER_TOOLS
-    from app.core.writer.agent_runtime import default_agent_registry
     from app.core.writer.permission import TOOL_PERMISSIONS
 
     controls = await runtime_controls(db, shared_db=shared_db)
-    agent_controls = controls["agents"]
     tool_controls = controls["tools"]
     command_policy_controls = controls["command_policies"]
     command_policies = {
         group: str(command_policy_controls.get(group) or policy)
         for group, policy in WRITER_DEFAULT_COMMAND_POLICIES.items()
     }
-
-    registry = default_agent_registry()
-    agents = []
-    for name in registry.names():
-        spec = registry.resolve(name)
-        if spec is None:
-            continue
-        agents.append({
-            "name": spec.name,
-            "description": spec.description,
-            "aliases": list(spec.aliases),
-            "modes": list(spec.modes),
-            "capabilities": list(spec.capabilities),
-            "can_parallel": spec.can_parallel,
-            "can_call_agents": spec.can_call_agents,
-            "max_depth": spec.max_depth,
-            "enabled": bool(agent_controls.get(spec.name, True)),
-        })
 
     tools = []
     for item in WRITER_TOOLS:
@@ -120,7 +100,7 @@ async def runtime_capabilities_response(
         })
 
     return {
-        "agents": agents,
+        "agents": [],
         "tools": tools,
         "command_policies": command_policies,
     }

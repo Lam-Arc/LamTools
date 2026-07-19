@@ -8,13 +8,23 @@ from typing import Any, Awaitable, Callable, Literal, Protocol, runtime_checkabl
 from lamtools_core.event import CoreEvent
 from lamtools_core.agent import SUB_AGENT_TOOL_NAME, SUB_AGENT_TOOL_SPEC, SubAgentRunResult
 from lamtools_core.skills import SkillRegistry
-from lamtools_core.tool import ToolCall, ToolResult, ToolSpec
+from lamtools_core.tool import ToolCall, ToolContext, ToolResult, ToolSpec
 from lamtools_core.tool.approval import ApprovalGate
 from lamtools_core.tool.command import run_subprocess
 from lamtools_core.tool.command_tools import CommandToolHandlers
+from lamtools_core.tool.durable_tools import (
+    OperationExecutor,
+    arrange_requires_approval,
+    durable_tool_handlers,
+    durable_tool_specs,
+)
 from lamtools_core.tool.git_tools import make_git_diff_handler, make_git_status_handler
 from lamtools_core.tool.mcp_tools import MCPToolCaller, execute_mcp_tool_call
 from lamtools_core.tool.permission import ASK_USER, AUTO_ALLOW, HARD_BLOCK, PermissionTier
+from lamtools_core.tool.spreadsheet import (
+    SPREADSHEET_WRITE_INPUT_SCHEMA,
+    write_spreadsheet_tool,
+)
 from lamtools_core.tool.web_tools import (
     make_browser_check_handler,
     make_web_fetch_handler,
@@ -24,6 +34,7 @@ from lamtools_core.tool.workspace_files import (
     DEFAULT_MAX_LIST_ITEMS,
     DEFAULT_MAX_SEARCH_RESULTS,
     DEFAULT_MAX_TEXT_LENGTH,
+    make_document_normalize_handler,
     make_edit_file_handler,
     make_write_file_handler,
     WorkspaceReadOnlyTools,
@@ -51,11 +62,13 @@ DEFAULT_COMMAND_TIMEOUT = 120
 
 DEFAULT_TOOL_PERMISSIONS: dict[str, PermissionTier] = {
     "read_file": AUTO_ALLOW,
+    "document_normalize": ASK_USER,
     "list_dir": AUTO_ALLOW,
     "search_files": AUTO_ALLOW,
     "search_content": AUTO_ALLOW,
     "load_skill": AUTO_ALLOW,
     "write_file": ASK_USER,
+    "write_spreadsheet": ASK_USER,
     "edit_file": ASK_USER,
     "run_command": ASK_USER,
     "run_tests": ASK_USER,
@@ -71,11 +84,13 @@ DEFAULT_TOOL_PERMISSIONS: dict[str, PermissionTier] = {
 
 DEFAULT_TOOL_ORDER: tuple[str, ...] = (
     "read_file",
+    "document_normalize",
     "list_dir",
     "search_files",
     "search_content",
     "load_skill",
     "write_file",
+    "write_spreadsheet",
     "edit_file",
     "run_command",
     "run_tests",
@@ -91,11 +106,13 @@ DEFAULT_TOOL_ORDER: tuple[str, ...] = (
 
 DEFAULT_TOOL_CATEGORIES: dict[str, str] = {
     "read_file": "file_read",
+    "document_normalize": "file_write",
     "list_dir": "file_read",
     "search_files": "file_read",
     "search_content": "file_read",
     "load_skill": "skill",
     "write_file": "file_write",
+    "write_spreadsheet": "file_write",
     "edit_file": "file_write",
     "run_command": "command",
     "run_tests": "command",
@@ -115,10 +132,20 @@ DEFAULT_TOOL_FAILURE_MODES: dict[str, list[dict[str, str]]] = {
         {"type": "file_not_found", "message": "File not found"},
         {"type": "read_error", "message": "Error reading file"},
     ],
+    "document_normalize": [
+        {"type": "path_outside_root", "message": "Blocked: path is outside work_root"},
+        {"type": "file_not_found", "message": "File not found"},
+        {"type": "normalize_error", "message": "Document normalization failed"},
+    ],
     "write_file": [
         {"type": "path_outside_root", "message": "Blocked: path is outside work_root"},
         {"type": "sensitive_pattern", "message": "Blocked: path contains sensitive pattern"},
         {"type": "write_rejected", "message": "WRITE REJECTED: {reason}"},
+    ],
+    "write_spreadsheet": [
+        {"type": "path_outside_root", "message": "Blocked: path is outside work_root"},
+        {"type": "invalid_workbook", "message": "Spreadsheet input or workbook is invalid"},
+        {"type": "write_rejected", "message": "Spreadsheet write rejected: {reason}"},
     ],
     "edit_file": [
         {"type": "old_string_empty", "message": "old_string is empty"},
@@ -161,7 +188,11 @@ DEFAULT_TOOL_FAILURE_MODES: dict[str, list[dict[str, str]]] = {
 
 DEFAULT_TOOL_RECOVERY: dict[str, str] = {
     "read_file": "Check path exists, use list_dir to find correct path",
+    "document_normalize": "Check that the path is a readable DOCX, PDF, or XLSX inside the workspace",
     "write_file": "Check path bounds, avoid sensitive patterns, ensure content is valid",
+    "write_spreadsheet": (
+        "Use workspace-relative .xlsx paths, valid A1 cell references, and formulas beginning with ="
+    ),
     "edit_file": "Read file first to get exact content, use precise old_string match",
     "search_content": "Use an exact substring from the file or narrow the search path",
     "run_command": (
@@ -205,9 +236,23 @@ def _schema(properties: dict[str, Any], required: list[str] | None = None) -> di
 DEFAULT_TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
     {
         "name": "read_file",
-        "description": "Read file content within the workspace.",
+        "description": (
+            "Read file content within the workspace. DOCX, PDF, and XLSX documents are automatically normalized "
+            "to Markdown and labeled as untrusted content."
+        ),
         "input_schema": _schema(
             {"path": {"type": "string", "description": "File path relative to the workspace"}},
+            ["path"],
+        ),
+    },
+    {
+        "name": "document_normalize",
+        "description": (
+            "Normalize a DOCX, PDF, or XLSX to Markdown and persist extracted DOCX image assets under "
+            ".lamtools/document-assets. This operation writes files and requires approval."
+        ),
+        "input_schema": _schema(
+            {"path": {"type": "string", "description": "Document path relative to the workspace"}},
             ["path"],
         ),
     },
@@ -259,6 +304,15 @@ DEFAULT_TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
             },
             ["path", "content"],
         ),
+    },
+    {
+        "name": "write_spreadsheet",
+        "description": (
+            "Create a new XLSX workbook or apply structured cell updates to an existing XLSX workbook. "
+            "Supports literal values, formulas, common cell formatting, column widths, and freeze panes. "
+            "Formulas are preserved but not calculated by Core."
+        ),
+        "input_schema": SPREADSHEET_WRITE_INPUT_SCHEMA,
     },
     {
         "name": "edit_file",
@@ -459,6 +513,9 @@ class CoreToolbox:
         approval_policy: ApprovalPolicy = "require",
         disabled_tools: set[str] | None = None,
         core_event_callback: Callable[[CoreEvent], Awaitable[None]] | None = None,
+        operation_executor: OperationExecutor | None = None,
+        enable_goal_tool: bool = False,
+        enable_arrange_tool: bool = False,
     ) -> None:
         self.work_root = Path(work_root).resolve()
         self.work_root.mkdir(parents=True, exist_ok=True)
@@ -473,6 +530,12 @@ class CoreToolbox:
         self._dynamic_mcp_tool_names = {spec.name for spec in mcp_tool_specs or [] if spec.name.startswith("mcp__")}
         for spec in mcp_tool_specs or []:
             self.tool_permissions[spec.name] = spec.permission  # type: ignore[assignment]
+        durable_specs = durable_tool_specs(
+            goal=enable_goal_tool and operation_executor is not None,
+            arrange=enable_arrange_tool and operation_executor is not None,
+        )
+        for spec in durable_specs:
+            self.tool_permissions[spec.name] = spec.permission  # type: ignore[assignment]
         for name in self.disabled_tools:
             self.tool_permissions[name] = HARD_BLOCK
         self.approval_gate = ApprovalGate(
@@ -480,7 +543,7 @@ class CoreToolbox:
             tool_permissions=self.tool_permissions,
             command_policies=command_policies,
         )
-        self._specs = [*default_core_tool_specs(), *list(mcp_tool_specs or [])]
+        self._specs = [*default_core_tool_specs(), *list(mcp_tool_specs or []), *durable_specs]
         self._handlers = self._build_handlers(
             command_timeout=command_timeout,
             max_write_length=max_write_length,
@@ -488,6 +551,7 @@ class CoreToolbox:
             max_text_length=max_text_length,
             max_search_results=max_search_results,
             core_event_callback=core_event_callback,
+            operation_executor=operation_executor,
         )
 
     def tool_specs(self) -> list[ToolSpec]:
@@ -511,6 +575,13 @@ class CoreToolbox:
     def prepare_call(self, call: ToolCall) -> ToolCall:
         args = call.arguments if isinstance(call.arguments, dict) else {}
         decision = self.approval_gate.check(call.name, args)
+        if call.name == "arrange" and not arrange_requires_approval(args) and not decision.blocked:
+            decision = replace(
+                decision,
+                allowed=True,
+                reason="Auto-approved read-only Arrange action",
+                requires_approval=False,
+            )
         approval = {
             "tier": decision.permission_tier,
             "reason": decision.reason,
@@ -529,7 +600,7 @@ class CoreToolbox:
             metadata=metadata,
         )
 
-    async def execute(self, call: ToolCall) -> ToolResult:
+    async def execute(self, call: ToolCall, context: ToolContext | None = None) -> ToolResult:
         approval = call.metadata.get("approval") if isinstance(call.metadata, dict) else None
         if isinstance(approval, dict) and approval.get("blocked"):
             return ToolResult(
@@ -557,6 +628,7 @@ class CoreToolbox:
         max_text_length: int,
         max_search_results: int,
         core_event_callback: Callable[[CoreEvent], Awaitable[None]] | None,
+        operation_executor: OperationExecutor | None,
     ) -> dict[str, ToolHandler]:
         read_tools = WorkspaceReadOnlyTools(
             self.work_root,
@@ -703,8 +775,13 @@ class CoreToolbox:
 
         handlers: dict[str, ToolHandler] = {
             **read_tools.as_dict(),
+            "document_normalize": make_document_normalize_handler(
+                self.work_root,
+                max_text_length=max_text_length,
+            ),
             "load_skill": load_skill,
             "write_file": make_write_file_handler(self.work_root, max_write_length=max_write_length),
+            "write_spreadsheet": lambda call: write_spreadsheet_tool(call, work_root=self.work_root),
             "edit_file": make_edit_file_handler(self.work_root, max_write_length=max_write_length),
             "run_command": command_handlers.run_command,
             "run_tests": command_handlers.run_tests,
@@ -725,6 +802,8 @@ class CoreToolbox:
             "mcp_tool": call_mcp,
             SUB_AGENT_TOOL_NAME: call_sub_agent,
         }
+        if operation_executor is not None:
+            handlers.update(durable_tool_handlers(operation_executor, work_root=self.work_root))
         return handlers
 
 

@@ -259,6 +259,10 @@ class CoreBaseAgentKit:
         return KernelTurn(reply=response.content or "", tool_calls=calls)
 
     async def execute_tool(self, state: RuntimeState, call: ToolCall) -> ToolResult:
+        routed = await self._pre_dispatch(state, call)
+        if routed is not None:
+            return routed
+
         call.metadata["_runtime_session_id"] = state.session_id
         call.metadata["_runtime_run_id"] = state.run_id
         if call.name == "sub_agent":
@@ -274,13 +278,30 @@ class CoreBaseAgentKit:
                 metadata=evidence_context_metadata(state),
             ),
         )
+        await self._post_dispatch(state, call, result)
+        return result
+
+    async def _pre_dispatch(self, state: RuntimeState, call: ToolCall) -> ToolResult | None:
+        if call.name == "invalid_tool_call":
+            return ToolResult(
+                call_id=call.id,
+                name=call.name,
+                status="failed",
+                error="模型返回了无效工具调用：工具名为空。",
+                content="请重新选择一个已注册工具，并提供完整参数。",
+                metadata=dict(call.arguments if isinstance(call.arguments, dict) else {}),
+            )
+        return None
+
+    async def _post_dispatch(
+        self, state: RuntimeState, call: ToolCall, result: ToolResult
+    ) -> None:
         if result.status == "ok":
             activated_goal_id = str(result.metadata.get("activate_goal_id") or "").strip()
             if activated_goal_id:
                 state.metadata["goal_id"] = activated_goal_id
         if result.status == "ok" and call.name in {"write_file", "edit_file"}:
             self._record_written_file(state, result)
-        return result
 
     async def format_tool_result_for_model(
         self,

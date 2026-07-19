@@ -4,7 +4,7 @@ from typing import Any, Awaitable, Callable
 
 from lamtools_core.event import CoreEvent
 
-from app.core.writer.agent_runtime import AgentCall
+from app.core.writer.agent_types import AgentCall
 
 
 class SubAgentEventForwardingSink:

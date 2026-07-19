@@ -110,13 +110,7 @@ from lamtools_core.tool.workspace import validate_workspace_path as _validate_pa
 
 from app.config import settings
 from app.core.prompt_assembler import WRITER_TOOLS, get_writer_execution_discipline
-from app.core.writer.agent_runtime import (
-    AgentCall,
-    AgentRegistry,
-    AgentRuntime,
-    AgentRunResult,
-    default_agent_registry,
-)
+from app.core.writer.agent_types import AgentCall
 from app.core.writer.failure_specs import failure_recovery_instruction
 from app.core.writer.llm_bridge import WriterLLMClientAdapter
 from app.core.writer.permission import command_permission_decision
@@ -143,11 +137,6 @@ from app.core.writer.tool_failure import (
     should_stop_repeated_failure,
     tool_failure_context,
     tool_failure_signature,
-)
-from app.core.writer.tool_feedback import (
-    agent_failure_reason,
-    agent_tool_facts_for_model,
-    format_tool_result_for_model as _format_tool_result_for_model,
 )
 from app.core.writer.tool_outcomes import record_tool_outcomes
 from app.core.writer.tools import ReadWriteToolExecutor, resolve_tool_executor as _resolve_tool_executor
@@ -234,8 +223,7 @@ class WriterKit:
             work_root: Working directory for file operations (used by verify
                 to check written files exist on disk).
             agent_llm_client: The raw Writer LLM client (with .chat_full) for
-                sub-agent execution. When provided, registered agent tools are
-                routed through AgentRuntime. When None, agent tools are not
+                sub-agent execution. When None, sub-agent tools are not
                 advertised.
         """
         self._tool_executor = tool_executor
@@ -249,33 +237,13 @@ class WriterKit:
         self._compact_trigger_ratio = compact_trigger_ratio
         self._cancel_event = cancel_event
         self._runtime_state_store = runtime_state_store
-        self._agent_runtime: AgentRuntime | None = None
-        self._agent_registry = self._build_agent_registry()
-        self._intervention_pending: str = ""  # System-level repair prompt, injected on next turn
+        self._intervention_pending: str = ""
 
         # MCP integration — loaded lazily on first run_start
         self._mcp_registry: Any = None
         self._mcp_loaded: bool = False
 
         self._effective_tools = self._filter_effective_tools(WRITER_TOOLS)
-
-        if self._agent_llm_client and self._agent_registry.names():
-            self._agent_runtime = AgentRuntime(
-                llm_client=self._agent_llm_client,
-                design_mode_selector=lambda task: "auto",
-                tool_runner=self._agent_tool_runner,
-                registry=self._agent_registry,
-                model_tools=self._effective_tools,
-                model_tools_provider=self._agent_model_tools,
-                parent_state_store=self._runtime_state_store,
-                sub_agent_kernel_runner=self._run_sub_agent_kernel,
-            )
-
-    def _agent_model_tools(self) -> list[dict[str, Any]]:
-        tools = list(self._effective_tools)
-        if self._mcp_registry is not None and self._mcp_loaded:
-            tools.extend(self._mcp_registry.tool_definitions())
-        return tools
 
     def _filter_effective_tools(self, tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Advertise only tools that can actually be executed in this runtime."""
@@ -292,8 +260,6 @@ class WriterKit:
             ]
 
         executable = set(self._tool_executor.keys())
-        if self._agent_llm_client and self._agent_registry.names():
-            executable.update(f"{name}_agent" for name in self._agent_registry.names())
         executable.add("mcp_tool")
 
         filtered = [
@@ -309,9 +275,6 @@ class WriterKit:
         ]
 
     def _model_tool_enabled(self, name: str) -> bool:
-        agent_name = self._agent_name_from_tool(name)
-        if agent_name:
-            return self._agent_enabled(agent_name) and self._tool_enabled(name)
         return self._tool_enabled(name)
 
     def _tool_enabled(self, name: str) -> bool:
@@ -349,55 +312,9 @@ class WriterKit:
             call.metadata["policy_reason"] = decision.reason
         return call
 
-    def _agent_enabled(self, name: str) -> bool:
-        controls = self._runtime_controls.get("agents", {})
+    def _tool_enabled(self, name: str) -> bool:
+        controls = self._runtime_controls.get("tools", {})
         return bool(controls.get(name, True))
-
-    def _agent_name_from_tool(self, tool_name: str) -> str:
-        if not tool_name.endswith("_agent"):
-            return ""
-        agent_name = tool_name[:-6]
-        if self._agent_registry.resolve(agent_name) is None:
-            return ""
-        return agent_name
-
-    def _build_agent_registry(self) -> AgentRegistry:
-        source = default_agent_registry()
-        registry = AgentRegistry()
-        for name in source.names():
-            spec = source.resolve(name)
-            if spec is not None and self._agent_enabled(spec.name):
-                registry.register(spec)
-        return registry
-
-    async def _agent_tool_runner(self, name: str, params: dict[str, Any]) -> str:
-        """Run a tool on behalf of AgentRuntime hooks (search, ui, dependency agents).
-
-        Falls back to the main tool_executor when the tool is registered there.
-        Returns a JSON-stringified result or an error JSON on failure.
-        """
-        agent_work_root = str(params.pop("__agent_work_root", "") or "")
-        executor = self._tool_executor
-        if agent_work_root:
-            executor = _resolve_tool_executor(None, agent_work_root, self._core_event_callback)
-        if executor and isinstance(executor, dict):
-            handler = executor.get(name)
-            if handler is not None:
-                result = handler(ToolCall(id="", name=name, arguments=params))
-                if asyncio.iscoroutine(result):
-                    result = await result
-                return json.dumps({
-                    "ok": result.status == "ok",
-                    "status": result.status,
-                    "content": result.content,
-                    "error": result.error,
-                    "metadata": result.metadata,
-                }, ensure_ascii=False)
-        return json.dumps({
-            "ok": False,
-            "status": "failed",
-            "error": f"工具 {name} 不可用：请求了当前环境没有注册的工具。",
-        }, ensure_ascii=False)
 
     async def _run_sub_agent_kernel(
         self,
@@ -782,11 +699,7 @@ class WriterKit:
     async def execute_tool(
         self, state: RuntimeState, call: ToolCall
     ) -> ToolResult:
-        """Execute a tool call via the injectable tool_executor.
-
-        Agent tools are routed through AgentRuntime. MCP tools (mcp_tool,
-        mcp__*) are routed through MCPRegistry.
-        """
+        """Execute a tool call via the injectable tool_executor."""
         if call.name == "invalid_tool_call":
             return ToolResult(
                 call_id=call.id,
@@ -796,14 +709,6 @@ class WriterKit:
                 content="请重新选择一个已注册工具，并提供完整参数。",
                 metadata=dict(call.arguments if isinstance(call.arguments, dict) else {}),
             )
-
-        # --- Agent dispatch ---
-        if self._agent_name_from_tool(call.name):
-            return await self._execute_agent_tool(state, call)
-
-        # --- MCP dispatch (mcp_tool / mcp__*) ---
-        if call.name == "mcp_tool" or call.name.startswith("mcp__"):
-            return await self._execute_mcp_tool(state, call)
 
         if call.requires_approval:
             return ToolResult(
@@ -858,13 +763,10 @@ class WriterKit:
                         error=f"工具 {call.name} 不可用：请求了当前环境没有注册的工具。",
                         content=f"可用工具：{', '.join(sorted(self._tool_executor.keys()))}",
                     )
-                runtime_keys = {}
-                sentinel = object()
-                if call.name in {"run_command", "run_tests", "goal", "arrange"}:
-                    runtime_keys = {
-                        "_runtime_session_id": state.session_id,
-                        "_runtime_run_id": state.run_id,
-                    }
+                runtime_keys = {
+                    "_runtime_session_id": state.session_id,
+                    "_runtime_run_id": state.run_id,
+                }
                 previous = {key: call.metadata.get(key, sentinel) for key in runtime_keys}
                 call.metadata.update(runtime_keys)
                 try:
@@ -915,110 +817,6 @@ class WriterKit:
             call,
             caller=self._mcp_registry,
             unavailable_error="MCP not available (no work_root configured)",
-        )
-
-    async def _execute_agent_tool(
-        self, state: RuntimeState, call: ToolCall
-    ) -> ToolResult:
-        """Route a concrete agent tool through AgentRuntime."""
-        if self._agent_runtime is None:
-            return ToolResult(
-                call_id=call.id,
-                name=call.name,
-                status="failed",
-                error="Agent runtime not configured (no llm_client provided to WriterKit)",
-            )
-
-        args = call.arguments if isinstance(call.arguments, dict) else {}
-        name = self._agent_name_from_tool(call.name) or ""
-        task = args.get("task", args.get("task_description", ""))
-        mode = args.get("mode", "auto")
-        clean = bool(args.get("clean") or args.get("force") or args.get("force_redesign"))
-        nested_options = args.get("options")
-        agent_options = dict(nested_options) if isinstance(nested_options, dict) else {}
-        agent_options.update({
-            k: v
-            for k, v in args.items()
-            if k not in {"task", "task_description", "mode", "clean", "force", "force_redesign", "options"}
-        })
-
-        if not name or not task:
-            return ToolResult(
-                call_id=call.id,
-                name=call.name,
-                status="failed",
-                error=f"{call.name} requires 'task' argument",
-            )
-
-        mode = str(mode or "auto")
-
-        agent_call = AgentCall(
-            name=name,
-            task=task,
-            mode=mode,
-            clean=clean,
-            options=agent_options,
-        )
-        agent_call.options.setdefault("_parent_tool_call_id", call.id)
-        logger.info(f"Agent dispatch: name={name} mode={mode} task={task[:80]}...")
-        try:
-            result: AgentRunResult = await self._agent_runtime.run(
-                state.session_id,
-                agent_call,
-                parent_state=state,
-            )
-        except Exception as exc:
-            logger.error(f"Agent runtime error: {exc}", exc_info=True)
-            return ToolResult(
-                call_id=call.id,
-                name=call.name,
-                status="failed",
-                error=f"Agent execution failed: {exc}",
-            )
-
-        metadata = result.metadata or {}
-        valid = metadata.get("valid_design", False)
-
-        # Return the agent output as tool result
-        content = result.output or f"[Agent {name} completed with no output]"
-        tool_metadata = {
-            **metadata,
-            "agent_name": metadata.get("agent_name") or metadata.get("agent") or result.name,
-            "runtime_agent": result.name,
-            "valid_design": valid,
-            "winner_name": metadata.get("winner_name", ""),
-        }
-        diagnostics = metadata.get("diagnostics") if isinstance(metadata.get("diagnostics"), dict) else {}
-        if diagnostics.get("decision") == "wait" and isinstance(diagnostics.get("pending_approval"), dict):
-            tool_metadata["delegated_approval_pending"] = True
-            tool_metadata["pending_approval"] = diagnostics["pending_approval"]
-            return ToolResult(
-                call_id=call.id,
-                name=call.name,
-                status="blocked",
-                content=content,
-                error="Sub-agent is waiting for user approval.",
-                metadata=tool_metadata,
-            )
-        facts = agent_tool_facts_for_model(result.name, tool_metadata)
-        if facts:
-            tool_metadata["tool_facts"] = facts
-        failure_reason = agent_failure_reason(result.name, tool_metadata, content)
-        if failure_reason:
-            return ToolResult(
-                call_id=call.id,
-                name=call.name,
-                status="failed",
-                content=content,
-                error=failure_reason,
-                metadata=tool_metadata,
-            )
-        return ToolResult(
-            call_id=call.id,
-            name=call.name,
-            status="ok",
-            content=content,
-            metadata=tool_metadata,
         )
 
     async def format_tool_result_for_model(
@@ -1256,7 +1054,7 @@ async def run_core_kernel(
     if llm_client is None:
         raise ValueError("llm_client must be provided")
 
-    # Keep a reference to the raw Writer LLM client before wrapping for AgentRuntime
+    # Keep a reference to the raw Writer LLM client before wrapping for CoreLLMClient
     raw_writer_client: Any = None
     if hasattr(llm_client, "complete"):
         # Already a Core LLMClient
