@@ -142,8 +142,9 @@ class CliLiveFormatter:
                 lines = [self._streamed_tool_text]
                 self._streamed_tool_text = tool_text
                 self._last_tool_line = tool_text
-                self._inline_delta_active = True
-                return [OutputChunk("", end="\r"), OutputChunk(self._streamed_tool_text, end="")]
+                if "edit" not in str(run_item_payload(run_item).get("tool_name", "")) and "edit" not in self._streamed_tool_text:
+                    self._inline_delta_active = True
+                    return [OutputChunk("", end="\r"), OutputChunk(self._streamed_tool_text, end="")]
             self._streamed_tool_text = tool_text
             self._last_tool_line = tool_text
         else:
@@ -157,9 +158,11 @@ class CliLiveFormatter:
         args = payload.get("arguments") or payload.get("tool_args")
         path = action_path(args) if isinstance(args, dict) else ""
         preview = payload.get("input_preview")
-        if isinstance(preview, dict) and preview.get("content"):
+        if isinstance(preview, dict) and preview.get("content") and "edit" not in tool_name:
             p = str(preview["content"]).replace("\n", " ").strip()
             detail = f"{preview.get('chars', '?')} chars: {p}"
+        elif isinstance(preview, dict) and preview.get("chars"):
+            detail = f"+{preview['chars']} chars"
         else:
             detail = str(payload.get("message") or payload.get("summary") or "").strip()
         return " ".join(bit for bit in (tool_tag(tool_name), tool_name, path, shorten(detail, 120)) if bit)
