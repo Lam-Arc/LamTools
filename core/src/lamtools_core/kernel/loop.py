@@ -548,95 +548,23 @@ class CoreLoopKernel:
                         blocked = await self._apply_pre_tool_hook(state, call)
                         if blocked is not None:
                             blocked_results[call.id] = blocked
-                    if (
-                        prior_payload is not None
-                        and bool(prior_payload.get("challenged"))
-                        and call.id not in blocked_results
-                    ):
-                        blocked_results[call.id] = ToolResult(
-                            call_id=call.id,
-                            name=call.name,
-                            status="blocked",
-                            error=(
-                                "A materially identical large payload was already used successfully. "
-                                "Reuse the existing artifact or result, or choose a materially different approach."
-                            ),
-                            metadata={
-                                "duplicate_substantive_payload": True,
-                                "tool_progress_required": True,
-                            },
-                        )
-                    prior_failed_call = diagnosis_failed_calls.get(self._tool_call_fingerprint(call))
-                    if (
-                        failure_diagnosis_pending
-                        and prior_failed_call is not None
-                        and self._tool_call_fingerprint(call) not in explicit_input_errors
-                        and call.id not in blocked_results
-                    ):
-                        blocked_results[call.id] = ToolResult(
-                            call_id=call.id,
-                            name=call.name,
-                            status="blocked",
-                            content=prior_failed_call.content,
-                            error=(
-                                "Exact retry blocked while failure diagnosis is pending. "
-                                "Investigate the existing evidence and complete the diagnosis first."
-                            ),
-                            metadata={
-                                "failure_diagnosis_required": True,
-                                "original_error": prior_failed_call.error,
-                            },
-                        )
-                    if (
-                        tool_progress_pending
-                        and not tool_progress_completed
-                        and call.id not in blocked_results
-                    ):
-                        blocked_results[call.id] = ToolResult(
-                            call_id=call.id,
-                            name=call.name,
-                            status="blocked",
-                            error=(
-                                "A tool progress checkpoint is required before more tools. "
-                                "Report confirmed facts, remaining uncertainty, and the next action."
-                            ),
-                            metadata={"tool_progress_required": True},
-                        )
-                    if (
-                        failure_diagnosis_pending
-                        and not failure_diagnosis_completed
-                        and failure_investigation_rounds >= 1
-                        and call.id not in blocked_results
-                    ):
-                        blocked_results[call.id] = ToolResult(
-                            call_id=call.id,
-                            name=call.name,
-                            status="blocked",
-                            error=(
-                                "Failure investigation already collected one round of evidence. "
-                                "Complete the visible diagnosis before using more tools."
-                            ),
-                            metadata={
-                                "failure_diagnosis_required": True,
-                                "investigation_budget_exhausted": True,
-                            },
-                        )
+                input_error_warnings: list[str] = []
                 for call in turn.tool_calls:
                     prior_input_error = explicit_input_errors.get(self._tool_call_fingerprint(call))
-                    if call.id in blocked_results or prior_input_error is None:
+                    if prior_input_error is None:
                         continue
-                    blocked_results[call.id] = ToolResult(
-                        call_id=call.id,
-                        name=call.name,
-                        status="blocked",
-                        content=prior_input_error.content,
-                        error=prior_input_error.error,
-                        artifacts=list(prior_input_error.artifacts),
-                        metadata={
-                            **dict(prior_input_error.metadata),
-                            "duplicate_input_error": True,
-                        },
+                    input_error_warnings.append(
+                        f"- {call.name}: {prior_input_error.error}"
                     )
+                if input_error_warnings:
+                    history.append(ChatMessage(
+                        role="system",
+                        content=(
+                            "[DUPLICATE_INPUT_ERROR] Some tool calls match previous input errors. "
+                            "Ensure the arguments below are corrected before retrying:\n"
+                            + "\n".join(input_error_warnings)
+                        ),
+                    ))
                 approval_calls = [
                     call
                     for call in turn.tool_calls
