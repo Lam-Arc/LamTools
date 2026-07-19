@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { mount } from '@vue/test-utils';
+import { nextTick } from 'vue';
 import {
   WORKSPACE_SLOT_NAMES,
   type MemberSlotSet,
@@ -14,8 +15,16 @@ import WorkspaceShell from '../src/components/WorkspaceShell.vue';
 import SessionSidebar from '../src/components/SessionSidebar.vue';
 import CoreExecutionControls from '../src/components/CoreExecutionControls.vue';
 
+const defaultViewportWidth = window.innerWidth;
+
+afterEach(() => {
+  Object.defineProperty(window, 'innerWidth', { configurable: true, value: defaultViewportWidth });
+  window.dispatchEvent(new Event('resize'));
+});
+
 function mountShell(options: Parameters<typeof mount>[1] = {}) {
   return mount(WorkspaceShell, {
+    attachTo: options.attachTo,
     props: {
       productName: 'LamTools',
       ...(options.props || {}),
@@ -130,6 +139,55 @@ describe('WorkspaceShell rendering', () => {
     });
 
     expect(wrapper.find('.drawer-right').exists()).toBe(false);
+    expect(wrapper.find('.edge-right').exists()).toBe(false);
+  });
+
+  it('provides a touch-friendly control that toggles the right panel', async () => {
+    const wrapper = mountShell();
+    const trigger = wrapper.find('.edge-right');
+
+    expect(trigger.element.tagName).toBe('BUTTON');
+    expect(trigger.attributes('aria-controls')).toBe('workspace-right-panel');
+    expect(trigger.attributes('aria-expanded')).toBe('false');
+    expect(trigger.text()).toBe('工具');
+
+    await trigger.trigger('click');
+    expect(wrapper.find('.drawer-right').classes()).toContain('open');
+    expect(trigger.attributes('aria-expanded')).toBe('true');
+    expect(trigger.text()).toBe('关闭');
+
+    await trigger.trigger('click');
+    expect(wrapper.find('.drawer-right').classes()).not.toContain('open');
+    expect(wrapper.find('.drawer-right').attributes('inert')).toBeDefined();
+  });
+
+  it('isolates focus behind the right panel on compact viewports', async () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 390 });
+    const wrapper = mountShell({ attachTo: document.body });
+    const trigger = wrapper.get('.edge-right');
+
+    await trigger.trigger('click');
+    await nextTick();
+
+    const drawer = wrapper.get('.drawer-right');
+    expect(document.activeElement).toBe(drawer.element);
+    expect(wrapper.get('.drawer-left').attributes('inert')).toBeDefined();
+    expect(wrapper.get('.workspace-main').attributes('inert')).toBeDefined();
+    expect(wrapper.get('.composer-root').attributes('inert')).toBeDefined();
+
+    await trigger.trigger('click');
+    await nextTick();
+    expect(drawer.classes()).not.toContain('open');
+    expect(drawer.attributes('inert')).toBeDefined();
+    expect(document.activeElement).toBe(trigger.element);
+
+    await trigger.trigger('click');
+    await nextTick();
+    await drawer.trigger('keydown', { key: 'Escape' });
+    await nextTick();
+    expect(drawer.classes()).not.toContain('open');
+    expect(document.activeElement).toBe(trigger.element);
+    wrapper.unmount();
   });
 
   it('renders named content slots', () => {

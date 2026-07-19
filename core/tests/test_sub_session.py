@@ -33,6 +33,17 @@ def test_sub_session_manager_assigns_next_index_per_parent_session() -> None:
     assert second.session_id == "parent-session:sub:002:test_fixer"
 
 
+def test_sub_session_manager_lists_and_resolves_registered_children() -> None:
+    state = RuntimeState(session_id="parent-session")
+    manager = SubSessionManager()
+    first = manager.get_or_create(state, "repo_reader")
+    second = manager.get_or_create(state, "test_fixer")
+
+    assert manager.list(state) == [first, second]
+    assert manager.get(state, second.session_id) == second
+    assert manager.get(state, "another-parent:sub:001:test_fixer") is None
+
+
 def test_sub_session_manager_defaults_empty_agent_name_to_sub() -> None:
     state = RuntimeState(session_id="parent-session")
     manager = SubSessionManager()

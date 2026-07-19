@@ -15,6 +15,7 @@ export type {
   CoreApiMapper,
   CoreSessionListItem,
   CoreMessage,
+  CoreSubAgentRun,
   CoreAttachmentStatus,
   CoreAttachment,
   CoreAttachmentInputItem,
@@ -51,6 +52,7 @@ export {
   type CoreResourceSummary,
 } from './runtime/resources';
 export { buildCurrentTurnChecklistGroups } from './runtime/checklist';
+export { selectCoreSubAgentRuns } from './agents/subAgentProjection';
 
 // Components
 export { default as WorkspaceShell } from './components/WorkspaceShell.vue';
@@ -58,6 +60,8 @@ export { default as SessionSidebar } from './components/SessionSidebar.vue';
 export { default as ChatThread } from './components/ChatThread.vue';
 export { default as ComposerBar } from './components/ComposerBar.vue';
 export { default as CoreExecutionControls } from './components/CoreExecutionControls.vue';
+export { default as CoreSubAgentPanel } from './components/CoreSubAgentPanel.vue';
+export { default as CoreSubAgentDialog } from './components/CoreSubAgentDialog.vue';
 export { default as CoreResourceStats } from './components/CoreResourceStats.vue';
 export { default as MarkdownRenderer } from './components/MarkdownRenderer.vue';
 export { default as UiSelect } from './components/UiSelect.vue';

@@ -27,6 +27,7 @@ from lamtools_core.app.approval_continuation import CoreApprovalContinuationCoor
 from app.core.writer.state_store import WriterStateStore
 from app.core.writer.core_kernel_adapter import (
     resume_sub_agent_turn,
+    run_sub_agent_turn as continue_sub_agent_turn,
     run_core_kernel,
     schedule_writer_startup_prewarm,
 )
@@ -55,7 +56,9 @@ from app.services.session_compaction_service import (
 )
 from app.services.llm_config_service import build_llm_client, resolve_llm_config
 from app.services.transcript_service import create_user_message_turn
+from lamtools_core.event import RunItemEvent
 from lamtools_core.runtime import RuntimeState, default_runtime_task_registry
+from lamtools_core.sub_session import SubSessionManager, SubSessionRuntimeStateStore
 from lamtools_core.attachment import build_attachment_runtime_input
 
 logger = logging.getLogger(__name__)
@@ -175,6 +178,7 @@ def writer_orchestrate(
     )
     state_store = WriterStateStore(state_session_factory, write_coordinator=writer_coordinator)
     core_state_store = _WriterCoreStateStore(state_store)
+    sub_session_manager = SubSessionManager()
     effective_config_session_factory = config_session_factory or shared_config_session
     git_manager = WriterGitManager()
     checkpoint_service = WriterCheckpointService(
@@ -543,7 +547,13 @@ def writer_orchestrate(
             delegated_session: dict[str, Any],
         ) -> None:
             async with state_session_factory() as read_db:
-                resolved_client = await _resolve_llm_client(read_db)
+                resolved_client = await _resolve_llm_client(
+                    read_db,
+                    thinking_enabled=delegated_session.get("thinking_enabled"),
+                    thinking_budget=delegated_session.get("thinking_budget"),
+                    shallow_thinking_enabled=delegated_session.get("shallow_thinking_enabled"),
+                    model_id=str(delegated_session.get("model_id") or "") or None,
+                )
                 controls = await _runtime_controls(read_db)
             sub_result = await resume_sub_agent_turn(
                 parent_state=state,
@@ -576,6 +586,158 @@ def writer_orchestrate(
             continue_turn=continue_turn,
             continue_delegated_turn=continue_delegated_turn,
         )
+
+    async def list_sub_agents(*, session_id: str) -> list[dict[str, Any]]:
+        parent_state = await core_state_store.get(session_id)
+        if parent_state is None:
+            raise ValueError("Session not found")
+        child_store = SubSessionRuntimeStateStore(parent_state)
+        records: list[dict[str, Any]] = []
+        for ref in sub_session_manager.list(parent_state):
+            child_state = await child_store.get(ref.session_id)
+            metadata = dict(child_state.metadata or {}) if child_state is not None else {}
+            link = dict(metadata.get("sub_agent_link") or {})
+            can_continue = not bool(
+                metadata.get("pending_approval")
+                or metadata.get("pending_waiting_request")
+            )
+            records.append({
+                **ref.to_dict(),
+                "status": str(child_state.status if child_state is not None else "idle"),
+                "turn_count": int(child_state.turn_count if child_state is not None else 0),
+                "initial_task": str(metadata.get("initial_task") or ""),
+                "model_id": str(metadata.get("last_model_id") or ""),
+                "error": str(metadata.get("last_error") or ""),
+                "can_continue": can_continue,
+                "parent_call_id": str(link.get("parent_call_id") or ""),
+                "parent_run_id": str(link.get("parent_run_id") or ""),
+                "parent_turn_id": str(link.get("parent_turn_id") or ""),
+            })
+        return records
+
+    async def get_sub_agent(*, session_id: str, sub_session_id: str) -> dict[str, Any]:
+        parent_state = await core_state_store.get(session_id)
+        if parent_state is None:
+            raise ValueError("Session not found")
+        for record in await list_sub_agents(session_id=session_id):
+            if record["session_id"] == sub_session_id:
+                history = await SubSessionRuntimeStateStore(parent_state).get_history(sub_session_id)
+                return {**record, "timeline": history}
+        raise ValueError("Sub-agent session not found")
+
+    async def mark_sub_agent_failed(
+        *,
+        session_id: str,
+        sub_session_id: str,
+        error: str,
+    ) -> None:
+        parent_state = await core_state_store.get(session_id)
+        if parent_state is None or sub_session_manager.get(parent_state, sub_session_id) is None:
+            return
+        child_store = SubSessionRuntimeStateStore(parent_state)
+        child_state = await child_store.get(sub_session_id)
+        if child_state is None:
+            return
+        child_state.status = "error"
+        child_state.loop_state = "error"
+        child_state.metadata["last_error"] = str(error or "Sub-agent turn failed")
+        await child_store.save(child_state)
+        await core_state_store.save(parent_state)
+
+    async def run_sub_agent_turn(
+        *,
+        session_id: str,
+        sub_session_id: str,
+        prompt: str,
+        model_id: str | None = None,
+        thinking_enabled: bool | None = None,
+        thinking_budget: int | None = None,
+        shallow_thinking_enabled: bool | None = None,
+    ) -> dict[str, Any]:
+        parent_state = await core_state_store.get(session_id)
+        if parent_state is None or sub_session_manager.get(parent_state, sub_session_id) is None:
+            raise ValueError("Sub-agent session not found")
+        child_store = SubSessionRuntimeStateStore(
+            parent_state,
+            parent_state_store=core_state_store,
+        )
+        child_state = await child_store.get(sub_session_id)
+        if child_state is None:
+            raise ValueError("Sub-agent runtime state not found")
+        link = dict(child_state.metadata.get("sub_agent_link") or {})
+        if not str(link.get("parent_call_id") or ""):
+            raise ValueError("Sub-agent parent link not found")
+        async with state_session_factory() as read_db:
+            session = await read_db.get(WriterSession, session_id)
+            if session is None:
+                raise ValueError("Session not found")
+            resolved_client = await _resolve_llm_client(
+                read_db,
+                thinking_enabled=thinking_enabled,
+                thinking_budget=thinking_budget,
+                shallow_thinking_enabled=shallow_thinking_enabled,
+                model_id=model_id,
+            )
+            controls = await _runtime_controls(read_db)
+            work_root = session.work_root or settings.writer_work_root
+        child_state.metadata["last_model_id"] = str(model_id or "")
+        child_state.metadata.pop("last_error", None)
+        await child_store.save(child_state)
+        parent_run_id = str(link.get("parent_run_id") or parent_state.run_id)
+        parent_call_id = str(link.get("parent_call_id") or "")
+        parent_item_id = f"{session_id}:{parent_run_id}:{parent_call_id}:tool"
+        direct_turn_id = f"{sub_session_id}:turn:{gen_uuid()}"
+        await app_projection_sink.publish([
+            RunItemEvent(
+                kind="message",
+                thread_id=session_id,
+                event_id=f"{direct_turn_id}:user",
+                run_id=direct_turn_id,
+                turn_id=str(link.get("parent_turn_id") or parent_run_id),
+                item_id=f"{direct_turn_id}:user",
+                parent_item_id=parent_item_id,
+                status="completed",
+                payload={"type": "userMessage", "content": prompt},
+                source="sub_agent.user",
+                metadata={"sub_agent": {**link, "session_id": sub_session_id}},
+            )
+        ], session_id=session_id, source_event_id=f"{direct_turn_id}:user")
+        recorder = RuntimeFactRecorder(
+            session_id=session_id,
+            turn_id=str(link.get("parent_turn_id") or parent_run_id),
+            app_projection_sink=app_projection_sink,
+            write_coordinator=writer_coordinator,
+        )
+        delegated = {
+            **link,
+            "session_id": sub_session_id,
+            "task": str(child_state.metadata.get("initial_task") or prompt),
+            "agent_run_id": direct_turn_id,
+            "sub_line_id": f"subline-{direct_turn_id}",
+            "model_id": str(model_id or ""),
+            "thinking_enabled": thinking_enabled,
+            "thinking_budget": thinking_budget,
+            "shallow_thinking_enabled": shallow_thinking_enabled,
+        }
+        result = await continue_sub_agent_turn(
+            parent_state=parent_state,
+            delegated_session=delegated,
+            prompt=prompt,
+            llm_client=resolved_client,
+            work_root=work_root,
+            runtime_controls=controls,
+            live_event_callback=recorder.record_core_event,
+            parent_state_store=core_state_store,
+        )
+        await core_state_store.save(parent_state)
+        return {
+            "session_id": sub_session_id,
+            "run_id": result.run_id,
+            "decision": result.decision,
+            "message": result.message,
+            "error": result.error,
+            "model_id": str(model_id or ""),
+        }
 
     async def compact_session_context(
         db: AsyncSession | None = None,
@@ -621,6 +783,10 @@ def writer_orchestrate(
         "delete_session": delete_session,
         "run_turn": run_turn,
         "create_approval_coordinator": create_approval_coordinator,
+        "list_sub_agents": list_sub_agents,
+        "get_sub_agent": get_sub_agent,
+        "run_sub_agent_turn": run_sub_agent_turn,
+        "mark_sub_agent_failed": mark_sub_agent_failed,
         "compact_session_context": compact_session_context,
         "close": close,
     }

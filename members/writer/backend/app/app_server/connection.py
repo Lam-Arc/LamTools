@@ -41,6 +41,9 @@ from .operations import (
     handle_session_list_operation,
     handle_session_rollback_turn_operation,
     handle_session_update_operation,
+    handle_sub_agent_get_operation,
+    handle_sub_agent_list_operation,
+    handle_sub_agent_turn_start_operation,
     operation_name,
 )
 from .protocol import PROTOCOL_VERSION, JsonRpcRequest
@@ -134,6 +137,9 @@ class WriterAppServerConnection(CoreLiveConnection):
     def _operation_catalog(self) -> OperationCatalog:
         core_handlers = self.context.host.operation_handlers()
         return build_writer_operation_catalog(
+            sub_agent_list=self._sub_agent_list,
+            sub_agent_get=self._sub_agent_get,
+            sub_agent_turn_start=self._sub_agent_turn_start,
             session_create=self._session_create,
             session_get=self._session_get,
             session_list=self._session_list,
@@ -142,7 +148,6 @@ class WriterAppServerConnection(CoreLiveConnection):
             session_fork=self._session_fork,
             session_git_graph=self._session_git_graph,
             session_changes_get=self._session_changes_get,
-            session_checkpoints_list=self._session_checkpoints_list,
             session_checkpoint_create=self._session_checkpoint_create,
             session_checkpoint_restore=self._session_checkpoint_restore,
             session_commit_review_get=self._session_commit_review_get,
@@ -157,6 +162,24 @@ class WriterAppServerConnection(CoreLiveConnection):
             session_change_file_undo=self._session_change_file_undo,
             core_handlers=core_handlers,
         )
+
+    async def _sub_agent_list(self, request: JsonRpcRequest) -> None:
+        outcome = await handle_sub_agent_list_operation(
+            request_id=request.id, params=request.params or {}, runtime=self.runtime,
+        )
+        await self._send(outcome.response)
+
+    async def _sub_agent_get(self, request: JsonRpcRequest) -> None:
+        outcome = await handle_sub_agent_get_operation(
+            request_id=request.id, params=request.params or {}, runtime=self.runtime,
+        )
+        await self._send(outcome.response)
+
+    async def _sub_agent_turn_start(self, request: JsonRpcRequest) -> None:
+        outcome = await handle_sub_agent_turn_start_operation(
+            request_id=request.id, params=request.params or {}, runtime=self.runtime,
+        )
+        await self._send(outcome.response)
 
     async def _resolve_client_response(self, raw: dict[str, Any]) -> None:
         request_id = str(raw.get("id") or "")
@@ -213,6 +236,8 @@ class WriterAppServerConnection(CoreLiveConnection):
             request_id=request.id,
             params=request.params,
             session_factory=async_session,
+            runtime_task_registry=self.runtime.runtime_task_registry,
+            session_deleter=self.runtime.delete_session,
         )
         await self._send(outcome.response)
 

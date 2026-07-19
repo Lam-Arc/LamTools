@@ -7,6 +7,7 @@
     <!-- Edge hover triggers -->
     <div
       class="edge edge-left"
+      :inert="rightDrawerModal || undefined"
       role="button"
       tabindex="0"
       aria-label="打开左侧会话栏"
@@ -15,21 +16,26 @@
       @keydown.enter.prevent="leftOpen = true"
       @keydown.space.prevent="leftOpen = true"
     ></div>
-    <div
+    <button
+      v-if="showRightPanel"
+      ref="rightToggle"
       class="edge edge-right"
-      role="button"
-      tabindex="0"
-      aria-label="打开右侧面板"
-      @mouseenter="rightOpen = true"
-      @focus="rightOpen = true"
-      @keydown.enter.prevent="rightOpen = true"
-      @keydown.space.prevent="rightOpen = true"
-    ></div>
+      data-workspace-right-toggle
+      type="button"
+      :aria-label="rightOpen ? '关闭右侧面板' : '打开右侧面板'"
+      aria-controls="workspace-right-panel"
+      :aria-expanded="rightOpen"
+      @pointerenter="openRightDrawerFromPointer"
+      @click="toggleRightDrawer"
+    >
+      <span class="edge-right-label" aria-hidden="true">{{ rightOpen ? '关闭' : '工具' }}</span>
+    </button>
 
     <!-- ===== Left Drawer ===== -->
     <aside
       class="workspace-drawer drawer-left"
       :class="{ open: leftOpen, pinned: leftPinned }"
+      :inert="rightDrawerModal || undefined"
       @mouseleave="onLeftDrawerLeave"
     >
       <header class="drawer-head">
@@ -64,7 +70,7 @@
     </aside>
 
     <!-- ===== Main Area ===== -->
-    <main class="workspace-main">
+    <main class="workspace-main" :inert="rightDrawerModal || undefined">
       <slot name="main-header" />
       <slot name="main-content">
         <section class="thread">
@@ -74,47 +80,66 @@
     </main>
 
     <!-- ===== Floating Composer ===== -->
-    <form
-      class="floating-composer"
-      @submit.prevent="$emit('composer-submit')"
-      @dragover.prevent
-      @drop.prevent="$emit('composer-drop', $event)"
+    <ComposerBar
+      :inert="rightDrawerModal || undefined"
+      variant="floating"
+      :placeholder="composerPlaceholder"
+      :disabled="composerDisabled"
+      :action-mode="composerActionMode"
+      :send-label="composerSendLabel"
+      :stop-label="composerStopLabel"
+      :send-title="composerSendTitle"
+      :stop-title="composerStopTitle"
+      @submit="$emit('composer-submit')"
+      @drop="$emit('composer-drop', $event)"
     >
-      <slot name="composer-preamble" />
-      <div class="composer-main-card">
+      <template #preamble>
+        <slot name="composer-preamble" />
+      </template>
+      <template #status>
         <slot name="composer-status" />
+      </template>
+      <template #textarea>
         <slot name="composer-textarea">
           <textarea
             :placeholder="composerPlaceholder"
+            :aria-label="composerPlaceholder"
+            :disabled="composerDisabled"
             rows="1"
             @keydown.enter.exact.prevent="$emit('composer-submit')"
           ></textarea>
         </slot>
-        <div class="composer-bottom">
-          <div class="tool-row">
-            <slot name="composer-tools" />
-          </div>
-          <slot name="composer-action">
-            <button
-              class="send"
-              :class="{ 'send--stop': composerActionMode === 'stop' }"
-              type="submit"
-              :disabled="composerActionMode === 'send' && composerDisabled"
-              :title="composerActionMode === 'stop' ? composerStopTitle : composerSendTitle"
-              :aria-label="composerActionMode === 'stop' ? composerStopTitle : composerSendTitle"
-            >{{ composerActionMode === 'stop' ? composerStopLabel : composerSendLabel }}</button>
-          </slot>
-        </div>
-      </div>
-      <div class="drop-hint">拖拽到这里</div>
-    </form>
+      </template>
+      <template #tools>
+        <slot name="composer-tools" />
+      </template>
+      <template #action>
+        <slot name="composer-action">
+          <button
+            class="send"
+            :class="{ 'send--stop': composerActionMode === 'stop' }"
+            type="submit"
+            :disabled="composerActionMode === 'send' && composerDisabled"
+            :title="composerActionMode === 'stop' ? composerStopTitle : composerSendTitle"
+            :aria-label="composerActionMode === 'stop' ? composerStopTitle : composerSendTitle"
+          >{{ composerActionMode === 'stop' ? composerStopLabel : composerSendLabel }}</button>
+        </slot>
+      </template>
+    </ComposerBar>
 
     <!-- ===== Right Drawer ===== -->
     <aside
       v-if="showRightPanel"
+      ref="rightDrawer"
+      id="workspace-right-panel"
       class="workspace-drawer drawer-right"
       :class="{ open: rightOpen, pinned: rightPinned }"
-      @mouseleave="onRightDrawerLeave"
+      :inert="!rightOpen || undefined"
+      :aria-hidden="!rightOpen || undefined"
+      :aria-label="rightPanelTitle"
+      tabindex="-1"
+      @mouseleave="onRightDrawerPointerLeave"
+      @keydown.esc.stop.prevent="closeRightDrawer"
     >
       <header class="drawer-head">
         <strong>{{ rightPanelTitle }}</strong>
@@ -148,8 +173,10 @@
  * Uses useShellLayout for all drawer/pin/theme/density state.
  * Product provides slots for actual content.
  */
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useShellLayout } from '../composables/useShellLayout'
 import type { ThemeData } from '../composables/useShellLayout'
+import ComposerBar from './ComposerBar.vue'
 
 const props = withDefaults(
   defineProps<{
@@ -214,6 +241,52 @@ const {
   contentWidth: props.contentWidth,
   theme: props.theme,
   showRightPanel: props.showRightPanel,
+})
+
+const rightToggle = ref<HTMLButtonElement | null>(null)
+const rightDrawer = ref<HTMLElement | null>(null)
+const compactViewport = ref(false)
+const rightDrawerModal = computed(() => rightOpen.value && compactViewport.value)
+
+function syncCompactViewport() {
+  compactViewport.value = typeof window !== 'undefined' && window.innerWidth <= 640
+}
+
+function toggleRightDrawer() {
+  if (rightOpen.value) {
+    closeRightDrawer()
+    return
+  }
+  rightOpen.value = true
+}
+
+function closeRightDrawer() {
+  rightOpen.value = false
+  void nextTick(() => rightToggle.value?.focus())
+}
+
+function onRightDrawerPointerLeave() {
+  if (!compactViewport.value) onRightDrawerLeave()
+}
+
+function openRightDrawerFromPointer(event: PointerEvent) {
+  if (event.pointerType === 'mouse') rightOpen.value = true
+}
+
+watch(rightDrawerModal, async (active) => {
+  if (!active) return
+  leftOpen.value = false
+  await nextTick()
+  rightDrawer.value?.focus()
+})
+
+onMounted(() => {
+  syncCompactViewport()
+  window.addEventListener('resize', syncCompactViewport)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', syncCompactViewport)
 })
 </script>
 

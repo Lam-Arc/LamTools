@@ -78,6 +78,32 @@ def test_writer_exposes_only_atomic_persistence_writes():
 
 
 @pytest.mark.asyncio
+async def test_writer_loads_and_reconciles_an_existing_snapshot(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'writer-snapshot-load.db'}", future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    try:
+        async with session_factory() as db:
+            db.add(WriterThreadSnapshot(
+                thread_id="thread-existing",
+                snapshot_seq=7,
+                snapshot_json={"thread_id": "thread-existing", "status": "idle"},
+            ))
+            await db.commit()
+
+        async with session_factory() as db:
+            snapshot = await load_snapshot(db, "thread-existing")
+
+        assert snapshot["thread_id"] == "thread-existing"
+        assert snapshot["snapshot_seq"] == 7
+        assert snapshot["status"] == "idle"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_writer_host_replays_legacy_and_core_projections_then_applies_rollback(tmp_path):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'writer-host-replay.db'}", future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)

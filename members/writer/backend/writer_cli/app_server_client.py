@@ -87,5 +87,42 @@ class AppServerClient(CoreAppServerClient):
     async def delete_session(self, *, session_id: str) -> None:
         await self.request("session.delete", {"session_id": session_id})
 
+    async def list_sub_agents(self, *, thread_id: str) -> list[dict[str, Any]]:
+        response = await self.request("sub_agent.list", {"thread_id": thread_id})
+        agents = response.get("sub_agents")
+        return agents if isinstance(agents, list) else []
+
+    async def get_sub_agent(self, *, thread_id: str, sub_session_id: str) -> dict[str, Any]:
+        response = await self.request(
+            "sub_agent.get",
+            {"thread_id": thread_id, "sub_session_id": sub_session_id},
+        )
+        agent = response.get("sub_agent")
+        return agent if isinstance(agent, dict) else {}
+
+    async def start_sub_agent_turn(
+        self,
+        *,
+        thread_id: str,
+        sub_session_id: str,
+        message: str,
+        model_id: str | None = None,
+        thinking_enabled: bool | None = None,
+        thinking_budget: int | None = None,
+        shallow_thinking_enabled: bool | None = None,
+    ) -> dict[str, Any]:
+        return await self.request(
+            "sub_agent.turn.start",
+            {
+                "thread_id": thread_id,
+                "sub_session_id": sub_session_id,
+                "input": [{"type": "text", "text": message}],
+                "model_id": model_id,
+                "thinking_enabled": thinking_enabled,
+                "thinking_budget": thinking_budget,
+                "shallow_thinking_enabled": shallow_thinking_enabled,
+            },
+        )
+
 
 __all__ = ["AppServerClient"]

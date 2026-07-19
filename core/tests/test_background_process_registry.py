@@ -106,6 +106,40 @@ async def test_runtime_task_completion_cleans_registered_processes(
 
 
 @pytest.mark.asyncio
+async def test_runtime_status_poll_cannot_skip_completed_task_process_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    process_registry = BackgroundProcessRegistry()
+    runtime_registry = RuntimeTaskRegistry(background_process_registry=process_registry)
+    process = _FakeProcess(445)
+    terminated: list[int] = []
+    monkeypatch.setattr(
+        process_module,
+        "terminate_process_tree",
+        lambda owned: terminated.append(owned.pid),
+    )
+    process_registry.register(
+        process,  # type: ignore[arg-type]
+        session_id="thread-polled",
+        run_id="turn-polled",
+        work_root=tmp_path,
+    )
+    release = asyncio.Event()
+    task = asyncio.create_task(release.wait())
+    assert runtime_registry.register("thread-polled", task, run_id="turn-polled") is True
+
+    release.set()
+    await asyncio.sleep(0)
+    assert task.done()
+    assert runtime_registry.active_run_id("thread-polled") is None
+    await asyncio.sleep(0)
+
+    assert terminated == [445]
+    assert process_registry.list() == []
+
+
+@pytest.mark.asyncio
 async def test_command_handler_passes_runtime_ownership_to_background_runner(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

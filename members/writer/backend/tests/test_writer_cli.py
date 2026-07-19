@@ -135,6 +135,25 @@ def test_parser_accepts_resume_command():
     assert args.heartbeat_interval == 10
 
 
+def test_parser_accepts_sub_agent_list_show_and_send_commands():
+    parser = build_parser()
+
+    listed = parser.parse_args(["sub-agent", "list", "session-1"])
+    shown = parser.parse_args(["sub-agent", "show", "session-1", "child-1"])
+    sent = parser.parse_args([
+        "sub-agent", "send", "session-1", "child-1", "继续检查", "--model-id", "model-2",
+        "--thinking", "--thinking-budget", "2048", "--shallow-thinking",
+    ])
+
+    assert listed.sub_agent_command == "list"
+    assert shown.sub_session_id == "child-1"
+    assert sent.message == ["继续检查"]
+    assert sent.model_id == "model-2"
+    assert sent.thinking is True
+    assert sent.thinking_budget == 2048
+    assert sent.shallow_thinking is True
+
+
 def test_parser_accepts_watch_command():
     parser = build_parser()
     args = parser.parse_args(["watch", "sess-1", "--verbose"])

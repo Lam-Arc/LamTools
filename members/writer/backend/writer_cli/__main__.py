@@ -181,6 +181,44 @@ async def cmd_list(args: argparse.Namespace) -> int:
     return 0
 
 
+async def cmd_sub_agent_list(args: argparse.Namespace) -> int:
+    async with AppServerClient(_base_url(args)) as client:
+        await client.connect(thread_id=args.session_id)
+        agents = await client.list_sub_agents(thread_id=args.session_id)
+    print(json.dumps({"sub_agents": agents}, ensure_ascii=False, sort_keys=True))
+    return 0
+
+
+async def cmd_sub_agent_show(args: argparse.Namespace) -> int:
+    async with AppServerClient(_base_url(args)) as client:
+        await client.connect(thread_id=args.session_id)
+        agent = await client.get_sub_agent(
+            thread_id=args.session_id,
+            sub_session_id=args.sub_session_id,
+        )
+    print(json.dumps(agent, ensure_ascii=False, indent=2))
+    return 0
+
+
+async def cmd_sub_agent_send(args: argparse.Namespace) -> int:
+    message = " ".join(args.message).strip()
+    if not message:
+        raise CliError("message is required")
+    async with AppServerClient(_base_url(args)) as client:
+        await client.connect(thread_id=args.session_id)
+        result = await client.start_sub_agent_turn(
+            thread_id=args.session_id,
+            sub_session_id=args.sub_session_id,
+            message=message,
+            model_id=args.model_id,
+            thinking_enabled=True if args.thinking else None,
+            thinking_budget=args.thinking_budget,
+            shallow_thinking_enabled=True if args.shallow_thinking else None,
+        )
+    print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+    return 0
+
+
 async def cmd_new(args: argparse.Namespace) -> int:
     created = await _create_visible_session(
         args,
@@ -623,6 +661,25 @@ def build_parser() -> argparse.ArgumentParser:
     list_parser = sub.add_parser("list", help="List sessions")
     list_parser.add_argument("-n", "--limit", type=int, default=20)
     list_parser.set_defaults(func=cmd_list)
+
+    sub_agent_parser = sub.add_parser("sub-agent", help="Inspect and continue sub-agent sessions")
+    sub_agent_sub = sub_agent_parser.add_subparsers(dest="sub_agent_command", required=True)
+    sub_agent_list = sub_agent_sub.add_parser("list", help="List sub-agents in a session")
+    sub_agent_list.add_argument("session_id")
+    sub_agent_list.set_defaults(func=cmd_sub_agent_list)
+    sub_agent_show = sub_agent_sub.add_parser("show", help="Show one sub-agent")
+    sub_agent_show.add_argument("session_id")
+    sub_agent_show.add_argument("sub_session_id")
+    sub_agent_show.set_defaults(func=cmd_sub_agent_show)
+    sub_agent_send = sub_agent_sub.add_parser("send", help="Send a follow-up to a sub-agent")
+    sub_agent_send.add_argument("session_id")
+    sub_agent_send.add_argument("sub_session_id")
+    sub_agent_send.add_argument("message", nargs="+")
+    sub_agent_send.add_argument("--model-id", dest="model_id", default=None)
+    sub_agent_send.add_argument("--thinking", action="store_true")
+    sub_agent_send.add_argument("--thinking-budget", type=int, default=None)
+    sub_agent_send.add_argument("--shallow-thinking", action="store_true")
+    sub_agent_send.set_defaults(func=cmd_sub_agent_send)
 
     new_parser = sub.add_parser("new", help="Create a session")
     new_parser.add_argument("title", nargs="?", default="CLI Session")

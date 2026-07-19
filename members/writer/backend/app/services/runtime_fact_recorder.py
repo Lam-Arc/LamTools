@@ -126,7 +126,11 @@ class RuntimeFactRecorder:
         self._seen_core_event_ids.add(event.event_id)
         payload = event.payload or {}
         event_name = event.name
-        if event_name in {"runtime.done", "runtime.failed", "runtime.cancelled", "runtime.waiting"}:
+        is_sub_agent_event = isinstance(payload.get("sub_agent"), dict)
+        if (
+            event_name in {"runtime.done", "runtime.failed", "runtime.cancelled", "runtime.waiting"}
+            and not is_sub_agent_event
+        ):
             self._seen_terminal_core_event = True
         await self.record(
             group=runtime_group_from_event_name(event_name),

@@ -84,7 +84,14 @@
   background: color-mix(in srgb, var(--blue) 14%, transparent);
 }
 .edge-left  { left: 0; }
-.edge-right { right: 0; }
+.edge-right {
+  right: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--theme-backdrop-text);
+}
+.edge-right-label { display: none; }
 
 /* =========================================================================
    Drawers — left sidebar / right panel
@@ -2245,9 +2252,42 @@
 }
 @media (max-width: 640px) {
   .workspace-shell { --left-card-width: 0px; }
-  .workspace-shell { --right-drawer-width: 0px; }
+  .workspace-shell { --right-drawer-width: 100vw; }
   .workspace-shell { --main-x-padding: 14px; }
-  .drawer-right { display: none; }
+  .workspace-shell.right-open { --main-right: 0px; }
+  .drawer-right {
+    z-index: calc(var(--z-main-surface, 20) + 10);
+    width: 100vw;
+    max-width: none;
+    background: var(--theme-backdrop-background);
+    opacity: 0;
+    transform: translateX(100%);
+  }
+  .drawer-right.open {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  .drawer-right .drawer-head {
+    min-height: 68px;
+    padding-right: 72px;
+  }
+  .drawer-right .pin-plain { display: none; }
+  .edge-right {
+    top: 12px;
+    right: 12px;
+    bottom: auto;
+    width: 48px;
+    min-width: 44px;
+    height: 44px;
+    border-radius: 10px;
+    background: var(--theme-control-background);
+  }
+  .edge-right-label {
+    display: inline;
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1;
+  }
   .floating-composer { width: calc(100vw - 28px); left: 50%; }
   .floating-composer textarea { font-size: 14px; }
 }

@@ -23,10 +23,10 @@ test('Core owns the shared resource panel and composer percentage line', () => {
 })
 
 test('Core context usage excludes cumulative input and output totals', () => {
-  const contextMetrics = coreResourceSource.match(/const current = firstNumber\([\s\S]*?\n\s*\)/)?.[0] || ''
-  assert.match(contextMetrics, /latest\.estimated_prompt_tokens/)
-  assert.match(contextMetrics, /latest\.context_tokens/)
-  assert.doesNotMatch(contextMetrics, /input_tokens|prompt_tokens(?!\b)/)
+  const contextMetrics = coreResourceSource.match(/for \(const message of messages\) \{[\s\S]*?if \(records\.length === 0 && current < 0\) return null/)?.[0] || ''
+  assert.match(contextMetrics, /record\.estimated_prompt_tokens/)
+  assert.match(contextMetrics, /record\.context_tokens/)
+  assert.doesNotMatch(contextMetrics, /record\.(?:input_tokens|prompt_tokens)\b/)
 })
 
 test('Core separates over-threshold state from completed compaction', () => {
