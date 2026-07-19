@@ -64,6 +64,10 @@ def reduce_events(thread_id: str, events: list[WriterAppEventEnvelope]) -> dict[
     return state
 
 
+def reconcile_status(state: dict[str, Any]) -> dict[str, Any]:
+    return _CORE_PROJECTOR.reconcile_status(deepcopy(state))
+
+
 def _to_core_envelope(event: WriterAppEventEnvelope) -> CoreAppEventEnvelope:
     return CoreAppEventEnvelope(
         event_id=event.event_id,

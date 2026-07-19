@@ -84,7 +84,14 @@
   background: color-mix(in srgb, var(--blue) 14%, transparent);
 }
 .edge-left  { left: 0; }
-.edge-right { right: 0; }
+.edge-right {
+  right: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--theme-backdrop-text);
+}
+.edge-right-label { display: none; }
 
 /* =========================================================================
    Drawers — left sidebar / right panel
@@ -2247,7 +2254,7 @@
 }
 @media (max-width: 640px) {
   .workspace-shell { --left-card-width: 0px; }
-  .workspace-shell { --right-drawer-width: 0px; }
+  .workspace-shell { --right-drawer-width: 100vw; }
   .workspace-shell { --main-x-padding: 14px; }
   .settings-page {
     display: flex;

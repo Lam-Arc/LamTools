@@ -64,6 +64,9 @@ from app.app_server.operations import (
     handle_session_update_operation,
     handle_settings_get_operation,
     handle_settings_update_operation,
+    handle_sub_agent_get_operation,
+    handle_sub_agent_list_operation,
+    handle_sub_agent_turn_start_operation,
     operation_name,
 )
 from app.app_server.protocol import AppendEventInput, InitializeParams, rpc_error, rpc_result
@@ -442,8 +445,9 @@ def test_operation_names_normalize_transport_aliases():
 
 def _build_test_writer_catalog(handler):
     overlay_arguments = (
+        "sub_agent_list", "sub_agent_get", "sub_agent_turn_start",
         "session_create", "session_get", "session_list", "session_update", "session_delete", "session_fork",
-        "session_git_graph", "session_changes_get", "session_checkpoints_list",
+        "session_git_graph", "session_changes_get",
         "session_checkpoint_create", "session_checkpoint_restore", "session_commit_review_get",
         "session_commit_review_decide", "session_agent_branches_list",
         "session_agent_branch_diff", "session_agent_branch_merge",
@@ -573,6 +577,9 @@ def test_writer_operation_catalog_covers_app_server_rpc_methods():
         "session.update",
         "settings.get",
         "settings.update",
+        "sub_agent.get",
+        "sub_agent.list",
+        "sub_agent.turn.start",
         "thread.read",
         "thread.resume",
         "thread.start",
@@ -600,6 +607,79 @@ async def test_turn_cancel_operation_returns_error_without_thread_id():
 
     assert outcome.response["error"]["message"] == "thread_id is required"
     assert outcome.publish_events == []
+
+
+@pytest.mark.asyncio
+async def test_sub_agent_operations_list_get_and_start_on_the_parent_thread():
+    calls = []
+
+    class Runtime:
+        async def list_sub_agents(self, thread_id):
+            calls.append(("list", thread_id))
+            return [{"session_id": "child-1"}]
+
+        async def get_sub_agent(self, thread_id, sub_session_id):
+            calls.append(("get", thread_id, sub_session_id))
+            return {"session_id": sub_session_id, "status": "completed"}
+
+        async def start_sub_agent_turn(self, **kwargs):
+            calls.append(("start", kwargs))
+            return {"accepted": True, "session_id": kwargs["sub_session_id"], "run_id": "child-run-2"}
+
+    runtime = Runtime()
+    listed = await handle_sub_agent_list_operation(
+        request_id=1,
+        params={"thread_id": "thread-1"},
+        runtime=runtime,
+    )
+    shown = await handle_sub_agent_get_operation(
+        request_id=2,
+        params={"thread_id": "thread-1", "sub_session_id": "child-1"},
+        runtime=runtime,
+    )
+    started = await handle_sub_agent_turn_start_operation(
+        request_id=3,
+        params={
+            "thread_id": "thread-1",
+            "sub_session_id": "child-1",
+            "input": [{"type": "text", "text": "继续检查"}],
+            "model_id": "model-2",
+            "thinking_enabled": True,
+            "thinking_budget": 6000,
+        },
+        runtime=runtime,
+    )
+
+    assert listed.response["result"]["sub_agents"] == [{"session_id": "child-1"}]
+    assert shown.response["result"]["sub_agent"]["status"] == "completed"
+    assert started.response["result"] == {
+        "accepted": True,
+        "session_id": "child-1",
+        "run_id": "child-run-2",
+    }
+    assert calls[2][1]["prompt"] == "继续检查"
+    assert calls[2][1]["model_id"] == "model-2"
+
+
+@pytest.mark.asyncio
+async def test_sub_agent_operations_reject_missing_identifiers_and_empty_input():
+    runtime = object()
+
+    listed = await handle_sub_agent_list_operation(request_id=1, params={}, runtime=runtime)
+    shown = await handle_sub_agent_get_operation(
+        request_id=2,
+        params={"thread_id": "thread-1"},
+        runtime=runtime,
+    )
+    started = await handle_sub_agent_turn_start_operation(
+        request_id=3,
+        params={"thread_id": "thread-1", "sub_session_id": "child-1", "input": []},
+        runtime=runtime,
+    )
+
+    assert listed.response["error"]["message"] == "thread_id is required"
+    assert shown.response["error"]["message"] == "thread_id and sub_session_id are required"
+    assert started.response["error"]["message"] == "thread_id, sub_session_id and input are required"
 
 
 
@@ -786,6 +866,47 @@ async def test_session_get_update_delete_operations_return_validation_errors():
     assert rollback_turn.response["error"]["message"] == "session_id is required"
     assert undo_changes.response["error"]["message"] == "session_id is required"
     assert undo_file.response["error"]["message"] == "session_id and path are required"
+
+
+@pytest.mark.asyncio
+async def test_session_delete_holds_the_runtime_slot_until_deletion_finishes():
+    registry = RuntimeTaskRegistry()
+    delete_started = asyncio.Event()
+    release_delete = asyncio.Event()
+    deleted: list[str] = []
+
+    async def delete_session(session_id: str) -> None:
+        deleted.append(session_id)
+        delete_started.set()
+        await release_delete.wait()
+
+    deletion = asyncio.create_task(handle_session_delete_operation(
+        request_id="delete",
+        params={"session_id": "session-delete-race"},
+        runtime_task_registry=registry,
+        session_deleter=delete_session,
+    ))
+    try:
+        await asyncio.wait_for(delete_started.wait(), timeout=0.5)
+        deletion_run_id = registry.active_run_id("session-delete-race")
+        assert deletion_run_id is not None
+        assert ":delete:" in deletion_run_id
+        assert registry.accept_run("session-delete-race", "late-child-turn") is False
+
+        concurrent_delete = await handle_session_delete_operation(
+            request_id="delete-again",
+            params={"session_id": "session-delete-race"},
+            runtime_task_registry=registry,
+            session_deleter=delete_session,
+        )
+        assert concurrent_delete.response["error"]["message"] == "Stop the active session before deleting it"
+    finally:
+        release_delete.set()
+
+    outcome = await deletion
+    assert outcome.response["result"] == {"ok": True}
+    assert deleted == ["session-delete-race"]
+    assert registry.active_run_id("session-delete-race") is None
 
 
 @pytest.mark.asyncio
@@ -1482,6 +1603,17 @@ async def test_session_get_update_delete_operations_round_trip(tmp_path):
         assert updated.response["result"]["session"]["project_id"]
         assert updated_root.is_dir()
         assert not (updated_root / ".git").exists()
+
+        registry = RuntimeTaskRegistry()
+        assert registry.accept_run("session-crud", "child-turn") is True
+        blocked_delete = await handle_session_delete_operation(
+            request_id="delete-active",
+            params={"session_id": "session-crud"},
+            session_factory=session_factory,
+            runtime_task_registry=registry,
+        )
+        assert blocked_delete.response["error"]["message"] == "Stop the active session before deleting it"
+        registry.release_run("session-crud", run_id="child-turn")
 
         async with session_factory() as db:
             project = await db.get(WriterProject, updated.response["result"]["session"]["project_id"])

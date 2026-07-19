@@ -141,6 +141,48 @@ test('queueInput transports skill input items without flattening them to text', 
   ])
 })
 
+test('sub-agent operations reuse the active parent App Server connection', async () => {
+  setActivePinia(createPinia())
+  const store = useWriterAppServerStore()
+  const calls: Array<{ method: string; params: Record<string, unknown> }> = []
+
+  store.runtime.client = {
+    request: async (method: string, params: Record<string, unknown>) => {
+      calls.push({ method, params })
+      if (method === 'sub_agent.list') return { sub_agents: [{ session_id: 'child-1' }] }
+      if (method === 'sub_agent.get') return { sub_agent: { session_id: 'child-1', status: 'completed' } }
+      return { accepted: true, session_id: 'child-1', run_id: 'child-run-2' }
+    },
+  } as never
+
+  const listed = await store.listSubAgents('thread-1')
+  const shown = await store.getSubAgent('thread-1', 'child-1')
+  const started = await store.startSubAgentTurn('thread-1', 'child-1', '继续检查', {
+    model_id: 'model-2',
+    thinking_enabled: true,
+    thinking_budget: 6000,
+    shallow_thinking_enabled: false,
+  })
+
+  assert.deepEqual(listed, [{ session_id: 'child-1' }])
+  assert.deepEqual(shown, { session_id: 'child-1', status: 'completed' })
+  assert.equal(started.run_id, 'child-run-2')
+  assert.deepEqual(calls.map(call => call.method), [
+    'sub_agent.list',
+    'sub_agent.get',
+    'sub_agent.turn.start',
+  ])
+  assert.deepEqual(calls[2].params, {
+    thread_id: 'thread-1',
+    sub_session_id: 'child-1',
+    input: [{ type: 'text', text: '继续检查' }],
+    model_id: 'model-2',
+    thinking_enabled: true,
+    thinking_budget: 6000,
+    shallow_thinking_enabled: false,
+  })
+})
+
 test('store reconnects after websocket close and resumes from the last seen snapshot', async () => {
   const previousWebSocket = globalThis.WebSocket
   const previousFetch = globalThis.fetch

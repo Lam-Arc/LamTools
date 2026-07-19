@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -101,6 +102,7 @@ from lamtools_core.app import (
 )
 from lamtools_core.config import build_shared_config_operation_catalog
 from lamtools_core.event import RunItemEvent
+from lamtools_core.runtime import RuntimeTaskRegistry, default_runtime_task_registry
 from .artifacts import open_artifact, read_artifact
 from .event_store import append_event_and_load_snapshot, append_run_item_event_and_apply_snapshot
 from .persistence import writer_persistence_host
@@ -247,6 +249,9 @@ def operation_name(method: str) -> str:
 
 
 WRITER_OVERLAY_OPERATION_NAMES: tuple[str, ...] = (
+    "sub_agent.list",
+    "sub_agent.get",
+    "sub_agent.turn.start",
     "session.create",
     "session.get",
     "session.list",
@@ -255,7 +260,6 @@ WRITER_OVERLAY_OPERATION_NAMES: tuple[str, ...] = (
     "session.fork",
     "session.git_graph.get",
     "session.changes.get",
-    "session.checkpoints.list",
     "session.checkpoint.create",
     "session.checkpoint.restore",
     "session.commit_review.get",
@@ -273,6 +277,9 @@ WRITER_OVERLAY_OPERATION_NAMES: tuple[str, ...] = (
 
 def build_writer_operation_catalog(
     *,
+    sub_agent_list: OperationRpcHandler,
+    sub_agent_get: OperationRpcHandler,
+    sub_agent_turn_start: OperationRpcHandler,
     session_create: OperationRpcHandler,
     session_get: OperationRpcHandler,
     session_list: OperationRpcHandler,
@@ -281,7 +288,6 @@ def build_writer_operation_catalog(
     session_fork: OperationRpcHandler,
     session_git_graph: OperationRpcHandler,
     session_changes_get: OperationRpcHandler,
-    session_checkpoints_list: OperationRpcHandler,
     session_checkpoint_create: OperationRpcHandler,
     session_checkpoint_restore: OperationRpcHandler,
     session_commit_review_get: OperationRpcHandler,
@@ -297,6 +303,9 @@ def build_writer_operation_catalog(
     core_handlers: Mapping[str, Any],
 ) -> OperationCatalog:
     writer_overlay_handlers = {
+        "sub_agent.list": _handler(sub_agent_list),
+        "sub_agent.get": _handler(sub_agent_get),
+        "sub_agent.turn.start": _handler(sub_agent_turn_start),
         "session.create": _handler(session_create),
         "session.get": _handler(session_get),
         "session.list": _handler(session_list),
@@ -305,7 +314,6 @@ def build_writer_operation_catalog(
         "session.fork": _handler(session_fork),
         "session.git_graph.get": _handler(session_git_graph),
         "session.changes.get": _handler(session_changes_get),
-        "session.checkpoints.list": _handler(session_checkpoints_list),
         "session.checkpoint.create": _handler(session_checkpoint_create),
         "session.checkpoint.restore": _handler(session_checkpoint_restore),
         "session.commit_review.get": _handler(session_commit_review_get),
@@ -324,6 +332,66 @@ def build_writer_operation_catalog(
         overlay_names=WRITER_OVERLAY_OPERATION_NAMES,
         overlay_handlers=writer_overlay_handlers,
     )
+
+
+async def handle_sub_agent_list_operation(
+    *, request_id: int | str | None, params: dict[str, Any], runtime: Any,
+) -> WriterOperationOutcome:
+    thread_id = str(params.get("thread_id") or params.get("threadId") or params.get("session_id") or "").strip()
+    if not thread_id:
+        return WriterOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message="thread_id is required"))
+    try:
+        agents = await runtime.list_sub_agents(thread_id)
+    except ValueError as exc:
+        return WriterOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
+    return WriterOperationOutcome(response=rpc_result(request_id, {"sub_agents": agents}))
+
+
+async def handle_sub_agent_get_operation(
+    *, request_id: int | str | None, params: dict[str, Any], runtime: Any,
+) -> WriterOperationOutcome:
+    thread_id = str(params.get("thread_id") or params.get("threadId") or params.get("session_id") or "").strip()
+    sub_session_id = str(params.get("sub_session_id") or params.get("subSessionId") or "").strip()
+    if not thread_id or not sub_session_id:
+        return WriterOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message="thread_id and sub_session_id are required"))
+    try:
+        agent = await runtime.get_sub_agent(thread_id, sub_session_id)
+    except ValueError as exc:
+        return WriterOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
+    return WriterOperationOutcome(response=rpc_result(request_id, {"sub_agent": agent}))
+
+
+async def handle_sub_agent_turn_start_operation(
+    *, request_id: int | str | None, params: dict[str, Any], runtime: Any,
+) -> WriterOperationOutcome:
+    thread_id = str(params.get("thread_id") or params.get("threadId") or params.get("session_id") or "").strip()
+    sub_session_id = str(params.get("sub_session_id") or params.get("subSessionId") or "").strip()
+    prompt = str(params.get("message") or params.get("prompt") or "").strip()
+    if not prompt and isinstance(params.get("input"), list):
+        prompt = "\n".join(
+            str(item.get("text") or "").strip()
+            for item in params["input"]
+            if isinstance(item, dict) and str(item.get("text") or "").strip()
+        )
+    if not thread_id or not sub_session_id or not prompt:
+        return WriterOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message="thread_id, sub_session_id and input are required"))
+    try:
+        result = await runtime.start_sub_agent_turn(
+            thread_id=thread_id,
+            sub_session_id=sub_session_id,
+            prompt=prompt,
+            model_id=str(params.get("model_id") or params.get("modelId") or "") or None,
+            thinking_enabled=params.get("thinking_enabled") if isinstance(params.get("thinking_enabled"), bool) else None,
+            thinking_budget=params.get("thinking_budget") if isinstance(params.get("thinking_budget"), int) else None,
+            shallow_thinking_enabled=(
+                params.get("shallow_thinking_enabled")
+                if isinstance(params.get("shallow_thinking_enabled"), bool)
+                else None
+            ),
+        )
+    except ValueError as exc:
+        return WriterOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
+    return WriterOperationOutcome(response=rpc_result(request_id, result))
 
 
 def build_writer_core_operation_adapter_catalog(
@@ -408,6 +476,9 @@ def build_writer_core_operation_adapter_catalog(
         ),
         "project.sessions.list": lambda request: adapt(
             request, handle_project_sessions_list_operation, session_factory=session_factory,
+        ),
+        "session.checkpoints.list": lambda request: adapt(
+            request, handle_session_checkpoints_list_operation, session_factory=session_factory,
         ),
     }
     for operation in ("plugin.list", "plugin.enable", "plugin.disable", "hook.list", "hook.trust"):
@@ -523,15 +594,30 @@ async def handle_session_delete_operation(
     request_id: int | str | None,
     params: dict[str, Any],
     session_factory: Any = async_session,
+    runtime_task_registry: RuntimeTaskRegistry | None = None,
+    session_deleter: Callable[[str], Awaitable[None]] | None = None,
 ) -> WriterOperationOutcome:
     session_id = str(params.get("session_id") or params.get("sessionId") or params.get("id") or "")
     if not session_id:
         return WriterOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message="session_id is required"))
+    registry = runtime_task_registry or default_runtime_task_registry()
+    deletion_run_id = f"{session_id}:delete:{uuid.uuid4().hex[:12]}"
+    if not registry.accept_run(session_id, deletion_run_id):
+        return WriterOperationOutcome(response=rpc_error(
+            request_id,
+            code=INVALID_REQUEST,
+            message="Stop the active session before deleting it",
+        ))
     try:
-        persistence = writer_persistence_host(session_factory)
-        await persistence.write(lambda db: delete_writer_session(db, session_id))
+        if session_deleter is not None:
+            await session_deleter(session_id)
+        else:
+            persistence = writer_persistence_host(session_factory)
+            await persistence.write(lambda db: delete_writer_session(db, session_id))
     except (LookupError, ValueError) as exc:
         return WriterOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
+    finally:
+        registry.release_run(session_id, run_id=deletion_run_id)
     return WriterOperationOutcome(response=rpc_result(request_id, {"ok": True}))
 
 

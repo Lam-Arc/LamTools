@@ -16,6 +16,8 @@ import {
   CoreAgentsEditor,
   CoreExecutionControls,
   CoreResourceStats,
+  CoreSubAgentDialog,
+  CoreSubAgentPanel,
   RuntimePanel,
   CoreProjectCreate,
   CoreSessionTitleEditor,
@@ -26,6 +28,7 @@ import {
   isCoreGuidableTurnStatus,
   normalizeCoreSessionStatus,
   selectCoreQueuedInputs,
+  selectCoreSubAgentRuns,
   selectLatestActiveTurnId,
   updateCoreSessionListStatus,
   useCoreAutoFollowScroll,
@@ -41,6 +44,7 @@ import {
   type CoreInputItem,
   type CoreMessage,
   type CoreQueuedInput,
+  type CoreSubAgentRun,
   type CoreWorkbenchApi,
   type CoreSessionListItem,
 } from '@lamtools/ui'
@@ -297,6 +301,331 @@ const {
 } = projectionController
 const runtimeChecklistGroups = computed(() => buildCurrentTurnChecklistGroups(messages.value))
 
+const projectedSubAgentRuns = computed(() => selectCoreSubAgentRuns(messages.value))
+const subAgentRecords = ref<Record<string, Record<string, unknown>>>({})
+const activeSubAgentId = ref('')
+const subAgentSendingIds = ref(new Set<string>())
+const subAgentListLoading = ref(false)
+const subAgentListError = ref('')
+let subAgentRefreshTimer: number | null = null
+let subAgentRefreshPromise: Promise<void> | null = null
+let subAgentRefreshSessionId = ''
+
+const subAgentRuns = computed<CoreSubAgentRun[]>(() => {
+  const projectedById = new Map(
+    projectedSubAgentRuns.value.map(run => [run.subSessionId, run]),
+  )
+  const agentIndexById = new Map<string, number>()
+  const listed = Object.values(subAgentRecords.value)
+    .filter(record => recordText(record, 'session_id'))
+  const merged = listed.map((record): CoreSubAgentRun => {
+    const subSessionId = recordText(record, 'session_id')
+    const agentIndex = Number.parseInt(recordText(record, 'agent_index'), 10)
+    if (Number.isFinite(agentIndex)) agentIndexById.set(subSessionId, agentIndex)
+    const projected = projectedById.get(subSessionId)
+    projectedById.delete(subSessionId)
+    const task = recordText(record, 'initial_task') || projected?.task || ''
+    const recordStatus = normalizeSubAgentRecordStatus(record.status)
+    const projectedStatus = projected?.status
+    const status = subAgentSendingIds.value.has(subSessionId)
+      ? 'running'
+      : recordStatus === 'running' || recordStatus === 'pending' || recordStatus === 'error'
+        ? recordStatus
+        : projectedStatus === 'running' || projectedStatus === 'pending' || projectedStatus === 'error'
+          ? projectedStatus
+          : recordStatus
+    return {
+      id: subSessionId,
+      subSessionId,
+      name: recordText(record, 'agent_name') || projected?.name || 'Sub Agent',
+      task,
+      status,
+      modelId: recordText(record, 'model_id') || projected?.modelId || '',
+      startedAt: projected?.startedAt || '',
+      updatedAt: projected?.updatedAt || '',
+      timeline: projected?.timeline || (task ? [{
+        id: `sub-agent:${subSessionId}:task`,
+        role: 'user',
+        content: task,
+        timestamp: '',
+        parts: [],
+      }] : []),
+      sourcePartIds: projected?.sourcePartIds || [],
+    }
+  })
+  return [...merged, ...projectedById.values()]
+    .sort((left, right) => compareSubAgentRuns(left, right, agentIndexById))
+})
+const activeSubAgentRun = computed(() => (
+  subAgentRuns.value.find(run => run.subSessionId === activeSubAgentId.value) || null
+))
+const subAgentDrafts = ref<Record<string, string>>({})
+const subAgentDraft = computed({
+  get: () => subAgentDrafts.value[activeSubAgentId.value] || '',
+  set: (value: string) => {
+    if (!activeSubAgentId.value) return
+    subAgentDrafts.value = { ...subAgentDrafts.value, [activeSubAgentId.value]: value }
+  },
+})
+const subAgentErrorText = ref('')
+const activeSubAgentErrorText = computed(() => {
+  if (subAgentErrorText.value) return subAgentErrorText.value
+  const run = activeSubAgentRun.value
+  if (!run || run.status !== 'error') return ''
+  return recordText(subAgentRecords.value[run.subSessionId] || {}, 'error')
+})
+const subAgentControlState = new Map<string, {
+  modelId: string
+  thinkingMode: string
+  shallowThinkingEnabled: boolean
+}>()
+
+const {
+  activeModel: activeSubAgentExecutionModel,
+  modelOptions: subAgentModelOptions,
+  selectedModelId: subAgentSelectedModelId,
+  selectedThinkingMode: subAgentSelectedThinkingMode,
+  selectModel: selectSubAgentModel,
+  selectThinkingMode: selectSubAgentThinkingMode,
+  shallowThinkingEnabled: subAgentShallowThinkingEnabled,
+  thinkingModeOptions: subAgentThinkingModeOptions,
+  payload: subAgentThinkingPayload,
+} = useCoreExecutionControlsState({
+  models: computed(() => configStore.models),
+  providers: computed(() => configStore.providers),
+  defaultModel,
+  storage: window.localStorage,
+  storageKeys: {
+    modelId: 'lamwriter.subAgent.modelId',
+    thinkingMode: 'lamwriter.subAgent.thinkingMode',
+    shallowThinking: 'lamwriter.subAgent.shallowThinking',
+  },
+  initial: {
+    thinkingMode: selectedThinkingMode.value,
+    shallowThinkingEnabled: shallowThinkingEnabled.value,
+  },
+  labels: {
+    currentModelPrefix: '跟随主 Agent：',
+    thinking: {
+      none: '无思考',
+      low: '低思考',
+      medium: '中思考',
+      high: '高思考',
+      max: 'Max 思考',
+    },
+  },
+})
+
+const subAgentIsBusy = computed(() => {
+  const run = activeSubAgentRun.value
+  if (!run) return false
+  return composerIsRunning.value
+    || run.status === 'running'
+    || run.status === 'pending'
+    || subAgentSendingIds.value.has(run.subSessionId)
+})
+const subAgentInputDisabled = computed(() => (
+  !activeSubAgentRun.value
+  || !isAppServerActive.value
+  || subAgentIsBusy.value
+))
+const subAgentSubmitDisabled = computed(() => (
+  subAgentInputDisabled.value || !subAgentDraft.value.trim()
+))
+const subAgentPlaceholder = computed(() => (
+  subAgentIsBusy.value
+    ? '当前运行结束后可继续对话'
+    : '向 Sub Agent 发送消息...'
+))
+
+function recordText(record: Record<string, unknown>, key: string): string {
+  const value = record[key]
+  return value === null || value === undefined ? '' : String(value).trim()
+}
+
+function normalizeSubAgentRecordStatus(value: unknown): CoreSubAgentRun['status'] {
+  const status = String(value || '').toLowerCase()
+  if (status === 'running' || status === 'generating') return 'running'
+  if (status === 'pending' || status === 'waiting' || status === 'blocked') return 'pending'
+  if (status === 'error' || status === 'failed' || status === 'rejected') return 'error'
+  return 'completed'
+}
+
+function compareSubAgentRuns(
+  left: CoreSubAgentRun,
+  right: CoreSubAgentRun,
+  agentIndexById: ReadonlyMap<string, number>,
+): number {
+  const statusDifference = subAgentDisplayRank(left.status) - subAgentDisplayRank(right.status)
+  if (statusDifference !== 0) return statusDifference
+
+  const leftUpdatedAt = Date.parse(left.updatedAt || left.startedAt) || 0
+  const rightUpdatedAt = Date.parse(right.updatedAt || right.startedAt) || 0
+  if (leftUpdatedAt !== rightUpdatedAt) return rightUpdatedAt - leftUpdatedAt
+
+  const leftIndex = agentIndexById.get(left.subSessionId) ?? -1
+  const rightIndex = agentIndexById.get(right.subSessionId) ?? -1
+  if (leftIndex !== rightIndex) return rightIndex - leftIndex
+  return right.subSessionId.localeCompare(left.subSessionId)
+}
+
+function subAgentDisplayRank(status: CoreSubAgentRun['status']): number {
+  if (status === 'running') return 0
+  if (status === 'pending') return 1
+  if (status === 'error') return 2
+  return 3
+}
+
+function replaceSubAgentSendingIds(next: Set<string>) {
+  subAgentSendingIds.value = next
+}
+
+function refreshSubAgents(sessionId = activeSessionId.value || ''): Promise<void> {
+  if (!sessionId || !isAppServerActive.value) return Promise.resolve()
+  if (subAgentRefreshPromise && subAgentRefreshSessionId === sessionId) return subAgentRefreshPromise
+  subAgentListLoading.value = true
+  subAgentListError.value = ''
+  const request = appServerStore.listSubAgents(sessionId)
+    .then((records) => {
+      if (activeSessionId.value !== sessionId) return
+      subAgentRecords.value = Object.fromEntries(
+        records
+          .map(record => [recordText(record, 'session_id'), record] as const)
+          .filter(([subSessionId]) => Boolean(subSessionId)),
+      )
+      const nextSending = new Set(subAgentSendingIds.value)
+      for (const subSessionId of nextSending) {
+        const record = subAgentRecords.value[subSessionId]
+        if (record && normalizeSubAgentRecordStatus(record.status) !== 'running') {
+          nextSending.delete(subSessionId)
+        }
+      }
+      replaceSubAgentSendingIds(nextSending)
+    })
+    .catch((err) => {
+      if (activeSessionId.value !== sessionId) return
+      subAgentListError.value = '记录更新失败。'
+      console.warn('Failed to refresh Sub Agents:', err)
+    })
+    .finally(() => {
+      if (subAgentRefreshPromise === request) {
+        subAgentRefreshPromise = null
+        subAgentRefreshSessionId = ''
+      }
+      if (activeSessionId.value === sessionId) subAgentListLoading.value = false
+    })
+  subAgentRefreshPromise = request
+  subAgentRefreshSessionId = sessionId
+  return request
+}
+
+function scheduleSubAgentRefresh() {
+  if (subAgentRefreshTimer !== null || subAgentSendingIds.value.size === 0) return
+  subAgentRefreshTimer = window.setTimeout(async () => {
+    subAgentRefreshTimer = null
+    await refreshSubAgents()
+    if (subAgentSendingIds.value.size > 0 && isAppServerActive.value) scheduleSubAgentRefresh()
+  }, 800)
+}
+
+function stopSubAgentRefresh() {
+  if (subAgentRefreshTimer !== null) window.clearTimeout(subAgentRefreshTimer)
+  subAgentRefreshTimer = null
+}
+
+function openSubAgent(subSessionId: string) {
+  const run = subAgentRuns.value.find(item => item.subSessionId === subSessionId)
+  if (!run) return
+  activeSubAgentId.value = subSessionId
+  subAgentErrorText.value = ''
+  const saved = subAgentControlState.get(subSessionId)
+  selectSubAgentModel(saved?.modelId || run.modelId || '')
+  selectSubAgentThinkingMode(saved?.thinkingMode || selectedThinkingMode.value)
+  subAgentShallowThinkingEnabled.value = saved?.shallowThinkingEnabled ?? shallowThinkingEnabled.value
+  const sessionId = activeSessionId.value
+  if (sessionId && isAppServerActive.value) {
+    void appServerStore.getSubAgent(sessionId, subSessionId)
+      .then((record) => {
+        if (activeSessionId.value !== sessionId || !recordText(record, 'session_id')) return
+        subAgentRecords.value = { ...subAgentRecords.value, [subSessionId]: record }
+      })
+      .catch((err) => {
+        if (activeSubAgentId.value === subSessionId) {
+          subAgentErrorText.value = err instanceof Error ? err.message : String(err)
+        }
+      })
+  }
+}
+
+function closeSubAgent() {
+  activeSubAgentId.value = ''
+  subAgentErrorText.value = ''
+}
+
+async function sendSubAgentMessage() {
+  const sessionId = activeSessionId.value
+  const run = activeSubAgentRun.value
+  const prompt = subAgentDraft.value.trim()
+  if (!sessionId || !run || !prompt || subAgentSubmitDisabled.value) return
+  subAgentErrorText.value = ''
+  const nextSending = new Set(subAgentSendingIds.value)
+  nextSending.add(run.subSessionId)
+  subAgentSendingIds.value = nextSending
+  try {
+    if (!await liveComposerController.ensureConnected(sessionId)) {
+      throw new Error(liveComposerController.lastError.value || '实时连接不可用')
+    }
+    await appServerStore.startSubAgentTurn(sessionId, run.subSessionId, prompt, {
+      model_id: subAgentSelectedModelId.value || activeSubAgentExecutionModel.value?.id,
+      thinking_enabled: subAgentThinkingPayload.value.thinking_enabled,
+      thinking_budget: subAgentThinkingPayload.value.thinking_budget,
+      shallow_thinking_enabled: subAgentThinkingPayload.value.shallow_thinking_enabled,
+    })
+    subAgentDraft.value = ''
+    void refreshSubAgents(sessionId)
+    scheduleSubAgentRefresh()
+  } catch (err) {
+    subAgentErrorText.value = err instanceof Error ? err.message : String(err)
+    const remaining = new Set(subAgentSendingIds.value)
+    remaining.delete(run.subSessionId)
+    replaceSubAgentSendingIds(remaining)
+  }
+}
+
+watch(
+  [subAgentSelectedModelId, subAgentSelectedThinkingMode, subAgentShallowThinkingEnabled],
+  ([modelId, thinkingMode, shallowThinking]) => {
+    if (!activeSubAgentId.value) return
+    subAgentControlState.set(activeSubAgentId.value, {
+      modelId,
+      thinkingMode,
+      shallowThinkingEnabled: shallowThinking,
+    })
+  },
+)
+
+watch(subAgentRuns, (runs) => {
+  if (activeSubAgentId.value && !runs.some(run => run.subSessionId === activeSubAgentId.value)) {
+    closeSubAgent()
+  }
+})
+
+watch(
+  () => appServerStore.lastSeenSeq,
+  () => {
+    if (subAgentSendingIds.value.size > 0) void refreshSubAgents()
+  },
+)
+
+watch(isAppServerActive, (active) => {
+  if (!active) {
+    stopSubAgentRefresh()
+    return
+  }
+  void refreshSubAgents()
+  scheduleSubAgentRefresh()
+})
+
 const approvalController = useCoreApprovalController({
   messages,
   hasActiveThread: computed(() => Boolean(activeSessionId.value)),
@@ -465,6 +794,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   threadResizeObserver?.disconnect()
   threadResizeObserver = null
+  stopSubAgentRefresh()
 })
 
 function buildSystemMessages(): CoreMessage[] {
@@ -719,6 +1049,11 @@ async function handleDecisionSelect(payload: DecisionSelectPayload) {
     console.error('Failed to respond approval:', approvalController.lastError.value)
     runtimeStatusText.value = '授权处理失败'
   }
+}
+
+function handleSubAgentDecisionSelect(payload: unknown) {
+  if (!payload || typeof payload !== 'object') return
+  void handleDecisionSelect(payload as DecisionSelectPayload)
 }
 
 function currentSessionWorkRoot(): string {
@@ -1386,6 +1721,14 @@ async function syncSessionUrl(sessionId: string | null) {
 
 watch(activeSessionId, (newId) => {
   void syncSessionUrl(newId ?? null)
+  closeSubAgent()
+  subAgentDrafts.value = {}
+  replaceSubAgentSendingIds(new Set())
+  subAgentRecords.value = {}
+  subAgentListLoading.value = false
+  subAgentListError.value = ''
+  subAgentControlState.clear()
+  stopSubAgentRefresh()
   reviewExpandedFiles.value = new Set()
   reviewAllFilesVisible.value = false
   reviewAllDiffsVisible.value = false
@@ -1404,7 +1747,12 @@ watch(activeSessionId, (newId) => {
     // Reset session store messages
     // Reset step store
     void appServerStore.connect(api.API_BASE, newId)
-      .then(() => liveComposerController.loadCommandCatalog(newId))
+      .then(async () => {
+        await Promise.all([
+          liveComposerController.loadCommandCatalog(newId),
+          refreshSubAgents(newId),
+        ])
+      })
       .catch((err) => {
         if (err instanceof Error && err.name === 'AbortError') return
         console.error('Failed to connect Writer App Server:', err)
@@ -1758,6 +2106,15 @@ onMounted(async () => {
     <template #right-panel>
       <div class="runtime-toolbar">
         <CoreResourceStats :messages="messages" :context-window="activeExecutionModel?.context_window" />
+        <CoreSubAgentPanel
+          :runs="subAgentRuns"
+          :active-sub-agent-id="activeSubAgentId"
+          :loading="subAgentListLoading"
+          :error-text="subAgentListError"
+          dialog-id="writer-sub-agent-dialog"
+          @open="openSubAgent"
+          @retry="refreshSubAgents()"
+        />
         <RuntimePanel :step-groups="runtimeChecklistGroups" />
 
         <section class="runtime-widget review-panel">
@@ -1804,6 +2161,27 @@ onMounted(async () => {
 
     <!-- AGENTS.md modal -->
     <template #modals>
+      <CoreSubAgentDialog
+        v-if="activeSubAgentRun"
+        :run="activeSubAgentRun"
+        :open="Boolean(activeSubAgentId)"
+        dialog-id="writer-sub-agent-dialog"
+        v-model:draft="subAgentDraft"
+        :placeholder="subAgentPlaceholder"
+        :disabled="subAgentInputDisabled"
+        :selected-model-id="subAgentSelectedModelId"
+        :thinking-mode="subAgentSelectedThinkingMode"
+        :shallow-thinking-enabled="subAgentShallowThinkingEnabled"
+        :model-options="subAgentModelOptions"
+        :thinking-mode-options="subAgentThinkingModeOptions"
+        :error-text="activeSubAgentErrorText"
+        @close="closeSubAgent"
+        @submit="sendSubAgentMessage"
+        @update:selected-model-id="selectSubAgentModel"
+        @update:thinking-mode="selectSubAgentThinkingMode"
+        @update:shallow-thinking-enabled="(enabled) => { subAgentShallowThinkingEnabled = enabled }"
+        @decision-select="handleSubAgentDecisionSelect"
+      />
       <div v-if="showAgentsMd" class="modal-overlay" @click.self="!agentsLoading && (showAgentsMd = false)">
         <div class="modal-card wide">
           <CoreAgentsEditor

@@ -172,6 +172,21 @@ export interface CoreMessage {
   metadata?: Record<string, unknown>;
 }
 
+export interface CoreSubAgentRun {
+  /** Durable child thread identifier. Also used as the stable UI identity. */
+  id: string;
+  subSessionId: string;
+  name: string;
+  task: string;
+  status: MessagePartStatus;
+  modelId: string;
+  startedAt: string;
+  updatedAt: string;
+  /** ChatThread-ready child conversation and runtime timeline. */
+  timeline: CoreMessage[];
+  sourcePartIds: string[];
+}
+
 export interface CoreRuntimeEvent {
   id: string;
   type: string;

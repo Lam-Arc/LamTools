@@ -72,7 +72,7 @@ from typing import Any, Callable, Awaitable
 
 from lamtools_core.context_compaction import COMPACTION_PREFIX
 from lamtools_core.tool.command_runner import command_shell_prompt
-from lamtools_core.event import CoreEvent, EventSink, InMemoryEventLog
+from lamtools_core.event import CollectingEventSink, CoreEvent, EventSink, InMemoryEventLog
 from lamtools_core.kernel import (
     CoreLoopKernel,
     KernelResult,
@@ -100,6 +100,7 @@ from lamtools_core.app.project_context import ProjectContextLoader
 from lamtools_core.runtime import InMemoryRuntimeStateStore, RuntimeState, RuntimeStateStore, RuntimeTurnInput
 from lamtools_core.runtime.goal import GoalCompletionGate, GoalManager, ModelGoalEvaluator
 from lamtools_core.sub_session import SubSessionRuntimeStateStore, normalize_sub_session_agent_name
+from lamtools_core.sub_agent import SubAgentEventForwardingSink
 from lamtools_core.tool import ToolCall, ToolResult
 from lamtools_core.tool.command import run_subprocess as _run_subprocess
 from lamtools_core.tool.command import validate_command_paths as _validate_command_paths
@@ -122,7 +123,6 @@ from app.core.writer.runtime_resources import (
     static_prompt_messages,
     stream_http_client,
 )
-from app.core.writer.sub_agent_events import SubAgentEventForwardingSink
 from app.core.writer.sub_agent_projection import project_sub_agent_result
 from app.core.writer.task_plan import (
     apply_checklist_update as _apply_checklist_update,
@@ -356,13 +356,23 @@ class WriterKit:
             compact_trigger_ratio=self._compact_trigger_ratio,
             cancel_event=self._cancel_event,
         )
-        event_log = InMemoryEventLog()
-
+        parent_session_id = str(call.options.get("_parent_session_id") or "")
+        parent_run_id = str(call.options.get("_parent_run_id") or "")
+        parent_turn_id = str(call.options.get("_parent_turn_id") or parent_run_id)
+        parent_call_id = str(call.options.get("_parent_tool_call_id") or "")
+        parent_sink = (
+            CollectingEventSink(live_callback=self._core_event_callback, should_collect=lambda _event: False)
+            if self._core_event_callback is not None
+            else None
+        )
         event_sink = SubAgentEventForwardingSink(
-            event_log=event_log,
-            core_event_callback=self._core_event_callback,
-            agent_name=agent_name,
-            call=call,
+            parent_sink=parent_sink,
+            parent_session_id=parent_session_id,
+            agent=agent_name,
+            task=call.task,
+            parent_call_id=parent_call_id,
+            parent_run_id=parent_run_id,
+            parent_turn_id=parent_turn_id,
         )
         kernel = CoreLoopKernel(
             kit=nested_kit,
@@ -390,7 +400,19 @@ class WriterKit:
         finally:
             if watcher_task is not None:
                 watcher_task.cancel()
-        nested_events = [event for _, event in event_log.replay_since()]
+        child_state = await state_store.get(sub_session_id)
+        if child_state is not None:
+            child_state.metadata.setdefault("initial_task", call.task)
+            child_state.metadata["sub_agent_link"] = {
+                "agent": agent_name,
+                "session_id": sub_session_id,
+                "parent_call_id": parent_call_id,
+                "parent_run_id": parent_run_id,
+                "parent_turn_id": parent_turn_id,
+                "tools": sorted(available_tools),
+            }
+            await state_store.save(child_state)
+        nested_events = event_sink.events
         data, tool_records, reasoning_blocks, diagnostics = project_sub_agent_result(result, nested_events)
         if result.decision == "wait":
             child_state = await state_store.get(sub_session_id)
@@ -407,6 +429,9 @@ class WriterKit:
                         "agent_run_id": str(call.options.get("_agent_run_id") or ""),
                         "sub_line_id": str(call.options.get("_sub_line_id") or ""),
                         "parent_tool_call_id": str(call.options.get("_parent_tool_call_id") or ""),
+                        "parent_call_id": parent_call_id,
+                        "parent_run_id": parent_run_id,
+                        "parent_turn_id": parent_turn_id,
                     },
                 }
                 parent_state = getattr(state_store, "parent_state", None)
@@ -418,12 +443,6 @@ class WriterKit:
                     if callable(persist_parent):
                         await persist_parent()
                 diagnostics["pending_approval"] = delegated
-                approval_event = next(
-                    (event for event in reversed(nested_events) if event.name == "runtime.approval_request"),
-                    None,
-                )
-                if approval_event is not None:
-                    await event_sink.forward(approval_event)
         return data, tool_records, reasoning_blocks, diagnostics
 
     # -- RuntimeKit protocol --------------------------------------------------
@@ -1292,6 +1311,31 @@ async def run_core_kernel(
     return result
 
 
+async def run_sub_agent_turn(
+    *,
+    parent_state: RuntimeState,
+    delegated_session: dict[str, Any],
+    prompt: str,
+    llm_client: Any,
+    work_root: str,
+    runtime_controls: dict[str, dict[str, bool]] | None = None,
+    live_event_callback: Callable[[CoreEvent], Awaitable[None]] | None = None,
+    parent_state_store: Any | None = None,
+) -> KernelResult:
+    """Continue an existing delegated session with one user-authored turn."""
+    return await _run_existing_sub_agent_turn(
+        parent_state=parent_state,
+        delegated_session=delegated_session,
+        prompt=prompt,
+        llm_client=llm_client,
+        work_root=work_root,
+        runtime_controls=runtime_controls,
+        live_event_callback=live_event_callback,
+        clear_pending=False,
+        parent_state_store=parent_state_store,
+    )
+
+
 async def resume_sub_agent_turn(
     *,
     parent_state: RuntimeState,
@@ -1301,8 +1345,34 @@ async def resume_sub_agent_turn(
     work_root: str,
     runtime_controls: dict[str, dict[str, bool]] | None = None,
     live_event_callback: Callable[[CoreEvent], Awaitable[None]] | None = None,
+    parent_state_store: Any | None = None,
 ) -> KernelResult:
     """Resume a delegated session after its pending approval is resolved."""
+    return await _run_existing_sub_agent_turn(
+        parent_state=parent_state,
+        delegated_session=delegated_session,
+        prompt=prompt,
+        llm_client=llm_client,
+        work_root=work_root,
+        runtime_controls=runtime_controls,
+        live_event_callback=live_event_callback,
+        clear_pending=True,
+        parent_state_store=parent_state_store,
+    )
+
+
+async def _run_existing_sub_agent_turn(
+    *,
+    parent_state: RuntimeState,
+    delegated_session: dict[str, Any],
+    prompt: str,
+    llm_client: Any,
+    work_root: str,
+    runtime_controls: dict[str, dict[str, bool]] | None,
+    live_event_callback: Callable[[CoreEvent], Awaitable[None]] | None,
+    clear_pending: bool,
+    parent_state_store: Any | None,
+) -> KernelResult:
     raw_writer_client = llm_client
     core_llm = llm_client if hasattr(llm_client, "complete") else WriterLLMClientAdapter(writer_client=llm_client)
     context_window = int(getattr(raw_writer_client, "context_window", 0) or 0)
@@ -1313,12 +1383,21 @@ async def resume_sub_agent_turn(
     if not sub_session_id:
         raise ValueError("Delegated session id is required")
 
-    state_store = SubSessionRuntimeStateStore(parent_state)
+    state_store = SubSessionRuntimeStateStore(
+        parent_state,
+        parent_state_store=parent_state_store,
+    )
     child_state = await state_store.get(sub_session_id)
     if child_state is None:
         raise ValueError("Delegated runtime state not found")
-    child_state.metadata.pop("pending_approval", None)
-    child_state.metadata.pop("pending_waiting_request", None)
+    if not clear_pending and (
+        child_state.metadata.get("pending_approval")
+        or child_state.metadata.get("pending_waiting_request")
+    ):
+        raise ValueError("Sub-agent is waiting for user approval")
+    if clear_pending:
+        child_state.metadata.pop("pending_approval", None)
+        child_state.metadata.pop("pending_waiting_request", None)
     child_state.status = "running"
     child_state.loop_state = "continue"
     history = await state_store.get_history(sub_session_id)
@@ -1335,6 +1414,13 @@ async def resume_sub_agent_turn(
         context_window_tokens=context_window_tokens,
         compact_trigger_ratio=0.8,
     )
+    parent_call_id = str(
+        delegated_session.get("parent_call_id")
+        or delegated_session.get("parent_tool_call_id")
+        or ""
+    )
+    parent_run_id = str(delegated_session.get("parent_run_id") or parent_state.run_id)
+    parent_turn_id = str(delegated_session.get("parent_turn_id") or parent_run_id)
     call = AgentCall(
         name="sub",
         task=str(delegated_session.get("task") or prompt),
@@ -1342,15 +1428,23 @@ async def resume_sub_agent_turn(
             "_agent_run_id": str(delegated_session.get("agent_run_id") or ""),
             "_sub_line_id": str(delegated_session.get("sub_line_id") or ""),
             "_parent_session_id": parent_state.session_id,
-            "_parent_run_id": parent_state.run_id,
+            "_parent_run_id": parent_run_id,
+            "_parent_tool_call_id": parent_call_id,
         },
     )
-    event_log = InMemoryEventLog()
+    parent_sink = (
+        CollectingEventSink(live_callback=live_event_callback, should_collect=lambda _event: False)
+        if live_event_callback is not None
+        else None
+    )
     event_sink = SubAgentEventForwardingSink(
-        event_log=event_log,
-        core_event_callback=live_event_callback,
-        agent_name=agent_name,
-        call=call,
+        parent_sink=parent_sink,
+        parent_session_id=parent_state.session_id,
+        agent=agent_name,
+        task=str(delegated_session.get("task") or prompt),
+        parent_call_id=parent_call_id,
+        parent_run_id=parent_run_id,
+        parent_turn_id=parent_turn_id,
     )
     kernel = CoreLoopKernel(
         kit=nested_kit,
@@ -1379,16 +1473,6 @@ async def resume_sub_agent_turn(
             }
             if isinstance(waiting, dict):
                 parent_state.metadata["pending_waiting_request"] = dict(waiting)
-            approval_event = next(
-                (
-                    event
-                    for _, event in reversed(event_log.replay_since())
-                    if event.name == "runtime.approval_request"
-                ),
-                None,
-            )
-            if approval_event is not None:
-                await event_sink.forward(approval_event)
     return result
 
 

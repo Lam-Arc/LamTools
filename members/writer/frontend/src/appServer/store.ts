@@ -105,5 +105,47 @@ export const useWriterAppServerStore = defineStore('writerAppServer', {
     async respondApproval(requestId: string, decision: string, guidance?: string) {
       await createWriterRuntimeController(this.runtime).respondApproval(requestId, decision, guidance)
     },
+    async listSubAgents(threadId: string): Promise<Array<Record<string, unknown>>> {
+      const client = this.runtime.client
+      if (!client) throw new Error('Writer App Server is not connected')
+      const response = await client.request('sub_agent.list', { thread_id: threadId })
+      return Array.isArray(response.sub_agents)
+        ? response.sub_agents.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+        : []
+    },
+    async getSubAgent(threadId: string, subSessionId: string): Promise<Record<string, unknown>> {
+      const client = this.runtime.client
+      if (!client) throw new Error('Writer App Server is not connected')
+      const response = await client.request('sub_agent.get', {
+        thread_id: threadId,
+        sub_session_id: subSessionId,
+      })
+      return response.sub_agent && typeof response.sub_agent === 'object'
+        ? response.sub_agent as Record<string, unknown>
+        : {}
+    },
+    async startSubAgentTurn(
+      threadId: string,
+      subSessionId: string,
+      input: string | WriterInputItem[],
+      options: {
+        model_id?: string
+        thinking_enabled?: boolean
+        thinking_budget?: number
+        shallow_thinking_enabled?: boolean
+      } = {},
+    ): Promise<Record<string, unknown>> {
+      const client = this.runtime.client
+      if (!client) throw new Error('Writer App Server is not connected')
+      const normalizedInput = typeof input === 'string'
+        ? [{ type: 'text', text: input }]
+        : input
+      return await client.request('sub_agent.turn.start', {
+        thread_id: threadId,
+        sub_session_id: subSessionId,
+        input: normalizedInput,
+        ...options,
+      })
+    },
   },
 })

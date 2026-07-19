@@ -52,6 +52,7 @@ from lamtools_core.llm import (
 )
 from lamtools_core.prompt import PromptContext
 from lamtools_core.runtime import InMemoryRuntimeStateStore, RuntimeState, RuntimeToolStep, RuntimeTurnInput
+from lamtools_core.sub_session import SubSessionManager, SubSessionRuntimeStateStore
 from lamtools_core.tool import ToolCall, ToolResult
 from lamtools_core.plugins import (
     HookRegistry,
@@ -69,6 +70,7 @@ from app.core.writer.core_kernel_adapter import (
     _validate_command_paths,
     _validate_path,
     resume_sub_agent_turn,
+    run_sub_agent_turn,
     run_core_kernel,
 )
 from app.core.writer.skills import WriterSkill
@@ -1129,6 +1131,11 @@ class TestRunCoreKernelIntegration:
     @pytest.mark.asyncio
     async def test_sub_agent_uses_same_kernel_loop_with_parent_tools_minus_sub_agent(self, tmp_path):
         (tmp_path / "README.md").write_text("hello from workspace", encoding="utf-8")
+        live_events = []
+
+        async def record_event(event):
+            live_events.append(event)
+
         llm = FakeLLMClient()
         llm.add_response(LLMResponse(
             content="",
@@ -1169,6 +1176,7 @@ class TestRunCoreKernelIntegration:
             session_id="test-sub-agent-same-loop",
             llm_client=llm,
             work_root=str(tmp_path),
+            live_event_callback=record_event,
         )
 
         assert result.decision == "done"
@@ -1203,6 +1211,16 @@ class TestRunCoreKernelIntegration:
         ]
         assert sub_tool_results and sub_tool_results[0] is not None
         assert "README 内容是 hello from workspace" in (sub_tool_results[0].content or "")
+        child_events = [
+            event for event in live_events
+            if isinstance((event.payload or {}).get("sub_agent"), dict)
+        ]
+        assert child_events
+        child_link = child_events[0].payload["sub_agent"]
+        assert child_link["session_id"] == "test-sub-agent-same-loop:sub:001:explorer"
+        assert child_link["parent_call_id"] == "call-sub"
+        assert child_link["parent_run_id"] == result.run_id
+        assert child_link["parent_turn_id"] == result.run_id
 
     @pytest.mark.asyncio
     async def test_writer_sub_agent_has_no_fixed_tool_round_limit(self, tmp_path):
@@ -1308,6 +1326,8 @@ class TestRunCoreKernelIntegration:
         pending = parent_state.metadata["pending_approval"]
         assert pending["request_id"] == "sub-dangerous-command"
         assert pending["delegated_session"]["agent"] == "worker"
+        stable_parent_run_id = pending["delegated_session"]["parent_run_id"]
+        assert pending["delegated_session"]["parent_call_id"] == "call-sub-approval"
         approval_events = [event for event in events if event.name == "runtime.approval_request"]
         assert approval_events
         assert approval_events[-1].session_id == "parent-approval-session"
@@ -1325,6 +1345,84 @@ class TestRunCoreKernelIntegration:
         )
         assert resumed.decision == "done"
         assert resumed.message == "审批后子任务完成。"
+
+        llm.add_response(LLMResponse(content="后续检查完成。", finish_reason="stop"))
+        parent_state.run_id = "later-parent-turn"
+        event_count_before_follow_up = len(events)
+        followed_up = await run_sub_agent_turn(
+            parent_state=parent_state,
+            delegated_session=pending["delegated_session"],
+            prompt="再检查一次结果",
+            llm_client=llm,
+            work_root=str(work_root),
+            runtime_controls={"command_policies": {"regular": "auto_allow", "dangerous": "ask_user"}},
+            live_event_callback=capture_event,
+        )
+        assert followed_up.decision == "done"
+        assert followed_up.message == "后续检查完成。"
+        follow_up_events = events[event_count_before_follow_up:]
+        forwarded = [
+            event.metadata.get("sub_agent")
+            for event in follow_up_events
+            if isinstance(event.metadata.get("sub_agent"), dict)
+        ]
+        assert forwarded
+        assert all(item["parent_call_id"] == "call-sub-approval" for item in forwarded)
+        assert all(item["parent_run_id"] == stable_parent_run_id for item in forwarded)
+        follow_up_messages = [
+            (message.role, message.content)
+            for message in llm.requests[-1].messages
+            if message.role in {"user", "assistant"}
+        ]
+        assert ("assistant", "审批后子任务完成。") in follow_up_messages
+        assert follow_up_messages[-1] == ("user", "再检查一次结果")
+
+    @pytest.mark.asyncio
+    async def test_failed_direct_sub_agent_turn_persists_the_new_child_history(self, tmp_path):
+        parent_state = RuntimeState(session_id="parent-failed-child", run_id="parent-run")
+        ref = SubSessionManager().get_or_create(parent_state, "reviewer")
+        child_state = RuntimeState(session_id=ref.session_id, status="completed", turn_count=1)
+        child_state.metadata.update({
+            "initial_task": "检查实现",
+            "sub_agent_link": {
+                "agent": "reviewer",
+                "session_id": ref.session_id,
+                "parent_call_id": "call-review",
+                "parent_run_id": "parent-run",
+                "parent_turn_id": "parent-turn",
+                "tools": [],
+            },
+        })
+        await SubSessionRuntimeStateStore(parent_state).save_checkpoint(
+            child_state,
+            [{"role": "user", "content": "检查实现"}],
+        )
+
+        saved_parent_states: list[dict[str, object]] = []
+
+        class TrackingParentStore:
+            async def save(self, state: RuntimeState) -> None:
+                saved_parent_states.append(json.loads(json.dumps(state.to_dict())))
+
+        class FailingLLMClient:
+            async def complete(self, _request: LLMRequest) -> LLMResponse:
+                raise RuntimeError("provider unavailable")
+
+        result = await run_sub_agent_turn(
+            parent_state=parent_state,
+            delegated_session=child_state.metadata["sub_agent_link"],
+            prompt="继续检查失败路径",
+            llm_client=FailingLLMClient(),
+            work_root=str(tmp_path),
+            parent_state_store=TrackingParentStore(),
+        )
+
+        assert "provider unavailable" in str(result.error)
+        assert saved_parent_states
+        persisted_parent = RuntimeState(**saved_parent_states[-1])
+        persisted_history = await SubSessionRuntimeStateStore(persisted_parent).get_history(ref.session_id)
+        assert persisted_history[-1]["role"] == "user"
+        assert persisted_history[-1]["content"] == "继续检查失败路径"
 
     @pytest.mark.asyncio
     async def test_distinct_file_read_failures_do_not_masquerade_as_done(self, tmp_path):

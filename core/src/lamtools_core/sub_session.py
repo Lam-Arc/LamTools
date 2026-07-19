@@ -50,6 +50,21 @@ class SubSessionManager:
         registry["next_index"] = next_index + 1
         return ref
 
+    def list(self, parent_state: RuntimeState) -> list[SubSessionRef]:
+        registry = _registry(parent_state.metadata, self._metadata_key)
+        refs = [
+            ref
+            for value in registry.get("agents", {}).values()
+            if isinstance(value, dict) and (ref := _ref_from_dict(value)) is not None
+        ]
+        return sorted(refs, key=lambda ref: ref.agent_index)
+
+    def get(self, parent_state: RuntimeState, session_id: str) -> SubSessionRef | None:
+        requested = str(session_id or "").strip()
+        if not requested:
+            return None
+        return next((ref for ref in self.list(parent_state) if ref.session_id == requested), None)
+
 
 class SubSessionRuntimeStateStore:
     def __init__(

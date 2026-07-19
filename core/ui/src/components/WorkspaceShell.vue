@@ -43,6 +43,7 @@
     <!-- Edge hover triggers -->
     <div
       class="edge edge-left"
+      :inert="rightDrawerModal || undefined"
       role="button"
       tabindex="0"
       aria-label="打开左侧会话栏"
@@ -51,7 +52,9 @@
       @keydown.enter.prevent="openLeftDrawer"
       @keydown.space.prevent="openLeftDrawer"
     ></div>
-    <div
+    <button
+      v-if="showRightPanel"
+      ref="rightToggle"
       class="edge edge-right"
       role="button"
       tabindex="0"
@@ -104,7 +107,7 @@
     </aside>
 
     <!-- ===== Main Area ===== -->
-    <main class="workspace-main">
+    <main class="workspace-main" :inert="rightDrawerModal || undefined">
       <slot name="main-header" />
       <slot name="main-content">
         <section class="thread">
@@ -114,40 +117,52 @@
     </main>
 
     <!-- ===== Floating Composer ===== -->
-    <form
-      class="floating-composer"
-      @submit.prevent="$emit('composer-submit')"
-      @dragover.prevent
-      @drop.prevent="$emit('composer-drop', $event)"
+    <ComposerBar
+      :inert="rightDrawerModal || undefined"
+      variant="floating"
+      :placeholder="composerPlaceholder"
+      :disabled="composerDisabled"
+      :action-mode="composerActionMode"
+      :send-label="composerSendLabel"
+      :stop-label="composerStopLabel"
+      :send-title="composerSendTitle"
+      :stop-title="composerStopTitle"
+      @submit="$emit('composer-submit')"
+      @drop="$emit('composer-drop', $event)"
     >
-      <slot name="composer-preamble" />
-      <div class="composer-main-card">
+      <template #preamble>
+        <slot name="composer-preamble" />
+      </template>
+      <template #status>
         <slot name="composer-status" />
+      </template>
+      <template #textarea>
         <slot name="composer-textarea">
           <textarea
             :placeholder="composerPlaceholder"
+            :aria-label="composerPlaceholder"
+            :disabled="composerDisabled"
             rows="1"
             @keydown.enter.exact.prevent="$emit('composer-submit')"
           ></textarea>
         </slot>
-        <div class="composer-bottom">
-          <div class="tool-row">
-            <slot name="composer-tools" />
-          </div>
-          <slot name="composer-action">
-            <button
-              class="send"
-              :class="{ 'send--stop': composerActionMode === 'stop' }"
-              type="submit"
-              :disabled="composerActionMode === 'send' && composerDisabled"
-              :title="composerActionMode === 'stop' ? composerStopTitle : composerSendTitle"
-              :aria-label="composerActionMode === 'stop' ? composerStopTitle : composerSendTitle"
-            >{{ composerActionMode === 'stop' ? composerStopLabel : composerSendLabel }}</button>
-          </slot>
-        </div>
-      </div>
-      <div class="drop-hint">拖拽到这里</div>
-    </form>
+      </template>
+      <template #tools>
+        <slot name="composer-tools" />
+      </template>
+      <template #action>
+        <slot name="composer-action">
+          <button
+            class="send"
+            :class="{ 'send--stop': composerActionMode === 'stop' }"
+            type="submit"
+            :disabled="composerActionMode === 'send' && composerDisabled"
+            :title="composerActionMode === 'stop' ? composerStopTitle : composerSendTitle"
+            :aria-label="composerActionMode === 'stop' ? composerStopTitle : composerSendTitle"
+          >{{ composerActionMode === 'stop' ? composerStopLabel : composerSendLabel }}</button>
+        </slot>
+      </template>
+    </ComposerBar>
 
     <!-- ===== Right Drawer ===== -->
     <aside
@@ -195,6 +210,7 @@
 import { ref, useId, watch } from 'vue'
 import { useShellLayout } from '../composables/useShellLayout'
 import type { ThemeData } from '../composables/useShellLayout'
+import ComposerBar from './ComposerBar.vue'
 
 const props = withDefaults(
   defineProps<{

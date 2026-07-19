@@ -1,3 +1,4 @@
+import asyncio
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -6,7 +7,10 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+import app.app_server.runtime as app_server_runtime_module
 from app.app_server.ledger import list_events_after
+from app.app_server.operations import handle_sub_agent_turn_start_operation
+from app.app_server.runtime import WriterRuntimeLifecycle
 from app.app_server.snapshot import load_snapshot
 from app.config import Settings
 from app.database import Base
@@ -19,7 +23,8 @@ import app.services.writer_service as writer_service_module
 from app.services.writer_service import writer_orchestrate
 from lamtools_core.event import CoreEvent
 from lamtools_core.kernel import KernelResult
-from lamtools_core.runtime import RuntimeState
+from lamtools_core.runtime import RuntimeState, RuntimeTaskRegistry
+from lamtools_core.sub_session import SubSessionManager, SubSessionRuntimeStateStore
 
 
 async def _app_events(db, session_id: str):
@@ -34,6 +39,347 @@ async def _transcript_blocks(db, session_id: str) -> list[WriterTranscriptBlock]
         .order_by(WriterTranscriptBlock.event_sequence.asc(), WriterTranscriptBlock.id.asc())
     )
     return list(result.scalars().all())
+
+
+@pytest.mark.asyncio
+async def test_writer_service_lists_and_gets_durable_sub_agent_sessions(tmp_path):
+    settings = Settings(
+        data_dir=str(tmp_path / "data"),
+        database_url=f"sqlite+aiosqlite:///{tmp_path / 'sub-agents.db'}",
+        llm_api_key="test",
+    )
+    engine = create_async_engine(settings.database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    parent = RuntimeState(session_id="session-sub-agents", run_id="turn-1")
+    ref = SubSessionManager().get_or_create(parent, "reviewer")
+    child = RuntimeState(session_id=ref.session_id, status="completed", turn_count=2)
+    child.metadata.update({
+        "initial_task": "检查当前实现",
+        "sub_agent_link": {
+            "agent": "reviewer",
+            "session_id": ref.session_id,
+            "parent_call_id": "call-sub",
+            "parent_run_id": "turn-1",
+            "parent_turn_id": "turn-1",
+            "tools": ["read_file"],
+        },
+    })
+    await SubSessionRuntimeStateStore(parent).save_checkpoint(
+        child,
+        [{"role": "user", "content": "检查当前实现"}],
+    )
+    async with session_factory() as db:
+        db.add(WriterSession(
+            id=parent.session_id,
+            title="test",
+            runtime_state={"session_memory": {"_core_runtime_state": parent.to_dict()}},
+        ))
+        await db.commit()
+
+    service = writer_orchestrate(settings)
+    try:
+        agents = await service["list_sub_agents"](session_id=parent.session_id)
+        selected = await service["get_sub_agent"](
+            session_id=parent.session_id,
+            sub_session_id=ref.session_id,
+        )
+        await service["mark_sub_agent_failed"](
+            session_id=parent.session_id,
+            sub_session_id=ref.session_id,
+            error="model unavailable",
+        )
+        failed = await service["get_sub_agent"](
+            session_id=parent.session_id,
+            sub_session_id=ref.session_id,
+        )
+    finally:
+        await service["close"]()
+        await engine.dispose()
+
+    assert agents[0]["session_id"] == selected["session_id"]
+    assert selected["session_id"] == ref.session_id
+    assert selected["initial_task"] == "检查当前实现"
+    assert selected["status"] == "completed"
+    assert selected["timeline"] == [{"role": "user", "content": "检查当前实现"}]
+    assert failed["status"] == "error"
+    assert failed["error"] == "model unavailable"
+
+
+@pytest.mark.asyncio
+async def test_writer_runtime_reports_live_sub_agent_status_from_the_task_registry(tmp_path):
+    settings = Settings(
+        data_dir=str(tmp_path / "data"),
+        database_url=f"sqlite+aiosqlite:///{tmp_path / 'sub-agent-live-status.db'}",
+        llm_api_key="test",
+    )
+    engine = create_async_engine(settings.database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    parent = RuntimeState(session_id="session-sub-agent-live", run_id="turn-1")
+    ref = SubSessionManager().get_or_create(parent, "reviewer")
+    child = RuntimeState(session_id=ref.session_id, status="completed", turn_count=1)
+    child.metadata.update({
+        "initial_task": "检查运行状态",
+        "sub_agent_link": {
+            "agent": "reviewer",
+            "session_id": ref.session_id,
+            "parent_call_id": "call-sub",
+            "parent_run_id": "turn-1",
+            "parent_turn_id": "turn-1",
+        },
+    })
+    await SubSessionRuntimeStateStore(parent).save_checkpoint(
+        child,
+        [{"role": "user", "content": "检查运行状态"}],
+    )
+    async with session_factory() as db:
+        db.add(WriterSession(
+            id=parent.session_id,
+            title="test",
+            runtime_state={"session_memory": {"_core_runtime_state": parent.to_dict()}},
+        ))
+        await db.commit()
+
+    registry = RuntimeTaskRegistry()
+    started = asyncio.Event()
+    release = asyncio.Event()
+    captured: dict[str, object] = {}
+    service = writer_orchestrate(settings)
+
+    async def controlled_sub_agent_turn(**kwargs):
+        captured.update(kwargs)
+        started.set()
+        await release.wait()
+
+    service["run_sub_agent_turn"] = controlled_sub_agent_turn
+    lifecycle = WriterRuntimeLifecycle(
+        session_factory=session_factory,
+        service_provider=lambda: service,
+        runtime_task_registry=registry,
+    )
+
+    try:
+        outcome = await handle_sub_agent_turn_start_operation(
+            request_id=1,
+            params={
+                "thread_id": parent.session_id,
+                "sub_session_id": ref.session_id,
+                "input": [{"type": "text", "text": "继续检查"}],
+                "model_id": "model-2",
+                "thinking_enabled": True,
+                "thinking_budget": 6000,
+                "shallow_thinking_enabled": True,
+            },
+            runtime=lifecycle,
+        )
+        accepted = outcome.response["result"]
+        await asyncio.wait_for(started.wait(), timeout=0.5)
+        listed = await lifecycle.list_sub_agents(parent.session_id)
+        selected = await lifecycle.get_sub_agent(parent.session_id, ref.session_id)
+
+        assert accepted["accepted"] is True
+        assert listed[0]["session_id"] == selected["session_id"]
+        assert selected["status"] == "running"
+        assert selected["active_run_id"] == accepted["run_id"]
+        assert registry.active_run_id(parent.session_id) == accepted["run_id"]
+        assert captured["prompt"] == "继续检查"
+        assert captured["model_id"] == "model-2"
+        assert captured["thinking_enabled"] is True
+        assert captured["thinking_budget"] == 6000
+        assert captured["shallow_thinking_enabled"] is True
+
+        duplicate = await handle_sub_agent_turn_start_operation(
+            request_id=2,
+            params={
+                "thread_id": parent.session_id,
+                "sub_session_id": ref.session_id,
+                "input": [{"type": "text", "text": "重复发送"}],
+            },
+            runtime=lifecycle,
+        )
+        assert duplicate.response["error"]["message"] == "Sub-agent session has an active turn"
+
+        active_task = registry.task(ref.session_id, run_id=accepted["run_id"])
+        assert active_task is not None
+        release.set()
+        await active_task
+        await asyncio.sleep(0)
+        completed = await lifecycle.get_sub_agent(parent.session_id, ref.session_id)
+        assert completed["status"] == "completed"
+        assert "active_run_id" not in completed
+        assert registry.active_run_id(parent.session_id) is None
+    finally:
+        release.set()
+        task = registry.task(ref.session_id)
+        if task is not None:
+            await asyncio.gather(task, return_exceptions=True)
+        registry.clear()
+        await service["close"]()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_writer_runtime_accepts_sub_agent_turn_and_consumes_background_failure(caplog):
+    registry = RuntimeTaskRegistry()
+    started = asyncio.Event()
+    release = asyncio.Event()
+    failures: list[dict[str, str]] = []
+
+    async def fail_sub_agent_turn(**_kwargs):
+        started.set()
+        await release.wait()
+        raise RuntimeError("child model failed")
+
+    async def get_sub_agent(**_kwargs):
+        return {"session_id": "child-1", "status": "completed"}
+
+    async def mark_sub_agent_failed(**kwargs):
+        failures.append({key: str(value) for key, value in kwargs.items()})
+
+    lifecycle = WriterRuntimeLifecycle(
+        service_provider=lambda: {
+            "get_sub_agent": get_sub_agent,
+            "run_sub_agent_turn": fail_sub_agent_turn,
+            "mark_sub_agent_failed": mark_sub_agent_failed,
+        },
+        runtime_task_registry=registry,
+    )
+    caplog.set_level("ERROR", logger="app.app_server.runtime")
+
+    accepted = await lifecycle.start_sub_agent_turn(
+        thread_id="parent-1",
+        sub_session_id="child-1",
+        prompt="继续检查",
+        model_id="model-2",
+    )
+    await asyncio.wait_for(started.wait(), timeout=0.5)
+    assert accepted["accepted"] is True
+    assert registry.active_run_id("child-1") == accepted["run_id"]
+
+    release.set()
+    for _ in range(50):
+        if caplog.records:
+            break
+        await asyncio.sleep(0)
+
+    assert any("Sub-agent turn failed" in record.getMessage() for record in caplog.records)
+    assert registry.active_run_id("child-1") is None
+    assert registry.active_run_id("parent-1") is None
+    assert failures == [{
+        "session_id": "parent-1",
+        "sub_session_id": "child-1",
+        "error": "child model failed",
+    }]
+
+
+@pytest.mark.asyncio
+async def test_writer_runtime_rejects_unknown_sub_agent_before_accepting_a_turn():
+    registry = RuntimeTaskRegistry()
+    turn_started = False
+
+    async def reject_sub_agent(**_kwargs):
+        raise ValueError("Sub-agent session not found")
+
+    async def run_sub_agent_turn(**_kwargs):
+        nonlocal turn_started
+        turn_started = True
+
+    lifecycle = WriterRuntimeLifecycle(
+        service_provider=lambda: {
+            "get_sub_agent": reject_sub_agent,
+            "run_sub_agent_turn": run_sub_agent_turn,
+        },
+        runtime_task_registry=registry,
+    )
+
+    with pytest.raises(ValueError, match="Sub-agent session not found"):
+        await lifecycle.start_sub_agent_turn(
+            thread_id="parent-1",
+            sub_session_id="unknown-child",
+            prompt="继续检查",
+        )
+
+    assert turn_started is False
+    assert registry.active_run_id("unknown-child") is None
+    assert registry.active_run_id("parent-1") is None
+
+
+@pytest.mark.asyncio
+async def test_writer_runtime_rejects_waiting_sub_agent_before_accepting_a_turn():
+    registry = RuntimeTaskRegistry()
+    turn_started = False
+    failures: list[dict[str, object]] = []
+
+    async def get_sub_agent(**_kwargs):
+        return {"session_id": "child-waiting", "status": "waiting", "can_continue": False}
+
+    async def run_sub_agent_turn(**_kwargs):
+        nonlocal turn_started
+        turn_started = True
+
+    async def mark_sub_agent_failed(**kwargs):
+        failures.append(kwargs)
+
+    lifecycle = WriterRuntimeLifecycle(
+        service_provider=lambda: {
+            "get_sub_agent": get_sub_agent,
+            "run_sub_agent_turn": run_sub_agent_turn,
+            "mark_sub_agent_failed": mark_sub_agent_failed,
+        },
+        runtime_task_registry=registry,
+    )
+
+    with pytest.raises(ValueError, match="waiting for user approval"):
+        await lifecycle.start_sub_agent_turn(
+            thread_id="parent-waiting",
+            sub_session_id="child-waiting",
+            prompt="继续检查",
+        )
+
+    assert turn_started is False
+    assert failures == []
+    assert registry.active_run_id("child-waiting") is None
+    assert registry.active_run_id("parent-waiting") is None
+
+
+@pytest.mark.asyncio
+async def test_writer_runtime_releases_sub_agent_reservation_when_task_creation_fails(monkeypatch):
+    registry = RuntimeTaskRegistry()
+
+    async def get_sub_agent(**_kwargs):
+        return {"session_id": "child-1", "status": "completed"}
+
+    async def run_sub_agent_turn(**_kwargs):
+        return None
+
+    class BrokenLoop:
+        def create_task(self, _coroutine):
+            raise RuntimeError("task creation failed")
+
+    lifecycle = WriterRuntimeLifecycle(
+        service_provider=lambda: {
+            "get_sub_agent": get_sub_agent,
+            "run_sub_agent_turn": run_sub_agent_turn,
+        },
+        runtime_task_registry=registry,
+    )
+
+    with monkeypatch.context() as patch:
+        patch.setattr(app_server_runtime_module.asyncio, "get_running_loop", lambda: BrokenLoop())
+        with pytest.raises(RuntimeError, match="task creation failed"):
+            await lifecycle.start_sub_agent_turn(
+                thread_id="parent-1",
+                sub_session_id="child-1",
+                prompt="继续检查",
+            )
+
+    assert registry.active_run_id("child-1") is None
+    assert registry.active_run_id("parent-1") is None
 
 
 def test_writer_state_store_uses_service_database_url(monkeypatch, tmp_path):

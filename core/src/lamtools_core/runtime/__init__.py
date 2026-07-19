@@ -392,6 +392,7 @@ class RuntimeTaskRegistry:
         entry = self._entries.get(thread_id)
         if entry is not None and entry.task is not None and entry.task.done():
             self._entries.pop(thread_id, None)
+            self._background_process_registry.cleanup_session(thread_id)
 
     def clear(self) -> None:
         self._entries.clear()

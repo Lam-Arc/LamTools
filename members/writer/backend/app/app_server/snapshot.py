@@ -7,7 +7,7 @@ from lamtools_core.app import AppEventEnvelope as CoreAppEventEnvelope
 from lamtools_core.app import SqlAlchemyThreadSnapshotStore
 
 from .protocol import PROTOCOL_VERSION, WriterAppEventEnvelope
-from .reducer import apply_event, empty_thread_state, reduce_events
+from .reducer import apply_event, empty_thread_state, reconcile_status, reduce_events
 
 
 class _WriterSnapshotProjector:
@@ -19,6 +19,9 @@ class _WriterSnapshotProjector:
 
     def reduce(self, thread_id: str, events: list[CoreAppEventEnvelope]) -> dict:
         return reduce_events(thread_id, [_to_writer_envelope(event) for event in events])
+
+    def reconcile_status(self, state: dict) -> dict:
+        return reconcile_status(state)
 
 
 _SNAPSHOT_STORE = SqlAlchemyThreadSnapshotStore(
