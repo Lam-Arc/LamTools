@@ -605,7 +605,7 @@ class CoreLoopKernel:
                     if (
                         failure_diagnosis_pending
                         and not failure_diagnosis_completed
-                        and failure_investigation_rounds >= 2
+                        and failure_investigation_rounds >= 1
                         and call.id not in blocked_results
                     ):
                         blocked_results[call.id] = ToolResult(
