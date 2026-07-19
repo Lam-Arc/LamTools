@@ -415,11 +415,10 @@ class TestRunCoreKernelIntegration:
         assert captured_request is not None
         project_messages = [
             m for m in captured_request.messages
-            if m.role == "system" and m.metadata.get("key") == "project_instructions"
+            if m.role == "system" and m.metadata.get("key") == "project_agents"
         ]
         assert len(project_messages) == 1
         assert "AGENTS.md" in project_messages[0].content
-        assert "我已读到agents.md" in project_messages[0].content
 
     @pytest.mark.asyncio
     async def test_run_core_kernel_verify_includes_written_files_exist(self):

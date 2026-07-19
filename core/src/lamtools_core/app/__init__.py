@@ -11,7 +11,13 @@ from .agent_app import (
 )
 from .factory import create_app
 from .operation_catalog import OperationCatalog, OperationRequest, OperationResult, normalize_operation_name
-from .operation_groups import CORE_WORKBENCH_OPERATION_NAMES, build_member_operation_catalog, register_operation_handlers
+from .operation_groups import (
+    CORE_DURABLE_OPERATION_NAMES,
+    CORE_WORKBENCH_OPERATION_NAMES,
+    build_member_operation_catalog,
+    register_operation_handlers,
+)
+from .durable_operations import register_durable_operations
 from .queue_state import (
     ACTIVE_TURN_STATUSES,
     QUEUE_TERMINAL_STATUSES,
@@ -83,6 +89,7 @@ from .project_store import (
     workspace_name,
     write_workspace_agents_md,
 )
+from .project_context import ProjectContextLoader, DEFAULT_PROJECT_CONTEXT_FILES
 from .turn_acceptance import (
     CoreAppEventSpec,
     TURN_ACCEPT_DEDUPE_METHODS,
@@ -132,7 +139,10 @@ __all__ = [
     "PreparedLiveInput",
     "QueueMaterialization",
     "TurnMaterialization",
+    "ProjectContextLoader",
+    "DEFAULT_PROJECT_CONTEXT_FILES",
     "CORE_APP_SERVER_PROTOCOL_VERSION",
+    "CORE_DURABLE_OPERATION_NAMES",
     "CORE_WORKBENCH_OPERATION_NAMES",
     "JsonRpcRequest",
     "ModelProvider",
@@ -183,6 +193,7 @@ __all__ = [
     "queue_dispatch_payload",
     "queue_item_payload",
     "register_operation_handlers",
+    "register_durable_operations",
     "rpc_error",
     "rpc_result",
     "snapshot_notification",

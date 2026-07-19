@@ -18,13 +18,21 @@ from lamtools_core.event import (
 )
 from lamtools_core.kernel.state import KernelStep, KernelTurn, VerificationResult
 from lamtools_core.llm import ChatMessage, LLMRequest, LLMResponse
-from lamtools_core.prompt import PromptContext
+from lamtools_core.member import VerificationPolicy
+from lamtools_core.prompt import PromptContext, PromptPart
 from lamtools_core.runtime import RuntimeState, RuntimeTurnInput
+from lamtools_core.runtime.evidence import (
+    evidence_context_metadata,
+    known_evidence_call_ids,
+    prune_turn_scoped_evidence,
+    remember_evidence,
+)
 from lamtools_core.snapshot import reduce_run_item_events
-from lamtools_core.tool import ToolCall, ToolResult
+from lamtools_core.tool import ToolCall, ToolContext, ToolResult
 from lamtools_core.tool.default_toolbox import ApprovalPolicy, CoreToolbox, build_core_toolbox
 from lamtools_core.tool.command_runner import command_shell_prompt
 from lamtools_core.tool.workspace import line_count
+from lamtools_core.app.project_context import ProjectContextLoader
 
 
 _MODEL_TOOL_EVIDENCE_LIMIT = 12_000
@@ -84,6 +92,7 @@ def _format_model_tool_evidence(result: ToolResult) -> str:
 
 @dataclass(frozen=True)
 class CoreBaseAgentConfig:
+    agent_id: str = "core-agent"
     model_id: str = ""
     instructions: str = "You are a standalone general-purpose agent runtime."
     temperature: float = 0.2
@@ -91,6 +100,8 @@ class CoreBaseAgentConfig:
     thinking_enabled: bool | None = None
     thinking_budget: int | None = None
     approval_policy: ApprovalPolicy = "require"
+    project_context_files: list[tuple[str, int, str]] | None = None
+    max_project_context_chars: int = 20000
 
 
 class CoreBaseAgentKit:
@@ -102,6 +113,7 @@ class CoreBaseAgentKit:
         work_root: str | Path,
         config: CoreBaseAgentConfig | None = None,
         toolbox: CoreToolbox | None = None,
+        verification_policy: VerificationPolicy | None = None,
     ) -> None:
         self.work_root = Path(work_root).resolve()
         self.config = config or CoreBaseAgentConfig()
@@ -109,15 +121,18 @@ class CoreBaseAgentKit:
             work_root=self.work_root,
             approval_policy=self.config.approval_policy,
         )
+        self.verification_policy = verification_policy or VerificationPolicy()
 
     async def on_run_start(self, state: RuntimeState, turn_input: RuntimeTurnInput) -> None:
-        state.metadata["agent_id"] = "core-agent"
+        state.metadata["agent_id"] = self.config.agent_id
         state.metadata["work_root"] = str(self.work_root)
         for key in ("model_id", "thinking_enabled", "thinking_budget", "shallow_thinking_enabled"):
             if key in turn_input.metadata:
                 state.metadata[key] = turn_input.metadata[key]
         if turn_input.user_message:
             state.metadata.setdefault("original_user_message", turn_input.user_message)
+        if self.verification_policy.required:
+            self._verification_state(state)
 
     async def build_context(
         self,
@@ -132,6 +147,13 @@ class CoreBaseAgentKit:
             tools=self.toolbox.tool_specs(),
             metadata={"step_index": step_index},
         )
+
+    def _build_project_context_parts(self) -> list[PromptPart]:
+        loader = ProjectContextLoader(
+            file_specs=self.config.project_context_files,
+            max_chars_per_file=self.config.max_project_context_chars,
+        )
+        return loader.to_prompt_parts(self.work_root)
 
     async def build_model_request(self, state: RuntimeState, context: PromptContext) -> LLMRequest:
         system_lines = [
@@ -159,6 +181,29 @@ class CoreBaseAgentKit:
         skill_index = self.toolbox.skill_index()
         if skill_index:
             system_lines.extend(["", skill_index])
+        context_parts = self._build_project_context_parts()
+        for part in context_parts:
+            system_lines.extend(["", part.content])
+        if self.verification_policy.required:
+            verification_state = self._verification_state(state)
+            system_lines.extend([
+                "",
+                (
+                    "This member requires tool-backed verification evidence before a final answer can complete. "
+                    "Use an eligible evidence-producing tool and ground the answer in its observed result."
+                ),
+            ])
+            repair_prompt = str(verification_state.get("repair_prompt") or "").strip()
+            if repair_prompt:
+                system_lines.append(f"Verification repair required: {repair_prompt}")
+            evidence_call_ids = known_evidence_call_ids(state)
+            if evidence_call_ids:
+                system_lines.append(
+                    "Known successful evidence call IDs are opaque references. "
+                    "When a tool asks for an evidence tool_call_id, copy one of these values exactly; "
+                    "do not add, remove, or normalize a prefix: "
+                    + json.dumps(evidence_call_ids, ensure_ascii=False)
+                )
         messages = [
             ChatMessage(
                 role="system",
@@ -215,7 +260,20 @@ class CoreBaseAgentKit:
         if call.name == "sub_agent":
             call.metadata["parent_run_id"] = state.run_id
             call.metadata["parent_turn_id"] = str(state.metadata.get("turn_id") or state.run_id)
-        result = await self.toolbox.execute(call)
+        result = await self.toolbox.execute(
+            call,
+            ToolContext(
+                session_id=state.session_id,
+                run_id=state.run_id,
+                work_root=str(self.work_root),
+                state=state,
+                metadata=evidence_context_metadata(state),
+            ),
+        )
+        if result.status == "ok":
+            activated_goal_id = str(result.metadata.get("activate_goal_id") or "").strip()
+            if activated_goal_id:
+                state.metadata["goal_id"] = activated_goal_id
         if result.status == "ok" and call.name in {"write_file", "edit_file"}:
             self._record_written_file(state, result)
         return result
@@ -239,8 +297,76 @@ class CoreBaseAgentKit:
         turn: KernelTurn,
         tool_results: list[ToolResult],
     ) -> VerificationResult:
-        passed = not tool_results or all(result.status == "ok" for result in tool_results)
-        return VerificationResult(passed=passed, required=bool(tool_results), summary="ok" if passed else "tool failed")
+        passed_tools = all(result.status == "ok" for result in tool_results)
+        if not self.verification_policy.required:
+            passed = not tool_results or passed_tools
+            return VerificationResult(
+                passed=passed,
+                required=bool(tool_results),
+                summary="ok" if passed else "tool failed",
+            )
+
+        verification_state = self._verification_state(state)
+        evidence = verification_state.setdefault("evidence", [])
+        known_call_ids = {
+            str(item.get("call_id") or "")
+            for item in evidence
+            if isinstance(item, dict)
+        }
+        for result in tool_results:
+            record = self._evidence_record(result)
+            if record is None or record["call_id"] in known_call_ids:
+                continue
+            evidence.append(record)
+            known_call_ids.add(record["call_id"])
+            if record.get("evidence_scope") != "turn":
+                remember_evidence(
+                    state,
+                    [record],
+                    run_id=state.run_id,
+                    turn_id=str(state.metadata.get("turn_id") or state.run_id),
+                )
+
+        minimum_evidence = self._policy_positive_int("minimum_evidence", default=1)
+        evidence_count = len(evidence)
+        evidence_sufficient = evidence_count >= minimum_evidence
+        natural_completion = not turn.tool_calls and bool(turn.reply.strip())
+        attempt = int(verification_state.get("attempt") or 0)
+        if natural_completion and (not passed_tools or not evidence_sufficient):
+            attempt += 1
+            verification_state["attempt"] = attempt
+
+        passed = passed_tools and evidence_sufficient
+        if passed:
+            verification_state.pop("repair_prompt", None)
+            summary = f"verification evidence satisfied ({evidence_count}/{minimum_evidence})"
+            repair_prompt = ""
+        elif not passed_tools:
+            summary = "verification tool failed"
+            repair_prompt = "Resolve the failed tool result and obtain successful verification evidence."
+        else:
+            summary = f"verification evidence missing ({evidence_count}/{minimum_evidence})"
+            repair_prompt = str(
+                self.verification_policy.metadata.get("repair_instruction")
+                or "Obtain tool-backed evidence before making the final claim."
+            ).strip()
+        if repair_prompt:
+            verification_state["repair_prompt"] = repair_prompt
+
+        return VerificationResult(
+            passed=passed,
+            required=True,
+            summary=summary,
+            repair_prompt=repair_prompt,
+            attempt=attempt,
+            max_attempts=self._policy_positive_int("max_attempts", default=2),
+            metadata={
+                "policy": self.verification_policy.name,
+                "evidence_count": evidence_count,
+                "minimum_evidence": minimum_evidence,
+                "evidence": list(evidence),
+            },
+        )
 
     async def decide_next(
         self,
@@ -279,6 +405,18 @@ class CoreBaseAgentKit:
         if turn.tool_calls:
             return "continue"
         if turn.reply.strip():
+            if verification.required and not verification.passed:
+                if verification.attempt >= verification.max_attempts:
+                    state.metadata["pending_waiting_request"] = {
+                        "request_kind": "verification",
+                        "message": (
+                            "Required verification evidence was not produced. "
+                            "Provide a source or guidance to continue."
+                        ),
+                        "verification": verification.metadata,
+                    }
+                    return "wait"
+                return "continue"
             return "done"
         return "failed"
 
@@ -294,6 +432,63 @@ class CoreBaseAgentKit:
 
     async def on_run_end(self, state: RuntimeState, result: Any) -> None:
         state.metadata["ended_decision"] = result.decision
+
+    def _verification_state(self, state: RuntimeState) -> dict[str, Any]:
+        turn_scoped_tools = {
+            spec.name
+            for spec in self.toolbox.tool_specs()
+            if str(spec.metadata.get("evidence_scope") or "") == "turn"
+        }
+        prune_turn_scoped_evidence(state, tool_names=turn_scoped_tools)
+        raw = state.metadata.get("member_verification")
+        if not isinstance(raw, dict) or raw.get("run_id") != state.run_id:
+            if isinstance(raw, dict):
+                remember_evidence(
+                    state,
+                    raw.get("evidence"),
+                    run_id=str(raw.get("run_id") or ""),
+                    turn_id=str(raw.get("run_id") or ""),
+                )
+            raw = {"run_id": state.run_id, "attempt": 0, "evidence": []}
+            state.metadata["member_verification"] = raw
+        return raw
+
+    def _policy_positive_int(self, key: str, *, default: int) -> int:
+        value = self.verification_policy.metadata.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            return value
+        return default
+
+    def _evidence_record(self, result: ToolResult) -> dict[str, str] | None:
+        if result.status != "ok" or (not str(result.content or "").strip() and not result.artifacts):
+            return None
+        spec = next((item for item in self.toolbox.tool_specs() if item.name == result.name), None)
+        category = str(spec.metadata.get("category") or "") if spec is not None else ""
+        evidence_scope = str(spec.metadata.get("evidence_scope") or "") if spec is not None else ""
+        metadata = self.verification_policy.metadata
+        raw_tools = metadata.get("evidence_tools")
+        allowed_tools = {
+            str(item).strip()
+            for item in raw_tools
+            if str(item).strip()
+        } if isinstance(raw_tools, (list, tuple, set)) else set()
+        raw_categories = metadata.get("evidence_categories")
+        allowed_categories = {
+            str(item).strip()
+            for item in raw_categories
+            if str(item).strip()
+        } if isinstance(raw_categories, (list, tuple, set)) else set()
+        if allowed_tools or allowed_categories:
+            if result.name not in allowed_tools and category not in allowed_categories:
+                return None
+        record = {
+            "call_id": str(result.call_id or result.name),
+            "tool": result.name,
+            "category": category,
+        }
+        if evidence_scope:
+            record["evidence_scope"] = evidence_scope
+        return record
 
     def _record_written_file(self, state: RuntimeState, result: ToolResult) -> None:
         raw_path = result.metadata.get("path") if isinstance(result.metadata, dict) else ""

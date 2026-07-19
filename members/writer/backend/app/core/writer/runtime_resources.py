@@ -15,7 +15,6 @@ from lamtools_core.prompt import PromptPart, prompt_parts_to_messages
 from app.core.persona import get_writer_system_prompt
 from app.core.prompt_assembler import get_writer_execution_discipline
 from app.core.prompt_files import load_writer_prompt
-from app.core.writer.project_instructions import PROJECT_INSTRUCTION_FILES, ProjectInstructionLoader
 from app.core.writer.skills import WriterSkillRegistry
 
 logger = logging.getLogger(__name__)
@@ -80,28 +79,6 @@ def runtime_now_prompt() -> str:
     return "now: " + datetime.datetime.now().astimezone().strftime("%Y-%m-%d")
 
 
-def _instruction_signature(work_root: str) -> tuple[Any, ...]:
-    if not work_root:
-        return ("instructions", "")
-    root = Path(work_root)
-    try:
-        root = root.resolve()
-    except OSError:
-        return ("instructions", work_root)
-    if not root.exists():
-        return ("instructions", str(root), "missing")
-    for filename in PROJECT_INSTRUCTION_FILES:
-        path = root / filename
-        if not path.is_file():
-            continue
-        try:
-            stat = path.stat()
-        except OSError:
-            return ("instructions", str(path), "error")
-        return ("instructions", str(path), stat.st_mtime_ns, stat.st_size)
-    return ("instructions", str(root), "none")
-
-
 def _skill_signature(work_root: str) -> tuple[Any, ...]:
     return ("skills", WriterSkillRegistry().signature(work_root))
 
@@ -111,7 +88,6 @@ def _static_prompt_signature(work_root: str) -> tuple[Any, ...]:
         get_writer_system_prompt(),
         get_writer_execution_discipline(),
         _platform_prompt(),
-        _instruction_signature(work_root),
         _skill_signature(work_root),
     )
 
@@ -138,18 +114,6 @@ def _static_prompt_parts(work_root: str) -> list[PromptPart]:
             priority=30,
         ),
     ]
-    instruction_loader = ProjectInstructionLoader()
-    instruction_blocks = [
-        instruction.to_prompt_block()
-        for instruction in instruction_loader.load(work_root)
-    ]
-    if instruction_blocks:
-        parts.append(PromptPart(
-            key="project_instructions",
-            kind="constraint",
-            content="Project instructions:\n" + "\n\n".join(instruction_blocks),
-            priority=40,
-        ))
     skill_index = WriterSkillRegistry().prompt_index(work_root)
     if skill_index:
         parts.append(PromptPart(

@@ -96,7 +96,9 @@ from lamtools_core.llm import (
 from lamtools_core.mem import format_session_memory_summary
 from lamtools_core.app import assemble_core_agent_plugins
 from lamtools_core.prompt import PromptContext, format_prompt_sections
+from lamtools_core.app.project_context import ProjectContextLoader
 from lamtools_core.runtime import InMemoryRuntimeStateStore, RuntimeState, RuntimeStateStore, RuntimeTurnInput
+from lamtools_core.runtime.goal import GoalCompletionGate, GoalManager, ModelGoalEvaluator
 from lamtools_core.sub_session import SubSessionRuntimeStateStore, normalize_sub_session_agent_name
 from lamtools_core.tool import ToolCall, ToolResult
 from lamtools_core.tool.command import run_subprocess as _run_subprocess
@@ -321,6 +323,16 @@ class WriterKit:
         return controls if isinstance(controls, dict) else {}
 
     def _annotate_command_permission(self, call: ToolCall) -> ToolCall:
+        if call.name == "arrange":
+            action = str((call.arguments or {}).get("action") or "").strip().lower()
+            if action not in {"list", "get"}:
+                call.requires_approval = True
+                call.metadata.update({
+                    "permission_group": "durable_write",
+                    "approval_policy": "ask_user",
+                    "policy_reason": "创建或修改长期安排需要确认",
+                })
+            return call
         if call.name not in {"run_command", "run_tests"}:
             return call
         args = call.arguments if isinstance(call.arguments, dict) else {}
@@ -499,6 +511,10 @@ class WriterKit:
 
     # -- RuntimeKit protocol --------------------------------------------------
 
+    def _build_project_context_parts(self):
+        loader = ProjectContextLoader()
+        return loader.to_prompt_parts(self._work_root)
+
     async def on_run_start(
         self, state: RuntimeState, turn_input: RuntimeTurnInput
     ) -> None:
@@ -535,6 +551,13 @@ class WriterKit:
         # Stable prefix first. Current time, task/session state, history,
         # approvals, and queued input stay out of the cache.
         messages = await static_prompt_messages(self._work_root)
+        context_parts = self._build_project_context_parts()
+        for part in context_parts:
+            messages.append(ChatMessage(
+                role="system",
+                content=part.content,
+                metadata={"key": part.key, "kind": part.kind},
+            ))
         messages.append(ChatMessage(
             role="system",
             content=runtime_now_prompt(),
@@ -837,7 +860,7 @@ class WriterKit:
                     )
                 runtime_keys = {}
                 sentinel = object()
-                if call.name in {"run_command", "run_tests"}:
+                if call.name in {"run_command", "run_tests", "goal", "arrange"}:
                     runtime_keys = {
                         "_runtime_session_id": state.session_id,
                         "_runtime_run_id": state.run_id,
@@ -848,6 +871,9 @@ class WriterKit:
                     result = handler(call)
                     if asyncio.iscoroutine(result):
                         result = await result
+                    activated_goal_id = str(result.metadata.get("activate_goal_id") or "").strip()
+                    if result.status == "ok" and activated_goal_id:
+                        state.metadata["goal_id"] = activated_goal_id
                     return result
                 finally:
                     for key, value in previous.items():
@@ -1180,6 +1206,9 @@ async def run_core_kernel(
     user_content: str | list[dict[str, Any]] | None = None,
     run_id: str = "",
     turn_id: str = "",
+    operation_executor: Callable[[str, dict[str, Any], dict[str, Any]], Awaitable[Any]] | None = None,
+    goal_manager: GoalManager | None = None,
+    goal_id: str = "",
 ) -> KernelResult:
     """Run Writer through CoreLoopKernel.
 
@@ -1243,7 +1272,12 @@ async def run_core_kernel(
         )
 
     # Resolve effective tool_executor
-    effective_executor = _resolve_tool_executor(tool_executor, work_root, live_event_callback)
+    effective_executor = _resolve_tool_executor(
+        tool_executor,
+        work_root,
+        live_event_callback,
+        operation_executor,
+    )
 
     # Build state store before Kit so sub sessions can reuse the same storage.
     effective_state_store = state_store or InMemoryRuntimeStateStore()
@@ -1314,6 +1348,15 @@ async def run_core_kernel(
         event_sink=_EventSink(),
         policy=policy,
         hook_engine=_build_plugin_hook_engine(work_root),
+        completion_gate=(
+            GoalCompletionGate(
+                goal_manager,
+                goal_id,
+                ModelGoalEvaluator(core_llm),
+            )
+            if goal_manager is not None
+            else None
+        ),
     )
 
     # Wire cancel event: if provided, set it on the kernel so the loop
@@ -1333,7 +1376,7 @@ async def run_core_kernel(
         user_content=user_content,
         run_id=run_id,
         turn_id=turn_id,
-        metadata={"session_id": session_id},
+        metadata={"session_id": session_id, "goal_id": str(goal_id or "")},
         guidance_source=guidance_source,
         guidance_finalizer=guidance_finalizer,
     )
