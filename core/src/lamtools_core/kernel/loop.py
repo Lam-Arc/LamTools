@@ -916,7 +916,6 @@ class CoreLoopKernel:
                     tool_only_rounds += 1
                     limit = self.policy.max_tool_only_rounds_without_progress
                     if limit is not None and limit > 0 and tool_only_rounds >= limit:
-                        tool_progress_pending = True
                         history.append(ChatMessage(
                             role="system",
                             content=(
@@ -932,7 +931,7 @@ class CoreLoopKernel:
                             "tool_only_rounds": tool_only_rounds,
                         }
                         await self._save_checkpoint(state, history)
-                elif turn.reply.strip() and not tool_progress_pending:
+                elif turn.reply.strip():
                     tool_only_rounds = 0
 
                 failed_pairs = [
