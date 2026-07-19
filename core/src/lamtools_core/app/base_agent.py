@@ -100,6 +100,10 @@ class CoreBaseAgentConfig:
     thinking_enabled: bool | None = None
     thinking_budget: int | None = None
     approval_policy: ApprovalPolicy = "require"
+    # Advanced: override the default project context file list.
+    # None (default) → uses DEFAULT_PROJECT_CONTEXT_FILES.
+    # Prefer load_context.jsonc in the workspace for per-project
+    # customization; change this only for member-wide advanced defaults.
     project_context_files: list[tuple[str, int, str]] | None = None
     max_project_context_chars: int = 20000
 
