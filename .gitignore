@@ -61,3 +61,6 @@ members/writer/frontend/src-tauri/gen/
 members/writer/frontend/.electron-app-stage/
 .acceptance/
 
+data/
+.codex-tmp/
+.tmp/
