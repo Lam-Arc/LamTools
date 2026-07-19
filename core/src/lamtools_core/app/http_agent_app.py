@@ -23,10 +23,14 @@ from lamtools_core.llm import LLMRequest
 from lamtools_core.config import build_shared_config_operation_catalog
 from lamtools_core.attachment import CoreAttachmentStore
 from lamtools_core.runtime import RuntimeTaskRegistry
+from lamtools_core.runtime.arrange import ArrangeManager, ArrangeRunner, arranged_operation_payload
+from lamtools_core.runtime.goal import GoalManager
+from lamtools_core.runtime.observer import ObserverSupervisor
 
 from .core_db import open_core_app_db
 from .core_session_store import CoreDbSessionStore
 from .default_agent import CoreAgentPaths, CoreAgentSpec, create_core_agent_operations
+from .durable_operations import register_durable_operations
 from .factory import create_app
 from .live_hub import CoreAppEventHub
 from .live_operations import CoreLiveContext, CoreLiveOperationHost
@@ -158,6 +162,8 @@ def create_core_agent_http_app(
         core_db_handle = await open_core_app_db(core_db_path)
         app_state["core_db"] = core_db_handle
         app_state["attachment_store"] = CoreAttachmentStore(core_db_handle.session_factory, resolved_data_dir)
+        goal_manager = GoalManager(core_db_handle.goal_store)
+        arrange_manager = ArrangeManager(core_db_handle.arrange_store)
         agent_operations = create_core_agent_operations(
             spec=CoreAgentSpec(
                 default_model=config.model_id,
@@ -179,6 +185,8 @@ def create_core_agent_http_app(
             app_event_hub=live_hub,
             runtime_state_store=core_db_handle.runtime_state_store,
             runtime_task_registry=runtime_task_registry,
+            goal_manager=goal_manager,
+            arrange_manager=arrange_manager,
             enable_turn_checkpoints=True,
         )
         _register_core_project_operations(agent_operations, project_store=core_db_handle.project_store)
@@ -193,10 +201,52 @@ def create_core_agent_http_app(
             agent_operations,
             build_shared_config_operation_catalog(config_session_factory),
         )
+
+        async def execute_arranged_job(job: Any) -> OperationResult:
+            payload = arranged_operation_payload(job)
+            if job.operation == "turn.start":
+                payload["run_id"] = job.occurrence_id
+                payload["turn_id"] = f"{job.thread_id}:turn:{job.occurrence_id}"
+            return await agent_operations.execute(
+                job.operation,
+                payload,
+                metadata={
+                    "source": "arrange",
+                    "arrange_job_id": job.id,
+                    "occurrence_id": job.occurrence_id,
+                    **({"arrange_signal": job.signal} if job.signal else {}),
+                },
+            )
+
+        arrange_runner = ArrangeRunner(core_db_handle.arrange_store, execute_arranged_job)
+        observer_supervisor = ObserverSupervisor(
+            core_db_handle.arrange_store,
+            data_dir=resolved_data_dir,
+            wake_runner=arrange_runner.wake,
+        )
+        register_durable_operations(
+            agent_operations,
+            goal_manager=goal_manager,
+            arrange_manager=arrange_manager,
+            wake_runner=arrange_runner.wake,
+            cancel_running=arrange_runner.cancel,
+            wake_observers=observer_supervisor.wake,
+            observer_status=observer_supervisor.status,
+        )
         app_state["config_engine"] = config_engine
         app_state["operations"] = agent_operations
+        app_state["arrange_runner"] = arrange_runner
+        app_state["observer_supervisor"] = observer_supervisor
+        await arrange_runner.start()
+        await observer_supervisor.start()
 
     async def shutdown_core_agent() -> None:
+        observer_supervisor = app_state.get("observer_supervisor")
+        if observer_supervisor is not None:
+            await observer_supervisor.stop()
+        arrange_runner = app_state.get("arrange_runner")
+        if arrange_runner is not None:
+            await arrange_runner.stop()
         await runtime_task_registry.shutdown()
         config_engine = app_state.get("config_engine")
         if config_engine is not None:

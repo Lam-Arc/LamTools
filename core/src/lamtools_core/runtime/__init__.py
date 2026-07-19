@@ -181,7 +181,7 @@ class InMemoryRuntimeStateStore:
 
     async def save_checkpoint(self, state: RuntimeState, history: list[dict[str, Any]]) -> None:
         self._states[state.session_id] = state
-        self._history[state.session_id] = deepcopy(history)
+        self._history[state.session_id] = list(history)
 
     async def find_pending_approval(self, request_id: str) -> RuntimeState | None:
         for state in self._states.values():

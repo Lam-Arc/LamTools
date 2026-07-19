@@ -2139,7 +2139,6 @@ class CoreLoopKernel:
         return list(await asyncio.gather(*(self._execute_tool(state, c) for c in calls)))
 
     def _copy_state(self, state: RuntimeState) -> RuntimeState:
-        """Create a deep copy of state for step recording."""
         return RuntimeState(
             session_id=state.session_id,
             run_id=state.run_id,

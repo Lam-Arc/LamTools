@@ -100,6 +100,7 @@ class CoreBaseAgentConfig:
     thinking_enabled: bool | None = None
     thinking_budget: int | None = None
     approval_policy: ApprovalPolicy = "require"
+    runtime_controls: dict[str, dict[str, bool]] | None = None
     # Advanced: override the default project context file list.
     # None (default) → uses DEFAULT_PROJECT_CONTEXT_FILES.
     # Prefer load_context.jsonc in the workspace for per-project
@@ -126,6 +127,7 @@ class CoreBaseAgentKit:
             approval_policy=self.config.approval_policy,
         )
         self.verification_policy = verification_policy or VerificationPolicy()
+        self._runtime_controls = self.config.runtime_controls or {}
 
     async def on_run_start(self, state: RuntimeState, turn_input: RuntimeTurnInput) -> None:
         state.metadata["agent_id"] = self.config.agent_id
@@ -208,6 +210,9 @@ class CoreBaseAgentKit:
                     "do not add, remove, or normalize a prefix: "
                     + json.dumps(evidence_call_ids, ensure_ascii=False)
                 )
+        empty_stop_retry = (state.metadata or {}).get("empty_stop_retry_instruction")
+        if empty_stop_retry and isinstance(empty_stop_retry, str):
+            system_lines.extend(["", str(empty_stop_retry)])
         messages = [
             ChatMessage(
                 role="system",
@@ -220,7 +225,7 @@ class CoreBaseAgentKit:
             model=self.config.model_id,
             temperature=self.config.temperature,
             max_tokens=self.config.max_tokens,
-            tools=self.toolbox.model_tools(),
+            tools=self._filtered_tools(),
             tool_choice="auto",
             metadata={
                 "core_base_agent": True,
@@ -239,24 +244,95 @@ class CoreBaseAgentKit:
 
     async def parse_model_output(self, state: RuntimeState, response: LLMResponse) -> KernelTurn:
         calls: list[ToolCall] = []
-        for raw in response.tool_calls or []:
-            args = raw.arguments
-            if isinstance(args, str):
-                try:
-                    args = json.loads(args)
-                except json.JSONDecodeError:
-                    args = {}
-            calls.append(
-                self.toolbox.prepare_call(
-                    ToolCall(
-                        id=raw.id or uuid.uuid4().hex,
-                        name=raw.name,
-                        arguments=args if isinstance(args, dict) else {},
-                        raw=raw.raw,
+        decision_hint: LoopDecision = "continue"
+        wait_reason = ""
+
+        if response.tool_calls:
+            if state.metadata:
+                state.metadata.pop("empty_stop_count", None)
+                state.metadata.pop("empty_stop_retry_instruction", None)
+            for raw in response.tool_calls or []:
+                args = raw.arguments
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args)
+                    except json.JSONDecodeError:
+                        args = {}
+                calls.append(
+                    self.toolbox.prepare_call(
+                        ToolCall(
+                            id=raw.id or uuid.uuid4().hex,
+                            name=raw.name,
+                            arguments=args if isinstance(args, dict) else {},
+                            raw=raw.raw,
+                        )
                     )
                 )
+        elif response.finish_reason == "stop":
+            content = (response.content or "").strip()
+            if not content:
+                decision_hint, wait_reason = self._resolve_empty_stop(state)
+            else:
+                if state.metadata:
+                    state.metadata.pop("empty_stop_count", None)
+                    state.metadata.pop("empty_stop_retry_instruction", None)
+                decision_hint = "done"
+        elif response.finish_reason == "length":
+            decision_hint = "continue"
+        else:
+            decision_hint = "done"
+
+        reply = response.content or ""
+        if decision_hint == "failed" and not reply:
+            reply = "Model produced empty output twice with no tool calls."
+
+        return KernelTurn(reply=reply, tool_calls=calls, decision_hint=decision_hint, wait_reason=wait_reason)
+
+    def _detect_delivery_progress(self, state: RuntimeState) -> bool:
+        written_files = (state.metadata or {}).get("written_files")
+        if isinstance(written_files, list) and any(str(item).strip() for item in written_files):
+            return True
+        recent_tools = (state.metadata or {}).get("recent_tools")
+        if isinstance(recent_tools, list) and any(str(tool) in {"write_file", "edit_file"} for tool in recent_tools):
+            return True
+        return False
+
+    def _default_empty_retry_instruction(self, has_delivery: bool) -> str:
+        if has_delivery:
+            return (
+                "The previous model turn stopped with no final text and no tool calls. "
+                "Deliverables already exist, so provide a concise visible final answer "
+                "summarizing completed files, verification, and any caveats. Do not call "
+                "more tools unless required to verify the final answer."
             )
-        return KernelTurn(reply=response.content or "", tool_calls=calls)
+        return (
+            "The previous model turn stopped with no final text and no tool calls. "
+            "Continue the task now: either call the needed tools to create and verify "
+            "deliverables, or provide a visible failure reason if the task cannot proceed."
+        )
+
+    def _resolve_empty_stop(self, state: RuntimeState) -> tuple[LoopDecision, str]:
+        attempts = int((state.metadata or {}).get("empty_stop_count", 0))
+        has_delivery = self._detect_delivery_progress(state)
+        if attempts <= 0:
+            if state.metadata:
+                state.metadata["empty_stop_count"] = 1
+                state.metadata["empty_stop_retry_instruction"] = self._default_empty_retry_instruction(has_delivery)
+            return "continue", ""
+        if state.metadata:
+            state.metadata["empty_stop_count"] = attempts + 1
+        return "failed", "Model stopped twice with no content and no tools."
+
+    def _tool_enabled(self, name: str) -> bool:
+        tools = self._runtime_controls.get("tools", {})
+        return bool(tools.get(name, True))
+
+    def _filtered_tools(self) -> list[dict[str, Any]]:
+        all_tools = self.toolbox.model_tools()
+        controls = self._runtime_controls.get("tools", {})
+        if not controls:
+            return all_tools
+        return [tool for tool in all_tools if self._tool_enabled(str(tool.get("function", {}).get("name", "")))]
 
     async def execute_tool(self, state: RuntimeState, call: ToolCall) -> ToolResult:
         routed = await self._pre_dispatch(state, call)

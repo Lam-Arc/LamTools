@@ -54,9 +54,25 @@ CORE_WORKBENCH_OPERATION_NAMES: tuple[str, ...] = (
     "project.agents_md.get",
     "project.agents_md.update",
     "project.directory.pick",
-    "session.checkpoints.list",
     "session.rollback",
     "session.rollback.undo",
+)
+
+
+CORE_DURABLE_OPERATION_NAMES: tuple[str, ...] = (
+    "goal.create",
+    "goal.get",
+    "goal.list",
+    "goal.update",
+    "arrange.create",
+    "arrange.get",
+    "arrange.list",
+    "arrange.pause",
+    "arrange.resume",
+    "arrange.cancel",
+    "arrange.signal",
+    "arrange.occurrence.get",
+    "arrange.occurrence.list",
 )
 
 
@@ -90,6 +106,7 @@ def build_member_operation_catalog(
 
 
 __all__ = [
+    "CORE_DURABLE_OPERATION_NAMES",
     "CORE_WORKBENCH_OPERATION_NAMES",
     "build_member_operation_catalog",
     "register_operation_handlers",

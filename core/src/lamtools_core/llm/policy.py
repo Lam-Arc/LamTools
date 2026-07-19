@@ -32,18 +32,17 @@ class RetryPolicy:
 
     Example:
         policy = RetryPolicy(
-            backoff_strategy=BackoffStrategy.EXPONENTIAL,
-            initial_delay_seconds=1.0,
-            max_delay_seconds=60.0,
-            jitter=True,
+            backoff_strategy=BackoffStrategy.FIXED,
+            initial_delay_seconds=0.5,
+            max_delay_seconds=0.5,
+            jitter=False,
         )
     """
 
-    backoff_strategy: BackoffStrategy = BackoffStrategy.EXPONENTIAL
-    initial_delay_seconds: float = 1.0
-    max_delay_seconds: float = 60.0
+    backoff_strategy: BackoffStrategy = BackoffStrategy.FIXED
+    initial_delay_seconds: float = 0.5
     jitter: bool = True
-    staged_delay_seconds: tuple[float, ...] = (1.0, 1.0, 1.0, 2.0, 2.0, 2.0)
+    staged_delay_seconds: tuple[float, ...] = ()
 
 
 __all__ = [

@@ -15,7 +15,7 @@ class LoopPolicy:
     """
 
     model_timeout_seconds: float = 360.0
-    model_retries: int = 10
+    model_retries: int = 100
     model_stream_idle_timeout_seconds: float | None = 120.0
     tool_timeout_seconds: float | None = None
     emit_debug_events: bool = False

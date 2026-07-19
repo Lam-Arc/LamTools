@@ -28,6 +28,8 @@ from lamtools_core.runtime import (
     RuntimeTurnInput,
     default_runtime_task_registry,
 )
+from lamtools_core.runtime.goal import GoalCompletionGate, GoalManager, ModelGoalEvaluator
+from lamtools_core.runtime.arrange import ArrangeManager
 from lamtools_core.skills import SkillRegistry
 from lamtools_core.session import InMemorySessionStore, SessionStore
 from lamtools_core.snapshot import InMemorySnapshotStore, SnapshotStore
@@ -106,6 +108,8 @@ def create_core_agent_operations(
     command_action_handlers: Mapping[str, CommandActionHandler] | None = None,
     runtime_state_store: RuntimeStateStore | None = None,
     runtime_task_registry: RuntimeTaskRegistry | None = None,
+    goal_manager: GoalManager | None = None,
+    arrange_manager: ArrangeManager | None = None,
     enable_turn_checkpoints: bool = False,
 ) -> OperationCatalog:
     spec = spec or CoreAgentSpec()
@@ -141,6 +145,16 @@ def create_core_agent_operations(
     ]
     resolved_command_member_roots = [Path(item) for item in (command_member_roots or [])]
 
+    def completion_gate(goal_id: str, llm_client: Any, model_id: str) -> GoalCompletionGate | None:
+        clean_goal_id = str(goal_id or "").strip()
+        if goal_manager is None:
+            return None
+        return GoalCompletionGate(
+            goal_manager,
+            clean_goal_id,
+            ModelGoalEvaluator(llm_client, model_id=model_id),
+        )
+
     def checkpoint_coordinator(work_root: Path | str) -> CoreCheckpointCoordinator | None:
         if db_session_factory is None or not enable_turn_checkpoints:
             return None
@@ -172,10 +186,38 @@ def create_core_agent_operations(
         effective_turn_id = requested_turn_id or (
             f"{thread_id}:turn:{requested_run_id}" if requested_run_id else ""
         )
+        goal_id = str(
+            request.payload.get("goal_id")
+            or request.payload.get("goalId")
+            or dict(request.payload.get("metadata") or {}).get("goal_id")
+            or ""
+        ).strip()
         if not thread_id:
             return OperationResult(name=request.name, status="error", payload={"error": "thread_id is required"})
         if not message:
             return OperationResult(name=request.name, status="error", payload={"error": "message is required"})
+        if goal_id:
+            if goal_manager is None:
+                return OperationResult(
+                    name=request.name,
+                    status="error",
+                    payload={"error": "Goal storage is not configured"},
+                )
+            goal = await goal_manager.get(goal_id)
+            if goal is None:
+                return OperationResult(
+                    name=request.name,
+                    status="error",
+                    payload={"error": f"Goal not found: {goal_id}"},
+                )
+            if goal.thread_id != thread_id:
+                return OperationResult(
+                    name=request.name,
+                    status="error",
+                    payload={"error": "Goal belongs to a different thread"},
+                )
+            if goal.status in {"pending", "blocked"}:
+                await goal_manager.update(goal.id, status="active", status_reason="")
         runtime_work_root = _work_root_from_request(paths, request)
         if _is_llm_client(model_provider):
             from lamtools_core.kernel.loop import CoreLoopKernel
@@ -227,6 +269,9 @@ def create_core_agent_operations(
                 sub_agent_session_prefix=thread_id,
                 sub_agent_event_sink=sink,
                 checkpoint_coordinator=turn_checkpoint_coordinator,
+                operation_catalog=catalog,
+                enable_goal_tool=goal_manager is not None,
+                enable_arrange_tool=arrange_manager is not None,
             )
             try:
                 kernel = CoreLoopKernel(
@@ -256,6 +301,11 @@ def create_core_agent_operations(
                     ),
                     hook_engine=plugin_assembly["hook_engine"],
                     checkpoint_coordinator=turn_checkpoint_coordinator,
+                    completion_gate=completion_gate(
+                        goal_id,
+                        runtime_model_provider,
+                        runtime_options.model_id,
+                    ),
                 )
                 kernel_result = await kernel.run(
                     RuntimeTurnInput(
@@ -274,6 +324,7 @@ def create_core_agent_operations(
                             **request.metadata,
                             **dict(request.payload.get("metadata") or {}),
                             "session_id": thread_id,
+                            "goal_id": goal_id,
                             "data_dir": str(paths.data_dir),
                             "work_root": str(runtime_work_root),
                             "model_id": runtime_options.model_id,
@@ -557,6 +608,9 @@ def create_core_agent_operations(
                         sub_agent_state_store=runtime_state_store,
                         sub_agent_session_prefix=thread_id,
                         sub_agent_event_sink=sink,
+                        operation_catalog=catalog,
+                        enable_goal_tool=goal_manager is not None,
+                        enable_arrange_tool=arrange_manager is not None,
                     )
                     sub_agent_runner = toolbox.sub_agent_runner
                     if sub_agent_runner is None or not hasattr(sub_agent_runner, "resume_approved"):
@@ -670,6 +724,11 @@ def create_core_agent_operations(
                             compact_limit_tokens=runtime_options.compact_limit_tokens,
                         ),
                         hook_engine=plugin_assembly["hook_engine"],
+                        completion_gate=completion_gate(
+                            str(state.metadata.get("goal_id") or ""),
+                            runtime_model_provider,
+                            runtime_options.model_id,
+                        ),
                     )
                     kernel_result = await kernel.run(
                         RuntimeTurnInput(
@@ -684,6 +743,7 @@ def create_core_agent_operations(
                                 **request.metadata,
                                 **dict(request.payload.get("metadata") or {}),
                                 "session_id": thread_id,
+                                "goal_id": str(state.metadata.get("goal_id") or ""),
                                 "data_dir": str(paths.data_dir),
                                 "work_root": str(runtime_work_root),
                                 "model_id": runtime_options.model_id,
@@ -783,6 +843,9 @@ def create_core_agent_operations(
                         max_tokens=runtime_options.max_tokens,
                         sub_agent_state_store=runtime_state_store,
                         sub_agent_session_prefix=thread_id,
+                        operation_catalog=catalog,
+                        enable_goal_tool=goal_manager is not None,
+                        enable_arrange_tool=arrange_manager is not None,
                     )
                     call = ToolCall(
                         id=str(pending_call.get("id") or ""),
@@ -893,6 +956,9 @@ def create_core_agent_operations(
                     sub_agent_state_store=runtime_state_store,
                     sub_agent_session_prefix=thread_id,
                     sub_agent_event_sink=sink,
+                    operation_catalog=catalog,
+                    enable_goal_tool=goal_manager is not None,
+                    enable_arrange_tool=arrange_manager is not None,
                 )
                 kernel = CoreLoopKernel(
                     kit=CoreBaseAgentKit(
@@ -919,6 +985,11 @@ def create_core_agent_operations(
                         compact_limit_tokens=runtime_options.compact_limit_tokens,
                     ),
                     hook_engine=plugin_assembly["hook_engine"],
+                    completion_gate=completion_gate(
+                        str(lifecycle.state.metadata.get("goal_id") or ""),
+                        runtime_model_provider,
+                        runtime_options.model_id,
+                    ),
                 )
                 kernel_result = await kernel.run(
                     RuntimeTurnInput(
@@ -931,6 +1002,7 @@ def create_core_agent_operations(
                             **request.metadata,
                             **dict(request.payload.get("metadata") or {}),
                             "session_id": thread_id,
+                            "goal_id": str(lifecycle.state.metadata.get("goal_id") or ""),
                             "data_dir": str(paths.data_dir),
                             "work_root": str(runtime_work_root),
                             "model_id": runtime_options.model_id,
@@ -1053,6 +1125,44 @@ def create_core_agent_operations(
                 payload={"error": f"Command is not executable as an action: {command}"},
             )
         handlers = dict(command_action_handlers or {})
+        async def goal_action(thread_id: str, arguments: str = "", **_: Any) -> dict[str, Any]:
+            if goal_manager is None:
+                raise RuntimeError("Goal storage is not configured")
+            text = str(arguments or "").strip()
+            active = next(
+                (
+                    item for item in reversed(await goal_manager.list(thread_id=thread_id))
+                    if item.status in {"pending", "active", "blocked"}
+                ),
+                None,
+            )
+            if not text:
+                return {"goal": active.to_dict() if active is not None else None}
+            if text.lower() == "cancel":
+                if active is None:
+                    return {"goal": None}
+                cancelled = await goal_manager.update(
+                    active.id,
+                    status="cancelled",
+                    status_reason="cancelled by user command",
+                )
+                return {"goal": cancelled.to_dict()}
+            goal = await goal_manager.create(thread_id=thread_id, objective=text)
+            started = await catalog.execute(
+                "turn.start",
+                {
+                    "thread_id": thread_id,
+                    "message": text,
+                    "goal_id": goal.id,
+                    **({"work_root": request.payload.get("work_root")} if request.payload.get("work_root") else {}),
+                },
+                metadata={"source": "composer_command"},
+            )
+            if started.status == "error":
+                raise RuntimeError(str(started.payload.get("error") or "Goal task failed to start"))
+            return {"goal": goal.to_dict(), "turn": started.payload}
+
+        handlers.setdefault("goal", goal_action)
         handlers.setdefault(
             "compact",
             lambda thread_id, on_event=None: compact_runtime_history(
@@ -1069,6 +1179,7 @@ def create_core_agent_operations(
                 command=command,
                 thread_id=thread_id,
                 work_root=str(request.payload.get("work_root") or request.payload.get("workRoot") or paths.work_root),
+                arguments=str(request.payload.get("arguments") or request.payload.get("args") or ""),
                 handlers=handlers,
                 on_event=on_event if callable(on_event) else None,
             )
@@ -1370,6 +1481,9 @@ async def _build_core_runtime_toolbox(
     sub_agent_session_prefix: str = "core-sub-agent",
     sub_agent_event_sink: EventSink | None = None,
     checkpoint_coordinator: Any | None = None,
+    operation_catalog: OperationCatalog | None = None,
+    enable_goal_tool: bool = False,
+    enable_arrange_tool: bool = False,
 ):
     from lamtools_core.mcp import MCPToolRegistry
     from lamtools_core.tool.sub_agent_runner import KernelSubAgentRunner
@@ -1404,6 +1518,11 @@ async def _build_core_runtime_toolbox(
             parent_event_sink=sub_agent_event_sink,
             checkpoint_coordinator=checkpoint_coordinator,
         )
+    async def execute_operation(name: str, payload: dict[str, Any], metadata: dict[str, Any]) -> Any:
+        if operation_catalog is None:
+            raise RuntimeError("Operation catalog is not configured")
+        return await operation_catalog.execute(name, payload, metadata=metadata)
+
     toolbox = build_core_toolbox(
         work_root=work_root,
         approval_policy=normalized_policy,
@@ -1411,6 +1530,9 @@ async def _build_core_runtime_toolbox(
         mcp_caller=registry if mcp_tool_specs else None,
         mcp_tool_specs=mcp_tool_specs,
         sub_agent_runner=sub_agent_runner,
+        operation_executor=execute_operation if operation_catalog is not None else None,
+        enable_goal_tool=enable_goal_tool,
+        enable_arrange_tool=enable_arrange_tool,
     )
     return toolbox, registry
 

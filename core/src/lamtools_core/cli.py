@@ -570,6 +570,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--model-id", default="", help="Model record id, provider model id, or display name")
     run.add_argument("--thread-id", default="", help="Stable Core thread/session id")
     run.add_argument("--work-root", "--project", dest="work_root", default="")
+    run.add_argument("--config-db", default="", help="Path to LLM config DB for resolving model context window")
     run.add_argument("--thinking-budget", type=int, default=10000)
     run.add_argument("--no-thinking", action="store_true")
     run.add_argument("--shallow-thinking", action="store_true", help="Require a prompt-based shallow thinking block")
@@ -587,6 +588,26 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--interactive-decisions", action="store_true")
     run.add_argument("--approval-decision", choices=("approve_once", "deny", "other_guidance"))
     run.set_defaults(func=cmd_run)
+
+    run_local = sub.add_parser("run-local", help="Run a Core Agent task directly without a server")
+    run_local.add_argument("message", nargs="+")
+    run_local.add_argument("--model-id", default="", help="Model record id, provider model id, or display name")
+    run_local.add_argument("--thread-id", default="", help="Stable Core thread/session id")
+    run_local.add_argument("--work-root", "--project", dest="work_root", default="")
+    run_local.add_argument("--run-dir", default="", help="Output directory for run artifacts (summary.json etc.)")
+    run_local.add_argument("--core-db", default="", help="Path to Core agent database")
+    run_local.add_argument("--config-db", default="", help="Path to LLM config database")
+    run_local.add_argument("--thinking-budget", type=int, default=10000)
+    run_local.add_argument("--no-thinking", action="store_true")
+    run_local.add_argument("--shallow-thinking", action="store_true", help="Require a prompt-based shallow thinking block")
+    run_local.add_argument("--auto-approve", action="store_true", help="Run approval-gated tools without prompting")
+    run_local.add_argument("--max-tokens", type=int, default=None)
+    run_local.add_argument("--compact-trigger-tokens", type=int, default=None, help="Session-only automatic compaction trigger")
+    run_local.add_argument("--compact-limit-tokens", type=int, default=None, help="Session-only post-compaction upper limit")
+    run_local.add_argument("--temperature", type=float, default=0.2)
+    run_local.add_argument("--raw", action="store_true")
+    run_local.add_argument("--verbose", action="store_true")
+    run_local.set_defaults(func=cmd_run_local)
 
     watch = sub.add_parser("watch", help="Watch a Core app-server thread")
     watch.add_argument("thread_id")
@@ -995,6 +1016,7 @@ async def cmd_run(args: argparse.Namespace) -> int:
     ):
         raise ValueError("--compact-limit-tokens cannot exceed --compact-trigger-tokens")
     thread_id = _resolve_thread_id(args.thread_id)
+    context_window_tokens = _resolve_cli_context_window(args)
     if not args.raw:
         print(f"[session] {thread_id}", flush=True)
     async def start(client: CoreAppServerClient) -> dict[str, Any]:
@@ -1010,10 +1032,66 @@ async def cmd_run(args: argparse.Namespace) -> int:
             temperature=float(args.temperature),
             compact_trigger_tokens=compact_trigger_tokens,
             compact_limit_tokens=compact_limit_tokens,
+            context_window_tokens=context_window_tokens,
             approval_policy="auto_approve" if bool(args.auto_approve) else "require",
         )
 
+
     return await _watch_live_cli(args, thread_id=thread_id, on_connected=start)
+
+
+async def cmd_run_local(args: argparse.Namespace) -> int:
+    compact_trigger_tokens = getattr(args, "compact_trigger_tokens", None)
+    compact_limit_tokens = getattr(args, "compact_limit_tokens", None)
+    if compact_trigger_tokens is not None and compact_trigger_tokens <= 0:
+        raise ValueError("--compact-trigger-tokens must be positive")
+    if compact_limit_tokens is not None and compact_limit_tokens <= 0:
+        raise ValueError("--compact-limit-tokens must be positive")
+    if (
+        compact_trigger_tokens is not None
+        and compact_limit_tokens is not None
+        and compact_limit_tokens > compact_trigger_tokens
+    ):
+        raise ValueError("--compact-limit-tokens cannot exceed --compact-trigger-tokens")
+    options = CoreCliRunOptions(
+        message=" ".join(args.message),
+        model_id=args.model_id or "",
+        work_root=args.work_root or _default_work_root(),
+        run_dir=args.run_dir or None,
+        core_db=args.core_db or None,
+        thread_id=args.thread_id or _resolve_thread_id(""),
+        config_db=args.config_db or None,
+        adapter_dirs=(),
+        plugin_roots=(),
+        thinking_enabled=not bool(args.no_thinking),
+        thinking_budget=args.thinking_budget,
+        shallow_thinking_enabled=bool(args.shallow_thinking),
+        max_tokens=int(args.max_tokens) if args.max_tokens is not None else None,
+        compact_trigger_tokens=compact_trigger_tokens,
+        compact_limit_tokens=compact_limit_tokens,
+        temperature=float(args.temperature),
+        approval_policy="auto_approve" if bool(args.auto_approve) else "require",
+        raw=bool(args.raw),
+        verbose=bool(args.verbose),
+    )
+    summary = await run_core_cli_task(options)
+    if args.raw:
+        print(json.dumps(summary, ensure_ascii=False), flush=True)
+    else:
+        ok = summary.get("ok", False)
+        status = "done" if ok else "failed"
+        model_info = summary.get("model", {})
+        model_name = model_info.get("display_name") or model_info.get("model_id", "?")
+        steps = summary.get("result", {}).get("steps_count", "?")
+        print(f"[{status}] model={model_name} steps={steps}")
+        artifacts = summary.get("artifacts", {})
+        if artifacts.get("summary_json"):
+            print(f"  summary: {artifacts['summary_json']}")
+        if artifacts.get("events_redacted_json"):
+            print(f"  events:  {artifacts['events_redacted_json']}")
+        if artifacts.get("run_dir"):
+            print(f"  run_dir: {artifacts['run_dir']}")
+    return 0
 
 
 async def cmd_watch(args: argparse.Namespace) -> int:
@@ -1381,6 +1459,19 @@ def _resolve_core_db(value: Path | str | None) -> Path:
     if env:
         return Path(env)
     return _repo_root() / "data" / "core.db"
+
+
+def _resolve_cli_context_window(args: argparse.Namespace) -> int | None:
+    config_db_str = getattr(args, "config_db", "") or os.environ.get("LAMTOOLS_LLM_CONFIG_DB") or ""
+    model_id = getattr(args, "model_id", "") or ""
+    if not config_db_str and not model_id:
+        return None
+    try:
+        config_db = _resolve_config_db(config_db_str if config_db_str else None)
+        config = load_llm_config(config_db, model_ref=model_id)
+        return config.context_window if config.context_window > 0 else None
+    except Exception:
+        return None
 
 
 def _resolve_thread_id(value: str | None) -> str:
