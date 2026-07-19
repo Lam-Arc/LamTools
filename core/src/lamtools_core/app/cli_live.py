@@ -72,6 +72,8 @@ class CliLiveFormatter:
         self._counted_usage_event_ids: set[str] = set()
         self._seen_running_compactions: set[str] = set()
         self._streamed_message_text: dict[str, str] = {}
+        self._streamed_tool_text: str = ""
+        self._last_tool_line: str = ""
         self._inline_delta_active = False
 
     def line(self, tag: str, text: str = "") -> str:
@@ -131,7 +133,36 @@ class CliLiveFormatter:
                 self._inline_delta_active = True
                 return [OutputChunk(display_event.content, end="")]
             return self._close_inline_delta([OutputChunk(line) for line in self._format_display_event(display_event)])
+        event_kind = str(run_item.get("kind") or "") if run_item and isinstance(run_item, dict) else ""
+        if event_kind == "tool_call":
+            tool_text = self._format_tool_stream_line(run_item)
+            if tool_text and tool_text == self._last_tool_line:
+                return []
+            if tool_text and self._streamed_tool_text:
+                lines = [self._streamed_tool_text]
+                self._streamed_tool_text = tool_text
+                self._last_tool_line = tool_text
+                self._inline_delta_active = True
+                return [OutputChunk("", end="\r"), OutputChunk(self._streamed_tool_text, end="")]
+            self._streamed_tool_text = tool_text
+            self._last_tool_line = tool_text
+        else:
+            self._streamed_tool_text = ""
+            self._last_tool_line = ""
         return self._close_inline_delta([OutputChunk(line) for line in self.format(event)])
+
+    def _format_tool_stream_line(self, run_item: dict[str, Any]) -> str:
+        payload = run_item_payload(run_item)
+        tool_name = str(payload.get("tool_name") or payload.get("kind") or "?")
+        args = payload.get("arguments") or payload.get("tool_args")
+        path = action_path(args) if isinstance(args, dict) else ""
+        preview = payload.get("input_preview")
+        if isinstance(preview, dict) and preview.get("content"):
+            p = str(preview["content"]).replace("\n", " ").strip()
+            detail = f"{preview.get('chars', '?')} chars: {p}"
+        else:
+            detail = str(payload.get("message") or payload.get("summary") or "").strip()
+        return " ".join(bit for bit in (tool_tag(tool_name), tool_name, path, shorten(detail, 120)) if bit)
 
     def _close_inline_delta(self, chunks: list[OutputChunk]) -> list[OutputChunk]:
         if not chunks or not self._inline_delta_active:

@@ -41,6 +41,7 @@ class RetryPolicy:
 
     backoff_strategy: BackoffStrategy = BackoffStrategy.FIXED
     initial_delay_seconds: float = 0.5
+    max_delay_seconds: float = 120.0
     jitter: bool = True
     staged_delay_seconds: tuple[float, ...] = ()
 
