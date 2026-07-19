@@ -42,6 +42,7 @@ from lamtools_core.llm.retry import (
 )
 from lamtools_core.plugins import HookEvent
 from lamtools_core.runtime import (
+    CompletionGate,
     RuntimeCheckpointStore,
     RuntimeState,
     RuntimeStateStore,
@@ -213,7 +214,7 @@ class CoreLoopKernel:
     tracer: Tracer = field(default_factory=NoopTracer)
     hook_engine: Any | None = None
     checkpoint_coordinator: Any | None = None
-    completion_gate: Any | None = None
+    completion_gate: CompletionGate | None = None
     _cancel_event: asyncio.Event = field(default_factory=asyncio.Event, init=False, repr=False)
     _base_event_sink: EventSink = field(init=False, repr=False)
 
@@ -293,6 +294,13 @@ class CoreLoopKernel:
         state.run_id = str(turn_input.run_id or "").strip() or _new_run_id()
         turn_id = str(turn_input.turn_id or "").strip() or f"{state.session_id}:turn:{state.run_id}"
         state.metadata["turn_id"] = turn_id
+        if "goal_id" in turn_input.metadata:
+            goal_id = str(turn_input.metadata.get("goal_id") or "").strip()
+            state.metadata.pop("goal_completion", None)
+            if goal_id:
+                state.metadata["goal_id"] = goal_id
+            else:
+                state.metadata.pop("goal_id", None)
         state.metadata.pop("no_progress", None)
         state.metadata.pop("failure_diagnosis", None)
         prior_waiting = state.metadata.get("pending_waiting_request")
@@ -954,6 +962,39 @@ class CoreLoopKernel:
                     if await self._consume_guidance(state, turn_input, history, index, finalize=True):
                         decision = "continue"
                         step.metadata["guidance_force_continue"] = True
+
+                if decision == "done" and self.completion_gate is not None:
+                    should_verify = getattr(self.completion_gate, "should_verify", None)
+                    if callable(should_verify) and not should_verify(state):
+                        state.metadata.pop("goal_completion", None)
+                        step.metadata.pop("goal_completion", None)
+                    else:
+                        completion = await self.completion_gate.verify(state, {
+                            "turn_input": turn_input,
+                            "turn": turn,
+                            "tool_results": tool_results,
+                            "verification": verification,
+                            "step": step,
+                            "history": list(history),
+                        })
+                        state.metadata["goal_completion"] = completion.to_dict()
+                        step.metadata["goal_completion"] = completion.to_dict()
+                        if not completion.passed:
+                            if completion.blocked:
+                                decision = "wait"
+                            else:
+                                repair_instruction = completion.repair_instruction.strip()
+                                if not repair_instruction:
+                                    repair_instruction = (
+                                        "The active goal is not complete. Address the remaining gap, "
+                                        "then provide a new final response."
+                                    )
+                                history.append(ChatMessage(
+                                    role="system",
+                                    content=f"[GOAL_INCOMPLETE] {repair_instruction}",
+                                ))
+                                await self._save_checkpoint(state, history)
+                                decision = "continue"
 
                 step.decision = decision
                 final_decision = decision
