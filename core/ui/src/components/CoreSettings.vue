@@ -14,10 +14,9 @@
 
         <div v-if="noticeText" class="settings-notice">{{ noticeText }}</div>
 
-        <article v-if="providerEditor" class="setting-card">
+        <section v-if="providerEditor" class="settings-editor" aria-label="供应商配置">
           <div class="subhead">
             <h3>{{ providerEditor.mode === 'create' ? '新增供应商' : '编辑供应商' }}</h3>
-            <button type="button" class="small-btn" @click="providerEditor = null">取消</button>
           </div>
           <form :data-provider-form="providerEditor.mode" class="config-form" @submit.prevent="submitProvider">
             <label v-if="providerEditor.mode === 'create'" class="field">官方模板
@@ -26,16 +25,14 @@
                 <option v-for="preset in providerPresets" :key="preset.id" :value="preset.id">{{ preset.label }}</option>
               </select>
             </label>
-            <label class="field">名称
+            <div v-if="providerEditor.preset_id" class="preset-summary field-wide">
+              <strong>{{ providerEditor.name }}</strong>
+              <span>{{ providerEditor.base_url }} · 将自动添加模板内模型</span>
+            </div>
+            <label v-if="providerEditor.mode === 'update' || !providerEditor.preset_id" class="field">名称
               <input v-model.trim="providerEditor.name" data-provider-name required />
             </label>
-            <label class="field">接口类型
-              <select v-model="providerEditor.api_type" data-provider-api-type>
-                <option value="openai">OpenAI compatible</option>
-                <option value="anthropic">Anthropic</option>
-              </select>
-            </label>
-            <label class="field">服务地址
+            <label v-if="providerEditor.mode === 'update' || !providerEditor.preset_id" class="field">服务地址
               <input v-model.trim="providerEditor.base_url" data-provider-base-url type="url" required />
             </label>
             <label class="field">API Key
@@ -48,17 +45,30 @@
                 :placeholder="providerEditor.mode === 'update' ? '留空以保留现有密钥' : ''"
               />
             </label>
-            <label class="field field-wide">高级适配 JSON
-              <textarea v-model="providerEditor.extra_json" rows="5" spellcheck="false" placeholder="{}"></textarea>
-            </label>
-            <button class="small-btn" type="submit">{{ providerEditor.mode === 'create' ? '添加供应商' : '保存供应商' }}</button>
+            <details class="settings-advanced field-wide">
+              <summary>高级设置</summary>
+              <div class="advanced-fields">
+                <label class="field">接口类型
+                  <select v-model="providerEditor.api_type" data-provider-api-type>
+                    <option value="openai">OpenAI compatible</option>
+                    <option value="anthropic">Anthropic</option>
+                  </select>
+                </label>
+                <label class="field field-wide">高级适配 JSON
+                  <textarea v-model="providerEditor.extra_json" rows="5" spellcheck="false" placeholder="{}"></textarea>
+                </label>
+              </div>
+            </details>
+            <div class="editor-actions field-wide">
+              <button type="button" class="small-btn quiet" @click="providerEditor = null">取消</button>
+              <button class="small-btn primary" type="submit">{{ providerEditor.mode === 'create' ? '添加供应商' : '保存供应商' }}</button>
+            </div>
           </form>
-        </article>
+        </section>
 
-        <article v-if="modelEditor" class="setting-card">
+        <section v-if="modelEditor" class="settings-editor" aria-label="模型配置">
           <div class="subhead">
             <h3>{{ modelEditor.mode === 'create' ? '新增模型' : '编辑模型' }}</h3>
-            <button type="button" class="small-btn" @click="modelEditor = null">取消</button>
           </div>
           <form :data-model-form="modelEditor.mode" class="config-form" @submit.prevent="submitModel">
             <label class="field">供应商
@@ -70,77 +80,70 @@
               <input v-model.trim="modelEditor.model_id" data-model-id required />
             </label>
             <label class="field">显示名称
-              <input v-model.trim="modelEditor.display_name" data-model-display-name />
+              <input v-model.trim="modelEditor.display_name" data-model-display-name placeholder="选填" />
             </label>
-            <label class="field">上下文窗口
-              <input v-model.number="modelEditor.context_window" type="number" min="1" />
-            </label>
-            <label class="field">最大输出
-              <input v-model.number="modelEditor.max_output_tokens" type="number" min="1" />
-            </label>
-            <label class="field">推理预算
-              <input v-model.number="modelEditor.thinking_budget" type="number" min="0" />
-            </label>
-            <label class="field">Temperature
-              <input v-model.number="modelEditor.temperature" type="number" min="0" max="2" step="0.1" />
-            </label>
-            <label class="field checkbox-field">
-              <input v-model="modelEditor.thinking_supported" type="checkbox" /> 支持推理
-            </label>
-            <label class="field field-wide">高级适配 JSON
-              <textarea v-model="modelEditor.extra_json" rows="5" spellcheck="false" placeholder="{}"></textarea>
-            </label>
-            <button class="small-btn" type="submit">{{ modelEditor.mode === 'create' ? '添加模型' : '保存模型' }}</button>
+            <details class="settings-advanced field-wide">
+              <summary>高级参数</summary>
+              <div class="advanced-fields model-advanced-fields">
+                <label class="field">上下文窗口
+                  <input v-model.number="modelEditor.context_window" type="number" min="1" />
+                </label>
+                <label class="field">最大输出
+                  <input v-model.number="modelEditor.max_output_tokens" type="number" min="1" />
+                </label>
+                <label class="field">推理预算
+                  <input v-model.number="modelEditor.thinking_budget" type="number" min="0" />
+                </label>
+                <label class="field">Temperature
+                  <input v-model.number="modelEditor.temperature" type="number" min="0" max="2" step="0.1" />
+                </label>
+                <label class="field checkbox-field">
+                  <input v-model="modelEditor.thinking_supported" type="checkbox" /> 支持推理
+                </label>
+                <label class="field field-wide">高级适配 JSON
+                  <textarea v-model="modelEditor.extra_json" rows="5" spellcheck="false" placeholder="{}"></textarea>
+                </label>
+              </div>
+            </details>
+            <div class="editor-actions field-wide">
+              <button type="button" class="small-btn quiet" @click="modelEditor = null">取消</button>
+              <button class="small-btn primary" type="submit">{{ modelEditor.mode === 'create' ? '添加模型' : '保存模型' }}</button>
+            </div>
           </form>
-        </article>
+        </section>
 
         <div class="provider-actions">
-          <button v-if="allowEnvironmentImport" class="small-btn" type="button" @click="$emit('import-environment')">从当前环境导入</button>
-          <button class="small-btn" type="button" data-provider-create @click="startProviderCreate">新增供应商</button>
-          <button class="small-btn" type="button" data-model-create @click="startModelCreate">新增模型</button>
+          <button class="small-btn primary" type="button" data-provider-create @click="startProviderCreate">新增供应商</button>
+          <button class="small-btn quiet" type="button" data-model-create @click="startModelCreate">新增模型</button>
+          <button v-if="allowEnvironmentImport" class="small-btn quiet" type="button" @click="$emit('import-environment')">从当前环境导入</button>
         </div>
 
-        <div v-if="providers.length" class="settings-panel">
-          <article v-for="provider in providers" :key="provider.id" class="provider-card">
+        <div v-if="providers.length" class="provider-list">
+          <section v-for="provider in providers" :key="provider.id" class="provider-group">
             <header class="provider-head">
-              <div>
+              <div class="provider-identity">
                 <strong>{{ provider.name || provider.id }}</strong>
-                <span>{{ provider.has_api_key ? '已配置密钥' : '未配置密钥' }}</span>
+                <span>{{ provider.has_api_key ? '已配置密钥' : '未配置密钥' }} · {{ provider.base_url || provider.id }}</span>
               </div>
-              <div class="provider-actions">
-                <button class="small-btn" type="button" :data-provider-edit="provider.id" @click="startProviderUpdate(provider)">编辑</button>
-                <button class="small-btn" type="button" :data-provider-delete="provider.id" @click="$emit('delete-provider', provider.id)">删除</button>
+              <div class="row-actions">
+                <button class="text-btn" type="button" :data-provider-edit="provider.id" @click="startProviderUpdate(provider)">编辑</button>
+                <button class="text-btn danger" type="button" :data-provider-delete="provider.id" @click="$emit('delete-provider', provider.id)">删除</button>
               </div>
             </header>
-            <div class="provider-body">
-              <div class="api-fields">
-                <div class="api-field">
-                  <span>供应商标识</span>
-                  <code>{{ provider.id }}</code>
-                </div>
-                <div class="api-field">
-                  <span>服务地址</span>
-                  <code>{{ provider.base_url || '未提供' }}</code>
-                </div>
-              </div>
-              <div class="model-list">
+            <div class="model-list">
                 <div v-for="model in modelsForProvider(provider.id)" :key="model.id" class="model-row">
-                  <div>
+                  <div class="model-identity">
                     <strong>{{ model.display_name || model.model_id || model.id }}</strong>
-                    <div class="model-params">
-                      <span class="param">{{ model.model_id || model.id }}</span>
-                      <span v-if="model.thinking_supported" class="param">支持推理</span>
-                    </div>
+                    <span>{{ model.model_id || model.id }}{{ model.thinking_supported ? ' · 支持推理' : '' }}</span>
                   </div>
                   <div class="row-actions">
-                    <button class="small-btn" type="button" :data-model-edit="model.id" @click="startModelUpdate(model)">编辑</button>
-                    <button class="small-btn" type="button" :data-model-delete="model.id" @click="$emit('delete-model', model.id)">删除</button>
+                    <button class="text-btn" type="button" :data-model-edit="model.id" @click="startModelUpdate(model)">编辑</button>
+                    <button class="text-btn danger" type="button" :data-model-delete="model.id" @click="$emit('delete-model', model.id)">删除</button>
                   </div>
                 </div>
-                <p v-if="!modelsForProvider(provider.id).length" class="muted">当前没有可用模型。</p>
-              </div>
+                <p v-if="!modelsForProvider(provider.id).length" class="model-empty">暂无模型</p>
             </div>
-          </article>
+          </section>
         </div>
         <div v-else class="setting-card">
           <h3>暂无配置</h3>
@@ -363,12 +366,14 @@ const settingsThemeStyle = computed(() => ({
     props.theme.mainOpacity,
   ),
   '--settings-main-text': props.theme.mainText,
-  '--settings-card-background': gradientFromStops(
-    props.theme.composerAngle,
-    props.theme.composerStops,
-    props.theme.composerOpacity,
+  '--settings-card-background': 'color-mix(in srgb, var(--settings-main-text) 4%, transparent)',
+  '--settings-card-text': props.theme.mainText,
+  '--settings-control-background': gradientFromStops(
+    props.theme.controlAngle,
+    props.theme.controlStops,
+    props.theme.controlOpacity,
   ),
-  '--settings-card-text': props.theme.composerText,
+  '--settings-control-text': props.theme.controlText,
 }))
 
 const themePreviewStyle = computed(() => ({
@@ -531,6 +536,68 @@ const presets = THEME_PRESETS
 </script>
 
 <style scoped>
+.settings-editor {
+  padding: 18px 0;
+  border-top: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 14%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 14%, transparent);
+}
+
+.settings-editor h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.preset-summary {
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--settings-main-text, #fff) 6%, transparent);
+}
+
+.preset-summary strong,
+.preset-summary span {
+  display: block;
+}
+
+.preset-summary strong { font-size: 13px; }
+.preset-summary span { margin-top: 3px; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.settings-advanced {
+  margin-top: 2px;
+  padding-top: 10px;
+  border-top: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 9%, transparent);
+}
+
+.settings-advanced summary {
+  width: max-content;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.settings-advanced[open] summary { margin-bottom: 12px; color: inherit; }
+
+.advanced-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.model-advanced-fields { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+.editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.small-btn.primary {
+  background: var(--settings-control-background, #343331);
+  color: var(--settings-control-text, var(--text));
+}
+
+.small-btn.quiet { background: transparent; }
+
 .density-options {
   display: inline-flex;
   gap: 4px;
@@ -554,7 +621,7 @@ const presets = THEME_PRESETS
 
 .config-form {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
   align-items: end;
 }
@@ -604,6 +671,15 @@ const presets = THEME_PRESETS
 }
 
 @media (max-width: 720px) {
+  .config-form {
+    grid-template-columns: 1fr;
+  }
+
+  .advanced-fields,
+  .model-advanced-fields {
+    grid-template-columns: 1fr;
+  }
+
   .permission-row {
     align-items: stretch;
     flex-direction: column;

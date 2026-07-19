@@ -4,7 +4,6 @@
     <aside class="settings-sidebar">
       <div class="settings-brand">
         <strong>{{ title }}</strong>
-        <button class="icon-btn" title="返回" @click="$emit('close')">×</button>
       </div>
 
       <nav class="settings-nav">
@@ -12,6 +11,7 @@
           v-for="section in sections"
           :key="section.id"
           :class="{ active: activeSection === section.id }"
+          :aria-current="activeSection === section.id ? 'page' : undefined"
           :data-settings-section="section.id"
           @click="activeSection = section.id; $emit('section-change', section.id)"
         >
@@ -20,10 +20,12 @@
         </button>
       </nav>
 
-      <button class="settings-entry" @click="$emit('close')">
-        <span>←</span>
-        <span>返回主界面</span>
-      </button>
+      <footer class="settings-sidebar-footer">
+        <button class="settings-entry" @click="$emit('close')">
+          <span aria-hidden="true">←</span>
+          <span>返回主界面</span>
+        </button>
+      </footer>
     </aside>
 
     <!-- Main content -->
@@ -71,21 +73,3 @@ const emit = defineEmits<{
 
 const activeSection = ref(props.sections[0]?.id || '')
 </script>
-
-<style scoped>
-.icon-btn {
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--muted);
-  display: grid;
-  place-items: center;
-  font-size: 18px;
-  font-weight: 700;
-}
-.icon-btn:hover {
-  background: rgba(255, 255, 255, 0.14);
-  color: var(--text);
-}
-</style>
