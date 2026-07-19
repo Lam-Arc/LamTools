@@ -560,8 +560,13 @@ def app_server_tool_detail(payload: dict[str, Any], fallback: str = "") -> str:
     args = payload.get("arguments")
     if not isinstance(args, dict):
         args = payload.get("tool_args")
-    text = str(payload.get("message") or payload.get("summary") or payload.get("error") or fallback or "").strip()
-    return " ".join(bit for bit in (app_server_tool_name(payload), action_path(args) if isinstance(args, dict) else "", shorten(text, 180)) if bit)
+    raw = payload.get("message") or payload.get("summary") or payload.get("error") or fallback or ""
+    preview = payload.get("input_preview")
+    if isinstance(preview, dict) and preview.get("content"):
+        p = str(preview["content"]).replace("\n", " ").strip()
+        raw = f"{preview.get('chars', '?')} chars: {p}"
+    text = str(raw).strip()
+    return " ".join(bit for bit in (app_server_tool_name(payload), action_path(args) if isinstance(args, dict) else "", shorten(text, 200)) if bit)
 
 
 def tool_tag(tool_name: str) -> str:
