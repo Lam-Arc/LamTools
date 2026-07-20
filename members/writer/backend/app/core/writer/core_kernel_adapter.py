@@ -104,6 +104,7 @@ from lamtools_core.sub_agent import SubAgentEventForwardingSink
 from lamtools_core.tool import ToolCall, ToolResult
 from lamtools_core.tool.command import run_subprocess as _run_subprocess
 from lamtools_core.tool.command import validate_command_paths as _validate_command_paths
+from lamtools_core.tool.sub_agent_runner import KernelSubAgentRunner
 from lamtools_core.tool.verification import verify_written_tool_results
 from lamtools_core.tool.workspace import is_within_path as _is_within_path
 from lamtools_core.tool.workspace import validate_workspace_path as _validate_path
@@ -1079,11 +1080,16 @@ async def run_core_kernel(
         )
 
     # Resolve effective tool_executor
+    sub_agent_runner = KernelSubAgentRunner(
+        llm_client=core_llm,
+        work_root=work_root,
+    )
     effective_executor = _resolve_tool_executor(
         tool_executor,
         work_root,
         live_event_callback,
         operation_executor,
+        sub_agent_runner=sub_agent_runner,
     )
 
     # Build state store before Kit so sub sessions can reuse the same storage.

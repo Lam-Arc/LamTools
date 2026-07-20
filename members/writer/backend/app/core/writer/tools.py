@@ -34,6 +34,7 @@ class ReadWriteToolExecutor(ReadOnlyToolExecutor):
         max_write_length: int = _DEFAULT_MAX_WRITE_LENGTH,
         command_timeout: int = _DEFAULT_COMMAND_TIMEOUT,
         core_event_callback: Callable[[CoreEvent], Awaitable[None]] | None = None,
+        sub_agent_runner: Any | None = None,
     ) -> None:
         super().__init__(
             work_root,
@@ -53,6 +54,7 @@ class ReadWriteToolExecutor(ReadOnlyToolExecutor):
             command_timeout=self._command_timeout,
             skill_registry=self._skills,
             core_event_callback=self._core_event_callback,
+            sub_agent_runner=sub_agent_runner,
         )
 
     def as_dict(self) -> dict[str, Callable[[ToolCall], Awaitable[ToolResult]]]:
@@ -147,11 +149,12 @@ def resolve_tool_executor(
     work_root: str | None,
     core_event_callback: Callable[[CoreEvent], Awaitable[None]] | None = None,
     operation_executor: Any | None = None,
+    sub_agent_runner: Any | None = None,
 ) -> dict[str, Callable[..., Awaitable[ToolResult]]] | Callable[[ToolCall], Awaitable[ToolResult]] | None:
     if tool_executor is None:
         if work_root is None:
             return None
-        return ReadWriteToolExecutor(work_root, core_event_callback=core_event_callback).as_dict()
+        return ReadWriteToolExecutor(work_root, core_event_callback=core_event_callback, sub_agent_runner=sub_agent_runner).as_dict()
 
     if callable(tool_executor) and not isinstance(tool_executor, dict):
         return tool_executor
@@ -159,7 +162,7 @@ def resolve_tool_executor(
     if work_root is None:
         return tool_executor
 
-    defaults = ReadWriteToolExecutor(work_root, core_event_callback=core_event_callback).as_dict()
+    defaults = ReadWriteToolExecutor(work_root, core_event_callback=core_event_callback, sub_agent_runner=sub_agent_runner).as_dict()
     return {**defaults, **tool_executor}
 
 
