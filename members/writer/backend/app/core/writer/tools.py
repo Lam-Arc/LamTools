@@ -4,7 +4,6 @@ from pathlib import Path
 from typing import Awaitable, Callable
 
 from lamtools_core.event import CoreEvent
-from lamtools_core.agent import SUB_AGENT_TOOL_NAME
 from lamtools_core.tool import ToolCall, ToolResult
 from lamtools_core.tool.default_toolbox import DEFAULT_TOOL_ORDER, CoreToolbox, build_core_toolbox
 
@@ -18,7 +17,7 @@ _DEFAULT_MAX_SEARCH_RESULTS = 50
 _DEFAULT_MAX_WRITE_LENGTH = 100_000
 _CORE_EXECUTOR_TOOL_NAMES = tuple(
     name for name in DEFAULT_TOOL_ORDER
-    if name not in {"mcp_tool", SUB_AGENT_TOOL_NAME}
+    if name not in {"mcp_tool"}
 )
 
 
