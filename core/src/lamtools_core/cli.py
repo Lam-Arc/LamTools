@@ -569,6 +569,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("message", nargs="+")
     run.add_argument("--model-id", default="", help="Model record id, provider model id, or display name")
     run.add_argument("--thread-id", default="", help="Stable Core thread/session id")
+    run.add_argument("--goal-id", default="", help="Durable Goal ID to verify on completion")
     run.add_argument("--work-root", "--project", dest="work_root", default="")
     run.add_argument("--config-db", default="", help="Path to LLM config DB for resolving model context window")
     run.add_argument("--thinking-budget", type=int, default=10000)
@@ -626,6 +627,7 @@ def build_parser() -> argparse.ArgumentParser:
     start = sub.add_parser("start", help="Start a live Core Agent turn")
     start.add_argument("thread_id")
     start.add_argument("message", nargs="+")
+    start.add_argument("--goal-id", default="", help="Durable Goal ID")
     _add_live_connection_arguments(start)
     start.add_argument("--work-root", "--project", dest="work_root", default="")
     start.add_argument("--model-id", default="")
@@ -790,6 +792,34 @@ def build_parser() -> argparse.ArgumentParser:
     project_agents_set.add_argument("source_file")
     project_agents_set.add_argument("--core-db", default="", help="Core-owned SQLite runtime database")
     project_agents_set.set_defaults(func=cmd_project_agents_set)
+
+    goal = sub.add_parser("goal", help="Manage durable goals")
+    goal_sub = goal.add_subparsers(dest="goal_command")
+    goal_create = goal_sub.add_parser("new", help="Create a new goal")
+    goal_create.add_argument("thread_id", help="Thread ID")
+    goal_create.add_argument("objective", nargs="+", help="Goal objective text")
+    goal_create.add_argument("--base-url", default=os.environ.get("LAMTOOLS_CORE_API_URL", "http://127.0.0.1:5172"))
+    goal_create.add_argument("--ws-path", default=os.environ.get("LAMTOOLS_CORE_WS_PATH", "/api/core/app-server"))
+    goal_create.add_argument("--token", default=os.environ.get("LAMTOOLS_CORE_TOKEN", ""))
+    goal_create.set_defaults(func=cmd_goal_create, raw=False)
+    goal_list = goal_sub.add_parser("ls", help="List goals")
+    goal_list.add_argument("--base-url", default=os.environ.get("LAMTOOLS_CORE_API_URL", "http://127.0.0.1:5172"))
+    goal_list.add_argument("--ws-path", default=os.environ.get("LAMTOOLS_CORE_WS_PATH", "/api/core/app-server"))
+    goal_list.add_argument("--token", default=os.environ.get("LAMTOOLS_CORE_TOKEN", ""))
+    goal_list.set_defaults(func=cmd_goal_list, thread_id="", raw=False)
+    goal_show = goal_sub.add_parser("describe", help="Show a goal")
+    goal_show.add_argument("goal_id", help="Goal ID")
+    goal_show.add_argument("--base-url", default=os.environ.get("LAMTOOLS_CORE_API_URL", "http://127.0.0.1:5172"))
+    goal_show.add_argument("--ws-path", default=os.environ.get("LAMTOOLS_CORE_WS_PATH", "/api/core/app-server"))
+    goal_show.add_argument("--token", default=os.environ.get("LAMTOOLS_CORE_TOKEN", ""))
+    goal_show.set_defaults(func=cmd_goal_show, thread_id="", raw=False)
+    goal_update = goal_sub.add_parser("set", help="Set goal status")
+    goal_update.add_argument("goal_id", help="Goal ID")
+    goal_update.add_argument("--status", default="", help="New status: active/completed/failed/cancelled")
+    goal_update.add_argument("--base-url", default=os.environ.get("LAMTOOLS_CORE_API_URL", "http://127.0.0.1:5172"))
+    goal_update.add_argument("--ws-path", default=os.environ.get("LAMTOOLS_CORE_WS_PATH", "/api/core/app-server"))
+    goal_update.add_argument("--token", default=os.environ.get("LAMTOOLS_CORE_TOKEN", ""))
+    goal_update.set_defaults(func=cmd_goal_update, thread_id="", raw=False)
     return parser
 
 
@@ -847,6 +877,7 @@ async def cmd_start(args: argparse.Namespace) -> int:
             input_items=[{"type": "text", "text": " ".join(args.message)}],
             work_root=args.work_root,
             model_id=args.model_id or None,
+            goal_id=args.goal_id or None,
             thinking_enabled=args.thinking == "enabled",
             thinking_budget=args.thinking_budget,
             shallow_thinking_enabled=bool(args.shallow),
@@ -1025,6 +1056,7 @@ async def cmd_run(args: argparse.Namespace) -> int:
             input_items=[{"type": "text", "text": " ".join(args.message)}],
             work_root=str(args.work_root or _default_work_root()),
             model_id=args.model_id or None,
+            goal_id=args.goal_id or None,
             thinking_enabled=not bool(args.no_thinking),
             thinking_budget=args.thinking_budget,
             shallow_thinking_enabled=bool(args.shallow_thinking),
@@ -1301,6 +1333,59 @@ async def cmd_project_agents_set(args: argparse.Namespace) -> int:
         _print_project_result({"agents_md": agents_md})
     finally:
         await db.close()
+    return 0
+
+
+async def cmd_goal_create(args: argparse.Namespace) -> int:
+    async def op(client: CoreAppServerClient) -> dict[str, Any]:
+        return await client.request("goal.create", {"thread_id": args.thread_id, "objective": " ".join(args.objective)})
+    result = await _invoke_live(args, op)
+    goal = result.get("goal", {}) if isinstance(result, dict) else {}
+    gid = str(goal.get("id") or goal.get("goal_id") or "")
+    print(f"[goal] {gid}")
+    if not args.raw:
+        obj = str(goal.get("objective") or " ".join(args.objective))
+        print(f"  objective: {obj}")
+    return 0
+
+
+async def cmd_goal_list(args: argparse.Namespace) -> int:
+    async def op(client: CoreAppServerClient) -> dict[str, Any]:
+        return await client.request("goal.list", {})
+    result = await _invoke_live(args, op)
+    goals = result.get("goals", []) if isinstance(result, dict) else []
+    if isinstance(goals, list):
+        for g in goals:
+            if isinstance(g, dict):
+                sid = str(g.get("id") or g.get("goal_id") or "")[:16]
+                obj = str(g.get("objective") or "")[:80]
+                st = str(g.get("status") or "?")
+                print(f"{sid}  {st:12s} {obj}")
+    return 0
+
+
+async def cmd_goal_show(args: argparse.Namespace) -> int:
+    async def op(client: CoreAppServerClient) -> dict[str, Any]:
+        return await client.request("goal.get", {"goal_id": args.goal_id})
+    result = await _invoke_live(args, op)
+    goal = result.get("goal", {}) if isinstance(result, dict) else {}
+    if isinstance(goal, dict):
+        for k in ("id", "objective", "status", "created_at"):
+            v = goal.get(k)
+            if v is not None:
+                print(f"  {k}: {v}")
+    return 0
+
+
+async def cmd_goal_update(args: argparse.Namespace) -> int:
+    if not args.status:
+        print("error: --status is required (active/completed/failed/cancelled)", file=sys.stderr)
+        return 1
+    async def op(client: CoreAppServerClient) -> dict[str, Any]:
+        return await client.request("goal.update", {"goal_id": args.goal_id, "status": args.status})
+    result = await _invoke_live(args, op)
+    goal = result.get("goal", {}) if isinstance(result, dict) else {}
+    print(f"[goal] {str(goal.get('id') or args.goal_id)} status={args.status}")
     return 0
 
 

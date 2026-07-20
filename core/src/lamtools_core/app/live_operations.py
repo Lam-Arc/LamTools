@@ -577,6 +577,7 @@ async def handle_turn_start_operation(
             and params.get("context_window_tokens") > 0
             else None
         ),
+        "goal_id": str(params.get("goal_id") or params.get("goalId") or "").strip(),
         "max_tokens": (
             params.get("max_tokens")
             if isinstance(params.get("max_tokens"), int)

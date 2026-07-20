@@ -91,6 +91,7 @@ class CoreAppServerClient:
         compact_limit_tokens: int | None = None,
         approval_policy: str | None = None,
         client_message_id: str | None = None,
+        goal_id: str | None = None,
     ) -> dict[str, Any]:
         import uuid
 
@@ -101,6 +102,8 @@ class CoreAppServerClient:
             "work_root": work_root,
             "mode": mode,
         }
+        if goal_id:
+            params["goal_id"] = goal_id
         if model_id:
             params["model_id"] = model_id
         if thinking_enabled is not None:
