@@ -143,9 +143,11 @@ class CliLiveFormatter:
                 args = payload.get("arguments") or payload.get("tool_args")
                 path = action_path(args) if isinstance(args, dict) else ""
                 if not self._streamed_tool_label:
+                    if not path:
+                        self._streamed_tool_content = content
+                        return []
                     label_parts = [self.label(tool_tag(tool_name), tool_name, time.monotonic())]
-                    if path:
-                        label_parts.append(path)
+                    label_parts.append(path)
                     self._streamed_tool_label = " ".join(label_parts) + " "
                     self._streamed_tool_content = ""
                 prev = self._streamed_tool_content
