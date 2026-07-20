@@ -433,6 +433,14 @@ class CoreLoopKernel:
                         raw=response.raw,
                     )
                 # 5.5 Parse model output
+                if not (response.content or "").strip() and not response.tool_calls:
+                    import sys, json
+                    print(json.dumps({
+                        "raw_content": repr(response.content),
+                        "raw_thinking": repr(getattr(response, 'thinking', None))[:200],
+                        "finish_reason": response.finish_reason,
+                        "usage": str(getattr(response, 'usage', None)),
+                    }, ensure_ascii=False), file=sys.stderr, flush=True)
                 turn = await self.kit.parse_model_output(state, response)
                 invalid_tool_argument_errors: dict[str, str] = {}
                 for call_index, response_call in enumerate(response.tool_calls or []):

@@ -314,14 +314,12 @@ class CoreBaseAgentKit:
     def _resolve_empty_stop(self, state: RuntimeState) -> tuple[LoopDecision, str]:
         attempts = int((state.metadata or {}).get("empty_stop_count", 0))
         has_delivery = self._detect_delivery_progress(state)
-        if attempts <= 0:
+        if attempts <= 2:
             if state.metadata:
-                state.metadata["empty_stop_count"] = 1
+                state.metadata["empty_stop_count"] = attempts + 1
                 state.metadata["empty_stop_retry_instruction"] = self._default_empty_retry_instruction(has_delivery)
             return "continue", ""
-        if state.metadata:
-            state.metadata["empty_stop_count"] = attempts + 1
-        return "failed", "Model stopped twice with no content and no tools."
+        return "failed", "Model stopped with no content after 3 retries."
 
     def _tool_enabled(self, name: str) -> bool:
         tools = self._runtime_controls.get("tools", {})
