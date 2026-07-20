@@ -72,8 +72,8 @@ class CliLiveFormatter:
         self._counted_usage_event_ids: set[str] = set()
         self._seen_running_compactions: set[str] = set()
         self._streamed_message_text: dict[str, str] = {}
-        self._streamed_tool_text: str = ""
-        self._last_tool_line: str = ""
+        self._streamed_tool_content: str = ""
+        self._streamed_tool_label: str = ""
         self._inline_delta_active = False
 
     def line(self, tag: str, text: str = "") -> str:
@@ -135,37 +135,37 @@ class CliLiveFormatter:
             return self._close_inline_delta([OutputChunk(line) for line in self._format_display_event(display_event)])
         event_kind = str(run_item.get("kind") or "") if run_item and isinstance(run_item, dict) else ""
         if event_kind == "tool_call":
-            tool_text = self._format_tool_stream_line(run_item)
-            if tool_text and tool_text == self._last_tool_line:
-                return []
-            if tool_text and self._streamed_tool_text:
-                lines = [self._streamed_tool_text]
-                self._streamed_tool_text = tool_text
-                self._last_tool_line = tool_text
-                if "edit" not in str(run_item_payload(run_item).get("tool_name", "")) and "edit" not in self._streamed_tool_text:
+            payload = run_item_payload(run_item)
+            preview = payload.get("input_preview")
+            content = str(preview.get("content", "")) if isinstance(preview, dict) else ""
+            if content:
+                tool_name = str(payload.get("tool_name") or payload.get("kind") or "?")
+                args = payload.get("arguments") or payload.get("tool_args")
+                path = action_path(args) if isinstance(args, dict) else ""
+                if not self._streamed_tool_label:
+                    label_parts = [self.label(tool_tag(tool_name), tool_name, time.monotonic())]
+                    if path:
+                        label_parts.append(path)
+                    self._streamed_tool_label = " ".join(label_parts) + " "
+                    self._streamed_tool_content = ""
+                prev = self._streamed_tool_content
+                if content.startswith(prev) and len(content) > len(prev):
+                    delta = content[len(prev):]
+                    self._streamed_tool_content = content
                     self._inline_delta_active = True
-                    return [OutputChunk("", end="\r"), OutputChunk(self._streamed_tool_text, end="")]
-            self._streamed_tool_text = tool_text
-            self._last_tool_line = tool_text
+                    suffix = OutputChunk(delta, end="")
+                    if not prev:
+                        suffix = OutputChunk(self._streamed_tool_label + delta, end="")
+                    return [suffix]
+                elif not prev:
+                    self._streamed_tool_content = content
+                    self._inline_delta_active = True
+                    return [OutputChunk(self._streamed_tool_label + content, end="")]
+            return []
         else:
-            self._streamed_tool_text = ""
-            self._last_tool_line = ""
+            self._streamed_tool_label = ""
+            self._streamed_tool_content = ""
         return self._close_inline_delta([OutputChunk(line) for line in self.format(event)])
-
-    def _format_tool_stream_line(self, run_item: dict[str, Any]) -> str:
-        payload = run_item_payload(run_item)
-        tool_name = str(payload.get("tool_name") or payload.get("kind") or "?")
-        args = payload.get("arguments") or payload.get("tool_args")
-        path = action_path(args) if isinstance(args, dict) else ""
-        preview = payload.get("input_preview")
-        if isinstance(preview, dict) and preview.get("content") and "edit" not in tool_name:
-            p = str(preview["content"]).replace("\n", " ").strip()
-            detail = f"{preview.get('chars', '?')} chars: {p}"
-        elif isinstance(preview, dict) and preview.get("chars"):
-            detail = f"+{preview['chars']} chars"
-        else:
-            detail = str(payload.get("message") or payload.get("summary") or "").strip()
-        return " ".join(bit for bit in (tool_tag(tool_name), tool_name, path, shorten(detail, 120)) if bit)
 
     def _close_inline_delta(self, chunks: list[OutputChunk]) -> list[OutputChunk]:
         if not chunks or not self._inline_delta_active:
@@ -212,6 +212,8 @@ class CliLiveFormatter:
             text = run_item_text(payload, input_text=self.input_text)
             return [self.line("think", shorten(text, 220))] if self.verbose and text else []
         if kind == "tool_call":
+            if isinstance(payload.get("input_preview"), dict) and payload["input_preview"].get("content"):
+                return []
             tool_name = app_server_tool_name(payload)
             self.last_status = f"tool:{tool_name}:running"
             return [self.line(tool_tag(tool_name), app_server_tool_detail(payload) or tool_name)]
