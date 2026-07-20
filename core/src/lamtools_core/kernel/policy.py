@@ -58,7 +58,7 @@ class LoopPolicy:
     # step summary to state.metadata["kernel_steps"] after each iteration.
     # This enables post-run audit and debugging. Full resume/fork requires
     # Kit to also persist history (Kernel does not auto-persist history).
-    persist_steps: bool = False
+    persist_steps: bool = True
     metadata: dict[str, Any] = field(default_factory=dict)
 
 

@@ -129,8 +129,6 @@ class KernelSubAgentRunner:
             checkpoint_coordinator=self.checkpoint_coordinator,
             policy=LoopPolicy(
                 model_timeout_seconds=360,
-                model_retries=3,
-                persist_steps=True,
                 context_window_tokens=self.context_window_tokens,
                 compact_trigger_ratio=self.compact_trigger_ratio,
             ),

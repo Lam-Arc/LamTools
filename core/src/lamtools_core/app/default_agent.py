@@ -113,6 +113,7 @@ def create_core_agent_operations(
     goal_manager: GoalManager | None = None,
     arrange_manager: ArrangeManager | None = None,
     enable_turn_checkpoints: bool = False,
+    attachment_service: Any | None = None,
 ) -> OperationCatalog:
     spec = spec or CoreAgentSpec()
     runtime_state_store = runtime_state_store or InMemoryRuntimeStateStore()
@@ -296,10 +297,8 @@ def create_core_agent_operations(
                     state_store=runtime_state_store,
                     event_sink=sink,
                     policy=LoopPolicy(
-                        model_timeout_seconds=360,
-                        model_retries=3,
-                        persist_steps=True,
-                        context_window_tokens=runtime_options.context_window_tokens,
+                            model_timeout_seconds=360,
+                            context_window_tokens=runtime_options.context_window_tokens,
                         compact_trigger_tokens=runtime_options.compact_trigger_tokens,
                         compact_limit_tokens=runtime_options.compact_limit_tokens,
                     ),
@@ -985,10 +984,8 @@ def create_core_agent_operations(
                     state_store=runtime_state_store,
                     event_sink=sink,
                     policy=LoopPolicy(
-                        model_timeout_seconds=360,
-                        model_retries=3,
-                        persist_steps=True,
-                        context_window_tokens=runtime_options.context_window_tokens,
+                            model_timeout_seconds=360,
+                            context_window_tokens=runtime_options.context_window_tokens,
                         compact_trigger_tokens=runtime_options.compact_trigger_tokens,
                         compact_limit_tokens=runtime_options.compact_limit_tokens,
                     ),

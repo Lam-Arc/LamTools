@@ -433,6 +433,19 @@ class CoreLoopKernel:
                         raw=response.raw,
                     )
                 # 5.5 Parse model output
+                from lamtools_core.tokens import estimate_text_tokens as _est  # DEBUG
+                _usage = getattr(response, 'usage', None)
+                _reasoning = getattr(_usage, 'completion_tokens_details', None)
+                _rt = getattr(_reasoning, 'reasoning_tokens', 0) if _reasoning else 0
+                _ot = getattr(_usage, 'completion_tokens', 0) if _usage else 0
+                _it = getattr(_usage, 'prompt_tokens', 0) if _usage else 0
+                import sys, json
+                print(json.dumps({
+                    "content_len": len(response.content or ""),
+                    "finish_reason": response.finish_reason,
+                    "tool_calls": len(response.tool_calls or []),
+                    "usage": {"completion": _ot, "prompt": _it, "reasoning": _rt},
+                }), file=sys.stderr, flush=True)
                 turn = await self.kit.parse_model_output(state, response)
                 invalid_tool_argument_errors: dict[str, str] = {}
                 for call_index, response_call in enumerate(response.tool_calls or []):
