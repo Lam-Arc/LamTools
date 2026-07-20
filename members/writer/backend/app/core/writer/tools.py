@@ -146,6 +146,7 @@ def resolve_tool_executor(
     | None,
     work_root: str | None,
     core_event_callback: Callable[[CoreEvent], Awaitable[None]] | None = None,
+    operation_executor: Any | None = None,
 ) -> dict[str, Callable[..., Awaitable[ToolResult]]] | Callable[[ToolCall], Awaitable[ToolResult]] | None:
     if tool_executor is None:
         if work_root is None:
