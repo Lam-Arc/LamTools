@@ -63,6 +63,8 @@ def prune_turn_scoped_evidence(
     *,
     tool_names: set[str] | None = None,
 ) -> None:
+    """Remove current-turn-only evidence, including records written by older runtimes."""
+
     metadata = _state_metadata(state)
     provenance = metadata.get("evidence_provenance")
     if not isinstance(provenance, dict):
