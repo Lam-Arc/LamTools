@@ -14,7 +14,9 @@ import {
   AttachmentTray,
   CommandPalette,
   CoreAgentsEditor,
+  CoreArrangeManager,
   CoreExecutionControls,
+  CoreGoalManager,
   CoreResourceStats,
   CoreSubAgentDialog,
   CoreSubAgentPanel,
@@ -26,11 +28,15 @@ import {
   buildCoreComposerHighlightSegments,
   coreInputToText,
   isCoreGuidableTurnStatus,
+  listArrangeJobs,
+  listGoals,
   normalizeCoreSessionStatus,
   selectCoreQueuedInputs,
   selectCoreSubAgentRuns,
   selectLatestActiveTurnId,
+  updateArrangeJob,
   updateCoreSessionListStatus,
+  updateGoal,
   useCoreAutoFollowScroll,
   useCoreApprovalController,
   useCoreExecutionControlsState,
@@ -1121,6 +1127,8 @@ async function handleProjectContextMenu(projectGroupId: string) {
 }
 
 const showAgentsMd = ref(false)
+const showGoalManager = ref(false)
+const showArrangeManager = ref(false)
 const agentsMdProjectId = ref('')
 const agentsContent = ref('')
 const agentsRequestToken = ref(0)
@@ -1964,9 +1972,36 @@ onMounted(async () => {
         <template #empty>
           <div style="text-align:center;padding:18px 12px;color:var(--muted);font-size:13px">
             暂无项目。<br />点击左上角 + 新建项目。
-          </div>
-        </template>
+</div>
+      <div v-if="showGoalManager" class="modal-overlay" @click.self="showGoalManager = false">
+        <div class="modal-card wide">
+          <CoreGoalManager
+            :list-goals="listGoals"
+            :update-goal="updateGoal"
+            @back="showGoalManager = false"
+          />
+        </div>
+      </div>
+      <div v-if="showArrangeManager" class="modal-overlay" @click.self="showArrangeManager = false">
+        <div class="modal-card wide">
+          <CoreArrangeManager
+            :list-jobs="listArrangeJobs"
+            :update-job="updateArrangeJob"
+            @back="showArrangeManager = false"
+          />
+        </div>
+      </div>
+    </template>
       </SessionSidebar>
+    </template>
+
+    <template #sidebar-footer>
+      <button class="sidebar-action" type="button" @click="showGoalManager = true">
+        <span aria-hidden="true">&#x25CE;</span><span>目标</span>
+      </button>
+      <button class="sidebar-action" type="button" @click="showArrangeManager = true">
+        <span aria-hidden="true">&#x25F7;</span><span>长期安排</span>
+      </button>
     </template>
 
     <!-- Main header -->
@@ -2327,5 +2362,23 @@ onMounted(async () => {
   background: color-mix(in srgb, currentColor 6%, transparent);
   font-size: 11px;
   white-space: pre-wrap;
+}
+
+.sidebar-action {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--theme-backdrop-text);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.sidebar-action:hover {
+  background: color-mix(in srgb, var(--theme-backdrop-text) 7%, transparent);
 }
 </style>
