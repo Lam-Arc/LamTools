@@ -52,7 +52,7 @@
       @keydown.enter.prevent="openLeftDrawer"
       @keydown.space.prevent="openLeftDrawer"
     ></div>
-    <button
+    <div
       v-if="showRightPanel"
       ref="rightToggle"
       class="edge edge-right"
@@ -272,6 +272,7 @@ const {
   isNarrowViewport,
   shellClass,
   shellStyle,
+  rightDrawerModal,
   toggleLeftPinned,
   toggleRightPinned,
   onLeftDrawerLeave,

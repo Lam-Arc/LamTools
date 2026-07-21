@@ -45,6 +45,8 @@ export function useShellLayout(options: ShellLayoutOptions) {
     [`density-${density.value}`]: true,
   }))
 
+  const rightDrawerModal = computed(() => rightOpen.value && isNarrowViewport.value)
+
   // --- shell CSS variables ---
   const shellStyle = computed(() => {
     const cssVars = themeToCSSVars(theme.value)
@@ -228,6 +230,7 @@ export function useShellLayout(options: ShellLayoutOptions) {
     // computed
     shellClass,
     shellStyle,
+    rightDrawerModal,
     // actions
     toggleLeftPinned,
     toggleRightPinned,

@@ -44,6 +44,16 @@ export type {
   ThemeCSSVars,
 } from './types';
 
+export type { CoreGoal, CoreArrangeJob } from './durable/types';
+
+export {
+  listGoals,
+  updateGoal,
+  createGoal,
+  listArrangeJobs,
+  updateArrangeJob,
+} from './durable/api';
+
 export { WORKSPACE_SLOT_NAMES } from './types';
 
 export {
@@ -82,6 +92,11 @@ export type {
   CoreSessionOperationRequest,
 } from './components/CoreSessionRollback.vue';
 export { default as CoreAgentsEditor } from './components/CoreAgentsEditor.vue';
+export { default as CoreArrangeManager } from './components/CoreArrangeManager.vue';
+export { default as CoreArrangeForm } from './components/CoreArrangeForm.vue';
+export type { CoreArrangeDraft } from './components/CoreArrangeForm.vue';
+export { default as CoreGoalStrip } from './components/CoreGoalStrip.vue';
+export { default as CoreGoalManager } from './components/CoreGoalManager.vue';
 export type {
   CoreSettingsDensity,
   CoreSettingsModel,

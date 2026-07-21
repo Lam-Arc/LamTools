@@ -902,6 +902,15 @@ class CoreLoopKernel:
                                 "the final outcome; do not repeat the diagnosis body."
                             ),
                         ))
+                    elif not turn.tool_calls:
+                        history.append(ChatMessage(
+                            role="system",
+                            content=(
+                                "[EXECUTE_FIX] The diagnosis is complete. Execute the selected fix "
+                                "using tools. Do not stop at diagnosis — apply the chosen solution, "
+                                "then verify with concrete evidence."
+                            ),
+                        ))
                     await self._save_checkpoint(state, history)
                 elif failure_diagnosis_incomplete:
                     history.append(ChatMessage(
@@ -952,6 +961,9 @@ class CoreLoopKernel:
                 elif failure_diagnosis_incomplete:
                     decision = "continue"
                     step.metadata["failure_diagnosis_retry_required"] = True
+                elif failure_diagnosis_completed and not turn.tool_calls:
+                    decision = "continue"
+                    step.metadata["failure_diagnosis_fix_required"] = True
                 elif turn.tool_calls and decision == "done":
                     # OpenAI/Claude-style loop contract: tool use is not a
                     # terminal answer. A run may only complete after the model
@@ -1383,12 +1395,12 @@ class CoreLoopKernel:
         stream = stream_with_retry(
             self.llm_client,
             request,
-            max_attempts=1,
-            # Streaming is bounded per idle gap by _next_stream_event().  A
-            # wall-clock timeout here would cancel long, healthy responses
-            # that keep producing tokens (for example a large write_file
-            # argument).  The non-streaming fallback remains bounded by
-            # model_timeout_seconds.
+            max_attempts=self.policy.model_retries,
+            # Streaming is bounded per idle gap by _next_stream_event().
+            # Retries only apply to stream-setup failures — once the stream
+            # starts emitting tokens, mid-stream errors cannot be replayed
+            # and are NOT retried.  The non-streaming fallback remains
+            # bounded by model_timeout_seconds.
             timeout_seconds=None,
             retry_policy=self.retry_policy,
             on_retry=lambda retry: self._emit_model_retry_from_event(

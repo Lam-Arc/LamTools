@@ -29,6 +29,12 @@
     @update-model="updateModel"
     @delete-model="deleteModel"
   />
+  <CoreArrangeManager
+    v-else-if="showArrange"
+    :list-jobs="listArrangeJobs"
+    :update-job="updateArrangeJob"
+    @back="showArrange = false"
+  />
   <WorkspaceShell
     v-else
     product-name="LamTools Core"
@@ -78,29 +84,12 @@
         @project-context-menu="openProjectActions"
         @delete-session="deleteSession"
       />
-      <section v-if="selectedProject" class="core-project-management" :aria-busy="projectActionLoading">
-        <form @submit.prevent="renameProject">
-          <label>
-            <span>项目名称</span>
-            <input v-model="projectNameDraft" class="field-input" :disabled="projectActionLoading" />
-          </label>
-          <div class="core-project-management-actions">
-            <button type="button" class="btn-cancel" :disabled="projectActionLoading || agentsLoading" @click="openAgentsEditor">AGENTS.md</button>
-            <button type="submit" class="btn-primary-sm" :disabled="projectActionLoading || !projectNameDraft.trim()">
-              {{ projectActionLoading ? '保存中' : '重命名' }}
-            </button>
-          </div>
-        </form>
-        <p v-if="projectActionError" class="core-project-management-error" role="alert">{{ projectActionError }}</p>
-      </section>
-      <CoreAgentsEditor
-        v-if="agentsProjectId"
-        :content="agentsContent"
-        :loading="agentsLoading"
-        :error="agentsError"
-        @save="saveAgents"
-        @close="closeAgentsEditor"
-      />
+    </template>
+
+    <template #sidebar-footer>
+      <button class="sidebar-action" type="button" @click="showArrange = true">
+        <span aria-hidden="true">&#x25F7;</span><span>长期安排</span>
+      </button>
     </template>
 
     <template #main-header>
@@ -127,6 +116,44 @@
           @decision-select="approvalController.handleDecision"
         />
       </section>
+    </template>
+
+    <template #modals>
+      <div v-if="selectedProject" class="core-project-overlay" @click.self="selectedProjectId = null">
+        <div class="core-project-card">
+          <header>
+            <div>
+              <h2>{{ selectedProject.name }}</h2>
+              <span class="work-root">{{ selectedProject.workRoot }}</span>
+            </div>
+            <button class="close-btn" @click="selectedProjectId = null" aria-label="关闭">&times;</button>
+          </header>
+          <form @submit.prevent="renameProject" class="core-project-rename">
+            <label>
+              <span>项目名称</span>
+              <input v-model="projectNameDraft" class="field-input" :disabled="projectActionLoading" />
+            </label>
+            <div class="core-project-management-actions">
+              <button type="button" class="btn-cancel" :disabled="projectActionLoading || agentsLoading" @click="openAgentsEditor">AGENTS.md</button>
+              <button type="submit" class="btn-primary-sm" :disabled="projectActionLoading || !projectNameDraft.trim()">
+                {{ projectActionLoading ? '保存中' : '重命名' }}
+              </button>
+            </div>
+          </form>
+          <p v-if="projectActionError" class="core-project-management-error" role="alert">{{ projectActionError }}</p>
+        </div>
+      </div>
+      <div v-if="agentsProjectId" class="core-project-overlay" @click.self="closeAgentsEditor">
+        <div class="core-agents-card">
+          <CoreAgentsEditor
+            :content="agentsContent"
+            :loading="agentsLoading"
+            :error="agentsError"
+            @save="saveAgents"
+            @close="closeAgentsEditor"
+          />
+        </div>
+      </div>
     </template>
 
     <template #composer-textarea>
@@ -216,6 +243,7 @@
         :session-id="activeSessionId"
         :request="requestConfigOperation"
         :active-turn="rollbackActiveTurn"
+        :turn-prompts="turnPrompts"
         @restored="refreshAfterRollback"
         @undone="refreshAfterRollback"
       />
@@ -259,6 +287,7 @@ import {
 } from '../appServer'
 import { buildCoreComposerHighlightSegments } from '../composer/inputItems'
 import { buildCurrentTurnChecklistGroups } from '../runtime/checklist'
+import { listArrangeJobs, updateArrangeJob } from '../durable/api'
 import {
   useCoreApprovalController,
   useCoreAutoFollowScroll,
@@ -277,6 +306,7 @@ import CoreExecutionControls from '../components/CoreExecutionControls.vue'
 import CoreResourceStats from '../components/CoreResourceStats.vue'
 import CoreQueuedInputTray from '../components/CoreQueuedInputTray.vue'
 import CoreAgentsEditor from '../components/CoreAgentsEditor.vue'
+import CoreArrangeManager from '../components/CoreArrangeManager.vue'
 import CoreProjectCreate from '../components/CoreProjectCreate.vue'
 import CoreSessionTitleEditor from '../components/CoreSessionTitleEditor.vue'
 import CoreSessionRollback from '../components/CoreSessionRollback.vue'
@@ -346,6 +376,7 @@ const agentsLoading = ref(false)
 const agentsError = ref('')
 const settingsStorageKey = 'lamtools.core.ui'
 const showSettings = ref(false)
+const showArrange = ref(false)
 const uiPreferences = useCoreUiPreferences(settingsStorageKey)
 const { density, contentWidth, theme } = uiPreferences
 const availableModels = ref<RawModel[]>([])
@@ -489,6 +520,19 @@ const projectionController = useCoreWorkbenchProjectionController({
 })
 const { messages, processExpandedIds, toggleProcess } = projectionController
 const stepGroups = computed(() => buildCurrentTurnChecklistGroups(messages.value))
+const turnPrompts = computed(() => {
+  const map: Record<string, string> = {}
+  const state = snapshot.value
+  if (!state?.turns) return map
+  for (const [turnId, turn] of Object.entries(state.turns)) {
+    const input = (turn as Record<string, unknown>).input
+    if (Array.isArray(input)) {
+      const textItem = input.find((item: Record<string, unknown>) => item.type === 'text')
+      if (textItem && typeof textItem.text === 'string') map[turnId] = textItem.text
+    }
+  }
+  return map
+})
 
 const approvalController = useCoreApprovalController({
   messages,
@@ -1043,6 +1087,84 @@ onUnmounted(() => {
   position: relative;
 }
 
+.core-project-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(2px);
+}
+
+.core-project-card {
+  width: min(480px, calc(100vw - 48px));
+  padding: 24px;
+  border: 1px solid color-mix(in srgb, var(--theme-main-text) 12%, transparent);
+  border-radius: 16px;
+  background: var(--bg);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.35);
+}
+
+.core-project-card header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.core-project-card header h2 {
+  margin: 0 0 4px;
+  font-size: 18px;
+  font-weight: 650;
+}
+
+.core-project-card header .work-root {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.close-btn {
+  border: 0;
+  padding: 4px 10px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 22px;
+  cursor: pointer;
+  line-height: 1;
+}
+.close-btn:hover { color: var(--text); }
+
+.core-agents-card {
+  width: min(520px, calc(100vw - 48px));
+  padding: 20px;
+  border: 1px solid color-mix(in srgb, var(--theme-main-text) 12%, transparent);
+  border-radius: 16px;
+  background: var(--bg);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.35);
+}
+
+.core-agents-card .core-agents-editor {
+  margin-top: 0;
+  padding: 0;
+  border-top: none;
+}
+
+.core-agents-card .core-agents-editor textarea {
+  min-height: 220px;
+}
+
+.core-project-rename {
+  display: grid;
+  gap: 6px;
+}
+
+.core-project-rename label {
+  color: color-mix(in srgb, var(--theme-main-text) 72%, transparent);
+  font-size: 12px;
+}
+
 .core-project-management {
   margin-top: 10px;
   padding: 10px;
@@ -1072,6 +1194,24 @@ onUnmounted(() => {
   color: var(--red);
   font-size: 12px;
   line-height: 1.35;
+}
+
+.sidebar-action {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--theme-backdrop-text);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.sidebar-action:hover {
+  background: color-mix(in srgb, var(--theme-backdrop-text) 7%, transparent);
 }
 
 </style>

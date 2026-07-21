@@ -86,7 +86,6 @@ export function cancelGoal(goalId: string): Promise<CoreGoal> {
     if (!result.goal) throw new Error('goal.update response is missing goal')
     return result.goal
   })
-}
 
 export function listArrangeJobs(): Promise<CoreArrangeJob[]> {
   return appServerOperation<{ jobs?: CoreArrangeJob[] }>('arrange.list')
