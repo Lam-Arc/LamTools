@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { useRouter } from 'vue-router'
-import { CoreArrangeManager } from '@lamtools/ui'
-import { listArrangeJobs, updateArrangeJob } from '../api/core'
+import { CoreArrangeManager, listArrangeJobs, updateArrangeJob } from '@lamtools/ui'
 
 const router = useRouter()
 </script>

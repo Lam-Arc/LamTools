@@ -1,9 +1,5 @@
 import {
-  appServerUrl,
-  CoreAppServerClient,
   createSessionMapper,
-  type CoreArrangeJob,
-  type CoreGoal,
   type CoreSessionRawLike,
 } from '@lamtools/ui'
 
@@ -57,50 +53,6 @@ export async function createCoreSession(title = '新的研究') {
     metadata: {},
   }))
   return sessionMapper.toCore(raw)
-}
-
-async function appServerOperation<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
-  const client = new CoreAppServerClient({
-    url: appServerUrl(API_BASE, { path: '/api/core/app-server' }),
-    clientInfo: { name: 'sage_frontend', title: 'Sage', version: '0.1.0' },
-  })
-  try {
-    await client.connect()
-    return await client.request(method, params) as T
-  } finally {
-    client.close()
-  }
-}
-
-export function listGoals(threadId: string): Promise<CoreGoal[]> {
-  return appServerOperation<{ goals?: CoreGoal[] }>('goal.list', { thread_id: threadId })
-    .then(result => result.goals ?? [])
-}
-
-export function cancelGoal(goalId: string): Promise<CoreGoal> {
-  return appServerOperation<{ goal?: CoreGoal }>('goal.update', {
-    goal_id: goalId,
-    status: 'cancelled',
-    status_reason: 'cancelled by user',
-  }).then((result) => {
-    if (!result.goal) throw new Error('goal.update response is missing goal')
-    return result.goal
-  })
-
-export function listArrangeJobs(): Promise<CoreArrangeJob[]> {
-  return appServerOperation<{ jobs?: CoreArrangeJob[] }>('arrange.list')
-    .then(result => result.jobs ?? [])
-}
-
-export function updateArrangeJob(
-  jobId: string,
-  action: 'pause' | 'resume' | 'cancel',
-): Promise<CoreArrangeJob> {
-  return appServerOperation<{ job?: CoreArrangeJob }>(`arrange.${action}`, { job_id: jobId })
-    .then((result) => {
-      if (!result.job) throw new Error(`arrange.${action} response is missing job`)
-      return result.job
-    })
 }
 
 export { SageApiError }

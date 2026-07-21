@@ -18,10 +18,12 @@ import {
   createCoreAppServerRuntimeController,
   createCoreAppServerRuntimeState,
   hydrateSnapshot,
+  listGoals,
   RuntimePanel,
   selectLatestActiveTurnId,
   selectLatestTurnStatus,
   SessionSidebar,
+  updateGoal,
   useCoreApprovalController,
   useCoreWorkbenchProjectionController,
   WorkspaceShell,
@@ -30,10 +32,8 @@ import {
   type CoreSessionListItem,
 } from '@lamtools/ui'
 import {
-  cancelGoal,
   createCoreSession,
   listCoreSessions,
-  listGoals,
 } from '../api/core'
 
 const router = useRouter()
@@ -155,7 +155,7 @@ async function refreshGoal(threadId: string | null) {
 
 async function handleCancelGoal(goal: CoreGoal) {
   try {
-    await cancelGoal(goal.id)
+    await updateGoal(goal.id, 'cancelled', 'cancelled by user')
     if (activeGoal.value?.id === goal.id) activeGoal.value = null
   } catch (error) {
     goalError.value = error instanceof Error ? error.message : '目标取消失败'
