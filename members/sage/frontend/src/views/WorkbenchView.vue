@@ -8,21 +8,24 @@ import {
   shallowRef,
   watch,
 } from 'vue'
-import { useRouter } from 'vue-router'
 import {
   appServerUrl,
   buildCurrentTurnChecklistGroups,
   ChatThread,
   CoreAppServerClient,
+  CoreArrangeManager,
+  CoreGoalManager,
   CoreGoalStrip,
   createCoreAppServerRuntimeController,
   createCoreAppServerRuntimeState,
   hydrateSnapshot,
+  listArrangeJobs,
   listGoals,
   RuntimePanel,
   selectLatestActiveTurnId,
   selectLatestTurnStatus,
   SessionSidebar,
+  updateArrangeJob,
   updateGoal,
   useCoreApprovalController,
   useCoreWorkbenchProjectionController,
@@ -36,7 +39,8 @@ import {
   listCoreSessions,
 } from '../api/core'
 
-const router = useRouter()
+const showGoalManager = ref(false)
+const showArrangeManager = ref(false)
 const sessions = ref<CoreSessionListItem[]>([])
 const activeSessionId = ref<string | null>(null)
 const composerText = ref('')
@@ -283,7 +287,7 @@ onUnmounted(runtimeController.disconnect)
     :composer-disabled="composerDisabled"
     :error-text="workbenchError"
     @new-session="newSession"
-    @settings="router.push('/arrange')"
+    @settings="showGoalManager = true"
     @composer-submit="handleComposerSubmit"
   >
     <template #sidebar-body>
@@ -301,8 +305,11 @@ onUnmounted(runtimeController.disconnect)
     </template>
 
     <template #sidebar-footer>
-      <button class="sidebar-action" type="button" @click="router.push('/arrange')">
-        <span aria-hidden="true">◷</span><span>长期安排</span>
+      <button class="sidebar-action" type="button" @click="showGoalManager = true">
+        <span aria-hidden="true">&#x25CE;</span><span>目标</span>
+      </button>
+      <button class="sidebar-action" type="button" @click="showArrangeManager = true">
+        <span aria-hidden="true">&#x25F7;</span><span>长期安排</span>
       </button>
     </template>
 
@@ -363,6 +370,27 @@ onUnmounted(runtimeController.disconnect)
         :panel-groups="panelGroups"
         :step-groups="stepGroups"
       />
+    </template>
+
+    <template #modals>
+      <div v-if="showGoalManager" class="modal-overlay" @click.self="showGoalManager = false">
+        <div class="modal-card wide">
+          <CoreGoalManager
+            :list-goals="() => listGoals()"
+            :update-goal="updateGoal"
+            @back="showGoalManager = false"
+          />
+        </div>
+      </div>
+      <div v-if="showArrangeManager" class="modal-overlay" @click.self="showArrangeManager = false">
+        <div class="modal-card wide">
+          <CoreArrangeManager
+            :list-jobs="listArrangeJobs"
+            :update-job="updateArrangeJob"
+            @back="showArrangeManager = false"
+          />
+        </div>
+      </div>
     </template>
   </WorkspaceShell>
 </template>
