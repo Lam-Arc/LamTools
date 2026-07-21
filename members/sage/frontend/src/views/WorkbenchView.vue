@@ -405,19 +405,16 @@ onUnmounted(runtimeController.disconnect)
 .sage-empty-state h1 { margin: 0 0 10px; font-size: 26px; letter-spacing: -.025em; text-wrap: balance; }
 .sage-empty-state p { max-width: 62ch; margin: 0; color: var(--muted); line-height: 1.65; text-wrap: pretty; }
 .sage-empty-state ul { margin: 20px 0; padding-left: 20px; color: var(--muted); line-height: 1.85; }
-.sage-empty-state button, .sidebar-action { border: 0; border-radius: 8px; font: inherit; cursor: pointer; }
-.sage-empty-state button { padding: 9px 14px; background: var(--blue); color: var(--bg); font-weight: 650; }
+.sage-empty-state button { border: 0; border-radius: 8px; font: inherit; cursor: pointer; padding: 9px 14px; background: var(--blue); color: var(--bg); font-weight: 650; }
 .sage-empty-state button:hover { filter: brightness(1.08); }
-.sage-empty-state button:focus-visible, .sidebar-action:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.sage-empty-state button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .sage-sidebar-empty { padding: 18px 12px; color: var(--muted); font-size: 13px; line-height: 1.55; text-align: center; }
-.sidebar-action { display: flex; align-items: center; gap: 9px; width: 100%; padding: 9px 11px; background: transparent; color: var(--muted); text-align: left; }
-.sidebar-action:hover { background: color-mix(in srgb, var(--text) 7%, transparent); color: var(--text); }
 textarea { width: 100%; min-height: 24px; max-height: 180px; resize: none; border: 0; outline: 0; background: transparent; color: var(--text); font: inherit; line-height: 1.55; }
 textarea::placeholder { color: var(--muted); opacity: 1; }
 textarea:disabled { cursor: not-allowed; opacity: .65; }
 @media (max-width: 700px) {
   .sage-empty-state { align-items: stretch; flex-direction: column; margin-top: 52px; }
-  .sage-empty-state button, .sidebar-action { min-height: 44px; }
+  .sage-empty-state button { min-height: 44px; }
   .thread-header { padding-inline: 16px; }
 }
 </style>

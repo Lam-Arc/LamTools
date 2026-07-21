@@ -199,6 +199,30 @@
   background: color-mix(in srgb, var(--theme-backdrop-text) 8%, transparent);
 }
 
+.sidebar-action {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.sidebar-action:hover {
+  background: color-mix(in srgb, var(--theme-backdrop-text) 7%, transparent);
+  color: var(--theme-backdrop-text);
+}
+.sidebar-action:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
+
 /* =========================================================================
    Main card — centered content area with top rounding & shadow
    ========================================================================= */

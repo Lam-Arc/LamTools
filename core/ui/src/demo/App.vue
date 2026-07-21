@@ -1196,22 +1196,4 @@ onUnmounted(() => {
   line-height: 1.35;
 }
 
-.sidebar-action {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--theme-backdrop-text);
-  font: inherit;
-  font-size: 13px;
-  cursor: pointer;
-}
-.sidebar-action:hover {
-  background: color-mix(in srgb, var(--theme-backdrop-text) 7%, transparent);
-}
-
 </style>
