@@ -3,7 +3,7 @@
 // All endpoints typed. Vite dev proxy handles /api -> backend.
 // ============================================================
 
-import { appServerUrl, fetchAppServerToken, WriterAppServerClient } from '@/appServer/client'
+import { appServerUrl, WriterAppServerClient } from '@/appServer/client'
 import { normalizeProjectAgents, requireProjectCreateResult, type ProjectAgents } from './project-contract'
 import type {
   Project,
@@ -84,9 +84,8 @@ async function requestForm<T>(path: string, formData: FormData, options: Request
 }
 
 async function appServerOperation<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
-  const token = await fetchAppServerToken(API_BASE)
   const client = new WriterAppServerClient({
-    url: appServerUrl(API_BASE, token),
+    url: appServerUrl(API_BASE),
     clientInfo: { name: 'writer_frontend_config', title: 'Writer Config', version: '0.1.0' },
   })
   try {

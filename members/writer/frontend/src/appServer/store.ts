@@ -5,7 +5,7 @@ import {
   type CoreAppServerRuntimeClient,
 } from '@lamtools/ui'
 import { hydrateSnapshot } from './snapshot.ts'
-import { appServerUrl, fetchAppServerToken, WriterAppServerClient } from './client.ts'
+import { appServerUrl, WriterAppServerClient } from './client.ts'
 import type { WriterAppSnapshot, WriterCommandCatalogItem, WriterInputItem } from './protocol.ts'
 
 function createWriterRuntimeController(runtime: ReturnType<typeof createCoreAppServerRuntimeState<WriterAppSnapshot, CoreAppServerRuntimeClient>>) {
@@ -14,9 +14,8 @@ function createWriterRuntimeController(runtime: ReturnType<typeof createCoreAppS
     {
       hydrateSnapshot,
       async createClient({ apiBase, onSnapshot, onConnectionState }) {
-        const token = await fetchAppServerToken(apiBase)
         return new WriterAppServerClient({
-          url: appServerUrl(apiBase, token),
+          url: appServerUrl(apiBase),
           clientInfo: { name: 'lamwriter_frontend', title: 'LamWriter Frontend', version: '0.1.0' },
           onSnapshot,
           onConnectionState,
