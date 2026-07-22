@@ -14,12 +14,15 @@ export interface CoreArrangeJob {
   id: string
   thread_id: string
   source_thread_id: string
+  project_id: string
   kind: 'focus' | 'routine'
   operation: string
   payload: Record<string, unknown>
   trigger: Record<string, unknown>
+  title: string
+  session_strategy: 'fixed' | 'new'
+  model_id?: string
   observer?: Record<string, unknown>
-  goal_id?: string
   status: 'scheduled' | 'waiting' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled'
   next_run_at?: string | null
   run_count: number

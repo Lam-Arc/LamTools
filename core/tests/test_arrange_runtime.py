@@ -18,6 +18,7 @@ async def test_once_job_runs_and_completes() -> None:
     seen: list[dict] = []
     job = await manager.create(
         thread_id="thread-1",
+        project_id="test-proj",
         kind="focus",
         operation="turn.start",
         payload={"message": "check competitors"},
@@ -42,6 +43,7 @@ async def test_interval_job_reschedules_until_max_runs() -> None:
     manager = ArrangeManager(store)
     job = await manager.create(
         thread_id="thread-1",
+        project_id="test-proj",
         kind="routine",
         operation="turn.start",
         payload={"message": "weekly digest"},
@@ -70,6 +72,7 @@ async def test_event_job_waits_until_signalled() -> None:
     manager = ArrangeManager(store)
     job = await manager.create(
         thread_id="thread-1",
+        project_id="test-proj",
         kind="focus",
         operation="turn.start",
         payload={"message": "inspect release"},
@@ -102,6 +105,7 @@ async def test_event_signal_keeps_payload_and_queues_while_job_is_busy() -> None
 
     job = await manager.create(
         thread_id="thread-1",
+        project_id="test-proj",
         kind="focus",
         operation="turn.start",
         payload={"message": "inspect the event"},
@@ -164,6 +168,7 @@ async def test_one_signal_can_trigger_multiple_jobs() -> None:
     for thread_id in ("thread-1", "thread-2"):
         await manager.create(
             thread_id=thread_id,
+            project_id="test-proj",
             kind="focus",
             operation="turn.start",
             payload={"message": "inspect"},
@@ -190,6 +195,7 @@ async def test_runner_recovers_abandoned_job_from_same_occurrence() -> None:
     manager = ArrangeManager(store)
     job = await manager.create(
         thread_id="thread-1",
+        project_id="test-proj",
         kind="focus",
         operation="turn.start",
         payload={"message": "resume durable task"},
@@ -217,6 +223,7 @@ async def test_paused_event_job_resumes_waiting_for_its_event() -> None:
     manager = ArrangeManager(InMemoryArrangeStore())
     job = await manager.create(
         thread_id="thread-1",
+        project_id="test-proj",
         kind="focus",
         operation="turn.start",
         payload={"message": "watch"},
@@ -237,6 +244,7 @@ async def test_paused_event_job_runs_signal_received_while_paused() -> None:
     manager = ArrangeManager(store)
     job = await manager.create(
         thread_id="thread-1",
+        project_id="test-proj",
         kind="focus",
         operation="turn.start",
         payload={"message": "watch"},
@@ -273,6 +281,7 @@ async def test_stopping_running_job_updates_occurrence(
     manager = ArrangeManager(store)
     job = await manager.create(
         thread_id="thread-1",
+        project_id="test-proj",
         kind="focus",
         operation="turn.start",
         payload={"message": "run"},
@@ -301,6 +310,7 @@ async def test_runner_records_operation_result_on_occurrence() -> None:
     manager = ArrangeManager(store)
     job = await manager.create(
         thread_id="thread-1",
+        project_id="test-proj",
         kind="focus",
         operation="turn.start",
         payload={"message": "run"},
@@ -333,6 +343,7 @@ async def test_runner_can_cancel_an_active_execution_without_marking_it_failed()
 
     job = await manager.create(
         thread_id="thread-1",
+        project_id="test-proj",
         kind="focus",
         operation="turn.start",
         payload={"message": "watch"},
@@ -357,6 +368,7 @@ async def test_expired_lease_is_reclaimed_with_same_occurrence() -> None:
     manager = ArrangeManager(store)
     job = await manager.create(
         thread_id="thread-1",
+        project_id="test-proj",
         kind="routine",
         operation="turn.start",
         payload={"message": "refresh"},
@@ -382,6 +394,7 @@ async def test_arrange_cancel_is_idempotent() -> None:
     manager = ArrangeManager(InMemoryArrangeStore())
     job = await manager.create(
         thread_id="thread-1",
+        project_id="test-proj",
         kind="routine",
         operation="turn.start",
         payload={"message": "refresh"},
@@ -402,6 +415,7 @@ async def test_daily_calendar_job_keeps_local_wall_clock_time() -> None:
     created_at = datetime(2026, 7, 16, 0, 30, tzinfo=timezone.utc)
     job = await manager.create(
         thread_id="thread-1",
+        project_id="test-proj",
         kind="routine",
         operation="turn.start",
         payload={"message": "breakfast recommendation"},
@@ -430,6 +444,7 @@ async def test_monthly_calendar_job_schedules_requested_day() -> None:
 
     job = await manager.create(
         thread_id="thread-1",
+        project_id="test-proj",
         kind="routine",
         operation="turn.start",
         payload={"message": "monthly review"},
@@ -453,6 +468,7 @@ async def test_once_job_accepts_local_date_time_and_rejects_past_time() -> None:
 
     job = await manager.create(
         thread_id="thread-1",
+        project_id="test-proj",
         kind="routine",
         operation="turn.start",
         payload={"message": "prepare report"},
@@ -471,6 +487,7 @@ async def test_once_job_accepts_local_date_time_and_rejects_past_time() -> None:
     with pytest.raises(ValueError, match="future"):
         await manager.create(
             thread_id="thread-1",
+            project_id="test-proj",
             kind="routine",
             operation="turn.start",
             payload={"message": "too late"},

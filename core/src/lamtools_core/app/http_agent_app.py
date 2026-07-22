@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import uuid
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -232,7 +233,11 @@ def create_core_agent_http_app(
                 },
             )
 
-        arrange_runner = ArrangeRunner(core_db_handle.arrange_store, execute_arranged_job)
+        arrange_runner = ArrangeRunner(
+            core_db_handle.arrange_store,
+            execute_arranged_job,
+            new_thread_factory=lambda _job: f"arrange_thread_{uuid.uuid4().hex}",
+        )
         observer_supervisor = ObserverSupervisor(
             core_db_handle.arrange_store,
             data_dir=resolved_data_dir,

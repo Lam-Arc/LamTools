@@ -47,6 +47,7 @@ def durable_tool_specs(*, goal: bool, arrange: bool) -> list[ToolSpec]:
             description=(
                 "Create or manage a durable arranged task that remains visible and manageable inside LamTools. "
                 "Use it directly for reminders, schedules, recurring work, and event-triggered work. "
+                "project_id is required — ask the user if you don't know it. "
                 "Creation, pause, resume, and cancellation require user confirmation; list and get are read-only."
                 f" Current UTC time is {current_utc}. Convert relative dates before calling the tool."
             ),
@@ -55,7 +56,15 @@ def durable_tool_specs(*, goal: bool, arrange: bool) -> list[ToolSpec]:
                     "type": "string",
                     "enum": ["create", "list", "get", "pause", "resume", "cancel"],
                 },
+                "project_id": {"type": "string", "description": "Project ID this arrangement belongs to (required)"},
                 "instruction": {"type": "string", "description": "Instruction sent when the task runs"},
+                "title": {"type": "string", "description": "Short display title (auto-generated from instruction if omitted)"},
+                "session_strategy": {
+                    "type": "string",
+                    "enum": ["fixed", "new"],
+                    "description": "fixed = reuse the current session, new = create a fresh session each run (default: new)",
+                },
+                "model_id": {"type": "string", "description": "Default model for new sessions when session_strategy is new"},
                 "kind": {"type": "string", "enum": ["focus", "routine"]},
                 "schedule_type": {
                     "type": "string",
@@ -76,10 +85,6 @@ def durable_tool_specs(*, goal: bool, arrange: bool) -> list[ToolSpec]:
                 },
                 "max_runs": {"type": "integer", "minimum": 1},
                 "job_id": {"type": "string", "description": "Arrange job id for get or management"},
-                "goal_id": {
-                    "type": "string",
-                    "description": "Existing Goal explicitly supplied by the user; otherwise leave null",
-                },
             }, required=["action"]),
             permission=ASK_USER,
             metadata={"category": "control", "read_actions": ["list", "get"]},
@@ -137,13 +142,19 @@ def durable_tool_handlers(
             except ValueError as exc:
                 return _failed(call, str(exc))
             operation = "arrange.create"
+            strategy = str(args.get("session_strategy") or "").strip()
+            if strategy not in {"fixed", "new"}:
+                strategy = "new"
             payload = {
                 "thread_id": session_id,
+                "project_id": str(args.get("project_id") or "").strip(),
                 "kind": str(args.get("kind") or "routine").strip(),
                 "operation": "turn.start",
                 "payload": {"message": str(args.get("instruction") or "").strip()},
                 "trigger": trigger,
-                "goal_id": str(args.get("goal_id") or "").strip(),
+                "title": str(args.get("title") or "").strip(),
+                "session_strategy": strategy,
+                "model_id": str(args.get("model_id") or "").strip(),
             }
             observer_entry = str(args.get("observer_entry") or "").strip()
             if observer_entry:

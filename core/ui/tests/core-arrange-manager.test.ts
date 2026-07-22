@@ -18,9 +18,9 @@ describe('CoreArrangeManager states', () => {
     await flushPromises()
     expect(wrapper.get('[role="alert"]').text()).toContain('服务不可用')
     expect(wrapper.find('.arrange-empty').exists()).toBe(false)
-    expect(wrapper.find('.job-list').exists()).toBe(false)
+    expect(wrapper.find('.card-list').exists()).toBe(false)
 
-    await wrapper.get('[data-arrange-retry]').trigger('click')
+    await wrapper.get('[role="alert"] button').trigger('click')
     await flushPromises()
     expect(wrapper.find('[role="alert"]').exists()).toBe(false)
     expect(wrapper.get('.arrange-empty').text()).toContain('还没有安排')

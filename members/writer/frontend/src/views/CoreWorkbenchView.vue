@@ -16,7 +16,6 @@ import {
   CoreAgentsEditor,
   CoreArrangeManager,
   CoreExecutionControls,
-  CoreGoalManager,
   CoreResourceStats,
   CoreSubAgentDialog,
   CoreSubAgentPanel,
@@ -28,15 +27,11 @@ import {
   buildCoreComposerHighlightSegments,
   coreInputToText,
   isCoreGuidableTurnStatus,
-  listArrangeJobs,
-  listGoals,
   normalizeCoreSessionStatus,
   selectCoreQueuedInputs,
   selectCoreSubAgentRuns,
   selectLatestActiveTurnId,
-  updateArrangeJob,
   updateCoreSessionListStatus,
-  updateGoal,
   useCoreAutoFollowScroll,
   useCoreApprovalController,
   useCoreExecutionControlsState,
@@ -1127,7 +1122,6 @@ async function handleProjectContextMenu(projectGroupId: string) {
 }
 
 const showAgentsMd = ref(false)
-const showGoalManager = ref(false)
 const showArrangeManager = ref(false)
 const agentsMdProjectId = ref('')
 const agentsContent = ref('')
@@ -1973,20 +1967,9 @@ onMounted(async () => {
           <div style="text-align:center;padding:18px 12px;color:var(--muted);font-size:13px">
             暂无项目。<br />点击左上角 + 新建项目。
 </div>
-      <div v-if="showGoalManager" class="modal-overlay" @click.self="showGoalManager = false">
-        <div class="modal-card wide">
-          <CoreGoalManager
-            :list-goals="listGoals"
-            :update-goal="updateGoal"
-            @back="showGoalManager = false"
-          />
-        </div>
-      </div>
       <div v-if="showArrangeManager" class="modal-overlay" @click.self="showArrangeManager = false">
         <div class="modal-card wide">
           <CoreArrangeManager
-            :list-jobs="listArrangeJobs"
-            :update-job="updateArrangeJob"
             @back="showArrangeManager = false"
           />
         </div>
@@ -1996,9 +1979,6 @@ onMounted(async () => {
     </template>
 
     <template #sidebar-footer>
-      <button class="sidebar-action" type="button" @click="showGoalManager = true">
-        <span aria-hidden="true">&#x25CE;</span><span>目标</span>
-      </button>
       <button class="sidebar-action" type="button" @click="showArrangeManager = true">
         <span aria-hidden="true">&#x25F7;</span><span>长期安排</span>
       </button>

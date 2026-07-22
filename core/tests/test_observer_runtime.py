@@ -142,6 +142,7 @@ time.sleep(10)
     manager = ArrangeManager(store)
     bound = await manager.create(
         thread_id="bound-thread",
+        project_id="test-proj",
         kind="focus",
         operation="turn.start",
         payload={"message": "bound"},
@@ -150,6 +151,7 @@ time.sleep(10)
     )
     other = await manager.create(
         thread_id="other-thread",
+        project_id="test-proj",
         kind="focus",
         operation="turn.start",
         payload={"message": "other"},
@@ -177,6 +179,7 @@ async def test_observer_requires_new_approval_after_script_changes(tmp_path: Pat
     store = InMemoryArrangeStore()
     job = await ArrangeManager(store).create(
         thread_id="thread-1",
+        project_id="test-proj",
         kind="focus",
         operation="turn.start",
         payload={"message": "observe"},
@@ -204,6 +207,7 @@ async def test_observer_follows_arrange_pause_resume_and_cancel(tmp_path: Path) 
     manager = ArrangeManager(store)
     job = await manager.create(
         thread_id="thread-1",
+        project_id="test-proj",
         kind="focus",
         operation="turn.start",
         payload={"message": "observe"},

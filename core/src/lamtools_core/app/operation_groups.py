@@ -67,6 +67,7 @@ CORE_DURABLE_OPERATION_NAMES: tuple[str, ...] = (
     "arrange.create",
     "arrange.get",
     "arrange.list",
+    "arrange.update",
     "arrange.pause",
     "arrange.resume",
     "arrange.cancel",

@@ -88,7 +88,20 @@ class WriterDurableRuntime:
             )
             return str(session["id"])
 
-        self.runner = ArrangeRunner(self.db.arrange_store, execute_job)
+        def _instruction_from_job(job: Any) -> str:
+            return str((job.payload or {}).get("message") or job.title or "Arrange")
+
+        async def new_thread_for_job(job: Any) -> str:
+            return await create_execution_thread(
+                job.source_thread_id or job.thread_id,
+                _instruction_from_job(job),
+            )
+
+        self.runner = ArrangeRunner(
+            self.db.arrange_store,
+            execute_job,
+            new_thread_factory=new_thread_for_job,
+        )
         self.observer_supervisor = ObserverSupervisor(
             self.db.arrange_store,
             data_dir=Path(settings.data_dir),
@@ -100,7 +113,6 @@ class WriterDurableRuntime:
             arrange_manager=self.arrange_manager,
             wake_runner=self.runner.wake,
             cancel_running=self.runner.cancel,
-            create_execution_thread=create_execution_thread,
             wake_observers=self.observer_supervisor.wake,
             observer_status=self.observer_supervisor.status,
         )

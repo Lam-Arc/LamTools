@@ -55,6 +55,7 @@ async def test_arrange_operations_validate_target_and_wake_runner() -> None:
         "arrange.create",
         {
             "thread_id": "thread-1",
+            "project_id": "proj-1",
             "kind": "routine",
             "operation": "missing.operation",
             "payload": {},
@@ -65,6 +66,7 @@ async def test_arrange_operations_validate_target_and_wake_runner() -> None:
         "arrange.create",
         {
             "thread_id": "thread-1",
+            "project_id": "proj-1",
             "kind": "routine",
             "operation": "probe.run",
             "payload": {"value": 1},
@@ -99,6 +101,7 @@ async def test_arrange_signal_accepts_generic_event_envelope() -> None:
         "arrange.create",
         {
             "thread_id": "thread-1",
+            "project_id": "proj-1",
             "kind": "focus",
             "operation": "turn.start",
             "payload": {"message": "inspect"},
@@ -127,22 +130,17 @@ async def test_arrange_signal_accepts_generic_event_envelope() -> None:
 async def test_agent_created_arrange_uses_core_owned_execution_thread_rule() -> None:
     catalog = OperationCatalog()
     catalog.register("turn.start", lambda request: OperationResult(name=request.name, payload={}))
-    created_threads: list[tuple[str, str]] = []
-
-    async def create_execution_thread(source_thread_id: str, instruction: str) -> str:
-        created_threads.append((source_thread_id, instruction))
-        return "execution-thread-1"
 
     register_durable_operations(
         catalog,
         goal_manager=GoalManager(InMemoryGoalStore()),
         arrange_manager=ArrangeManager(InMemoryArrangeStore()),
-        create_execution_thread=create_execution_thread,
     )
     result = await catalog.execute(
         "arrange.create",
         {
             "thread_id": "source-thread-1",
+            "project_id": "proj-1",
             "kind": "routine",
             "operation": "turn.start",
             "payload": {"message": "prepare report"},
@@ -151,9 +149,10 @@ async def test_agent_created_arrange_uses_core_owned_execution_thread_rule() -> 
         metadata={"source": "agent_tool"},
     )
 
-    assert result.payload["job"]["thread_id"] == "execution-thread-1"
+    assert result.payload["job"]["thread_id"] == "source-thread-1"
     assert result.payload["job"]["source_thread_id"] == "source-thread-1"
-    assert created_threads == [("source-thread-1", "prepare report")]
+    assert result.payload["job"]["project_id"] == "proj-1"
+    assert result.payload["job"]["session_strategy"] == "new"
 
 
 @pytest.mark.asyncio
@@ -175,6 +174,7 @@ async def test_arrange_operation_approves_observer_content_and_reconciles_runtim
         "arrange.create",
         {
             "thread_id": "thread-1",
+            "project_id": "proj-1",
             "kind": "focus",
             "operation": "turn.start",
             "payload": {"message": "watch"},

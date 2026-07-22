@@ -102,12 +102,15 @@ class CoreArrangeJob(CoreDbBase):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     thread_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
     source_thread_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False, default="")
+    project_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False, default="")
     kind: Mapped[str] = mapped_column(String(32), nullable=False)
     operation: Mapped[str] = mapped_column(String(128), nullable=False)
     payload_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     trigger_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    title: Mapped[str] = mapped_column(String(256), nullable=False, default="")
+    session_strategy: Mapped[str] = mapped_column(String(16), nullable=False, default="new")
+    model_id: Mapped[str] = mapped_column(String(256), nullable=False, default="")
     observer_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    goal_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False, default="")
     status: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
     next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True, nullable=True)
     run_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -399,11 +402,13 @@ class SqlAlchemyArrangeStore:
         return _arrange_from_row(row) if row is not None else None
 
     async def list(
-        self, *, thread_id: str | None = None, status: ArrangeStatus | None = None
+        self, *, thread_id: str | None = None, project_id: str | None = None, status: ArrangeStatus | None = None
     ) -> list[ArrangeJob]:
         statement = select(CoreArrangeJob)
         if thread_id is not None:
             statement = statement.where(CoreArrangeJob.thread_id == thread_id)
+        if project_id is not None:
+            statement = statement.where(CoreArrangeJob.project_id == project_id)
         if status is not None:
             statement = statement.where(CoreArrangeJob.status == status)
         statement = statement.order_by(CoreArrangeJob.created_at, CoreArrangeJob.id)
@@ -999,6 +1004,32 @@ async def _migrate_core_app_schema(connection: Any) -> None:
             "ALTER TABLE core_arrange_jobs "
             "ADD COLUMN observer_json JSON NOT NULL DEFAULT '{}'"
         ))
+    if "project_id" not in arrange_columns:
+        await connection.execute(text(
+            "ALTER TABLE core_arrange_jobs "
+            "ADD COLUMN project_id VARCHAR(64) NOT NULL DEFAULT ''"
+        ))
+    if "title" not in arrange_columns:
+        await connection.execute(text(
+            "ALTER TABLE core_arrange_jobs "
+            "ADD COLUMN title VARCHAR(256) NOT NULL DEFAULT ''"
+        ))
+        # Backfill title from payload_json.message (first 80 chars)
+        await connection.execute(text(
+            "UPDATE core_arrange_jobs SET title = COALESCE("
+            "  SUBSTR(json_extract(payload_json, '$.message'), 1, 80), ''"
+            ") WHERE title = ''"
+        ))
+    if "session_strategy" not in arrange_columns:
+        await connection.execute(text(
+            "ALTER TABLE core_arrange_jobs "
+            "ADD COLUMN session_strategy VARCHAR(16) NOT NULL DEFAULT 'new'"
+        ))
+    if "model_id" not in arrange_columns:
+        await connection.execute(text(
+            "ALTER TABLE core_arrange_jobs "
+            "ADD COLUMN model_id VARCHAR(256) NOT NULL DEFAULT ''"
+        ))
 
 
 def _runtime_state_payloads(state: RuntimeState) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -1071,12 +1102,15 @@ def _arrange_values(job: ArrangeJob) -> dict[str, Any]:
     return {
         "thread_id": job.thread_id,
         "source_thread_id": job.source_thread_id,
+        "project_id": job.project_id,
         "kind": job.kind,
         "operation": job.operation,
         "payload_json": _json_safe(job.payload),
         "trigger_json": _json_safe(job.trigger),
+        "title": job.title,
+        "session_strategy": job.session_strategy,
+        "model_id": job.model_id,
         "observer_json": _json_safe(job.observer),
-        "goal_id": job.goal_id,
         "status": job.status,
         "next_run_at": _utc_datetime(job.next_run_at) if job.next_run_at else None,
         "run_count": job.run_count,
@@ -1100,12 +1134,15 @@ def _arrange_from_row(row: CoreArrangeJob) -> ArrangeJob:
         id=row.id,
         thread_id=row.thread_id,
         source_thread_id=row.source_thread_id or row.thread_id,
+        project_id=row.project_id or "",
         kind=row.kind,  # type: ignore[arg-type]
         operation=row.operation,
         payload=_json_safe(row.payload_json or {}),
         trigger=_json_safe(row.trigger_json or {}),
+        title=row.title or "",
+        session_strategy=row.session_strategy or "new",  # type: ignore[arg-type]
+        model_id=row.model_id or "",
         observer=_json_safe(row.observer_json or {}),
-        goal_id=row.goal_id or "",
         status=row.status,  # type: ignore[arg-type]
         next_run_at=_utc_datetime(row.next_run_at) if row.next_run_at else None,
         run_count=int(row.run_count or 0),

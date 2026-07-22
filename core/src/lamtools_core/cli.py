@@ -824,20 +824,25 @@ def build_parser() -> argparse.ArgumentParser:
     arrange = sub.add_parser("arrange", help="Manage durable arrangements")
     arrange_sub = arrange.add_subparsers(dest="arrange_command")
     arrange_create = arrange_sub.add_parser("new", help="Create a new arrangement")
-    arrange_create.add_argument("thread_id", help="Thread ID")
     arrange_create.add_argument("message", nargs="+", help="Arrangement instruction text")
+    arrange_create.add_argument("--project-id", required=True, default="", help="Project ID (required)")
+    arrange_create.add_argument("--thread-id", default="", help="Target thread ID (uses source thread if omitted)")
+    arrange_create.add_argument("--title", default="", help="Card title (defaults to first 40 chars of message)")
+    arrange_create.add_argument("--session-strategy", choices=["fixed", "new"], default="new", help="Session strategy: fixed or new (default: new)")
     arrange_create.add_argument("--kind", choices=["routine", "focus"], default="routine", help="Arrangement kind (default: routine)")
     arrange_create.add_argument("--trigger-once", default="", help="One-time run at local datetime (e.g. 2026-12-31T08:00)")
     arrange_create.add_argument("--trigger-daily", default="", help="Daily at wall-clock time HH:MM (e.g. 09:00)")
     arrange_create.add_argument("--trigger-monthly", default="", help="Monthly at DAY:HH:MM (e.g. 5:09:00)")
     arrange_create.add_argument("--trigger-event", default="", help="Event-triggered by event type name")
     arrange_create.add_argument("--timezone", default="Asia/Shanghai", help="Timezone for calendar triggers")
+    arrange_create.add_argument("--model-id", default="", help="Default model for new sessions (strategy=new)")
     arrange_create.add_argument("--max-runs", type=int, default=None, help="Maximum run count")
     arrange_create.add_argument("--base-url", default=os.environ.get("LAMTOOLS_CORE_API_URL", "http://127.0.0.1:5172"))
     arrange_create.add_argument("--ws-path", default=os.environ.get("LAMTOOLS_CORE_WS_PATH", "/api/core/app-server"))
     arrange_create.add_argument("--token", default=os.environ.get("LAMTOOLS_CORE_TOKEN", ""))
     arrange_create.set_defaults(func=cmd_arrange_create, raw=False)
     arrange_list = arrange_sub.add_parser("ls", help="List arrangements")
+    arrange_list.add_argument("--project-id", default="", help="Filter by project ID")
     arrange_list.add_argument("--base-url", default=os.environ.get("LAMTOOLS_CORE_API_URL", "http://127.0.0.1:5172"))
     arrange_list.add_argument("--ws-path", default=os.environ.get("LAMTOOLS_CORE_WS_PATH", "/api/core/app-server"))
     arrange_list.add_argument("--token", default=os.environ.get("LAMTOOLS_CORE_TOKEN", ""))
@@ -855,6 +860,21 @@ def build_parser() -> argparse.ArgumentParser:
     arrange_update.add_argument("--ws-path", default=os.environ.get("LAMTOOLS_CORE_WS_PATH", "/api/core/app-server"))
     arrange_update.add_argument("--token", default=os.environ.get("LAMTOOLS_CORE_TOKEN", ""))
     arrange_update.set_defaults(func=cmd_arrange_update, thread_id="", raw=False)
+    arrange_edit = arrange_sub.add_parser("edit", help="Edit arrangement fields")
+    arrange_edit.add_argument("job_id", help="Job ID")
+    arrange_edit.add_argument("--title", default="", help="New title")
+    arrange_edit.add_argument("--instruction", default="", help="New instruction text")
+    arrange_edit.add_argument("--session-strategy", choices=["fixed", "new"], default="", help="Session strategy")
+    arrange_edit.add_argument("--model-id", default="", help="Default model for new sessions")
+    arrange_edit.add_argument("--trigger-once", default="", help="New one-time trigger")
+    arrange_edit.add_argument("--trigger-daily", default="", help="New daily trigger HH:MM")
+    arrange_edit.add_argument("--trigger-monthly", default="", help="New monthly trigger DAY:HH:MM")
+    arrange_edit.add_argument("--trigger-event", default="", help="New event type")
+    arrange_edit.add_argument("--timezone", default="Asia/Shanghai", help="Timezone for calendar triggers")
+    arrange_edit.add_argument("--base-url", default=os.environ.get("LAMTOOLS_CORE_API_URL", "http://127.0.0.1:5172"))
+    arrange_edit.add_argument("--ws-path", default=os.environ.get("LAMTOOLS_CORE_WS_PATH", "/api/core/app-server"))
+    arrange_edit.add_argument("--token", default=os.environ.get("LAMTOOLS_CORE_TOKEN", ""))
+    arrange_edit.set_defaults(func=cmd_arrange_edit, raw=False)
     return parser
 
 
@@ -1439,12 +1459,19 @@ async def cmd_arrange_create(args: argparse.Namespace) -> int:
         trigger = {"type": "event", "event_type": args.trigger_event}
     else:
         trigger = {"type": "once", "local_at": "", "timezone": args.timezone}
+    thread_id = str(args.thread_id or "").strip()
+    if not thread_id:
+        thread_id = args.project_id  # fallback: use project_id as source_thread_id
     payload = {
-        "thread_id": args.thread_id,
+        "project_id": args.project_id,
+        "thread_id": thread_id,
         "kind": args.kind,
-        "operation": "lamtools_core.run",
+        "operation": "turn.start",
         "payload": {"message": " ".join(args.message)},
         "trigger": trigger,
+        "title": str(args.title or "").strip(),
+        "session_strategy": args.session_strategy,
+        "model_id": str(args.model_id or "").strip(),
     }
     if args.max_runs is not None:
         payload["max_runs"] = args.max_runs
@@ -1462,8 +1489,12 @@ async def cmd_arrange_create(args: argparse.Namespace) -> int:
 
 
 async def cmd_arrange_list(args: argparse.Namespace) -> int:
+    params: dict[str, Any] = {}
+    project_id = str(args.project_id or "").strip()
+    if project_id:
+        params["project_id"] = project_id
     async def op(client: CoreAppServerClient) -> dict[str, Any]:
-        return await client.request("arrange.list", {})
+        return await client.request("arrange.list", params)
     result = await _invoke_live(args, op)
     jobs = result.get("jobs", []) if isinstance(result, dict) else []
     if isinstance(jobs, list):
@@ -1510,6 +1541,39 @@ async def cmd_arrange_update(args: argparse.Namespace) -> int:
     result = await _invoke_live(args, op)
     job = result.get("job", {}) if isinstance(result, dict) else {}
     print(f"[arrange] {str(job.get('id') or args.job_id)} status={args.status}")
+    return 0
+
+
+async def cmd_arrange_edit(args: argparse.Namespace) -> int:
+    payload: dict[str, Any] = {"job_id": args.job_id}
+    if args.title:
+        payload["title"] = args.title
+    if args.instruction:
+        payload["instruction"] = args.instruction
+    if args.session_strategy:
+        payload["session_strategy"] = args.session_strategy
+    if args.model_id:
+        payload["model_id"] = args.model_id
+    if args.trigger_once:
+        payload["trigger"] = {"type": "once", "local_at": args.trigger_once, "timezone": args.timezone}
+    elif args.trigger_daily:
+        payload["trigger"] = {"type": "calendar", "frequency": "daily", "time": args.trigger_daily, "timezone": args.timezone}
+    elif args.trigger_monthly:
+        parts = args.trigger_monthly.split(":", 1)
+        day = int(parts[0])
+        time_val = parts[1] if len(parts) > 1 else "09:00"
+        payload["trigger"] = {"type": "calendar", "frequency": "monthly", "day": day, "time": time_val, "timezone": args.timezone}
+    elif args.trigger_event:
+        payload["trigger"] = {"type": "event", "event_type": args.trigger_event}
+    if len(payload) <= 1:
+        print("error: no fields to update", file=sys.stderr)
+        return 1
+    async def op(client: CoreAppServerClient) -> dict[str, Any]:
+        return await client.request("arrange.update", payload)
+    result = await _invoke_live(args, op)
+    job = result.get("job", {}) if isinstance(result, dict) else {}
+    jid = str(job.get("id") or args.job_id)
+    print(f"[arrange] {jid} updated")
     return 0
 
 

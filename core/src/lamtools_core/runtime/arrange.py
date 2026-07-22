@@ -113,12 +113,15 @@ class ArrangeJob:
     id: str
     thread_id: str
     source_thread_id: str
+    project_id: str
     kind: ArrangeKind
     operation: str
     payload: dict[str, Any]
     trigger: dict[str, Any]
+    title: str = ""
+    session_strategy: Literal["fixed", "new"] = "new"
+    model_id: str = ""
     observer: dict[str, Any] = field(default_factory=dict)
-    goal_id: str = ""
     status: ArrangeStatus = "scheduled"
     next_run_at: datetime | None = None
     run_count: int = 0
@@ -137,12 +140,15 @@ class ArrangeJob:
             "id": self.id,
             "thread_id": self.thread_id,
             "source_thread_id": self.source_thread_id,
+            "project_id": self.project_id,
             "kind": self.kind,
             "operation": self.operation,
             "payload": deepcopy(self.payload),
             "trigger": deepcopy(self.trigger),
+            "title": self.title,
+            "session_strategy": self.session_strategy,
+            "model_id": self.model_id,
             "observer": deepcopy(self.observer),
-            "goal_id": self.goal_id,
             "status": self.status,
             "next_run_at": self.next_run_at.isoformat() if self.next_run_at else None,
             "run_count": self.run_count,
@@ -211,7 +217,7 @@ class ArrangeStore(Protocol):
     async def insert(self, job: ArrangeJob) -> ArrangeJob: ...
     async def get(self, job_id: str) -> ArrangeJob | None: ...
     async def list(
-        self, *, thread_id: str | None = None, status: ArrangeStatus | None = None
+        self, *, thread_id: str | None = None, project_id: str | None = None, status: ArrangeStatus | None = None
     ) -> list[ArrangeJob]: ...
     async def replace(self, job: ArrangeJob, *, expected_revision: int) -> ArrangeJob: ...
     async def claim_due(
@@ -261,13 +267,14 @@ class InMemoryArrangeStore:
             return deepcopy(job) if job is not None else None
 
     async def list(
-        self, *, thread_id: str | None = None, status: ArrangeStatus | None = None
+        self, *, thread_id: str | None = None, project_id: str | None = None, status: ArrangeStatus | None = None
     ) -> list[ArrangeJob]:
         async with self._lock:
             jobs = [
                 deepcopy(job)
                 for job in self._jobs.values()
                 if (thread_id is None or job.thread_id == thread_id)
+                and (project_id is None or job.project_id == project_id)
                 and (status is None or job.status == status)
             ]
         return sorted(jobs, key=lambda job: (job.created_at, job.id))
@@ -585,22 +592,30 @@ class ArrangeManager:
         self,
         *,
         thread_id: str,
+        project_id: str,
         source_thread_id: str = "",
         kind: ArrangeKind,
         operation: str,
         payload: dict[str, Any],
         trigger: dict[str, Any],
+        title: str = "",
+        session_strategy: Literal["fixed", "new"] = "new",
+        model_id: str = "",
         observer: dict[str, Any] | None = None,
-        goal_id: str = "",
         max_runs: int | None = None,
         job_id: str = "",
         now: datetime | None = None,
     ) -> ArrangeJob:
         current = now or _utcnow()
         clean_thread = str(thread_id or "").strip()
+        clean_project = str(project_id or "").strip()
         clean_operation = str(operation or "").strip()
+        if not clean_project:
+            raise ValueError("project_id is required")
         if not clean_thread:
             raise ValueError("thread_id is required")
+        if session_strategy not in {"fixed", "new"}:
+            raise ValueError("session_strategy must be fixed or new")
         if kind not in {"focus", "routine"}:
             raise ValueError("kind must be focus or routine")
         if not clean_operation:
@@ -615,12 +630,15 @@ class ArrangeManager:
             id=str(job_id or "").strip() or f"arrange_{uuid.uuid4().hex}",
             thread_id=clean_thread,
             source_thread_id=str(source_thread_id or clean_thread).strip(),
+            project_id=clean_project,
             kind=kind,
             operation=clean_operation,
             payload=deepcopy(payload),
             trigger=normalized_trigger,
+            title=str(title or payload.get("message", "")).strip()[:80],
+            session_strategy=session_strategy,
+            model_id=str(model_id or "").strip(),
             observer=normalized_observer,
-            goal_id=str(goal_id or "").strip(),
             status=status,
             next_run_at=next_run_at,
             max_runs=max_runs,
@@ -631,8 +649,49 @@ class ArrangeManager:
     async def get(self, job_id: str) -> ArrangeJob | None:
         return await self.store.get(str(job_id or "").strip())
 
-    async def list(self, *, thread_id: str | None = None, status: ArrangeStatus | None = None) -> list[ArrangeJob]:
-        return await self.store.list(thread_id=thread_id, status=status)
+    async def update_fields(
+        self,
+        job_id: str,
+        *,
+        title: str | None = None,
+        instruction: str | None = None,
+        trigger: dict[str, Any] | None = None,
+        session_strategy: Literal["fixed", "new"] | None = None,
+        model_id: str | None = None,
+        now: datetime | None = None,
+    ) -> ArrangeJob:
+        current = await self.store.get(str(job_id or "").strip())
+        if current is None:
+            raise LookupError(f"Arrange job not found: {job_id}")
+        kwargs: dict[str, Any] = {}
+        if title is not None:
+            kwargs["title"] = str(title).strip()[:80]
+        if instruction is not None:
+            new_payload = dict(current.payload)
+            new_payload["message"] = str(instruction).strip()
+            kwargs["payload"] = new_payload
+        if session_strategy is not None:
+            if session_strategy not in {"fixed", "new"}:
+                raise ValueError("session_strategy must be fixed or new")
+            kwargs["session_strategy"] = session_strategy
+        if model_id is not None:
+            kwargs["model_id"] = str(model_id).strip()
+        when = now or _utcnow()
+        if trigger is not None:
+            normalized, new_status, new_next = self._normalize_trigger(trigger, when)
+            kwargs["trigger"] = normalized
+            kwargs["status"] = new_status
+            kwargs["next_run_at"] = new_next
+        kwargs["updated_at"] = when
+        if not kwargs:
+            return current
+        return await self.store.replace(
+            replace(current, **kwargs),
+            expected_revision=current.revision,
+        )
+
+    async def list(self, *, thread_id: str | None = None, project_id: str | None = None, status: ArrangeStatus | None = None) -> list[ArrangeJob]:
+        return await self.store.list(thread_id=thread_id, project_id=project_id, status=status)
 
     async def update_status(
         self,
@@ -647,7 +706,13 @@ class ArrangeManager:
         if current.status in _TERMINAL_STATUSES:
             if current.status == "cancelled" and status == "cancelled":
                 return current
-            raise ValueError(f"Arrange job is terminal: {job_id}")
+            # Allow failed/completed jobs to be cancelled (cleanup)
+            if status == "cancelled":
+                pass
+            elif current.status == "failed" and status == "scheduled":
+                pass  # allow retry
+            else:
+                raise ValueError(f"Arrange job is terminal: {job_id}")
         when = now or _utcnow()
         next_run_at = current.next_run_at
         next_status: ArrangeStatus = status
@@ -832,8 +897,6 @@ def arranged_operation_payload(job: ArrangeJob) -> dict[str, Any]:
     """Build the operation payload for one run without teaching Core any provider schema."""
     payload = deepcopy(job.payload)
     payload["thread_id"] = job.thread_id
-    if job.goal_id:
-        payload["goal_id"] = job.goal_id
     if job.signal:
         metadata = dict(payload.get("metadata") or {})
         metadata["arrange_signal"] = deepcopy(job.signal)
@@ -860,6 +923,7 @@ class ArrangeRunner:
         poll_interval: float = 1.0,
         lease_seconds: float = 30.0,
         claim_limit: int = 4,
+        new_thread_factory: Callable[[ArrangeJob], str | Awaitable[str]] | None = None,
     ) -> None:
         self.store = store
         self.executor = executor
@@ -868,6 +932,7 @@ class ArrangeRunner:
         self.poll_interval = max(0.01, poll_interval)
         self.lease_seconds = max(1.0, lease_seconds)
         self.claim_limit = max(1, claim_limit)
+        self.new_thread_factory = new_thread_factory
         self._wake = asyncio.Event()
         self._stopping = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
@@ -937,9 +1002,20 @@ class ArrangeRunner:
                 pass
 
     async def _execute(self, job: ArrangeJob) -> None:
-        renewer = asyncio.create_task(self._renew(job.id))
+        effective_job = job
+        if job.session_strategy == "new" and self.new_thread_factory is not None:
+            try:
+                new_id = self.new_thread_factory(job)
+                if inspect.isawaitable(new_id):
+                    new_id = await new_id
+                new_thread = str(new_id or "").strip()
+                if new_thread:
+                    effective_job = replace(job, thread_id=new_thread, updated_at=self.clock())
+            except Exception:
+                pass  # fall through with original thread_id
+        renewer = asyncio.create_task(self._renew(effective_job.id))
         try:
-            result = self.executor(job)
+            result = self.executor(effective_job)
             if inspect.isawaitable(result):
                 result = await result
             status = (
@@ -956,7 +1032,7 @@ class ArrangeRunner:
                 message = payload.get("error") if isinstance(payload, dict) else "arranged operation failed"
                 raise RuntimeError(str(message or "arranged operation failed"))
             await self.store.complete_run(
-                job_id=job.id,
+                job_id=effective_job.id,
                 worker_id=self.worker_id,
                 now=self.clock(),
                 result=_execution_result(result),
@@ -965,7 +1041,7 @@ class ArrangeRunner:
             raise
         except Exception as exc:
             await self.store.fail_run(
-                job_id=job.id,
+                job_id=effective_job.id,
                 worker_id=self.worker_id,
                 now=self.clock(),
                 error=str(exc) or type(exc).__name__,

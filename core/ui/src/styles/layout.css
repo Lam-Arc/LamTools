@@ -2703,8 +2703,8 @@
 }
 .thread .reasoning-body {
   margin: 3px 0 8px 24px;
-  max-height: none;
-  overflow: visible;
+  max-height: 800px;
+  overflow: hidden;
   padding: 2px 0 6px;
   border: 0;
   border-radius: 0;
@@ -2714,6 +2714,19 @@
   line-height: 1.65;
   font-style: normal;
   text-wrap: pretty;
+  opacity: 1;
+  transition: max-height 0.28s cubic-bezier(0.2, 0.8, 0.2, 1),
+              opacity 0.22s ease,
+              margin 0.28s cubic-bezier(0.2, 0.8, 0.2, 1),
+              padding 0.28s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.thread .reasoning-body--closed {
+  max-height: 0;
+  opacity: 0;
+  margin-top: 0;
+  margin-bottom: 0;
+  padding-top: 0;
+  padding-bottom: 0;
 }
 .thread .reasoning-body .process-step-detail {
   display: block;
@@ -2848,6 +2861,15 @@
   .workspace-main,
   .floating-composer {
     transition-duration: .5s !important;
+  }
+  .reasoning-body,
+  .tool-card-body {
+    transition: none !important;
+  }
+  .reasoning-body--closed,
+  .tool-card-body--closed {
+    max-height: none;
+    opacity: 1;
   }
 }
 

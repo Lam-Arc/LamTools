@@ -107,12 +107,14 @@ export function selectChatMessages(state: CoreAppSnapshot): CoreAppServerChatMes
       })
     }
     const assistant = messages[messages.length - 1]
-    if (item.type === 'agentMessage' && isFinalAssistantContentItem(state, item, itemId, itemOrder)) {
+    if (item.type === 'agentMessage') {
       const content = String(item.content ?? '')
+      // Always accumulate the last agentMessage text as content for backward compat
+      // (simple text-only Q&A, message filtering etc.) while keeping ALL agentMessages
+      // in parts for inline chronological rendering.
       if (!isProtocolEnvelopeText(content)) assistant.content = content
-    } else {
-      assistant.parts.push(item)
     }
+    assistant.parts.push(item)
   }
   maybeAppendInitialAssistantWaiting(state, messages)
   return messages.filter((message) => (

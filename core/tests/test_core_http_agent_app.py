@@ -261,11 +261,11 @@ def test_core_agent_http_app_exposes_durable_goal_and_arrange_operations(tmp_pat
                 "method": "arrange.create",
                 "params": {
                     "thread_id": "thread-1",
+                    "project_id": "test-proj",
                     "kind": "focus",
                     "operation": "goal.list",
                     "payload": {"thread_id": "thread-1"},
                     "trigger": {"type": "event", "key": "evidence.changed"},
-                    "goal_id": goal["id"],
                     "max_runs": 1,
                 },
             })
@@ -296,6 +296,7 @@ def test_core_agent_http_restart_reclaims_running_arrange_occurrence(tmp_path: P
             now = datetime.now(timezone.utc)
             job = await ArrangeManager(db.arrange_store).create(
                 thread_id="thread-restart",
+                project_id="test-proj",
                 kind="routine",
                 operation="goal.list",
                 payload={"thread_id": "thread-restart"},
@@ -366,6 +367,7 @@ def test_core_agent_http_startup_restores_persisted_observer(tmp_path: Path) -> 
         try:
             job = await ArrangeManager(db.arrange_store).create(
                 thread_id="thread-observer-restart",
+                project_id="test-proj",
                 kind="focus",
                 operation="goal.list",
                 payload={"thread_id": "thread-observer-restart"},

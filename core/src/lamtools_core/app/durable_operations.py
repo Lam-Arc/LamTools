@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import inspect
+import uuid
 from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
-import uuid
 
 from lamtools_core.runtime.arrange import ArrangeManager
 from lamtools_core.runtime.goal import GoalManager
@@ -23,7 +22,6 @@ def register_durable_operations(
     arrange_manager: ArrangeManager,
     wake_runner: Callable[[], Any] | None = None,
     cancel_running: Callable[[str], Any] | None = None,
-    create_execution_thread: Callable[[str, str], Any] | None = None,
     wake_observers: Callable[[], Any] | None = None,
     observer_status: Callable[[str], dict[str, Any]] | None = None,
 ) -> None:
@@ -102,20 +100,17 @@ def register_durable_operations(
         payload = request.payload
         operation = str(payload.get("operation") or "").strip()
         source_thread_id = _thread_id(payload)
+        project_id = str(payload.get("project_id") or payload.get("projectId") or "").strip()
+        if not project_id:
+            return _error(request, "project_id is required")
+        session_strategy = str(payload.get("session_strategy") or payload.get("sessionStrategy") or "new").strip()
+        if session_strategy not in {"fixed", "new"}:
+            return _error(request, "session_strategy must be fixed or new")
         thread_id = source_thread_id
-        goal_id = str(payload.get("goal_id") or payload.get("goalId") or "").strip()
         if operation.startswith("arrange."):
             return _error(request, "Arrange control operations cannot schedule themselves")
         if not catalog.has(operation):
             return _error(request, f"Operation is not registered: {operation or '-'}")
-        if goal_id:
-            goal = await goal_manager.get(goal_id)
-            if goal is None:
-                return _error(request, f"Goal not found: {goal_id}")
-            if goal.thread_id != source_thread_id:
-                return _error(request, "Goal belongs to a different thread")
-            if goal.status in {"completed", "failed", "cancelled"}:
-                return _error(request, f"Goal is terminal: {goal_id}")
         try:
             raw_observer = dict(payload.get("observer") or {})
             observer = (
@@ -126,29 +121,23 @@ def register_durable_operations(
                 if raw_observer
                 else {}
             )
-            if (
-                not goal_id
-                and str(request.metadata.get("source") or "") == "agent_tool"
-            ):
-                instruction = str(dict(payload.get("payload") or {}).get("message") or "Arrange")
-                if create_execution_thread is None:
-                    thread_id = f"arrange_thread_{uuid.uuid4().hex}"
-                else:
-                    created = create_execution_thread(source_thread_id, instruction)
-                    if inspect.isawaitable(created):
-                        created = await created
-                    thread_id = str(created or "").strip()
-                    if not thread_id:
-                        raise ValueError("Arrange execution thread was not created")
+            # When strategy is "new", the Runner's new_thread_factory creates
+            # a fresh thread at execution time. The initial thread_id is a
+            # placeholder in this case.
+            if not thread_id and session_strategy == "new":
+                thread_id = f"arrange_thread_{uuid.uuid4().hex}"
             job = await arrange_manager.create(
                 thread_id=thread_id,
+                project_id=project_id,
                 source_thread_id=source_thread_id,
                 kind=str(payload.get("kind") or ""),  # type: ignore[arg-type]
                 operation=operation,
                 payload=dict(payload.get("payload") or {}),
                 trigger=dict(payload.get("trigger") or {}),
+                title=str(payload.get("title") or "").strip(),
+                session_strategy=session_strategy,  # type: ignore[arg-type]
+                model_id=str(payload.get("model_id") or payload.get("modelId") or "").strip(),
                 observer=observer,
-                goal_id=goal_id,
                 max_runs=_optional_positive_int(payload.get("max_runs", payload.get("maxRuns"))),
                 job_id=str(payload.get("job_id") or payload.get("jobId") or payload.get("id") or ""),
             )
@@ -169,6 +158,7 @@ def register_durable_operations(
         try:
             jobs = await arrange_manager.list(
                 thread_id=_optional_text(payload, "thread_id", "threadId"),
+                project_id=_optional_text(payload, "project_id", "projectId"),
                 status=_optional_text(payload, "status"),  # type: ignore[arg-type]
             )
         except (TypeError, ValueError) as exc:
@@ -253,6 +243,45 @@ def register_durable_operations(
             payload={"occurrences": [item.to_dict() for item in occurrences]},
         )
 
+    async def arrange_update(request: OperationRequest) -> OperationResult:
+        """Update editable fields on an arrange job: title, instruction, trigger, session_strategy."""
+        payload = request.payload
+        try:
+            job_id = _job_id(payload)
+            title: str | None = None
+            instruction: str | None = None
+            trigger: dict[str, Any] | None = None
+            session_strategy: Any = None
+            if "title" in payload:
+                title = str(payload.get("title") or "").strip()
+            if "instruction" in payload:
+                instruction = str(payload.get("instruction") or "").strip()
+            if "trigger" in payload:
+                trigger = dict(payload.get("trigger") or {})
+                if not trigger:
+                    trigger = None
+            strategy_raw = str(payload.get("session_strategy") or payload.get("sessionStrategy") or "").strip()
+            if strategy_raw in {"fixed", "new"}:
+                session_strategy = strategy_raw
+            model_id_raw = str(payload.get("model_id") or payload.get("modelId") or "").strip()
+            model_id: str | None = model_id_raw if model_id_raw else None
+            if title is None and instruction is None and trigger is None and session_strategy is None and model_id is None:
+                current = await arrange_manager.get(job_id)
+                if current is None:
+                    return _error(request, f"Arrange job not found: {job_id}")
+                return OperationResult(name=request.name, payload={"job": job_payload(current)})
+            job = await arrange_manager.update_fields(
+                job_id,
+                title=title,
+                instruction=instruction,
+                trigger=trigger,
+                session_strategy=session_strategy,
+                model_id=model_id,
+            )
+        except (LookupError, TypeError, ValueError) as exc:
+            return _error(request, exc)
+        return OperationResult(name=request.name, payload={"job": job_payload(job)})
+
     handlers = {
         "goal.create": goal_create,
         "goal.get": goal_get,
@@ -261,6 +290,7 @@ def register_durable_operations(
         "arrange.create": arrange_create,
         "arrange.get": arrange_get,
         "arrange.list": arrange_list,
+        "arrange.update": arrange_update,
         "arrange.pause": arrange_pause,
         "arrange.resume": arrange_resume,
         "arrange.cancel": arrange_cancel,
