@@ -1,192 +1,53 @@
-from __future__ import annotations
-
-import logging
 from pathlib import Path
-
-from fastapi.middleware.cors import CORSMiddleware
-
-from lamtools_core.app import create_app
-from lamtools_core.member import MemberManifest
-
 from app.config import settings
-from app.database import init_db
-from app.shared_config_database import init_shared_config_db
-from app.routers.session import router as session_router
-from app.routers.project import router as project_router
-from app.routers.config import router as config_router
-from app.routers.attachment import router as attachment_router
-from app.routers.core_http import router as core_http_router
-from app.app_server.router import router as app_server_router
+from app.http_app import create_writer_http_app
+
+_data = Path(settings.data_dir)
+_config_db = str(_data / "lamtools.db")
+_core_db = str(_data / "writer_core.db")
 
 
-def _setup_logging():
-    """Configure logging to file and console."""
-    log_file = Path(settings.data_dir) / "lamwriter.log"
-    log_file.parent.mkdir(parents=True, exist_ok=True)
-
-    file_handler = logging.FileHandler(str(log_file), encoding="utf-8")
-    file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(logging.Formatter(
-        "%(asctime)s | %(levelname)-8s | %(name)s:%(lineno)d | %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    ))
-
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
-    console_handler.setFormatter(logging.Formatter(
-        "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-        datefmt="%H:%M:%S",
-    ))
-
-    root_logger = logging.getLogger()
-    root_logger.setLevel(logging.INFO)
-    root_logger.addHandler(file_handler)
-    root_logger.addHandler(console_handler)
-
-
-_setup_logging()
-
-
-# ---------------------------------------------------------------------------
-# Startup / shutdown hooks — extracted from the former lifespan context manager
-# ---------------------------------------------------------------------------
-
-_writer_service_healthy = False
-
-
-async def _on_startup():
-    """Initialize database and Writer service on startup."""
-    global _writer_service_healthy
-    await init_db()
-    await init_shared_config_db()
+def _ensure_writer_config():
+    """Ensure the shared config DB has at least one provider/model configured."""
+    import sqlite3
     try:
-        from app.database import async_session
-        from app.shared_config_database import shared_config_session
-        from app.services.app_settings import move_writer_settings_from_shared_to_writer
-        async with async_session() as writer_db, shared_config_session() as shared_db:
-            await move_writer_settings_from_shared_to_writer(writer_db, shared_db)
-    except Exception as e:
-        logging.getLogger(__name__).warning(f"Writer setting migration failed: {e}")
-    # Seed default LLM config from .env if DB is empty
-    try:
-        from app.routers.config import seed_default_config
-        from app.shared_config_database import shared_config_session
-        async with shared_config_session() as seed_db:
-            await seed_default_config(seed_db)
-    except Exception as e:
-        logging.getLogger(__name__).warning(f"Config seed failed: {e}")
-    # Initialize Writer service
-    try:
-        from app.services.writer_service import writer_orchestrate
-        from app.routers import session as session_mod
-        service = writer_orchestrate(settings)
-        session_mod._service = service
-        _writer_service_healthy = True
-        logging.getLogger(__name__).info("Writer service initialized")
-    except Exception as e:
-        _writer_service_healthy = False
-        logging.getLogger(__name__).warning(
-            f"Writer service not available ({e}), using echo fallback"
+        db = sqlite3.connect(_config_db)
+        db.execute(
+            "INSERT OR IGNORE INTO llm_providers (id, name, api_type, base_url, api_key, is_default) "
+            "VALUES ('writer-default', 'Writer Default', ?, ?, ?, 1)",
+            (settings.llm_api_type, settings.llm_base_url, settings.llm_api_key),
         )
+        db.execute(
+            "INSERT OR IGNORE INTO llm_models (id, provider_id, model_id, display_name, context_window, "
+            "max_output_tokens, thinking_supported, thinking_budget, temperature, is_default) "
+            "VALUES (?, 'writer-default', ?, ?, ?, ?, ?, ?, ?, 1)",
+            (
+                f"model-{settings.llm_model}",
+                settings.llm_model,
+                settings.llm_model,
+                settings.llm_context_window,
+                settings.llm_max_tokens,
+                1,
+                settings.llm_thinking_budget,
+                settings.llm_temperature,
+            ),
+        )
+        db.commit()
+        db.close()
+    except Exception:
+        pass  # DB may not exist yet; create_core_agent_http_app will handle table creation
 
 
-async def _on_shutdown():
-    """Cleanup: close shared HTTP session pool, dispose DB engine, close file log handlers."""
-    try:
-        from app.utils.llm_client import close_http_session
-        await close_http_session()
-    except Exception as e:
-        logging.getLogger(__name__).error(f"Error closing HTTP session: {e}")
-    try:
-        from app.routers import session as session_mod
-        service = session_mod._service
-        if isinstance(service, dict) and callable(service.get("close")):
-            await service["close"]()
-            session_mod._service = None
-    except Exception as e:
-        logging.getLogger(__name__).error(f"Error closing Writer service: {e}")
-    try:
-        from app.core.writer.core_kernel_adapter import close_writer_runtime_resources
-        await close_writer_runtime_resources()
-    except Exception as e:
-        logging.getLogger(__name__).error(f"Error closing Writer runtime resources: {e}")
-    try:
-        from app.database import engine
-        await engine.dispose()
-    except Exception as e:
-        logging.getLogger(__name__).error(f"Error disposing DB engine: {e}")
-    try:
-        from app.shared_config_database import shared_config_engine
-        await shared_config_engine.dispose()
-    except Exception as e:
-        logging.getLogger(__name__).error(f"Error disposing shared config DB engine: {e}")
-    try:
-        root_logger = logging.getLogger()
-        for handler in list(root_logger.handlers):
-            if isinstance(handler, logging.FileHandler):
-                root_logger.removeHandler(handler)
-                handler.close()
-    except Exception as e:
-        logging.getLogger(__name__).error(f"Error closing log handlers: {e}")
-
-
-# ---------------------------------------------------------------------------
-# Writer member manifest
-# ---------------------------------------------------------------------------
-
-_writer_manifest = MemberManifest(
-    id="writer",
-    name="LamWriter",
-    version="0.1.0",
-    capabilities=["session", "project", "config", "attachment"],
-    default_routes={
-        "/api": "Writer session, project, and config routers",
-        "/api/core": "Core HTTP adapter -- sessions, providers, usage, attachments",
-    },
+_ensure_writer_config()
+app = create_writer_http_app(
+    model_id=settings.llm_model,
+    config_db=_config_db,
+    core_db=_core_db,
+    data_dir=settings.data_dir,
+    work_root=settings.writer_work_root or None,
+    cors_origins=settings.cors_origins,
+    thinking_enabled=settings.llm_thinking_enabled,
+    thinking_budget=settings.llm_thinking_budget,
+    max_tokens=settings.llm_max_tokens or None,
+    temperature=settings.llm_temperature,
 )
-
-
-# ---------------------------------------------------------------------------
-# Health payload — preserves {"status": "ok", "app": settings.app_name}
-# ---------------------------------------------------------------------------
-
-def _health_payload() -> dict:
-    return {
-        "status": "ok" if _writer_service_healthy else "degraded",
-        "app": settings.app_name,
-        "writer_service": "ok" if _writer_service_healthy else "unavailable",
-    }
-
-
-# ---------------------------------------------------------------------------
-# Application factory
-# ---------------------------------------------------------------------------
-
-app = create_app(
-    members=[_writer_manifest],
-    title="LamWriter",
-    version="0.1.0",
-    on_startup=[_on_startup],
-    on_shutdown=[_on_shutdown],
-    enable_core_routes=False,
-    health_payload=_health_payload,
-)
-
-# CORS middleware (not handled by create_app)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.cors_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Existing routers — preserved with identical prefixes
-app.include_router(session_router, prefix="/api")
-app.include_router(project_router, prefix="/api")
-app.include_router(config_router, prefix="/api")
-app.include_router(attachment_router, prefix="/api/core")
-app.include_router(app_server_router, prefix="/api")
-
-# Writer Core HTTP adapter -- maps Writer DB to Core-shaped JSON
-app.include_router(core_http_router, prefix="/api/core")
