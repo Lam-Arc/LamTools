@@ -113,10 +113,7 @@ export function createProject(data: ProjectCreate): Promise<WriterProjectCreateR
     .then(requireProjectCreateResult)
 }
 
-export function pickProjectDirectory(): Promise<string> {
-  return appServerOperation<{ path?: string }>('project.directory.pick')
-    .then((result) => result.path ?? '')
-}
+
 
 export function getProject(id: string): Promise<Project> {
   return appServerOperation<{ project?: Project }>('project.get', { project_id: id })
@@ -168,13 +165,7 @@ export function listSessions(): Promise<Session[]> {
     .then((result) => result.sessions ?? [])
 }
 
-export function createSession(data: SessionCreate): Promise<Session> {
-  return appServerOperation<{ session?: Session }>('session.create', { ...data })
-    .then((result) => {
-      if (!result.session) throw new Error('session.create response is missing session')
-      return result.session
-    })
-}
+
 
 export function getSession(id: string): Promise<Session> {
   return appServerOperation<{ session?: Session }>('session.get', { session_id: id })
@@ -184,51 +175,25 @@ export function getSession(id: string): Promise<Session> {
     })
 }
 
-export function updateSession(id: string, data: SessionUpdate): Promise<Session> {
-  return appServerOperation<{ session?: Session }>('session.update', { session_id: id, ...data })
-    .then((result) => {
-      if (!result.session) throw new Error('session.update response is missing session')
-      return result.session
-    })
-}
+
 
 export function deleteSession(id: string): Promise<void> {
   return appServerOperation<{ ok?: boolean }>('session.delete', { session_id: id }).then(() => undefined)
 }
 
-export function forkSession(id: string, options: SessionForkOptions = {}): Promise<Session> {
-  return appServerOperation<{ session?: Session }>('session.fork', {
-    session_id: id,
-    ...options,
-  }).then((result) => {
-    if (!result.session) throw new Error('session.fork response is missing session')
-    return result.session
-  })
-}
+
 
 export function rollbackSessionTurn(sessionId: string, turnId?: string, reason = ''): Promise<SessionRollbackResult> {
-  return appServerOperation<SessionRollbackResult>('session.rollback_turn', {
+  return appServerOperation<SessionRollbackResult>('session.rollback', {
     session_id: sessionId,
     ...(turnId ? { turn_id: turnId } : {}),
     ...(reason ? { reason } : {}),
   })
 }
 
-export function getGitGraph(sessionId: string): Promise<GitVersionGraph> {
-  return appServerOperation<{ graph?: GitVersionGraph }>('session.git_graph.get', { session_id: sessionId })
-    .then((result) => {
-      if (!result.graph) throw new Error('session.git_graph.get response is missing graph')
-      return result.graph
-    })
-}
 
-export function getSessionChanges(sessionId: string): Promise<SessionChanges> {
-  return appServerOperation<{ changes?: SessionChanges }>('session.changes.get', { session_id: sessionId })
-    .then((result) => {
-      if (!result.changes) throw new Error('session.changes.get response is missing changes')
-      return result.changes
-    })
-}
+
+
 
 export function listSessionCheckpoints(sessionId: string): Promise<SessionCheckpoint[]> {
   return appServerOperation<{ checkpoints?: SessionCheckpoint[] }>('session.checkpoints.list', { session_id: sessionId })
@@ -236,7 +201,7 @@ export function listSessionCheckpoints(sessionId: string): Promise<SessionCheckp
 }
 
 export function createSessionCheckpoint(sessionId: string, reason: string = '手动保存检查点'): Promise<SessionCheckpoint> {
-  return appServerOperation<{ checkpoint?: SessionCheckpoint }>('session.checkpoint.create', {
+  return appServerOperation<{ checkpoint?: SessionCheckpoint }>('session.checkpoints.create', {
     session_id: sessionId,
     label: 'checkpoint',
     reason,
@@ -249,7 +214,7 @@ export function createSessionCheckpoint(sessionId: string, reason: string = '手
 
 export function restoreSessionCheckpoint(sessionId: string, commit: string): Promise<{ status: string; source: string; ref: string | null; paths: string[]; message: string }> {
   return appServerOperation<{ status?: string; source?: string; ref?: string | null; paths?: string[]; message?: string }>(
-    'session.checkpoint.restore',
+    'session.checkpoints.restore',
     { session_id: sessionId, commit },
   ).then((result) => ({
     status: result.status ?? '',
@@ -260,93 +225,23 @@ export function restoreSessionCheckpoint(sessionId: string, commit: string): Pro
   }))
 }
 
-export function getCommitReview(sessionId: string): Promise<CommitReview> {
-  return appServerOperation<{ review?: CommitReview }>('session.commit_review.get', { session_id: sessionId })
-    .then((result) => {
-      if (!result.review) throw new Error('session.commit_review.get response is missing review')
-      return result.review
-    })
-}
 
-export function decideCommitReview(sessionId: string, data: CommitReviewDecision): Promise<CommitReview> {
-  return appServerOperation<{ review?: CommitReview }>('session.commit_review.decide', {
-    session_id: sessionId,
-    ...data,
-  }).then((result) => {
-    if (!result.review) throw new Error('session.commit_review.decide response is missing review')
-    return result.review
-  })
-}
 
-export function undoSessionChanges(sessionId: string): Promise<{ status: string; source: string; ref: string | null; paths: string[]; message: string }> {
-  return appServerOperation<{ status?: string; source?: string; ref?: string | null; paths?: string[]; message?: string }>(
-    'session.changes.undo',
-    { session_id: sessionId },
-  ).then((result) => ({
-    status: result.status ?? '',
-    source: result.source ?? '',
-    ref: result.ref ?? null,
-    paths: result.paths ?? [],
-    message: result.message ?? '',
-  }))
-}
 
-export function undoSessionFileChange(sessionId: string, path: string): Promise<{ status: string; source: string; ref: string | null; paths: string[]; message: string }> {
-  return appServerOperation<{ status?: string; source?: string; ref?: string | null; paths?: string[]; message?: string }>(
-    'session.change_file.undo',
-    { session_id: sessionId, path },
-  ).then((result) => ({
-    status: result.status ?? '',
-    source: result.source ?? '',
-    ref: result.ref ?? null,
-    paths: result.paths ?? [],
-    message: result.message ?? '',
-  }))
-}
 
-export function openSessionChangeFile(sessionId: string, path: string): Promise<{ status: string; path: string; opened_with: string }> {
-  return appServerOperation<{ status?: string; path?: string; opened_with?: string }>(
-    'session.change_file.open',
-    { session_id: sessionId, path },
-  ).then((result) => ({
-    status: result.status ?? '',
-    path: result.path ?? path,
-    opened_with: result.opened_with ?? '',
-  }))
-}
 
-export function listAgentBranches(sessionId: string): Promise<AgentBranch[]> {
-  return appServerOperation<{ branches?: AgentBranch[] }>('session.agent_branches.list', { session_id: sessionId })
-    .then((result) => result.branches ?? [])
-}
 
-export function getAgentBranchDiff(sessionId: string, branch: string): Promise<{ branch: string; diff: string }> {
-  return appServerOperation<{ branch?: string; diff?: string }>('session.agent_branch.diff', { session_id: sessionId, branch })
-    .then((result) => ({ branch: result.branch ?? branch, diff: result.diff ?? '' }))
-}
 
-export function mergeAgentBranch(sessionId: string, branch: string): Promise<{ status: string; branch: string; message: string; strategy: string }> {
-  return appServerOperation<{ status?: string; branch?: string; message?: string; strategy?: string }>(
-    'session.agent_branch.merge',
-    { session_id: sessionId, branch },
-  ).then((result) => ({
-    status: result.status ?? '',
-    branch: result.branch ?? branch,
-    message: result.message ?? '',
-    strategy: result.strategy ?? '',
-  }))
-}
 
-export function abandonAgentBranch(sessionId: string, branch: string): Promise<{ status: string; branch: string; message: string }> {
-  return appServerOperation<{ status?: string; branch?: string; message?: string }>(
-    'session.agent_branch.abandon',
-    { session_id: sessionId, branch },
-  ).then((result) => ({
-    status: result.status ?? '',
-    branch: result.branch ?? branch,
-    message: result.message ?? '',
-  }))
-}
+
+
+
+
+
+
+
+
+
 
 // --- Attachments ---
 
@@ -357,8 +252,7 @@ export function uploadAttachment(sessionId: string, file: File): Promise<Attachm
 }
 
 export function listAttachments(sessionId: string): Promise<Attachment[]> {
-  return appServerOperation<{ attachments?: Attachment[] }>('attachment.list', { session_id: sessionId })
-    .then((result) => result.attachments ?? [])
+  return request<Attachment[]>(`/api/core/sessions/${sessionId}/attachments`)
 }
 
 export function getAttachment(id: string): Promise<Attachment> {
@@ -475,19 +369,9 @@ export function getResolvedConfig(taskType: string = 'default'): Promise<Resolve
     })
 }
 
-export function getRuntimeCapabilities(workRoot?: string): Promise<RuntimeCapabilities> {
-  const params = workRoot ? { work_root: workRoot } : {}
-  return appServerOperation<{ runtime_capabilities?: RuntimeCapabilities }>('config.runtime_capabilities.get', params)
-    .then((result) => {
-      if (!result.runtime_capabilities) throw new Error('config.runtime_capabilities.get response is missing runtime capabilities')
-      return result.runtime_capabilities
-    })
-}
 
-export function listAdapterProfiles(): Promise<AdapterProfile[]> {
-  return appServerOperation<{ adapter_profiles?: AdapterProfile[] }>('config.adapter_profiles.list')
-    .then((result) => result.adapter_profiles ?? [])
-}
+
+
 
 export function getAppSetting(namespace: string): Promise<AppSetting> {
   return appServerOperation<{ setting?: AppSetting }>('settings.get', { namespace })
