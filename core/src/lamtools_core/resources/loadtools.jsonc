@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "modes": {
+    "consider": {
+      "description": "思索模式：仅使用只读工具进行分析和调研，不修改任何文件",
+      "tools": [
+        "read_file",
+        "list_dir",
+        "search_files",
+        "search_content",
+        "web_search",
+        "web_fetch",
+        "git_status",
+        "git_diff",
+        "load_skill",
+        "browser_check",
+        "sub_agent"
+      ]
+    },
+    "execute": {
+      "description": "执行模式：可使用全部工具进行完整的代码操作",
+      "tools": []
+    }
+  }
+}

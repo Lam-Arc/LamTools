@@ -14,8 +14,7 @@
       }
     },
     "unsupported_fields": [
-      "thinking",
-      "reasoning_effort"
+      "thinking"
     ]
   },
   "stream_response": {

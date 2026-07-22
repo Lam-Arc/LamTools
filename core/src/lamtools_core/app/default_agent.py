@@ -84,6 +84,7 @@ class CoreAgentRuntimeOptions:
     model_id: str
     thinking_enabled: bool | None = None
     thinking_budget: int | None = None
+    reasoning_effort: str = ""
     shallow_thinking_enabled: bool = False
     context_window_tokens: int | None = None
     max_tokens: int | None = None
@@ -219,7 +220,7 @@ def create_core_agent_operations(
                     status="error",
                     payload={"error": "Goal belongs to a different thread"},
                 )
-            if goal.status in {"pending", "blocked"}:
+            if goal.status == "blocked":
                 await goal_manager.update(goal.id, status="active", status_reason="")
         runtime_work_root = _work_root_from_request(paths, request)
         project_id = await _resolve_project_id(thread_id, thread_snapshot_store)
@@ -251,6 +252,13 @@ def create_core_agent_operations(
             approval_policy = str(request.payload.get("approval_policy") or "require")
             if approval_policy not in {"require", "auto_approve"}:
                 approval_policy = "require"
+            active_tier = request.payload.get("active_tier")
+            if active_tier not in ("read_only", "limited_edit", "full_edit"):
+                active_tier = None
+            tier_tools = request.payload.get("tier_tools") if isinstance(request.payload.get("tier_tools"), dict) else None
+            active_mode = request.payload.get("active_mode")
+            if not isinstance(active_mode, str) or not active_mode.strip():
+                active_mode = None
             plugin_assembly = assemble_core_agent_plugins(
                 data_dir=paths.data_dir,
                 work_root=runtime_work_root,
@@ -276,6 +284,9 @@ def create_core_agent_operations(
                 operation_catalog=catalog,
                 enable_goal_tool=goal_manager is not None,
                 enable_arrange_tool=arrange_manager is not None,
+                active_tier=active_tier,
+                tier_tools=tier_tools,
+                active_mode=active_mode,
             )
             try:
                 kernel = CoreLoopKernel(
@@ -287,9 +298,11 @@ def create_core_agent_operations(
                             instructions=spec.instructions,
                             thinking_enabled=runtime_options.thinking_enabled,
                             thinking_budget=runtime_options.thinking_budget,
+                            reasoning_effort=runtime_options.reasoning_effort,
                             temperature=runtime_options.temperature,
                             max_tokens=runtime_options.max_tokens,
                             approval_policy=approval_policy,  # type: ignore[arg-type]
+                            active_mode=active_mode,
                         ),
                         toolbox=toolbox,
                         verification_policy=kit.verification_policy(),
@@ -713,6 +726,7 @@ def create_core_agent_operations(
                                 instructions=spec.instructions,
                                 thinking_enabled=runtime_options.thinking_enabled,
                                 thinking_budget=runtime_options.thinking_budget,
+                                reasoning_effort=runtime_options.reasoning_effort,
                                 temperature=runtime_options.temperature,
                                 max_tokens=runtime_options.max_tokens,
                             ),
@@ -1139,7 +1153,7 @@ def create_core_agent_operations(
             active = next(
                 (
                     item for item in reversed(await goal_manager.list(thread_id=thread_id))
-                    if item.status in {"pending", "active", "blocked"}
+                    if item.status in {"active", "blocked"}
                 ),
                 None,
             )
@@ -1150,7 +1164,7 @@ def create_core_agent_operations(
                     return {"goal": None}
                 cancelled = await goal_manager.update(
                     active.id,
-                    status="cancelled",
+                    status="archived",
                     status_reason="cancelled by user command",
                 )
                 return {"goal": cancelled.to_dict()}
@@ -1281,6 +1295,13 @@ def _runtime_options_from_request(spec: CoreAgentSpec, request: OperationRequest
         metadata.get("thinking_budget"),
         spec.metadata.get("thinking_budget"),
     )
+    reasoning_effort = str(
+        payload.get("reasoning_effort")
+        or payload.get("reasoningEffort")
+        or metadata.get("reasoning_effort")
+        or spec.metadata.get("reasoning_effort")
+        or ""
+    )
     shallow_thinking_enabled = bool(
         _optional_bool(
             payload.get("shallow_thinking_enabled"),
@@ -1318,6 +1339,7 @@ def _runtime_options_from_request(spec: CoreAgentSpec, request: OperationRequest
         model_id=model_id,
         thinking_enabled=thinking_enabled,
         thinking_budget=thinking_budget,
+        reasoning_effort=reasoning_effort,
         shallow_thinking_enabled=shallow_thinking_enabled,
         context_window_tokens=context_window_tokens,
         max_tokens=max_tokens,
@@ -1508,10 +1530,14 @@ async def _build_core_runtime_toolbox(
     operation_catalog: OperationCatalog | None = None,
     enable_goal_tool: bool = False,
     enable_arrange_tool: bool = False,
+    active_tier: str | None = None,
+    tier_tools: dict | None = None,
+    active_mode: str | None = None,
 ):
     from lamtools_core.mcp import MCPToolRegistry
     from lamtools_core.tool.sub_agent_runner import KernelSubAgentRunner
     from lamtools_core.tool.default_toolbox import build_core_toolbox
+    from lamtools_core.tool.loadtools import LoadTools, default_load_tools, load_loadtools
 
     registry = MCPToolRegistry(work_root, config_files=plugin_assembly.get("mcp_files") or [])
     await registry.load()
@@ -1524,6 +1550,13 @@ async def _build_core_runtime_toolbox(
         *default_core_skill_roots(),
         *(plugin_assembly.get("skill_roots") or []),
     }
+    # Load tools configuration — prefer member override, fallback to Core default
+    load_tools: LoadTools = default_load_tools()
+    data_dir = plugin_assembly.get("data_dir")
+    if data_dir:
+        member_loadtools = load_loadtools(Path(data_dir) / "loadtools.jsonc")
+        if member_loadtools:
+            load_tools = member_loadtools
     sub_agent_runner = None
     if llm_client is not None:
         sub_agent_runner = KernelSubAgentRunner(
@@ -1560,6 +1593,9 @@ async def _build_core_runtime_toolbox(
         operation_executor=execute_operation if operation_catalog is not None else None,
         enable_goal_tool=enable_goal_tool,
         enable_arrange_tool=enable_arrange_tool,
+        active_tier=active_tier,
+        tier_tools=tier_tools,
+        load_tools=load_tools,
     )
     return toolbox, registry
 

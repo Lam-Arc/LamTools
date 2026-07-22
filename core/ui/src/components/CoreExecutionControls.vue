@@ -22,6 +22,17 @@
       hide-arrow
       @update:model-value="selectThinkingOption"
     />
+    <UiSelect
+      v-if="modeOptions.length > 0"
+      class="composer-mode-select"
+      :model-value="activeMode"
+      :options="modeOptions"
+      :placeholder="'模式'"
+      aria-label="操作模式"
+      direction="up"
+      hide-arrow
+      @update:model-value="$emit('update:activeMode', $event)"
+    />
     <slot name="trailing" />
   </div>
 </template>
@@ -37,6 +48,8 @@ const props = withDefaults(defineProps<{
   thinkingMode: CoreThinkingMode | string
   thinkingModeOptions: CoreThinkingModeOption[]
   shallowThinkingEnabled?: boolean
+  activeMode?: string
+  modeOptions?: CoreSelectOption[]
   modelAriaLabel?: string
   thinkingAriaLabel?: string
   shallowLabel?: string
@@ -45,6 +58,8 @@ const props = withDefaults(defineProps<{
   modelValue: '',
   modelOptions: () => [],
   shallowThinkingEnabled: false,
+  activeMode: '',
+  modeOptions: () => [],
   modelAriaLabel: '模型',
   thinkingAriaLabel: '思考模式',
   shallowLabel: 'Shallow',
@@ -55,6 +70,7 @@ const emit = defineEmits<{
   'update:modelValue': [value: string]
   'update:thinkingMode': [value: string]
   'update:shallowThinkingEnabled': [value: boolean]
+  'update:activeMode': [value: string]
 }>()
 
 const SHALLOW_OPTION_VALUE = '__shallow__'

@@ -259,6 +259,18 @@
                       </div>
                     </div>
 
+                    <div v-else-if="isModelRetryPart(part)" class="model-retry-bar">
+                      <div class="model-retry-bar__track">
+                        <div
+                          v-for="i in modelRetryCounts(part).maxRetries"
+                          :key="i"
+                          class="model-retry-bar__segment"
+                          :class="{ 'model-retry-bar__segment--filled': i <= modelRetryCounts(part).attempt }"
+                        />
+                      </div>
+                      <span class="model-retry-bar__label">重试中 {{ modelRetryCounts(part).attempt }}/{{ modelRetryCounts(part).maxRetries }}</span>
+                    </div>
+
                     <div v-else class="process-timeline">
                       <div
                         class="process-step"
@@ -579,6 +591,18 @@
                             <span class="checklist-text">{{ item.text }}</span>
                           </li>
                         </ol>
+                      </div>
+
+                      <div v-else-if="isModelRetryPart(group.part)" class="model-retry-bar">
+                        <div class="model-retry-bar__track">
+                          <div
+                            v-for="i in modelRetryCounts(group.part).maxRetries"
+                            :key="i"
+                            class="model-retry-bar__segment"
+                            :class="{ 'model-retry-bar__segment--filled': i <= modelRetryCounts(group.part).attempt }"
+                          />
+                        </div>
+                        <span class="model-retry-bar__label">重试中 {{ modelRetryCounts(group.part).attempt }}/{{ modelRetryCounts(group.part).maxRetries }}</span>
                       </div>
 
                       <div v-else class="process-step process-step--info" :class="'process-step--' + group.part.status">
@@ -1179,15 +1203,12 @@ function isPartExpanded(part: MessagePart, live = false): boolean {
     return autoExpandedPartIds.value.has(part.id)
   }
   
+  // Status parts: toggleable via autoExpandedPartIds
+  if (part.partType === 'status') {
+    return autoExpandedPartIds.value.has(part.id)
+  }
+  
   // Default collapsed for others unless explicitly expanded
-  return false
-}
-
-function isDefaultExpandedPart(part: MessagePart, live = false): boolean {
-  if (live) return true
-  if (part.partType === 'reasoning') return true
-  if (part.partType === 'error') return true
-  if (isSubLinePart(part)) return true
   return false
 }
 
@@ -1229,7 +1250,7 @@ watch(
             // Clear any collapse timer
             const timer = partCompletionTimers.get(part.id)
             if (timer) { clearTimeout(timer); partCompletionTimers.delete(part.id) }
-          } else if (part.status === 'completed' || part.status === 'error') {
+          } else if (part.status === 'completed') {
             // Schedule auto-collapse when done (if not already expanded by user)
             if (autoExpandedPartIds.value.has(part.id)) {
               schedulePartAutoCollapse(part.id)
@@ -1253,6 +1274,21 @@ function toolRetryLabel(part: MessagePart): string {
     return maxRetries > 0 ? `重试中 ${retryCount}/${maxRetries}` : '重试中'
   }
   return ''
+}
+
+// ── Model retry progress bar helpers ──
+function isModelRetryPart(part: MessagePart): boolean {
+  if (part.partType !== 'status') return false
+  return /模型请求重试/.test(String(part.content || ''))
+}
+
+function modelRetryCounts(part: MessagePart): { attempt: number; maxRetries: number } {
+  const text = String(part.content || '')
+  const match = text.match(/\((\d+)\/(\d+)\)/)
+  if (match) {
+    return { attempt: parseInt(match[1], 10) || 0, maxRetries: parseInt(match[2], 10) || 0 }
+  }
+  return { attempt: 1, maxRetries: 0 }
 }
 
 function isSubLinePart(part: MessagePart): boolean {
@@ -3301,6 +3337,40 @@ function formatContextSummary(c: ContextCounts): string {
   color: var(--orange);
   cursor: pointer;
 }
+
+/* ── Model retry progress bar ── */
+.model-retry-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+}
+.model-retry-bar__track {
+  flex: 1;
+  height: 4px;
+  display: flex;
+  gap: 2px;
+  background: color-mix(in srgb, var(--theme-main-text, #fff) 8%, transparent);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.model-retry-bar__segment {
+  flex: 1;
+  height: 100%;
+  min-width: 2px;
+  background: transparent;
+  transition: background-color 0.2s ease;
+}
+.model-retry-bar__segment--filled {
+  background: var(--orange, #ff9142);
+}
+.model-retry-bar__label {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 550;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 48%, transparent);
+  white-space: nowrap;
+}
 .tool-card-header--command .tool-type-tag {
   grid-area: type;
   min-width: 0;
@@ -3351,7 +3421,7 @@ function formatContextSummary(c: ContextCounts): string {
   padding-left: 0;
   width: 100%;
   min-width: 0;
-  overflow: hidden;
+  overflow: auto;
   max-height: 800px;
   opacity: 1;
   transition: max-height 0.28s cubic-bezier(0.2, 0.8, 0.2, 1),
@@ -4274,7 +4344,7 @@ function formatContextSummary(c: ContextCounts): string {
 .reasoning-body {
   margin: 3px 0 8px 24px;
   max-height: 800px;
-  overflow: hidden;
+  overflow: auto;
   padding: 2px 0 6px;
   border: 0;
   border-radius: 0;

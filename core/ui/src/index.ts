@@ -153,6 +153,7 @@ export {
   useCoreConfigState,
   useCoreUiPreferences,
   useCoreWorkbenchController,
+  useCoreGoals,
   type CoreAutoFollowScrollController,
   type CoreExecutionControlsStorage,
   type CoreExecutionControlsState,
@@ -183,6 +184,7 @@ export {
   type CoreWorkbenchApi,
   type UseCoreWorkbenchControllerContext,
   type UseCoreWorkbenchControllerOptions,
+  type UseCoreGoalsOptions,
 } from './composables';
 
 export { CORE_EXECUTION_CONTROLS_STORAGE_KEYS } from './composables';

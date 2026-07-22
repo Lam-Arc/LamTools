@@ -201,9 +201,7 @@ class WriterKit:
         initial_history: list[ChatMessage] | None = None,
         work_root: str = "",
         agent_llm_client: Any = None,
-        runtime_controls: dict[str, dict[str, bool]] | None = None,
         core_event_callback: Callable[[CoreEvent], Awaitable[None]] | None = None,
-        tool_allowlist: set[str] | frozenset[str] | None = None,
         context_window_tokens: int | None = None,
         compact_trigger_ratio: float = 0.8,
         cancel_event: asyncio.Event | None = None,
@@ -231,9 +229,7 @@ class WriterKit:
         self._initial_history: list[ChatMessage] = list(initial_history) if initial_history else []
         self._work_root = work_root
         self._agent_llm_client = agent_llm_client
-        self._runtime_controls = runtime_controls or {}
         self._core_event_callback = core_event_callback
-        self._tool_allowlist = frozenset(tool_allowlist) if tool_allowlist is not None else None
         self._context_window_tokens = context_window_tokens
         self._compact_trigger_ratio = compact_trigger_ratio
         self._cancel_event = cancel_event
@@ -243,48 +239,6 @@ class WriterKit:
         # MCP integration — loaded lazily on first run_start
         self._mcp_registry: Any = None
         self._mcp_loaded: bool = False
-
-        self._effective_tools = self._filter_effective_tools(WRITER_TOOLS)
-
-    def _filter_effective_tools(self, tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Advertise only tools that can actually be executed in this runtime."""
-        if not isinstance(self._tool_executor, dict):
-            filtered = [
-                tool for tool in tools
-                if self._model_tool_enabled(str(tool.get("function", {}).get("name", "")))
-            ]
-            if self._tool_allowlist is None:
-                return filtered
-            return [
-                tool for tool in filtered
-                if str(tool.get("function", {}).get("name", "")) in self._tool_allowlist
-            ]
-
-        executable = set(self._tool_executor.keys())
-        executable.add("mcp_tool")
-
-        filtered = [
-            tool for tool in tools
-            if str(tool.get("function", {}).get("name", "")) in executable
-            and self._model_tool_enabled(str(tool.get("function", {}).get("name", "")))
-        ]
-        if self._tool_allowlist is None:
-            return filtered
-        return [
-            tool for tool in filtered
-            if str(tool.get("function", {}).get("name", "")) in self._tool_allowlist
-        ]
-
-    def _model_tool_enabled(self, name: str) -> bool:
-        return self._tool_enabled(name)
-
-    def _tool_enabled(self, name: str) -> bool:
-        controls = self._runtime_controls.get("tools", {})
-        return bool(controls.get(name, True))
-
-    def _command_policies(self) -> dict[str, object]:
-        controls = self._runtime_controls.get("command_policies", {})
-        return controls if isinstance(controls, dict) else {}
 
     def _annotate_command_permission(self, call: ToolCall) -> ToolCall:
         if call.name == "arrange":
@@ -303,7 +257,7 @@ class WriterKit:
         command = args.get("command")
         if not isinstance(command, str) or not command.strip():
             return call
-        decision = command_permission_decision(command, self._command_policies())
+        decision = command_permission_decision(command, None)
         call.metadata.update({
             "permission_group": decision.group,
             "approval_policy": decision.policy,
@@ -312,10 +266,6 @@ class WriterKit:
         if decision.reason:
             call.metadata["policy_reason"] = decision.reason
         return call
-
-    def _tool_enabled(self, name: str) -> bool:
-        controls = self._runtime_controls.get("tools", {})
-        return bool(controls.get(name, True))
 
     async def _run_sub_agent_kernel(
         self,
@@ -350,8 +300,6 @@ class WriterKit:
             tool_executor=tool_executor,
             work_root=work_root,
             agent_llm_client=None,
-            runtime_controls=self._runtime_controls,
-            tool_allowlist=available_tools,
             core_event_callback=self._core_event_callback,
             context_window_tokens=self._context_window_tokens,
             compact_trigger_ratio=self._compact_trigger_ratio,
@@ -460,6 +408,8 @@ class WriterKit:
         for key in ("model_id", "project_id", "thinking_enabled", "thinking_budget", "shallow_thinking_enabled"):
             if key in turn_input.metadata:
                 state.metadata[key] = turn_input.metadata[key]
+        if self._agent_llm_client is not None and "thinking_budget" in turn_input.metadata:
+            self._agent_llm_client.thinking_budget = turn_input.metadata["thinking_budget"]
         if turn_input.user_message:
             state.metadata["current_task"] = turn_input.user_message
             state.metadata["original_task"] = turn_input.user_message
@@ -605,16 +555,11 @@ class WriterKit:
         if not messages and context.user_message:
             messages.append(ChatMessage(role="user", content=context.user_message))
 
-        tools = list(self._effective_tools)
+        tools = list(WRITER_TOOLS)
         # Append MCP tools when registry is loaded
         if self._mcp_registry is not None and self._mcp_loaded:
             mcp_defs = self._mcp_registry.tool_definitions()
             if mcp_defs:
-                if self._tool_allowlist is not None:
-                    mcp_defs = [
-                        tool for tool in mcp_defs
-                        if str(tool.get("function", {}).get("name", "")) in self._tool_allowlist
-                    ]
                 tools = tools + mcp_defs
         return LLMRequest(messages=messages, tools=tools)
 
@@ -1015,7 +960,6 @@ async def run_core_kernel(
     history: list[dict[str, str]] | None = None,
     state_store: RuntimeStateStore | None = None,
     live_event_callback: Callable[[CoreEvent], Awaitable[None]] | None = None,
-    runtime_controls: dict[str, dict[str, bool]] | None = None,
     cancel_event: asyncio.Event | None = None,
     guidance_source: Callable[[], list[str]] | None = None,
     guidance_finalizer: Callable[[], list[str] | None] | None = None,
@@ -1138,7 +1082,6 @@ async def run_core_kernel(
         initial_history=initial_history,
         work_root=work_root or "",
         agent_llm_client=raw_writer_client,
-        runtime_controls=runtime_controls,
         core_event_callback=live_event_callback,
         context_window_tokens=context_window_tokens,
         compact_trigger_ratio=compact_trigger_ratio,
@@ -1335,7 +1278,6 @@ async def run_sub_agent_turn(
     prompt: str,
     llm_client: Any,
     work_root: str,
-    runtime_controls: dict[str, dict[str, bool]] | None = None,
     live_event_callback: Callable[[CoreEvent], Awaitable[None]] | None = None,
     parent_state_store: Any | None = None,
 ) -> KernelResult:
@@ -1346,7 +1288,6 @@ async def run_sub_agent_turn(
         prompt=prompt,
         llm_client=llm_client,
         work_root=work_root,
-        runtime_controls=runtime_controls,
         live_event_callback=live_event_callback,
         clear_pending=False,
         parent_state_store=parent_state_store,
@@ -1360,7 +1301,6 @@ async def resume_sub_agent_turn(
     prompt: str,
     llm_client: Any,
     work_root: str,
-    runtime_controls: dict[str, dict[str, bool]] | None = None,
     live_event_callback: Callable[[CoreEvent], Awaitable[None]] | None = None,
     parent_state_store: Any | None = None,
 ) -> KernelResult:
@@ -1371,7 +1311,6 @@ async def resume_sub_agent_turn(
         prompt=prompt,
         llm_client=llm_client,
         work_root=work_root,
-        runtime_controls=runtime_controls,
         live_event_callback=live_event_callback,
         clear_pending=True,
         parent_state_store=parent_state_store,
@@ -1385,7 +1324,6 @@ async def _run_existing_sub_agent_turn(
     prompt: str,
     llm_client: Any,
     work_root: str,
-    runtime_controls: dict[str, dict[str, bool]] | None,
     live_event_callback: Callable[[CoreEvent], Awaitable[None]] | None,
     clear_pending: bool,
     parent_state_store: Any | None,
@@ -1425,8 +1363,6 @@ async def _run_existing_sub_agent_turn(
         tool_executor=effective_executor,
         work_root=work_root,
         agent_llm_client=None,
-        runtime_controls=runtime_controls,
-        tool_allowlist=available_tools,
         core_event_callback=live_event_callback,
         context_window_tokens=context_window_tokens,
         compact_trigger_ratio=0.8,

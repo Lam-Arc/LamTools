@@ -1974,7 +1974,7 @@ class CoreLoopKernel:
             name="runtime.part",
             category="progress",
             payload={
-                "part_id": f"{state.run_id}:model-retry:{response_index if response_index is not None else 'unknown'}:{attempt}",
+                "part_id": f"{state.run_id}:model-retry:{response_index if response_index is not None else 'unknown'}",
                 "part_type": "status",
                 "status": "retrying",
                 "label": label,

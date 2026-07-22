@@ -21,13 +21,12 @@ async def test_goal_manager_persists_and_updates_lifecycle() -> None:
         objective="Produce a verified report",
         completion_criteria=["report exists", "sources are cited"],
     )
-    active = await manager.update(goal.id, status="active")
-    blocked = await manager.update(active.id, status="blocked", status_reason="approval required")
+    blocked = await manager.update(goal.id, status="blocked", status_reason="approval required")
     resumed = await manager.update(blocked.id, status="active")
-    completed = await manager.update(resumed.id, status="completed", status_reason="verified")
+    completed = await manager.update(resumed.id, status="archived", status_reason="verified")
 
-    assert completed.revision == 5
-    assert completed.status == "completed"
+    assert completed.revision == 4
+    assert completed.status == "archived"
     assert completed.completed_at is not None
     assert [item.id for item in await manager.list(thread_id="thread-1")] == [goal.id]
 
@@ -36,12 +35,12 @@ async def test_goal_manager_persists_and_updates_lifecycle() -> None:
 async def test_goal_manager_rejects_updates_after_terminal_state() -> None:
     manager = GoalManager(InMemoryGoalStore())
     goal = await manager.create(thread_id="thread-1", objective="Ship it")
-    await manager.update(goal.id, status="completed")
+    await manager.update(goal.id, status="archived")
 
     with pytest.raises(ValueError, match="terminal"):
         await manager.update(goal.id, objective="Change it")
 
-    unchanged = await manager.update(goal.id, status="completed")
+    unchanged = await manager.update(goal.id, status="archived")
     assert unchanged.revision == 2
 
 
@@ -175,7 +174,7 @@ async def test_goal_completion_gate_uses_goal_activated_during_current_run() -> 
 
     assert result.passed is True
     assert seen == [goal.id]
-    assert (await manager.get(goal.id)).status == "completed"  # type: ignore[union-attr]
+    assert (await manager.get(goal.id)).status == "archived"  # type: ignore[union-attr]
 
 
 @pytest.mark.asyncio

@@ -83,6 +83,7 @@ class CoreAppServerClient:
         model_id: str | None = None,
         thinking_enabled: bool | None = None,
         thinking_budget: int | None = None,
+        reasoning_effort: str | None = None,
         shallow_thinking_enabled: bool | None = None,
         context_window_tokens: int | None = None,
         max_tokens: int | None = None,
@@ -110,6 +111,8 @@ class CoreAppServerClient:
             params["thinking_enabled"] = thinking_enabled
         if thinking_budget is not None:
             params["thinking_budget"] = thinking_budget
+        if reasoning_effort is not None:
+            params["reasoning_effort"] = reasoning_effort
         if shallow_thinking_enabled is not None:
             params["shallow_thinking_enabled"] = shallow_thinking_enabled
         if context_window_tokens is not None:

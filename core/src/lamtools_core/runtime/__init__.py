@@ -136,6 +136,7 @@ class CompletionResult:
     summary: str
     checks: list[CompletionCheck] = field(default_factory=list)
     repair_instruction: str = ""
+    blocked: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -143,6 +144,7 @@ class CompletionResult:
             "summary": self.summary,
             "checks": [c.to_dict() for c in self.checks],
             "repair_instruction": self.repair_instruction,
+            "blocked": self.blocked,
         }
 
 

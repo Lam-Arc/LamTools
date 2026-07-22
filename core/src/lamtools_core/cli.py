@@ -127,6 +127,7 @@ class CoreHttpLLMClient:
         adapter_profile: dict[str, Any],
         thinking_enabled: bool,
         thinking_budget: int,
+        reasoning_effort: str = "",
         max_tokens: int,
         temperature: float,
     ) -> None:
@@ -134,6 +135,7 @@ class CoreHttpLLMClient:
         self.adapter_profile = adapter_profile
         self.thinking_enabled = thinking_enabled
         self.thinking_budget = thinking_budget
+        self.reasoning_effort = reasoning_effort
         self.max_tokens = max_tokens
         self.temperature = temperature
 
@@ -143,6 +145,7 @@ class CoreHttpLLMClient:
             self.adapter_profile,
             thinking_enabled=self.thinking_enabled,
             thinking_budget=self.thinking_budget,
+            reasoning_effort=self.reasoning_effort,
         )
         async with httpx.AsyncClient(timeout=httpx.Timeout(360.0, connect=30.0)) as client:
             response = await client.post(
@@ -169,6 +172,7 @@ class CoreHttpLLMClient:
             stream=True,
             thinking_enabled=self.thinking_enabled,
             thinking_budget=self.thinking_budget,
+            reasoning_effort=self.reasoning_effort,
         )
         async with httpx.AsyncClient(timeout=httpx.Timeout(360.0, connect=30.0)) as client:
             async with client.stream(
@@ -815,7 +819,7 @@ def build_parser() -> argparse.ArgumentParser:
     goal_show.set_defaults(func=cmd_goal_show, thread_id="", raw=False)
     goal_update = goal_sub.add_parser("set", help="Set goal status")
     goal_update.add_argument("goal_id", help="Goal ID")
-    goal_update.add_argument("--status", default="", help="New status: active/completed/failed/cancelled")
+    goal_update.add_argument("--status", default="", help="New status: active/blocked/archived")
     goal_update.add_argument("--base-url", default=os.environ.get("LAMTOOLS_CORE_API_URL", "http://127.0.0.1:5172"))
     goal_update.add_argument("--ws-path", default=os.environ.get("LAMTOOLS_CORE_WS_PATH", "/api/core/app-server"))
     goal_update.add_argument("--token", default=os.environ.get("LAMTOOLS_CORE_TOKEN", ""))
@@ -1434,7 +1438,7 @@ async def cmd_goal_show(args: argparse.Namespace) -> int:
 
 async def cmd_goal_update(args: argparse.Namespace) -> int:
     if not args.status:
-        print("error: --status is required (active/completed/failed/cancelled)", file=sys.stderr)
+        print("error: --status is required (active/blocked/archived)", file=sys.stderr)
         return 1
     async def op(client: CoreAppServerClient) -> dict[str, Any]:
         return await client.request("goal.update", {"goal_id": args.goal_id, "status": args.status})

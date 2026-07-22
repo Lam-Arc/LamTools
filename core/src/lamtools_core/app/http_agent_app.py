@@ -105,11 +105,13 @@ class CoreConfigRoutingLLMClient:
             if isinstance(metadata.get("thinking_budget"), int) and not isinstance(metadata.get("thinking_budget"), bool)
             else self.thinking_budget or config.thinking_budget
         )
+        reasoning_effort = str(metadata.get("reasoning_effort") or "")
         return config, CoreHttpLLMClient(
             config=config,
             adapter_profile=profile,
             thinking_enabled=thinking_enabled,
             thinking_budget=thinking_budget,
+            reasoning_effort=reasoning_effort,
             max_tokens=self.max_tokens or config.max_output_tokens,
             temperature=self.temperature if self.temperature is not None else config.temperature,
         )

@@ -206,7 +206,7 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
     return ok
   }
 
-  async function submit(submissionOptions: { clearComposer?: boolean } = {}): Promise<SubmitCoreComposerTaskResult | null> {
+  async function submit(submissionOptions: { clearComposer?: boolean; forceGuide?: boolean } = {}): Promise<SubmitCoreComposerTaskResult | null> {
     if (actionMode.value === 'stop') {
       await stop()
       return null
@@ -230,6 +230,7 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
         executeCommand: runCommand,
         steerTurn: options.steerTurn,
         queueInput: options.queueInput,
+        forceGuide: submissionOptions.forceGuide === true,
         startTurn: async (_threadId, input) => {
           const started = await liveTurnController.startThreadTurn(
             input,
@@ -275,9 +276,10 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
     if (event.key === 'Enter' && (!event.shiftKey || paletteVisible.value)) {
       event.preventDefault()
       lastEnterHandledAt.value = Date.now()
+      const forceGuide = event.ctrlKey || event.metaKey
       const selected = paletteVisible.value ? commandPalette.selected() : null
       if (selected) await selectCommand(selected)
-      else await submit({ clearComposer: true })
+      else await submit({ clearComposer: true, forceGuide })
       return true
     }
     return false

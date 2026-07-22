@@ -18,17 +18,15 @@ import {
   createCoreAppServerRuntimeController,
   createCoreAppServerRuntimeState,
   hydrateSnapshot,
-  listGoals,
   RuntimePanel,
   selectLatestActiveTurnId,
   selectLatestTurnStatus,
   SessionSidebar,
-  updateGoal,
   useCoreApprovalController,
+  useCoreGoals,
   useCoreWorkbenchProjectionController,
   WorkspaceShell,
   type CoreAppSnapshot,
-  type CoreGoal,
   type CoreSessionListItem,
 } from '@lamtools/ui'
 import {
@@ -42,9 +40,7 @@ const activeSessionId = ref<string | null>(null)
 const composerText = ref('')
 const loadError = ref('')
 const actionError = ref('')
-const goalError = ref('')
 const sessionLoading = ref(false)
-const activeGoal = ref<CoreGoal | null>(null)
 const shallowThinkingPending = ref(false)
 const runtime = reactive(createCoreAppServerRuntimeState<CoreAppSnapshot, CoreAppServerClient>())
 const snapshot = computed(() => runtime.state)
@@ -89,6 +85,8 @@ const projectionController = useCoreWorkbenchProjectionController({
 })
 const { messages, processExpandedIds, toggleProcess } = projectionController
 const stepGroups = computed(() => buildCurrentTurnChecklistGroups(messages.value))
+
+const { activeGoal, goalError, refreshGoal, handleCancelGoal } = useCoreGoals({ activeSessionId })
 
 const approvalController = useCoreApprovalController({
   messages,
@@ -135,32 +133,6 @@ const workbenchError = computed(() => (
   || runtime.lastError
   || goalError.value
 ))
-
-let goalRequestGeneration = 0
-
-async function refreshGoal(threadId: string | null) {
-  const generation = ++goalRequestGeneration
-  activeGoal.value = null
-  goalError.value = ''
-  if (!threadId) return
-  try {
-    const goals = await listGoals(threadId)
-    if (generation !== goalRequestGeneration || activeSessionId.value !== threadId) return
-    activeGoal.value = goals.find(goal => ['pending', 'active', 'blocked'].includes(goal.status)) ?? null
-  } catch (error) {
-    if (generation !== goalRequestGeneration || activeSessionId.value !== threadId) return
-    goalError.value = error instanceof Error ? error.message : '目标读取失败'
-  }
-}
-
-async function handleCancelGoal(goal: CoreGoal) {
-  try {
-    await updateGoal(goal.id, 'cancelled', 'cancelled by user')
-    if (activeGoal.value?.id === goal.id) activeGoal.value = null
-  } catch (error) {
-    goalError.value = error instanceof Error ? error.message : '目标取消失败'
-  }
-}
 
 async function loadInitialData() {
   sessionLoading.value = true

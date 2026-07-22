@@ -2,7 +2,7 @@ export interface CoreGoal {
   id: string
   thread_id: string
   objective: string
-  status: 'pending' | 'active' | 'completed' | 'failed' | 'cancelled' | 'blocked'
+  status: 'active' | 'blocked' | 'archived'
   status_reason?: string
   completion_criteria?: string[]
   metadata?: Record<string, unknown>

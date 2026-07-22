@@ -87,29 +87,28 @@ function isSubmitting(itemId: string): boolean {
 </template>
 
 <style scoped>
+/* ===== Queued input tray — inset card between goal strip and textarea ===== */
+
 .core-queued-input-tray {
-  position: absolute;
-  right: var(--queued-input-right-inset, 0);
-  bottom: calc(100% + 8px);
-  left: var(--queued-input-left-inset, 20px);
-  width: calc(100% - var(--composer-side-width, 58px) - var(--queued-input-left-inset, 20px) - var(--queued-input-right-inset, 0px));
+  margin: 4px 12px 6px;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--theme-backdrop-text) 10%, transparent);
-  background: color-mix(in srgb, var(--theme-surface) 96%, transparent);
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--theme-composer-text) 7%, transparent);
+  background: color-mix(in srgb, var(--theme-composer-text) 4%, var(--theme-composer-background));
 }
 
 .core-queued-input-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  min-height: 36px;
+  min-height: 34px;
   gap: 8px;
-  padding: 7px 8px;
+  padding: 6px 10px;
   font-size: 12px;
 }
 
 .core-queued-input-row + .core-queued-input-row {
-  border-top: 1px solid color-mix(in srgb, var(--theme-backdrop-text) 7%, transparent);
+  border-top: 1px solid color-mix(in srgb, var(--theme-composer-text) 6%, transparent);
 }
 
 .core-queued-input-copy {
@@ -122,13 +121,13 @@ function isSubmitting(itemId: string): boolean {
 
 .core-queued-input-status {
   flex: 0 0 auto;
-  color: color-mix(in srgb, var(--theme-backdrop-text) 50%, transparent);
+  color: color-mix(in srgb, var(--theme-composer-text) 40%, transparent);
 }
 
 .core-queued-input-text {
   min-width: 0;
   overflow: hidden;
-  color: color-mix(in srgb, var(--theme-backdrop-text) 82%, transparent);
+  color: color-mix(in srgb, var(--theme-composer-text) 75%, transparent);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -136,9 +135,9 @@ function isSubmitting(itemId: string): boolean {
 .core-queued-input-edit {
   min-width: 0;
   width: 100%;
-  border: 1px solid color-mix(in srgb, var(--theme-backdrop-text) 16%, transparent);
-  background: color-mix(in srgb, var(--theme-surface) 92%, transparent);
-  color: var(--theme-backdrop-text);
+  border: 1px solid color-mix(in srgb, var(--theme-composer-text) 16%, transparent);
+  background: color-mix(in srgb, var(--theme-composer-background) 92%, transparent);
+  color: var(--theme-composer-text);
   font: inherit;
   line-height: 1.4;
   outline: none;
@@ -146,7 +145,7 @@ function isSubmitting(itemId: string): boolean {
 }
 
 .core-queued-input-edit:focus {
-  border-color: color-mix(in srgb, var(--theme-backdrop-text) 32%, transparent);
+  border-color: color-mix(in srgb, var(--theme-composer-text) 32%, transparent);
 }
 
 .core-queued-input-actions {
@@ -159,16 +158,17 @@ function isSubmitting(itemId: string): boolean {
 .core-queued-input-actions button {
   height: 24px;
   min-width: 24px;
-  border: 1px solid color-mix(in srgb, var(--theme-backdrop-text) 10%, transparent);
-  background: color-mix(in srgb, var(--theme-backdrop-text) 5%, transparent);
-  color: color-mix(in srgb, var(--theme-backdrop-text) 72%, transparent);
+  border: 1px solid color-mix(in srgb, var(--theme-composer-text) 10%, transparent);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--theme-composer-text) 4%, transparent);
+  color: color-mix(in srgb, var(--theme-composer-text) 65%, transparent);
   cursor: pointer;
   font-size: 11px;
 }
 
 .core-queued-input-actions button:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--theme-backdrop-text) 10%, transparent);
-  color: var(--theme-backdrop-text);
+  background: color-mix(in srgb, var(--theme-composer-text) 10%, transparent);
+  color: var(--theme-composer-text);
 }
 
 .core-queued-input-actions button:disabled {

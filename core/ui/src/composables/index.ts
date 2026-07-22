@@ -80,3 +80,8 @@ export {
   type CoreScrollableElement,
   type UseCoreAutoFollowScrollOptions,
 } from './useCoreAutoFollowScroll'
+
+export {
+  useCoreGoals,
+  type UseCoreGoalsOptions,
+} from './useCoreGoals'

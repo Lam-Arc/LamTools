@@ -15,6 +15,7 @@ export interface SubmitCoreComposerTaskOptions {
   steerTurn?: (threadId: string, turnId: string, inputItems: CoreInputItem[]) => Promise<void>
   queueInput: (threadId: string, inputItems: CoreInputItem[]) => Promise<void>
   startTurn: (threadId: string, inputItems: CoreInputItem[]) => Promise<boolean>
+  forceGuide?: boolean
 }
 
 export type SubmitCoreComposerTaskResult =
@@ -88,7 +89,7 @@ export async function submitCoreComposerTask(
 
   if (isCoreActiveTurnStatus(options.status)) {
     const inputItems = buildCoreComposerInputItems(cleaned, attachments, commandCatalog)
-    if (attachments.length === 0 && options.activeTurnId && options.steerTurn) {
+    if (options.forceGuide && attachments.length === 0 && options.activeTurnId && options.steerTurn) {
       await options.steerTurn(options.threadId, options.activeTurnId, inputItems)
       return { status: 'guided', inputItems }
     }

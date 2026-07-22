@@ -26,12 +26,14 @@ export const CORE_EXECUTION_CONTROLS_STORAGE_KEYS = {
   modelId: 'lamtools.core.executionControls.modelId',
   thinkingMode: 'lamtools.core.executionControls.thinkingMode',
   shallowThinking: 'lamtools.core.executionControls.shallowThinking',
+  activeMode: 'lamtools.core.executionControls.activeMode',
 } as const
 
 export interface CoreExecutionControlsStateInitial {
   modelId?: string
   thinkingMode?: CoreThinkingMode
   shallowThinkingEnabled?: boolean
+  activeMode?: string
 }
 
 export interface CoreExecutionControlsStateLabels {
@@ -58,6 +60,7 @@ export interface CoreExecutionControlsState<TModel extends CoreExecutionModelSou
   selectedModelId: Ref<string>
   selectedThinkingMode: Ref<CoreThinkingMode>
   shallowThinkingEnabled: Ref<boolean>
+  activeMode: Ref<string>
   modelOptions: ComputedRef<CoreSelectOption[]>
   thinkingModeOptions: ComputedRef<CoreThinkingModeOption[]>
   activeModel: ComputedRef<TModel | null>
@@ -65,6 +68,7 @@ export interface CoreExecutionControlsState<TModel extends CoreExecutionModelSou
   payload: ComputedRef<CoreThinkingPayload>
   selectModel(modelId: string): void
   selectThinkingMode(mode: string): void
+  selectMode(mode: string): void
   turnOptions(): Record<string, unknown>
 }
 
@@ -91,6 +95,7 @@ export function useCoreExecutionControlsState<
     storageKeys.shallowThinking,
     options.initial?.shallowThinkingEnabled === true,
   ))
+  const activeMode = ref(options.initial?.activeMode || 'execute')
   const activeModel = computed(() => {
     const configuredDefault = options.defaultModel.value
     const currentDefault = configuredDefault
@@ -175,10 +180,22 @@ export function useCoreExecutionControlsState<
     selectedThinkingMode.value = normalizeCoreThinkingMode(mode)
   }
 
+  function selectMode(mode: string): void {
+    activeMode.value = mode
+    try { options.storage?.setItem(storageKeys.activeMode, mode) } catch { /* noop */ }
+  }
+
+  // Restore persisted activeMode on mount
+  try {
+    const stored = options.storage?.getItem(storageKeys.activeMode)
+    if (stored) activeMode.value = stored
+  } catch { /* noop */ }
+
   return {
     selectedModelId,
     selectedThinkingMode,
     shallowThinkingEnabled,
+    activeMode,
     modelOptions,
     thinkingModeOptions,
     activeModel,
@@ -186,12 +203,14 @@ export function useCoreExecutionControlsState<
     payload,
     selectModel,
     selectThinkingMode,
+    selectMode,
     turnOptions: () => ({
       ...payload.value,
       ...(activeModel.value?.id ? { model_id: activeModel.value.id } : {}),
       ...(Number(activeModel.value?.context_window || 0) > 0
         ? { context_window_tokens: Number(activeModel.value?.context_window) }
         : {}),
+      active_mode: activeMode.value,
     }),
   }
 }

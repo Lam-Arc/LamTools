@@ -16,6 +16,7 @@ import {
   CoreAgentsEditor,
   CoreArrangeManager,
   CoreExecutionControls,
+  CoreGoalStrip,
   CoreResourceStats,
   CoreSubAgentDialog,
   CoreSubAgentPanel,
@@ -35,6 +36,7 @@ import {
   useCoreAutoFollowScroll,
   useCoreApprovalController,
   useCoreExecutionControlsState,
+  useCoreGoals,
   useCoreLiveComposerController,
   useCoreWorkbenchProjectionController,
   useCoreQueuedInputController,
@@ -99,6 +101,8 @@ const {
   selectThinkingMode,
   shallowThinkingEnabled,
   thinkingModeOptions,
+  activeMode,
+  selectMode,
   turnOptions: currentThinkingOptions,
 } = useCoreExecutionControlsState({
   models: computed(() => configStore.models),
@@ -138,6 +142,11 @@ const {
     }
   },
 })
+
+const modeOptions = [
+  { value: 'consider', label: 'consider' },
+  { value: 'execute', label: 'execute' },
+]
 
 // --- Core controller ---
 const coreApi: CoreWorkbenchApi = {
@@ -301,6 +310,8 @@ const {
   toggleProcess,
 } = projectionController
 const runtimeChecklistGroups = computed(() => buildCurrentTurnChecklistGroups(messages.value))
+
+const { activeGoal, goalError, refreshGoal, handleCancelGoal } = useCoreGoals({ activeSessionId })
 
 const projectedSubAgentRuns = computed(() => selectCoreSubAgentRuns(messages.value))
 const subAgentRecords = ref<Record<string, Record<string, unknown>>>({})
@@ -786,6 +797,10 @@ watch(
   },
   { flush: 'post' },
 )
+
+watch([activeSessionId, activeSessionStatus], ([threadId]) => {
+  void refreshGoal(threadId)
+})
 
 onMounted(() => {
   void refreshThreadResizeObserver()
@@ -1754,6 +1769,7 @@ watch(activeSessionId, (newId) => {
           liveComposerController.loadCommandCatalog(newId),
           refreshSubAgents(newId),
         ])
+        void refreshGoal(newId)
       })
       .catch((err) => {
         if (err instanceof Error && err.name === 'AbortError') return
@@ -2020,6 +2036,10 @@ onMounted(async () => {
       </section>
     </template>
 
+    <template #composer-preamble>
+      <CoreGoalStrip v-if="activeGoal" :goal="activeGoal" @cancel="handleCancelGoal" />
+    </template>
+
     <!-- Composer tools -->
     <template #composer-textarea>
       <input
@@ -2048,8 +2068,8 @@ onMounted(async () => {
         @preview="previewPendingAttachment"
         @open="openPendingAttachment"
       />
-      <div v-if="composerErrorText" class="composer-feedback composer-feedback--error">
-        {{ composerErrorText }}
+      <div v-if="composerErrorText || goalError" class="composer-feedback composer-feedback--error">
+        {{ goalError || composerErrorText }}
       </div>
       <div class="composer-input-wrap" :class="{ 'has-command-tokens': hasComposerCommandTokens }">
         <CommandPalette
@@ -2095,6 +2115,8 @@ onMounted(async () => {
         :model-value="selectedModelId"
         :thinking-mode="selectedThinkingMode"
         :shallow-thinking-enabled="shallowThinkingEnabled"
+        :active-mode="activeMode"
+        :mode-options="modeOptions"
         :model-options="modelOptions"
         :thinking-mode-options="thinkingModeOptions"
         model-aria-label="模型"
@@ -2103,6 +2125,7 @@ onMounted(async () => {
         @update:model-value="selectModel"
         @update:thinking-mode="selectThinkingMode"
         @update:shallow-thinking-enabled="(enabled) => { shallowThinkingEnabled = enabled }"
+        @update:active-mode="selectMode"
       >
         <template #leading>
           <button

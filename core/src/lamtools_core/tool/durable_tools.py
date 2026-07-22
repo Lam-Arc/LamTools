@@ -118,7 +118,7 @@ def durable_tool_handlers(
             operation = "goal.update"
             payload = {
                 "goal_id": str(args.get("goal_id") or "").strip(),
-                "status": "cancelled",
+                "status": "archived",
                 "status_reason": "cancelled by agent request",
             }
         else:

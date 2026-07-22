@@ -31,6 +31,7 @@ from lamtools_core.snapshot import reduce_run_item_events
 from lamtools_core.tool import ToolCall, ToolContext, ToolResult
 from lamtools_core.tool.default_toolbox import ApprovalPolicy, CoreToolbox, build_core_toolbox
 from lamtools_core.tool.command_runner import command_shell_prompt
+from lamtools_core.tool.loadtools import mode_prompt_line
 from lamtools_core.tool.workspace import line_count
 from lamtools_core.app.project_context import ProjectContextLoader
 
@@ -99,8 +100,10 @@ class CoreBaseAgentConfig:
     max_tokens: int | None = None
     thinking_enabled: bool | None = None
     thinking_budget: int | None = None
+    reasoning_effort: str = ""
     approval_policy: ApprovalPolicy = "require"
     runtime_controls: dict[str, dict[str, bool]] | None = None
+    active_mode: str | None = None  # loadtools.jsonc mode name (e.g. "consider", "execute")
     # Advanced: override the default project context file list.
     # None (default) → uses DEFAULT_PROJECT_CONTEXT_FILES.
     # Prefer load_context.jsonc in the workspace for per-project
@@ -185,6 +188,9 @@ class CoreBaseAgentKit:
             ),
             "Final answers should summarize the outcome and mention important saved paths.",
         ]
+        mode_line = mode_prompt_line(self.toolbox.load_tools, self.config.active_mode)
+        if mode_line:
+            system_lines.insert(2, mode_line)  # inject right after "当前项目" line
         skill_index = self.toolbox.skill_index()
         if skill_index:
             system_lines.extend(["", skill_index])
@@ -238,6 +244,11 @@ class CoreBaseAgentKit:
                 **(
                     {"thinking_budget": self.config.thinking_budget}
                     if self.config.thinking_budget is not None
+                    else {}
+                ),
+                **(
+                    {"reasoning_effort": self.config.reasoning_effort}
+                    if self.config.reasoning_effort
                     else {}
                 ),
             },
@@ -327,7 +338,7 @@ class CoreBaseAgentKit:
         return bool(tools.get(name, True))
 
     def _filtered_tools(self) -> list[dict[str, Any]]:
-        all_tools = self.toolbox.model_tools()
+        all_tools = self.toolbox.model_tools(active_mode=self.config.active_mode)
         controls = self._runtime_controls.get("tools", {})
         if not controls:
             return all_tools

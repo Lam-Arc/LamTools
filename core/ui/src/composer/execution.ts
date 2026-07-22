@@ -1,4 +1,4 @@
-export type CoreThinkingMode = 'none' | 'low' | 'medium' | 'high' | 'max'
+export type CoreThinkingMode = 'none' | 'low' | 'medium' | 'high' | 'max' | 'ultra' | 'ULTRA'
 
 export interface CoreExecutionModelSource {
   id?: string
@@ -31,28 +31,33 @@ export interface CoreThinkingModeOption {
 export interface CoreThinkingPayload {
   thinking_enabled: boolean
   thinking_budget?: number
+  reasoning_effort?: string
   shallow_thinking_enabled?: boolean
 }
 
 export type CoreThinkingLabels = Record<CoreThinkingMode, string>
 
 export const CORE_THINKING_LABELS: CoreThinkingLabels = {
-  none: 'No thinking',
-  low: 'Low thinking',
-  medium: 'Medium thinking',
-  high: 'High thinking',
-  max: 'Max thinking',
+  none: 'No',
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
+  max: 'Max',
+  ultra: 'Ultra',
+  ULTRA: 'ULTRA',
 }
 
 export const CORE_THINKING_BUDGETS: Record<Exclude<CoreThinkingMode, 'none'>, number> = {
-  low: 2_000,
-  medium: 6_000,
-  high: 10_000,
-  max: 20_000,
+  low: 1_024,
+  medium: 4_096,
+  high: 8_192,
+  max: 16_384,
+  ultra: 32_768,
+  ULTRA: 65_536,
 }
 
 export function normalizeCoreThinkingMode(value: unknown, fallback: CoreThinkingMode = 'none'): CoreThinkingMode {
-  return value === 'low' || value === 'medium' || value === 'high' || value === 'max' || value === 'none'
+  return value === 'low' || value === 'medium' || value === 'high' || value === 'max' || value === 'ultra' || value === 'ULTRA' || value === 'none'
     ? value
     : fallback
 }
@@ -138,7 +143,7 @@ export function coreThinkingModeOptions(
     return [{ value: 'none', label: labels.none }]
   }
   const modes: CoreThinkingMode[] = isMaxOnlyThinkingProvider(params.provider)
-    ? ['max', 'none']
+    ? ['high', 'medium', 'low', 'none']
     : ['max', 'high', 'medium', 'low', 'none']
   return modes.map((value) => ({ value, label: labels[value] }))
 }
@@ -155,12 +160,20 @@ export function coreThinkingPayload(params: {
   if (mode === 'none' || !params.model?.thinking_supported) {
     return { thinking_enabled: false, shallow_thinking_enabled: shallow }
   }
+  const xfyun = isMaxOnlyThinkingProvider(params.provider)
   const budgets = params.budgets ?? CORE_THINKING_BUDGETS
   const modelBudget = Number(params.model.thinking_budget || 0)
-  const thinking_budget = isMaxOnlyThinkingProvider(params.provider)
+  const thinking_budget = xfyun
     ? modelBudget || budgets.max
     : Math.max(modelBudget || 0, budgets[mode])
-  return { thinking_enabled: true, thinking_budget, shallow_thinking_enabled: shallow }
+  const reasoning_effort = xfyun ? xfyunReasoningEffort(mode) : undefined
+  return { thinking_enabled: true, thinking_budget, reasoning_effort, shallow_thinking_enabled: shallow }
+}
+
+function xfyunReasoningEffort(mode: CoreThinkingMode): string {
+  if (mode === 'low') return 'low'
+  if (mode === 'medium') return 'medium'
+  return 'high'
 }
 
 export function readStoredCoreThinkingMode(

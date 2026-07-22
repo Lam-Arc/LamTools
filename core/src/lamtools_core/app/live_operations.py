@@ -19,7 +19,9 @@ from lamtools_core.composer_commands import (
 )
 from lamtools_core.runtime import RuntimeStateStore, default_runtime_task_registry
 from lamtools_core.project.directory_picker import ProjectDirectoryPickerUnavailable, pick_project_directory
-from lamtools_core.tool.approval import normalize_command_policies
+from lamtools_core.tool.approval import load_access_tools, normalize_command_policies
+from lamtools_core.tool.approval import PermissionMode, TierTools
+from lamtools_core.tool.loadtools import LoadTools, default_load_tools, load_loadtools, mode_names
 
 from .event_store import AppEventEnvelope, AppEventInput, CORE_RUN_ITEM_METHOD, SqlAlchemyAppEventStore
 from .command_execution import execute_command_action
@@ -553,7 +555,7 @@ async def handle_turn_start_operation(
         return write_result
     accepted, user, running, snapshot, materialized = write_result
 
-    approval_policy = await _resolve_turn_approval_policy(context=context, params=params)
+    resolved = await _resolve_turn_approval_policy(context=context, params=params)
     runtime_start = {
         "thread_id": thread_id,
         "turn_id": turn_id,
@@ -561,10 +563,14 @@ async def handle_turn_start_operation(
         "text": prepared.runtime_text,
         "input": prepared.runtime_input,
         "work_root": prepared.work_root,
-        "approval_policy": approval_policy,
+        "approval_policy": resolved["approval_policy"],
+        "active_tier": resolved["active_tier"],
+        "tier_tools": resolved["tier_tools"],
+        "active_mode": resolved["active_mode"],
         "model_id": str(params.get("model_id") or params.get("modelId") or ""),
         "thinking_enabled": params.get("thinking_enabled") if isinstance(params.get("thinking_enabled"), bool) else None,
         "thinking_budget": params.get("thinking_budget") if isinstance(params.get("thinking_budget"), int) else None,
+        "reasoning_effort": str(params.get("reasoning_effort") or params.get("reasoningEffort") or ""),
         "shallow_thinking_enabled": (
             params.get("shallow_thinking_enabled")
             if isinstance(params.get("shallow_thinking_enabled"), bool)
@@ -629,12 +635,29 @@ async def handle_turn_start_operation(
     )
 
 
-async def _resolve_turn_approval_policy(*, context: "CoreLiveContext", params: dict[str, Any]) -> str:
+async def _resolve_turn_approval_policy(*, context: "CoreLiveContext", params: dict[str, Any]) -> dict[str, Any]:
+    """Resolve approval policy, tier configuration, and loadtools mode for a turn.
+    
+    Returns dict with keys: approval_policy, active_tier, tier_tools, active_mode, load_tools
+    """
     explicit = params.get("approval_policy") or params.get("approvalPolicy")
+    active_mode = params.get("active_mode")
+    if isinstance(active_mode, str) and active_mode.strip():
+        active_mode = active_mode.strip()
+    else:
+        active_mode = None
+    load_tools = _load_load_tools(context)
+    default_result: dict[str, Any] = {
+        "approval_policy": "require",
+        "active_tier": None,
+        "tier_tools": None,
+        "active_mode": active_mode,
+    }
     if explicit is not None:
-        return "auto_approve" if explicit == "auto_approve" else "require"
+        default_result["approval_policy"] = "auto_approve" if explicit == "auto_approve" else "require"
+        return default_result
     if not context.operations.has("settings.get"):
-        return "require"
+        return default_result
     try:
         result = await context.operations.execute(
             "settings.get",
@@ -642,13 +665,60 @@ async def _resolve_turn_approval_policy(*, context: "CoreLiveContext", params: d
             metadata={"source": "core_live"},
         )
     except Exception:
-        return "require"
+        return default_result
     if result.status != "ok":
-        return "require"
+        return default_result
     value = result.payload.get("value") if isinstance(result.payload, dict) else None
-    raw_policies = value.get("command_policies") if isinstance(value, dict) else None
-    policies = normalize_command_policies(raw_policies if isinstance(raw_policies, dict) else None)
-    return "auto_approve" if all(policy == "auto_allow" for policy in policies.values()) else "require"
+    if not isinstance(value, dict):
+        return default_result
+    permission_mode = value.get("permission_mode")
+    if permission_mode not in ("read_only", "limited_edit", "full_edit"):
+        return default_result
+    active_tier: PermissionMode = permission_mode  # type: ignore[assignment]
+    tier_tools = _load_tier_tools(context)
+    approval_policy = "auto_approve" if active_tier == "full_edit" else "require"
+    return {
+        "approval_policy": approval_policy,
+        "active_tier": active_tier,
+        "tier_tools": tier_tools,
+        "active_mode": active_mode,
+    }
+
+
+def _load_tier_tools(context: "CoreLiveContext") -> TierTools | None:
+    """Load access_tools.jsonc from the data directory."""
+    data_dir_raw = context.host.runtime_task_registry._data_dir if hasattr(context.host.runtime_task_registry, "_data_dir") else None
+    if data_dir_raw is None:
+        return None
+    data_dir = Path(str(data_dir_raw))
+    candidates = [
+        data_dir / "access_tools.jsonc",
+        Path(__file__).resolve().parent.parent / "resources" / "access_tools.jsonc",
+    ]
+    for candidate in candidates:
+        try:
+            if candidate.exists():
+                return load_access_tools(candidate)
+        except (OSError, ValueError):
+            continue
+    return None
+
+
+def _load_load_tools(context: "CoreLiveContext") -> LoadTools:
+    """Load loadtools.jsonc — prefer data_dir, fallback to Core default."""
+    data_dir_raw = context.host.runtime_task_registry._data_dir if hasattr(context.host.runtime_task_registry, "_data_dir") else None
+    if data_dir_raw:
+        data_dir = Path(str(data_dir_raw))
+        candidate = data_dir / "loadtools.jsonc"
+        try:
+            if candidate.exists():
+                member_tools = load_loadtools(candidate)
+                if member_tools:
+                    return member_tools
+        except (OSError, ValueError):
+            pass
+    # Fallback to Core built-in default
+    return default_load_tools()
 
 
 async def handle_turn_cancel_operation(
@@ -1443,7 +1513,7 @@ async def _dispatch_next_queue_item(
     if next_dispatchable_queue_item(current_snapshot) is None:
         return
     context.host.runtime_task_registry.release_run(thread_id, run_id=completed_turn_id)
-    approval_policy = await _resolve_turn_approval_policy(context=context, params={})
+    resolved = await _resolve_turn_approval_policy(context=context, params={})
     claimed_turn_id = ""
 
     async def write(db: AsyncSession):
@@ -1509,7 +1579,10 @@ async def _dispatch_next_queue_item(
                 "text": prepared.runtime_text,
                 "input": prepared.runtime_input,
                 "work_root": prepared.work_root,
-                "approval_policy": approval_policy,
+                "approval_policy": resolved["approval_policy"],
+                "active_tier": resolved["active_tier"],
+                "tier_tools": resolved["tier_tools"],
+                "active_mode": resolved["active_mode"],
                 **prepared.runtime_extras,
                 **materialized.runtime_extras,
             }

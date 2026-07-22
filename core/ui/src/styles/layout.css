@@ -247,7 +247,12 @@
     inset 0 1px 0 color-mix(in srgb, var(--theme-main-text) 5%, transparent);
   transition:
     left .5s cubic-bezier(.2,.8,.2,1),
-    right .5s cubic-bezier(.2,.8,.2,1);
+    right .5s cubic-bezier(.2,.8,.2,1),
+    padding-bottom .3s ease;
+}
+
+.workspace-shell:has(.core-goal-area) .workspace-main {
+  padding-bottom: 210px;
 }
 
 /* =========================================================================
@@ -317,6 +322,19 @@
   position: relative;
   z-index: 1;
 }
+
+.core-goal-area {
+  background: color-mix(in srgb, var(--panel-2) 80%, transparent);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border-radius: 20px 20px 0 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--theme-composer-text) 8%, transparent);
+}
+
+.core-goal-area[data-status='blocked'] {
+  background: color-mix(in srgb, var(--orange) 10%, color-mix(in srgb, var(--panel-2) 80%, transparent));
+}
+
 .floating-composer.dragover {
   border-color: var(--blue);
   box-shadow:
@@ -2704,7 +2722,7 @@
 .thread .reasoning-body {
   margin: 3px 0 8px 24px;
   max-height: 800px;
-  overflow: hidden;
+  overflow: auto;
   padding: 2px 0 6px;
   border: 0;
   border-radius: 0;

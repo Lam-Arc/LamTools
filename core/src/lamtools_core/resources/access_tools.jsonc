@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "tiers": {
+    "read_only": {
+      "access": [
+        "read_file",
+        "list_dir",
+        "search_files",
+        "search_content",
+        "web_search",
+        "web_fetch",
+        "git_status",
+        "git_diff",
+        "load_skill",
+        "browser_check",
+        "sub_agent"
+      ]
+    },
+    "limited_edit": {
+      "access": [
+        "read_file",
+        "list_dir",
+        "search_files",
+        "search_content",
+        "web_search",
+        "web_fetch",
+        "git_status",
+        "git_diff",
+        "load_skill",
+        "browser_check",
+        "sub_agent",
+        "write_file",
+        "edit_file",
+        "write_spreadsheet",
+        "document_normalize",
+        "run_tests"
+      ]
+    },
+    "full_edit": {
+      "access": []
+    }
+  }
+}

@@ -17,15 +17,12 @@ from lamtools_core.llm import ChatMessage, LLMRequest
 from . import CompletionResult, RuntimeState
 
 
-GoalStatus = Literal["pending", "active", "blocked", "completed", "failed", "cancelled"]
-_TERMINAL_STATUSES: frozenset[GoalStatus] = frozenset({"completed", "failed", "cancelled"})
+GoalStatus = Literal["active", "blocked", "archived"]
+_TERMINAL_STATUSES: frozenset[GoalStatus] = frozenset({"archived"})
 _ALLOWED_TRANSITIONS: dict[GoalStatus, frozenset[GoalStatus]] = {
-    "pending": frozenset({"active", "blocked", "completed", "failed", "cancelled"}),
-    "active": frozenset({"blocked", "completed", "failed", "cancelled"}),
-    "blocked": frozenset({"active", "completed", "failed", "cancelled"}),
-    "completed": frozenset(),
-    "failed": frozenset(),
-    "cancelled": frozenset(),
+    "active": frozenset({"blocked", "archived"}),
+    "blocked": frozenset({"active", "archived"}),
+    "archived": frozenset(),
 }
 
 
@@ -39,7 +36,7 @@ class Goal:
     thread_id: str
     objective: str
     completion_criteria: tuple[str, ...] = ()
-    status: GoalStatus = "pending"
+    status: GoalStatus = "active"
     status_reason: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
     revision: int = 1
@@ -187,7 +184,7 @@ class GoalManager:
             metadata=deepcopy(current.metadata if metadata is None else metadata),
             revision=current.revision + 1,
             updated_at=now,
-            completed_at=now if next_status == "completed" else current.completed_at,
+            completed_at=now if next_status == "archived" else current.completed_at,
         )
         return await self.store.replace(updated, expected_revision=current.revision)
 
@@ -236,15 +233,9 @@ class GoalCompletionGate:
                 blocked=True,
                 summary="Goal belongs to a different thread",
             )
-        if goal.status == "completed":
-            return CompletionResult(passed=True, summary=goal.status_reason or "goal completed")
-        if goal.status in {"failed", "cancelled"}:
-            return CompletionResult(
-                passed=False,
-                blocked=True,
-                summary=goal.status_reason or f"goal is {goal.status}",
-            )
-        if goal.status in {"pending", "blocked"}:
+        if goal.status == "archived":
+            return CompletionResult(passed=True, summary=goal.status_reason or "goal archived")
+        if goal.status == "blocked":
             goal = await self.manager.update(goal.id, status="active", status_reason="")
 
         evaluated = self.evaluator(goal, {**context, "state": state})
@@ -273,7 +264,7 @@ class GoalCompletionGate:
         elif evaluated.passed:
             state.metadata.pop(attempts_key, None)
 
-        status: GoalStatus = "completed" if result.passed else "blocked" if result.blocked else "active"
+        status: GoalStatus = "archived" if result.passed else "blocked" if result.blocked else "active"
         await self.manager.update(
             goal.id,
             status=status,

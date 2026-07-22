@@ -188,4 +188,13 @@ __all__ = [
     "ToolExecutor",
     "ToolExecutorProtocol",
     "ToolRegistry",
+    # loadtools
+    "LoadToolMode",
+    "LoadTools",
+    "ModeName",
+    "default_load_tools",
+    "load_loadtools",
+    "mode_names",
+    "mode_prompt_line",
+    "mode_tool_set",
 ]

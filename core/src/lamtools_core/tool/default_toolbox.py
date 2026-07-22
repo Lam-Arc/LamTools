@@ -10,6 +10,7 @@ from lamtools_core.agent import SUB_AGENT_TOOL_NAME, SUB_AGENT_TOOL_SPEC, SubAge
 from lamtools_core.skills import SkillRegistry
 from lamtools_core.tool import ToolCall, ToolContext, ToolResult, ToolSpec
 from lamtools_core.tool.approval import ApprovalGate
+from lamtools_core.tool.loadtools import LoadTools, mode_tool_set
 from lamtools_core.tool.command import run_subprocess
 from lamtools_core.tool.command_tools import CommandToolHandlers
 from lamtools_core.tool.durable_tools import (
@@ -516,6 +517,9 @@ class CoreToolbox:
         operation_executor: OperationExecutor | None = None,
         enable_goal_tool: bool = False,
         enable_arrange_tool: bool = False,
+        active_tier: "PermissionMode | None" = None,
+        tier_tools: "TierTools | None" = None,
+        load_tools: LoadTools | None = None,
     ) -> None:
         self.work_root = Path(work_root).resolve()
         self.work_root.mkdir(parents=True, exist_ok=True)
@@ -525,6 +529,7 @@ class CoreToolbox:
         self._failed_sub_agent_calls: dict[tuple[str, str], dict[str, Any]] = {}
         self.approval_policy = approval_policy
         self.disabled_tools = set(disabled_tools or set())
+        self.load_tools = load_tools or {}
         self.tool_permissions = dict(DEFAULT_TOOL_PERMISSIONS)
         self.skill_registry = skill_registry or SkillRegistry(explicit_roots=self.loaded_skill_roots)
         self._dynamic_mcp_tool_names = {spec.name for spec in mcp_tool_specs or [] if spec.name.startswith("mcp__")}
@@ -542,6 +547,8 @@ class CoreToolbox:
             work_root=self.work_root,
             tool_permissions=self.tool_permissions,
             command_policies=command_policies,
+            active_tier=active_tier,
+            tier_tools=tier_tools,
         )
         self._specs = [*default_core_tool_specs(), *list(mcp_tool_specs or []), *durable_specs]
         self._handlers = self._build_handlers(
@@ -566,8 +573,17 @@ class CoreToolbox:
         *,
         include_tools: set[str] | None = None,
         exclude_tools: set[str] | None = None,
+        active_mode: str | None = None,
     ) -> list[dict[str, Any]]:
-        return core_model_tools(self.tool_specs(), include_tools=include_tools, exclude_tools=exclude_tools)
+        effective_exclude = set(exclude_tools or set())
+        # Apply loadtools active_mode filtering
+        if active_mode and self.load_tools:
+            allowed = mode_tool_set(self.load_tools, active_mode)
+            if allowed is not None:
+                # Build exclude set = all tool names NOT in allowed set
+                all_names = {spec.name for spec in self.tool_specs()}
+                effective_exclude |= (all_names - allowed)
+        return core_model_tools(self.tool_specs(), include_tools=include_tools, exclude_tools=effective_exclude or None)
 
     def skill_index(self) -> str:
         return self.skill_registry.prompt_index(self.work_root)

@@ -7,7 +7,7 @@
     :theme="theme"
     :content-width="contentWidth"
     :allow-environment-import="true"
-    :command-policies="commandPolicies"
+    :permission-mode="permissionMode"
     @close="showSettings = false"
     @update:density="uiPreferences.setDensity"
     @update:content-width="uiPreferences.setContentWidth"
@@ -21,7 +21,7 @@
     @remove-stop="uiPreferences.removeStop"
     @sort-stops="uiPreferences.sortStops"
     @import-environment="importEnvironmentConfig"
-    @update-command-policy="updateCommandPolicy"
+    @update-permission-mode="updatePermissionMode"
     @create-provider="createProvider"
     @update-provider="updateProvider"
     @delete-provider="deleteProvider"
@@ -156,9 +156,24 @@
       </div>
     </template>
 
-    <template #composer-textarea>
-      <input ref="attachmentFileInput" class="sr-only" type="file" multiple @change="handleAttachmentInputChange" />
+    <template #composer-preamble>
+      <div v-if="activeGoal" class="core-goal-area" :data-status="activeGoal.status">
+        <CoreGoalStrip :goal="activeGoal" @cancel="handleCancelGoal" />
+        <CoreQueuedInputTray
+          v-model:draft="queuedInputDraft"
+          :items="queuedInputs"
+          :editing-id="editingQueuedInputId"
+          :can-guide="canGuideQueuedInput"
+          :submitting-ids="queueController.submittingItemIds.value"
+          @edit="(item) => queueController.beginEdit(item as CoreQueuedInput)"
+          @save="(item) => queueController.save(item as CoreQueuedInput)"
+          @cancel="queueController.cancelEdit"
+          @delete="(item) => queueController.remove(item as CoreQueuedInput)"
+          @guide="(item) => queueController.guide(item as CoreQueuedInput)"
+        />
+      </div>
       <CoreQueuedInputTray
+        v-else
         v-model:draft="queuedInputDraft"
         :items="queuedInputs"
         :editing-id="editingQueuedInputId"
@@ -170,6 +185,10 @@
         @delete="(item) => queueController.remove(item as CoreQueuedInput)"
         @guide="(item) => queueController.guide(item as CoreQueuedInput)"
       />
+    </template>
+
+    <template #composer-textarea>
+      <input ref="attachmentFileInput" class="sr-only" type="file" multiple @change="handleAttachmentInputChange" />
       <AttachmentTray
         :attachments="pendingAttachments"
         @remove="removeAttachment"
@@ -218,12 +237,15 @@
         :model-value="selectedModelId"
         :thinking-mode="selectedThinkingMode"
         :shallow-thinking-enabled="shallowThinkingEnabled"
+        :active-mode="activeMode"
+        :mode-options="modeOptions"
         :model-options="modelOptions"
         :thinking-mode-options="thinkingModeOptions"
         shallow-label="Shallow"
         @update:model-value="executionControls.selectModel"
         @update:thinking-mode="executionControls.selectThinkingMode"
         @update:shallow-thinking-enabled="setShallowThinking"
+        @update:active-mode="executionControls.selectMode"
       >
         <template #leading>
           <button class="composer-attachment-button" type="button" title="添加附件" aria-label="添加附件" @click="attachmentFileInput?.click()">+</button>
@@ -292,6 +314,7 @@ import {
   useCoreApprovalController,
   useCoreAutoFollowScroll,
   useCoreExecutionControlsState,
+  useCoreGoals,
   useCoreLiveComposerController,
   usePendingAttachments,
   useCoreQueuedInputController,
@@ -307,6 +330,7 @@ import CoreResourceStats from '../components/CoreResourceStats.vue'
 import CoreQueuedInputTray from '../components/CoreQueuedInputTray.vue'
 import CoreAgentsEditor from '../components/CoreAgentsEditor.vue'
 import CoreArrangeManager from '../components/CoreArrangeManager.vue'
+import CoreGoalStrip from '../components/CoreGoalStrip.vue'
 import CoreProjectCreate from '../components/CoreProjectCreate.vue'
 import CoreSessionTitleEditor from '../components/CoreSessionTitleEditor.vue'
 import CoreSessionRollback from '../components/CoreSessionRollback.vue'
@@ -382,10 +406,7 @@ const { density, contentWidth, theme } = uiPreferences
 const availableModels = ref<RawModel[]>([])
 const availableProviders = ref<RawProvider[]>([])
 const defaultModelId = ref('')
-const commandPolicies = ref<Record<'regular' | 'dangerous', 'auto_allow' | 'ask_user'>>({
-  regular: 'auto_allow',
-  dangerous: 'ask_user',
-})
+const permissionMode = ref<'read_only' | 'limited_edit' | 'full_edit'>('full_edit')
 const { pendingAttachments, attachmentInputItems, addUploaded, markFailed, removeAttachment, clearAttachments } = usePendingAttachments()
 const threadScrollEl = ref<HTMLElement | null>(null)
 const threadScroll = useCoreAutoFollowScroll(threadScrollEl)
@@ -409,7 +430,14 @@ const {
   selectedThinkingMode,
   shallowThinkingEnabled,
   thinkingModeOptions,
+  activeMode,
+  selectMode,
 } = executionControls
+
+const modeOptions = [
+  { value: 'consider', label: 'consider' },
+  { value: 'execute', label: 'execute' },
+]
 
 const latestStatus = computed(() => snapshot.value ? selectLatestTurnStatus(snapshot.value) : 'idle')
 const activeTurnId = computed(() => snapshot.value ? selectLatestActiveTurnId(snapshot.value) : '')
@@ -520,6 +548,9 @@ const projectionController = useCoreWorkbenchProjectionController({
 })
 const { messages, processExpandedIds, toggleProcess } = projectionController
 const stepGroups = computed(() => buildCurrentTurnChecklistGroups(messages.value))
+
+const { activeGoal, goalError, refreshGoal, handleCancelGoal } = useCoreGoals({ activeSessionId })
+
 const turnPrompts = computed(() => {
   const map: Record<string, string> = {}
   const state = snapshot.value
@@ -552,7 +583,7 @@ const approvalController = useCoreApprovalController({
 })
 approvalControllerRef.value = approvalController
 const workbenchErrorText = computed(() => (
-  loadError.value || composerErrorText.value || approvalController.lastError.value
+  loadError.value || composerErrorText.value || approvalController.lastError.value || goalError.value
 ))
 
 const queuedInputs = computed<CoreQueuedInput[]>(() => {
@@ -582,7 +613,7 @@ const canGuideQueuedInput = queueController.canGuide
 async function loadInitialData() {
   try {
     loadError.value = null
-    await Promise.all([loadModelOptions(), loadCommandPolicies(), refreshProjects(), refreshSessions()])
+    await Promise.all([loadModelOptions(), loadPermissionMode(), refreshProjects(), refreshSessions()])
     if (sessions.value[0]) await selectSession(sessions.value[0].id)
   } catch (error) {
     loadError.value = error instanceof Error ? error.message : String(error)
@@ -773,6 +804,7 @@ async function selectSession(id: string) {
   runtimeStatusText.value = ''
   await connectLive(id)
   await liveComposerController.loadCommandCatalog(id)
+  await refreshGoal(id)
   await threadScroll.scrollToBottom(true)
 }
 
@@ -922,29 +954,25 @@ async function importEnvironmentConfig() {
   await mutateConfig('config.import_env', {}, '已从当前环境导入')
 }
 
-async function loadCommandPolicies() {
+async function loadPermissionMode() {
   try {
     const result = await requestConfigOperation('settings.get', { namespace: 'core.runtimeControls' })
     const value = result.value && typeof result.value === 'object' ? result.value as Record<string, unknown> : {}
-    const policies = value.command_policies && typeof value.command_policies === 'object'
-      ? value.command_policies as Record<string, unknown>
-      : {}
-    commandPolicies.value = {
-      regular: policies.regular === 'ask_user' ? 'ask_user' : 'auto_allow',
-      dangerous: policies.dangerous === 'auto_allow' ? 'auto_allow' : 'ask_user',
+    const mode = value.permission_mode
+    if (mode === 'read_only' || mode === 'limited_edit' || mode === 'full_edit') {
+      permissionMode.value = mode
     }
   } catch {
-    commandPolicies.value = { regular: 'auto_allow', dangerous: 'ask_user' }
+    permissionMode.value = 'full_edit'
   }
 }
 
-async function updateCommandPolicy(group: 'regular' | 'dangerous', policy: 'auto_allow' | 'ask_user') {
-  const next = { ...commandPolicies.value, [group]: policy }
+async function updatePermissionMode(mode: 'read_only' | 'limited_edit' | 'full_edit') {
+  permissionMode.value = mode
   await requestConfigOperation('settings.update', {
     namespace: 'core.runtimeControls',
-    value: { command_policies: next },
+    value: { permission_mode: mode },
   })
-  commandPolicies.value = next
 }
 
 async function mutateConfig(method: string, params: object, successText: string) {
@@ -1011,15 +1039,25 @@ async function loadModelOptions() {
 
 function syncThreadResizeObserver() {
   if (typeof ResizeObserver === 'undefined') return
-  threadResizeObserver?.disconnect()
-  threadResizeObserver = new ResizeObserver(() => {
-    void threadScroll.scrollToBottom()
-  })
+  // Persist the observer instead of recreating on every call to avoid
+  // missing resize events during the disconnect/reconnect gap.
+  if (!threadResizeObserver) {
+    threadResizeObserver = new ResizeObserver(() => {
+      void threadScroll.scrollToBottom()
+    })
+    const element = threadScrollEl.value
+    if (!element) return
+    threadResizeObserver.observe(element)
+  }
+  // Ensure direct children of .thread are observed (e.g. .chat-thread).
+  // New children may appear if the DOM structure changes.
   const element = threadScrollEl.value
-  if (!element) return
-  threadResizeObserver.observe(element)
+  if (!element || !threadResizeObserver) return
   for (const child of Array.from(element.children)) {
-    if (child instanceof HTMLElement) threadResizeObserver.observe(child)
+    if (child instanceof HTMLElement) {
+      // observe() is idempotent — already-observed elements are a no-op
+      threadResizeObserver.observe(child)
+    }
   }
 }
 
@@ -1063,6 +1101,10 @@ watch(messages, async () => {
   syncThreadResizeObserver()
   await threadScroll.scrollToBottom()
 }, { deep: true })
+
+watch([activeSessionId, messages, latestStatus], ([threadId]) => {
+  void refreshGoal(threadId)
+})
 
 onMounted(() => {
   void uiPreferences.load()

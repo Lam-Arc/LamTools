@@ -209,16 +209,26 @@
       <section v-else class="settings-panel">
         <header class="settings-title">
           <h1>权限策略</h1>
-          <p>Core 统一管理常规命令与高危命令的授权策略。</p>
         </header>
         <article class="setting-card">
-          <h3>命令执行策略</h3>
+          <h3>放行模式</h3>
           <div class="permission-list">
-            <div v-for="group in permissionGroups" :key="group.id" class="permission-row">
-              <div><strong>{{ group.label }}</strong><p>{{ group.description }}</p></div>
-              <div class="density-options" role="group" :aria-label="group.label">
-                <button type="button" :class="{ active: commandPolicies[group.id] === 'auto_allow' }" @click="$emit('update-command-policy', group.id, 'auto_allow')">自动放行</button>
-                <button type="button" :class="{ active: commandPolicies[group.id] === 'ask_user' }" @click="$emit('update-command-policy', group.id, 'ask_user')">需要审批</button>
+            <div v-for="tier in permissionTiers" :key="tier.id" class="permission-row">
+              <div class="permission-row-top">
+                <button type="button" class="permission-row-header" @click="expandedTier = expandedTier === tier.id ? null : tier.id">
+                  {{ tier.label }}
+                </button>
+                <button type="button" class="permission-radio" :class="{ active: permissionMode === tier.id }" @click="$emit('update-permission-mode', tier.id)" :aria-label="'选择' + tier.label">
+                  <span class="permission-radio-dot" />
+                </button>
+              </div>
+              <div v-if="expandedTier === tier.id" class="permission-tools">
+                <template v-if="tier.id === 'full_edit'">
+                  <p class="permission-tools-full">完全放行</p>
+                </template>
+                <template v-else>
+                  <div v-for="tool in tier.tools" :key="tool" class="permission-tool-row">{{ tool }}</div>
+                </template>
               </div>
             </div>
           </div>
@@ -297,7 +307,7 @@ const props = defineProps<{
   theme: ThemeData
   contentWidth?: number
   allowEnvironmentImport?: boolean
-  commandPolicies?: Record<'regular' | 'dangerous', 'auto_allow' | 'ask_user'>
+  permissionMode?: 'read_only' | 'limited_edit' | 'full_edit'
 }>()
 
 const emit = defineEmits<{
@@ -305,7 +315,7 @@ const emit = defineEmits<{
   'update:density': [density: CoreSettingsDensity]
   'update:content-width': [width: number]
   'import-environment': []
-  'update-command-policy': [group: 'regular' | 'dangerous', policy: 'auto_allow' | 'ask_user']
+  'update-permission-mode': [mode: 'read_only' | 'limited_edit' | 'full_edit']
   'reset-theme': []
   'apply-preset': [preset: ThemePreset]
   'update-stops': [area: ThemeArea, stops: ThemeStop[]]
@@ -347,10 +357,21 @@ type ModelEditor = CoreSettingsModelPayload & { mode: 'create' | 'update'; extra
 const providerEditor = ref<ProviderEditor | null>(null)
 const modelEditor = ref<ModelEditor | null>(null)
 const noticeText = ref('')
-const commandPolicies = computed(() => props.commandPolicies || { regular: 'auto_allow', dangerous: 'ask_user' })
-const permissionGroups = [
-  { id: 'regular' as const, label: '常规命令', description: '读取、搜索、测试、构建和状态查看。' },
-  { id: 'dangerous' as const, label: '高危命令', description: '删除、移动、重命名、重置和权限变更。' },
+const expandedTier = ref<string | null>(null)
+const permissionMode = computed(() => props.permissionMode || 'full_edit')
+const permissionTiers = [
+  {
+    id: 'read_only' as const, label: '只读调查',
+    tools: ['read_file', 'list_dir', 'search_files', 'search_content', 'web_search', 'web_fetch', 'git_status', 'git_diff', 'load_skill', 'browser_check', 'sub_agent'],
+  },
+  {
+    id: 'limited_edit' as const, label: '有限编辑',
+    tools: ['read_file', 'list_dir', 'search_files', 'search_content', 'web_search', 'web_fetch', 'git_status', 'git_diff', 'load_skill', 'browser_check', 'sub_agent', 'write_file', 'edit_file', 'write_spreadsheet', 'document_normalize', 'run_tests'],
+  },
+  {
+    id: 'full_edit' as const, label: '完全编辑',
+    tools: [] as string[],
+  },
 ]
 const providerPresets = PROVIDER_PRESETS
 
@@ -678,13 +699,88 @@ const presets = THEME_PRESETS
 
 .permission-row {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20px;
+  flex-direction: column;
+  padding: 8px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--theme-main-text) 50%, transparent);
 }
 
-.permission-row p {
-  margin: 4px 0 0;
+.permission-row:last-child {
+  border-bottom: none;
+}
+
+.permission-row-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.permission-row-header {
+  border: 0;
+  padding: 6px 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 650;
+  text-align: left;
+  cursor: pointer;
+}
+
+.permission-row-header:hover {
+  color: color-mix(in srgb, var(--blue) 70%, var(--text));
+}
+
+.permission-radio {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--theme-main-text) 45%, transparent);
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.permission-radio .permission-radio-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: transparent;
+}
+
+.permission-radio.active {
+  border-color: var(--green, #4caf50);
+}
+
+.permission-radio.active .permission-radio-dot {
+  background: var(--green, #4caf50);
+}
+
+.permission-radio:hover {
+  border-color: color-mix(in srgb, var(--theme-main-text) 70%, transparent);
+}
+
+.permission-tools {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 4px 16px;
+  padding: 8px 0 4px 0;
+}
+
+.permission-tool-row {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.permission-tools-full {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
 }
 
 @media (max-width: 720px) {
@@ -697,9 +793,8 @@ const presets = THEME_PRESETS
     grid-template-columns: 1fr;
   }
 
-  .permission-row {
-    align-items: stretch;
-    flex-direction: column;
+  .permission-tools {
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
   }
 }
 

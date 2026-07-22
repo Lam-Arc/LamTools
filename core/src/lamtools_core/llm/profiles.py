@@ -191,6 +191,7 @@ def build_profiled_openai_request(
     stream: bool = False,
     thinking_enabled: bool = False,
     thinking_budget: int = 0,
+    reasoning_effort: str = "",
     endpoint_fallback: str = "/chat/completions",
 ) -> dict[str, Any]:
     payload = build_openai_payload(request, stream=stream)
@@ -198,6 +199,8 @@ def build_profiled_openai_request(
     apply_request_payload(payload, profile=profile, variables=variables)
     if thinking_enabled:
         apply_thinking_payload(payload, profile=profile, thinking_budget=thinking_budget)
+    if reasoning_effort:
+        payload["reasoning_effort"] = reasoning_effort
     return {
         "endpoint": endpoint_path(profile, endpoint_fallback),
         "payload": payload,
