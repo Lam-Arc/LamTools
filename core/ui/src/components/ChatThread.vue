@@ -208,7 +208,7 @@
                         class="tool-card-body"
                         :class="{ 'tool-card-body--row': !isCommandTool(part) }"
                       >
-                        <pre v-if="displayToolError(part)" class="tool-output tool-output--error">{{ displayToolError(part) }}</pre>
+                        <pre v-if="displayToolError(part)" class="tool-output tool-output--error" @click.stop="copyToolErrorText(part)" title="点击复制错误信息">{{ displayToolError(part) }}</pre>
                         <div v-if="displayToolResult(part) && isFileTool(part)" class="diff-block" :class="[fileDiffClass(part), { 'diff-block--wrap': isToolWrapEnabled(part.id) }]">
                           <div class="diff-header">
                             <span class="diff-file">{{ diffHeaderText(part) }}</span>
@@ -688,7 +688,7 @@
                   >
                     <span class="tool-row-name">{{ toolTypeLabel(group.part) }}</span>
                     <span class="process-step-title tool-row-summary">{{ readableProcessTitle(group.part) }}</span>
-                    <span class="tool-row-status">{{ toolRetryLabel(group.part) || toolStatusLabel(group.part) }}</span>
+                    <span class="tool-row-status" :class="{ 'tool-row-status--retry': toolRetryLabel(group.part) }">{{ toolRetryLabel(group.part) || toolStatusLabel(group.part) }}</span>
                     <span v-if="hasToolDisplay(group.part)" class="tool-expand-chevron">{{ shouldShowToolBody(group.part, true) ? '▾' : '▸' }}</span>
                   </button>
                   <div :class="['tool-card-body', 'tool-card-body--row', { 'tool-card-body--closed': !shouldShowToolBody(group.part, true) }]">
@@ -780,7 +780,7 @@
                         <span class="tool-row-name">{{ toolTypeLabel(group.part) }}</span>
                         <span class="process-step-title tool-row-summary">{{ readableProcessTitle(group.part) }}</span>
                         <span v-if="shouldShowToolArgsPreview(group.part)" class="tool-args-preview tool-row-args">{{ toolArgsPreview(group.part.toolArgs || {}) }}</span>
-                        <span class="tool-row-status">{{ toolRetryLabel(group.part) || toolStatusLabel(group.part) }}</span>
+                        <span class="tool-row-status" :class="{ 'tool-row-status--retry': toolRetryLabel(group.part) }">{{ toolRetryLabel(group.part) || toolStatusLabel(group.part) }}</span>
                       </template>
                       <span
                         v-if="hasToolDisplay(group.part)"
@@ -1890,6 +1890,16 @@ async function copyProcessDetail(part: MessagePart) {
   if (!detail) return
   try {
     await navigator.clipboard?.writeText(detail)
+  } catch {
+    // Clipboard can be unavailable in embedded desktop contexts.
+  }
+}
+
+async function copyToolErrorText(part: MessagePart) {
+  const error = displayToolError(part)
+  if (!error) return
+  try {
+    await navigator.clipboard?.writeText(error)
   } catch {
     // Clipboard can be unavailable in embedded desktop contexts.
   }
@@ -3287,6 +3297,10 @@ function formatContextSummary(c: ContextCounts): string {
   font-weight: 550;
   white-space: nowrap;
 }
+.tool-row-status--retry {
+  color: var(--orange);
+  cursor: pointer;
+}
 .tool-card-header--command .tool-type-tag {
   grid-area: type;
   min-width: 0;
@@ -3537,6 +3551,11 @@ function formatContextSummary(c: ContextCounts): string {
   border-color: color-mix(in srgb, var(--red) 30%, transparent);
   background: color-mix(in srgb, var(--red) 6%, transparent);
   color: var(--red);
+  cursor: pointer;
+  user-select: all;
+}
+.tool-output--error:hover {
+  background: color-mix(in srgb, var(--red) 10%, transparent);
 }
 .tool-card-body--row .tool-output,
 .context-tool-output {
