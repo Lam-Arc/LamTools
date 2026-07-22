@@ -3,15 +3,24 @@ from app.config import settings
 from app.http_app import create_writer_http_app
 
 _data = Path(settings.data_dir)
-_config_db = str(_data / "lamtools.db")
-_core_db = str(_data / "writer_core.db")
+_config_db = _data / "lamtools.db"
+_core_db = _data / "writer_core.db"
 
 
-def _ensure_writer_config():
-    """Ensure the shared config DB has at least one provider/model configured."""
+def _ensure_config_db():
+    """Create shared config DB tables if they don't exist."""
+    from lamtools_core.config.shared_database import SharedConfigBase
+    from sqlalchemy import create_engine
+    engine = create_engine(f"sqlite:///{_config_db}")
+    SharedConfigBase.metadata.create_all(engine)
+    engine.dispose()
+
+
+def _seed_writer_config():
+    """Ensure at least one provider/model is configured."""
     import sqlite3
     try:
-        db = sqlite3.connect(_config_db)
+        db = sqlite3.connect(str(_config_db))
         db.execute(
             "INSERT OR IGNORE INTO llm_providers (id, name, api_type, base_url, api_key, is_default) "
             "VALUES ('writer-default', 'Writer Default', ?, ?, ?, 1)",
@@ -35,14 +44,16 @@ def _ensure_writer_config():
         db.commit()
         db.close()
     except Exception:
-        pass  # DB may not exist yet; create_core_agent_http_app will handle table creation
+        pass
 
 
-_ensure_writer_config()
+_ensure_config_db()
+_seed_writer_config()
+
 app = create_writer_http_app(
     model_id=settings.llm_model,
-    config_db=_config_db,
-    core_db=_core_db,
+    config_db=str(_config_db),
+    core_db=str(_core_db),
     data_dir=settings.data_dir,
     work_root=settings.writer_work_root or None,
     cors_origins=settings.cors_origins,
