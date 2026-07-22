@@ -205,6 +205,7 @@ def create_core_agent_http_app(
             enable_turn_checkpoints=True,
         )
         _register_core_project_operations(agent_operations, project_store=core_db_handle.project_store)
+        _register_core_session_operations(agent_operations, session_store=session_store)
         _register_core_config_operations(
             agent_operations,
             config_db_path=config_db_path,
@@ -460,6 +461,31 @@ def _register_core_project_operations(catalog: OperationCatalog, *, project_stor
         "project.agents_md.update": project_agents_md_update,
     }
     for name, handler in handlers.items():
+        if not catalog.has(name):
+            catalog.register(name, handler)
+
+
+def _register_core_session_operations(catalog: OperationCatalog, *, session_store: Any) -> None:
+    async def session_list(request: OperationRequest) -> OperationResult:
+        from lamtools_core.app.core_session_store import CoreDbSessionStore
+        sessions = await session_store.list()
+        return OperationResult(name="session.list", payload={
+            "sessions": [{"id": s.id, "title": s.title, "status": s.status} for s in sessions]
+        })
+
+    async def session_get(request: OperationRequest) -> OperationResult:
+        sid = str(request.payload.get("session_id") or request.payload.get("sessionId") or request.payload.get("id") or "")
+        s = await session_store.get(sid)
+        if s is None:
+            return OperationResult(name="session.get", status="error", payload={"error": "Not found"})
+        return OperationResult(name="session.get", payload={"session": {"id": s.id, "title": s.title, "status": s.status}})
+
+    async def session_delete(request: OperationRequest) -> OperationResult:
+        sid = str(request.payload.get("session_id") or request.payload.get("sessionId") or request.payload.get("id") or "")
+        await session_store.delete(sid)
+        return OperationResult(name="session.delete", payload={"deleted": sid})
+
+    for name, handler in [("session.list", session_list), ("session.get", session_get), ("session.delete", session_delete)]:
         if not catalog.has(name):
             catalog.register(name, handler)
 
