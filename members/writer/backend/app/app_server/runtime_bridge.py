@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from lamtools_core.event import RunItemEvent
 
-from .event_store import append_run_item_event_and_apply_snapshot
+from .persistence import append_run_item_event_and_apply_snapshot
 from .protocol import WriterAppEventEnvelope
 from .runtime_side_effects import persist_run_item_side_effects
 

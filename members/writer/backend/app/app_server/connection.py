@@ -8,6 +8,7 @@ from fastapi import WebSocket
 from app.database import async_session
 from app.shared_config_database import shared_config_session
 from lamtools_core.app import (
+    CoreAppEventHub,
     CoreLiveConnection,
     CoreLiveConnectionAdapter,
     CoreLiveContext,
@@ -16,7 +17,9 @@ from lamtools_core.app import (
 )
 from lamtools_core.runtime import default_runtime_task_registry
 
-from .hub import hub
+from lamtools_core.runtime import default_runtime_task_registry
+
+hub = CoreAppEventHub()
 from .operations import (
     build_writer_core_operation_adapter_catalog,
     build_writer_operation_catalog,

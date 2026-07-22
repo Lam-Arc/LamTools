@@ -5,7 +5,9 @@ from typing import Any, Awaitable, Callable
 
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from app.app_server.hub import hub as app_server_hub
+from lamtools_core.app import CoreAppEventHub
+
+_app_hub = CoreAppEventHub()
 from app.app_server.protocol import WriterAppEventEnvelope
 from app.app_server.runtime_bridge import persist_run_item_events_as_app_events
 from app.database import create_writer_engine, writer_write_coordinator
@@ -23,7 +25,7 @@ class AppProjectionSink:
         database_url: str = "",
         debug: bool = False,
         persist_run_items: PersistRunItems | None = None,
-        hub: Any = app_server_hub,
+        hub: Any = None,
         session_factory: async_sessionmaker | None = None,
         write_coordinator: Any | None = None,
     ) -> None:

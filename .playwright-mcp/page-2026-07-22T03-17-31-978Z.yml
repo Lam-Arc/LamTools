@@ -1,0 +1,8 @@
+- main [ref=e52]:
+  - generic [ref=e53]:
+    - generic [ref=e54]:
+      - button "← 返回" [ref=e55] [cursor=pointer]
+      - heading "安排" [level=1] [ref=e56]
+      - paragraph [ref=e57]: 长期任务，按计划自动执行。
+    - button "刷新中…" [disabled] [ref=e58]
+  - status [ref=e59]: 正在读取安排…

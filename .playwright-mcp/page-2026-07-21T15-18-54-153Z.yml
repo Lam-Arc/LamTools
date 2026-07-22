@@ -1,0 +1,268 @@
+- generic [ref=e2]:
+  - navigation "工作区面板" [ref=e3]:
+    - button "关闭会话与导航" [expanded] [ref=e4] [cursor=pointer]
+    - button "打开运行状态" [ref=e6] [cursor=pointer]
+  - button "打开左侧会话栏" [ref=e8]
+  - button "打开右侧面板" [ref=e9]
+  - complementary [ref=e10]:
+    - generic [ref=e11]:
+      - button "取消固定左侧栏" [ref=e12] [cursor=pointer]: ◆
+      - strong [ref=e13]: Core
+      - button "新建项目" [ref=e15] [cursor=pointer]: +
+    - generic [ref=e18]:
+      - heading "RECENT" [level=2] [ref=e19]
+      - article [ref=e20]:
+        - generic [ref=e21]:
+          - button "Unassigned 项目操作" [ref=e23] [cursor=pointer]: •••
+          - button "Unassigned 16 个会话" [disabled] [ref=e24] [cursor=pointer]:
+            - strong [ref=e25]: Unassigned
+            - generic [ref=e26]: 16 个会话
+        - generic [ref=e27]:
+          - generic [ref=e28] [cursor=pointer]:
+            - button "打开会话 arrange_thread_de1dfdda44064437a5a11c434658d6b6，第 16 个" [ref=e29]:
+              - generic [ref=e30]: "16"
+              - strong [ref=e32]: arrange_thread_de1dfdda44064437a5a11c434658d6b6
+            - generic [ref=e33]:
+              - img "状态：空闲" [ref=e34]
+              - generic:
+                - button "置顶会话 arrange_thread_de1dfdda44064437a5a11c434658d6b6":
+                  - img
+                - button "删除会话 arrange_thread_de1dfdda44064437a5a11c434658d6b6":
+                  - img
+          - generic [ref=e35] [cursor=pointer]:
+            - button "打开会话 arrange_thread_f1e16d331e3e4a6e8dba794dd06c2008，第 15 个" [ref=e36]:
+              - generic [ref=e37]: "15"
+              - strong [ref=e39]: arrange_thread_f1e16d331e3e4a6e8dba794dd06c2008
+            - generic [ref=e40]:
+              - img "状态：失败" [ref=e41]
+              - generic:
+                - button "置顶会话 arrange_thread_f1e16d331e3e4a6e8dba794dd06c2008":
+                  - img
+                - button "删除会话 arrange_thread_f1e16d331e3e4a6e8dba794dd06c2008":
+                  - img
+          - generic [ref=e42] [cursor=pointer]:
+            - button "打开会话 arrange_thread_c288d655556e4f948965315678437034，第 14 个" [ref=e43]:
+              - generic [ref=e44]: "14"
+              - strong [ref=e46]: arrange_thread_c288d655556e4f948965315678437034
+            - generic [ref=e47]:
+              - img "状态：失败" [ref=e48]
+              - generic:
+                - button "置顶会话 arrange_thread_c288d655556e4f948965315678437034":
+                  - img
+                - button "删除会话 arrange_thread_c288d655556e4f948965315678437034":
+                  - img
+          - generic [ref=e49] [cursor=pointer]:
+            - button "打开会话 core-cli-4d2f0b8a，第 13 个" [ref=e50]:
+              - generic [ref=e51]: "13"
+              - strong [ref=e53]: core-cli-4d2f0b8a
+            - generic [ref=e54]:
+              - img "状态：已完成" [ref=e55]
+              - generic:
+                - button "置顶会话 core-cli-4d2f0b8a":
+                  - img
+                - button "删除会话 core-cli-4d2f0b8a":
+                  - img
+          - generic [ref=e56] [cursor=pointer]:
+            - button "打开会话 core-cli-4aafb4d1，第 12 个" [ref=e57]:
+              - generic [ref=e58]: "12"
+              - strong [ref=e60]: core-cli-4aafb4d1
+            - generic [ref=e61]:
+              - img "状态：失败" [ref=e62]
+              - generic:
+                - button "置顶会话 core-cli-4aafb4d1":
+                  - img
+                - button "删除会话 core-cli-4aafb4d1":
+                  - img
+          - generic [ref=e63] [cursor=pointer]:
+            - button "打开会话 core-cli-e1be6645，第 11 个" [ref=e64]:
+              - generic [ref=e65]: "11"
+              - strong [ref=e67]: core-cli-e1be6645
+            - generic [ref=e68]:
+              - img "状态：已完成" [ref=e69]
+              - generic:
+                - button "置顶会话 core-cli-e1be6645":
+                  - img
+                - button "删除会话 core-cli-e1be6645":
+                  - img
+          - generic [ref=e70] [cursor=pointer]:
+            - button "打开会话 core-cli-ee577bd9，第 10 个" [ref=e71]:
+              - generic [ref=e72]: "10"
+              - strong [ref=e74]: core-cli-ee577bd9
+            - generic [ref=e75]:
+              - img "状态：已完成" [ref=e76]
+              - generic:
+                - button "置顶会话 core-cli-ee577bd9":
+                  - img
+                - button "删除会话 core-cli-ee577bd9":
+                  - img
+          - generic [ref=e77] [cursor=pointer]:
+            - button "打开会话 core-cli-51b3cd16，第 9 个" [ref=e78]:
+              - generic [ref=e79]: "9"
+              - strong [ref=e81]: core-cli-51b3cd16
+            - generic [ref=e82]:
+              - img "状态：已完成" [ref=e83]
+              - generic:
+                - button "置顶会话 core-cli-51b3cd16":
+                  - img
+                - button "删除会话 core-cli-51b3cd16":
+                  - img
+          - button "还有 8 个会话" [ref=e84] [cursor=pointer]
+      - article [ref=e85]:
+        - generic [ref=e86]:
+          - button "新建文件夹 项目操作" [ref=e88] [cursor=pointer]: •••
+          - button "新建文件夹 E:\\WriterTest\\blog-ux-20260615-123630\\新建文件夹" [ref=e89] [cursor=pointer]:
+            - strong [ref=e90]: 新建文件夹
+            - generic [ref=e91]: E:\WriterTest\blog-ux-20260615-123630\新建文件夹
+        - generic [ref=e92]:
+          - generic [ref=e93] [cursor=pointer]:
+            - button "打开会话 新会话，第 8 个" [ref=e94]:
+              - generic [ref=e95]: "8"
+              - strong [ref=e97]: 新会话
+            - generic [ref=e98]:
+              - img "状态：已完成" [ref=e99]
+              - generic:
+                - button "置顶会话 新会话":
+                  - img
+                - button "删除会话 新会话":
+                  - img
+          - generic [ref=e100] [cursor=pointer]:
+            - button "打开会话 新会话，第 7 个" [ref=e101]:
+              - generic [ref=e102]: "7"
+              - strong [ref=e104]: 新会话
+            - generic [ref=e105]:
+              - img "状态：已完成" [ref=e106]
+              - generic:
+                - button "置顶会话 新会话":
+                  - img
+                - button "删除会话 新会话":
+                  - img
+          - generic [ref=e107] [cursor=pointer]:
+            - button "打开会话 新会话，第 6 个" [ref=e108]:
+              - generic [ref=e109]: "6"
+              - strong [ref=e111]: 新会话
+            - generic [ref=e112]:
+              - img "状态：已完成" [ref=e113]
+              - generic:
+                - button "置顶会话 新会话":
+                  - img
+                - button "删除会话 新会话":
+                  - img
+          - generic [ref=e114] [cursor=pointer]:
+            - button "打开会话 新会话，第 5 个" [ref=e115]:
+              - generic [ref=e116]: "5"
+              - strong [ref=e118]: 新会话
+            - generic [ref=e119]:
+              - img "状态：cancelled" [ref=e120]
+              - generic:
+                - button "置顶会话 新会话":
+                  - img
+                - button "删除会话 新会话":
+                  - img
+          - generic [ref=e121] [cursor=pointer]:
+            - button "打开会话 新会话，第 4 个" [ref=e122]:
+              - generic [ref=e123]: "4"
+              - strong [ref=e125]: 新会话
+            - generic [ref=e126]:
+              - img "状态：已完成" [ref=e127]
+              - generic:
+                - button "置顶会话 新会话":
+                  - img
+                - button "删除会话 新会话":
+                  - img
+          - generic [ref=e128] [cursor=pointer]:
+            - button "打开会话 新会话，第 2 个" [ref=e129]:
+              - generic [ref=e130]: "2"
+              - strong [ref=e132]: 新会话
+            - generic [ref=e133]:
+              - img "状态：已完成" [ref=e134]
+              - generic:
+                - button "置顶会话 新会话":
+                  - img
+                - button "删除会话 新会话":
+                  - img
+          - generic [ref=e135] [cursor=pointer]:
+            - button "打开会话 新建文件夹，第 1 个" [ref=e136]:
+              - generic [ref=e137]: "1"
+              - strong [ref=e139]: 新建文件夹
+            - generic [ref=e140]:
+              - img "状态：已完成" [ref=e141]
+              - generic:
+                - button "置顶会话 新建文件夹":
+                  - img
+                - button "删除会话 新建文件夹":
+                  - img
+          - generic [ref=e142] [cursor=pointer]:
+            - button "打开会话 新会话，第 3 个" [ref=e143]:
+              - generic [ref=e144]: "3"
+              - strong [ref=e146]: 新会话
+            - generic [ref=e147]:
+              - img "状态：已完成" [ref=e148]
+              - generic:
+                - button "置顶会话 新会话":
+                  - img
+                - button "删除会话 新会话":
+                  - img
+    - generic [ref=e149]:
+      - button "打开设置" [ref=e150] [cursor=pointer]:
+        - generic [ref=e151]: ⌘
+        - generic [ref=e152]: Settings
+      - button "长期安排" [ref=e153] [cursor=pointer]:
+        - generic [ref=e154]: ◷
+        - generic [ref=e155]: 长期安排
+  - main [ref=e156]:
+    - generic [ref=e158]:
+      - heading "arrange_thread_de1dfdda44064437a5a11c434658d6b6" [level=1] [ref=e159]:
+        - textbox "会话标题" [ref=e160]: arrange_thread_de1dfdda44064437a5a11c434658d6b6
+      - generic [ref=e161]: "#arrange_"
+    - generic [ref=e164]: 暂无消息，发送一个任务。
+  - generic [ref=e166]:
+    - meter "上下文占用"
+    - button "Choose File" [ref=e167]
+    - textbox "给 Core Agent 发送任务..." [ref=e169]
+    - generic [ref=e170]:
+      - generic [ref=e172]:
+        - button "添加附件" [ref=e173] [cursor=pointer]: +
+        - button "模型" [ref=e175] [cursor=pointer]:
+          - generic [ref=e176]: DeepSeek V4 Pro
+        - button "思考模式" [ref=e178] [cursor=pointer]:
+          - generic [ref=e179]: Max thinking
+      - button "发送" [disabled] [ref=e180]: send
+  - complementary:
+    - generic:
+      - strong: 运行状态
+      - button: ◇
+    - generic:
+      - generic:
+        - generic:
+          - heading [level=3]: 资源
+        - generic: 暂无资源统计。
+      - region:
+        - generic:
+          - generic:
+            - heading [level=3]: 回退
+            - generic: 3 个节点
+          - generic:
+            - button: 保存
+            - button: ↻
+        - generic:
+          - img
+          - tree:
+            - treeitem:
+              - button:
+                - generic:
+                  - strong: 节点 1
+                  - generic: 07/21 18:35
+                - generic: 用户指令前自动存档
+            - treeitem:
+              - button:
+                - generic:
+                  - strong: 节点 2
+                  - generic: 07/21 18:36
+                - generic: 用户指令前自动存档
+            - treeitem:
+              - button:
+                - generic:
+                  - strong: 节点 3
+                  - generic: 当前
+                  - generic: 07/21 18:37
+                - generic: 用户指令前自动存档

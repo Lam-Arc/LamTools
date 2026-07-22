@@ -1,0 +1,699 @@
+- generic [ref=e2]:
+  - navigation "工作区面板" [ref=e3]:
+    - button "关闭会话与导航" [expanded] [ref=e4] [cursor=pointer]
+    - button "打开运行状态" [ref=e6] [cursor=pointer]
+  - button "打开左侧会话栏" [ref=e8]
+  - button "打开右侧面板" [ref=e9]
+  - complementary [ref=e10]:
+    - generic [ref=e11]:
+      - button "取消固定左侧栏" [ref=e12] [cursor=pointer]: ◆
+      - strong [ref=e13]: Core
+      - button "新建项目" [ref=e15] [cursor=pointer]: +
+    - generic [ref=e51]:
+      - heading "RECENT" [level=2] [ref=e52]
+      - article [ref=e53]:
+        - generic [ref=e54]:
+          - button "Unassigned 项目操作" [ref=e56] [cursor=pointer]: •••
+          - button "Unassigned 16 个会话" [disabled] [ref=e57] [cursor=pointer]:
+            - strong [ref=e58]: Unassigned
+            - generic [ref=e59]: 16 个会话
+        - generic [ref=e60]:
+          - generic [ref=e61] [cursor=pointer]:
+            - button "打开会话 arrange_thread_de1dfdda44064437a5a11c434658d6b6，第 16 个" [ref=e62]:
+              - generic [ref=e63]: "16"
+              - strong [ref=e65]: arrange_thread_de1dfdda44064437a5a11c434658d6b6
+            - generic [ref=e66]:
+              - img "状态：失败" [ref=e67]
+              - generic:
+                - button "置顶会话 arrange_thread_de1dfdda44064437a5a11c434658d6b6":
+                  - img
+                - button "删除会话 arrange_thread_de1dfdda44064437a5a11c434658d6b6":
+                  - img
+          - generic [ref=e68] [cursor=pointer]:
+            - button "打开会话 arrange_thread_f1e16d331e3e4a6e8dba794dd06c2008，第 15 个" [ref=e69]:
+              - generic [ref=e70]: "15"
+              - strong [ref=e72]: arrange_thread_f1e16d331e3e4a6e8dba794dd06c2008
+            - generic [ref=e73]:
+              - img "状态：失败" [ref=e74]
+              - generic:
+                - button "置顶会话 arrange_thread_f1e16d331e3e4a6e8dba794dd06c2008":
+                  - img
+                - button "删除会话 arrange_thread_f1e16d331e3e4a6e8dba794dd06c2008":
+                  - img
+          - generic [ref=e75] [cursor=pointer]:
+            - button "打开会话 arrange_thread_c288d655556e4f948965315678437034，第 14 个" [ref=e76]:
+              - generic [ref=e77]: "14"
+              - strong [ref=e79]: arrange_thread_c288d655556e4f948965315678437034
+            - generic [ref=e80]:
+              - img "状态：失败" [ref=e81]
+              - generic:
+                - button "置顶会话 arrange_thread_c288d655556e4f948965315678437034":
+                  - img
+                - button "删除会话 arrange_thread_c288d655556e4f948965315678437034":
+                  - img
+          - generic [ref=e82] [cursor=pointer]:
+            - button "打开会话 core-cli-4d2f0b8a，第 13 个" [ref=e83]:
+              - generic [ref=e84]: "13"
+              - strong [ref=e86]: core-cli-4d2f0b8a
+            - generic [ref=e87]:
+              - img "状态：已完成" [ref=e88]
+              - generic:
+                - button "置顶会话 core-cli-4d2f0b8a":
+                  - img
+                - button "删除会话 core-cli-4d2f0b8a":
+                  - img
+          - generic [ref=e89] [cursor=pointer]:
+            - button "打开会话 core-cli-4aafb4d1，第 12 个" [ref=e90]:
+              - generic [ref=e91]: "12"
+              - strong [ref=e93]: core-cli-4aafb4d1
+            - generic [ref=e94]:
+              - img "状态：失败" [ref=e95]
+              - generic:
+                - button "置顶会话 core-cli-4aafb4d1":
+                  - img
+                - button "删除会话 core-cli-4aafb4d1":
+                  - img
+          - generic [ref=e96] [cursor=pointer]:
+            - button "打开会话 core-cli-e1be6645，第 11 个" [ref=e97]:
+              - generic [ref=e98]: "11"
+              - strong [ref=e100]: core-cli-e1be6645
+            - generic [ref=e101]:
+              - img "状态：已完成" [ref=e102]
+              - generic:
+                - button "置顶会话 core-cli-e1be6645":
+                  - img
+                - button "删除会话 core-cli-e1be6645":
+                  - img
+          - generic [ref=e103] [cursor=pointer]:
+            - button "打开会话 core-cli-ee577bd9，第 10 个" [ref=e104]:
+              - generic [ref=e105]: "10"
+              - strong [ref=e107]: core-cli-ee577bd9
+            - generic [ref=e108]:
+              - img "状态：已完成" [ref=e109]
+              - generic:
+                - button "置顶会话 core-cli-ee577bd9":
+                  - img
+                - button "删除会话 core-cli-ee577bd9":
+                  - img
+          - generic [ref=e110] [cursor=pointer]:
+            - button "打开会话 core-cli-51b3cd16，第 9 个" [ref=e111]:
+              - generic [ref=e112]: "9"
+              - strong [ref=e114]: core-cli-51b3cd16
+            - generic [ref=e115]:
+              - img "状态：已完成" [ref=e116]
+              - generic:
+                - button "置顶会话 core-cli-51b3cd16":
+                  - img
+                - button "删除会话 core-cli-51b3cd16":
+                  - img
+          - button "还有 8 个会话" [ref=e117] [cursor=pointer]
+      - article [ref=e118]:
+        - generic [ref=e119]:
+          - button "新建文件夹 项目操作" [ref=e121] [cursor=pointer]: •••
+          - button "新建文件夹 E:\\WriterTest\\blog-ux-20260615-123630\\新建文件夹" [ref=e122] [cursor=pointer]:
+            - strong [ref=e123]: 新建文件夹
+            - generic [ref=e124]: E:\WriterTest\blog-ux-20260615-123630\新建文件夹
+        - generic [ref=e125]:
+          - generic [ref=e126] [cursor=pointer]:
+            - button "打开会话 新会话，第 8 个" [ref=e127]:
+              - generic [ref=e128]: "8"
+              - strong [ref=e130]: 新会话
+            - generic [ref=e131]:
+              - img "状态：已完成" [ref=e132]
+              - generic:
+                - button "置顶会话 新会话":
+                  - img
+                - button "删除会话 新会话":
+                  - img
+          - generic [ref=e133] [cursor=pointer]:
+            - button "打开会话 新会话，第 7 个" [ref=e134]:
+              - generic [ref=e135]: "7"
+              - strong [ref=e137]: 新会话
+            - generic [ref=e138]:
+              - img "状态：已完成" [ref=e139]
+              - generic:
+                - button "置顶会话 新会话":
+                  - img
+                - button "删除会话 新会话":
+                  - img
+          - generic [ref=e140] [cursor=pointer]:
+            - button "打开会话 新会话，第 6 个" [ref=e141]:
+              - generic [ref=e142]: "6"
+              - strong [ref=e144]: 新会话
+            - generic [ref=e145]:
+              - img "状态：已完成" [ref=e146]
+              - generic:
+                - button "置顶会话 新会话":
+                  - img
+                - button "删除会话 新会话":
+                  - img
+          - generic [ref=e147] [cursor=pointer]:
+            - button "打开会话 新会话，第 5 个" [ref=e148]:
+              - generic [ref=e149]: "5"
+              - strong [ref=e151]: 新会话
+            - generic [ref=e152]:
+              - img "状态：cancelled" [ref=e153]
+              - generic:
+                - button "置顶会话 新会话":
+                  - img
+                - button "删除会话 新会话":
+                  - img
+          - generic [ref=e154] [cursor=pointer]:
+            - button "打开会话 新会话，第 4 个" [ref=e155]:
+              - generic [ref=e156]: "4"
+              - strong [ref=e158]: 新会话
+            - generic [ref=e159]:
+              - img "状态：已完成" [ref=e160]
+              - generic:
+                - button "置顶会话 新会话":
+                  - img
+                - button "删除会话 新会话":
+                  - img
+          - generic [ref=e161] [cursor=pointer]:
+            - button "打开会话 新会话，第 2 个" [ref=e162]:
+              - generic [ref=e163]: "2"
+              - strong [ref=e165]: 新会话
+            - generic [ref=e166]:
+              - img "状态：已完成" [ref=e167]
+              - generic:
+                - button "置顶会话 新会话":
+                  - img
+                - button "删除会话 新会话":
+                  - img
+          - generic [ref=e168] [cursor=pointer]:
+            - button "打开会话 新建文件夹，第 1 个" [ref=e169]:
+              - generic [ref=e170]: "1"
+              - strong [ref=e172]: 新建文件夹
+            - generic [ref=e173]:
+              - img "状态：已完成" [ref=e174]
+              - generic:
+                - button "置顶会话 新建文件夹":
+                  - img
+                - button "删除会话 新建文件夹":
+                  - img
+          - generic [ref=e175] [cursor=pointer]:
+            - button "打开会话 新会话，第 3 个" [ref=e176]:
+              - generic [ref=e177]: "3"
+              - strong [ref=e179]: 新会话
+            - generic [ref=e180]:
+              - img "状态：已完成" [ref=e181]
+              - generic:
+                - button "置顶会话 新会话":
+                  - img
+                - button "删除会话 新会话":
+                  - img
+    - generic [ref=e27]:
+      - button "打开设置" [ref=e28] [cursor=pointer]:
+        - generic [ref=e29]: ⌘
+        - generic [ref=e30]: Settings
+      - button "长期安排" [ref=e31] [cursor=pointer]:
+        - generic [ref=e32]: ◷
+        - generic [ref=e33]: 长期安排
+  - main [ref=e34]:
+    - generic [ref=e183]:
+      - heading "arrange_thread_de1dfdda44064437a5a11c434658d6b6" [level=1] [ref=e184]:
+        - textbox "会话标题" [ref=e185]: arrange_thread_de1dfdda44064437a5a11c434658d6b6
+      - generic [ref=e186]: "#arrange_"
+    - generic [ref=e188]:
+      - generic [ref=e190]: Assistant
+      - alert [ref=e191]:
+        - generic [ref=e192]: 运行失败
+        - generic [ref=e193]: "Model call failed after 100 attempts: model not found: xdeepseekv4pro"
+      - generic [ref=e194]:
+        - generic [ref=e195]:
+          - 'button "error Model call failed after 1 attempts: model not found: xdeepseekv4pro ▾" [ref=e196] [cursor=pointer]':
+            - generic [ref=e198]: error
+            - generic [ref=e199]: "Model call failed after 1 attempts: model not found: xdeepseekv4pro"
+            - generic [ref=e200]: ▾
+          - generic [ref=e201]:
+            - button "复制" [ref=e202] [cursor=pointer]
+            - generic [ref=e203]: "Model call failed after 1 attempts: model not found: xdeepseekv4pro"
+        - button "status 模型请求重试中 (1/99) ▸" [ref=e205] [cursor=pointer]:
+          - generic [ref=e207]: status
+          - generic [ref=e208]: 模型请求重试中 (1/99)
+          - generic [ref=e209]: ▸
+        - button "status 模型请求重试中 (2/99) ▸" [ref=e211] [cursor=pointer]:
+          - generic [ref=e213]: status
+          - generic [ref=e214]: 模型请求重试中 (2/99)
+          - generic [ref=e215]: ▸
+        - button "status 模型请求重试中 (3/99) ▸" [ref=e217] [cursor=pointer]:
+          - generic [ref=e219]: status
+          - generic [ref=e220]: 模型请求重试中 (3/99)
+          - generic [ref=e221]: ▸
+        - button "status 模型请求重试中 (4/99) ▸" [ref=e223] [cursor=pointer]:
+          - generic [ref=e225]: status
+          - generic [ref=e226]: 模型请求重试中 (4/99)
+          - generic [ref=e227]: ▸
+        - button "status 模型请求重试中 (5/99) ▸" [ref=e229] [cursor=pointer]:
+          - generic [ref=e231]: status
+          - generic [ref=e232]: 模型请求重试中 (5/99)
+          - generic [ref=e233]: ▸
+        - button "status 模型请求重试中 (6/99) ▸" [ref=e235] [cursor=pointer]:
+          - generic [ref=e237]: status
+          - generic [ref=e238]: 模型请求重试中 (6/99)
+          - generic [ref=e239]: ▸
+        - button "status 模型请求重试中 (7/99) ▸" [ref=e241] [cursor=pointer]:
+          - generic [ref=e243]: status
+          - generic [ref=e244]: 模型请求重试中 (7/99)
+          - generic [ref=e245]: ▸
+        - button "status 模型请求重试中 (8/99) ▸" [ref=e247] [cursor=pointer]:
+          - generic [ref=e249]: status
+          - generic [ref=e250]: 模型请求重试中 (8/99)
+          - generic [ref=e251]: ▸
+        - button "status 模型请求重试中 (9/99) ▸" [ref=e253] [cursor=pointer]:
+          - generic [ref=e255]: status
+          - generic [ref=e256]: 模型请求重试中 (9/99)
+          - generic [ref=e257]: ▸
+        - button "status 模型请求重试中 (10/99) ▸" [ref=e259] [cursor=pointer]:
+          - generic [ref=e261]: status
+          - generic [ref=e262]: 模型请求重试中 (10/99)
+          - generic [ref=e263]: ▸
+        - button "status 模型请求重试中 (11/99) ▸" [ref=e265] [cursor=pointer]:
+          - generic [ref=e267]: status
+          - generic [ref=e268]: 模型请求重试中 (11/99)
+          - generic [ref=e269]: ▸
+        - button "status 模型请求重试中 (12/99) ▸" [ref=e271] [cursor=pointer]:
+          - generic [ref=e273]: status
+          - generic [ref=e274]: 模型请求重试中 (12/99)
+          - generic [ref=e275]: ▸
+        - button "status 模型请求重试中 (13/99) ▸" [ref=e277] [cursor=pointer]:
+          - generic [ref=e279]: status
+          - generic [ref=e280]: 模型请求重试中 (13/99)
+          - generic [ref=e281]: ▸
+        - button "status 模型请求重试中 (14/99) ▸" [ref=e283] [cursor=pointer]:
+          - generic [ref=e285]: status
+          - generic [ref=e286]: 模型请求重试中 (14/99)
+          - generic [ref=e287]: ▸
+        - button "status 模型请求重试中 (15/99) ▸" [ref=e289] [cursor=pointer]:
+          - generic [ref=e291]: status
+          - generic [ref=e292]: 模型请求重试中 (15/99)
+          - generic [ref=e293]: ▸
+        - button "status 模型请求重试中 (16/99) ▸" [ref=e295] [cursor=pointer]:
+          - generic [ref=e297]: status
+          - generic [ref=e298]: 模型请求重试中 (16/99)
+          - generic [ref=e299]: ▸
+        - button "status 模型请求重试中 (17/99) ▸" [ref=e301] [cursor=pointer]:
+          - generic [ref=e303]: status
+          - generic [ref=e304]: 模型请求重试中 (17/99)
+          - generic [ref=e305]: ▸
+        - button "status 模型请求重试中 (18/99) ▸" [ref=e307] [cursor=pointer]:
+          - generic [ref=e309]: status
+          - generic [ref=e310]: 模型请求重试中 (18/99)
+          - generic [ref=e311]: ▸
+        - button "status 模型请求重试中 (19/99) ▸" [ref=e313] [cursor=pointer]:
+          - generic [ref=e315]: status
+          - generic [ref=e316]: 模型请求重试中 (19/99)
+          - generic [ref=e317]: ▸
+        - button "status 模型请求重试中 (20/99) ▸" [ref=e319] [cursor=pointer]:
+          - generic [ref=e321]: status
+          - generic [ref=e322]: 模型请求重试中 (20/99)
+          - generic [ref=e323]: ▸
+        - button "status 模型请求重试中 (21/99) ▸" [ref=e325] [cursor=pointer]:
+          - generic [ref=e327]: status
+          - generic [ref=e328]: 模型请求重试中 (21/99)
+          - generic [ref=e329]: ▸
+        - button "status 模型请求重试中 (22/99) ▸" [ref=e331] [cursor=pointer]:
+          - generic [ref=e333]: status
+          - generic [ref=e334]: 模型请求重试中 (22/99)
+          - generic [ref=e335]: ▸
+        - button "status 模型请求重试中 (23/99) ▸" [ref=e337] [cursor=pointer]:
+          - generic [ref=e339]: status
+          - generic [ref=e340]: 模型请求重试中 (23/99)
+          - generic [ref=e341]: ▸
+        - button "status 模型请求重试中 (24/99) ▸" [ref=e343] [cursor=pointer]:
+          - generic [ref=e345]: status
+          - generic [ref=e346]: 模型请求重试中 (24/99)
+          - generic [ref=e347]: ▸
+        - button "status 模型请求重试中 (25/99) ▸" [ref=e349] [cursor=pointer]:
+          - generic [ref=e351]: status
+          - generic [ref=e352]: 模型请求重试中 (25/99)
+          - generic [ref=e353]: ▸
+        - button "status 模型请求重试中 (26/99) ▸" [ref=e355] [cursor=pointer]:
+          - generic [ref=e357]: status
+          - generic [ref=e358]: 模型请求重试中 (26/99)
+          - generic [ref=e359]: ▸
+        - button "status 模型请求重试中 (27/99) ▸" [ref=e361] [cursor=pointer]:
+          - generic [ref=e363]: status
+          - generic [ref=e364]: 模型请求重试中 (27/99)
+          - generic [ref=e365]: ▸
+        - button "status 模型请求重试中 (28/99) ▸" [ref=e367] [cursor=pointer]:
+          - generic [ref=e369]: status
+          - generic [ref=e370]: 模型请求重试中 (28/99)
+          - generic [ref=e371]: ▸
+        - button "status 模型请求重试中 (29/99) ▸" [ref=e373] [cursor=pointer]:
+          - generic [ref=e375]: status
+          - generic [ref=e376]: 模型请求重试中 (29/99)
+          - generic [ref=e377]: ▸
+        - button "status 模型请求重试中 (30/99) ▸" [ref=e379] [cursor=pointer]:
+          - generic [ref=e381]: status
+          - generic [ref=e382]: 模型请求重试中 (30/99)
+          - generic [ref=e383]: ▸
+        - button "status 模型请求重试中 (31/99) ▸" [ref=e385] [cursor=pointer]:
+          - generic [ref=e387]: status
+          - generic [ref=e388]: 模型请求重试中 (31/99)
+          - generic [ref=e389]: ▸
+        - button "status 模型请求重试中 (32/99) ▸" [ref=e391] [cursor=pointer]:
+          - generic [ref=e393]: status
+          - generic [ref=e394]: 模型请求重试中 (32/99)
+          - generic [ref=e395]: ▸
+        - button "status 模型请求重试中 (33/99) ▸" [ref=e397] [cursor=pointer]:
+          - generic [ref=e399]: status
+          - generic [ref=e400]: 模型请求重试中 (33/99)
+          - generic [ref=e401]: ▸
+        - button "status 模型请求重试中 (34/99) ▸" [ref=e403] [cursor=pointer]:
+          - generic [ref=e405]: status
+          - generic [ref=e406]: 模型请求重试中 (34/99)
+          - generic [ref=e407]: ▸
+        - button "status 模型请求重试中 (35/99) ▸" [ref=e409] [cursor=pointer]:
+          - generic [ref=e411]: status
+          - generic [ref=e412]: 模型请求重试中 (35/99)
+          - generic [ref=e413]: ▸
+        - button "status 模型请求重试中 (36/99) ▸" [ref=e415] [cursor=pointer]:
+          - generic [ref=e417]: status
+          - generic [ref=e418]: 模型请求重试中 (36/99)
+          - generic [ref=e419]: ▸
+        - button "status 模型请求重试中 (37/99) ▸" [ref=e421] [cursor=pointer]:
+          - generic [ref=e423]: status
+          - generic [ref=e424]: 模型请求重试中 (37/99)
+          - generic [ref=e425]: ▸
+        - button "status 模型请求重试中 (38/99) ▸" [ref=e427] [cursor=pointer]:
+          - generic [ref=e429]: status
+          - generic [ref=e430]: 模型请求重试中 (38/99)
+          - generic [ref=e431]: ▸
+        - button "status 模型请求重试中 (39/99) ▸" [ref=e433] [cursor=pointer]:
+          - generic [ref=e435]: status
+          - generic [ref=e436]: 模型请求重试中 (39/99)
+          - generic [ref=e437]: ▸
+        - button "status 模型请求重试中 (40/99) ▸" [ref=e439] [cursor=pointer]:
+          - generic [ref=e441]: status
+          - generic [ref=e442]: 模型请求重试中 (40/99)
+          - generic [ref=e443]: ▸
+        - button "status 模型请求重试中 (41/99) ▸" [ref=e445] [cursor=pointer]:
+          - generic [ref=e447]: status
+          - generic [ref=e448]: 模型请求重试中 (41/99)
+          - generic [ref=e449]: ▸
+        - button "status 模型请求重试中 (42/99) ▸" [ref=e451] [cursor=pointer]:
+          - generic [ref=e453]: status
+          - generic [ref=e454]: 模型请求重试中 (42/99)
+          - generic [ref=e455]: ▸
+        - button "status 模型请求重试中 (43/99) ▸" [ref=e457] [cursor=pointer]:
+          - generic [ref=e459]: status
+          - generic [ref=e460]: 模型请求重试中 (43/99)
+          - generic [ref=e461]: ▸
+        - button "status 模型请求重试中 (44/99) ▸" [ref=e463] [cursor=pointer]:
+          - generic [ref=e465]: status
+          - generic [ref=e466]: 模型请求重试中 (44/99)
+          - generic [ref=e467]: ▸
+        - button "status 模型请求重试中 (45/99) ▸" [ref=e469] [cursor=pointer]:
+          - generic [ref=e471]: status
+          - generic [ref=e472]: 模型请求重试中 (45/99)
+          - generic [ref=e473]: ▸
+        - button "status 模型请求重试中 (46/99) ▸" [ref=e475] [cursor=pointer]:
+          - generic [ref=e477]: status
+          - generic [ref=e478]: 模型请求重试中 (46/99)
+          - generic [ref=e479]: ▸
+        - button "status 模型请求重试中 (47/99) ▸" [ref=e481] [cursor=pointer]:
+          - generic [ref=e483]: status
+          - generic [ref=e484]: 模型请求重试中 (47/99)
+          - generic [ref=e485]: ▸
+        - button "status 模型请求重试中 (48/99) ▸" [ref=e487] [cursor=pointer]:
+          - generic [ref=e489]: status
+          - generic [ref=e490]: 模型请求重试中 (48/99)
+          - generic [ref=e491]: ▸
+        - button "status 模型请求重试中 (49/99) ▸" [ref=e493] [cursor=pointer]:
+          - generic [ref=e495]: status
+          - generic [ref=e496]: 模型请求重试中 (49/99)
+          - generic [ref=e497]: ▸
+        - button "status 模型请求重试中 (50/99) ▸" [ref=e499] [cursor=pointer]:
+          - generic [ref=e501]: status
+          - generic [ref=e502]: 模型请求重试中 (50/99)
+          - generic [ref=e503]: ▸
+        - button "status 模型请求重试中 (51/99) ▸" [ref=e505] [cursor=pointer]:
+          - generic [ref=e507]: status
+          - generic [ref=e508]: 模型请求重试中 (51/99)
+          - generic [ref=e509]: ▸
+        - button "status 模型请求重试中 (52/99) ▸" [ref=e511] [cursor=pointer]:
+          - generic [ref=e513]: status
+          - generic [ref=e514]: 模型请求重试中 (52/99)
+          - generic [ref=e515]: ▸
+        - button "status 模型请求重试中 (53/99) ▸" [ref=e517] [cursor=pointer]:
+          - generic [ref=e519]: status
+          - generic [ref=e520]: 模型请求重试中 (53/99)
+          - generic [ref=e521]: ▸
+        - button "status 模型请求重试中 (54/99) ▸" [ref=e523] [cursor=pointer]:
+          - generic [ref=e525]: status
+          - generic [ref=e526]: 模型请求重试中 (54/99)
+          - generic [ref=e527]: ▸
+        - button "status 模型请求重试中 (55/99) ▸" [ref=e529] [cursor=pointer]:
+          - generic [ref=e531]: status
+          - generic [ref=e532]: 模型请求重试中 (55/99)
+          - generic [ref=e533]: ▸
+        - button "status 模型请求重试中 (56/99) ▸" [ref=e535] [cursor=pointer]:
+          - generic [ref=e537]: status
+          - generic [ref=e538]: 模型请求重试中 (56/99)
+          - generic [ref=e539]: ▸
+        - button "status 模型请求重试中 (57/99) ▸" [ref=e541] [cursor=pointer]:
+          - generic [ref=e543]: status
+          - generic [ref=e544]: 模型请求重试中 (57/99)
+          - generic [ref=e545]: ▸
+        - button "status 模型请求重试中 (58/99) ▸" [ref=e547] [cursor=pointer]:
+          - generic [ref=e549]: status
+          - generic [ref=e550]: 模型请求重试中 (58/99)
+          - generic [ref=e551]: ▸
+        - button "status 模型请求重试中 (59/99) ▸" [ref=e553] [cursor=pointer]:
+          - generic [ref=e555]: status
+          - generic [ref=e556]: 模型请求重试中 (59/99)
+          - generic [ref=e557]: ▸
+        - button "status 模型请求重试中 (60/99) ▸" [ref=e559] [cursor=pointer]:
+          - generic [ref=e561]: status
+          - generic [ref=e562]: 模型请求重试中 (60/99)
+          - generic [ref=e563]: ▸
+        - button "status 模型请求重试中 (61/99) ▸" [ref=e565] [cursor=pointer]:
+          - generic [ref=e567]: status
+          - generic [ref=e568]: 模型请求重试中 (61/99)
+          - generic [ref=e569]: ▸
+        - button "status 模型请求重试中 (62/99) ▸" [ref=e571] [cursor=pointer]:
+          - generic [ref=e573]: status
+          - generic [ref=e574]: 模型请求重试中 (62/99)
+          - generic [ref=e575]: ▸
+        - button "status 模型请求重试中 (63/99) ▸" [ref=e577] [cursor=pointer]:
+          - generic [ref=e579]: status
+          - generic [ref=e580]: 模型请求重试中 (63/99)
+          - generic [ref=e581]: ▸
+        - button "status 模型请求重试中 (64/99) ▸" [ref=e583] [cursor=pointer]:
+          - generic [ref=e585]: status
+          - generic [ref=e586]: 模型请求重试中 (64/99)
+          - generic [ref=e587]: ▸
+        - button "status 模型请求重试中 (65/99) ▸" [ref=e589] [cursor=pointer]:
+          - generic [ref=e591]: status
+          - generic [ref=e592]: 模型请求重试中 (65/99)
+          - generic [ref=e593]: ▸
+        - button "status 模型请求重试中 (66/99) ▸" [ref=e595] [cursor=pointer]:
+          - generic [ref=e597]: status
+          - generic [ref=e598]: 模型请求重试中 (66/99)
+          - generic [ref=e599]: ▸
+        - button "status 模型请求重试中 (67/99) ▸" [ref=e601] [cursor=pointer]:
+          - generic [ref=e603]: status
+          - generic [ref=e604]: 模型请求重试中 (67/99)
+          - generic [ref=e605]: ▸
+        - button "status 模型请求重试中 (68/99) ▸" [ref=e607] [cursor=pointer]:
+          - generic [ref=e609]: status
+          - generic [ref=e610]: 模型请求重试中 (68/99)
+          - generic [ref=e611]: ▸
+        - button "status 模型请求重试中 (69/99) ▸" [ref=e613] [cursor=pointer]:
+          - generic [ref=e615]: status
+          - generic [ref=e616]: 模型请求重试中 (69/99)
+          - generic [ref=e617]: ▸
+        - button "status 模型请求重试中 (70/99) ▸" [ref=e619] [cursor=pointer]:
+          - generic [ref=e621]: status
+          - generic [ref=e622]: 模型请求重试中 (70/99)
+          - generic [ref=e623]: ▸
+        - button "status 模型请求重试中 (71/99) ▸" [ref=e625] [cursor=pointer]:
+          - generic [ref=e627]: status
+          - generic [ref=e628]: 模型请求重试中 (71/99)
+          - generic [ref=e629]: ▸
+        - button "status 模型请求重试中 (72/99) ▸" [ref=e631] [cursor=pointer]:
+          - generic [ref=e633]: status
+          - generic [ref=e634]: 模型请求重试中 (72/99)
+          - generic [ref=e635]: ▸
+        - button "status 模型请求重试中 (73/99) ▸" [ref=e637] [cursor=pointer]:
+          - generic [ref=e639]: status
+          - generic [ref=e640]: 模型请求重试中 (73/99)
+          - generic [ref=e641]: ▸
+        - button "status 模型请求重试中 (74/99) ▸" [ref=e643] [cursor=pointer]:
+          - generic [ref=e645]: status
+          - generic [ref=e646]: 模型请求重试中 (74/99)
+          - generic [ref=e647]: ▸
+        - button "status 模型请求重试中 (75/99) ▸" [ref=e649] [cursor=pointer]:
+          - generic [ref=e651]: status
+          - generic [ref=e652]: 模型请求重试中 (75/99)
+          - generic [ref=e653]: ▸
+        - button "status 模型请求重试中 (76/99) ▸" [ref=e655] [cursor=pointer]:
+          - generic [ref=e657]: status
+          - generic [ref=e658]: 模型请求重试中 (76/99)
+          - generic [ref=e659]: ▸
+        - button "status 模型请求重试中 (77/99) ▸" [ref=e661] [cursor=pointer]:
+          - generic [ref=e663]: status
+          - generic [ref=e664]: 模型请求重试中 (77/99)
+          - generic [ref=e665]: ▸
+        - button "status 模型请求重试中 (78/99) ▸" [ref=e667] [cursor=pointer]:
+          - generic [ref=e669]: status
+          - generic [ref=e670]: 模型请求重试中 (78/99)
+          - generic [ref=e671]: ▸
+        - button "status 模型请求重试中 (79/99) ▸" [ref=e673] [cursor=pointer]:
+          - generic [ref=e675]: status
+          - generic [ref=e676]: 模型请求重试中 (79/99)
+          - generic [ref=e677]: ▸
+        - button "status 模型请求重试中 (80/99) ▸" [ref=e679] [cursor=pointer]:
+          - generic [ref=e681]: status
+          - generic [ref=e682]: 模型请求重试中 (80/99)
+          - generic [ref=e683]: ▸
+        - button "status 模型请求重试中 (81/99) ▸" [ref=e685] [cursor=pointer]:
+          - generic [ref=e687]: status
+          - generic [ref=e688]: 模型请求重试中 (81/99)
+          - generic [ref=e689]: ▸
+        - button "status 模型请求重试中 (82/99) ▸" [ref=e691] [cursor=pointer]:
+          - generic [ref=e693]: status
+          - generic [ref=e694]: 模型请求重试中 (82/99)
+          - generic [ref=e695]: ▸
+        - button "status 模型请求重试中 (83/99) ▸" [ref=e697] [cursor=pointer]:
+          - generic [ref=e699]: status
+          - generic [ref=e700]: 模型请求重试中 (83/99)
+          - generic [ref=e701]: ▸
+        - button "status 模型请求重试中 (84/99) ▸" [ref=e703] [cursor=pointer]:
+          - generic [ref=e705]: status
+          - generic [ref=e706]: 模型请求重试中 (84/99)
+          - generic [ref=e707]: ▸
+        - button "status 模型请求重试中 (85/99) ▸" [ref=e709] [cursor=pointer]:
+          - generic [ref=e711]: status
+          - generic [ref=e712]: 模型请求重试中 (85/99)
+          - generic [ref=e713]: ▸
+        - button "status 模型请求重试中 (86/99) ▸" [ref=e715] [cursor=pointer]:
+          - generic [ref=e717]: status
+          - generic [ref=e718]: 模型请求重试中 (86/99)
+          - generic [ref=e719]: ▸
+        - button "status 模型请求重试中 (87/99) ▸" [ref=e721] [cursor=pointer]:
+          - generic [ref=e723]: status
+          - generic [ref=e724]: 模型请求重试中 (87/99)
+          - generic [ref=e725]: ▸
+        - button "status 模型请求重试中 (88/99) ▸" [ref=e727] [cursor=pointer]:
+          - generic [ref=e729]: status
+          - generic [ref=e730]: 模型请求重试中 (88/99)
+          - generic [ref=e731]: ▸
+        - button "status 模型请求重试中 (89/99) ▸" [ref=e733] [cursor=pointer]:
+          - generic [ref=e735]: status
+          - generic [ref=e736]: 模型请求重试中 (89/99)
+          - generic [ref=e737]: ▸
+        - button "status 模型请求重试中 (90/99) ▸" [ref=e739] [cursor=pointer]:
+          - generic [ref=e741]: status
+          - generic [ref=e742]: 模型请求重试中 (90/99)
+          - generic [ref=e743]: ▸
+        - button "status 模型请求重试中 (91/99) ▸" [ref=e745] [cursor=pointer]:
+          - generic [ref=e747]: status
+          - generic [ref=e748]: 模型请求重试中 (91/99)
+          - generic [ref=e749]: ▸
+        - button "status 模型请求重试中 (92/99) ▸" [ref=e751] [cursor=pointer]:
+          - generic [ref=e753]: status
+          - generic [ref=e754]: 模型请求重试中 (92/99)
+          - generic [ref=e755]: ▸
+        - button "status 模型请求重试中 (93/99) ▸" [ref=e757] [cursor=pointer]:
+          - generic [ref=e759]: status
+          - generic [ref=e760]: 模型请求重试中 (93/99)
+          - generic [ref=e761]: ▸
+        - button "status 模型请求重试中 (94/99) ▸" [ref=e763] [cursor=pointer]:
+          - generic [ref=e765]: status
+          - generic [ref=e766]: 模型请求重试中 (94/99)
+          - generic [ref=e767]: ▸
+        - button "status 模型请求重试中 (95/99) ▸" [ref=e769] [cursor=pointer]:
+          - generic [ref=e771]: status
+          - generic [ref=e772]: 模型请求重试中 (95/99)
+          - generic [ref=e773]: ▸
+        - button "status 模型请求重试中 (96/99) ▸" [ref=e775] [cursor=pointer]:
+          - generic [ref=e777]: status
+          - generic [ref=e778]: 模型请求重试中 (96/99)
+          - generic [ref=e779]: ▸
+        - button "status 模型请求重试中 (97/99) ▸" [ref=e781] [cursor=pointer]:
+          - generic [ref=e783]: status
+          - generic [ref=e784]: 模型请求重试中 (97/99)
+          - generic [ref=e785]: ▸
+        - button "status 模型请求重试中 (98/99) ▸" [ref=e787] [cursor=pointer]:
+          - generic [ref=e789]: status
+          - generic [ref=e790]: 模型请求重试中 (98/99)
+          - generic [ref=e791]: ▸
+        - button "status 模型请求重试中 (99/99) ▸" [ref=e793] [cursor=pointer]:
+          - generic [ref=e795]: status
+          - generic [ref=e796]: 模型请求重试中 (99/99)
+          - generic [ref=e797]: ▸
+        - 'button "status Model call failed after 100 attempts: model not found: xdeepseekv4pro ▸" [ref=e799] [cursor=pointer]':
+          - generic [ref=e801]: status
+          - generic [ref=e802]: "Model call failed after 100 attempts: model not found: xdeepseekv4pro"
+          - generic [ref=e803]: ▸
+  - generic [ref=e39]:
+    - meter "上下文占用"
+    - button "Choose File" [ref=e40]
+    - textbox "给 Core Agent 发送任务..." [ref=e42]
+    - generic [ref=e43]:
+      - generic [ref=e45]:
+        - button "添加附件" [ref=e46] [cursor=pointer]: +
+        - button "模型" [ref=e805] [cursor=pointer]:
+          - generic [ref=e806]: DeepSeek V4 Pro
+        - button "思考模式" [ref=e48] [cursor=pointer]:
+          - generic [ref=e49]: Max thinking
+      - button "发送" [disabled] [ref=e50]: send
+  - complementary:
+    - generic:
+      - strong: 运行状态
+      - button: ◇
+    - generic:
+      - generic:
+        - generic:
+          - heading [level=3]: 资源
+          - strong: 正常
+        - generic:
+          - generic:
+            - strong: 9.2k / 131k
+            - strong: 7%
+          - meter
+          - generic:
+            - generic: 可用至 80%
+            - generic: 灰色区压缩
+        - generic:
+          - generic:
+            - generic: 调用
+            - strong: "3"
+          - generic:
+            - generic: 输入
+            - strong: "--"
+          - generic:
+            - generic: 输出
+            - strong: "--"
+      - region:
+        - generic:
+          - generic:
+            - heading [level=3]: 回退
+            - generic: 3 个节点
+          - generic:
+            - button: 保存
+            - button: ↻
+        - generic:
+          - img
+          - tree:
+            - treeitem:
+              - button:
+                - generic:
+                  - strong: 节点 1
+                  - generic: 07/21 18:35
+                - generic: 用户指令前自动存档
+            - treeitem:
+              - button:
+                - generic:
+                  - strong: 节点 2
+                  - generic: 07/21 18:36
+                - generic: 用户指令前自动存档
+            - treeitem:
+              - button:
+                - generic:
+                  - strong: 节点 3
+                  - generic: 当前
+                  - generic: 07/21 18:37
+                - generic: 用户指令前自动存档
