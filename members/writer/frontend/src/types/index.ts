@@ -135,12 +135,24 @@ export interface Provider {
   updated_at: string
 }
 
+export interface ProviderCreateModel {
+  model_id: string
+  display_name?: string
+  context_window?: number
+  max_output_tokens?: number
+  thinking_supported?: boolean
+  thinking_budget?: number
+  temperature?: number
+  extra?: Record<string, unknown>
+}
+
 export interface ProviderCreate {
   name: string
   api_type?: string
   base_url: string
   api_key: string
   extra?: Record<string, unknown>
+  models?: ProviderCreateModel[]
 }
 
 export type { WriterQueuedInput } from '../runtime/queue'

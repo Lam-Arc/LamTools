@@ -274,6 +274,7 @@ export interface CoreSettingsProviderPayload {
   base_url: string
   api_key?: string
   extra?: Record<string, unknown>
+  models?: CoreSettingsModelPayload[]
 }
 
 export interface CoreSettingsModelPayload {
@@ -437,6 +438,22 @@ function submitProvider() {
     base_url: editor.base_url,
     ...(editor.api_key.trim() ? { api_key: editor.api_key.trim() } : {}),
     extra,
+  }
+  if (editor.mode === 'create' && editor.preset_id) {
+    const preset = providerPresets.find(candidate => candidate.id === editor.preset_id)
+    if (preset) {
+      payload.models = preset.models.map(model => ({
+        provider_id: '',
+        model_id: model.modelId,
+        display_name: model.displayName,
+        context_window: model.contextWindow,
+        max_output_tokens: model.maxOutputTokens,
+        thinking_supported: model.thinkingSupported,
+        thinking_budget: model.thinkingBudget,
+        temperature: model.temperature,
+        extra: model.extra,
+      }))
+    }
   }
   if (editor.mode === 'create') emit('create-provider', payload)
   else emit('update-provider', payload)

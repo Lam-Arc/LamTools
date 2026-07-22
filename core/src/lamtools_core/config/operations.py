@@ -63,8 +63,17 @@ def build_shared_config_operation_catalog(
             "api_key": str(params.get("api_key") or ""),
             "extra": params.get("extra") if isinstance(params.get("extra"), dict) else None,
         }
+        models_raw = params.get("models")
+        if isinstance(models_raw, list):
+            models_data: list[dict[str, Any]] = []
+            for raw in models_raw:
+                if not isinstance(raw, dict) or not str(raw.get("model_id") or ""):
+                    continue
+                models_data.append(_model_payload(raw))
+            if models_data:
+                payload["models"] = models_data
         try:
-            provider = await _retry_sqlite_locked_write(
+            result = await _retry_sqlite_locked_write(
                 session_factory,
                 lambda db: create_provider(db, payload),
                 retry_delays=sqlite_lock_retry_delays,
@@ -73,7 +82,7 @@ def build_shared_config_operation_catalog(
             if _is_sqlite_locked_error(exc):
                 return _error(request, locked_message)
             raise
-        return OperationResult(name=request.name, payload={"provider": provider})
+        return OperationResult(name=request.name, payload={"provider": result})
 
     async def provider_update(request: OperationRequest) -> OperationResult:
         params = request.payload

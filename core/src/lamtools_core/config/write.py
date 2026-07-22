@@ -11,12 +11,30 @@ from .shared_database import LLMModel, LLMProvider
 
 async def create_provider_config(db: AsyncSession, data: dict[str, Any]) -> dict[str, Any]:
     payload = dict(data)
+    models_data: list[dict[str, Any]] = payload.pop("models", None) or []
     payload["is_default"] = False
     provider = LLMProvider(**payload)
     db.add(provider)
+    await db.flush()
+
+    created_models: list[dict[str, Any]] = []
+    for model_payload in models_data:
+        model_payload = dict(model_payload)
+        model_payload.pop("provider_id", None)
+        model_payload["provider_id"] = provider.id
+        model_payload["is_default"] = False
+        model = LLMModel(**model_payload)
+        db.add(model)
+        created_models.append(model)
+
     await db.commit()
     await db.refresh(provider)
-    return provider_response(provider)
+    for model in created_models:
+        await db.refresh(model)
+
+    result = provider_response(provider)
+    result["models"] = [model_response(m) for m in created_models]
+    return result
 
 
 async def update_provider_config(

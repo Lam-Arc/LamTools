@@ -19,7 +19,6 @@ test('Writer keeps only adapters for shared settings operations', () => {
   assert.match(viewSource, /@create-provider="createProvider"/)
   assert.match(viewSource, /@create-model="createModel"/)
   assert.match(viewSource, /@update-command-policy="updateCommandPolicy"/)
-  assert.match(viewSource, /PROVIDER_PRESETS/)
   assert.match(viewSource, /UI_NAMESPACE = 'lamwriter\.ui'/)
   assert.ok(viewSource.split('\n').length < 260)
 })

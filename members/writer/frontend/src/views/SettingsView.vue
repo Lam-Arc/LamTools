@@ -3,7 +3,6 @@ import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   CoreSettings,
-  PROVIDER_PRESETS,
   useCoreUiPreferences,
   type CoreSettingsModelPayload,
   type CoreSettingsProviderPayload,
@@ -40,29 +39,14 @@ function goBack() {
 }
 
 async function createProvider(payload: CoreSettingsProviderPayload) {
-  const provider = await configStore.createProvider({
+  await configStore.createProvider({
     name: payload.name,
     api_type: payload.api_type,
     base_url: payload.base_url,
     api_key: payload.api_key || '',
     extra: payload.extra,
+    models: payload.models,
   })
-  const preset = PROVIDER_PRESETS.find(candidate => candidate.id === payload.preset_id)
-  if (preset) {
-    for (const model of preset.models) {
-      await configStore.createModel({
-        provider_id: provider.id,
-        model_id: model.modelId,
-        display_name: model.displayName,
-        context_window: model.contextWindow,
-        max_output_tokens: model.maxOutputTokens,
-        thinking_supported: model.thinkingSupported,
-        thinking_budget: model.thinkingBudget,
-        temperature: model.temperature,
-        extra: model.extra,
-      })
-    }
-  }
 }
 
 async function updateProvider(payload: CoreSettingsProviderPayload) {
