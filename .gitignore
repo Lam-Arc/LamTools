@@ -64,3 +64,5 @@ members/writer/frontend/.electron-app-stage/
 data/
 .codex-tmp/
 .tmp/
+.playwright-mcp/
+.zcode/plans/
