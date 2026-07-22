@@ -20,7 +20,8 @@ def default_writer_plugin_root() -> Path:
 
 def _register_overlay(app: FastAPI) -> None:
     try:
-        catalog = app.state.operations
+        ag_state = app.state.core_agent_app_state
+        catalog = ag_state.get("operations") if isinstance(ag_state, dict) else None
     except AttributeError:
         return
     if catalog is None:
@@ -99,8 +100,8 @@ def create_writer_http_app(
         import asyncio
         for i in range(20):
             try:
-                ops = app.state.operations
-                if ops is not None:
+                ag_state = app.state.core_agent_app_state
+                if isinstance(ag_state, dict) and ag_state.get("operations") is not None:
                     break
             except AttributeError:
                 pass

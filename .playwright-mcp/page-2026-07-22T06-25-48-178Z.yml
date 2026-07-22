@@ -1,0 +1,127 @@
+- main [ref=e55]:
+  - generic [ref=e56]:
+    - generic [ref=e57]:
+      - button "← 返回" [ref=e58] [cursor=pointer]
+      - heading "安排" [level=1] [ref=e59]
+      - paragraph [ref=e60]: 长期任务，按计划自动执行。
+    - button "刷新" [ref=e63] [cursor=pointer]
+  - list [ref=e64]:
+    - listitem [ref=e65]:
+      - generic [ref=e66]:
+        - button "重命名 给用户写一个温馨的睡前故事" [ref=e68] [cursor=pointer]: 给用户写一个温馨的睡前故事
+        - button "取消" [ref=e70] [cursor=pointer]
+      - button "编辑指令" [ref=e72] [cursor=pointer]: 给用户写一个温馨的睡前故事
+      - generic [ref=e73]:
+        - generic [ref=e74]:
+          - text: 项目
+          - code [ref=e75]: "-"
+        - generic [ref=e76]: ·
+        - button "切换会话策略，当前每次新建" [ref=e77] [cursor=pointer]: 会话 每次新建
+        - generic [ref=e78]: ·
+        - generic [ref=e79]: 模型 跟随默认
+      - generic [ref=e80]:
+        - generic [ref=e81]: 单次 · 2026/7/22 00:51:00
+        - generic [ref=e82]: ·
+        - generic [ref=e83]: 已运行 1 次
+        - button "展开历史" [ref=e84] [cursor=pointer]
+      - generic [ref=e86]: 已完成
+    - listitem [ref=e88]:
+      - generic [ref=e89]:
+        - button "重命名 给用户讲一下今天（2026年7月21日）世界上发生了什么重要或有趣的事情" [ref=e91] [cursor=pointer]: 给用户讲一下今天（2026年7月21日）世界上发生了什么重要或有趣的事情
+        - button "取消" [ref=e93] [cursor=pointer]
+      - button "编辑指令" [ref=e95] [cursor=pointer]: 给用户讲一下今天（2026年7月21日）世界上发生了什么重要或有趣的事情
+      - generic [ref=e96]:
+        - generic [ref=e97]:
+          - text: 项目
+          - code [ref=e98]: "-"
+        - generic [ref=e99]: ·
+        - button "切换会话策略，当前每次新建" [ref=e100] [cursor=pointer]: 会话 每次新建
+        - generic [ref=e101]: ·
+        - generic [ref=e102]: 模型 跟随默认
+      - generic [ref=e103]:
+        - generic [ref=e104]: 单次 · 2026/7/22 00:45:00
+        - generic [ref=e105]: ·
+        - generic [ref=e106]: 已运行 0 次
+      - generic [ref=e107]:
+        - generic [ref=e108]: 失败
+        - button "查看错误" [ref=e110] [cursor=pointer]
+    - listitem [ref=e111]:
+      - generic [ref=e112]:
+        - button "重命名 每天早上为用户创作一篇原创短篇小说（题材可以轮换：科幻、悬疑、奇幻、现实主义、武侠、爱情等，每天给点新意），将小说内容保存为一个 UTF-8 编码的 .txt" [ref=e114] [cursor=pointer]: 每天早上为用户创作一篇原创短篇小说（题材可以轮换：科幻、悬疑、奇幻、现实主义、武侠、爱情等，每天给点新意），将小说内容保存为一个 UTF-8 编码的 .txt
+        - generic [ref=e115]:
+          - button "恢复" [ref=e116] [cursor=pointer]
+          - button "取消" [ref=e117] [cursor=pointer]
+      - button "编辑指令" [ref=e119] [cursor=pointer]: 每天早上为用户创作一篇原创短篇小说（题材可以轮换：科幻、悬疑、奇幻、现实主义、武侠、爱情等，每天给点新意），将小说内容保存为一个 UTF-8 编码的 .txt 文件。文件命名格式为：novel_YYYYMMDD_题材.txt，例如 novel_20260721_sci-fi.txt。小说篇幅建议在 2000-5000 字之间，要有完整的起承转合。保存到工作区根目录。
+      - generic [ref=e120]:
+        - generic [ref=e121]:
+          - text: 项目
+          - code [ref=e122]: "-"
+        - generic [ref=e123]: ·
+        - button "切换会话策略，当前每次新建" [ref=e124] [cursor=pointer]: 会话 每次新建
+        - generic [ref=e125]: ·
+        - generic [ref=e126]: 模型 跟随默认
+      - generic [ref=e127]:
+        - generic [ref=e128]: 每天 09:00
+        - generic [ref=e129]: ·
+        - generic [ref=e130]: 已运行 0 次
+      - generic [ref=e132]: 已暂停
+    - listitem [ref=e134]:
+      - generic [ref=e135]:
+        - button "重命名 报告当前UTC时间，格式为：当前时间是 YYYY-MM-DD HH:MM:SS UTC" [ref=e137] [cursor=pointer]: 报告当前UTC时间，格式为：当前时间是 YYYY-MM-DD HH:MM:SS UTC
+        - button "取消" [ref=e139] [cursor=pointer]
+      - button "编辑指令" [ref=e141] [cursor=pointer]: 报告当前UTC时间，格式为：当前时间是 YYYY-MM-DD HH:MM:SS UTC
+      - generic [ref=e142]:
+        - generic [ref=e143]:
+          - text: 项目
+          - code [ref=e144]: "-"
+        - generic [ref=e145]: ·
+        - button "切换会话策略，当前每次新建" [ref=e146] [cursor=pointer]: 会话 每次新建
+        - generic [ref=e147]: ·
+        - generic [ref=e148]: 模型 跟随默认
+      - generic [ref=e149]:
+        - generic [ref=e150]: 每 300 秒
+        - generic [ref=e151]: ·
+        - generic [ref=e152]: 已运行 0 次
+      - generic [ref=e153]:
+        - generic [ref=e154]: 失败
+        - button "查看错误" [ref=e156] [cursor=pointer]
+    - listitem [ref=e157]:
+      - generic [ref=e158]:
+        - button "重命名 请写一篇小说" [ref=e160] [cursor=pointer]: 请写一篇小说
+        - button "取消" [ref=e162] [cursor=pointer]
+      - button "编辑指令" [ref=e164] [cursor=pointer]: 请写一篇小说
+      - generic [ref=e165]:
+        - generic [ref=e166]:
+          - text: 项目
+          - code [ref=e167]: "-"
+        - generic [ref=e168]: ·
+        - button "切换会话策略，当前每次新建" [ref=e169] [cursor=pointer]: 会话 每次新建
+        - generic [ref=e170]: ·
+        - generic [ref=e171]: 模型 跟随默认
+      - generic [ref=e172]:
+        - generic [ref=e173]: 单次 · 2026/7/21 18:30:00
+        - generic [ref=e174]: ·
+        - generic [ref=e175]: 已运行 0 次
+      - generic [ref=e176]:
+        - generic [ref=e177]: 失败
+        - button "查看错误" [ref=e179] [cursor=pointer]
+    - listitem [ref=e180]:
+      - generic [ref=e181]:
+        - button "重命名 请报告当前的日期和时间" [ref=e183] [cursor=pointer]: 请报告当前的日期和时间
+        - button "取消" [ref=e185] [cursor=pointer]
+      - button "编辑指令" [ref=e187] [cursor=pointer]: 请报告当前的日期和时间
+      - generic [ref=e188]:
+        - generic [ref=e189]:
+          - text: 项目
+          - code [ref=e190]: "-"
+        - generic [ref=e191]: ·
+        - button "切换会话策略，当前每次新建" [ref=e192] [cursor=pointer]: 会话 每次新建
+        - generic [ref=e193]: ·
+        - generic [ref=e194]: 模型 跟随默认
+      - generic [ref=e195]:
+        - generic [ref=e196]: 每 300 秒
+        - generic [ref=e197]: ·
+        - generic [ref=e198]: 已运行 0 次
+      - generic [ref=e199]:
+        - generic [ref=e200]: 失败
+        - button "查看错误" [ref=e202] [cursor=pointer]
