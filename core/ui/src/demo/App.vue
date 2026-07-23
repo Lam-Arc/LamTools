@@ -25,9 +25,10 @@
     @create-provider="createProvider"
     @update-provider="updateProvider"
     @delete-provider="deleteProvider"
-    @create-model="createModel"
-    @update-model="updateModel"
-    @delete-model="deleteModel"
+@create-model="createModel"
+	    @update-model="updateModel"
+	    @delete-model="deleteModel"
+	    @set-default-model="setDefaultModel"
   />
   <CoreArrangeManager
     v-else-if="showArrange"
@@ -459,22 +460,23 @@ const projectWorkspace = createCoreProjectWorkspaceActions({
 const busyProjectIds = projectWorkspace.busyProjectIds
 
 const runtimeController = createCoreAppServerRuntimeController(runtime, {
-  hydrateSnapshot,
-  createClient: ({ apiBase: frontendBase, onEvent, onSnapshot, onConnectionState }) => new CoreAppServerClient({
-    url: appServerUrl(frontendBase, { path: '/api/core/app-server' }),
-    clientInfo: { name: 'lamtools_core_frontend', title: 'LamTools Core Frontend', version: '0.1.0' },
-    onEvent,
-    onSnapshot,
-    onConnectionState: (state) => {
-      onConnectionState(state)
-      if (state === 'error') {
-        loadError.value = 'Core App Server 连接失败'
-      } else if (state === 'open' && loadError.value === 'Core App Server 连接失败') {
-        loadError.value = null
-      }
-    },
-  }),
-})
+    hydrateSnapshot,
+    onSessionCreated: refreshSessions,
+    createClient: ({ apiBase: frontendBase, onEvent, onSnapshot, onConnectionState }) => new CoreAppServerClient({
+      url: appServerUrl(frontendBase, { path: '/api/core/app-server' }),
+      clientInfo: { name: 'lamtools_core_frontend', title: 'LamTools Core Frontend', version: '0.1.0' },
+      onEvent,
+      onSnapshot,
+      onConnectionState: (state) => {
+        onConnectionState(state)
+        if (state === 'error') {
+          loadError.value = 'Core App Server 连接失败'
+        } else if (state === 'open' && loadError.value === 'Core App Server 连接失败') {
+          loadError.value = null
+        }
+      },
+    }),
+  })
 
 const liveComposerController = useCoreLiveComposerController({
   activeThreadId: activeSessionId,
@@ -949,6 +951,10 @@ async function deleteModel(modelRecordId: string) {
   await mutateConfig('config.model.delete', { model_record_id: modelRecordId }, '模型已删除')
 }
 
+async function setDefaultModel(modelId: string) {
+  await mutateConfig('config.model.update', { model_record_id: modelId, is_default: true }, '已设为默认模型')
+}
+
 async function importEnvironmentConfig() {
   await mutateConfig('config.import_env', {}, '已从当前环境导入')
 }
@@ -960,6 +966,8 @@ async function loadPermissionMode() {
     const mode = value.permission_mode
     if (mode === 'read_only' || mode === 'limited_edit' || mode === 'full_edit') {
       permissionMode.value = mode
+    } else {
+      await updatePermissionMode(permissionMode.value)
     }
   } catch {
     permissionMode.value = 'full_edit'

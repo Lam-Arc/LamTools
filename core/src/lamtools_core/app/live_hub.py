@@ -55,6 +55,16 @@ class CoreAppEventHub:
                 )
         await asyncio.sleep(0)
 
+    async def broadcast(self, event: Any) -> None:
+        """Push an event to all connected subscribers regardless of thread_id."""
+        for subscribers in self._subscribers.values():
+            for queue in list(subscribers):
+                try:
+                    queue.put_nowait(event)
+                except asyncio.QueueFull:
+                    pass  # best-effort for global notifications
+        await asyncio.sleep(0)
+
 
 hub = CoreAppEventHub()
 

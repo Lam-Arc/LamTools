@@ -277,6 +277,29 @@ def create_core_agent_http_app(
             if job.operation == "turn.start":
                 payload["run_id"] = job.occurrence_id
                 payload["turn_id"] = f"{job.thread_id}:turn:{job.occurrence_id}"
+            if getattr(job, "model_id", ""):
+                payload["model_id"] = job.model_id
+            # Register new arrange threads as project sessions so the frontend
+            # can associate them with the correct workspace.
+            if job.session_strategy == "new":
+                try:
+                    session_title = job.title or f"Arrange: {(job.payload.get('message') or '')[:50]}"
+                    await core_db_handle.project_store.ensure_session(
+                        work_root=job.work_root,
+                        session_id=job.thread_id,
+                        title=session_title,
+                    )
+                    await live_hub.broadcast({
+                        "method": "session/created",
+                        "thread_id": job.thread_id,
+                        "payload": {
+                            "session_id": job.thread_id,
+                            "title": session_title,
+                            "work_root": job.work_root,
+                        },
+                    })
+                except Exception:
+                    pass  # best-effort registration; never block execution
             return await agent_operations.execute(
                 job.operation,
                 payload,

@@ -208,7 +208,7 @@ class CoreLiveConnection:
                 continue
             await self._send(event_notification(event))
             event_method = event.get("method") if isinstance(event, dict) else getattr(event, "method", "")
-            if event_method == CORE_RUN_ITEM_METHOD:
+            if event_method in (CORE_RUN_ITEM_METHOD, "session/created"):
                 continue
             await self._send_snapshot(_event_thread_id(event))
 

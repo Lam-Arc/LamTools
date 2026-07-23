@@ -147,7 +147,8 @@ def durable_tool_handlers(
                 strategy = "new"
             payload = {
                 "thread_id": session_id,
-                "work_root": str(args.get("project_id") or args.get("work_root") or "").strip(),
+                "work_root": str(args.get("project_id") or args.get("work_root") or "").strip()
+                or (str(Path(work_root).resolve()) if work_root else ""),
                 "kind": str(args.get("kind") or "routine").strip(),
                 "operation": "turn.start",
                 "payload": {"message": str(args.get("instruction") or "").strip()},

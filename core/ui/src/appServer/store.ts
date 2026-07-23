@@ -45,6 +45,7 @@ export interface CoreAppServerRuntimeControllerOptions<
   reconnectBaseMs?: number
   reconnectMaxMs?: number
   scheduleFrame?: (callback: () => void) => unknown
+  onSessionCreated?: () => void
 }
 
 export function createCoreAppServerRuntimeState<
@@ -157,6 +158,10 @@ export function createCoreAppServerRuntimeController<
   }
 
   function enqueueEvent(event: CoreAppEvent) {
+    if (event.method === 'session/created') {
+      options.onSessionCreated?.()
+      return
+    }
     if (event.method !== 'core/runItem') return
     pendingEvents.push(event)
     if (eventFrameScheduled) return

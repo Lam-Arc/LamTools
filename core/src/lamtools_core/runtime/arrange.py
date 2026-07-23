@@ -897,6 +897,7 @@ def arranged_operation_payload(job: ArrangeJob) -> dict[str, Any]:
     """Build the operation payload for one run without teaching Core any provider schema."""
     payload = deepcopy(job.payload)
     payload["thread_id"] = job.thread_id
+    payload["work_root"] = job.work_root
     if job.signal:
         metadata = dict(payload.get("metadata") or {})
         metadata["arrange_signal"] = deepcopy(job.signal)
