@@ -15,6 +15,7 @@ export interface CoreArrangeJob {
   thread_id: string
   source_thread_id: string
   project_id: string
+  work_root?: string
   kind: 'focus' | 'routine'
   operation: string
   payload: Record<string, unknown>

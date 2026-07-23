@@ -48,11 +48,30 @@ export function createGoal(threadId: string, objective: string): Promise<CoreGoa
     })
 }
 
-export function listArrangeJobs(projectId?: string): Promise<CoreArrangeJob[]> {
+export function listArrangeJobs(workRoot?: string): Promise<CoreArrangeJob[]> {
   const params: Record<string, unknown> = {}
-  if (projectId) params.project_id = projectId
+  if (workRoot) params.work_root = workRoot
   return appServerOperation<{ jobs?: CoreArrangeJob[] }>('arrange.list', params)
     .then(result => result.jobs ?? [])
+}
+
+export function createArrangeJob(params: {
+  thread_id: string
+  work_root: string
+  kind: string
+  operation: string
+  payload: { message: string }
+  trigger: Record<string, unknown>
+  title?: string
+  session_strategy?: string
+  model_id?: string
+  max_runs?: number
+}): Promise<CoreArrangeJob> {
+  return appServerOperation<{ job?: CoreArrangeJob }>('arrange.create', params)
+    .then((result) => {
+      if (!result.job) throw new Error('arrange.create response is missing job')
+      return result.job
+    })
 }
 
 export function updateArrangeJob(

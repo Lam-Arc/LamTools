@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import type { CoreArrangeJob } from '../durable/types'
-import { listArrangeJobs, updateArrangeJob, renameArrangeJob, editArrangeJob as editArrangeJobApi, listArrangeOccurrences } from '../durable/api'
+import { listArrangeJobs, createArrangeJob, updateArrangeJob, renameArrangeJob, editArrangeJob as editArrangeJobApi, listArrangeOccurrences } from '../durable/api'
 
 defineEmits<{ back: [] }>()
 
@@ -9,7 +9,8 @@ const jobs = ref<CoreArrangeJob[]>([])
 const loading = ref(false)
 const error = ref('')
 const busyIds = ref(new Set<string>())
-const terminal = new Set(['cancelled'])
+const terminal = new Set(['cancelled', 'completed'])
+const showTerminal = ref(false)
 
 /* ---- inline editing state ---- */
 const editingTitle = ref<Record<string, string>>({})
@@ -18,11 +19,161 @@ const expandedHistory = ref(new Set<string>())
 const expandedError = ref(new Set<string>())
 const occurrences = ref<Record<string, Array<{ id: string; status: string; scheduled_at: string; started_at?: string | null; completed_at?: string | null; attempt_count: number; last_error?: string }>>>({})
 
-const orderedJobs = computed(() => [...jobs.value].sort((a, b) => {
-  const aTerminal = terminal.has(a.status) ? 1 : 0
-  const bTerminal = terminal.has(b.status) ? 1 : 0
-  return aTerminal - bTerminal || Date.parse(b.updated_at) - Date.parse(a.updated_at)
-}))
+/* ---- create / edit form ---- */
+const showForm = ref(false)
+const formMode = ref<'create' | 'edit'>('create')
+const editingJobId = ref<string | null>(null)
+const formInstruction = ref('')
+const formTitle = ref('')
+const formKind = ref('routine')
+const formSessionStrategy = ref('new')
+const formModelId = ref('')
+const formScheduleType = ref<'once' | 'daily' | 'monthly' | 'interval' | 'event'>('once')
+const formTimezone = ref('Asia/Shanghai')
+const formDate = ref('')
+const formTime = ref('09:00')
+const formDay = ref(1)
+const formEverySeconds = ref(3600)
+const formEventType = ref('')
+const formMaxRuns = ref<number | undefined>(undefined)
+const formSubmitting = ref(false)
+
+const activeJobs = computed(() =>
+  showTerminal.value
+    ? [...jobs.value].sort((a, b) => (terminal.has(a.status) ? 1 : 0) - (terminal.has(b.status) ? 1 : 0) || Date.parse(b.updated_at) - Date.parse(a.updated_at))
+    : [...jobs.value].filter(j => !terminal.has(j.status)).sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at))
+)
+
+function openCreateForm() {
+  formMode.value = 'create'
+  editingJobId.value = null
+  formInstruction.value = ''
+  formTitle.value = ''
+  formKind.value = 'routine'
+  formSessionStrategy.value = 'new'
+  formModelId.value = ''
+  formScheduleType.value = 'once'
+  formTimezone.value = 'Asia/Shanghai'
+  formDate.value = ''
+  formTime.value = '09:00'
+  formDay.value = 1
+  formEverySeconds.value = 3600
+  formEventType.value = ''
+  formMaxRuns.value = undefined
+  showForm.value = true
+}
+
+function openEditForm(job: CoreArrangeJob) {
+  formMode.value = 'edit'
+  editingJobId.value = job.id
+  formInstruction.value = instruction(job)
+  formTitle.value = job.title || ''
+  formKind.value = (job.kind as 'focus' | 'routine') || 'routine'
+  formSessionStrategy.value = (job.session_strategy as 'fixed' | 'new') || 'new'
+  formModelId.value = job.model_id || ''
+
+  const trigger = job.trigger || {}
+  if (trigger.type === 'calendar') {
+    if (trigger.frequency === 'daily') {
+      formScheduleType.value = 'daily'
+      formTime.value = trigger.time || '09:00'
+    } else {
+      formScheduleType.value = 'monthly'
+      formDay.value = trigger.day || 1
+      formTime.value = trigger.time || '09:00'
+    }
+    formTimezone.value = trigger.timezone || 'Asia/Shanghai'
+  } else if (trigger.type === 'once') {
+    formScheduleType.value = 'once'
+  } else if (trigger.type === 'interval') {
+    formScheduleType.value = 'interval'
+    formEverySeconds.value = trigger.every_seconds || 3600
+  } else if (trigger.type === 'event') {
+    formScheduleType.value = 'event'
+    formEventType.value = trigger.event_type || ''
+  } else {
+    formScheduleType.value = 'once'
+  }
+  showForm.value = true
+}
+
+function closeForm() {
+  showForm.value = false
+}
+
+function buildTrigger(): Record<string, unknown> {
+  switch (formScheduleType.value) {
+    case 'once':
+      return {
+        type: 'once',
+        local_at: formDate.value ? `${formDate.value}T${formTime.value}:00` : '',
+        timezone: formTimezone.value,
+      }
+    case 'daily':
+      return {
+        type: 'calendar',
+        frequency: 'daily',
+        time: formTime.value,
+        timezone: formTimezone.value,
+      }
+    case 'monthly':
+      return {
+        type: 'calendar',
+        frequency: 'monthly',
+        day: formDay.value,
+        time: formTime.value,
+        timezone: formTimezone.value,
+      }
+    case 'interval':
+      return {
+        type: 'interval',
+        every_seconds: formEverySeconds.value,
+      }
+    case 'event':
+      return {
+        type: 'event',
+        event_type: formEventType.value,
+      }
+    default:
+      return { type: 'once' }
+  }
+}
+
+async function submitForm() {
+  if (!formInstruction.value.trim()) return
+  formSubmitting.value = true
+  error.value = ''
+  try {
+    if (formMode.value === 'create') {
+      await createArrangeJob({
+        thread_id: '',
+        work_root: '',
+        kind: formKind.value,
+        operation: 'turn.start',
+        payload: { message: formInstruction.value.trim() },
+        trigger: buildTrigger(),
+        title: formTitle.value.trim() || undefined,
+        session_strategy: formSessionStrategy.value,
+        model_id: formModelId.value.trim() || undefined,
+        max_runs: formMaxRuns.value,
+      })
+    } else if (editingJobId.value) {
+      const fields: Record<string, unknown> = {}
+      if (formTitle.value.trim()) fields.title = formTitle.value.trim()
+      fields.instruction = formInstruction.value.trim()
+      fields.trigger = buildTrigger()
+      fields.session_strategy = formSessionStrategy.value
+      fields.model_id = formModelId.value.trim() || undefined
+      await editArrangeJobApi(editingJobId.value, fields as { instruction?: string; trigger?: Record<string, unknown>; session_strategy?: 'fixed' | 'new'; model_id?: string })
+    }
+    showForm.value = false
+    await loadJobs()
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : '操作失败'
+  } finally {
+    formSubmitting.value = false
+  }
+}
 
 async function loadJobs() {
   loading.value = true
@@ -124,7 +275,6 @@ async function toggleHistory(jobId: string) {
     expandedHistory.value = new Set([...expandedHistory.value].filter(id => id !== jobId))
     return
   }
-  // Set placeholder before expanding so the v-for never receives undefined
   if (!occurrences.value[jobId]) {
     occurrences.value = { ...occurrences.value, [jobId]: [] }
   }
@@ -174,6 +324,9 @@ function statusDot(status: CoreArrangeJob['status']) {
   if (status === 'completed') return 'var(--green)'
   return 'var(--muted)'
 }
+function scheduleLabel(type: string) {
+  return ({ once: '单次', daily: '每天', monthly: '每月', interval: '间隔', event: '事件' } as Record<string, string>)[type] || type
+}
 
 /* ---- keyboard for inline editors ---- */
 function onTitleKeydown(e: KeyboardEvent, job: CoreArrangeJob) {
@@ -196,23 +349,136 @@ onMounted(loadJobs)
         <h1>安排</h1>
         <p>长期任务，按计划自动执行。</p>
       </div>
-      <button class="quiet-button" :disabled="loading" @click="loadJobs">{{ loading ? '刷新中…' : '刷新' }}</button>
+      <div class="header-actions">
+        <button class="primary-button" @click="openCreateForm">＋ 新建安排</button>
+        <button class="quiet-button" :disabled="loading" @click="loadJobs">{{ loading ? '刷新中…' : '刷新' }}</button>
+      </div>
     </header>
 
     <p v-if="loading" class="arrange-loading" role="status">正在读取安排…</p>
 
-    <div v-else-if="error" class="arrange-error" role="alert">
+    <div v-else-if="error && !showForm" class="arrange-error" role="alert">
       <span>{{ error }}</span>
       <button type="button" @click="loadJobs">重试</button>
     </div>
 
-    <div v-else-if="orderedJobs.length === 0" class="arrange-empty">
-      还没有安排。可以直接告诉 Agent「安排一下……」。
+    <!-- create / edit form -->
+    <div v-if="showForm" class="form-card">
+      <div class="form-header">
+        <strong>{{ formMode === 'create' ? '新建安排' : '编辑安排' }}</strong>
+        <button class="text-button" @click="closeForm">取消</button>
+      </div>
+      <div class="form-body">
+        <label class="form-field">
+          <span>指令 <em>必填</em></span>
+          <textarea v-model="formInstruction" rows="3" placeholder="任务触发时发送给 Agent 的指令…" />
+        </label>
+        <label class="form-field">
+          <span>标题 <em>可选</em></span>
+          <input v-model="formTitle" placeholder="留空则自动生成" />
+        </label>
+        <div class="form-row">
+          <label class="form-field">
+            <span>类型</span>
+            <select v-model="formKind">
+              <option value="routine">routine · 常规</option>
+              <option value="focus">focus · 专注</option>
+            </select>
+          </label>
+          <label class="form-field">
+            <span>会话策略</span>
+            <select v-model="formSessionStrategy">
+              <option value="new">每次新建</option>
+              <option value="fixed">固定会话</option>
+            </select>
+          </label>
+        </div>
+        <label v-if="formSessionStrategy === 'new'" class="form-field">
+          <span>模型 <em>可选</em></span>
+          <input v-model="formModelId" placeholder="provider/model，如 xunfei/deepseek-v4" />
+        </label>
+        <div class="form-row">
+          <label class="form-field">
+            <span>调度方式</span>
+            <select v-model="formScheduleType">
+              <option value="once">单次</option>
+              <option value="daily">每天</option>
+              <option value="monthly">每月</option>
+              <option value="interval">间隔</option>
+              <option value="event">事件</option>
+            </select>
+          </label>
+          <label v-if="formScheduleType !== 'event' && formScheduleType !== 'interval'" class="form-field">
+            <span>时区</span>
+            <input v-model="formTimezone" placeholder="Asia/Shanghai" />
+          </label>
+        </div>
+        <div v-if="formScheduleType === 'once'" class="form-row">
+          <label class="form-field">
+            <span>日期</span>
+            <input v-model="formDate" type="date" />
+          </label>
+          <label class="form-field">
+            <span>时间</span>
+            <input v-model="formTime" type="time" />
+          </label>
+        </div>
+        <div v-else-if="formScheduleType === 'daily'" class="form-field">
+          <label>
+            <span>时间</span>
+            <input v-model="formTime" type="time" />
+          </label>
+        </div>
+        <div v-else-if="formScheduleType === 'monthly'" class="form-row">
+          <label class="form-field">
+            <span>日期</span>
+            <input v-model.number="formDay" type="number" min="1" max="31" />
+          </label>
+          <label class="form-field">
+            <span>时间</span>
+            <input v-model="formTime" type="time" />
+          </label>
+        </div>
+        <div v-else-if="formScheduleType === 'interval'" class="form-field">
+          <label>
+            <span>间隔秒数</span>
+            <input v-model.number="formEverySeconds" type="number" min="1" />
+          </label>
+        </div>
+        <div v-else-if="formScheduleType === 'event'" class="form-field">
+          <label>
+            <span>事件类型</span>
+            <input v-model="formEventType" placeholder="artifact.changed" />
+          </label>
+        </div>
+        <label class="form-field">
+          <span>最大运行次数 <em>可选</em></span>
+          <input v-model.number="formMaxRuns" type="number" min="1" placeholder="留空不限" />
+        </label>
+        <div v-if="error" class="form-error">{{ error }}</div>
+        <div class="form-actions">
+          <button class="primary-button" :disabled="formSubmitting || !formInstruction.trim()" @click="submitForm">
+            {{ formSubmitting ? '提交中…' : formMode === 'create' ? '创建' : '保存' }}
+          </button>
+          <button class="quiet-button" @click="closeForm">取消</button>
+        </div>
+      </div>
     </div>
 
-    <div v-else class="card-list" role="list">
+    <div v-if="!loading && !showForm && !error && activeJobs.length === 0 && jobs.length === 0" class="arrange-empty">
+      还没有安排。点击上方按钮新建，或直接告诉 Agent「安排一下……」。
+    </div>
+
+    <!-- terminal toggle -->
+    <div v-if="!loading && !showForm && !error && jobs.some(j => terminal.has(j.status))" class="terminal-toggle">
+      <button class="text-button" @click="showTerminal = !showTerminal">
+        {{ showTerminal ? '隐藏' : '显示' }}已完成/已取消 ({{ jobs.filter(j => terminal.has(j.status)).length }})
+      </button>
+    </div>
+
+    <div v-if="!loading && !showForm && !error && activeJobs.length > 0" class="card-list" role="list">
       <article
-        v-for="job in orderedJobs"
+        v-for="job in activeJobs"
         :key="job.id"
         class="arrange-card"
         role="listitem"
@@ -238,6 +504,7 @@ onMounted(loadJobs)
             >{{ displayTitle(job) }}</strong>
           </div>
           <div class="title-actions">
+            <button class="action-btn" :disabled="busyIds.has(job.id)" @click="openEditForm(job)">编辑</button>
             <button
               v-if="['scheduled', 'waiting', 'running'].includes(job.status)"
               class="action-btn"
@@ -286,7 +553,11 @@ onMounted(loadJobs)
 
         <!-- row 3: project + session -->
         <div class="card-row meta-row">
-          <span class="meta-item">项目 <code>{{ (job.project_id || '').slice(0, 8) || '-' }}</code></span>
+          <span class="meta-item">项目 <code>{{ (job.work_root || job.project_id || '').slice(0, 8) || '-' }}</code></span>
+          <span class="meta-divider">·</span>
+          <span class="meta-item">
+            <span class="kind-badge" :class="job.kind">{{ job.kind === 'focus' ? '专注' : '常规' }}</span>
+          </span>
           <span class="meta-divider">·</span>
           <span
             class="meta-item clickable"
@@ -364,10 +635,33 @@ onMounted(loadJobs)
 h1 { margin: 18px 0 6px; font-size: 30px; letter-spacing: -.025em; } p { margin: 0; } .arrange-header p, .text-button { color: var(--muted); }
 button { font: inherit; } .text-button, .quiet-button { border: 0; background: transparent; color: inherit; cursor: pointer; }
 .text-button { padding: 0; } .quiet-button { padding: 7px 12px; border: 1px solid var(--line); border-radius: 8px; }
+.primary-button { padding: 7px 16px; border: 0; border-radius: 8px; background: var(--blue); color: #101820; cursor: pointer; font-weight: 600; }
+.primary-button:disabled { opacity: .5; cursor: default; }
+.header-actions { display: flex; gap: 8px; align-items: center; }
 
 .arrange-loading, .arrange-empty { max-width: 780px; margin-inline: auto; padding: 28px 0; color: var(--muted); }
 .arrange-error { max-width: 780px; margin-inline: auto; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 0; color: var(--red); }
 .arrange-error button { flex: none; min-height: 36px; padding: 6px 11px; border: 1px solid currentColor; border-radius: 8px; background: transparent; color: inherit; cursor: pointer; }
+
+/* ---- form ---- */
+.form-card { max-width: 780px; margin: 0 auto 28px; padding: 20px; border: 1px solid var(--blue); border-radius: var(--radius); background: var(--panel-2); }
+.form-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+.form-body { display: flex; flex-direction: column; gap: 14px; }
+.form-field { display: flex; flex-direction: column; gap: 4px; }
+.form-field span { font-size: 13px; color: var(--muted); }
+.form-field em { font-style: normal; color: var(--orange); }
+.form-field input, .form-field textarea, .form-field select {
+  box-sizing: border-box; width: 100%; padding: 7px 10px;
+  border: 1px solid var(--line); border-radius: 6px;
+  background: var(--bg); color: var(--text); font: inherit; font-size: 14px;
+}
+.form-field textarea { resize: vertical; min-height: 64px; }
+.form-field select { cursor: pointer; }
+.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.form-error { color: var(--red); font-size: 13px; }
+.form-actions { display: flex; gap: 8px; margin-top: 4px; }
+
+.terminal-toggle { max-width: 780px; margin: 0 auto 12px; }
 
 /* ---- cards ---- */
 .card-list { max-width: 780px; margin-inline: auto; display: grid; gap: 16px; }
@@ -407,6 +701,8 @@ button { font: inherit; } .text-button, .quiet-button { border: 0; background: t
 .meta-item.clickable:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .meta-item code { font-size: 12px; color: var(--muted); background: color-mix(in srgb, var(--text) 6%, transparent); border-radius: 4px; padding: 1px 5px; }
 .meta-divider { color: var(--faint); }
+.kind-badge { font-size: 11px; padding: 1px 6px; border-radius: 4px; background: color-mix(in srgb, var(--text) 8%, transparent); }
+.kind-badge.focus { background: color-mix(in srgb, var(--orange) 20%, transparent); color: var(--orange); }
 
 /* row 5: status */
 .status-row { justify-content: space-between; }
@@ -442,9 +738,12 @@ button:disabled { cursor: default; opacity: .5; }
 @media (max-width: 700px) {
   .arrange-page { padding: 24px 18px; }
   .arrange-card { padding: 14px 16px; }
+  .form-card { padding: 14px 16px; }
+  .form-row { grid-template-columns: 1fr; }
   .title-row { align-items: flex-start; flex-direction: column; gap: 8px; }
-  .title-actions { width: 100%; }
+  .title-actions { width: 100%; flex-wrap: wrap; }
   .action-btn { min-height: 36px; }
   .text-button, .quiet-button { min-height: 44px; }
+  .header-actions { flex-direction: column; align-items: stretch; }
 }
 </style>
