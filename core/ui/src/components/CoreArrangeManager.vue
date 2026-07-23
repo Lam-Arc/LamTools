@@ -95,8 +95,8 @@ async function loadSessions(workRoot: string) {
   finally { loadingSessions.value = false }
 }
 
-watch(formSessionStrategy, (val) => {
-  if (val === 'fixed' && formWorkRoot.value) loadSessions(formWorkRoot.value)
+watch([formSessionStrategy, formWorkRoot], ([strategy, root]) => {
+  if (strategy === 'fixed' && root) loadSessions(root)
 })
 
 const activeJobs = computed(() =>

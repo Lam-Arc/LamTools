@@ -31,8 +31,7 @@
   />
   <CoreArrangeManager
     v-else-if="showArrange"
-    :list-jobs="listArrangeJobs"
-    :update-job="updateArrangeJob"
+    :work-root="currentWorkRoot()"
     @back="showArrange = false"
   />
   <WorkspaceShell
