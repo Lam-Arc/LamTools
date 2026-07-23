@@ -182,7 +182,7 @@ class CoreProjectStore:
                     member_id="core",
                     title=session_title,
                     status="idle",
-                    metadata={"project_id": project.id, "work_root": project.work_root},
+                    metadata={"work_root": project.work_root},
                 )
                 db.add(
                     CoreThreadSnapshot(
@@ -198,7 +198,6 @@ class CoreProjectStore:
                     session.title = session_title
                 session.metadata = {
                     **session.metadata,
-                    "project_id": project.id,
                     "work_root": project.work_root,
                 }
                 state = dict(row.snapshot_json or {})
@@ -303,7 +302,7 @@ async def _create_project_session(db: Any, project: CoreProject, *, title: str) 
         member_id="core",
         title=title,
         status="idle",
-        metadata={"project_id": project.id, "work_root": project.work_root},
+        metadata={"work_root": project.work_root},
     )
     db.add(
         CoreThreadSnapshot(

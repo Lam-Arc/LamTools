@@ -100,9 +100,9 @@ def register_durable_operations(
         payload = request.payload
         operation = str(payload.get("operation") or "").strip()
         source_thread_id = _thread_id(payload)
-        project_id = str(payload.get("project_id") or payload.get("projectId") or "").strip()
-        if not project_id:
-            return _error(request, "project_id is required")
+        work_root = str(payload.get("work_root") or payload.get("workRoot") or payload.get("project_id") or payload.get("projectId") or "").strip()
+        if not work_root:
+            return _error(request, "work_root is required")
         session_strategy = str(payload.get("session_strategy") or payload.get("sessionStrategy") or "new").strip()
         if session_strategy not in {"fixed", "new"}:
             return _error(request, "session_strategy must be fixed or new")
@@ -128,7 +128,7 @@ def register_durable_operations(
                 thread_id = f"arrange_thread_{uuid.uuid4().hex}"
             job = await arrange_manager.create(
                 thread_id=thread_id,
-                project_id=project_id,
+                work_root=work_root,
                 source_thread_id=source_thread_id,
                 kind=str(payload.get("kind") or ""),  # type: ignore[arg-type]
                 operation=operation,
@@ -158,7 +158,7 @@ def register_durable_operations(
         try:
             jobs = await arrange_manager.list(
                 thread_id=_optional_text(payload, "thread_id", "threadId"),
-                project_id=_optional_text(payload, "project_id", "projectId"),
+                work_root=_optional_text(payload, "work_root", "workRoot", "project_id", "projectId"),
                 status=_optional_text(payload, "status"),  # type: ignore[arg-type]
             )
         except (TypeError, ValueError) as exc:

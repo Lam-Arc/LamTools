@@ -135,7 +135,7 @@ class CoreBaseAgentKit:
     async def on_run_start(self, state: RuntimeState, turn_input: RuntimeTurnInput) -> None:
         state.metadata["agent_id"] = self.config.agent_id
         state.metadata["work_root"] = str(self.work_root)
-        for key in ("model_id", "project_id", "thinking_enabled", "thinking_budget", "shallow_thinking_enabled"):
+        for key in ("model_id", "thinking_enabled", "thinking_budget", "shallow_thinking_enabled"):
             if key in turn_input.metadata:
                 state.metadata[key] = turn_input.metadata[key]
         if turn_input.user_message:
@@ -167,7 +167,7 @@ class CoreBaseAgentKit:
     async def build_model_request(self, state: RuntimeState, context: PromptContext) -> LLMRequest:
         system_lines = [
             self.config.instructions,
-            f"当前项目: {state.metadata.get('project_id', '')}, 当前会话: {state.session_id}, 当前模型: {self.config.model_id}",
+            f"当前项目: {state.metadata.get('work_root', '')}, 当前会话: {state.session_id}, 当前模型: {self.config.model_id}",
             command_shell_prompt(),
             "Use the available tools when they help complete the user's request.",
             "If the user explicitly asks to use a sub-agent, call sub_agent before producing the final result.",

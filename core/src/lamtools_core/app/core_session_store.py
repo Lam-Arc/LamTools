@@ -162,14 +162,13 @@ def _session_state(session: SessionRecord, *, messages=None) -> dict:
 
 
 def _canonicalize_project_metadata(existing: dict, requested: dict) -> dict:
-    project_id = existing.get("project_id")
-    if not isinstance(project_id, str) or not project_id:
-        if "project_id" in requested or "work_root" in requested:
+    work_root = existing.get("work_root")
+    if not isinstance(work_root, str) or not work_root:
+        if "work_root" in requested:
             raise ValueError("Use the project session endpoint for project-owned sessions")
         return dict(requested)
     metadata = dict(requested)
-    metadata["project_id"] = project_id
-    metadata["work_root"] = str(existing.get("work_root") or "")
+    metadata["work_root"] = str(work_root)
     return metadata
 
 

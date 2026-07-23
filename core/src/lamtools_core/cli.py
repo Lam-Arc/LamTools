@@ -829,7 +829,7 @@ def build_parser() -> argparse.ArgumentParser:
     arrange_sub = arrange.add_subparsers(dest="arrange_command")
     arrange_create = arrange_sub.add_parser("new", help="Create a new arrangement")
     arrange_create.add_argument("message", nargs="+", help="Arrangement instruction text")
-    arrange_create.add_argument("--project-id", required=True, default="", help="Project ID (required)")
+    arrange_create.add_argument("--work-root", required=True, default="", help="Project work root absolute path (required)")
     arrange_create.add_argument("--thread-id", default="", help="Target thread ID (uses source thread if omitted)")
     arrange_create.add_argument("--title", default="", help="Card title (defaults to first 40 chars of message)")
     arrange_create.add_argument("--session-strategy", choices=["fixed", "new"], default="new", help="Session strategy: fixed or new (default: new)")
@@ -846,7 +846,7 @@ def build_parser() -> argparse.ArgumentParser:
     arrange_create.add_argument("--token", default=os.environ.get("LAMTOOLS_CORE_TOKEN", ""))
     arrange_create.set_defaults(func=cmd_arrange_create, raw=False)
     arrange_list = arrange_sub.add_parser("ls", help="List arrangements")
-    arrange_list.add_argument("--project-id", default="", help="Filter by project ID")
+    arrange_list.add_argument("--work-root", default="", help="Filter by project work_root")
     arrange_list.add_argument("--base-url", default=os.environ.get("LAMTOOLS_CORE_API_URL", "http://127.0.0.1:5172"))
     arrange_list.add_argument("--ws-path", default=os.environ.get("LAMTOOLS_CORE_WS_PATH", "/api/core/app-server"))
     arrange_list.add_argument("--token", default=os.environ.get("LAMTOOLS_CORE_TOKEN", ""))
@@ -1465,9 +1465,9 @@ async def cmd_arrange_create(args: argparse.Namespace) -> int:
         trigger = {"type": "once", "local_at": "", "timezone": args.timezone}
     thread_id = str(args.thread_id or "").strip()
     if not thread_id:
-        thread_id = args.project_id  # fallback: use project_id as source_thread_id
+        thread_id = args.work_root  # fallback: use work_root as source_thread_id
     payload = {
-        "project_id": args.project_id,
+        "work_root": args.work_root,
         "thread_id": thread_id,
         "kind": args.kind,
         "operation": "turn.start",
@@ -1494,9 +1494,9 @@ async def cmd_arrange_create(args: argparse.Namespace) -> int:
 
 async def cmd_arrange_list(args: argparse.Namespace) -> int:
     params: dict[str, Any] = {}
-    project_id = str(args.project_id or "").strip()
-    if project_id:
-        params["project_id"] = project_id
+    work_root = str(args.work_root or "").strip()
+    if work_root:
+        params["work_root"] = work_root
     async def op(client: CoreAppServerClient) -> dict[str, Any]:
         return await client.request("arrange.list", params)
     result = await _invoke_live(args, op)

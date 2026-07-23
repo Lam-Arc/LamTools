@@ -223,7 +223,6 @@ def create_core_agent_operations(
             if goal.status == "blocked":
                 await goal_manager.update(goal.id, status="active", status_reason="")
         runtime_work_root = _work_root_from_request(paths, request)
-        project_id = await _resolve_project_id(thread_id, thread_snapshot_store)
         if _is_llm_client(model_provider):
             from lamtools_core.kernel.loop import CoreLoopKernel
             from lamtools_core.kernel.policy import LoopPolicy
@@ -342,7 +341,6 @@ def create_core_agent_operations(
                             **dict(request.payload.get("metadata") or {}),
                             "session_id": thread_id,
                             "goal_id": goal_id,
-                            "project_id": project_id,
                             "data_dir": str(paths.data_dir),
                             "work_root": str(runtime_work_root),
                             "model_id": runtime_options.model_id,
@@ -1249,23 +1247,6 @@ def _work_root_from_request(paths: CoreAgentPaths, request: OperationRequest) ->
         or metadata.get("workRoot")
     )
     return Path(supplied or paths.work_root).expanduser().resolve()
-
-
-async def _resolve_project_id(thread_id: str, snapshot_store: Any) -> str:
-    """Read project_id from a session's snapshot metadata."""
-    if snapshot_store is None:
-        return ""
-    try:
-        load = getattr(snapshot_store, "load", None)
-        if not callable(load):
-            return ""
-        snapshot = await load(thread_id)
-        if snapshot is None:
-            return ""
-        metadata = snapshot.get("metadata") if isinstance(snapshot, dict) else {}
-        return str(metadata.get("project_id") or "")
-    except Exception:
-        return ""
 
 
 def _work_root_from_state(paths: CoreAgentPaths, state: Any) -> Path:

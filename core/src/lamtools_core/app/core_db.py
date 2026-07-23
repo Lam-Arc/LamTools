@@ -102,7 +102,7 @@ class CoreArrangeJob(CoreDbBase):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     thread_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
     source_thread_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False, default="")
-    project_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False, default="")
+    work_root: Mapped[str] = mapped_column(String(2048), index=True, nullable=False, default="")
     kind: Mapped[str] = mapped_column(String(32), nullable=False)
     operation: Mapped[str] = mapped_column(String(128), nullable=False)
     payload_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
@@ -402,13 +402,13 @@ class SqlAlchemyArrangeStore:
         return _arrange_from_row(row) if row is not None else None
 
     async def list(
-        self, *, thread_id: str | None = None, project_id: str | None = None, status: ArrangeStatus | None = None
+        self, *, thread_id: str | None = None, work_root: str | None = None, status: ArrangeStatus | None = None
     ) -> list[ArrangeJob]:
         statement = select(CoreArrangeJob)
         if thread_id is not None:
             statement = statement.where(CoreArrangeJob.thread_id == thread_id)
-        if project_id is not None:
-            statement = statement.where(CoreArrangeJob.project_id == project_id)
+        if work_root is not None:
+            statement = statement.where(CoreArrangeJob.work_root == work_root)
         if status is not None:
             statement = statement.where(CoreArrangeJob.status == status)
         statement = statement.order_by(CoreArrangeJob.created_at, CoreArrangeJob.id)
@@ -1009,6 +1009,11 @@ async def _migrate_core_app_schema(connection: Any) -> None:
             "ALTER TABLE core_arrange_jobs "
             "ADD COLUMN project_id VARCHAR(64) NOT NULL DEFAULT ''"
         ))
+    if "work_root" not in arrange_columns:
+        await connection.execute(text(
+            "ALTER TABLE core_arrange_jobs "
+            "ADD COLUMN work_root VARCHAR(2048) NOT NULL DEFAULT ''"
+        ))
     if "title" not in arrange_columns:
         await connection.execute(text(
             "ALTER TABLE core_arrange_jobs "
@@ -1102,7 +1107,7 @@ def _arrange_values(job: ArrangeJob) -> dict[str, Any]:
     return {
         "thread_id": job.thread_id,
         "source_thread_id": job.source_thread_id,
-        "project_id": job.project_id,
+        "work_root": job.work_root,
         "kind": job.kind,
         "operation": job.operation,
         "payload_json": _json_safe(job.payload),
@@ -1134,7 +1139,7 @@ def _arrange_from_row(row: CoreArrangeJob) -> ArrangeJob:
         id=row.id,
         thread_id=row.thread_id,
         source_thread_id=row.source_thread_id or row.thread_id,
-        project_id=row.project_id or "",
+        work_root=row.work_root or "",
         kind=row.kind,  # type: ignore[arg-type]
         operation=row.operation,
         payload=_json_safe(row.payload_json or {}),

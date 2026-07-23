@@ -847,18 +847,17 @@ def _datetime_from_ms(value: Any) -> datetime:
 
 
 def _has_project_metadata(metadata: dict[str, Any]) -> bool:
-    return "project_id" in metadata or "work_root" in metadata
+    return "work_root" in metadata
 
 
 def _validated_session_metadata(existing: dict[str, Any], requested: dict[str, Any] | None) -> dict[str, Any] | None:
     if requested is None:
         return None
-    project_id = existing.get("project_id")
-    if not isinstance(project_id, str) or not project_id:
+    work_root = existing.get("work_root")
+    if not isinstance(work_root, str) or not work_root:
         if _has_project_metadata(requested):
             raise HTTPException(status_code=422, detail="Use the project session endpoint for project-owned sessions")
         return dict(requested)
     metadata = dict(requested)
-    metadata["project_id"] = project_id
-    metadata["work_root"] = str(existing.get("work_root") or "")
+    metadata["work_root"] = str(work_root)
     return metadata

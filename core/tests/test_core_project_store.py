@@ -44,7 +44,7 @@ async def test_create_makes_normalized_workspace_without_initializing_git(tmp_pa
         assert requested_root.resolve().is_dir()
         assert not (requested_root.resolve() / ".git").exists()
         assert [session.metadata for session in await db.project_store.list_sessions(project.id)] == [
-            {"project_id": project.id, "work_root": str(requested_root.resolve())}
+            {"work_root": str(requested_root.resolve())}
         ]
     finally:
         await db.close()
@@ -135,7 +135,6 @@ async def test_create_with_initial_session_returns_the_public_initial_session(tm
 
         assert created is True
         assert initial_session.metadata == {
-            "project_id": project.id,
             "work_root": str(root.resolve()),
         }
         assert await db.project_store.list_sessions(project.id) == [initial_session]
@@ -151,7 +150,7 @@ async def test_project_session_creation_uses_canonical_project_and_rejects_missi
         project, _ = await db.project_store.create(tmp_path / "workspace")
         session = await db.project_store.create_session(project.id, title="Follow-up")
 
-        assert session.metadata == {"project_id": project.id, "work_root": project.work_root}
+        assert session.metadata == {"work_root": project.work_root}
         assert session.title == "Follow-up"
         with pytest.raises(LookupError, match="Project not found"):
             await db.project_store.create_session("missing-project")
@@ -222,7 +221,7 @@ async def test_session_store_enforces_project_metadata_without_http_guards(tmp_p
         )
         await store.create(unassigned)
         with pytest.raises(ValueError, match="project session endpoint"):
-            await store.patch("unassigned", metadata={"project_id": "forged", "work_root": "E:\\forged"})
+            await store.patch("unassigned", metadata={"work_root": "E:\\forged"})
 
         project, _ = await db.project_store.create(tmp_path / "workspace")
         [owned] = await db.project_store.list_sessions(project.id)
@@ -233,7 +232,6 @@ async def test_session_store_enforces_project_metadata_without_http_guards(tmp_p
         assert persisted is not None
         assert persisted.metadata == {
             "source": "updated",
-            "project_id": project.id,
             "work_root": project.work_root,
         }
     finally:

@@ -280,7 +280,6 @@ def test_core_project_cli_creates_workspace_and_round_trips_agents(monkeypatch, 
     assert created["project"]["name"] == "Docs"
     assert created["project"]["work_root"] == str(workspace.resolve())
     assert created["session"]["metadata"] == {
-        "project_id": project_id,
         "work_root": str(workspace.resolve()),
     }
 
@@ -783,7 +782,6 @@ async def test_core_cli_run_uses_core_kernel_tool_loop(tmp_path: Path) -> None:
     snapshot = json.loads(snapshot_row[1])
     assert snapshot["session"]["title"] == "写一个文档，超过 10 行，随便写。"
     assert snapshot["session"]["metadata"]["work_root"] == str((tmp_path / "workspace").resolve())
-    assert snapshot["session"]["metadata"]["project_id"] == project_row[0]
     assert project_row[1] == "workspace"
     assert project_row[2] == str((tmp_path / "workspace").resolve())
 

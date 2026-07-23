@@ -261,7 +261,7 @@ def test_core_agent_http_app_exposes_durable_goal_and_arrange_operations(tmp_pat
                 "method": "arrange.create",
                 "params": {
                     "thread_id": "thread-1",
-                    "project_id": "test-proj",
+                    "work_root": "test-proj",
                     "kind": "focus",
                     "operation": "goal.list",
                     "payload": {"thread_id": "thread-1"},
@@ -296,7 +296,7 @@ def test_core_agent_http_restart_reclaims_running_arrange_occurrence(tmp_path: P
             now = datetime.now(timezone.utc)
             job = await ArrangeManager(db.arrange_store).create(
                 thread_id="thread-restart",
-                project_id="test-proj",
+                work_root="test-proj",
                 kind="routine",
                 operation="goal.list",
                 payload={"thread_id": "thread-restart"},
@@ -367,7 +367,7 @@ def test_core_agent_http_startup_restores_persisted_observer(tmp_path: Path) -> 
         try:
             job = await ArrangeManager(db.arrange_store).create(
                 thread_id="thread-observer-restart",
-                project_id="test-proj",
+                work_root="test-proj",
                 kind="focus",
                 operation="goal.list",
                 payload={"thread_id": "thread-observer-restart"},
@@ -563,7 +563,6 @@ def test_project_http_round_trip_survives_restart_and_uses_agents_md(tmp_path: P
         result = created.json()
         project_id = result["project"]["id"]
         assert result["session"]["metadata"] == {
-            "project_id": project_id,
             "work_root": str(root.resolve()),
         }
 
@@ -583,7 +582,6 @@ def test_project_http_round_trip_survives_restart_and_uses_agents_md(tmp_path: P
         )
         assert created_session.status_code == 201
         assert created_session.json()["metadata"] == {
-            "project_id": project_id,
             "work_root": str(root.resolve()),
         }
         assert client.post(
@@ -655,7 +653,7 @@ def test_project_http_delete_rejects_active_session_and_app_server_uses_project_
 
             websocket.send_json({"id": 61, "method": "project.sessions.create", "params": {"project_id": project_id}})
             project_session = _receive_rpc_response(websocket, 61)["result"]["session"]
-            assert project_session["metadata"]["project_id"] == project_id
+            assert project_session["metadata"]["work_root"] == str(tmp_path / "workspace")
 
             websocket.send_json(
                 {"id": 7, "method": "project.agents_md.update", "params": {"project_id": project_id, "content": "# Rules\n"}}
@@ -666,11 +664,10 @@ def test_project_http_delete_rejects_active_session_and_app_server_uses_project_
             assert _receive_rpc_response(websocket, 8)["result"]["agents_md"] == {"content": "# Rules\n", "exists": True}
         protected = client.patch(
             f"/api/core/sessions/{session_id}",
-            json={"metadata": {"project_id": "forged", "work_root": "E:\\forged", "note": "kept"}},
+            json={"metadata": {"work_root": "E:\\forged", "note": "kept"}},
         )
         assert protected.status_code == 200
         assert protected.json()["metadata"] == {
-            "project_id": project_id,
             "work_root": str((tmp_path / "workspace").resolve()),
             "note": "kept",
         }

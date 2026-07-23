@@ -47,7 +47,7 @@ def durable_tool_specs(*, goal: bool, arrange: bool) -> list[ToolSpec]:
             description=(
                 "Create or manage a durable arranged task that remains visible and manageable inside LamTools. "
                 "Use it directly for reminders, schedules, recurring work, and event-triggered work. "
-                "project_id is required — ask the user if you don't know it. "
+                "work_root is required — ask the user if you don't know it. "
                 "Creation, pause, resume, and cancellation require user confirmation; list and get are read-only."
                 f" Current UTC time is {current_utc}. Convert relative dates before calling the tool."
             ),
@@ -56,7 +56,7 @@ def durable_tool_specs(*, goal: bool, arrange: bool) -> list[ToolSpec]:
                     "type": "string",
                     "enum": ["create", "list", "get", "pause", "resume", "cancel"],
                 },
-                "project_id": {"type": "string", "description": "Project ID this arrangement belongs to (required)"},
+                "project_id": {"type": "string", "description": "Project work_root (absolute path) this arrangement belongs to (required)"},
                 "instruction": {"type": "string", "description": "Instruction sent when the task runs"},
                 "title": {"type": "string", "description": "Short display title (auto-generated from instruction if omitted)"},
                 "session_strategy": {
@@ -147,7 +147,7 @@ def durable_tool_handlers(
                 strategy = "new"
             payload = {
                 "thread_id": session_id,
-                "project_id": str(args.get("project_id") or "").strip(),
+                "work_root": str(args.get("project_id") or args.get("work_root") or "").strip(),
                 "kind": str(args.get("kind") or "routine").strip(),
                 "operation": "turn.start",
                 "payload": {"message": str(args.get("instruction") or "").strip()},

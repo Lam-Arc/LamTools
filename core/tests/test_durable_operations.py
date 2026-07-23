@@ -55,7 +55,7 @@ async def test_arrange_operations_validate_target_and_wake_runner() -> None:
         "arrange.create",
         {
             "thread_id": "thread-1",
-            "project_id": "proj-1",
+            "work_root": "proj-1",
             "kind": "routine",
             "operation": "missing.operation",
             "payload": {},
@@ -66,7 +66,7 @@ async def test_arrange_operations_validate_target_and_wake_runner() -> None:
         "arrange.create",
         {
             "thread_id": "thread-1",
-            "project_id": "proj-1",
+            "work_root": "proj-1",
             "kind": "routine",
             "operation": "probe.run",
             "payload": {"value": 1},
@@ -101,7 +101,7 @@ async def test_arrange_signal_accepts_generic_event_envelope() -> None:
         "arrange.create",
         {
             "thread_id": "thread-1",
-            "project_id": "proj-1",
+            "work_root": "proj-1",
             "kind": "focus",
             "operation": "turn.start",
             "payload": {"message": "inspect"},
@@ -140,7 +140,7 @@ async def test_agent_created_arrange_uses_core_owned_execution_thread_rule() -> 
         "arrange.create",
         {
             "thread_id": "source-thread-1",
-            "project_id": "proj-1",
+            "work_root": "proj-1",
             "kind": "routine",
             "operation": "turn.start",
             "payload": {"message": "prepare report"},
@@ -151,7 +151,7 @@ async def test_agent_created_arrange_uses_core_owned_execution_thread_rule() -> 
 
     assert result.payload["job"]["thread_id"] == "source-thread-1"
     assert result.payload["job"]["source_thread_id"] == "source-thread-1"
-    assert result.payload["job"]["project_id"] == "proj-1"
+    assert result.payload["job"]["work_root"] == "proj-1"
     assert result.payload["job"]["session_strategy"] == "new"
 
 
@@ -174,7 +174,7 @@ async def test_arrange_operation_approves_observer_content_and_reconciles_runtim
         "arrange.create",
         {
             "thread_id": "thread-1",
-            "project_id": "proj-1",
+            "work_root": "proj-1",
             "kind": "focus",
             "operation": "turn.start",
             "payload": {"message": "watch"},

@@ -113,7 +113,7 @@ class ArrangeJob:
     id: str
     thread_id: str
     source_thread_id: str
-    project_id: str
+    work_root: str
     kind: ArrangeKind
     operation: str
     payload: dict[str, Any]
@@ -140,7 +140,7 @@ class ArrangeJob:
             "id": self.id,
             "thread_id": self.thread_id,
             "source_thread_id": self.source_thread_id,
-            "project_id": self.project_id,
+            "work_root": self.work_root,
             "kind": self.kind,
             "operation": self.operation,
             "payload": deepcopy(self.payload),
@@ -217,7 +217,7 @@ class ArrangeStore(Protocol):
     async def insert(self, job: ArrangeJob) -> ArrangeJob: ...
     async def get(self, job_id: str) -> ArrangeJob | None: ...
     async def list(
-        self, *, thread_id: str | None = None, project_id: str | None = None, status: ArrangeStatus | None = None
+        self, *, thread_id: str | None = None, work_root: str | None = None, status: ArrangeStatus | None = None
     ) -> list[ArrangeJob]: ...
     async def replace(self, job: ArrangeJob, *, expected_revision: int) -> ArrangeJob: ...
     async def claim_due(
@@ -267,14 +267,14 @@ class InMemoryArrangeStore:
             return deepcopy(job) if job is not None else None
 
     async def list(
-        self, *, thread_id: str | None = None, project_id: str | None = None, status: ArrangeStatus | None = None
+        self, *, thread_id: str | None = None, work_root: str | None = None, status: ArrangeStatus | None = None
     ) -> list[ArrangeJob]:
         async with self._lock:
             jobs = [
                 deepcopy(job)
                 for job in self._jobs.values()
                 if (thread_id is None or job.thread_id == thread_id)
-                and (project_id is None or job.project_id == project_id)
+                and (work_root is None or job.work_root == work_root)
                 and (status is None or job.status == status)
             ]
         return sorted(jobs, key=lambda job: (job.created_at, job.id))
@@ -592,7 +592,7 @@ class ArrangeManager:
         self,
         *,
         thread_id: str,
-        project_id: str,
+        work_root: str,
         source_thread_id: str = "",
         kind: ArrangeKind,
         operation: str,
@@ -608,10 +608,10 @@ class ArrangeManager:
     ) -> ArrangeJob:
         current = now or _utcnow()
         clean_thread = str(thread_id or "").strip()
-        clean_project = str(project_id or "").strip()
+        clean_project = str(work_root or "").strip()
         clean_operation = str(operation or "").strip()
         if not clean_project:
-            raise ValueError("project_id is required")
+            raise ValueError("work_root is required")
         if not clean_thread:
             raise ValueError("thread_id is required")
         if session_strategy not in {"fixed", "new"}:
@@ -630,7 +630,7 @@ class ArrangeManager:
             id=str(job_id or "").strip() or f"arrange_{uuid.uuid4().hex}",
             thread_id=clean_thread,
             source_thread_id=str(source_thread_id or clean_thread).strip(),
-            project_id=clean_project,
+            work_root=clean_project,
             kind=kind,
             operation=clean_operation,
             payload=deepcopy(payload),
@@ -690,8 +690,8 @@ class ArrangeManager:
             expected_revision=current.revision,
         )
 
-    async def list(self, *, thread_id: str | None = None, project_id: str | None = None, status: ArrangeStatus | None = None) -> list[ArrangeJob]:
-        return await self.store.list(thread_id=thread_id, project_id=project_id, status=status)
+    async def list(self, *, thread_id: str | None = None, work_root: str | None = None, status: ArrangeStatus | None = None) -> list[ArrangeJob]:
+        return await self.store.list(thread_id=thread_id, work_root=work_root, status=status)
 
     async def update_status(
         self,
