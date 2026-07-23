@@ -53,17 +53,22 @@ async function configRequest(method: string, params: Record<string, unknown> = {
     _configClient = new CoreAppServerClient({
       url,
       clientInfo: { name: 'lamtools_arrange', title: 'Arrange', version: '0.1.0' },
-      onConnectionState: (state: string) => { if (state === 'closed' || state === 'error') _configClient = null },
+      onConnectionState: (state) => { if (state === 'closed' || state === 'error') _configClient = null },
     })
     await _configClient.connect()
   }
-  return await _configClient.request(method, params)
+  try {
+    return await _configClient.request(method, params)
+  } catch {
+    _configClient = null
+    throw new Error(`configRequest failed: ${method}`)
+  }
 }
 
 async function loadProjects() {
   if (availableProjects.value.length > 0) return
   try {
-    const result = await configRequest('project.list', {}) as { projects?: Array<{ id: string; name: string; work_root: string }> }
+    const result = await configRequest('project.list') as { projects?: Array<{ id: string; name: string; work_root: string }> }
     availableProjects.value = result.projects || []
   } catch (e) { console.error('loadProjects:', e) }
 }
@@ -71,8 +76,8 @@ async function loadProjects() {
 async function loadModels() {
   if (availableModels.value.length > 0) return
   try {
-    const models = await configRequest('config.models.list', {}) as { models?: Array<{ id: string; model_id: string; display_name: string; provider_name: string }> }
-    availableModels.value = (models.models || []).map(m => {
+    const result = await configRequest('config.models.list') as { models?: Array<{ id: string; model_id: string; display_name: string; provider_name: string }> }
+    availableModels.value = (result.models || []).map(m => {
       const pn = m.provider_name || ''
       const mn = m.model_id || m.display_name
       const name = pn && mn ? `${pn}/${mn}` : (m.display_name || m.model_id)
@@ -85,8 +90,8 @@ async function loadSessions(workRoot: string) {
   loadingSessions.value = true
   availableSessions.value = []
   try {
-    const projects = await configRequest('project.list', {}) as { projects?: Array<{ id: string; work_root: string }> }
-    const project = (projects.projects || []).find(p => p.work_root === workRoot)
+    const result = await configRequest('project.list') as { projects?: Array<{ id: string; work_root: string }> }
+    const project = (result.projects || []).find(p => p.work_root === workRoot)
     if (project) {
       const sessions = await configRequest('project.sessions.list', { project_id: project.id }) as { sessions?: Array<{ id: string; title: string }> }
       availableSessions.value = sessions.sessions || []
