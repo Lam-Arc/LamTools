@@ -2,7 +2,6 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import type { CoreArrangeJob } from '../durable/types'
 import { listArrangeJobs, createArrangeJob, updateArrangeJob, renameArrangeJob, editArrangeJob as editArrangeJobApi, listArrangeOccurrences } from '../durable/api'
-import { CoreAppServerClient, appServerUrl } from '../appServer'
 
 const props = defineProps<{ workRoot?: string }>()
 defineEmits<{ back: [] }>()
@@ -46,43 +45,32 @@ const availableSessions = ref<Array<{ id: string; title: string }>>([])
 const availableProjects = ref<Array<{ id: string; name: string; work_root: string }>>([])
 const loadingSessions = ref(false)
 
-let _configClient: CoreAppServerClient | null = null
-async function configRequest(method: string, params: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
-  if (!_configClient) {
-    const url = appServerUrl(window.location.origin, { path: '/api/core/app-server' })
-    _configClient = new CoreAppServerClient({
-      url,
-      clientInfo: { name: 'lamtools_arrange', title: 'Arrange', version: '0.1.0' },
-      onConnectionState: (state) => { if (state === 'closed' || state === 'error') _configClient = null },
-    })
-    await _configClient.connect()
-  }
-  try {
-    return await _configClient.request(method, params)
-  } catch {
-    _configClient = null
-    throw new Error(`configRequest failed: ${method}`)
-  }
+async function apiGet<T>(path: string): Promise<T> {
+  const res = await fetch(path)
+  if (!res.ok) throw new Error(`${path}: ${res.status}`)
+  return res.json() as T
 }
 
 async function loadProjects() {
   if (availableProjects.value.length > 0) return
   try {
-    const result = await configRequest('project.list') as { projects?: Array<{ id: string; name: string; work_root: string }> }
-    availableProjects.value = result.projects || []
+    availableProjects.value = await apiGet<Array<{ id: string; name: string; work_root: string }>>('/api/core/projects')
   } catch (e) { console.error('loadProjects:', e) }
 }
 
 async function loadModels() {
   if (availableModels.value.length > 0) return
   try {
-    const result = await configRequest('config.models.list') as { models?: Array<{ id: string; model_id: string; display_name: string; provider_name: string }> }
-    availableModels.value = (result.models || []).map(m => {
-      const pn = m.provider_name || ''
-      const mn = m.model_id || m.display_name
-      const name = pn && mn ? `${pn}/${mn}` : (m.display_name || m.model_id)
-      return { id: name, display_name: name }
-    })
+    interface RawProvider { name: string; models: string[] }
+    const providers = await apiGet<RawProvider[]>('/api/core/providers')
+    const list: Array<{ id: string; display_name: string }> = []
+    for (const p of providers) {
+      for (const m of p.models) {
+        const name = `${p.name}/${m}`
+        list.push({ id: name, display_name: name })
+      }
+    }
+    availableModels.value = list
   } catch (e) { console.error('loadModels:', e) }
 }
 
@@ -90,11 +78,11 @@ async function loadSessions(workRoot: string) {
   loadingSessions.value = true
   availableSessions.value = []
   try {
-    const result = await configRequest('project.list') as { projects?: Array<{ id: string; work_root: string }> }
-    const project = (result.projects || []).find(p => p.work_root === workRoot)
+    const projects = await apiGet<Array<{ id: string; work_root: string }>>('/api/core/projects')
+    const project = projects.find(p => p.work_root === workRoot)
     if (project) {
-      const sessions = await configRequest('project.sessions.list', { project_id: project.id }) as { sessions?: Array<{ id: string; title: string }> }
-      availableSessions.value = sessions.sessions || []
+      const result = await apiGet<{ sessions: Array<{ id: string; title: string }> }>(`/api/core/projects/${project.id}/sessions`)
+      availableSessions.value = result.sessions || []
     }
   } catch (e) { console.error('loadSessions:', e) }
   finally { loadingSessions.value = false }
