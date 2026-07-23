@@ -56,7 +56,7 @@ def durable_tool_specs(*, goal: bool, arrange: bool) -> list[ToolSpec]:
                     "type": "string",
                     "enum": ["create", "list", "get", "pause", "resume", "cancel"],
                 },
-                "project_id": {"type": "string", "description": "Project work_root (absolute path) this arrangement belongs to (required)"},
+                "work_root": {"type": "string", "description": "Project work_root (absolute path) this arrangement belongs to (required)"},
                 "instruction": {"type": "string", "description": "Instruction sent when the task runs"},
                 "title": {"type": "string", "description": "Short display title (auto-generated from instruction if omitted)"},
                 "session_strategy": {

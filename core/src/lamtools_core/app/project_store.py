@@ -219,7 +219,10 @@ class CoreProjectStore:
 
     async def list_sessions(self, project_id: str) -> list[SessionRecord]:
         async with self.session_factory() as db:
-            return await _project_sessions(db, project_id)
+            project = await db.get(CoreProject, project_id)
+            if project is None:
+                return []
+            return await _project_sessions(db, project.work_root)
 
     async def delete_with_sessions(self, project_id: str) -> bool:
         return await self._delete_with_sessions(project_id)
@@ -288,7 +291,7 @@ async def _create_project_with_initial_session(
         db.add(project)
         await db.flush()
 
-    sessions = await _project_sessions(db, project.id)
+    sessions = await _project_sessions(db, project.work_root)
     if sessions:
         return _record(project), sessions[0], created
 
@@ -320,7 +323,7 @@ async def _delete_project_with_sessions(db: Any, project_id: str) -> bool:
     project = await db.get(CoreProject, project_id)
     if project is None:
         return False
-    sessions = await _project_sessions(db, project_id)
+    sessions = await _project_sessions(db, project.work_root)
     if any(session.status.lower() in {"running", "waiting", "interrupting"} for session in sessions):
         raise ActiveProjectSessionsError("Stop the active session before deleting the project")
     await delete_session_records(db, [session.id for session in sessions])
@@ -328,12 +331,12 @@ async def _delete_project_with_sessions(db: Any, project_id: str) -> bool:
     return True
 
 
-async def _project_sessions(db: Any, project_id: str) -> list[SessionRecord]:
+async def _project_sessions(db: Any, work_root: str) -> list[SessionRecord]:
     rows = (
         await db.execute(select(CoreThreadSnapshot).order_by(CoreThreadSnapshot.updated_at.desc()))
     ).scalars().all()
     sessions = [session_record_from_snapshot(row) for row in rows]
-    owned = [session for session in sessions if session.metadata.get("project_id") == project_id]
+    owned = [session for session in sessions if session.metadata.get("work_root") == work_root]
     return sorted(owned, key=lambda session: (session.created_at, session.id))
 
 
