@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import type { CoreArrangeJob } from '../durable/types'
 import { listArrangeJobs, createArrangeJob, updateArrangeJob, renameArrangeJob, editArrangeJob as editArrangeJobApi, listArrangeOccurrences } from '../durable/api'
+import { CoreAppServerClient, appServerUrl } from '../appServer'
 
+const props = defineProps<{ workRoot?: string }>()
 defineEmits<{ back: [] }>()
 
 const jobs = ref<CoreArrangeJob[]>([])
@@ -37,6 +39,63 @@ const formEverySeconds = ref(3600)
 const formEventType = ref('')
 const formMaxRuns = ref<number | undefined>(undefined)
 const formSubmitting = ref(false)
+const formWorkRoot = ref('')
+const formThreadId = ref('')
+const availableModels = ref<Array<{ id: string; display_name: string }>>([])
+const availableSessions = ref<Array<{ id: string; title: string }>>([])
+const availableProjects = ref<Array<{ id: string; name: string; work_root: string }>>([])
+const loadingSessions = ref(false)
+
+async function loadProjects() {
+  if (availableProjects.value.length > 0) return
+  try {
+    const client = new CoreAppServerClient({ url: appServerUrl('', { path: '/api/core/app-server' }), clientInfo: { name: 'core_ui', title: 'Core', version: '0.1.0' } })
+    await client.connect()
+    try {
+      const result = await client.request('project.list', {}) as { projects?: Array<{ id: string; name: string; work_root: string }> }
+      availableProjects.value = result.projects || []
+    } finally { client.close() }
+  } catch { /* ignore */ }
+}
+
+async function loadModels() {
+  if (availableModels.value.length > 0) return
+  try {
+    const client = new CoreAppServerClient({ url: appServerUrl('', { path: '/api/core/app-server' }), clientInfo: { name: 'core_ui', title: 'Core', version: '0.1.0' } })
+    await client.connect()
+    try {
+      const providers = await client.request('config.providers.list', {}) as { providers?: Array<{ id: string; name: string }> }
+      const models = await client.request('config.models.list', {}) as { models?: Array<{ id: string; model_id: string; display_name: string; provider_id: string }> }
+      const providerMap = new Map((providers.providers || []).map((p: { id: string; name: string }) => [p.id, p.name]))
+      availableModels.value = (models.models || []).map(m => {
+        const name = `${providerMap.get(m.provider_id) || ''}/${m.model_id || m.display_name}`
+        return { id: name, display_name: name }
+      })
+    } finally { client.close() }
+  } catch { /* ignore */ }
+}
+
+async function loadSessions(workRoot: string) {
+  loadingSessions.value = true
+  availableSessions.value = []
+  try {
+    const client = new CoreAppServerClient({ url: appServerUrl('', { path: '/api/core/app-server' }), clientInfo: { name: 'core_ui', title: 'Core', version: '0.1.0' } })
+    await client.connect()
+    try {
+      const projects = await client.request('project.list', {}) as { projects?: Array<{ id: string; work_root: string }> }
+      const project = (projects.projects || []).find((p: { id: string; work_root: string }) => p.work_root === workRoot)
+      if (project) {
+        const sessions = await client.request('project.sessions.list', { project_id: project.id }) as { sessions?: Array<{ id: string; title: string }> }
+        availableSessions.value = sessions.sessions || []
+      }
+    } finally { client.close() }
+  } catch { /* ignore */ }
+  finally { loadingSessions.value = false }
+}
+
+watch(formSessionStrategy, (val) => {
+  if (val === 'fixed' && formWorkRoot.value) loadSessions(formWorkRoot.value)
+})
 
 const activeJobs = computed(() =>
   showTerminal.value
@@ -60,7 +119,11 @@ function openCreateForm() {
   formEverySeconds.value = 3600
   formEventType.value = ''
   formMaxRuns.value = undefined
+  formWorkRoot.value = props.workRoot || ''
+  formThreadId.value = ''
   showForm.value = true
+  loadProjects()
+  loadModels()
 }
 
 function openEditForm(job: CoreArrangeJob) {
@@ -94,11 +157,17 @@ function openEditForm(job: CoreArrangeJob) {
   } else {
     formScheduleType.value = 'once'
   }
+  formWorkRoot.value = (job as any).work_root || props.workRoot || ''
+  formThreadId.value = job.thread_id || ''
   showForm.value = true
+  loadProjects()
+  loadModels()
+  if (formSessionStrategy.value === 'fixed') loadSessions(formWorkRoot.value)
 }
 
 function closeForm() {
   showForm.value = false
+  availableSessions.value = []
 }
 
 function buildTrigger(): Record<string, unknown> {
@@ -146,15 +215,15 @@ async function submitForm() {
   try {
     if (formMode.value === 'create') {
       await createArrangeJob({
-        thread_id: '',
-        work_root: '',
+        thread_id: formThreadId.value || '',
+        work_root: formWorkRoot.value.trim() || '',
         kind: formKind.value,
         operation: 'turn.start',
         payload: { message: formInstruction.value.trim() },
         trigger: buildTrigger(),
         title: formTitle.value.trim() || undefined,
         session_strategy: formSessionStrategy.value,
-        model_id: formModelId.value.trim() || undefined,
+        model_id: formModelId.value || undefined,
         max_runs: formMaxRuns.value,
       })
     } else if (editingJobId.value) {
@@ -163,7 +232,7 @@ async function submitForm() {
       fields.instruction = formInstruction.value.trim()
       fields.trigger = buildTrigger()
       fields.session_strategy = formSessionStrategy.value
-      fields.model_id = formModelId.value.trim() || undefined
+      fields.model_id = formModelId.value || undefined
       await editArrangeJobApi(editingJobId.value, fields as { instruction?: string; trigger?: Record<string, unknown>; session_strategy?: 'fixed' | 'new'; model_id?: string })
     }
     showForm.value = false
@@ -374,6 +443,17 @@ onMounted(loadJobs)
           <textarea v-model="formInstruction" rows="3" placeholder="任务触发时发送给 Agent 的指令…" />
         </label>
         <label class="form-field">
+          <span>项目目录 <em>必填</em></span>
+          <input
+            v-model="formWorkRoot"
+            placeholder="E:\Projects\..."
+            :list="'project-datalist-' + (editingJobId || 'new')"
+          />
+          <datalist :id="'project-datalist-' + (editingJobId || 'new')">
+            <option v-for="p in availableProjects" :key="p.id" :value="p.work_root">{{ p.name }} · {{ p.work_root }}</option>
+          </datalist>
+        </label>
+        <label class="form-field">
           <span>标题 <em>可选</em></span>
           <input v-model="formTitle" placeholder="留空则自动生成" />
         </label>
@@ -393,9 +473,19 @@ onMounted(loadJobs)
             </select>
           </label>
         </div>
-        <label v-if="formSessionStrategy === 'new'" class="form-field">
+        <label class="form-field">
           <span>模型 <em>可选</em></span>
-          <input v-model="formModelId" placeholder="provider/model，如 xunfei/deepseek-v4" />
+          <select v-model="formModelId">
+            <option value="">跟随默认</option>
+            <option v-for="m in availableModels" :key="m.id" :value="m.id">{{ m.display_name }}</option>
+          </select>
+        </label>
+        <label v-if="formSessionStrategy === 'fixed'" class="form-field">
+          <span>绑定会话</span>
+          <select v-model="formThreadId" :disabled="loadingSessions">
+            <option value="">{{ loadingSessions ? '加载中…' : '-- 选择会话 --' }}</option>
+            <option v-for="s in availableSessions" :key="s.id" :value="s.id">{{ s.title || s.id.slice(0, 8) }}</option>
+          </select>
         </label>
         <div class="form-row">
           <label class="form-field">
