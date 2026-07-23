@@ -46,50 +46,52 @@ const availableSessions = ref<Array<{ id: string; title: string }>>([])
 const availableProjects = ref<Array<{ id: string; name: string; work_root: string }>>([])
 const loadingSessions = ref(false)
 
+let _configClient: CoreAppServerClient | null = null
+async function configRequest(method: string, params: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+  if (!_configClient) {
+    const url = appServerUrl(window.location.origin, { path: '/api/core/app-server' })
+    _configClient = new CoreAppServerClient({
+      url,
+      clientInfo: { name: 'lamtools_arrange', title: 'Arrange', version: '0.1.0' },
+      onConnectionState: (state: string) => { if (state === 'closed' || state === 'error') _configClient = null },
+    })
+    await _configClient.connect()
+  }
+  return await _configClient.request(method, params)
+}
+
 async function loadProjects() {
   if (availableProjects.value.length > 0) return
   try {
-    const client = new CoreAppServerClient({ url: appServerUrl('', { path: '/api/core/app-server' }), clientInfo: { name: 'core_ui', title: 'Core', version: '0.1.0' } })
-    await client.connect()
-    try {
-      const result = await client.request('project.list', {}) as { projects?: Array<{ id: string; name: string; work_root: string }> }
-      availableProjects.value = result.projects || []
-    } finally { client.close() }
-  } catch { /* ignore */ }
+    const result = await configRequest('project.list', {}) as { projects?: Array<{ id: string; name: string; work_root: string }> }
+    availableProjects.value = result.projects || []
+  } catch (e) { console.error('loadProjects:', e) }
 }
 
 async function loadModels() {
   if (availableModels.value.length > 0) return
   try {
-    const client = new CoreAppServerClient({ url: appServerUrl('', { path: '/api/core/app-server' }), clientInfo: { name: 'core_ui', title: 'Core', version: '0.1.0' } })
-    await client.connect()
-    try {
-      const providers = await client.request('config.providers.list', {}) as { providers?: Array<{ id: string; name: string }> }
-      const models = await client.request('config.models.list', {}) as { models?: Array<{ id: string; model_id: string; display_name: string; provider_id: string }> }
-      const providerMap = new Map((providers.providers || []).map((p: { id: string; name: string }) => [p.id, p.name]))
-      availableModels.value = (models.models || []).map(m => {
-        const name = `${providerMap.get(m.provider_id) || ''}/${m.model_id || m.display_name}`
-        return { id: name, display_name: name }
-      })
-    } finally { client.close() }
-  } catch { /* ignore */ }
+    const models = await configRequest('config.models.list', {}) as { models?: Array<{ id: string; model_id: string; display_name: string; provider_name: string }> }
+    availableModels.value = (models.models || []).map(m => {
+      const pn = m.provider_name || ''
+      const mn = m.model_id || m.display_name
+      const name = pn && mn ? `${pn}/${mn}` : (m.display_name || m.model_id)
+      return { id: name, display_name: name }
+    })
+  } catch (e) { console.error('loadModels:', e) }
 }
 
 async function loadSessions(workRoot: string) {
   loadingSessions.value = true
   availableSessions.value = []
   try {
-    const client = new CoreAppServerClient({ url: appServerUrl('', { path: '/api/core/app-server' }), clientInfo: { name: 'core_ui', title: 'Core', version: '0.1.0' } })
-    await client.connect()
-    try {
-      const projects = await client.request('project.list', {}) as { projects?: Array<{ id: string; work_root: string }> }
-      const project = (projects.projects || []).find((p: { id: string; work_root: string }) => p.work_root === workRoot)
-      if (project) {
-        const sessions = await client.request('project.sessions.list', { project_id: project.id }) as { sessions?: Array<{ id: string; title: string }> }
-        availableSessions.value = sessions.sessions || []
-      }
-    } finally { client.close() }
-  } catch { /* ignore */ }
+    const projects = await configRequest('project.list', {}) as { projects?: Array<{ id: string; work_root: string }> }
+    const project = (projects.projects || []).find(p => p.work_root === workRoot)
+    if (project) {
+      const sessions = await configRequest('project.sessions.list', { project_id: project.id }) as { sessions?: Array<{ id: string; title: string }> }
+      availableSessions.value = sessions.sessions || []
+    }
+  } catch (e) { console.error('loadSessions:', e) }
   finally { loadingSessions.value = false }
 }
 
