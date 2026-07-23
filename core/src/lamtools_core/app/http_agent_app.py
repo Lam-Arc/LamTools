@@ -190,6 +190,31 @@ def create_core_agent_http_app(
         app_state["attachment_store"] = CoreAttachmentStore(core_db_handle.session_factory, resolved_data_dir)
         goal_manager = GoalManager(core_db_handle.goal_store)
         arrange_manager = ArrangeManager(core_db_handle.arrange_store)
+
+        config_engine = create_async_engine(f"sqlite+aiosqlite:///{config_db_path}")
+        config_session_factory = async_sessionmaker(config_engine, expire_on_commit=False)
+
+        def _resolve_model_display(model_id: str) -> str:
+            try:
+                import sqlite3
+                con = sqlite3.connect(f"file:{config_db_path}?mode=ro", uri=True)
+                try:
+                    row = con.execute(
+                        "SELECT m.model_id, m.display_name, p.name as provider_name "
+                        "FROM llm_models m LEFT JOIN llm_providers p ON p.id = m.provider_id "
+                        "WHERE m.id = ?", (model_id,)
+                    ).fetchone()
+                    if row is None:
+                        return ""
+                    provider_name, model_name = row[2] or "", (row[1] or row[0] or "")
+                    if provider_name and model_name:
+                        return f"{provider_name}/{model_name}"
+                    return model_name
+                finally:
+                    con.close()
+            except Exception:
+                return ""
+
         agent_operations = create_core_agent_operations(
             spec=runtime_spec,
             member_kit=member_kit,
@@ -205,6 +230,7 @@ def create_core_agent_http_app(
             goal_manager=goal_manager,
             arrange_manager=arrange_manager,
             enable_turn_checkpoints=True,
+            model_display_resolver=_resolve_model_display,
         )
         _register_core_project_operations(agent_operations, project_store=core_db_handle.project_store)
         _register_core_session_operations(agent_operations, session_store=session_store)
@@ -213,8 +239,6 @@ def create_core_agent_http_app(
             config_db_path=config_db_path,
             default_model_id=config.model_record_id,
         )
-        config_engine = create_async_engine(f"sqlite+aiosqlite:///{config_db_path}")
-        config_session_factory = async_sessionmaker(config_engine, expire_on_commit=False)
         _register_missing_operations(
             agent_operations,
             build_shared_config_operation_catalog(config_session_factory),

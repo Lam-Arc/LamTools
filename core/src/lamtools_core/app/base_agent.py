@@ -95,6 +95,7 @@ def _format_model_tool_evidence(result: ToolResult) -> str:
 class CoreBaseAgentConfig:
     agent_id: str = "core-agent"
     model_id: str = ""
+    model_display_name: str = ""
     instructions: str = "You are a standalone general-purpose agent runtime."
     temperature: float = 0.2
     max_tokens: int | None = None
@@ -167,7 +168,7 @@ class CoreBaseAgentKit:
     async def build_model_request(self, state: RuntimeState, context: PromptContext) -> LLMRequest:
         system_lines = [
             self.config.instructions,
-            f"当前项目: {state.metadata.get('work_root', '')}, 当前会话: {state.session_id}, 当前模型: {self.config.model_id}",
+            f"当前项目: {state.metadata.get('work_root', '')}, 当前会话: {state.session_id}, 当前模型: {self.config.model_display_name or self.config.model_id}",
             command_shell_prompt(),
             "Use the available tools when they help complete the user's request.",
             "If the user explicitly asks to use a sub-agent, call sub_agent before producing the final result.",

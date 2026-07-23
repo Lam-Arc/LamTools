@@ -115,8 +115,14 @@ def create_core_agent_operations(
     arrange_manager: ArrangeManager | None = None,
     enable_turn_checkpoints: bool = False,
     attachment_service: Any | None = None,
+    model_display_resolver: Callable[[str], str] | None = None,
 ) -> OperationCatalog:
     spec = spec or CoreAgentSpec()
+
+    def _model_display(model_id: str) -> str:
+        if not model_id or model_display_resolver is None:
+            return ""
+        return model_display_resolver(model_id)
     runtime_state_store = runtime_state_store or InMemoryRuntimeStateStore()
     runtime_task_registry = runtime_task_registry or default_runtime_task_registry()
     kit = member_kit or StaticMemberKit(
@@ -294,6 +300,7 @@ def create_core_agent_operations(
                         config=CoreBaseAgentConfig(
                             agent_id=spec.id,
                             model_id=runtime_options.model_id,
+                            model_display_name=_model_display(runtime_options.model_id),
                             instructions=spec.instructions,
                             thinking_enabled=runtime_options.thinking_enabled,
                             thinking_budget=runtime_options.thinking_budget,
@@ -721,6 +728,7 @@ def create_core_agent_operations(
                             config=CoreBaseAgentConfig(
                                 agent_id=spec.id,
                                 model_id=runtime_options.model_id,
+                                model_display_name=_model_display(runtime_options.model_id),
                                 instructions=spec.instructions,
                                 thinking_enabled=runtime_options.thinking_enabled,
                                 thinking_budget=runtime_options.thinking_budget,
@@ -985,6 +993,7 @@ def create_core_agent_operations(
                         config=CoreBaseAgentConfig(
                             agent_id=spec.id,
                             model_id=runtime_options.model_id,
+                            model_display_name=_model_display(runtime_options.model_id),
                             instructions=spec.instructions,
                             thinking_enabled=runtime_options.thinking_enabled,
                             thinking_budget=runtime_options.thinking_budget,

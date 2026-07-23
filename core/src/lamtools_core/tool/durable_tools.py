@@ -64,7 +64,7 @@ def durable_tool_specs(*, goal: bool, arrange: bool) -> list[ToolSpec]:
                     "enum": ["fixed", "new"],
                     "description": "fixed = reuse the current session, new = create a fresh session each run (default: new)",
                 },
-                "model_id": {"type": "string", "description": "Default model for new sessions when session_strategy is new"},
+                "model_id": {"type": "string", "description": "Model in provider/model format (e.g. xunfei/deepseek-v4) for new sessions"},
                 "kind": {"type": "string", "enum": ["focus", "routine"]},
                 "schedule_type": {
                     "type": "string",
