@@ -181,6 +181,34 @@ def create_core_agent_http_app(
     operations.register("turn.start", execute_core_operation)
     operations.register("approval.respond", execute_core_operation)
 
+    # Expose config/project RPC operations directly so UI can query models/projects/sessions.
+    from lamtools_core.cli import list_llm_model_configs, _list_llm_provider_configs
+
+    async def _config_models_list(request: OperationRequest) -> OperationResult:
+        del request
+        return OperationResult(name="config.models.list", payload={
+            "models": list_llm_model_configs(config_db_path),
+            "default_model_id": config.model_record_id,
+        })
+
+    async def _config_providers_list(request: OperationRequest) -> OperationResult:
+        del request
+        return OperationResult(name="config.providers.list", payload={
+            "providers": _list_llm_provider_configs(config_db_path),
+        })
+
+    async def _project_list(request: OperationRequest) -> OperationResult:
+        del request
+        return await execute_core_operation(OperationRequest(name="project.list", payload={}, metadata={}))
+
+    async def _project_sessions_list(request: OperationRequest) -> OperationResult:
+        return await execute_core_operation(OperationRequest(name="project.sessions.list", payload=request.payload, metadata={}))
+
+    operations.register("config.models.list", _config_models_list)
+    operations.register("config.providers.list", _config_providers_list)
+    operations.register("project.list", _project_list)
+    operations.register("project.sessions.list", _project_sessions_list)
+
     async def startup_core_agent() -> None:
         core_db_handle = await open_core_app_db(
             core_db_path,
