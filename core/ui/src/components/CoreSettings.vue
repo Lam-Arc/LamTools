@@ -429,6 +429,7 @@ function startProviderCreate() {
     api_key: '',
     extra: {},
     extra_json: '{}',
+    models: [],
   }
 }
 
@@ -443,6 +444,7 @@ function startProviderUpdate(provider: CoreSettingsProvider) {
     api_key: '',
     extra: provider.extra || {},
     extra_json: JSON.stringify(provider.extra || {}, null, 2),
+    models: [],
   }
 }
 
