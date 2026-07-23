@@ -182,7 +182,7 @@ def create_core_agent_http_app(
     operations.register("approval.respond", execute_core_operation)
 
     # Expose config/project RPC operations directly so UI can query models/projects/sessions.
-    from lamtools_core.cli import list_llm_model_configs, _list_llm_provider_configs
+    from lamtools_core.cli import list_llm_model_configs
 
     async def _config_models_list(request: OperationRequest) -> OperationResult:
         del request
