@@ -11,3 +11,12 @@
 - 改动 member 功能前，先询问是否需要下沉到 `core/`。
 - 任何 GUI 能力必须有对应的 CLI。
 - PowerShell 涉及中文必须使用 UTF-8。
+
+## 开发启动
+
+```powershell
+.\scripts\dev.ps1 core              # Core 前后端 (5172 / 5173)
+.\scripts\dev.ps1 writer            # Writer (6173 / 6174)
+.\scripts\dev.ps1 sage              # Sage (6170 / 6171)
+.\scripts\dev.ps1 all               # 全部
+```
