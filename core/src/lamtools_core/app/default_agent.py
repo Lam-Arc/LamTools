@@ -20,7 +20,11 @@ from lamtools_core.composer_commands import (
 )
 from lamtools_core.checkpoint import CoreCheckpointCoordinator, register_checkpoint_operations
 from lamtools_core.member import MemberKit, PromptFragment, StaticMemberKit
+from lamtools_core.kernel.loop import CoreLoopKernel
+from lamtools_core.kernel.policy import LoopPolicy
+from lamtools_core.llm import LLMClient
 from lamtools_core.runtime import (
+    CompletionGate,
     InMemoryRuntimeStateStore,
     RuntimeApprovalStore,
     RuntimeStateConflictError,
@@ -93,6 +97,69 @@ class CoreAgentRuntimeOptions:
     compact_limit_tokens: int | None = None
 
 
+def create_goal_gate(
+    goal_manager: GoalManager | None,
+    goal_id: str,
+    llm_client: Any,
+    model_id: str = "",
+) -> GoalCompletionGate | None:
+    """Create a GoalCompletionGate with model_id wired to the evaluator."""
+    if goal_manager is None:
+        return None
+    clean_goal_id = str(goal_id or "").strip()
+    return GoalCompletionGate(
+        goal_manager,
+        clean_goal_id,
+        ModelGoalEvaluator(llm_client, model_id=model_id),
+    )
+
+
+def create_kernel(
+    kit: Any,
+    llm_client: LLMClient,
+    state_store: RuntimeStateStore,
+    event_sink: EventSink,
+    *,
+    hook_engine: Any | None = None,
+    checkpoint_coordinator: Any | None = None,
+    completion_gate: CompletionGate | None = None,
+    model_timeout_seconds: int = 360,
+    model_retries: int | None = None,
+    persist_steps: bool = False,
+    context_window_tokens: int | None = None,
+    compact_trigger_tokens: int | None = None,
+    compact_limit_tokens: int | None = None,
+    parallel_tool_names: tuple[str, ...] = ("sub_agent",),
+    **extra_policy_kwargs: Any,
+) -> CoreLoopKernel:
+    """Create a CoreLoopKernel with sensible production defaults."""
+    policy_kwargs: dict[str, Any] = {
+        "model_timeout_seconds": model_timeout_seconds,
+        "parallel_tool_names": parallel_tool_names,
+    }
+    if model_retries is not None:
+        policy_kwargs["model_retries"] = model_retries
+    if persist_steps:
+        policy_kwargs["persist_steps"] = persist_steps
+    if context_window_tokens is not None:
+        policy_kwargs["context_window_tokens"] = context_window_tokens
+    if compact_trigger_tokens is not None:
+        policy_kwargs["compact_trigger_tokens"] = compact_trigger_tokens
+    if compact_limit_tokens is not None:
+        policy_kwargs["compact_limit_tokens"] = compact_limit_tokens
+    policy_kwargs.update(extra_policy_kwargs)
+    return CoreLoopKernel(
+        kit=kit,
+        llm_client=llm_client,
+        state_store=state_store,
+        event_sink=event_sink,
+        policy=LoopPolicy(**policy_kwargs),
+        hook_engine=hook_engine,
+        checkpoint_coordinator=checkpoint_coordinator,
+        completion_gate=completion_gate,
+    )
+
+
 def create_core_agent_operations(
     *,
     spec: CoreAgentSpec | None = None,
@@ -154,16 +221,6 @@ def create_core_agent_operations(
         Path(item) for item in (command_core_roots or default_core_resource_roots())
     ]
     resolved_command_member_roots = [Path(item) for item in (command_member_roots or [])]
-
-    def completion_gate(goal_id: str, llm_client: Any, model_id: str) -> GoalCompletionGate | None:
-        clean_goal_id = str(goal_id or "").strip()
-        if goal_manager is None:
-            return None
-        return GoalCompletionGate(
-            goal_manager,
-            clean_goal_id,
-            ModelGoalEvaluator(llm_client, model_id=model_id),
-        )
 
     def checkpoint_coordinator(work_root: Path | str) -> CoreCheckpointCoordinator | None:
         if db_session_factory is None or not enable_turn_checkpoints:
@@ -230,8 +287,6 @@ def create_core_agent_operations(
                 await goal_manager.update(goal.id, status="active", status_reason="")
         runtime_work_root = _work_root_from_request(paths, request)
         if _is_llm_client(model_provider):
-            from lamtools_core.kernel.loop import CoreLoopKernel
-            from lamtools_core.kernel.policy import LoopPolicy
             from lamtools_core.tool.default_toolbox import build_core_toolbox
 
             runtime_options = _runtime_options_from_request(spec, request)
@@ -325,7 +380,8 @@ def create_core_agent_operations(
                     ),
                     hook_engine=plugin_assembly["hook_engine"],
                     checkpoint_coordinator=turn_checkpoint_coordinator,
-                    completion_gate=completion_gate(
+                    completion_gate=create_goal_gate(
+                        goal_manager,
                         goal_id,
                         runtime_model_provider,
                         runtime_options.model_id,
@@ -439,8 +495,6 @@ def create_core_agent_operations(
     async def approval_respond(request: OperationRequest) -> OperationResult:
         if _is_llm_client(model_provider):
             from lamtools_core.event import CoreEvent
-            from lamtools_core.kernel.loop import CoreLoopKernel
-            from lamtools_core.kernel.policy import LoopPolicy
             from lamtools_core.tool import ToolCall
             from lamtools_core.tool.approval_continuation import (
                 ApprovedToolExecution,
@@ -753,7 +807,8 @@ def create_core_agent_operations(
                             parallel_tool_names=("sub_agent",),
                         ),
                         hook_engine=plugin_assembly["hook_engine"],
-                        completion_gate=completion_gate(
+                        completion_gate=create_goal_gate(
+                            goal_manager,
                             str(state.metadata.get("goal_id") or ""),
                             runtime_model_provider,
                             runtime_options.model_id,
@@ -1016,7 +1071,8 @@ def create_core_agent_operations(
                         parallel_tool_names=("sub_agent",),
                     ),
                     hook_engine=plugin_assembly["hook_engine"],
-                    completion_gate=completion_gate(
+                    completion_gate=create_goal_gate(
+                        goal_manager,
                         str(lifecycle.state.metadata.get("goal_id") or ""),
                         runtime_model_provider,
                         runtime_options.model_id,

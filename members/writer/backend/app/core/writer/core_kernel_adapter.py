@@ -72,14 +72,13 @@ from typing import Any, Callable, Awaitable
 
 from lamtools_core.context_compaction import COMPACTION_PREFIX
 from lamtools_core.tool.command_runner import command_shell_prompt
-from lamtools_core.event import CollectingEventSink, CoreEvent, EventSink, InMemoryEventLog
+from lamtools_core.event import CollectingEventSink, CoreEvent, EventSink
+from lamtools_core.app.default_agent import create_goal_gate, create_kernel
 from lamtools_core.kernel import (
-    CoreLoopKernel,
     KernelResult,
     KernelStep,
     KernelTurn,
     LoopDecision,
-    LoopPolicy,
     RuntimeKit,
     VerificationResult,
     build_response_blocks_for_summary,
@@ -98,7 +97,7 @@ from lamtools_core.app import assemble_core_agent_plugins
 from lamtools_core.prompt import PromptContext, format_prompt_sections
 from lamtools_core.app.project_context import ProjectContextLoader
 from lamtools_core.runtime import InMemoryRuntimeStateStore, RuntimeState, RuntimeStateStore, RuntimeTurnInput
-from lamtools_core.runtime.goal import GoalCompletionGate, GoalManager, ModelGoalEvaluator
+from lamtools_core.runtime.goal import GoalManager
 from lamtools_core.sub_session import SubSessionRuntimeStateStore, normalize_sub_session_agent_name
 from lamtools_core.sub_agent import SubAgentEventForwardingSink
 from lamtools_core.tool import ToolCall, ToolResult
@@ -113,7 +112,6 @@ from app.config import settings
 from app.core.prompt_assembler import WRITER_TOOLS, get_writer_execution_discipline
 from app.core.writer.agent_types import AgentCall
 from app.core.writer.failure_specs import failure_recovery_instruction
-from app.core.writer.llm_bridge import WriterLLMClientAdapter
 from app.core.writer.permission import command_permission_decision
 from app.core.writer.read_tools import ReadOnlyToolExecutor
 from app.core.writer.runtime_resources import (
@@ -134,7 +132,6 @@ from app.core.writer.task_plan import (
 )
 from app.core.writer.tool_failure import (
     looks_like_test_assertion_failure,
-    should_stop_repeated_failure,
     tool_failure_context,
     tool_failure_signature,
 )
@@ -167,7 +164,7 @@ def _exception_summary(exc: BaseException) -> str:
 # ---------------------------------------------------------------------------
 
 # Action types that signal the model wants user input
-_WAIT_ACTION_TYPES = frozenset({"ask_clarification", "needs_user_input"})
+_WAIT_ACTION_TYPES = frozenset({"needs_user_input"})
 
 class WriterKit:
     """RuntimeKit implementation for Writer CoreLoopKernel.
@@ -280,10 +277,8 @@ class WriterKit:
 
         if hasattr(llm_client, "complete"):
             core_llm = llm_client
-        elif hasattr(llm_client, "chat_full"):
-            core_llm = WriterLLMClientAdapter(writer_client=llm_client)
         else:
-            raise RuntimeError("SubAgent LLM client must have .chat_full() or .complete()")
+            raise RuntimeError("SubAgent LLM client must have .complete() (Core LLMClient protocol)")
 
         work_root = str(self._work_root or "")
         tool_executor = _resolve_tool_executor(self._tool_executor, work_root or None)
@@ -323,16 +318,15 @@ class WriterKit:
             parent_run_id=parent_run_id,
             parent_turn_id=parent_turn_id,
         )
-        kernel = CoreLoopKernel(
+        kernel = create_kernel(
             kit=nested_kit,
             llm_client=core_llm,
             state_store=state_store,
             event_sink=event_sink,
-            policy=LoopPolicy(
-                context_window_tokens=self._context_window_tokens,
-                compact_trigger_ratio=self._compact_trigger_ratio,
-                parallel_tool_names=(),
-            ),
+            context_window_tokens=self._context_window_tokens,
+            compact_trigger_tokens=int(self._context_window_tokens * self._compact_trigger_ratio) if self._context_window_tokens and self._compact_trigger_ratio else None,
+            parallel_tool_names=("sub_agent",),
+            max_identical_tool_results=5,
             hook_engine=_build_plugin_hook_engine(work_root),
         )
         watcher_task = None
@@ -619,7 +613,7 @@ class WriterKit:
         elif response.finish_reason == "stop":
             # Text-only response — check if content signals wait
             content = (response.content or "").lower()
-            if any(signal in content for signal in ("ask_clarification", "needs_user_input")):
+            if any(signal in content for signal in ("needs_user_input",)):
                 decision_hint = "wait"
                 wait_reason = "Model text signals wait"
             elif not content.strip():
@@ -862,18 +856,12 @@ class WriterKit:
         ):
             return "wait"
 
-        if self._should_stop_repeated_failure(state, step):
-            return "failed"
-
         if verification.required and not verification.passed:
             if verification.attempt >= verification.max_attempts:
                 return "failed"
             return "continue"
 
         return hint
-
-    def _should_stop_repeated_failure(self, state: RuntimeState, step: KernelStep) -> bool:
-        return should_stop_repeated_failure(state.metadata, step.tool_steps)
 
     @staticmethod
     def _tool_failure_signature(call: ToolCall, result: ToolResult | None) -> str:
@@ -1018,20 +1006,10 @@ async def run_core_kernel(
     if llm_client is None:
         raise ValueError("llm_client must be provided")
 
-    # Keep a reference to the raw Writer LLM client before wrapping for CoreLLMClient
-    raw_writer_client: Any = None
-    if hasattr(llm_client, "complete"):
-        # Already a Core LLMClient
-        core_llm = llm_client
-        raw_writer_client = llm_client
-    elif hasattr(llm_client, "chat_full"):
-        # Writer-style client
-        raw_writer_client = llm_client
-        core_llm = WriterLLMClientAdapter(writer_client=llm_client)
-    else:
-        raise ValueError(
-            "llm_client must have .chat_full() or .complete() method"
-        )
+    # Use Core LLMClient directly
+    core_llm = llm_client
+    if not hasattr(core_llm, "complete"):
+        raise ValueError("llm_client must have .complete() method (Core LLMClient protocol)")
 
     # Resolve effective tool_executor
     sub_agent_runner = KernelSubAgentRunner(
@@ -1072,7 +1050,7 @@ async def run_core_kernel(
                 filtered_history.append((index, ChatMessage(role=role, content=content, metadata=metadata)))
         initial_history.extend(message for _, message in filtered_history)
 
-    context_window = int(getattr(raw_writer_client, "context_window", 0) or 0)
+    context_window = int(getattr(core_llm, "context_window", 0) or getattr(getattr(core_llm, "config", None), "context_window", 0) or 0)
     context_window_tokens = context_window if context_window > 0 else None
     compact_trigger_ratio = 0.8
 
@@ -1081,7 +1059,7 @@ async def run_core_kernel(
         tool_executor=effective_executor,
         initial_history=initial_history,
         work_root=work_root or "",
-        agent_llm_client=raw_writer_client,
+        agent_llm_client=core_llm,
         core_event_callback=live_event_callback,
         context_window_tokens=context_window_tokens,
         compact_trigger_ratio=compact_trigger_ratio,
@@ -1090,38 +1068,27 @@ async def run_core_kernel(
     )
 
     # Build event sink (collects events in memory)
-    event_log = InMemoryEventLog()
-
-    class _EventSink:
-        async def emit(self, event: CoreEvent) -> None:
-            event_log.append(event)
-            if live_event_callback is not None:
-                await live_event_callback(event)
-
-    # Build policy
-    policy = LoopPolicy(
-        context_window_tokens=context_window_tokens,
-        compact_trigger_ratio=compact_trigger_ratio,
-        parallel_tool_names=(),
-    )
+    event_sink = CollectingEventSink(live_callback=live_event_callback)
 
     # Build kernel. WriterKit handles all lifecycle logic: persona, tools,
     # verification, drift detection, and writeback.
-    kernel = CoreLoopKernel(
+    kernel = create_kernel(
         kit=kit,
         llm_client=core_llm,
         state_store=effective_state_store,
-        event_sink=_EventSink(),
-        policy=policy,
+        event_sink=event_sink,
+        context_window_tokens=context_window_tokens,
+        compact_trigger_tokens=int(context_window_tokens * compact_trigger_ratio) if context_window_tokens and compact_trigger_ratio else None,
+        parallel_tool_names=("sub_agent",),
+        max_identical_tool_results=5,
         hook_engine=_build_plugin_hook_engine(work_root),
         completion_gate=(
-            GoalCompletionGate(
+            create_goal_gate(
                 goal_manager,
                 goal_id,
-                ModelGoalEvaluator(core_llm),
+                core_llm,
+                model_id=model_id,
             )
-            if goal_manager is not None
-            else None
         ),
     )
 
@@ -1160,8 +1127,8 @@ async def run_core_kernel(
             pass
 
     # --- Observability: enrich KernelResult.metadata from event_log ---
-    # Collect all CoreEvents from the InMemoryEventLog (no global variables).
-    all_events = [evt for _, evt in event_log.replay_since()]
+    # Collect all CoreEvents from the CollectingEventSink.
+    all_events = list(event_sink.events)
 
     # Build core_events summary list (lightweight dicts, no full prompt/output).
     # Streaming events are compacted to logical blocks so page refresh does not
@@ -1328,9 +1295,10 @@ async def _run_existing_sub_agent_turn(
     clear_pending: bool,
     parent_state_store: Any | None,
 ) -> KernelResult:
-    raw_writer_client = llm_client
-    core_llm = llm_client if hasattr(llm_client, "complete") else WriterLLMClientAdapter(writer_client=llm_client)
-    context_window = int(getattr(raw_writer_client, "context_window", 0) or 0)
+    core_llm = llm_client
+    if not hasattr(core_llm, "complete"):
+        raise ValueError("llm_client must have .complete() method (Core LLMClient protocol)")
+    context_window = int(getattr(core_llm, "context_window", 0) or getattr(getattr(core_llm, "config", None), "context_window", 0) or 0)
     context_window_tokens = context_window if context_window > 0 else None
     available_tools = frozenset(str(item) for item in delegated_session.get("tools", []) if str(item))
     agent_name = normalize_sub_session_agent_name(str(delegated_session.get("agent") or ""))
@@ -1399,16 +1367,15 @@ async def _run_existing_sub_agent_turn(
         parent_run_id=parent_run_id,
         parent_turn_id=parent_turn_id,
     )
-    kernel = CoreLoopKernel(
+    kernel = create_kernel(
         kit=nested_kit,
         llm_client=core_llm,
         state_store=state_store,
         event_sink=event_sink,
-        policy=LoopPolicy(
-            context_window_tokens=context_window_tokens,
-            compact_trigger_ratio=0.8,
-            parallel_tool_names=(),
-        ),
+        context_window_tokens=context_window_tokens,
+        compact_trigger_tokens=int(context_window_tokens * 0.8) if context_window_tokens else None,
+        parallel_tool_names=("sub_agent",),
+        max_identical_tool_results=5,
         hook_engine=_build_plugin_hook_engine(work_root),
     )
     result = await kernel.run(RuntimeTurnInput(

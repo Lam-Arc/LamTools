@@ -156,8 +156,25 @@ async def cached_mcp_registry(work_root: str | Path | None) -> Any:
         cached = _MCP_REGISTRY_CACHE.get(key)
         if cached is not None:
             return cached
-        from app.core.mcp.registry import MCPToolRegistry
-        registry = MCPToolRegistry(key)
+        from lamtools_core.mcp.registry import MCPToolRegistry
+        from lamtools_core.mcp.config import load_mcp_server_configs as load_core_mcp_server_configs
+
+        root = Path(work_root or "")
+        repo_member_root = Path(__file__).resolve().parents[4]
+        local_playwright_cli = repo_member_root / "frontend" / "node_modules" / "@playwright" / "mcp" / "cli.js"
+
+        def _load_writer_mcp_configs(wr: str) -> Any:
+            return load_core_mcp_server_configs(
+                wr,
+                env_var="LAMWRITER_MCP_CONFIG",
+                default_paths=(Path(wr) / ".lamwriter" / "mcp.json", Path(wr) / "mcp.json"),
+                include_builtin_playwright=True,
+                builtin_playwright_env_var="LAMWRITER_BUILTIN_PLAYWRIGHT_MCP",
+                builtin_playwright_cli=local_playwright_cli,
+                builtin_playwright_output_dir=root.resolve() / ".writer-artifacts" / "mcp" / "playwright",
+            )
+
+        registry = MCPToolRegistry(key, config_loader=_load_writer_mcp_configs)
         await registry.load()
         _MCP_REGISTRY_CACHE[key] = registry
         if registry.tools:

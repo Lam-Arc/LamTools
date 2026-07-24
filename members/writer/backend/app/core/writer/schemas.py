@@ -9,15 +9,12 @@ from pydantic import BaseModel, Field
 # --- Action Types (8 MVP tools + meta actions) ---
 
 WriterActionType = Literal[
-    "chat_only",
-    "ask_clarification",
     "read_file",
     "write_file",
     "edit_file",
     "run_command",
     "search_content",
     "search_files",
-    "recall_session",
     "load_skill",
     "web_search",
     "git_status",
@@ -27,12 +24,9 @@ WriterActionType = Literal[
     "run_tests",
     "inspect_project",
     "browser_check",
-    "decision_point",
-    "self_critique",
     "write_checklist",
     "update_checklist",
     "verify_design",
-    "delegate_to_member",
     "sub_agent",
     "mcp_tool",
 ]
@@ -179,20 +173,9 @@ class WriterTurn(BaseModel):
     mode: WriterInteractionMode = "EXECUTE"
     is_complete: bool = False  # True = Writer is done, break the while loop
     needs_user_input: bool = False  # True = Writer wants user input before continuing
-    self_critique: str | None = None
     next_phase: WriterPhase | None = None
     output_type: WriterOutputType = "text"
     output_meta: dict[str, Any] = Field(default_factory=dict)
-
-
-class DelegationStatus(BaseModel):
-    """Status of a delegation to another LamTools member."""
-    target_member: str  # "butler", "sage", "artist"
-    task_description: str
-    context: dict[str, Any] = Field(default_factory=dict)
-    status: Literal["queued", "executing", "completed", "failed"] = "queued"
-    queued_at: datetime = Field(default_factory=datetime.now)
-    result: str | None = None
 
 
 class WriterSessionState(BaseModel):
@@ -226,7 +209,6 @@ class WriterSessionState(BaseModel):
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: datetime = Field(default_factory=datetime.now)
     locked_context: dict[str, str] = Field(default_factory=dict)  # W8: Anchored key-value pairs that survive compaction
-    delegation_queue: list[DelegationStatus] = Field(default_factory=list)  # W9: Pending delegations
     pending_decision_points: dict[str, Any] = Field(default_factory=dict)
     decision_history: list[dict[str, Any]] = Field(default_factory=list)
     git_state: dict[str, Any] = Field(default_factory=dict)
@@ -258,14 +240,6 @@ class WriterSessionState(BaseModel):
         if task_plan_raw and isinstance(task_plan_raw, dict):
             task_plan = TaskPlan(**task_plan_raw)
 
-        # Deserialize delegation_queue from runtime_state
-        delegation_queue = []
-        for d in runtime_state.get("delegation_queue", []):
-            if isinstance(d, dict):
-                delegation_queue.append(DelegationStatus(**d))
-            else:
-                delegation_queue.append(d)
-
         return cls(
             session_id=session.id,
             work_root=session.work_root or "",
@@ -292,7 +266,6 @@ class WriterSessionState(BaseModel):
             created_at=session.created_at or datetime.now(),
             updated_at=session.updated_at or datetime.now(),
             locked_context=runtime_state.get("locked_context", {}),
-            delegation_queue=delegation_queue,
             pending_decision_points=runtime_state.get("pending_decision_points", {}),
             decision_history=runtime_state.get("decision_history", []),
             git_state=runtime_state.get("git_state", {}),
@@ -339,7 +312,6 @@ class WriterSessionState(BaseModel):
             "total_writes_this_session": self.total_writes_this_session,
             "last_output_turn": self.last_output_turn,
             "locked_context": self.locked_context,
-            "delegation_queue": [d.model_dump() for d in self.delegation_queue],
             "pending_decision_points": self.pending_decision_points,
             "decision_history": self.decision_history,
             "git_state": self.git_state,

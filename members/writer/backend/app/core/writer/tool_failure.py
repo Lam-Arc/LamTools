@@ -74,38 +74,3 @@ def looks_like_test_assertion_failure(result: ToolResult) -> bool:
     if any(marker in text for marker in ("failed", "assertionerror", "assert ", "e       assert")):
         return True
     return False
-
-
-def should_stop_repeated_failure(metadata: dict[str, Any], tool_steps: list[Any]) -> bool:
-    if not tool_steps:
-        return False
-    if any(item.result is not None and item.result.status == "ok" for item in tool_steps):
-        metadata.pop("drift_warning", None)
-        return False
-
-    current_signatures = [
-        tool_failure_signature(item.call, item.result)
-        for item in tool_steps
-        if item.result is not None and item.result.status == "failed"
-    ]
-    if not current_signatures or len(set(current_signatures)) > 1:
-        return False
-    current_signature = current_signatures[0]
-
-    recent_statuses: list[str] = list(metadata.get("recent_statuses", []))
-    recent_signatures: list[str] = list(metadata.get("recent_failure_signatures", []))
-    if not recent_signatures or not recent_statuses:
-        return False
-    failure_count = 1
-    for status, signature in zip(reversed(recent_statuses), reversed(recent_signatures)):
-        if status == "failed" and signature == current_signature:
-            failure_count += 1
-            continue
-        break
-    if failure_count < 5:
-        return False
-    metadata["drift_warning"] = (
-        f"Repeated identical tool failure '{current_signature}' occurred {failure_count} times. "
-        "Stopping as failed because the tool call and result are unchanged."
-    )
-    return True
