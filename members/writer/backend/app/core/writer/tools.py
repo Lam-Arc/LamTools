@@ -14,7 +14,6 @@ _DEFAULT_COMMAND_TIMEOUT = 120
 _DEFAULT_MAX_LIST_ITEMS = 100
 _DEFAULT_MAX_TEXT_LENGTH = 50_000
 _DEFAULT_MAX_SEARCH_RESULTS = 50
-_DEFAULT_MAX_WRITE_LENGTH = 100_000
 _CORE_EXECUTOR_TOOL_NAMES = tuple(
     name for name in DEFAULT_TOOL_ORDER
     if name not in {"mcp_tool"}
@@ -31,7 +30,6 @@ class ReadWriteToolExecutor(ReadOnlyToolExecutor):
         max_list_items: int = _DEFAULT_MAX_LIST_ITEMS,
         max_text_length: int = _DEFAULT_MAX_TEXT_LENGTH,
         max_search_results: int = _DEFAULT_MAX_SEARCH_RESULTS,
-        max_write_length: int = _DEFAULT_MAX_WRITE_LENGTH,
         command_timeout: int = _DEFAULT_COMMAND_TIMEOUT,
         core_event_callback: Callable[[CoreEvent], Awaitable[None]] | None = None,
         sub_agent_runner: Any | None = None,
@@ -42,7 +40,6 @@ class ReadWriteToolExecutor(ReadOnlyToolExecutor):
             max_text_length=max_text_length,
             max_search_results=max_search_results,
         )
-        self._max_write_length = max_write_length
         self._command_timeout = command_timeout
         self._core_event_callback = core_event_callback
         self._core_toolbox: CoreToolbox = build_core_toolbox(
@@ -50,7 +47,6 @@ class ReadWriteToolExecutor(ReadOnlyToolExecutor):
             max_list_items=max_list_items,
             max_text_length=max_text_length,
             max_search_results=max_search_results,
-            max_write_length=max_write_length,
             command_timeout=self._command_timeout,
             skill_registry=self._skills,
             core_event_callback=self._core_event_callback,

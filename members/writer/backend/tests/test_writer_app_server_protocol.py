@@ -1509,7 +1509,6 @@ async def test_session_create_operation_creates_project_backed_session(tmp_path)
         assert row["title"] == "Created"
         assert row["work_root"] == str(work_root.resolve())
         assert row["mode"] == "PLAN"
-        assert row["project_id"]
         assert work_root.is_dir()
         assert not (work_root / ".git").exists()
     finally:
@@ -1600,7 +1599,7 @@ async def test_session_get_update_delete_operations_round_trip(tmp_path):
         )
         assert updated.response["result"]["session"]["title"] == "Renamed"
         assert updated.response["result"]["session"]["mode"] == "PLAN"
-        assert updated.response["result"]["session"]["project_id"]
+        assert updated.response["result"]["session"]["work_root"] == str(updated_root.resolve())
         assert updated_root.is_dir()
         assert not (updated_root / ".git").exists()
 
@@ -1616,7 +1615,8 @@ async def test_session_get_update_delete_operations_round_trip(tmp_path):
         registry.release_run("session-crud", run_id="child-turn")
 
         async with session_factory() as db:
-            project = await db.get(WriterProject, updated.response["result"]["session"]["project_id"])
+            session_row = await db.get(WriterSession, "session-crud")
+            project = await db.get(WriterProject, session_row.project_id)
             assert project is not None
             assert project.work_root == str(updated_root.resolve())
 

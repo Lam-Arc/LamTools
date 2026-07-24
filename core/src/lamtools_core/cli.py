@@ -361,6 +361,7 @@ async def run_core_cli_task(
                 context_window_tokens=context_window_tokens,
                 compact_trigger_tokens=options.compact_trigger_tokens,
                 compact_limit_tokens=options.compact_limit_tokens,
+                parallel_tool_names=("sub_agent",),
             ),
             hook_engine=plugin_assembly["hook_engine"],
         )
@@ -1780,7 +1781,7 @@ def _model_ref_from_routing(con: sqlite3.Connection) -> str:
             if model_id:
                 return model_id
     try:
-        row = con.execute("select id from llm_models order by created_at asc limit 1").fetchone()
+        row = con.execute("select id from llm_models order by is_default desc, created_at asc limit 1").fetchone()
     except sqlite3.OperationalError:
         row = None
     return str(row["id"] or "") if row is not None else ""

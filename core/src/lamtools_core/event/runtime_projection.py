@@ -430,6 +430,20 @@ def runtime_fact_to_run_item_events(
             return []
         tool_item_id = _tool_item_id(fact, payload)
         message = str(payload.get("message") or payload.get("question") or fact.summary or "Waiting for user decision")
+        if kind == "no_progress":
+            return [
+                RunItemEvent(
+                    kind="status",
+                    item_id=tool_item_id,
+                    status="running",
+                    payload={
+                        "type": "status",
+                        "content": message,
+                        "status": "running",
+                    },
+                    **base,
+                )
+            ]
         return [
             RunItemEvent(
                 kind="approval_request",

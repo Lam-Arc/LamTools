@@ -1,0 +1,1753 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LamImager UI - 像素 / 手绘 二元风格</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Press+Start+2P&family=Fira+Code:wght@400;500&family=Caveat:wght@400;500;600&family=Architects+Daughter&family=Ma+Shan+Zheng&family=ZCOOL+KuaiLe&family=Pixelify+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-base: #1A1A1E;
+      --bg-elevated: #242428;
+      --bg-surface: #2D2D32;
+      --bg-hover: #38383F;
+      --bg-active: #45454D;
+      --border-light: #3A3A42;
+      --border-default: #4A4A54;
+      --border-strong: #6B6B78;
+      --text-primary: #F5F3EF;
+      --text-secondary: #B8B4AD;
+      --text-tertiary: #8A8680;
+      --text-disabled: #5C5A56;
+      --accent: #E8A87C;
+      --accent-hover: #D4956A;
+      --accent-light: rgba(232, 168, 124, 0.15);
+      --pixel-cyan: #7FDBDA;
+      --pixel-magenta: #C77DFF;
+      --pixel-yellow: #F8E16C;
+      --success: #7AB89A;
+      --warning: #E8C17C;
+      --danger: #D4777C;
+      --info: #7CA3B8;
+      --shadow-sm: 0 2px 8px rgba(0,0,0,0.3);
+      --shadow-md: 0 4px 16px rgba(0,0,0,0.4);
+      --space-2: 8px; --space-3: 12px; --space-4: 16px;
+      --space-5: 20px; --space-6: 24px; --space-8: 32px;
+      --transition-fast: 120ms ease;
+
+      /* 系统像素风格 */
+      --sys-font-label: "Press Start 2P", monospace;
+      --sys-font-data: "Fira Code", monospace;
+      --sys-font-ui: "Pixelify Sans", sans-serif;
+      --sys-radius: 0px;
+      --sys-radius-sm: 2px;
+      --sys-radius-full: 9999px;
+      --sys-shadow: 4px 4px 0 rgba(0,0,0,0.6);
+      --sys-shadow-active: 2px 2px 0 rgba(0,0,0,0.6);
+      --sys-border: 2px solid var(--border-strong);
+      --sys-border-medium: 1.5px solid var(--border-default);
+      --sys-border-light: 1px solid var(--border-light);
+
+      /* 用户手绘风格 */
+      --usr-font-content: "Inter", "PingFang SC", sans-serif;
+      --usr-font-label: "Inter", "PingFang SC", sans-serif;
+      --usr-font-title: "Inter", "PingFang SC", sans-serif;
+      --usr-radius: 8px 12px 6px 10px;
+      --usr-radius-alt: 10px 6px 12px 8px;
+      --usr-radius-card: 10px 14px 8px 12px;
+      --usr-radius-sm: 4px 6px 3px 5px;
+      --usr-shadow: 2px 3px 8px rgba(0,0,0,0.12);
+      --usr-shadow-hover: 3px 4px 12px rgba(0,0,0,0.18);
+      --usr-border: 1.5px solid rgba(120,110,100,0.5);
+      --usr-border-warm: 1.5px solid rgba(180,140,100,0.3);
+      --usr-bg-paper: linear-gradient(145deg, #2E2A26 0%, #332D28 40%, #292420 100%);
+      --usr-bg-paper-warm: linear-gradient(145deg, #3A3028 0%, #342C24 50%, #2E261E 100%);
+      --usr-accent: rgba(232,168,124,0.25);
+      --usr-accent-strong: rgba(232,168,124,0.4);
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: "Inter", -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+      background: var(--bg-base);
+      color: var(--text-primary);
+      font-size: 14px; line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .preview-section { padding: var(--space-8); background: var(--bg-base); min-height: 100vh; }
+    .preview-header { margin-bottom: var(--space-8); }
+    .preview-title { font-size: 24px; font-weight: 700; margin-bottom: var(--space-2); }
+    .preview-subtitle { font-size: 14px; color: var(--text-secondary); margin-bottom: var(--space-2); }
+
+    .preview-legend {
+      display: flex; gap: 24px; padding: 12px 16px;
+      background: var(--bg-elevated); border: 1px solid var(--border-default);
+      border-radius: var(--sys-radius-sm); margin-bottom: var(--space-6);
+    }
+    .legend-item { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+    .legend-sys { width: 16px; height: 16px; background: var(--bg-surface); border: 2px solid transparent; position: relative; }
+    .legend-sys::before {
+      content: ''; position: absolute; inset: -2px;
+      background: linear-gradient(90deg, var(--pixel-cyan) 0%, var(--pixel-magenta) 33%, var(--pixel-yellow) 66%, var(--pixel-cyan) 100%);
+    }
+    .legend-usr { width: 16px; height: 16px; background: var(--bg-surface); border: 2px solid transparent; position: relative; }
+    .legend-usr::before {
+      content: ''; position: absolute; inset: -2px;
+      background: linear-gradient(90deg, var(--pixel-cyan) 0%, var(--pixel-magenta) 33%, var(--pixel-yellow) 66%, var(--pixel-cyan) 100%);
+    }
+    .legend-mix { width: 16px; height: 16px; background: var(--bg-surface); border: 2px solid transparent; position: relative; }
+    .legend-mix::before {
+      content: ''; position: absolute; inset: -2px;
+      background: linear-gradient(90deg, var(--pixel-cyan) 0%, var(--pixel-magenta) 33%, var(--pixel-yellow) 66%, var(--pixel-cyan) 100%);
+    }
+
+    .preview-group {
+      background: var(--bg-elevated); border: 1px solid var(--border-default);
+      padding: var(--space-6); margin-bottom: var(--space-6); position: relative;
+    }
+    .preview-group::before {
+      content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+      background: linear-gradient(90deg, var(--accent) 0%, var(--pixel-cyan) 33%, var(--pixel-magenta) 66%, var(--pixel-yellow) 100%);
+    }
+    .preview-group-title {
+      font-size: 16px; font-weight: 600; margin-bottom: var(--space-5);
+      padding-bottom: var(--space-4); border-bottom: 1px solid var(--border-light);
+      color: var(--text-primary); margin-top: var(--space-4);
+    }
+    .section-label { font-size: 10px; font-family: var(--sys-font-label); color: var(--text-tertiary); margin-bottom: var(--space-3); text-transform: uppercase; letter-spacing: 1px; }
+    .section-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--space-6); }
+    /* section-item - 像素渐变边框：上=彩虹，左右下=灰色 */
+    .section-item { background: var(--bg-surface); border: 1px solid var(--border-default); padding: var(--space-4); position: relative; }
+    .section-item::before {
+      content: ''; position: absolute; top: -1px; left: -1px; right: -1px; height: 3px;
+      background: linear-gradient(90deg, var(--pixel-cyan) 0%, var(--pixel-magenta) 33%, var(--pixel-yellow) 66%, var(--pixel-cyan) 100%);
+    }
+    .section-item::after {
+      content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+      background: transparent;
+    }
+    .section-item.sys::after { background: linear-gradient(90deg, var(--border-strong) 0%, transparent 100%); }
+    .section-item.usr::after { background: linear-gradient(90deg, var(--usr-accent-strong) 0%, transparent 100%); }
+    .section-item.mix::after { background: linear-gradient(90deg, var(--accent) 0%, var(--usr-accent) 50%, transparent 100%); }
+    .section-item-title { font-size: 11px; font-family: var(--sys-font-label); color: var(--text-primary); margin-bottom: var(--space-3); letter-spacing: 0.5px; }
+    .section-item-sub { font-size: 11px; color: var(--text-tertiary); margin-top: 4px; font-family: var(--sys-font-label); }
+    .style-tag {
+      display: inline-block; font-size: 9px; font-family: var(--sys-font-label);
+      padding: 2px 6px; border-radius: var(--sys-radius-sm); margin-bottom: 8px;
+      letter-spacing: 0.5px; text-transform: uppercase;
+    }
+    .style-tag.sys { background: var(--bg-base); color: var(--text-tertiary); border: 1px solid var(--border-default); }
+    .style-tag.usr { background: var(--usr-bg-paper); color: var(--usr-accent-strong); border: 1px solid var(--usr-border); transform: rotate(-1deg); display: inline-block; }
+    .style-tag.mix { background: linear-gradient(90deg, var(--bg-base) 50%, var(--usr-bg-paper) 50%); color: var(--accent); border: 1px solid var(--usr-border); }
+
+    /* 系统按钮 - 像素风格：硬边、方角、厚重3D阴影 */
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+      padding: 8px 16px; border: var(--sys-border); background: var(--bg-surface);
+      color: var(--text-primary); font-size: 12px; font-family: var(--sys-font-ui); font-weight: 500;
+      cursor: pointer; transition: var(--transition-fast); border-radius: var(--sys-radius-sm);
+      box-shadow: 4px 4px 0 rgba(0,0,0,0.6); text-transform: uppercase; letter-spacing: 0.5px;
+      position: relative;
+    }
+    .btn::after {
+      content: ''; position: absolute; bottom: -4px; left: -4px; right: -4px; height: 4px;
+      background: rgba(0,0,0,0.3);
+    }
+    .btn:hover { background: var(--bg-hover); }
+    .btn:active { transform: translate(4px, 4px); box-shadow: none; }
+    .btn:active::after { display: none; }
+    .btn-primary { background: linear-gradient(180deg, var(--accent) 0%, #C88A5E 100%); color: #0A0A0B; border-color: var(--accent); font-weight: 700; box-shadow: 4px 4px 0 var(--accent-hover); }
+    .btn-primary::after { background: var(--accent-hover); }
+    .btn-primary:hover { background: linear-gradient(180deg, var(--accent-hover) 0%, #B87A4E 100%); }
+    .btn-danger { background: linear-gradient(180deg, var(--danger) 0%, #B8666A 100%); color: #fff; border-color: var(--danger); box-shadow: 4px 4px 0 #A85555; }
+    .btn-danger::after { background: #A85555; }
+    .btn-warning { background: linear-gradient(180deg, var(--warning) 0%, #D4AE68 100%); color: #0A0A0B; border-color: var(--warning); box-shadow: 4px 4px 0 #B89A55; }
+    .btn-warning::after { background: #B89A55; }
+    .btn-sm { padding: 6px 10px; font-size: 11px; }
+    .btn-icon { width: 34px; height: 34px; padding: 0; border-radius: var(--sys-radius-sm); display: flex; align-items: center; justify-content: center; background: var(--bg-surface); border: var(--sys-border-medium); box-shadow: 3px 3px 0 rgba(0,0,0,0.4); position: relative; }
+    .btn-icon::after { content: ''; position: absolute; bottom: -3px; left: -3px; right: -3px; height: 3px; background: rgba(0,0,0,0.25); }
+    .btn-icon:hover { background: var(--bg-hover); border-color: var(--accent); }
+
+    /* 用户按钮 - 手绘风格：温暖纸张背景、柔软阴影、微旋转 */
+    .btn-usr {
+      display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+      padding: 8px 18px; border: var(--usr-border); background: var(--usr-bg-paper);
+      color: var(--text-primary); font-size: 13px; font-family: var(--usr-font-label);
+      cursor: pointer; transition: all 200ms cubic-bezier(0.34, 1.56, 0.64, 1);
+      border-radius: var(--usr-radius); box-shadow: var(--usr-shadow); transform: rotate(-0.3deg);
+    }
+    .btn-usr:hover { box-shadow: var(--usr-shadow-hover); transform: rotate(0deg) translateY(-2px); }
+    .btn-usr:active { box-shadow: 1px 1px 4px rgba(0,0,0,0.15); transform: rotate(0.2deg) translateY(1px); }
+    .btn-usr-primary { background: var(--usr-bg-paper-warm); border-color: var(--accent); color: var(--accent); box-shadow: 3px 3px 10px rgba(0,0,0,0.15); }
+    .btn-usr-primary:hover { background: linear-gradient(145deg, var(--usr-accent) 0%, var(--usr-bg-paper) 100%); }
+    .btn-usr-sm { padding: 5px 12px; font-size: 12px; }
+    .btn-usr-danger { border-color: rgba(212,119,124,0.5); color: var(--danger); background: rgba(212,119,124,0.1); }
+    .btn-usr-danger:hover { background: rgba(212,119,124,0.2); }
+
+    .count-btn {
+      padding: 4px 10px; border: var(--usr-border); border-radius: var(--usr-radius-alt);
+      background: var(--usr-bg-paper); font-size: 11px; font-family: var(--usr-font-label);
+      cursor: pointer; transition: all 200ms cubic-bezier(0.34, 1.56, 0.64, 1);
+      color: var(--text-primary); transform: rotate(-0.5deg);
+    }
+    .count-btn:hover { border-color: var(--accent); transform: rotate(0deg); }
+    .count-btn.active {
+      background: linear-gradient(135deg, rgba(232,168,124,0.25), rgba(212,149,106,0.2));
+      border-color: var(--accent); color: var(--accent); transform: rotate(0deg); box-shadow: var(--usr-shadow);
+    }
+
+    /* 输入框 */
+    .input-field { border: var(--sys-border-light); border-radius: var(--sys-radius-sm); padding: 8px 12px; font-size: 13px; background: var(--bg-surface); color: var(--text-primary); font-family: inherit; outline: none; transition: var(--transition-fast); }
+    .input-field:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(232,168,124,0.1); }
+    .input-usr { border: var(--usr-border); border-radius: var(--usr-radius); padding: 10px 14px; font-size: 14px; background: var(--usr-bg-paper); color: var(--text-primary); font-family: var(--usr-font-content); outline: none; transition: all 200ms ease; transform: rotate(-0.2deg); }
+    .input-usr:focus { border-color: var(--accent); box-shadow: var(--usr-shadow); transform: rotate(0deg); }
+    .textarea-usr { width: 100%; min-height: 80px; max-height: 120px; resize: none; border: var(--usr-border); border-radius: var(--usr-radius); background: var(--usr-bg-paper); color: var(--text-primary); font-family: var(--usr-font-content); font-size: 14px; padding: 12px; outline: none; transform: rotate(-0.2deg); }
+    .textarea-usr:focus { border-color: var(--accent); box-shadow: var(--usr-shadow-hover); }
+
+    /* 覆盖层 */
+    .lightbox-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.92); z-index: 300; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+    .lightbox-content { position: relative; display: flex; flex-direction: column; align-items: center; cursor: default; }
+    .lightbox-header { width: 100%; padding: 8px 12px; background: var(--bg-elevated); border: var(--sys-border); border-radius: var(--sys-radius-sm) var(--sys-radius-sm) 0 0; display: flex; justify-content: space-between; align-items: center; }
+    .lightbox-title { font-family: var(--sys-font-label); font-size: 10px; color: var(--text-tertiary); }
+    .lightbox-close { background: none; border: none; color: var(--text-secondary); cursor: pointer; padding: 4px; opacity: 0.7; transition: opacity 0.15s; font-size: 14px; }
+    .lightbox-close:hover { opacity: 1; }
+    .lightbox-img-wrap { border: var(--usr-border); border-radius: var(--usr-radius-card); overflow: hidden; box-shadow: var(--usr-shadow-hover); background: var(--usr-bg-paper); padding: 8px; transform: rotate(-0.3deg); display: inline-block; }
+    .lightbox-img { max-width: 65vw; max-height: 65vh; display: block; border-radius: calc(var(--usr-radius) - 2px); }
+    .lightbox-actions { margin-top: var(--space-4); display: flex; gap: var(--space-2); }
+
+    .compare-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 200; display: flex; align-items: center; justify-content: center; }
+    .compare-view { background: var(--bg-elevated); border: var(--sys-border); border-radius: var(--sys-radius-sm); padding: var(--space-6); max-width: 90vw; max-height: 90vh; overflow: auto; }
+    .compare-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--space-4); }
+    .compare-title { font-family: var(--sys-font-label); font-size: 11px; color: var(--text-primary); }
+    .compare-images { display: flex; gap: var(--space-3); flex-wrap: wrap; }
+    .compare-img-wrap { border: var(--usr-border); border-radius: var(--usr-radius); overflow: hidden; box-shadow: var(--usr-shadow); background: var(--usr-bg-paper); padding: 6px; transform: rotate(-0.5deg); }
+    .compare-img-wrap:nth-child(2) { transform: rotate(0.3deg); }
+    .compare-img-wrap:nth-child(3) { transform: rotate(-0.2deg); }
+    .compare-img { max-width: 260px; max-height: 320px; display: block; border-radius: calc(var(--usr-radius) - 2px); }
+
+    .checkpoint-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 200; display: flex; align-items: center; justify-content: center; }
+    .checkpoint-card { background: var(--bg-elevated); border: var(--sys-border); border-radius: var(--sys-radius-sm); padding: var(--space-6); max-width: 420px; width: 90%; text-align: center; box-shadow: var(--sys-shadow); }
+    .checkpoint-tool { font-size: 11px; font-family: var(--sys-font-label); color: var(--text-tertiary); margin-bottom: var(--space-1); }
+    .checkpoint-step { font-size: 12px; color: var(--text-secondary); margin-bottom: var(--space-3); font-style: italic; }
+    .checkpoint-message { font-size: 14px; line-height: 1.6; margin-bottom: var(--space-4); color: var(--text-primary); }
+    .checkpoint-preview-wrap { border: var(--usr-border); border-radius: var(--usr-radius-card); overflow: hidden; background: var(--usr-bg-paper); padding: 8px; margin-bottom: var(--space-4); box-shadow: var(--usr-shadow); transform: rotate(-0.5deg); display: inline-block; }
+    .checkpoint-preview { max-width: 100%; max-height: 180px; display: block; }
+    .checkpoint-label { font-family: var(--sys-font-label); font-size: 10px; color: var(--text-tertiary); margin-bottom: 8px; }
+    .checkpoint-actions { display: flex; gap: var(--space-2); justify-content: center; flex-wrap: wrap; margin-top: var(--space-4); }
+    .checkpoint-actions .btn-usr { min-width: 90px; }
+
+    .context-menu { position: fixed; background: var(--bg-elevated); border: var(--sys-border); border-radius: var(--sys-radius-sm); box-shadow: var(--sys-shadow); z-index: 300; padding: var(--space-1); min-width: 160px; }
+    .context-menu button { display: block; width: 100%; padding: 8px 12px; border: none; background: none; text-align: left; font-size: 12px; font-family: var(--sys-font-ui); cursor: pointer; border-radius: var(--sys-radius-sm); color: var(--text-primary); }
+    .context-menu button + button { border-top: 1px solid var(--border-light); }
+    .context-menu button:hover { background: var(--bg-hover); }
+
+    .dialog-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 200; display: flex; align-items: center; justify-content: center; }
+    .dialog-panel { background: var(--bg-elevated); border: 2px solid var(--border-strong); border-radius: 0; box-shadow: 6px 6px 0 rgba(0,0,0,0.5); width: 380px; max-width: 90vw; padding: var(--space-6); }
+    .dialog-title { font-size: 14px; font-weight: 600; margin-bottom: var(--space-3); font-family: var(--sys-font-label); letter-spacing: 0.5px; }
+    .dialog-body { color: var(--text-secondary); font-size: 14px; line-height: 1.6; margin-bottom: var(--space-5); }
+    .dialog-actions { display: flex; justify-content: flex-end; gap: var(--space-2); }
+    .dialog-actions .btn + .btn { margin-left: 4px; }
+
+    /* 徽章 */
+    .badge { display: inline-flex; align-items: center; padding: 3px 8px; font-size: 10px; font-weight: 600; font-family: var(--sys-font-label); letter-spacing: 0.5px; border-radius: var(--sys-radius-sm); border: 1px solid; }
+    .badge-active { background: rgba(122,184,154,0.2); color: var(--success); border-color: var(--success); }
+    .badge-inactive { background: var(--bg-surface); color: var(--text-tertiary); border-color: var(--border-default); }
+    .agent-badge { background: #000; color: #fff; font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 2px; font-family: var(--sys-font-label); }
+    .status-badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; font-size: 10px; font-family: var(--sys-font-label); letter-spacing: 0.5px; border-radius: var(--sys-radius-sm); border: 1px solid; }
+    .status-badge.generating { background: rgba(232,168,124,0.2); color: var(--accent); border-color: var(--accent); }
+    .status-badge.optimizing { background: rgba(127,219,218,0.2); color: var(--pixel-cyan); border-color: var(--pixel-cyan); }
+    .status-badge.error { background: rgba(212,119,124,0.2); color: var(--danger); border-color: var(--danger); }
+    .status-dot { width: 6px; height: 6px; background: currentColor; border-radius: 50%; }
+    .status-dot.spinning { animation: dot-spin 1s linear infinite; }
+    @keyframes dot-spin { 0%{opacity:1} 50%{opacity:0.3} 100%{opacity:1} }
+
+    /* 消息卡片 - 风格对比：用户=手绘暖色，系统=像素冷色 */
+    .text-message { position: relative; padding: 10px 14px; line-height: 1.6; font-size: 14px; word-break: break-word; max-width: 70%; }
+    /* 用户文字消息 - 靠右对齐 */
+    .text-message.user {
+      background: var(--usr-bg-paper);
+      border: var(--usr-border);
+      border-radius: var(--usr-radius);
+      align-self: flex-end;
+      box-shadow: var(--usr-shadow);
+      transform: rotate(-0.4deg);
+      font-family: var(--usr-font-content);
+      font-size: 15px;
+      border-left: 3px solid rgba(180,140,100,0.4);
+      text-align: left;
+    }
+    .text-message.user:hover { transform: rotate(0deg); box-shadow: var(--usr-shadow-hover); }
+    /* 助手文字消息 - 像素冷色风格 */
+    .text-message.assistant {
+      background: var(--bg-elevated);
+      border: var(--sys-border-medium);
+      border-radius: var(--sys-radius-sm);
+      align-self: flex-start;
+      font-size: 13px;
+      border-left: 3px solid var(--border-strong);
+    }
+    .msg-copy-btn { position: absolute; top: 6px; right: 6px; background: none; border: none; cursor: pointer; opacity: 0; transition: opacity 0.15s; color: var(--text-secondary); padding: 2px; font-size: 12px; }
+    .text-message:hover .msg-copy-btn { opacity: 1; }
+
+    /* 用户图片消息 - 手绘风格 */
+    .image-message {
+      position: relative; padding: 12px 16px; border-radius: var(--usr-radius-card); line-height: 1.6; font-size: 14px; word-break: break-word;
+      background: var(--usr-bg-paper); border: var(--usr-border); max-width: 620px;
+      box-shadow: var(--usr-shadow); transform: rotate(-0.2deg);
+      border-left: 3px solid rgba(180,140,100,0.4);
+    }
+    .image-message:hover { box-shadow: var(--usr-shadow-hover); transform: rotate(0deg); }
+    .image-message .msg-copy-btn { opacity: 0; transition: opacity 0.15s; }
+    .image-message:hover .msg-copy-btn { opacity: 1; }
+    .image-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; margin-top: var(--space-2); }
+    /* 用户生成图片 - 各自独特微旋转增加手绘感 + 像素边框 */
+    .image-item { position: relative; border-radius: 0; overflow: hidden; border: 2px solid var(--border-strong); box-shadow: 3px 3px 0 rgba(0,0,0,0.5); background: var(--usr-bg-paper); padding: 3px; transform: rotate(-1.2deg); }
+    .image-item:nth-child(2) { transform: rotate(0.7deg); }
+    .image-item:nth-child(3) { transform: rotate(-0.5deg); }
+    .image-item:nth-child(4) { transform: rotate(0.9deg); }
+    .image-item:nth-child(5) { transform: rotate(-0.3deg); }
+    .image-item:nth-child(6) { transform: rotate(0.5deg); }
+    .image-item:nth-child(7) { transform: rotate(-0.8deg); }
+    .image-item:nth-child(8) { transform: rotate(0.6deg); }
+    .image-item img { width: 100%; display: block; cursor: pointer; border-radius: 0; }
+    .image-check { position: absolute; top: 8px; left: 8px; }
+    .image-check input { width: 16px; height: 16px; cursor: pointer; accent-color: var(--accent); }
+    .image-actions { display: flex; gap: var(--space-2); margin-top: var(--space-3); flex-wrap: wrap; }
+
+    /* 用户优化卡片 - 手绘风格 */
+    .optimization-message {
+      position: relative; padding: 12px 16px; border-radius: var(--usr-radius-card); line-height: 1.6; font-size: 14px; word-break: break-word;
+      background: var(--usr-bg-paper); border: var(--usr-border); max-width: 620px;
+      box-shadow: var(--usr-shadow); transform: rotate(-0.2deg);
+      border-left: 3px solid rgba(180,140,100,0.4);
+    }
+    .optimization-message:hover { box-shadow: var(--usr-shadow-hover); }
+    .optimization-compare { display: flex; gap: var(--space-3); margin: var(--space-3) 0; }
+    .compare-side { flex: 1; padding: var(--space-3); background: rgba(0,0,0,0.08); border-radius: var(--usr-radius); border: 1px solid rgba(120,110,100,0.25); }
+    .compare-label { font-size: 11px; font-weight: 600; color: var(--text-tertiary); margin-bottom: var(--space-1); text-transform: uppercase; font-family: var(--usr-font-label); letter-spacing: 0.5px; }
+    .compare-text { font-size: 13px; white-space: pre-wrap; font-family: var(--usr-font-content); }
+    .compare-text.optimized { color: var(--accent); font-weight: 500; }
+    .optimization-actions { display: flex; gap: var(--space-2); margin-top: var(--space-3); }
+
+    /* 用户规划卡片 - 手绘风格 */
+    .plan-message { position: relative; padding: 12px 16px; border-radius: var(--usr-radius-card); line-height: 1.6; font-size: 14px; word-break: break-word; background: var(--usr-bg-paper); border: var(--usr-border); max-width: 620px; box-shadow: var(--usr-shadow); transform: rotate(-0.2deg); border-left: 3px solid rgba(180,140,100,0.4); }
+    .plan-card { border: 1px solid rgba(120,110,100,0.35); border-radius: var(--usr-radius); overflow: hidden; margin-top: var(--space-2); background: rgba(0,0,0,0.05); }
+    .plan-card-header { display: flex; justify-content: space-between; align-items: center; padding: var(--space-2) var(--space-3); cursor: pointer; background: rgba(0,0,0,0.08); }
+    .plan-card-header:hover { background: rgba(0,0,0,0.12); }
+    .plan-card-title { display: flex; align-items: center; gap: 6px; font-size: 13px; font-family: var(--usr-font-label); font-weight: 500; }
+    .plan-card-meta { display: flex; align-items: center; gap: var(--space-2); }
+    .plan-step-count { font-size: 11px; color: var(--text-tertiary); font-family: var(--usr-font-label); }
+    .plan-chevron { transition: transform 0.2s; font-size: 10px; }
+    .plan-chevron.expanded { transform: rotate(180deg); }
+    .plan-card-body { padding: var(--space-2) var(--space-3); }
+    .plan-card-step { padding: var(--space-2) 0; border-bottom: 1px solid rgba(120,110,100,0.2); }
+    .plan-card-step:last-child { border-bottom: none; }
+    .plan-step-header { display: flex; align-items: center; gap: var(--space-2); }
+    .step-num { width: 22px; height: 22px; border-radius: var(--usr-radius-sm); background: var(--usr-bg-paper); border: 1.5px solid var(--accent); color: var(--accent); font-size: 11px; font-weight: 600; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-family: var(--usr-font-label); }
+    .step-prompt-preview { font-size: 12px; color: var(--text-secondary); font-family: var(--usr-font-content); }
+    .step-field { margin-bottom: 2px; }
+    .step-field label { font-size: 10px; font-weight: 600; color: var(--text-tertiary); text-transform: uppercase; font-family: var(--usr-font-label); letter-spacing: 0.5px; }
+    .step-field p { font-size: 12px; margin: 0; white-space: pre-wrap; font-family: var(--usr-font-content); }
+
+    /* Agent消息卡片 - 混合风格：手绘卡片+像素头部 */
+    .agent-message { position: relative; padding: 12px 16px; border-radius: var(--usr-radius-card); line-height: 1.6; font-size: 14px; word-break: break-word; background: var(--usr-bg-paper); border: var(--usr-border); max-width: 100%; box-shadow: var(--usr-shadow); transform: rotate(-0.2deg); border-left: 3px solid rgba(180,140,100,0.4); }
+    .agent-card { border: 1px solid rgba(120,110,100,0.35); border-radius: var(--usr-radius); overflow: hidden; margin-top: var(--space-2); background: rgba(0,0,0,0.05); }
+    .agent-card-header { display: flex; justify-content: space-between; align-items: center; padding: 6px 12px; background: var(--bg-surface); border-bottom: var(--sys-border-light); }
+    .agent-card-content { padding: 10px 14px; font-family: var(--usr-font-content); }
+    .agent-card-images { display: flex; gap: var(--space-2); padding: 4px 12px 8px; flex-wrap: wrap; }
+    .agent-card-thumb { width: 72px; height: 72px; object-fit: cover; border-radius: var(--usr-radius); cursor: pointer; border: var(--usr-border); box-shadow: var(--usr-shadow); transform: rotate(-1deg); }
+    .agent-card-thumb:nth-child(2) { transform: rotate(0.6deg); }
+    .agent-card-thumb:nth-child(3) { transform: rotate(-0.4deg); }
+    .agent-card-thumb:nth-child(4) { transform: rotate(0.8deg); }
+    .agent-steps { padding: var(--space-2) var(--space-3); border-top: 1px solid rgba(120,110,100,0.2); }
+    .step-item { padding: 6px 10px; border-radius: var(--usr-radius); cursor: pointer; font-size: 12px; border: 1px solid transparent; font-family: var(--usr-font-label); }
+    .step-item:hover { background: rgba(0,0,0,0.08); border-color: rgba(120,110,100,0.2); }
+    .step-item-row { display: flex; align-items: center; gap: var(--space-2); }
+    /* 步骤图标 - 系统用方形像素风格 */
+    .step-icon { width: 18px; height: 18px; border-radius: var(--sys-radius-sm); background: var(--accent); color: #0A0A0B; font-size: 10px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-family: var(--sys-font-label); box-shadow: 2px 2px 0 rgba(0,0,0,0.3); }
+    .step-name { font-weight: 500; }
+    .step-detail { margin-left: 26px; font-size: 11px; color: var(--text-secondary); margin-top: 2px; font-family: var(--usr-font-content); }
+    .step-arg { font-size: 10px; padding: 1px 6px; background: rgba(0,0,0,0.1); border-radius: var(--usr-radius-sm); color: var(--text-secondary); font-family: var(--usr-font-label); }
+
+    /* AgentStreamCard 全像素 */
+    .agent-stream-card { border-left: 3px solid var(--accent); background: var(--bg-elevated); border-radius: 0 var(--sys-radius-sm) var(--sys-radius-sm) 0; padding: var(--space-3); margin: var(--space-2) 0; max-width: 100%; border-top: var(--sys-border-light); border-right: var(--sys-border-light); border-bottom: var(--sys-border-light); }
+    .stream-header { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-2); flex-wrap: wrap; }
+    .stream-cost { font-size: 12px; color: var(--text-tertiary); font-family: var(--sys-font-data); }
+    .stream-status { font-size: 12px; color: var(--text-tertiary); margin-left: auto; font-family: var(--sys-font-data); }
+    .stream-status.thinking { color: var(--accent); }
+    .stream-status.tool_running { color: var(--warning); }
+    .stream-status.error { color: var(--danger); }
+    .stream-status.done { color: var(--success); }
+    .stream-progress { font-size: 11px; font-weight: 600; color: var(--accent); background: var(--bg-surface); padding: 2px 8px; border-radius: var(--sys-radius-full); font-family: var(--sys-font-label); }
+    .stream-body { display: flex; gap: var(--space-3); }
+    .stream-timeline { position: relative; width: 100px; flex-shrink: 0; }
+    .timeline-line { position: absolute; left: 6px; top: 8px; bottom: 8px; width: 2px; background: var(--border-default); }
+    .timeline-node { position: relative; padding: 6px 0 6px 20px; display: flex; align-items: center; gap: 4px; }
+    .node-dot { position: absolute; left: 2px; top: 50%; transform: translateY(-50%); width: 10px; height: 10px; border-radius: 0; background: var(--border-default); border: 2px solid var(--border-strong); transition: all 0.3s; }
+    .timeline-node.done .node-dot { background: var(--accent); border-color: var(--accent); }
+    .timeline-node.running .node-dot { background: var(--accent); border-color: var(--accent); animation: node-flash 0.8s ease-in-out infinite; }
+    .timeline-node.error .node-dot { background: var(--danger); border-color: var(--danger); }
+    .node-label { font-size: 11px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: var(--sys-font-label); }
+    .stream-content { flex: 1; min-width: 0; }
+    .stream-text { font-size: 13px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+    .step-images { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-2); }
+    .step-thumb { width: 100px; height: 100px; object-fit: cover; border-radius: var(--sys-radius-sm); border: var(--sys-border-light); cursor: pointer; }
+    .step-thumb:hover { transform: scale(1.05); }
+    .typing-cursor { display: inline-block; width: 2px; height: 1em; background: var(--accent); vertical-align: text-bottom; animation: blink-cursor 0.8s step-end infinite; }
+    @keyframes node-flash { 0%,100%{opacity:1} 50%{opacity:0.3} }
+    @keyframes blink-cursor { 0%,100%{opacity:1} 50%{opacity:0} }
+
+    /* 特殊组件 */
+    .generating-indicator { display: flex; gap: 3px; }
+    .generating-indicator .dot { width: 6px; height: 6px; background: var(--text-secondary); border-radius: 0; animation: dot-bounce 1.4s infinite ease-in-out both; }
+    .generating-indicator .dot:nth-child(1) { animation-delay: -0.32s; }
+    .generating-indicator .dot:nth-child(2) { animation-delay: -0.16s; }
+    .generating-indicator .dot:nth-child(3) { animation-delay: 0s; }
+    @keyframes dot-bounce { 0%,80%,100%{transform:scale(0)} 40%{transform:scale(1)} }
+    .generating-text { font-size: 13px; color: var(--text-secondary); margin-left: var(--space-2); font-family: var(--sys-font-label); }
+    .task-type-badge { display: inline-block; margin-left: var(--space-2); padding: 2px 8px; font-size: 10px; font-weight: 700; color: #fff; background: #000; border-radius: 2px; vertical-align: middle; font-family: var(--sys-font-label); letter-spacing: 1px; border: 2px solid var(--accent); box-shadow: 2px 2px 0 var(--accent-hover); }
+    .task-progress { font-size: 10px; color: var(--text-tertiary); margin-left: var(--space-2); font-family: var(--sys-font-data); }
+
+    .context-strip { display: flex; align-items: flex-start; gap: var(--space-2); padding: var(--space-2); flex-wrap: wrap; min-height: 32px; }
+    .context-strip-item { position: relative; display: flex; flex-direction: column; align-items: center; gap: 2px; }
+    .context-strip-thumb-wrap { position: relative; width: 40px; height: 40px; }
+    .context-strip-thumb { width: 40px; height: 40px; object-fit: cover; border-radius: var(--usr-radius); border: var(--usr-border); box-shadow: var(--usr-shadow); background: var(--usr-bg-paper); padding: 2px; transform: rotate(-0.5deg); cursor: pointer; }
+    .context-strip-thumb:hover { transform: rotate(0deg) scale(1.05); }
+    .context-strip-badge { position: absolute; top: -5px; left: -5px; width: 14px; height: 14px; border-radius: 2px; background: var(--accent); color: #1A1A1E; font-size: 9px; font-weight: 700; display: flex; align-items: center; justify-content: center; font-family: var(--sys-font-label); box-shadow: 1px 1px 0 rgba(0,0,0,0.3); }
+    .context-strip-label { font-size: 9px; color: var(--text-tertiary); max-width: 48px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; font-family: var(--usr-font-label); }
+    .context-strip-remove { position: absolute; top: -5px; right: -5px; width: 14px; height: 14px; border-radius: 2px; background: var(--danger); color: white; border: none; font-size: 10px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-family: var(--sys-font-label); }
+    .context-strip-add { display: flex; align-items: center; justify-content: center; width: 40px; height: 40px; border: 1.5px dashed var(--border-default); border-radius: var(--usr-radius); cursor: pointer; font-size: 16px; color: var(--text-tertiary); transition: all 0.15s; background: rgba(0,0,0,0.1); }
+    .context-strip-add:hover { border-color: var(--accent); color: var(--accent); }
+
+    .composer-controls { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: var(--space-3); padding: var(--space-3); background: var(--usr-bg-paper); border: var(--usr-border); border-radius: var(--usr-radius-card); box-shadow: var(--usr-shadow); transform: rotate(-0.2deg); }
+    .composer-options { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+    .composer-label { font-size: 12px; color: var(--text-secondary); font-family: var(--usr-font-label); }
+    .size-input { width: 56px; padding: 4px; border: var(--usr-border); border-radius: var(--usr-radius-alt); text-align: center; font-size: 11px; background: var(--usr-bg-paper); color: var(--text-primary); font-family: var(--usr-font-label); outline: none; }
+    .size-input:focus { border-color: var(--accent); }
+    .size-sep { font-size: 12px; color: var(--text-tertiary); }
+    .composer-actions { display: flex; gap: var(--space-2); }
+    .upload-btn { display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; border: var(--usr-border); border-radius: var(--usr-radius); cursor: pointer; color: var(--text-secondary); transition: all 200ms ease; background: rgba(0,0,0,0.1); }
+    .upload-btn:hover { background: rgba(0,0,0,0.15); border-color: var(--accent); color: var(--accent); }
+    .refine-mode-badge { display: flex; align-items: center; gap: var(--space-2); padding: 6px 12px; background: linear-gradient(135deg, rgba(232,168,124,0.2), rgba(127,219,218,0.15)); border: 1.5px solid var(--accent); border-radius: var(--usr-radius); font-size: 12px; color: var(--accent); font-family: var(--usr-font-label); transform: rotate(-0.3deg); }
+
+    /* 布局 */
+    .sidebar { width: 200px; background: var(--bg-elevated); border-right: var(--sys-border); display: flex; flex-direction: column; flex-shrink: 0; }
+    .sidebar-brand { padding: var(--space-4); font-size: 16px; font-weight: 700; border-bottom: var(--sys-border-light); display: flex; align-items: center; gap: 8px; }
+    .logo-pixels { display: flex; gap: 2px; }
+    .logo-pixel { width: 8px; height: 8px; }
+    .logo-pixel:nth-child(1) { background: var(--accent); }
+    .logo-pixel:nth-child(2) { background: var(--pixel-cyan); }
+    .logo-pixel:nth-child(3) { background: var(--pixel-magenta); }
+    .sidebar-nav { padding: var(--space-3); display: flex; flex-direction: column; gap: 2px; }
+    .nav-item { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); color: var(--text-secondary); font-size: 13px; font-weight: 500; cursor: pointer; transition: var(--transition-fast); border-radius: var(--sys-radius-sm); font-family: var(--sys-font-ui); }
+    .nav-item:hover { background: var(--bg-hover); color: var(--text-primary); }
+    .nav-item.active { background: var(--accent-light); color: var(--accent); }
+
+    .session-item { padding: var(--space-3); margin: var(--space-1) 0; border-radius: var(--sys-radius-sm); cursor: pointer; transition: var(--transition-fast); border: 1px solid transparent; background: var(--bg-surface); }
+    .session-item:hover { border-color: var(--border-default); }
+    .session-item.active { border-color: var(--accent); background: var(--accent-light); }
+    .session-title { font-size: 13px; font-weight: 500; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: inherit; display: inline-block; }
+    .session-meta { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--text-tertiary); }
+    .session-meta span { font-family: var(--sys-font-data); }
+
+    .tabs { display: flex; padding: var(--space-2); gap: 4px; background: var(--bg-surface); border-bottom: var(--sys-border-light); }
+    .tab-btn { flex: 1; padding: 8px 12px; border: none; background: transparent; font-size: 11px; font-weight: 600; font-family: var(--sys-font-label); letter-spacing: 0.5px; color: var(--text-secondary); cursor: pointer; border-radius: var(--sys-radius-sm); transition: var(--transition-fast); }
+    .tab-btn.active { background: var(--accent); color: #1A1A1E; }
+
+    .stat-card { background: var(--bg-elevated); border: var(--sys-border-light); padding: var(--space-4); position: relative; }
+    .stat-card::before { content: ''; position: absolute; top: 0; left: 0; width: 6px; height: 6px; background: var(--accent); }
+    .stat-card::after { content: ''; position: absolute; top: 0; right: 0; width: 6px; height: 6px; background: var(--pixel-cyan); }
+    .stat-card:hover { border-color: var(--accent); }
+    .stat-value { font-size: 24px; font-weight: 700; margin-bottom: 4px; font-family: var(--sys-font-label); color: var(--text-primary); }
+    .stat-value.accent { color: var(--accent); }
+    .stat-label { font-size: 10px; font-family: var(--sys-font-label); color: var(--text-tertiary); letter-spacing: 0.5px; }
+
+    table { width: 100%; border-collapse: collapse; background: var(--bg-elevated); border: var(--sys-border-light); }
+    th { background: var(--bg-surface); font-size: 10px; font-weight: 600; font-family: var(--sys-font-label); letter-spacing: 0.5px; color: var(--text-tertiary); padding: var(--space-3) var(--space-4); text-align: left; border-bottom: var(--sys-border-light); text-transform: uppercase; }
+    td { padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border-light); font-size: 13px; }
+    tr:hover td { background: var(--bg-surface); }
+    tr:last-child td { border-bottom: none; }
+
+    .badge-toggle { display: inline-flex; border: var(--sys-border-light); border-radius: var(--sys-radius-sm); overflow: hidden; background: var(--bg-surface); }
+    .badge-toggle-item { padding: 6px 12px; font-size: 11px; font-family: var(--sys-font-label); cursor: pointer; transition: var(--transition-fast); background: transparent; border-right: 1px solid var(--border-light); color: var(--text-secondary); letter-spacing: 0.5px; }
+    .badge-toggle-item:last-child { border-right: none; }
+    .badge-toggle-item.active { background: var(--accent); color: #1A1A1E; }
+
+    .toggle { position: relative; display: inline-block; width: 44px; height: 24px; }
+    .toggle input { opacity: 0; width: 0; height: 0; }
+    .toggle-track { position: absolute; cursor: pointer; inset: 0; background: var(--bg-hover); border-radius: var(--sys-radius-full); transition: var(--transition-fast); }
+    .toggle-thumb { position: absolute; top: 2px; left: 2px; width: 20px; height: 20px; background: var(--text-tertiary); border-radius: 50%; transition: var(--transition-fast); box-shadow: 0 1px 3px rgba(0,0,0,0.3); }
+    .toggle input:checked + .toggle-track { background: var(--accent); }
+    .toggle input:checked + .toggle-track .toggle-thumb { left: 22px; background: white; }
+
+    .slider-wrap { display: flex; flex-direction: column; gap: 6px; }
+    .slider-header { display: flex; justify-content: space-between; }
+    .slider-label { font-size: 12px; color: var(--text-secondary); font-family: var(--usr-font-label); }
+    .slider-value { font-size: 12px; font-family: var(--sys-font-data); color: var(--accent); }
+    input[type="range"] { width: 100%; height: 6px; -webkit-appearance: none; background: var(--bg-hover); border-radius: 3px; outline: none; }
+    input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; background: var(--accent); border-radius: var(--sys-radius-sm); cursor: pointer; box-shadow: 2px 2px 0 rgba(0,0,0,0.3); }
+
+    .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 32px; background: var(--usr-bg-paper); border: 1.5px dashed var(--border-default); border-radius: var(--usr-radius-card); transform: rotate(-0.3deg); }
+    .empty-icon { font-size: 48px; margin-bottom: 12px; opacity: 0.4; }
+    .empty-title { font-size: 14px; color: var(--text-secondary); margin-bottom: 4px; font-family: var(--usr-font-label); }
+    .empty-desc { font-size: 12px; color: var(--text-tertiary); font-family: var(--usr-font-content); }
+
+    .skeleton { background: linear-gradient(90deg, var(--bg-hover) 25%, var(--bg-surface) 50%, var(--bg-hover) 75%); background-size: 200% 100%; animation: shimmer 1.5s infinite; border-radius: var(--sys-radius-sm); }
+    .skeleton-round { border-radius: var(--usr-radius); }
+    @keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
+
+    .toast { background: var(--bg-elevated); border-radius: var(--sys-radius-sm); padding: 12px 16px; display: flex; align-items: center; gap: 8px; box-shadow: var(--sys-shadow); font-family: var(--sys-font-ui); font-size: 13px; }
+    .toast-success { border: 2px solid var(--success); }
+    .toast-warning { border: 2px solid var(--warning); }
+    .toast-error { border: 2px solid var(--danger); }
+
+    .select-field { border: var(--sys-border-light); border-radius: var(--sys-radius-sm); padding: 8px 12px; font-size: 13px; background: var(--bg-surface); color: var(--text-primary); font-family: inherit; outline: none; cursor: pointer; width: 100%; }
+    .select-field:focus { border-color: var(--accent); }
+
+    .dialog-input { width: 100%; padding: 8px 12px; border: var(--sys-border-light); border-radius: var(--sys-radius-sm); background: var(--bg-surface); color: var(--text-primary); font-size: 14px; outline: none; transition: border-color 0.15s; }
+    .dialog-input:focus { border-color: var(--accent); }
+
+    .drawer { border: var(--sys-border); border-radius: var(--sys-radius-sm); padding: 16px; background: var(--bg-surface); }
+    .drawer-title { font-size: 14px; font-weight: 600; margin-bottom: 16px; padding-bottom: 12px; border-bottom: var(--sys-border-light); }
+    .drawer-form { display: flex; flex-direction: column; gap: 12px; }
+    .drawer-field label { display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; font-family: var(--usr-font-label); }
+    .drawer-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+
+    /* AssistantSidebar */
+    .assistant-sidebar-wrap { display: grid; grid-template-columns: 1fr 420px; gap: 0; height: 420px; border: 1px solid var(--border-default); border-radius: var(--sys-radius-sm); overflow: hidden; }
+    .sidebar-main { flex: 1; background: var(--bg-base); display: flex; flex-direction: column; }
+    .sidebar-header { padding: 12px; border-bottom: var(--sys-border-light); display: flex; align-items: center; justify-content: space-between; background: var(--bg-elevated); }
+    .sidebar-header-title { font-size: 13px; font-weight: 600; }
+    .sidebar-header-actions { display: flex; gap: 4px; }
+    .session-list-small { flex: 1; padding: 8px; overflow-y: auto; }
+    .session-item-small { padding: 10px 12px; margin: 4px 0; border-radius: var(--sys-radius-sm); cursor: pointer; background: var(--bg-surface); border: 1px solid transparent; }
+    .session-item-small:hover { border-color: var(--border-default); }
+    .session-item-small.active { border-color: var(--accent); background: var(--accent-light); }
+    .session-item-small .session-title { font-size: 12px; margin-bottom: 2px; }
+    .assistant-panel { width: 420px; background: var(--bg-elevated); border-left: var(--sys-border); display: flex; flex-direction: column; }
+    .assistant-panel .tabs { padding: 8px 12px; gap: 8px; }
+    .assistant-content { flex: 1; padding: 12px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+    .config-section { display: flex; flex-direction: column; gap: 8px; }
+    .config-label { font-size: 11px; color: var(--text-tertiary); font-family: var(--usr-font-label); }
+    .settings-panel { background: var(--bg-surface); border-radius: var(--usr-radius); padding: 10px 12px; }
+    .settings-row { display: flex; align-items: center; justify-content: space-between; padding: 4px 0; }
+    .settings-row-label { font-size: 11px; color: var(--text-secondary); font-family: var(--usr-font-label); }
+    .dialog-bubbles { display: flex; flex-direction: column; gap: 8px; flex: 1; min-height: 0; }
+    .dialog-attachments { display: flex; gap: 6px; flex-wrap: wrap; }
+    .dialog-attachment { width: 44px; height: 44px; border-radius: var(--usr-radius); border: var(--usr-border); overflow: hidden; position: relative; background: var(--usr-bg-paper); padding: 2px; box-shadow: var(--usr-shadow); transform: rotate(-0.5deg); }
+    .dialog-attachment img { width: 100%; height: 100%; object-fit: cover; border-radius: calc(var(--usr-radius) - 1px); }
+    .dialog-attachment-remove { position: absolute; top: -4px; right: -4px; width: 14px; height: 14px; background: var(--danger); border-radius: 2px; border: none; color: white; font-size: 10px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+    .dialog-input-wrap { border: var(--usr-border); border-radius: var(--usr-radius); background: var(--usr-bg-paper); padding: 8px; display: flex; flex-direction: column; gap: 8px; box-shadow: var(--usr-shadow); }
+    .dialog-textarea { width: 100%; min-height: 56px; max-height: 100px; background: transparent; border: none; color: var(--text-primary); font-family: var(--usr-font-content); font-size: 14px; resize: none; outline: none; }
+    .dialog-input-actions { display: flex; justify-content: space-between; align-items: center; }
+    .dialog-input-tools { display: flex; gap: 4px; }
+
+    .tool-call-card { background: var(--bg-surface); border: var(--sys-border-light); border-radius: var(--usr-radius); overflow: hidden; margin-top: 4px; }
+    .tool-call-header { padding: 6px 10px; background: var(--bg-hover); font-size: 11px; font-family: var(--sys-font-label); color: var(--text-secondary); display: flex; justify-content: space-between; align-items: center; cursor: pointer; }
+    .tool-call-body { padding: 8px 10px; font-size: 12px; color: var(--text-secondary); font-family: var(--usr-font-content); }
+
+    .optimize-directions { display: flex; flex-wrap: wrap; gap: 6px; }
+    .direction-chip { padding: 4px 10px; border: var(--usr-border); border-radius: 9999px; font-size: 11px; cursor: pointer; font-family: var(--usr-font-label); background: var(--usr-bg-paper); transition: all 0.2s; }
+    .direction-chip:hover { border-color: var(--accent); }
+    .direction-chip.selected { background: rgba(232,168,124,0.2); border-color: var(--accent); color: var(--accent); }
+    .optimize-preview { padding: 10px; background: rgba(0,0,0,0.1); border-radius: var(--usr-radius); font-size: 13px; font-family: var(--usr-font-content); color: var(--text-secondary); border: 1px solid rgba(120,110,100,0.15); }
+
+    .plan-steps-editor { display: flex; flex-direction: column; gap: 8px; }
+    .plan-step-row { border: var(--usr-border); border-radius: var(--usr-radius); padding: 10px; background: var(--usr-bg-paper); }
+    .plan-add-step { width: 100%; padding: 8px; border: 1.5px dashed var(--border-default); border-radius: var(--usr-radius); background: transparent; color: var(--text-tertiary); cursor: pointer; font-family: var(--usr-font-label); font-size: 12px; transition: all 0.15s; }
+    .plan-add-step:hover { border-color: var(--accent); color: var(--accent); }
+    .plan-estimate { padding: 10px; background: rgba(0,0,0,0.1); border-radius: var(--usr-radius); display: flex; justify-content: space-between; font-size: 12px; font-family: var(--usr-font-label); }
+    .plan-estimate span:last-child { color: var(--accent); }
+
+    .skill-list { display: flex; flex-direction: column; gap: 6px; }
+    .skill-item { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: var(--usr-border); border-radius: var(--usr-radius); background: var(--usr-bg-paper); cursor: pointer; transition: all 0.15s; }
+    .skill-item:hover { border-color: var(--accent); }
+    .skill-item.selected { background: rgba(232,168,124,0.15); border-color: var(--accent); }
+    .skill-name { font-size: 13px; font-family: var(--usr-font-label); }
+    .skill-hint { font-size: 11px; color: var(--text-tertiary); font-family: var(--usr-font-content); }
+
+    .ai-drawer { border: var(--sys-border); border-radius: var(--sys-radius-sm); background: var(--bg-surface); overflow: hidden; }
+    .ai-drawer-header { padding: 10px 12px; background: var(--bg-elevated); border-bottom: var(--sys-border-light); font-family: var(--sys-font-label); font-size: 12px; }
+    .ai-drawer-body { padding: 12px; }
+    /* AI输出区域 - 像素风格 */
+    .ai-output { border: 2px solid var(--accent); border-radius: 0; padding: 12px; background: var(--bg-base); min-height: 160px; position: relative; margin-top: 12px; box-shadow: var(--sys-shadow); }
+    .ai-output::before { content: ''; position: absolute; inset: -2px; border: 2px solid var(--accent); border-radius: 0; animation: pulse-border 2s ease-in-out infinite; pointer-events: none; }
+    .ai-output-text { font-size: 12px; line-height: 1.8; font-family: var(--sys-font-data); color: var(--text-secondary); }
+    .ai-output-text p { margin-bottom: 6px; }
+    .ai-output-text .done { color: var(--success); font-weight: 600; }
+    .ai-output-text .acc { color: var(--accent); font-weight: 600; }
+    .ai-output-text .analyzing { color: #fff; font-weight: 700; font-size: 14px; font-family: var(--sys-font-label); letter-spacing: 1px; }
+    /* 全局滚动条美化 - 像素短滑块 + 上下甩尾 */
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-track { background: var(--bg-base); border-left: 2px solid var(--border-default); }
+    ::-webkit-scrollbar-thumb {
+      background: var(--accent);
+      border: 2px solid var(--border-strong);
+      border-radius: 0;
+      box-shadow:
+        0 2px 0 -1px var(--bg-base),
+        0 4px 0 -2px var(--accent-hover);
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: var(--accent-hover);
+      box-shadow:
+        0 2px 0 -1px var(--bg-base),
+        0 4px 0 -2px var(--accent),
+        0 6px 0 -3px var(--accent-hover);
+    }
+    ::-webkit-scrollbar-thumb:active {
+      animation: scroll-trail 0.15s steps(2) infinite;
+    }
+    @keyframes scroll-trail {
+      0% { box-shadow: 0 2px 0 -1px var(--bg-base), 0 4px 0 -2px var(--accent-hover); }
+      50% { box-shadow: 0 -2px 0 -1px var(--bg-base), 0 -4px 0 -2px var(--accent-hover); }
+      100% { box-shadow: 0 2px 0 -1px var(--bg-base), 0 4px 0 -2px var(--accent-hover); }
+    }
+    ::-webkit-scrollbar-corner { background: var(--bg-base); }
+    * { scrollbar-width: thin; scrollbar-color: var(--accent) var(--bg-base); }
+
+    /* 主界面布局 */
+    .app-layout { display: flex; height: 700px; border: 2px solid var(--border-strong); border-right: none; background: var(--bg-base); position: relative; }
+    .app-layout::after {
+      content: ''; position: absolute; top: 0; right: 0; bottom: 0; width: 3px;
+      background: linear-gradient(180deg, var(--pixel-cyan) 0%, var(--pixel-magenta) 33%, var(--pixel-yellow) 66%, var(--pixel-cyan) 100%);
+    }
+    /* 全局导航 - 像素风格 */
+    .global-nav { width: 64px; background: var(--bg-elevated); border-right: 2px solid var(--border-strong); display: flex; flex-direction: column; }
+    .nav-brand { padding: 12px 8px; border-bottom: 1px solid var(--border-light); display: flex; justify-content: center; }
+    .nav-menu { flex: 1; padding: 8px 0; display: flex; flex-direction: column; gap: 2px; }
+    .nav-footer { padding: 8px 0; border-top: 1px solid var(--border-light); display: flex; flex-direction: column; align-items: center; }
+    .nav-item { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 10px 6px; width: 100%; border: none; background: transparent; color: var(--text-tertiary); cursor: pointer; font-size: 9px; font-family: var(--sys-font-label); transition: var(--transition-fast); border-radius: var(--sys-radius-sm); }
+    .nav-item:hover { background: var(--bg-hover); color: var(--text-primary); }
+    .nav-item.active { background: var(--accent-light); color: var(--accent); }
+    .nav-icon { font-size: 16px; }
+    .nav-label { font-size: 8px; }
+    .main-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+    /* Topbar - 顶部栏 + 彩虹渐变顶边 */
+    .topbar {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 8px 16px; background: var(--bg-elevated);
+      border-bottom: 2px solid var(--border-strong);
+      height: 48px; position: relative;
+    }
+    .topbar::before {
+      content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+      background: linear-gradient(90deg, var(--pixel-cyan) 0%, var(--pixel-magenta) 33%, var(--pixel-yellow) 66%, var(--pixel-cyan) 100%);
+    }
+    .topbar-brand { display: flex; align-items: center; gap: 8px; }
+    .topbar-billing { display: flex; align-items: center; gap: 8px; }
+    .billing-label { font-size: 11px; color: var(--text-tertiary); font-family: var(--sys-font-label); }
+    .billing-value { font-size: 14px; font-weight: 600; color: var(--accent); font-family: var(--sys-font-label); }
+    .topbar-actions { display: flex; gap: 8px; }
+    .main-body { display: flex; flex: 1; overflow: hidden; }
+    .main-sidebar { width: 200px; background: var(--bg-elevated); border-right: 2px solid var(--border-strong); display: flex; flex-direction: column; }
+    .main-chat { flex: 1; display: flex; flex-direction: column; background: var(--bg-base); overflow: hidden; }
+    .message-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+    .session-list { flex: 1; overflow-y: auto; }
+  </style>
+</head>
+<body>
+<div class="preview-section">
+  <div class="preview-header">
+    <h1 class="preview-title">LamImager UI - 像素 / 手绘 二元风格预览</h1>
+    <p class="preview-subtitle">系统归属 → 像素风格（暗房设备精确可靠） | 用户归属 → 手绘线条风格（摄影师创意人性）</p>
+    <div class="preview-legend">
+      <div class="legend-item"><div class="legend-sys"></div><span>系统归属（像素方角）</span></div>
+      <div class="legend-item"><div class="legend-usr"></div><span>用户归属（手绘圆角）</span></div>
+      <div class="legend-item"><div class="legend-mix"></div><span>混合组件（边界分明）</span></div>
+    </div>
+  </div>
+
+  <!-- SECTION 1: 覆盖层 -->
+  <div class="preview-group">
+    <h2 class="preview-group-title">覆盖层组件</h2>
+    <div class="section-grid">
+      <div class="section-item mix">
+        <span class="style-tag mix">MIX</span>
+        <div class="section-item-title">Lightbox</div>
+        <p class="section-item-sub">像素框架 + 手绘预览图片</p>
+        <div style="margin-top:12px; display:flex; flex-direction:column; gap:12px;">
+          <div class="lightbox-overlay" style="position:relative; inset:auto; width:100%; height:260px; border-radius:var(--sys-radius-sm); overflow:hidden; cursor:default;">
+            <div class="lightbox-content">
+              <div class="lightbox-header" style="width:100%; max-width:380px;">
+                <span class="lightbox-title">PREVIEW</span>
+                <button class="lightbox-close">✕</button>
+              </div>
+              <div class="lightbox-img-wrap" style="margin-top:12px;">
+                <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='280' height='180' viewBox='0 0 280 180'%3E%3Crect fill='%23333' width='280' height='180'/%3E%3Crect fill='%23444' x='90' y='40' width='100' height='100'/%3E%3Crect fill='%23E8A87C' x='100' y='50' width='80' height='80'/%3E%3C/svg%3E" class="lightbox-img" alt="">
+              </div>
+              <div class="lightbox-actions">
+                <button class="btn-usr btn-usr-sm">下载</button>
+                <button class="btn-usr btn-usr-sm">新窗口打开</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section-item mix">
+        <span class="style-tag mix">MIX</span>
+        <div class="section-item-title">CompareOverlay</div>
+        <p class="section-item-sub">像素框架 + 手绘图片（各有微旋转）</p>
+        <div style="margin-top:12px;">
+          <div class="compare-view" style="position:relative; inset:auto; width:100%; padding:16px; transform:none;">
+            <div class="compare-header">
+              <span class="compare-title">图片对比 (3张)</span>
+              <button class="btn btn-sm">关闭对比</button>
+            </div>
+            <div class="compare-images">
+              <div class="compare-img-wrap"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='110' height='110' viewBox='0 0 110 110'%3E%3Crect fill='%23333' width='110' height='110'/%3E%3Crect fill='%23E8A87C' x='25' y='25' width='60' height='60'/%3E%3C/svg%3E" class="compare-img" alt=""></div>
+              <div class="compare-img-wrap"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='110' height='110' viewBox='0 0 110 110'%3E%3Crect fill='%23333' width='110' height='110'/%3E%3Crect fill='%237FDBDA' x='25' y='25' width='60' height='60'/%3E%3C/svg%3E" class="compare-img" alt=""></div>
+              <div class="compare-img-wrap"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='110' height='110' viewBox='0 0 110 110'%3E%3Crect fill='%23333' width='110' height='110'/%3E%3Crect fill='%23C77DFF' x='25' y='25' width='60' height='60'/%3E%3C/svg%3E" class="compare-img" alt=""></div>
+            </div>
+            <button class="btn-usr btn-usr-sm" style="margin-top:12px; align-self:flex-start;">下载全部</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="section-item mix">
+        <span class="style-tag mix">MIX</span>
+        <div class="section-item-title">CheckpointOverlay</div>
+        <p class="section-item-sub">像素框架 + 手绘预览框 + 手绘操作按钮</p>
+        <div style="margin-top:12px;">
+          <div class="checkpoint-card" style="position:relative; inset:auto; width:100%; max-width:340px; margin:0 auto; transform:none; box-shadow:none;">
+            <p class="checkpoint-tool">generate_image</p>
+            <p class="checkpoint-step">Step 2: 生成主体图像</p>
+            <p class="checkpoint-message">已生成图像预览，请确认是否继续或进行调整</p>
+            <div class="checkpoint-preview-wrap">
+              <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='130' viewBox='0 0 200 130'%3E%3Crect fill='%23333' width='200' height='130'/%3E%3Crect fill='%23444' x='55' y='25' width='90' height='80'/%3E%3C/svg%3E" class="checkpoint-preview" alt="">
+            </div>
+            <p class="checkpoint-label">预览</p>
+            <div class="checkpoint-actions">
+              <button class="btn-usr btn-usr-sm btn-usr-primary">继续</button>
+              <button class="btn-usr btn-usr-sm">重做此步</button>
+              <button class="btn-usr btn-usr-sm">重新规划</button>
+              <button class="btn-usr btn-usr-sm" style="border-color:var(--danger);color:var(--danger);">终止</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section-item sys">
+        <span class="style-tag sys">SYS</span>
+        <div class="section-item-title">ContextMenu + ConfirmDialog</div>
+        <p class="section-item-sub">系统框架，像素风格</p>
+        <div style="margin-top:12px; display:flex; flex-direction:column; gap:16px;">
+          <div style="position:relative; height:80px; background:var(--bg-surface); border-radius:var(--sys-radius-sm); display:flex; align-items:center; justify-content:center;">
+            <span style="font-size:12px; color:var(--text-tertiary); font-family:var(--sys-font-label);">右键此处</span>
+            <div class="context-menu" style="position:absolute; top:12px; left:40px;">
+              <button>复制</button><button>下载</button><button>精修</button><button>设为参考</button>
+            </div>
+          </div>
+          <div class="dialog-panel" style="position:relative; inset:auto; width:100%; max-width:300px; margin:0 auto; transform:none; box-shadow:none;">
+            <div class="dialog-title">确认删除</div>
+            <div class="dialog-body">确定要删除此会话吗？此操作无法撤销。</div>
+            <div class="dialog-actions">
+              <button class="btn">取消</button>
+              <button class="btn btn-danger">删除</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SECTION 2: 消息卡片 -->
+  <div class="preview-group">
+    <h2 class="preview-group-title">消息卡片</h2>
+    <div class="section-grid">
+      <div class="section-item mix">
+        <span class="style-tag mix">MIX</span>
+        <div class="section-item-title">TextMessageCard</div>
+        <p class="section-item-sub">用户=手绘气泡(暖色)，助手=像素气泡(冷色)</p>
+        <div style="display:flex; flex-direction:column; gap:16px; margin-top:12px;">
+          <div class="text-message user" style="align-self:flex-end;">画一只可爱的猫咪<button class="msg-copy-btn">📋</button></div>
+          <div class="text-message assistant" style="align-self:flex-start;">好的，我来为您生成一张可爱的猫咪图片。<button class="msg-copy-btn">📋</button></div>
+        </div>
+      </div>
+
+      <div class="section-item usr">
+        <span class="style-tag usr">USR</span>
+        <div class="section-item-title">ImageMessageCard</div>
+        <p class="section-item-sub">用户创意，手绘卡片，图片各有微旋转</p>
+        <div style="display:flex; flex-direction:column; gap:12px; margin-top:12px;">
+          <div class="image-message">
+            <p style="font-family:var(--usr-font-label);margin-bottom:4px;">生成了 4 张猫咪图片：</p>
+            <div class="image-grid">
+              <div class="image-item"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='150' viewBox='0 0 150 150'%3E%3Crect fill='%23E8A87C' width='150' height='150'/%3E%3C/svg%3E" alt=""><label class="image-check"><input type="checkbox"></label></div>
+              <div class="image-item"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='150' viewBox='0 0 150 150'%3E%3Crect fill='%237FDBDA' width='150' height='150'/%3E%3C/svg%3E" alt=""><label class="image-check"><input type="checkbox"></label></div>
+              <div class="image-item"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='150' viewBox='0 0 150 150'%3E%3Crect fill='%23C77DFF' width='150' height='150'/%3E%3C/svg%3E" alt=""><label class="image-check"><input type="checkbox"></label></div>
+              <div class="image-item"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='150' viewBox='0 0 150 150'%3E%3Crect fill='%23F8E16C' width='150' height='150'/%3E%3C/svg%3E" alt=""><label class="image-check"><input type="checkbox"></label></div>
+            </div>
+            <div class="image-actions">
+              <button class="btn-usr btn-usr-sm">下载选中(2)</button>
+              <button class="btn-usr btn-usr-sm">全部下载</button>
+              <button class="btn-usr btn-usr-sm">对比选中</button>
+              <button class="btn-usr btn-usr-sm btn-usr-primary">精修(2)</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section-item usr">
+        <span class="style-tag usr">USR</span>
+        <div class="section-item-title">OptimizationCard</div>
+        <p class="section-item-sub">用户创意内容，手绘卡片</p>
+        <div style="display:flex; flex-direction:column; gap:12px; margin-top:12px;">
+          <div class="optimization-message">
+            <p style="font-family:var(--usr-font-label);margin-bottom:4px;">Prompt 优化完成：</p>
+            <div class="optimization-compare">
+              <div class="compare-side"><div class="compare-label">原始</div><div class="compare-text">一只猫</div></div>
+              <div class="compare-side"><div class="compare-label">优化后</div><div class="compare-text optimized">A fluffy orange tabby cat with bright green eyes playing on a lush green meadow</div></div>
+            </div>
+            <div class="optimization-actions">
+              <button class="btn-usr btn-usr-sm btn-usr-primary">应用优化</button>
+              <button class="btn-usr btn-usr-sm">使用原始</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section-item usr">
+        <span class="style-tag usr">USR</span>
+        <div class="section-item-title">PlanMessageCard</div>
+        <p class="section-item-sub">用户创意编排，手绘卡片</p>
+        <div style="display:flex; flex-direction:column; gap:12px; margin-top:12px;">
+          <div class="plan-message">
+            <p style="font-family:var(--usr-font-label);margin-bottom:4px;">执行计划已生成：</p>
+            <div class="plan-card">
+              <div class="plan-card-header">
+                <div class="plan-card-title"><span>辐射策略 - 表情包系列</span></div>
+                <div class="plan-card-meta"><span class="plan-step-count">4 个步骤</span><span class="plan-chevron expanded">▼</span></div>
+              </div>
+              <div class="plan-card-body">
+                <div class="plan-card-step">
+                  <div class="plan-step-header"><span class="step-num">1</span><span class="step-prompt-preview">生成基础角色设定稿</span></div>
+                  <div class="step-field" style="padding-left:28px;margin-top:4px;"><label>Prompt</label><p>A cute cartoon cat character design, front view</p></div>
+                </div>
+                <div class="plan-card-step"><div class="plan-step-header"><span class="step-num">2</span><span class="step-prompt-preview">生成 6 个表情变体</span></div></div>
+                <div class="plan-card-step"><div class="plan-step-header"><span class="step-num">3</span><span class="step-prompt-preview">统一风格和色调</span></div></div>
+                <div class="plan-card-step"><div class="plan-step-header"><span class="step-num">4</span><span class="step-prompt-preview">输出最终 6 格表情包</span></div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section-item mix">
+        <span class="style-tag mix">MIX</span>
+        <div class="section-item-title">AgentMessageCard</div>
+        <p class="section-item-sub">用户创意，手绘卡片 + 像素头部</p>
+        <div style="display:flex; flex-direction:column; gap:12px; margin-top:12px;">
+          <div class="agent-message">
+            <div class="agent-card">
+              <div class="agent-card-header"><span class="agent-badge">AGENT</span><span style="font-size:11px;color:var(--text-tertiary);font-family:var(--sys-font-data);">¥0.0234</span></div>
+              <div class="agent-card-content"><p>正在为您创作猫咪主题的表情包系列...</p></div>
+              <div class="agent-card-images">
+                <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='60' height='60' viewBox='0 0 60 60'%3E%3Crect fill='%23E8A87C' width='60' height='60'/%3E%3C/svg%3E" class="agent-card-thumb" alt="">
+                <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='60' height='60' viewBox='0 0 60 60'%3E%3Crect fill='%237FDBDA' width='60' height='60'/%3E%3C/svg%3E" class="agent-card-thumb" alt="">
+                <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='60' height='60' viewBox='0 0 60 60'%3E%3Crect fill='%23C77DFF' width='60' height='60'/%3E%3C/svg%3E" class="agent-card-thumb" alt="">
+              </div>
+              <div class="agent-steps">
+                <div class="step-item">
+                  <div class="step-item-row"><span class="step-icon">画</span><span class="step-name">generate_image</span><span style="font-size:11px;color:var(--success);margin-left:auto;">✓ 3张</span></div>
+                  <div class="step-detail">count: 3, prompt: A cute cartoon cat...</div>
+                </div>
+                <div class="step-item" style="margin-top:4px;opacity:0.6;">
+                  <div class="step-item-row"><span class="step-icon">策</span><span class="step-name">plan</span><span style="font-size:11px;color:var(--text-tertiary);margin-left:auto;">进行中</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section-item sys">
+        <span class="style-tag sys">SYS</span>
+        <div class="section-item-title">AgentStreamCard</div>
+        <p class="section-item-sub">系统进程，完整像素风格</p>
+        <div style="display:flex; flex-direction:column; gap:12px; margin-top:12px;">
+          <div class="agent-stream-card">
+            <div class="stream-header">
+              <span class="agent-badge">AGENT</span>
+              <span class="stream-cost">¥0.0156</span>
+              <span class="stream-status tool_running">执行工具中...</span>
+              <span class="stream-progress">2/4</span>
+            </div>
+            <div class="stream-body">
+              <div class="stream-timeline">
+                <div class="timeline-line"></div>
+                <div class="timeline-node done"><span class="node-dot"></span><span class="node-label">intent</span></div>
+                <div class="timeline-node done"><span class="node-dot"></span><span class="node-label">skill</span></div>
+                <div class="timeline-node running"><span class="node-dot"></span><span class="node-label">generate</span></div>
+                <div class="timeline-node"><span class="node-dot"></span><span class="node-label">critic</span></div>
+              </div>
+              <div class="stream-content">
+                <div class="stream-text">正在生成图像，请稍候...</div>
+                <div class="step-images">
+                  <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='80' viewBox='0 0 80 80'%3E%3Crect fill='%23333' width='80' height='80'/%3E%3Crect fill='%23E8A87C' x='20' y='20' width='40' height='40'/%3E%3C/svg%3E" class="step-thumb" alt="">
+                  <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='80' viewBox='0 0 80 80'%3E%3Crect fill='%23333' width='80' height='80'/%3E%3Crect fill='%237FDBDA' x='20' y='20' width='40' height='40'/%3E%3C/svg%3E" class="step-thumb" alt="">
+                </div>
+                <span class="typing-cursor"></span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SECTION 3: 特殊组件 -->
+  <div class="preview-group">
+    <h2 class="preview-group-title">特殊组件</h2>
+    <div class="section-grid">
+      <div class="section-item sys">
+        <span class="style-tag sys">SYS</span>
+        <div class="section-item-title">GeneratingIndicator</div>
+        <p class="section-item-sub">系统状态，像素方块动画</p>
+        <div style="margin-top:12px; display:flex; align-items:center; gap:8px;">
+          <div class="generating-indicator"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
+          <span class="generating-text">正在生成图像</span>
+          <span class="task-type-badge">RADIATE</span>
+          <span class="task-progress">2/6</span>
+        </div>
+      </div>
+
+      <div class="section-item mix">
+        <span class="style-tag mix">MIX</span>
+        <div class="section-item-title">ContextImageStrip</div>
+        <p class="section-item-sub">混合：用户缩略图=手绘 + 系统编号=像素</p>
+        <div style="margin-top:12px;">
+          <div class="context-strip">
+            <div class="context-strip-item">
+              <div class="context-strip-thumb-wrap">
+                <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='36' height='36' viewBox='0 0 36 36'%3E%3Crect fill='%23333' width='36' height='36'/%3E%3C/svg%3E" class="context-strip-thumb" alt="">
+                <span class="context-strip-badge">1</span>
+                <button class="context-strip-remove">✕</button>
+              </div>
+              <span class="context-strip-label">上传</span>
+            </div>
+            <div class="context-strip-item">
+              <div class="context-strip-thumb-wrap">
+                <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='36' height='36' viewBox='0 0 36 36'%3E%3Crect fill='%23444' width='36' height='36'/%3E%3C/svg%3E" class="context-strip-thumb" alt="">
+                <span class="context-strip-badge">2</span>
+                <button class="context-strip-remove">✕</button>
+              </div>
+              <span class="context-strip-label">精修</span>
+            </div>
+            <div class="context-strip-item">
+              <div class="context-strip-thumb-wrap">
+                <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='36' height='36' viewBox='0 0 36 36'%3E%3Crect fill='%23555' width='36' height='36'/%3E%3C/svg%3E" class="context-strip-thumb" alt="">
+                <span class="context-strip-badge">3</span>
+              </div>
+              <span class="context-strip-label">上下文</span>
+            </div>
+            <div class="context-strip-add">+</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section-item usr" style="grid-column:span 2;">
+        <span class="style-tag usr">USR</span>
+        <div class="section-item-title">ComposerControls</div>
+        <p class="section-item-sub">用户操作控件，手绘风格</p>
+        <div style="margin-top:12px; display:flex; flex-direction:column; gap:12px;">
+          <div>
+            <p style="font-size:11px;color:var(--text-tertiary);margin-bottom:8px;font-family:var(--usr-font-label);">正常模式</p>
+            <div class="composer-controls">
+              <div class="composer-options">
+                <span class="composer-label">数量:</span>
+                <button class="count-btn active">1</button>
+                <button class="count-btn">2</button>
+                <button class="count-btn">4</button>
+                <button class="count-btn">8</button>
+                <span class="composer-label" style="margin-left:8px;">尺寸:</span>
+                <input type="number" class="size-input" value="1024">
+                <span class="size-sep">×</span>
+                <input type="number" class="size-input" value="1024">
+              </div>
+              <div class="composer-actions">
+                <button class="upload-btn" title="上传图片">🖼</button>
+                <button class="upload-btn" title="上传文档">📄</button>
+                <button class="btn-usr btn-usr-sm">智能</button>
+                <button class="btn-usr btn-usr-sm">助手</button>
+                <button class="btn-usr btn-usr-sm btn-usr-primary">发送</button>
+              </div>
+            </div>
+          </div>
+          <div>
+            <p style="font-size:11px;color:var(--text-tertiary);margin-bottom:8px;font-family:var(--usr-font-label);">精修模式</p>
+            <div class="composer-controls">
+              <div class="refine-mode-badge">
+                <span>精修模式</span>
+                <button class="btn-usr btn-usr-sm">退出</button>
+              </div>
+              <div class="composer-actions">
+                <button class="upload-btn" title="上传图片">🖼</button>
+                <button class="btn-usr btn-usr-sm btn-usr-primary">精修发送</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SECTION 4: 布局组件 -->
+  <div class="preview-group">
+    <h2 class="preview-group-title">布局组件</h2>
+    <div class="section-grid">
+      <div class="section-item mix">
+        <span class="style-tag mix">MIX</span>
+        <div class="section-item-title">Sidebar + SessionList</div>
+        <p class="section-item-sub">骨架=像素，标题=用户手写字体</p>
+        <div style="margin-top:12px; display:flex; gap:0; height:260px; border:1px solid var(--border-default); border-radius:var(--sys-radius-sm); overflow:hidden;">
+          <div class="sidebar" style="height:100%;width:150px;">
+            <div class="sidebar-brand">
+              <span>Lam</span>
+              <div class="logo-pixels"><span class="logo-pixel"></span><span class="logo-pixel"></span><span class="logo-pixel"></span></div>
+              <span style="font-weight:400;color:var(--text-secondary);">mager</span>
+            </div>
+            <nav class="sidebar-nav">
+              <a class="nav-item active" href="#">会话</a>
+              <a class="nav-item" href="#">API 配置</a>
+              <a class="nav-item" href="#">技能</a>
+              <a class="nav-item" href="#">规则</a>
+              <a class="nav-item" href="#">参考图</a>
+              <a class="nav-item" href="#">规划模板</a>
+              <a class="nav-item" href="#">仪表盘</a>
+              <a class="nav-item" href="#">设置</a>
+            </nav>
+          </div>
+          <div style="flex:1;padding:8px;overflow-y:auto;background:var(--bg-base);">
+            <div class="session-item active">
+              <div class="session-title">猫咪主题创作</div>
+              <div class="session-meta"><span>¥2.50</span><span class="status-badge generating"><span class="status-dot spinning"></span>生成中</span></div>
+            </div>
+            <div class="session-item">
+              <div class="session-title">风景插画系列</div>
+              <div class="session-meta"><span>¥5.80</span></div>
+            </div>
+            <div class="session-item">
+              <div class="session-title">角色设计 - 武士</div>
+              <div class="session-meta"><span>¥0.00</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section-item sys">
+        <span class="style-tag sys">SYS</span>
+        <div class="section-item-title">Tabs + Stat Cards + Table</div>
+        <p class="section-item-sub">像素骨架，数字=用户手写字体</p>
+        <div style="margin-top:12px; display:flex; flex-direction:column; gap:16px;">
+          <div class="tabs"><button class="tab-btn active">对话</button><button class="tab-btn">优化</button><button class="tab-btn">规划</button><button class="tab-btn">技能</button></div>
+          <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;">
+            <div class="stat-card"><div class="stat-value">156</div><div class="stat-label">总会话数</div></div>
+            <div class="stat-card"><div class="stat-value">428</div><div class="stat-label">生成图片</div></div>
+            <div class="stat-card"><div class="stat-value">892</div><div class="stat-label">生成次数</div></div>
+            <div class="stat-card"><div class="stat-value accent">¥128</div><div class="stat-label">累计费用</div></div>
+          </div>
+          <table style="font-size:12px;">
+            <thead><tr><th>名称</th><th>API</th><th>状态</th></tr></thead>
+            <tbody>
+              <tr><td>OpenAI</td><td style="color:var(--text-secondary);">api.openai.com</td><td><span class="badge badge-active">启用</span></td></tr>
+              <tr><td>Claude</td><td style="color:var(--text-secondary);">api.anthropic.com</td><td><span class="badge badge-active">启用</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SECTION 5: AssistantSidebar -->
+  <div class="preview-group">
+    <h2 class="preview-group-title">AssistantSidebar 完整展示</h2>
+    <div style="margin-top:12px;">
+      <div class="assistant-sidebar-wrap">
+        <div class="sidebar-main">
+          <div class="sidebar-header">
+            <span class="sidebar-header-title">会话</span>
+            <div class="sidebar-header-actions">
+              <button class="btn-icon" style="width:28px;height:28px;font-size:14px;">+</button>
+              <button class="btn-icon" style="width:28px;height:28px;font-size:14px;">~</button>
+            </div>
+          </div>
+          <div class="session-list-small">
+            <div class="session-item-small active"><div class="session-title">猫咪创作</div><div class="session-meta"><span>¥2.50</span></div></div>
+            <div class="session-item-small"><div class="session-title">风景插画</div><div class="session-meta"><span>¥5.80</span></div></div>
+          </div>
+        </div>
+        <div class="assistant-panel">
+          <div class="tabs" style="padding:8px 12px;gap:8px;"><button class="tab-btn active" style="font-size:10px;">对话</button><button class="tab-btn" style="font-size:10px;">优化</button><button class="tab-btn" style="font-size:10px;">规划</button><button class="tab-btn" style="font-size:10px;">技能</button></div>
+          <div class="assistant-content">
+            <div class="config-section">
+              <p class="config-label">响应风格</p>
+              <div class="badge-toggle"><span class="badge-toggle-item active">默认</span><span class="badge-toggle-item">详细</span><span class="badge-toggle-item">简洁</span></div>
+            </div>
+            <div class="settings-panel">
+              <details style="cursor:pointer;">
+                <summary style="font-size:12px;color:var(--accent);display:flex;align-items:center;gap:6px;font-family:var(--usr-font-label);">高级设置</summary>
+                <div style="margin-top:8px;display:flex;flex-direction:column;gap:6px;">
+                  <div class="settings-row"><span class="settings-row-label">上下文模式</span><div class="badge-toggle" style="font-size:9px;"><span class="badge-toggle-item active">共享</span><span class="badge-toggle-item">仅当前</span></div></div>
+                  <div class="settings-row"><span class="settings-row-label">记忆模式</span><div class="badge-toggle" style="font-size:9px;"><span class="badge-toggle-item active">全局</span><span class="badge-toggle-item">仅会话</span></div></div>
+                </div>
+              </details>
+            </div>
+            <div class="dialog-bubbles">
+              <div class="text-message user" style="max-width:85%;align-self:flex-end;font-size:13px;">帮我画一只赛博朋克风格的猫</div>
+              <div class="text-message assistant" style="max-width:85%;align-self:flex-start;font-size:13px;">已为您生成赛博朋克风格猫咪图像。</div>
+            </div>
+            <div class="tool-call-card">
+              <div class="tool-call-header"><span>web_search</span><span style="color:var(--success);">✓ 完成</span></div>
+              <div class="tool-call-body">找到了 5 个相关参考...</div>
+            </div>
+            <div class="dialog-attachments">
+              <div class="dialog-attachment"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='40'%3E%3Crect fill='%23333' width='40' height='40'/%3E%3C/svg%3E" alt=""><button class="dialog-attachment-remove">✕</button></div>
+            </div>
+            <div class="dialog-input-wrap">
+              <textarea class="dialog-textarea" placeholder="输入消息..."></textarea>
+              <div class="dialog-input-actions">
+                <div class="dialog-input-tools">
+                  <button class="upload-btn" style="width:28px;height:28px;font-size:12px;" title="上传图片">🖼</button>
+                  <button class="upload-btn" style="width:28px;height:28px;font-size:12px;" title="网络搜索">🔍</button>
+                </div>
+                <button class="btn-usr btn-usr-sm btn-usr-primary">发送</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SECTION 6: 4个Tab分别展示 -->
+  <div class="preview-group">
+    <h2 class="preview-group-title">AssistantSidebar - Tab 内容详解</h2>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:12px;">
+      <!-- 优化Tab -->
+      <div style="border:1px solid var(--border-default);border-radius:var(--usr-radius-card);padding:12px;background:var(--usr-bg-paper);">
+        <p style="font-size:11px;font-family:var(--sys-font-label);color:var(--text-tertiary);margin-bottom:8px;">优化 Tab</p>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          <div>
+            <p class="config-label">优化方向</p>
+            <div class="optimize-directions">
+              <span class="direction-chip selected">细节</span>
+              <span class="direction-chip">风格</span>
+              <span class="direction-chip">构图</span>
+              <span class="direction-chip">色彩</span>
+              <span class="direction-chip">艺术化</span>
+            </div>
+          </div>
+          <div class="optimize-preview">当前提示词：一只猫在草地上奔跑...</div>
+          <button class="btn-usr btn-usr-sm btn-usr-primary" style="width:100%;">开始优化</button>
+        </div>
+      </div>
+      <!-- 规划Tab -->
+      <div style="border:1px solid var(--border-default);border-radius:var(--usr-radius-card);padding:12px;background:var(--usr-bg-paper);">
+        <p style="font-size:11px;font-family:var(--sys-font-label);color:var(--text-tertiary);margin-bottom:8px;">规划 Tab</p>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          <div class="plan-steps-editor">
+            <div class="plan-step-row" style="padding:8px;">
+              <div style="display:flex;align-items:center;gap:4px;margin-bottom:4px;">
+                <span class="step-num" style="width:18px;height:18px;font-size:10px;">1</span>
+                <input class="input-usr" style="flex:1;padding:4px 8px;font-size:11px;" value="生成角色设定稿">
+                <button class="btn btn-sm" style="padding:2px 6px;font-size:10px;">✕</button>
+              </div>
+              <div style="display:grid;grid-template-columns:1fr 1fr 36px 36px;gap:4px;padding-left:22px;">
+                <input class="input-usr" style="padding:3px 6px;font-size:10px;" value="A cute cat">
+                <input class="input-usr" style="padding:3px 6px;font-size:10px;" value="">
+                <input class="input-usr" style="padding:3px 6px;font-size:10px;text-align:center;" value="1">
+                <input class="input-usr" style="padding:3px 6px;font-size:10px;text-align:center;" value="1024">
+              </div>
+            </div>
+            <div class="plan-step-row" style="padding:8px;">
+              <div style="display:flex;align-items:center;gap:4px;margin-bottom:4px;">
+                <span class="step-num" style="width:18px;height:18px;font-size:10px;">2</span>
+                <input class="input-usr" style="flex:1;padding:4px 8px;font-size:11px;" value="生成6个表情变体">
+                <button class="btn btn-sm" style="padding:2px 6px;font-size:10px;">✕</button>
+              </div>
+              <div style="display:grid;grid-template-columns:1fr 1fr 36px 36px;gap:4px;padding-left:22px;">
+                <input class="input-usr" style="padding:3px 6px;font-size:10px;" value="6 expression variants">
+                <input class="input-usr" style="padding:3px 6px;font-size:10px;" value="">
+                <input class="input-usr" style="padding:3px 6px;font-size:10px;text-align:center;" value="6">
+                <input class="input-usr" style="padding:3px 6px;font-size:10px;text-align:center;" value="512">
+              </div>
+            </div>
+          </div>
+          <button class="plan-add-step">+ 添加步骤</button>
+          <div class="plan-estimate"><span>预计生成</span><span>7 张图片</span></div>
+          <button class="btn-usr btn-usr-sm btn-usr-primary" style="width:100%;">确认并执行</button>
+        </div>
+      </div>
+      <!-- 技能Tab -->
+      <div style="border:1px solid var(--border-default);border-radius:var(--usr-radius-card);padding:12px;background:var(--usr-bg-paper);">
+        <p style="font-size:11px;font-family:var(--sys-font-label);color:var(--text-tertiary);margin-bottom:8px;">技能 Tab</p>
+        <div class="skill-list">
+          <div class="skill-item selected">
+            <input type="checkbox" checked style="accent-color:var(--accent);">
+            <div><div class="skill-name">壁画风格</div><div class="skill-hint">生成壁画、墙绘风格</div></div>
+          </div>
+          <div class="skill-item">
+            <input type="checkbox">
+            <div><div class="skill-name">水彩插画</div><div class="skill-hint">水彩手绘风格</div></div>
+          </div>
+          <div class="skill-item">
+            <input type="checkbox">
+            <div><div class="skill-name">赛博朋克</div><div class="skill-hint">未来科技风格</div></div>
+          </div>
+        </div>
+        <p style="font-size:11px;color:var(--text-tertiary);margin-top:8px;font-family:var(--usr-font-content);">已选技能将应用于下次生图</p>
+      </div>
+      <!-- AI生成抽屉 -->
+      <div style="border:1px solid var(--border-default);border-radius:var(--sys-radius-sm);overflow:hidden;">
+        <div class="ai-drawer-header">AI 生成规划</div>
+        <div class="ai-drawer-body">
+          <div style="display:flex;flex-direction:column;gap:8px;">
+            <div>
+              <label style="font-size:11px;color:var(--text-secondary);font-family:var(--usr-font-label);display:block;margin-bottom:4px;">描述您的需求</label>
+              <textarea class="textarea-usr" rows="2" style="width:100%;min-height:50px;font-size:12px;" placeholder="创建一个6格表情包系列..."></textarea>
+            </div>
+            <div>
+              <p class="config-label">策略</p>
+              <div class="badge-toggle" style="font-size:9px;"><span class="badge-toggle-item">SINGLE</span><span class="badge-toggle-item">PARALLEL</span><span class="badge-toggle-item active">RADIATE</span><span class="badge-toggle-item">ITERATIVE</span></div>
+            </div>
+            <button class="btn-usr btn-usr-sm btn-usr-primary" style="width:100%;">开始生成</button>
+            <div class="ai-output">
+              <div class="ai-output-text">
+                <p class="analyzing">ANALYZING...</p>
+                <p>已理解：创建表情包系列</p>
+                <p class="acc">> Step 1: 生成基础角色</p>
+                <p class="acc">> Step 2: 生成 6 个表情</p>
+                <p class="done">> 解析完成！已自动填入</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SECTION 7: 管理页面 -->
+  <div class="preview-group">
+    <h2 class="preview-group-title">管理页面（像素骨架 + 用户数据手绘元素）</h2>
+    <div class="section-grid">
+      <div class="section-item" style="grid-column:span 2;">
+        <div class="section-item-title">Dashboard</div>
+        <p class="section-item-sub">像素骨架，数字用用户手写字体</p>
+        <div style="margin-top:12px;display:flex;flex-direction:column;gap:16px;">
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;">
+            <div class="stat-card"><div class="stat-value">156</div><div class="stat-label">总会话数</div></div>
+            <div class="stat-card"><div class="stat-value">428</div><div class="stat-label">生成图片</div></div>
+            <div class="stat-card"><div class="stat-value">892</div><div class="stat-label">生成次数</div></div>
+            <div class="stat-card"><div class="stat-value accent">¥128.50</div><div class="stat-label">累计费用</div></div>
+          </div>
+          <div style="display:flex;gap:12px;">
+            <button class="btn btn-primary"><span style="font-size:14px;">+</span> 新建会话</button>
+            <button class="btn"><span style="font-size:14px;">⚙</span> 管理 API</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="section-item" style="grid-column:span 2;">
+        <div class="section-item-title">ApiManage - 可展开表格</div>
+        <p class="section-item-sub">像素骨架</p>
+        <div style="margin-top:12px;">
+          <table>
+            <thead><tr><th style="width:40px;"></th><th>名称</th><th>API 地址</th><th>模型数</th><th>状态</th><th>操作</th></tr></thead>
+            <tbody>
+              <tr style="background:var(--bg-surface);">
+                <td style="padding:8px;"><span style="cursor:pointer;color:var(--accent);font-size:12px;">▼</span></td>
+                <td style="font-weight:600;">OpenAI</td>
+                <td style="color:var(--text-secondary);">api.openai.com</td>
+                <td>5</td>
+                <td><span class="badge badge-active">启用</span></td>
+                <td><button class="btn btn-sm">测试</button><button class="btn btn-sm">编辑</button><button class="btn btn-sm" style="color:var(--danger);">删除</button></td>
+              </tr>
+              <tr><td colspan="6" style="padding:0;background:var(--bg-base);">
+                <div style="padding:10px 10px 10px 48px;border-top:1px solid var(--border-light);">
+                  <table style="background:transparent;border:none;">
+                    <thead><tr><th style="width:130px;">模型名称</th><th style="width:160px;">模型 ID</th><th>类型</th><th>单价</th><th>状态</th><th>操作</th></tr></thead>
+                    <tbody>
+                      <tr><td>GPT-4o</td><td style="color:var(--text-tertiary);">gpt-4o</td><td><span class="badge" style="background:var(--bg-hover);color:var(--pixel-cyan);border-color:var(--pixel-cyan);">LLM</span></td><td style="font-family:var(--sys-font-data);">¥0.01/1K</td><td><span class="badge badge-active">启用</span></td><td><button class="btn btn-sm">编辑</button></td></tr>
+                      <tr><td>DALL-E 3</td><td style="color:var(--text-tertiary);">dall-e-3</td><td><span class="badge" style="background:var(--bg-hover);color:var(--pixel-magenta);border-color:var(--pixel-magenta);">图像生成</span></td><td style="font-family:var(--sys-font-data);">¥0.08/张</td><td><span class="badge badge-active">启用</span></td><td><button class="btn btn-sm">编辑</button></td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </td></tr>
+              <tr><td style="padding:8px;"><span style="cursor:pointer;color:var(--text-tertiary);font-size:12px;">▶</span></td><td style="font-weight:600;">Claude</td><td style="color:var(--text-secondary);">api.anthropic.com</td><td>3</td><td><span class="badge badge-active">启用</span></td><td><button class="btn btn-sm">测试</button><button class="btn btn-sm">编辑</button><button class="btn btn-sm" style="color:var(--danger);">删除</button></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="section-item">
+        <div class="section-item-title">ApiManage - 供应商抽屉</div>
+        <p class="section-item-sub">像素框架</p>
+        <div style="margin-top:12px;">
+          <div class="drawer">
+            <h4 class="drawer-title">编辑供应商</h4>
+            <div class="drawer-form">
+              <div class="drawer-field"><label>名称</label><input type="text" class="input-field" value="OpenAI" style="width:100%;"></div>
+              <div class="drawer-field"><label>接口地址</label><input type="text" class="input-field" value="api.openai.com" style="width:100%;"></div>
+              <div class="drawer-field"><label>API 密钥</label><input type="password" class="input-field" value="sk-xxxx****5678" style="width:100%;"></div>
+              <div style="display:flex;align-items:center;gap:8px;">
+                <label class="toggle"><input type="checkbox" checked><span class="toggle-track"><span class="toggle-thumb"></span></span></label>
+                <span style="font-size:12px;">启用此供应商</span>
+              </div>
+              <div class="drawer-actions"><button class="btn">取消</button><button class="btn btn-primary">保存</button></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section-item">
+        <div class="section-item-title">ApiManage - 模型抽屉</div>
+        <p class="section-item-sub">像素框架</p>
+        <div style="margin-top:12px;">
+          <div class="drawer">
+            <h4 class="drawer-title">编辑模型</h4>
+            <div class="drawer-form" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+              <div style="grid-column:span 2;"><label style="display:block;font-size:12px;color:var(--text-secondary);margin-bottom:4px;">模型名称</label><input type="text" class="input-field" value="GPT-4o" style="width:100%;"></div>
+              <div style="grid-column:span 2;"><label style="display:block;font-size:12px;color:var(--text-secondary);margin-bottom:4px;">模型 ID</label><input type="text" class="input-field" value="gpt-4o" style="width:100%;"></div>
+              <div><label style="display:block;font-size:12px;color:var(--text-secondary);margin-bottom:4px;">类型</label><select class="select-field"><option selected>LLM</option><option>图像生成</option><option>联网搜索</option></select></div>
+              <div><label style="display:block;font-size:12px;color:var(--text-secondary);margin-bottom:4px;">计费方式</label><select class="select-field"><option>按 Token</option><option>按次数</option></select></div>
+              <div><label style="display:block;font-size:12px;color:var(--text-secondary);margin-bottom:4px;">单价</label><input type="number" class="input-field" value="0.01" style="width:100%;"></div>
+              <div><label style="display:block;font-size:12px;color:var(--text-secondary);margin-bottom:4px;">货币</label><select class="select-field"><option selected>CNY</option><option>USD</option></select></div>
+              <div style="grid-column:span 2;display:flex;align-items:center;gap:8px;"><label class="toggle"><input type="checkbox" checked><span class="toggle-track"><span class="toggle-thumb"></span></span></label><span style="font-size:12px;">启用此模型</span></div>
+              <div class="drawer-actions" style="grid-column:span 2;"><button class="btn">取消</button><button class="btn btn-primary">保存</button></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SECTION 8: 技能/规则/参考图/规划模板 -->
+  <div class="preview-group">
+    <h2 class="preview-group-title">技能 / 规则 / 参考图 / 规划模板管理</h2>
+    <div class="section-grid">
+      <div class="section-item">
+        <div class="section-item-title">SkillManage</div>
+        <p class="section-item-sub">表格=像素，自定义技能=用户手绘</p>
+        <div style="margin-top:12px;">
+          <table>
+            <thead><tr><th>名称</th><th>类型</th><th>描述</th><th>操作</th></tr></thead>
+            <tbody>
+              <tr><td style="font-weight:500;">壁画风格</td><td><span class="badge" style="background:var(--pixel-cyan);color:#1A1A1E;">内置</span></td><td style="color:var(--text-secondary);font-size:12px;">生成壁画、墙绘风格</td><td><button class="btn btn-sm">查看</button></td></tr>
+              <tr><td style="font-weight:500;font-family:var(--usr-font-title);transform:rotate(-0.3deg);display:inline-block;">我的自定义技能</td><td><span class="badge badge-inactive">自定义</span></td><td style="color:var(--text-secondary);font-size:12px;font-family:var(--usr-font-content);">用户自定义的技能模板</td><td><button class="btn btn-sm">编辑</button><button class="btn btn-sm" style="color:var(--danger);">删除</button></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="section-item">
+        <div class="section-item-title">RuleManage</div>
+        <p class="section-item-sub">像素骨架，Toggle 开关</p>
+        <div style="margin-top:12px;">
+          <table>
+            <thead><tr><th>名称</th><th>类型</th><th>优先级</th><th>状态</th><th>操作</th></tr></thead>
+            <tbody>
+              <tr><td style="font-weight:500;">默认负面提示词</td><td style="font-size:12px;color:var(--text-secondary);">过滤器</td><td>1</td><td><label class="toggle"><input type="checkbox" checked><span class="toggle-track"><span class="toggle-thumb"></span></span></label></td><td><button class="btn btn-sm">编辑</button></td></tr>
+              <tr><td style="font-weight:500;">高质量出图</td><td style="font-size:12px;color:var(--text-secondary);">默认参数</td><td>2</td><td><label class="toggle"><input type="checkbox" checked><span class="toggle-track"><span class="toggle-thumb"></span></span></label></td><td><button class="btn btn-sm">编辑</button></td></tr>
+              <tr><td style="font-weight:500;">禁用 NSFW</td><td style="font-size:12px;color:var(--text-secondary);">工作流</td><td>0</td><td><label class="toggle"><input type="checkbox"><span class="toggle-track"><span class="toggle-thumb"></span></span></label></td><td><button class="btn btn-sm">编辑</button></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="section-item">
+        <div class="section-item-title">ReferenceManage</div>
+        <p class="section-item-sub">混合：骨架=像素，缩略图/滑块=用户手绘</p>
+        <div style="margin-top:12px;">
+          <table>
+            <thead><tr><th style="width:40px;"><input type="checkbox"></th><th>预览</th><th>文件名</th><th>强度</th><th>操作</th></tr></thead>
+            <tbody>
+              <tr>
+                <td><input type="checkbox" checked></td>
+                <td><div style="width:48px;height:48px;border-radius:var(--usr-radius);overflow:hidden;border:var(--usr-border);box-shadow:var(--usr-shadow);background:var(--usr-bg-paper);padding:2px;transform:rotate(-0.5deg);"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48'%3E%3Crect fill='%23E8A87C' width='48' height='48'/%3E%3C/svg%3E" style="width:100%;height:100%;object-fit:cover;border-radius:calc(var(--usr-radius)-1px);" alt=""></div></td>
+                <td style="font-size:12px;">cat_reference.png</td>
+                <td><div style="display:flex;align-items:center;gap:8px;"><input type="range" min="0" max="100" value="75" style="width:80px;"><span style="font-size:11px;color:var(--text-tertiary);font-family:var(--sys-font-data);">0.75</span></div></td>
+                <td><button class="btn btn-sm">删除</button></td>
+              </tr>
+              <tr>
+                <td><input type="checkbox"></td>
+                <td><div style="width:48px;height:48px;border-radius:var(--usr-radius);overflow:hidden;border:var(--usr-border);display:flex;align-items:center;justify-content:center;background:var(--usr-bg-paper);"><span style="font-size:10px;color:var(--text-tertiary);font-family:var(--usr-font-label);">.TXT</span></div></td>
+                <td style="font-size:12px;">prompt_template.txt</td>
+                <td>-</td>
+                <td><button class="btn btn-sm">删除</button></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="section-item">
+        <div class="section-item-title">PlanTemplateManage</div>
+        <p class="section-item-sub">混合：表格/AI抽屉=像素，模板名称/编辑=用户手绘</p>
+        <div style="margin-top:12px;">
+          <table>
+            <thead><tr><th>模板名称</th><th>策略</th><th>步骤数</th><th>操作</th></tr></thead>
+            <tbody>
+              <tr><td style="font-weight:500;font-family:var(--usr-font-title);transform:rotate(-0.3deg);display:inline-block;">表情包系列</td><td><span class="badge" style="background:var(--pixel-magenta);color:#1A1A1E;">RADIATE</span></td><td>4</td><td><button class="btn btn-sm">编辑</button><button class="btn btn-sm">AI 生成</button><button class="btn btn-sm" style="color:var(--danger);">删除</button></td></tr>
+              <tr><td style="font-weight:500;">迭代精修</td><td><span class="badge" style="background:var(--pixel-cyan);color:#1A1A1E;">ITERATIVE</span></td><td>3</td><td><button class="btn btn-sm">编辑</button><button class="btn btn-sm">AI 生成</button><button class="btn btn-sm" style="color:var(--danger);">删除</button></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SECTION 9: Settings + 通用组件 -->
+  <div class="preview-group">
+    <h2 class="preview-group-title">Settings + 通用组件</h2>
+    <div class="section-grid">
+      <div class="section-item" style="grid-column:span 2;">
+        <div class="section-item-title">Settings 页面</div>
+        <p class="section-item-sub">像素骨架</p>
+        <div style="margin-top:12px;display:grid;grid-template-columns:repeat(4,1fr);gap:16px;">
+          <div>
+            <p style="font-size:12px;font-weight:600;margin-bottom:8px;">默认模型配置</p>
+            <div style="display:flex;flex-direction:column;gap:8px;">
+              <div><label style="display:block;font-size:11px;color:var(--text-secondary);margin-bottom:3px;">默认 LLM</label><select class="select-field"><option selected>GPT-4o</option><option>Claude 3.5</option></select></div>
+              <div><label style="display:block;font-size:11px;color:var(--text-secondary);margin-bottom:3px;">默认图像</label><select class="select-field"><option selected>DALL-E 3</option></select></div>
+              <div><label style="display:block;font-size:11px;color:var(--text-secondary);margin-bottom:3px;">默认搜索</label><select class="select-field"><option selected>Serper</option></select></div>
+            </div>
+          </div>
+          <div>
+            <p style="font-size:12px;font-weight:600;margin-bottom:8px;">默认图像尺寸</p>
+            <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;">
+              <button class="count-btn active">1:1</button><button class="count-btn">4:3</button><button class="count-btn">3:4</button><button class="count-btn">16:9</button><button class="count-btn">9:16</button>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px;">
+              <input type="number" class="size-input" value="1024" style="width:70px;"><span class="size-sep">×</span><input type="number" class="size-input" value="1024" style="width:70px;">
+              <label style="display:flex;align-items:center;gap:4px;margin-left:8px;font-size:11px;color:var(--text-secondary);"><input type="checkbox">不限</label>
+            </div>
+          </div>
+          <div>
+            <p style="font-size:12px;font-weight:600;margin-bottom:8px;">通用设置</p>
+            <div style="display:flex;flex-direction:column;gap:8px;">
+              <div style="display:flex;justify-content:space-between;align-items:center;">
+                <span style="font-size:12px;">最大并发数</span><input type="number" class="input-field" value="4" style="width:60px;text-align:center;"></div>
+              <div style="display:flex;justify-content:space-between;align-items:center;">
+                <span style="font-size:12px;">搜索重试</span><input type="number" class="input-field" value="3" style="width:60px;text-align:center;"></div>
+              </div>
+            </div>
+          </div>
+          <div>
+            <p style="font-size:12px;font-weight:600;margin-bottom:8px;">数据管理</p>
+            <div style="display:flex;flex-direction:column;gap:8px;">
+              <div style="display:flex;gap:8px;"><button class="btn" style="flex:1;">导出</button><button class="btn" style="flex:1;">导入</button></div>
+              <button class="btn btn-danger" style="width:100%;">清除缓存</button>
+            </div>
+          </div>
+        </div>
+        <div style="margin-top:16px;">
+          <p style="font-size:11px;color:var(--text-tertiary);margin-bottom:8px;font-family:var(--usr-font-label);">Toast 通知</p>
+          <div style="display:flex;gap:12px;flex-wrap:wrap;">
+            <div class="toast toast-success"><span style="color:var(--success);">✓</span><span>设置已保存</span></div>
+            <div class="toast toast-warning"><span style="color:var(--warning);">⚠</span><span>操作失败，请重试</span></div>
+            <div class="toast toast-error"><span style="color:var(--danger);">✕</span><span>会话已删除</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section-item">
+        <div class="section-item-title">Toggle 开关</div>
+        <div style="margin-top:12px;display:flex;flex-direction:column;gap:12px;">
+          <label style="display:flex;align-items:center;gap:12px;cursor:pointer;">
+            <label class="toggle"><input type="checkbox" checked><span class="toggle-track"><span class="toggle-thumb"></span></span></label>
+            <span style="font-size:13px;">启用此功能</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:12px;cursor:pointer;">
+            <label class="toggle"><input type="checkbox"><span class="toggle-track"><span class="toggle-thumb"></span></span></label>
+            <span style="font-size:13px;">禁用此功能</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="section-item">
+        <div class="section-item-title">Slider 滑块</div>
+        <div style="margin-top:12px;display:flex;flex-direction:column;gap:16px;">
+          <div class="slider-wrap">
+            <div class="slider-header"><span class="slider-label">强度</span><span class="slider-value">75%</span></div>
+            <input type="range" min="0" max="100" value="75">
+          </div>
+          <div class="slider-wrap">
+            <div class="slider-header"><span class="slider-label">音量</span><span class="slider-value" style="color:var(--text-tertiary);">50%</span></div>
+            <input type="range" min="0" max="100" value="50">
+          </div>
+        </div>
+      </div>
+
+      <div class="section-item">
+        <div class="section-item-title">Empty 空状态</div>
+        <div style="margin-top:12px;">
+          <div class="empty-state">
+            <div class="empty-icon">📭</div>
+            <div class="empty-title">暂无数据</div>
+            <div class="empty-desc">点击上方按钮创建第一个会话</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section-item">
+        <div class="section-item-title">Skeleton 骨架屏</div>
+        <div style="margin-top:12px;display:flex;flex-direction:column;gap:12px;">
+          <div style="display:flex;gap:12px;align-items:center;">
+            <div class="skeleton skeleton-round" style="width:48px;height:48px;"></div>
+            <div style="flex:1;display:flex;flex-direction:column;gap:6px;">
+              <div class="skeleton" style="height:14px;width:60%;"></div>
+              <div class="skeleton" style="height:12px;width:40%;"></div>
+            </div>
+          </div>
+          <div class="skeleton" style="height:80px;"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SECTION 10: 主界面完整布局 -->
+  <div class="preview-group">
+    <h2 class="preview-group-title">主界面 - 完整布局（含全局导航）</h2>
+    <p class="section-item-sub" style="margin-top:8px;margin-bottom:16px;">6个区域：Global Nav / Topbar / Left Sidebar / Center / ContextStrip / Right Sidebar</p>
+    <div style="margin-top:12px;">
+      <div class="app-layout">
+        <!-- 1. Global Nav - 全局左侧导航 -->
+        <div class="global-nav">
+          <div class="nav-brand">
+            <div class="logo-pixels" style="gap:3px;justify-content:center;"><span class="logo-pixel" style="width:10px;height:10px;"></span><span class="logo-pixel" style="width:10px;height:10px;"></span><span class="logo-pixel" style="width:10px;height:10px;"></span></div>
+          </div>
+          <nav class="nav-menu">
+            <button class="nav-item active" title="Dashboard">
+              <span class="nav-icon">◫</span>
+              <span class="nav-label">仪表盘</span>
+            </button>
+            <button class="nav-item" title="API管理">
+              <span class="nav-icon">⚡</span>
+              <span class="nav-label">API</span>
+            </button>
+            <button class="nav-item" title="技能管理">
+              <span class="nav-icon">★</span>
+              <span class="nav-label">技能</span>
+            </button>
+            <button class="nav-item" title="规则管理">
+              <span class="nav-icon">⚙</span>
+              <span class="nav-label">规则</span>
+            </button>
+            <button class="nav-item" title="参考图库">
+              <span class="nav-icon">◻</span>
+              <span class="nav-label">参考</span>
+            </button>
+            <button class="nav-item" title="计划模板">
+              <span class="nav-icon">☰</span>
+              <span class="nav-label">模板</span>
+            </button>
+          </nav>
+          <div class="nav-footer">
+            <button class="nav-item" title="设置">
+              <span class="nav-icon">⚙</span>
+              <span class="nav-label">设置</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- 主体区域 -->
+        <div class="main-area">
+          <!-- 2. Topbar - 顶部栏 -->
+          <div class="topbar">
+            <div class="topbar-brand">
+              <span style="font-weight:700;font-size:14px;">LamImager</span>
+            </div>
+            <div class="topbar-billing">
+              <span class="billing-label">本月费用</span>
+              <span class="billing-value">¥128.50</span>
+            </div>
+          </div>
+
+          <!-- 主体内容 -->
+          <div class="main-body">
+            <!-- 3. Left Sidebar - 会话列表 -->
+            <div class="main-sidebar">
+              <div style="padding:8px;">
+                <button class="btn btn-primary" style="width:100%;margin-bottom:8px;font-size:11px;padding:10px 16px;">
+                  <span style="font-size:14px;">+</span> 新建会话
+                </button>
+              </div>
+              <div class="session-list" style="flex:1;overflow-y:auto;padding:4px 8px;">
+                <div class="session-item active" style="margin:4px 0;">
+                  <div class="session-title">猫咪主题创作</div>
+                  <div class="session-meta"><span>¥2.50</span><span class="status-badge generating"><span class="status-dot spinning"></span>生成中</span></div>
+                </div>
+                <div class="session-item">
+                  <div class="session-title">风景插画系列</div>
+                  <div class="session-meta"><span>¥5.80</span></div>
+                </div>
+                <div class="session-item">
+                  <div class="session-title">角色设计 - 武士</div>
+                  <div class="session-meta"><span>¥0.00</span></div>
+                </div>
+                <div class="session-item">
+                  <div class="session-title">Logo 设计提案</div>
+                  <div class="session-meta"><span>¥12.30</span></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 4. Center - 消息区域 -->
+            <div class="main-chat">
+              <!-- 消息列表 -->
+              <div class="message-list" style="flex:1;padding:16px;overflow-y:auto;">
+                <div class="text-message user">画一只可爱的猫咪</div>
+                <div class="text-message assistant">好的，我来为您生成一张可爱的猫咪图片。</div>
+                <div class="agent-stream-card">
+                  <div class="stream-header">
+                    <span class="agent-badge">AGENT</span>
+                    <span class="stream-cost">¥0.0089</span>
+                    <span class="stream-status tool_running">执行工具中...</span>
+                    <span class="stream-progress">1/4</span>
+                  </div>
+                  <div class="stream-body">
+                    <div class="stream-timeline">
+                      <div class="timeline-line"></div>
+                      <div class="timeline-node done"><span class="node-dot"></span><span class="node-label">intent</span></div>
+                      <div class="timeline-node done"><span class="node-dot"></span><span class="node-label">skill</span></div>
+                      <div class="timeline-node running"><span class="node-dot"></span><span class="node-label">generate</span></div>
+                      <div class="timeline-node"><span class="node-dot"></span><span class="node-label">critic</span></div>
+                    </div>
+                    <div class="stream-content">
+                      <div class="stream-text">正在生成图像，请稍候<span class="typing-cursor"></span></div>
+                      <div class="step-images">
+                        <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='80' viewBox='0 0 80 80'%3E%3Crect fill='%23333' width='80' height='80'/%3E%3Crect fill='%23E8A87C' x='20' y='20' width='40' height='40'/%3E%3C/svg%3E" class="step-thumb" alt="">
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="image-message">
+                  <p style="margin-bottom:8px;font-size:13px;">已为您生成 4 张猫咪图片：</p>
+                  <div class="image-grid">
+                    <div class="image-item"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='150' viewBox='0 0 150 150'%3E%3Crect fill='%23E8A87C' width='150' height='150'/%3E%3Crect fill='%23fff' x='50' y='40' width='50' height='40'/%3E%3Crect fill='%23333' x='60' y='50' width='10' height='10'/%3E%3Crect fill='%23333' x='80' y='50' width='10' height='10'/%3E%3C/svg%3E" alt=""></div>
+                    <div class="image-item"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='150' viewBox='0 0 150 150'%3E%3Crect fill='%237FDBDA' width='150' height='150'/%3E%3Crect fill='%23fff' x='50' y='40' width='50' height='40'/%3E%3Crect fill='%23333' x='60' y='50' width='10' height='10'/%3E%3Crect fill='%23333' x='80' y='50' width='10' height='10'/%3E%3C/svg%3E" alt=""></div>
+                    <div class="image-item"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='150' viewBox='0 0 150 150'%3E%3Crect fill='%23C77DFF' width='150' height='150'/%3E%3Crect fill='%23fff' x='50' y='40' width='50' height='40'/%3E%3Crect fill='%23333' x='60' y='50' width='10' height='10'/%3E%3Crect fill='%23333' x='80' y='50' width='10' height='10'/%3E%3C/svg%3E" alt=""></div>
+                    <div class="image-item"><img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='150' viewBox='0 0 150 150'%3E%3Crect fill='%23F8E16C' width='150' height='150'/%3E%3Crect fill='%23fff' x='50' y='40' width='50' height='40'/%3E%3Crect fill='%23333' x='60' y='50' width='10' height='10'/%3E%3Crect fill='%23333' x='80' y='50' width='10' height='10'/%3E%3C/svg%3E" alt=""></div>
+                  </div>
+                  <div class="image-actions" style="margin-top:12px;">
+                    <button class="btn-usr btn-usr-sm">下载选中</button>
+                    <button class="btn-usr btn-usr-sm">全部下载</button>
+                    <button class="btn-usr btn-usr-sm">对比选中</button>
+                    <button class="btn-usr btn-usr-sm btn-usr-primary">精修</button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 5. Context Strip - 参考图区域 -->
+              <div class="context-area" style="padding:8px 16px;border-top:1px solid var(--border-light);background:var(--bg-elevated);">
+                <div class="context-strip" style="min-height:40px;">
+                  <div class="context-strip-item">
+                    <div class="context-strip-thumb-wrap">
+                      <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='36' height='36' viewBox='0 0 36 36'%3E%3Crect fill='%23333' width='36' height='36'/%3E%3C/svg%3E" class="context-strip-thumb" alt="">
+                      <span class="context-strip-badge">1</span>
+                      <button class="context-strip-remove">✕</button>
+                    </div>
+                    <span class="context-strip-label">上传</span>
+                  </div>
+                  <div class="context-strip-item">
+                    <div class="context-strip-thumb-wrap">
+                      <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='36' height='36' viewBox='0 0 36 36'%3E%3Crect fill='%23444' width='36' height='36'/%3E%3C/svg%3E" class="context-strip-thumb" alt="">
+                      <span class="context-strip-badge">2</span>
+                    </div>
+                    <span class="context-strip-label">上下文</span>
+                  </div>
+                  <div class="context-strip-add">+</div>
+                </div>
+              </div>
+
+              <!-- 6. Composer - 输入区域 -->
+              <div class="composer-area" style="padding:12px 16px;background:var(--bg-base);border-top:3px solid transparent;border-image:linear-gradient(90deg,var(--pixel-cyan),var(--pixel-magenta),var(--pixel-yellow),var(--pixel-cyan)) 1;position:relative;">
+                <div class="composer-controls">
+                  <div class="composer-options">
+                    <span class="composer-label">数量:</span>
+                    <button class="count-btn active">1</button>
+                    <button class="count-btn">2</button>
+                    <button class="count-btn">4</button>
+                    <button class="count-btn">8</button>
+                    <span class="composer-label" style="margin-left:8px;">尺寸:</span>
+                    <input type="number" class="size-input" value="1024">
+                    <span class="size-sep">×</span>
+                    <input type="number" class="size-input" value="1024">
+                    <label style="display:flex;align-items:center;gap:4px;margin-left:8px;font-size:11px;color:var(--text-secondary);"><input type="checkbox">不限</label>
+                  </div>
+                  <div class="composer-actions">
+                    <button class="upload-btn" title="上传图片">🖼</button>
+                    <button class="upload-btn" title="上传文档">📄</button>
+                    <button class="btn-usr btn-usr-sm">智能</button>
+                    <button class="btn-usr btn-usr-sm btn-usr-primary">发送</button>
+                  </div>
+                </div>
+                <div style="margin-top:8px;">
+                  <textarea class="textarea-usr" rows="2" placeholder="描述您想要创作的图像..." style="width:100%;min-height:60px;max-height:120px;"></textarea>
+                </div>
+              </div>
+            </div>
+
+            <!-- 7. Right Sidebar - 助手侧边栏 -->
+            <div class="assistant-panel" style="width:300px;background:var(--bg-elevated);border-left:2px solid var(--border-strong);display:flex;flex-direction:column;">
+              <div class="tabs" style="padding:8px 12px;gap:4px;display:flex;align-items:center;">
+                <button class="tab-btn active" style="font-size:10px;padding:6px 10px;">对话</button>
+                <button class="tab-btn" style="font-size:10px;padding:6px 10px;">优化</button>
+                <button class="tab-btn" style="font-size:10px;padding:6px 10px;">规划</button>
+                <button class="tab-btn" style="font-size:10px;padding:6px 10px;">技能</button>
+                <div style="flex:1;"></div>
+                <label for="settings-toggle" class="btn-icon" style="width:26px;height:26px;font-size:12px;cursor:pointer;display:flex;align-items:center;justify-content:center;border:none;background:transparent;" title="配置">⚙</label>
+                <input type="checkbox" id="settings-toggle" style="display:none;">
+              </div>
+              <!-- 配置面板 - 可折叠 -->
+              <div class="dialog-settings" style="padding:8px 12px;background:var(--bg-base);border-bottom:1px solid var(--border-light);display:none;">
+                <div style="margin-bottom:8px;">
+                  <div style="font-size:9px;color:var(--text-tertiary);margin-bottom:4px;font-family:var(--sys-font-label);">响应风格</div>
+                  <div style="display:flex;gap:4px;">
+                    <button class="btn btn-sm active" style="font-size:9px;padding:4px 8px;">默认</button>
+                    <button class="btn btn-sm" style="font-size:9px;padding:4px 8px;">详细</button>
+                    <button class="btn btn-sm" style="font-size:9px;padding:4px 8px;">简洁</button>
+                  </div>
+                </div>
+                <div style="display:flex;gap:12px;font-size:9px;color:var(--text-tertiary);">
+                  <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="radio" name="ctx" checked> 共享上下文</label>
+                  <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="radio" name="ctx"> 仅当前</label>
+                </div>
+                <div style="display:flex;gap:12px;font-size:9px;color:var(--text-tertiary);margin-top:4px;">
+                  <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="radio" name="mem" checked> 全局记忆</label>
+                  <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="radio" name="mem"> 仅会话</label>
+                </div>
+              </div>
+              <style>
+                #settings-toggle:checked ~ .dialog-settings { display: block !important; }
+              </style>
+              <div class="assistant-content" style="flex:1;padding:12px;overflow-y:auto;">
+                <div class="dialog-bubbles" style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px;">
+                  <div class="text-message user" style="max-width:90%;align-self:flex-end;font-size:13px;">帮我画一个logo</div>
+                  <div class="text-message assistant" style="max-width:90%;align-self:flex-start;font-size:13px;">请问您需要什么风格的 Logo 呢？</div>
+                </div>
+                <div class="dialog-input-wrap" style="margin-top:auto;">
+                  <textarea class="dialog-textarea" placeholder="输入消息..." style="width:100%;min-height:48px;"></textarea>
+                  <div class="dialog-input-actions" style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;">
+                    <div class="dialog-input-tools" style="display:flex;gap:4px;">
+                      <button class="upload-btn" style="width:28px;height:28px;font-size:12px;" title="上传图片">🖼</button>
+                      <button class="upload-btn" style="width:28px;height:28px;font-size:12px;" title="网络搜索">🔍</button>
+                    </div>
+                    <button class="btn-usr btn-usr-sm btn-usr-primary">发送</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

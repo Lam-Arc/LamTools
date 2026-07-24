@@ -1,0 +1,8 @@
+{
+  "name": "goal",
+  "title": "目标",
+  "description": "查看、取消或创建一个持续监管当前任务的 Goal",
+  "icon": "target",
+  "action": "run_action",
+  "accepts_args": true
+}

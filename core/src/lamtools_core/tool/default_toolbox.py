@@ -57,7 +57,6 @@ class SubAgentRunner(Protocol):
         parent_turn_id: str = "",
     ) -> SubAgentRunResult | str: ...
 
-DEFAULT_MAX_WRITE_LENGTH = 500_000
 DEFAULT_COMMAND_TIMEOUT = 120
 
 
@@ -501,7 +500,6 @@ class CoreToolbox:
         *,
         work_root: str | Path,
         command_timeout: int = DEFAULT_COMMAND_TIMEOUT,
-        max_write_length: int = DEFAULT_MAX_WRITE_LENGTH,
         max_list_items: int = DEFAULT_MAX_LIST_ITEMS,
         max_text_length: int = DEFAULT_MAX_TEXT_LENGTH,
         max_search_results: int = DEFAULT_MAX_SEARCH_RESULTS,
@@ -553,7 +551,6 @@ class CoreToolbox:
         self._specs = [*default_core_tool_specs(), *list(mcp_tool_specs or []), *durable_specs]
         self._handlers = self._build_handlers(
             command_timeout=command_timeout,
-            max_write_length=max_write_length,
             max_list_items=max_list_items,
             max_text_length=max_text_length,
             max_search_results=max_search_results,
@@ -639,7 +636,6 @@ class CoreToolbox:
         self,
         *,
         command_timeout: int,
-        max_write_length: int,
         max_list_items: int,
         max_text_length: int,
         max_search_results: int,
@@ -796,9 +792,9 @@ class CoreToolbox:
                 max_text_length=max_text_length,
             ),
             "load_skill": load_skill,
-            "write_file": make_write_file_handler(self.work_root, max_write_length=max_write_length),
+            "write_file": make_write_file_handler(self.work_root),
             "write_spreadsheet": lambda call: write_spreadsheet_tool(call, work_root=self.work_root),
-            "edit_file": make_edit_file_handler(self.work_root, max_write_length=max_write_length),
+            "edit_file": make_edit_file_handler(self.work_root),
             "run_command": command_handlers.run_command,
             "run_tests": command_handlers.run_tests,
             "git_status": make_git_status_handler(
@@ -847,7 +843,6 @@ def _default_display(category: str) -> dict[str, Any]:
 __all__ = [
     "CoreToolbox",
     "DEFAULT_COMMAND_TIMEOUT",
-    "DEFAULT_MAX_WRITE_LENGTH",
     "DEFAULT_TOOL_CATEGORIES",
     "DEFAULT_TOOL_FAILURE_MODES",
     "DEFAULT_TOOL_ORDER",

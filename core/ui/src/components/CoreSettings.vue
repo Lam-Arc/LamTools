@@ -137,6 +137,7 @@
                     <span>{{ model.model_id || model.id }}{{ model.thinking_supported ? ' · 支持推理' : '' }}</span>
                   </div>
                   <div class="row-actions">
+                    <button class="text-btn" :class="{ active: model.is_default }" type="button" :data-model-default="model.id" @click="$emit('set-default-model', model.id)">{{ model.is_default ? '★ 默认' : '☆ 默认' }}</button>
                     <button class="text-btn" type="button" :data-model-edit="model.id" @click="startModelUpdate(model)">编辑</button>
                     <button class="text-btn danger" type="button" :data-model-delete="model.id" @click="$emit('delete-model', model.id)">删除</button>
                   </div>
@@ -264,6 +265,7 @@ export interface CoreSettingsModel {
   thinking_supported?: boolean
   thinking_budget?: number
   temperature?: number
+  is_default?: boolean
   extra?: Record<string, unknown> | null
 }
 
@@ -331,6 +333,7 @@ const emit = defineEmits<{
   'create-model': [payload: CoreSettingsModelPayload]
   'update-model': [payload: CoreSettingsModelPayload]
   'delete-model': [modelRecordId: string]
+  'set-default-model': [modelId: string]
 }>()
 
 const sections: SettingsSection[] = [

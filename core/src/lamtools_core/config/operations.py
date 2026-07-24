@@ -182,6 +182,7 @@ def build_shared_config_operation_catalog(
                 "thinking_budget": params.get("thinking_budget"),
                 "temperature": params.get("temperature"),
                 "extra": params.get("extra"),
+                "is_default": params.get("is_default"),
             }.items()
             if value is not None
         }
@@ -237,7 +238,7 @@ def build_shared_config_operation_catalog(
                 setting = AppSetting(namespace=namespace, value=dict(value))
                 db.add(setting)
             else:
-                setting.value = dict(value)
+                setting.value = {**(setting.value or {}), **dict(value)}
             await db.commit()
             return {"namespace": namespace, "value": setting.value}
 

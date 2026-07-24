@@ -338,11 +338,9 @@ class WorkspaceReadOnlyTools:
 
 def make_write_file_handler(
     work_root: Path,
-    *,
-    max_write_length: int,
 ) -> Callable[[ToolCall], Awaitable[ToolResult]]:
     async def write_file(call: ToolCall) -> ToolResult:
-        return await write_file_tool(call, work_root=work_root, max_write_length=max_write_length)
+        return await write_file_tool(call, work_root=work_root)
 
     return write_file
 
@@ -434,11 +432,9 @@ async def document_normalize_tool(
 
 def make_edit_file_handler(
     work_root: Path,
-    *,
-    max_write_length: int,
 ) -> Callable[[ToolCall], Awaitable[ToolResult]]:
     async def edit_file(call: ToolCall) -> ToolResult:
-        return await edit_file_tool(call, work_root=work_root, max_write_length=max_write_length)
+        return await edit_file_tool(call, work_root=work_root)
 
     return edit_file
 
@@ -447,7 +443,6 @@ async def write_file_tool(
     call: ToolCall,
     *,
     work_root: Path,
-    max_write_length: int,
 ) -> ToolResult:
     args = call.arguments if isinstance(call.arguments, dict) else {}
     path_str = args.get("path", "")
@@ -464,14 +459,6 @@ async def write_file_tool(
         resolved = validate_workspace_path(path_str, work_root)
     except ValueError as exc:
         return ToolResult(call_id=call.id, name=call.name, status="failed", error=str(exc))
-
-    if len(content) > max_write_length:
-        return ToolResult(
-            call_id=call.id,
-            name=call.name,
-            status="failed",
-            error=f"Content length {len(content)} exceeds max_write_length {max_write_length}",
-        )
 
     try:
         resolved.parent.mkdir(parents=True, exist_ok=True)
@@ -548,7 +535,6 @@ async def edit_file_tool(
     call: ToolCall,
     *,
     work_root: Path,
-    max_write_length: int,
 ) -> ToolResult:
     args = call.arguments if isinstance(call.arguments, dict) else {}
     path_str = args.get("path", "")
@@ -598,14 +584,6 @@ async def edit_file_tool(
     match_offset = content.find(old_string)
     match_line_no = content.count("\n", 0, match_offset) + 1
     new_content = content.replace(old_string, new_string, 1)
-
-    if len(new_content) > max_write_length:
-        return ToolResult(
-            call_id=call.id,
-            name=call.name,
-            status="failed",
-            error=f"Resulting file length {len(new_content)} exceeds max_write_length {max_write_length}",
-        )
 
     try:
         resolved.write_text(new_content, encoding="utf-8")

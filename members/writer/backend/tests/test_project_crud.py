@@ -227,7 +227,7 @@ async def test_project_session_creation_rejects_missing_or_deleted_projects(tmp_
             params={"project_id": project_id, "title": "Inside project"},
             session_factory=session_factory,
         )
-        assert session.response["result"]["session"]["project_id"] == project_id
+        assert session.response["result"]["session"]["work_root"] == str(tmp_path / "workspace")
 
         deleted = await handle_project_delete_operation(
             request_id=3,
@@ -381,7 +381,7 @@ async def test_rest_session_work_root_updates_preserve_project_ownership_without
             )
             assert created_root.is_dir()
             assert not (created_root / ".git").exists()
-            assert created["project_id"]
+            assert created["work_root"]
 
             with pytest.raises(HTTPException, match="Project work_root is immutable"):
                 await update_session(
@@ -400,7 +400,6 @@ async def test_rest_session_work_root_updates_preserve_project_ownership_without
                 db,
             )
             assert assigned["work_root"] == str(updated_root.resolve())
-            assert assigned["project_id"]
             assert updated_root.is_dir()
             assert not (updated_root / ".git").exists()
     finally:

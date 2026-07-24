@@ -405,7 +405,7 @@ class WriterKit:
     ) -> None:
         if state.metadata is None:
             state.metadata = {}
-        for key in ("model_id", "project_id", "thinking_enabled", "thinking_budget", "shallow_thinking_enabled"):
+        for key in ("model_id", "work_root", "thinking_enabled", "thinking_budget", "shallow_thinking_enabled"):
             if key in turn_input.metadata:
                 state.metadata[key] = turn_input.metadata[key]
         if self._agent_llm_client is not None and "thinking_budget" in turn_input.metadata:
@@ -455,7 +455,7 @@ class WriterKit:
         ))
         messages.append(ChatMessage(
             role="system",
-            content=f"当前项目: {state.metadata.get('project_id', '')}, 当前会话: {state.session_id}, 当前模型: {state.metadata.get('model_id', 'default')}",
+            content=f"当前项目: {state.metadata.get('work_root', '')}, 当前会话: {state.session_id}, 当前模型: {state.metadata.get('model_id', 'default')}",
             metadata={"key": "session_context", "kind": "context"},
         ))
         messages.append(ChatMessage(
@@ -1143,7 +1143,7 @@ async def run_core_kernel(
         run_id=run_id,
         turn_id=turn_id,
         metadata={"session_id": session_id, "goal_id": str(goal_id or ""),
-                    "project_id": str(project_id or ""), "model_id": str(model_id or "").strip()},
+                    "work_root": str(work_root or ""), "model_id": str(model_id or "").strip()},
         guidance_source=guidance_source,
         guidance_finalizer=guidance_finalizer,
     )

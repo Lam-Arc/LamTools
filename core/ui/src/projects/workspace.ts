@@ -62,7 +62,7 @@ export function createCoreProjectWorkspaceActions(options: CoreProjectWorkspaceO
       const project = options.projects.value.find((item) => item.id === projectId)
       if (!project) return undefined
       const deletedSessionIds = options.sessions.value
-        .filter((session) => session.metadata?.project_id === project.id)
+        .filter((session) => session.metadata?.work_root === project.workRoot)
         .map((session) => session.id)
       const wasActive = Boolean(options.activeSessionId.value && deletedSessionIds.includes(options.activeSessionId.value))
 

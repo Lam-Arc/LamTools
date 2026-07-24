@@ -3251,20 +3251,6 @@ class TestReadWriteWriteFile:
         assert "outside work_root" in result.error
 
     @pytest.mark.asyncio
-    async def test_write_file_content_length_exceeded(self, tmp_path):
-        """Content exceeding max_write_length is rejected."""
-        work_root = tmp_path / "project"
-        work_root.mkdir()
-
-        executor = ReadWriteToolExecutor(work_root, max_write_length=100)
-        big_content = "x" * 200
-        call = ToolCall(id="w6", name="write_file", arguments={"path": "big.txt", "content": big_content})
-        result = await executor.write_file(call)
-
-        assert result.status == "failed"
-        assert "exceeds max_write_length" in result.error
-
-    @pytest.mark.asyncio
     async def test_write_file_missing_path(self, tmp_path):
         """Missing 'path' argument returns failed result."""
         work_root = tmp_path / "project"
@@ -3455,24 +3441,6 @@ class TestReadWriteEditFile:
         assert result.status == "failed"
         assert "new_string" in result.error
         assert (work_root / "a.py").read_text(encoding="utf-8") == "x = 1\n"
-
-    @pytest.mark.asyncio
-    async def test_edit_file_resulting_length_exceeded(self, tmp_path):
-        """edit_file fails when resulting file exceeds max_write_length."""
-        work_root = tmp_path / "project"
-        work_root.mkdir()
-        (work_root / "big.py").write_text("x = 1\n", encoding="utf-8")
-
-        executor = ReadWriteToolExecutor(work_root, max_write_length=10)
-        call = ToolCall(
-            id="e8",
-            name="edit_file",
-            arguments={"path": "big.py", "old_string": "x = 1", "new_string": "x" * 200},
-        )
-        result = await executor.edit_file(call)
-
-        assert result.status == "failed"
-        assert "exceeds max_write_length" in result.error
 
     @pytest.mark.asyncio
     async def test_edit_file_multiline_replacement(self, tmp_path):

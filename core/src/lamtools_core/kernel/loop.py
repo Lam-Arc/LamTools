@@ -353,7 +353,6 @@ class CoreLoopKernel:
         error_msg = ""
         recent_tool_result_fingerprints: list[str] = []
         recent_successful_payloads: list[dict[str, Any]] = []
-        recent_successful_outputs: list[dict[str, Any]] = []
         explicit_input_errors: dict[str, ToolResult] = {}
         diagnosis_failed_calls: dict[str, ToolResult] = {}
         failure_diagnosis_pending = False
@@ -634,11 +633,11 @@ class CoreLoopKernel:
                     if callable(preflight):
                         maybe_blocked = await preflight(state, turn.tool_calls)
                         if isinstance(maybe_blocked, dict):
-                            blocked_results = {
+                            blocked_results.update({
                                 str(call_id): result
                                 for call_id, result in maybe_blocked.items()
                                 if isinstance(result, ToolResult)
-                            }
+                            })
                     for call in turn.tool_calls:
                         await self._emit_tool_started(state, call, response_index=index)
                     executable_calls = [call for call in turn.tool_calls if call.id not in blocked_results]
@@ -765,22 +764,11 @@ class CoreLoopKernel:
                         await self._save_checkpoint(state, history)
                         break
 
-                output_overlap_observation = self._observe_overlapping_success_outputs(
-                    turn.tool_calls,
-                    tool_results,
-                    recent_successful_outputs,
-                )
-                exact_repeat_observation = self._observe_repeated_tool_failures(
+                repeat_observation = self._observe_repeated_tool_failures(
                     turn.tool_calls,
                     tool_results,
                     recent_tool_result_fingerprints,
                     explicit_input_errors,
-                )
-                repeat_observation = (
-                    output_overlap_observation
-                    if output_overlap_observation.get("recovery_prompt")
-                    or output_overlap_observation.get("no_progress")
-                    else exact_repeat_observation
                 )
                 observation_audit = repeat_observation.get("audit")
                 if isinstance(observation_audit, dict):
@@ -818,12 +806,7 @@ class CoreLoopKernel:
                     await self._save_checkpoint(state, history)
                     break
                 recovery_prompt = repeat_observation.get("recovery_prompt")
-                overlap_reassessment_required = bool(
-                    output_overlap_observation.get("recovery_prompt")
-                )
                 if isinstance(recovery_prompt, str) and recovery_prompt:
-                    if overlap_reassessment_required:
-                        tool_progress_pending = True
                     history.append(ChatMessage(role="system", content=recovery_prompt))
                     step.metadata["no_progress_recovery_required"] = True
                     state.metadata["no_progress_recovery"] = {
@@ -836,7 +819,6 @@ class CoreLoopKernel:
                     tool_progress_completed
                     and not payload_reassessment_required
                     and not duplicate_payload_blocked
-                    and not overlap_reassessment_required
                 ):
                     tool_progress_pending = False
                     tool_only_rounds = 0
@@ -1186,49 +1168,6 @@ class CoreLoopKernel:
             return False
         return len(left_lines & right_lines) / smaller >= 0.98
 
-    def _observe_overlapping_success_outputs(
-        self,
-        calls: list[ToolCall],
-        results: list[ToolResult],
-        recent_outputs: list[dict[str, Any]],
-    ) -> dict[str, Any]:
-        window = max(3, int(self.policy.identical_tool_result_window or 12))
-        for call, result in zip(calls, results):
-            if result.status in {"failed", "blocked"} or len(result.content) < _TOOL_INPUT_PROGRESS_CHARS:
-                continue
-            signature = self._substantive_text_signature(call.name, [result.content])
-            prior = next(
-                (
-                    item
-                    for item in reversed(recent_outputs)
-                    if self._substantive_payloads_match(signature, item)
-                ),
-                None,
-            )
-            record = {**signature, "challenged": prior is not None}
-            recent_outputs.append(record)
-            del recent_outputs[:-window]
-            if prior is None:
-                continue
-            audit = {
-                "fingerprint_sha256": signature["exact"],
-                "kind": "overlapping_success_output",
-                "window": window,
-            }
-            if bool(prior.get("challenged")):
-                return {"audit": audit, "no_progress": (
-                    "No progress observed: three successful tool results contained materially overlapping "
-                    "large output with almost no new evidence. The run is paused and can be resumed after "
-                    "choosing a different investigation or execution approach."
-                )}
-            prior["challenged"] = True
-            return {"audit": audit, "recovery_prompt": (
-                "[OVERLAPPING_OUTPUT_REASSESSMENT_REQUIRED] Two successful tool calls returned materially "
-                "overlapping large output. Before using more tools, reuse the existing evidence, report what "
-                "new fact was actually gained, and choose a materially different next action."
-            )}
-        return {}
-
     @staticmethod
     def _is_explicit_input_error(result: ToolResult) -> bool:
         metadata = result.metadata if isinstance(result.metadata, dict) else {}
@@ -1348,23 +1287,12 @@ class CoreLoopKernel:
                 "window": window,
                 "threshold": threshold,
             }
-            if result.status in {"failed", "blocked"} and count >= threshold:
+            if count >= threshold:
+                status_label = "failed" if result.status in {"failed", "blocked"} else "successful"
                 return {"audit": audit, "no_progress": (
-                    "No progress observed: the same exact failed tool call and result "
-                    f"occurred {count} times within the last {window} failed tool results. "
+                    "No progress observed: the same exact tool call and result "
+                    f"occurred {count} times within the last {window} tool results. "
                     "The run is paused and can be resumed after changing the approach or explicitly continuing."
-                )}
-            if result.status not in {"failed", "blocked"} and count >= threshold * 2:
-                return {"audit": audit, "no_progress": (
-                    "No progress observed: the same exact successful tool call and result "
-                    f"occurred {count} times within the last {window} tool results, even after a rethink request. "
-                    "The run is paused and can be resumed after changing the approach or explicitly continuing."
-                )}
-            if result.status not in {"failed", "blocked"} and count == threshold:
-                return {"audit": audit, "recovery_prompt": (
-                    "[NO_PROGRESS_REASSESSMENT_REQUIRED] The same exact tool call returned the same result "
-                    f"{count} times. Before using tools again, explain what new evidence you expected, then choose "
-                    "a materially different investigation or execution approach. Do not repeat the exact call."
                 )}
             if count > 1:
                 observation["audit"] = audit

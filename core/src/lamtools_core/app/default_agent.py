@@ -321,6 +321,7 @@ def create_core_agent_operations(
                             context_window_tokens=runtime_options.context_window_tokens,
                         compact_trigger_tokens=runtime_options.compact_trigger_tokens,
                         compact_limit_tokens=runtime_options.compact_limit_tokens,
+                        parallel_tool_names=("sub_agent",),
                     ),
                     hook_engine=plugin_assembly["hook_engine"],
                     checkpoint_coordinator=turn_checkpoint_coordinator,
@@ -749,6 +750,7 @@ def create_core_agent_operations(
                             context_window_tokens=runtime_options.context_window_tokens,
                             compact_trigger_tokens=runtime_options.compact_trigger_tokens,
                             compact_limit_tokens=runtime_options.compact_limit_tokens,
+                            parallel_tool_names=("sub_agent",),
                         ),
                         hook_engine=plugin_assembly["hook_engine"],
                         completion_gate=completion_gate(
@@ -1011,6 +1013,7 @@ def create_core_agent_operations(
                             context_window_tokens=runtime_options.context_window_tokens,
                         compact_trigger_tokens=runtime_options.compact_trigger_tokens,
                         compact_limit_tokens=runtime_options.compact_limit_tokens,
+                        parallel_tool_names=("sub_agent",),
                     ),
                     hook_engine=plugin_assembly["hook_engine"],
                     completion_gate=completion_gate(

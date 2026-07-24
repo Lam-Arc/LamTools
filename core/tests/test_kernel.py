@@ -2120,28 +2120,20 @@ class TestKernelStateSave:
         assert kit.executed_call_ids == ["write-1", "write-2"]
 
     @pytest.mark.asyncio
-    async def test_repeated_identical_successes_request_rethink_then_wait(self):
+    async def test_repeated_identical_results_wait_at_threshold(self):
         steps = [
             MockKitStep(
                 tool_calls=[ToolCall(id=f"success-{index}", name="read_file", arguments={"path": "same.txt"})],
                 tool_results=[ToolResult(call_id=f"success-{index}", name="read_file", content="same result")],
             )
-            for index in range(8)
+            for index in range(10)
         ]
         kit = MockRuntimeKit(steps=steps)
 
         result = await _make_kernel(kit).run(_make_turn_input())
 
         assert result.decision == "wait"
-        assert result.steps[3].metadata["no_progress_recovery_required"] is True
         assert result.steps[-1].metadata["no_progress"] is True
-        reassessment_prompts = [
-            str(message.content)
-            for history in kit.context_histories
-            for message in history
-            if message.role == "system" and "NO_PROGRESS_REASSESSMENT_REQUIRED" in str(message.content)
-        ]
-        assert reassessment_prompts
 
     @pytest.mark.asyncio
     async def test_repeated_large_payload_is_reconsidered_then_blocked_before_third_write(self):
@@ -2182,43 +2174,9 @@ class TestKernelStateSave:
         assert blocked.metadata["duplicate_substantive_payload"] is True
 
     @pytest.mark.asyncio
-    async def test_highly_overlapping_success_outputs_rethink_then_wait(self):
-        base = "\n".join(f"line {index}: existing evidence" for index in range(80))
-        outputs = [base, base + "\nnew line 1", base + "\nnew line 1\nnew line 2"]
-        calls = [
-            ToolCall(id=f"read-{index}", name="run_command", arguments={"command": f"read --context {size}"})
-            for index, size in enumerate((2, 5, 10))
-        ]
-
-        class RecordingKit(MockRuntimeKit):
-            def __init__(self) -> None:
-                progress = "[已确认事实] 已获得输出 [剩余不确定性] 新信息很少 [下一步] 改变方法"
-                super().__init__(steps=[
-                    MockKitStep(reply=progress, tool_calls=[call], tool_results=[
-                        ToolResult(call_id=call.id, name=call.name, content=output),
-                    ])
-                    for call, output in zip(calls, outputs)
-                ])
-                self.executed: list[str] = []
-
-            async def execute_tool(self, state: RuntimeState, call: ToolCall) -> ToolResult:
-                self.executed.append(call.id)
-                return await super().execute_tool(state, call)
-
-        kit = RecordingKit()
-        policy = LoopPolicy(max_tool_only_rounds_without_progress=20)
-
-        result = await _make_kernel(kit, policy=policy).run(_make_turn_input())
-
-        assert result.decision == "wait"
-        assert kit.executed == ["read-0", "read-1", "read-2"]
-        assert result.steps[1].metadata["no_progress_recovery_required"] is True
-        assert result.steps[2].metadata["no_progress"] is True
-
-    @pytest.mark.asyncio
     async def test_repeated_identical_tool_failures_wait_as_a_last_resort(self):
         steps = []
-        for index in range(5):
+        for index in range(10):
             command = "get project"
             steps.append(MockKitStep(
                 tool_calls=[ToolCall(
@@ -2243,18 +2201,18 @@ class TestKernelStateSave:
 
         assert result.decision == "wait"
         assert result.error == ""
-        assert len(result.steps) == 5
+        assert len(result.steps) == 10
         assert result.steps[-1].metadata["no_progress"] is True
         assert result.state is not None
-        assert result.state.metadata["no_progress"]["response_index"] == 4
+        assert result.state.metadata["no_progress"]["response_index"] == 9
         assert result.state.metadata["no_progress"]["recoverable"] is True
-        assert result.state.turn_count == 5
+        assert result.state.turn_count == 10
         assert result.state.loop_state == "wait"
         audit = result.state.metadata["runtime_audit"]
         observation = audit["no_progress_observations"][-1]
         assert len(observation["fingerprint_sha256"]) == 64
-        assert observation["count"] == 4
-        assert observation["threshold"] == 4
+        assert observation["count"] == 10
+        assert observation["threshold"] == 10
         assert "get project" not in repr(observation)
 
     @pytest.mark.asyncio

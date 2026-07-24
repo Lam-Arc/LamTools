@@ -33,7 +33,9 @@
         "edit_file",
         "write_spreadsheet",
         "document_normalize",
-        "run_tests"
+        "run_tests",
+        "arrange",
+        "goal"
       ]
     },
     "full_edit": {

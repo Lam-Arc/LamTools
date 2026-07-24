@@ -42,14 +42,14 @@ export function buildCoreProjectGroups(
     sessions: [] as SessionItem[],
     canManage: true,
   }))
-  const groupsById = new Map(groups.map((group) => [group.id, group]))
+  const groupsByWorkRoot = new Map(groups.map((group) => [group.workRoot, group]))
   const unassigned: SessionItem[] = []
 
   for (const session of sessions) {
-    const projectId = typeof session.metadata?.project_id === 'string'
-      ? session.metadata.project_id
+    const workRoot = typeof session.metadata?.work_root === 'string'
+      ? session.metadata.work_root
       : ''
-    const group = projectId ? groupsById.get(projectId) : undefined
+    const group = workRoot ? groupsByWorkRoot.get(workRoot) : undefined
     if (group) {
       group.sessions.push(session)
     } else {

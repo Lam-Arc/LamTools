@@ -48,7 +48,7 @@ class LoopPolicy:
     # Last-resort stop for an exact repeated failed tool call/result without a
     # total step budget. The Kernel does not try to enumerate or semantically
     # classify every possible failure; model-visible diagnosis handles that.
-    max_identical_tool_results: int | None = 4
+    max_identical_tool_results: int | None = 10
     identical_tool_result_window: int = 12
     # Periodic evidence-convergence checkpoint for long tool-only streaks.
     # This does not classify tool semantics or stop the run; it only requires

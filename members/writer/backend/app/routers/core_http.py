@@ -61,7 +61,6 @@ def _session_to_core(s: WriterSession) -> dict[str, Any]:
     metadata.setdefault("branch", s.branch or "")
     metadata.setdefault("phase", s.phase or "idle")
     metadata.setdefault("mode", s.mode or "EXECUTE")
-    metadata["project_id"] = s.project_id or ""
     metadata.setdefault("loop_position", s.loop_position or "execute")
     metadata["lifecycle"] = lifecycle
 
@@ -187,9 +186,8 @@ async def update_session(
         if body.metadata is not None:
             metadata = dict(body.metadata)
             if session.project_id:
-                metadata.pop("project_id", None)
                 metadata.pop("work_root", None)
-            elif "project_id" in metadata or "work_root" in metadata:
+            elif "work_root" in metadata:
                 raise HTTPException(status_code=422, detail="Use the project session endpoint for project-owned sessions")
             session.metadata_ = {**dict(session.metadata_ or {}), **metadata}
         await write_db.flush()

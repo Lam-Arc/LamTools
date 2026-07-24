@@ -198,6 +198,8 @@ class CoreRestoreOperation(CoreDbBase):
     undo_checkpoint_id: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="prepared")
     error: Mapped[str] = mapped_column(String(2048), nullable=False, default="")
+    scope: Mapped[str] = mapped_column(String(32), nullable=False, default="all")
+    derived_checkpoint_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
 
@@ -991,6 +993,15 @@ async def _migrate_core_app_schema(connection: Any) -> None:
         row["name"]
         for row in (await connection.execute(text("PRAGMA table_info(core_arrange_jobs)"))).mappings()
     }
+    if "goal_id" in arrange_columns:
+        await connection.execute(text("DROP INDEX IF EXISTS ix_core_arrange_jobs_goal_id"))
+        await connection.execute(text(
+            "ALTER TABLE core_arrange_jobs DROP COLUMN goal_id"
+        ))
+    if "project_id" in arrange_columns:
+        await connection.execute(text(
+            "ALTER TABLE core_arrange_jobs DROP COLUMN project_id"
+        ))
     if "source_thread_id" not in arrange_columns:
         await connection.execute(text(
             "ALTER TABLE core_arrange_jobs "
@@ -1003,11 +1014,6 @@ async def _migrate_core_app_schema(connection: Any) -> None:
         await connection.execute(text(
             "ALTER TABLE core_arrange_jobs "
             "ADD COLUMN observer_json JSON NOT NULL DEFAULT '{}'"
-        ))
-    if "project_id" not in arrange_columns:
-        await connection.execute(text(
-            "ALTER TABLE core_arrange_jobs "
-            "ADD COLUMN project_id VARCHAR(64) NOT NULL DEFAULT ''"
         ))
     if "work_root" not in arrange_columns:
         await connection.execute(text(
@@ -1034,6 +1040,20 @@ async def _migrate_core_app_schema(connection: Any) -> None:
         await connection.execute(text(
             "ALTER TABLE core_arrange_jobs "
             "ADD COLUMN model_id VARCHAR(256) NOT NULL DEFAULT ''"
+        ))
+    restore_columns = {
+        row["name"]
+        for row in (await connection.execute(text("PRAGMA table_info(core_restore_operations)"))).mappings()
+    }
+    if "scope" not in restore_columns:
+        await connection.execute(text(
+            "ALTER TABLE core_restore_operations "
+            "ADD COLUMN scope VARCHAR(32) NOT NULL DEFAULT 'all'"
+        ))
+    if "derived_checkpoint_id" not in restore_columns:
+        await connection.execute(text(
+            "ALTER TABLE core_restore_operations "
+            "ADD COLUMN derived_checkpoint_id VARCHAR(64) NOT NULL DEFAULT ''"
         ))
 
 

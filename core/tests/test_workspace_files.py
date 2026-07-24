@@ -418,7 +418,6 @@ async def test_write_and_edit_file_are_bounded_to_workspace(tmp_path):
     created = await write_file_tool(
         ToolCall(id="write-1", name="write_file", arguments={"path": "note.txt", "content": "hello\n"}),
         work_root=work_root,
-        max_write_length=100,
     )
     edited = await edit_file_tool(
         ToolCall(
@@ -427,12 +426,10 @@ async def test_write_and_edit_file_are_bounded_to_workspace(tmp_path):
             arguments={"path": "note.txt", "old_string": "hello", "new_string": "hello world"},
         ),
         work_root=work_root,
-        max_write_length=100,
     )
     escaped = await write_file_tool(
         ToolCall(id="write-escape", name="write_file", arguments={"path": "../secret.txt", "content": "bad"}),
         work_root=work_root,
-        max_write_length=100,
     )
 
     assert created.status == "ok"

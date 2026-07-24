@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .read import model_response, provider_response
@@ -94,8 +94,12 @@ async def update_model_config(db: AsyncSession, model_id: str, data: dict[str, A
         if provider is None:
             raise ValueError("Provider not found")
 
+    set_default = data.get("is_default")
+    if set_default:
+        await db.execute(sa_update(LLMModel).values(is_default=False))
+        data = {**data, "is_default": True}
+
     update_data = dict(data)
-    update_data.pop("is_default", None)
     for key, value in update_data.items():
         setattr(model, key, value)
 
