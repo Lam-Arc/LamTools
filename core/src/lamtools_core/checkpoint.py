@@ -216,7 +216,7 @@ class CoreCheckpointCoordinator:
         if not normalized_session_id:
             raise ValueError("session_id is required")
         async with self._workspace_lock:
-            return await self._capture(
+            ref = await self._capture(
                 session_id=normalized_session_id,
                 turn_id=str(turn_id or "manual").strip() or "manual",
                 actor_kind=str(actor_kind or "main"),
@@ -225,6 +225,90 @@ class CoreCheckpointCoordinator:
                 edge_kind=str(edge_kind or "checkpoint"),
                 parent_checkpoint_id=parent_checkpoint_id,
             )
+            self._latest_checkpoint = ref
+            return ref
+
+    async def backup_file(self, *, session_id: str, path: str | Path) -> None:
+        """Back up a single file before it is modified by a tool.
+
+        Reads the current content, writes a blob, and appends the file entry
+        to the latest checkpoint's workspace manifest.
+        """
+        await self._ensure_schema()
+        file_path = Path(path).resolve()
+        if not file_path.is_file():
+            return
+        relative = str(file_path.relative_to(self.work_root).as_posix()) if _is_within(file_path, self.work_root) else file_path.as_posix()
+        data = file_path.read_bytes()
+        digest = hashlib.sha256(data).hexdigest()
+        blob_root = self.storage_root / "blobs"
+        blob_path = blob_root / digest[:2] / digest
+        if not blob_path.exists():
+            blob_path.parent.mkdir(parents=True, exist_ok=True)
+            fd, temp_name = tempfile.mkstemp(prefix=f"{digest}.", dir=blob_path.parent)
+            try:
+                with os.fdopen(fd, "wb") as handle:
+                    handle.write(data)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                try:
+                    os.replace(temp_name, blob_path)
+                except FileExistsError:
+                    os.unlink(temp_name)
+            except BaseException:
+                try:
+                    os.unlink(temp_name)
+                except OSError:
+                    pass
+                raise
+        mode = stat.S_IMODE(file_path.stat().st_mode)
+        entry = {"hash": digest, "size": len(data), "mode": mode}
+        async with self._workspace_lock:
+            ref = self._latest_checkpoint
+            if ref is None:
+                return
+            await self._append_file_to_manifest(
+                checkpoint_id=ref.id,
+                relative=relative,
+                entry=entry,
+                digest=digest,
+                blob_path=blob_path,
+                size=len(data),
+            )
+
+    async def _append_file_to_manifest(
+        self,
+        *,
+        checkpoint_id: str,
+        relative: str,
+        entry: dict[str, Any],
+        digest: str,
+        blob_path: Path,
+        size: int,
+    ) -> None:
+        async def write(db: Any) -> None:
+            cp = await db.get(CoreCheckpoint, checkpoint_id)
+            if cp is None:
+                return
+            old_hash = cp.manifest_hash
+            if old_hash:
+                manifest_row = await db.get(CoreWorkspaceManifest, old_hash)
+                merged = dict(manifest_row.entries_json or {}) if manifest_row is not None else {}
+            else:
+                merged = {}
+            if relative in merged:
+                return  # already backed up
+            merged[relative] = entry
+            new_hash = hashlib.sha256(
+                json.dumps(merged, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            ).hexdigest()
+            if await db.get(CoreWorkspaceManifest, new_hash) is None:
+                db.add(CoreWorkspaceManifest(hash=new_hash, entries_json=merged))
+            if await db.get(CoreCheckpointBlob, digest) is None:
+                db.add(CoreCheckpointBlob(hash=digest, size=size, storage_path=str(blob_path)))
+            cp.manifest_hash = new_hash
+            db.add(cp)
+        await self.write_coordinator.run(write)
 
     async def list(self, session_id: str) -> list[CheckpointRef]:
         await self._ensure_schema()
@@ -445,7 +529,10 @@ class CoreCheckpointCoordinator:
         edge_kind: str,
         parent_checkpoint_id: str | None = None,
     ) -> CheckpointRef:
-        manifest_hash, entries, blobs = await asyncio.to_thread(self._capture_workspace)
+        # Lazy: workspace capture is deferred to per-file backup_file() calls.
+        manifest_hash = ""
+        entries: dict[str, Any] = {}
+        blobs: list[tuple[str, int, str]] = []
         root_session_id = _root_session_id(session_id)
         conversation = await self.conversation_backend.capture(session_id, exclude_turn_id=turn_id)
         checkpoint_id = uuid.uuid4().hex
@@ -594,6 +681,8 @@ class CoreCheckpointCoordinator:
             return row
 
     async def _manifest(self, manifest_hash: str) -> dict[str, Any]:
+        if not manifest_hash:
+            return {}
         async with self.session_factory() as db:
             row = await db.get(CoreWorkspaceManifest, manifest_hash)
             if row is None:
@@ -601,6 +690,8 @@ class CoreCheckpointCoordinator:
             return dict(row.entries_json or {})
 
     async def _apply_manifest(self, manifest_hash: str) -> list[str]:
+        if not manifest_hash:
+            return []  # lazy checkpoint — no files to restore
         target = await self._manifest(manifest_hash)
         current_hash, current, _ = await asyncio.to_thread(self._capture_workspace)
         if current_hash == manifest_hash:

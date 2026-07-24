@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
+import time as time_module
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import TypeVar
 
 from lamtools_core.llm import LLMClient, LLMRequest, LLMResponse, LLMStreamEvent
 from lamtools_core.llm.policy import BackoffStrategy, RetryPolicy
+
+_logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
@@ -123,6 +127,9 @@ async def stream_with_retry(
     policy = retry_policy or RetryPolicy()
     sleep_fn = sleep or asyncio.sleep
     last_error: Exception | None = None
+    _start_ts = time_module.time()
+    _logger.info("[retry:stream_with_retry] attempting stream model=%s messages=%d max_attempts=%d timeout=%s",
+                  request.model, len(request.messages), attempts, timeout_seconds)
     for attempt in range(attempts):
         emitted = False
         try:
@@ -161,6 +168,10 @@ async def stream_with_retry(
             if attempt >= attempts - 1:
                 break
             delay = _delay_for_error(policy, attempt, kind, exc)
+            _logger.warning(
+                "[retry:stream_with_retry] attempt %d/%d failed model=%s kind=%s delay=%.2fs error=%s",
+                attempt + 1, attempts, request.model, kind, delay, exc,
+            )
             await _notify_retry(
                 on_retry,
                 ModelRetryEvent(
@@ -174,6 +185,9 @@ async def stream_with_retry(
             await sleep_fn(delay)
     if last_error is None:
         last_error = RuntimeError("model stream did not start")
+    _elapsed = time_module.time() - _start_ts
+    _logger.error("[retry:stream_with_retry] exhausted %d attempts model=%s elapsed=%.2fs last_error=%s",
+                   attempts, request.model, _elapsed, last_error)
     raise ModelRetryExhausted(attempts=attempts, last_error=last_error)
 
 

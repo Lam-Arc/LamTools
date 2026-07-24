@@ -17,10 +17,14 @@ import copy
 import asyncio
 import hashlib
 import json
+import logging
 import re
 import uuid
+import time as time_module
 from dataclasses import dataclass, field
 from typing import Any, TYPE_CHECKING
+
+_logger = logging.getLogger(__name__)
 
 from lamtools_core.context_compaction import (
     ContextCompactionError,
@@ -285,8 +289,10 @@ class CoreLoopKernel:
                 state = loaded
             else:
                 state = RuntimeState(session_id=session_id or _new_run_id())
+            _logger.info("[kernel:_run] state loaded sid=%s existing=%s", state.session_id, loaded is not None)
 
         history = await self._load_history(state.session_id)
+        _logger.info("[kernel:_run] history loaded sid=%s len=%d", state.session_id, len(history))
 
         # Each user turn is a new run inside the same session. Persisted state
         # carries session memory and turn_count, but a stale run_id/status from
@@ -319,6 +325,7 @@ class CoreLoopKernel:
         # and delegated agents cannot accidentally drift into two policies.
         if self.checkpoint_coordinator is not None:
             actor_kind = str(turn_input.metadata.get("actor_kind") or "main")
+            _logger.info("[kernel:_run] checkpoint begin_turn sid=%s actor=%s", state.session_id, actor_kind)
             await self.checkpoint_coordinator.begin_turn(
                 session_id=state.session_id,
                 turn_id=turn_id,
@@ -333,6 +340,7 @@ class CoreLoopKernel:
         # 2. Mark running
         state.status = "running"
         await self.state_store.save(state)
+        _logger.info("[kernel:_run] state saved as running sid=%s", state.session_id)
 
         # 3. Kit on_run_start
         await self.kit.on_run_start(state, turn_input)
@@ -346,6 +354,7 @@ class CoreLoopKernel:
         if current_user_content:
             history.append(ChatMessage(role="user", content=current_user_content))
         await self._save_checkpoint(state, history)
+        _logger.info("[kernel:_run] checkpoint saved sid=%s", state.session_id)
 
         steps: list[KernelStep] = []
         latest_message = ""
@@ -363,6 +372,11 @@ class CoreLoopKernel:
 
         # Emit runtime.started event
         await self._emit_state_event(state, "runtime.started", "run started")
+
+        _logger.info("[kernel:_run] entering main loop sid=%s run=%s tools=%d history=%d",
+                      state.session_id, state.run_id,
+                      len(self.kit.toolbox.tool_specs()) if self.kit.toolbox else 0,
+                      len(history))
 
         # 5. Main loop. There is intentionally no step budget: complex tasks
         # may need many model/tool rounds. Cancellation, explicit failure,
@@ -407,10 +421,20 @@ class CoreLoopKernel:
                 await self._compact_request_if_needed(state, request, history=history)
 
                 # 5.4 Call model — try streaming first
+                _step_start = time_module.time()
+                _logger.info("[kernel:_run] step=%d calling stream model sid=%s", index, state.session_id)
                 response = await self._stream_model(request, state, response_index=index)
                 streamed_response = response is not None
                 if response is None:
                     response = await self._call_model(request, state=state, response_index=index)
+                _step_elapsed = time_module.time() - _step_start
+                _logger.info(
+                    "[kernel:_run] model response received sid=%s step=%d "
+                    "streamed=%s content_len=%d tool_calls=%d elapsed=%.2fs",
+                    state.session_id, index, streamed_response,
+                    len(response.content or ""), len(response.tool_calls or []),
+                    _step_elapsed,
+                )
                 if response.usage is not None and not streamed_response:
                     await self.event_sink.emit(CoreEvent(
                         name="runtime.usage",
@@ -433,13 +457,13 @@ class CoreLoopKernel:
                     )
                 # 5.5 Parse model output
                 if not (response.content or "").strip() and not response.tool_calls:
-                    import sys, json
-                    print(json.dumps({
-                        "raw_content": repr(response.content),
-                        "raw_thinking": repr(getattr(response, 'thinking', None))[:200],
-                        "finish_reason": response.finish_reason,
-                        "usage": str(getattr(response, 'usage', None)),
-                    }, ensure_ascii=False), file=sys.stderr, flush=True)
+                    _logger.warning(
+                        "[kernel:_run] empty model response sid=%s step=%d "
+                        "finish_reason=%s usage=%s",
+                        state.session_id, index,
+                        response.finish_reason,
+                        str(getattr(response, 'usage', None))[:120],
+                    )
                 turn = await self.kit.parse_model_output(state, response)
                 invalid_tool_argument_errors: dict[str, str] = {}
                 for call_index, response_call in enumerate(response.tool_calls or []):
@@ -1035,6 +1059,8 @@ class CoreLoopKernel:
                 final_decision = "failed"
                 break
             except Exception as e:
+                _logger.exception("[kernel:_run] unexpected error sid=%s step=%d",
+                                  state.session_id, index)
                 error_msg = f"Unexpected error: {e}"
                 step.error = error_msg
                 final_decision = "failed"
@@ -1320,6 +1346,8 @@ class CoreLoopKernel:
     ) -> LLMResponse | None:
         """Try streaming model call.  Returns a complete LLMResponse on success,
         or None when streaming is not available so the caller can fall back."""
+        _logger.info("[kernel:_stream_model] starting stream sid=%s run=%s model=%s",
+                      state.session_id, state.run_id, request.model)
         stream = stream_with_retry(
             self.llm_client,
             request,
@@ -1920,6 +1948,30 @@ class CoreLoopKernel:
             tags=["progress"],
         ))
 
+    async def _backup_file_for_writer_tool(self, state: RuntimeState, call: ToolCall) -> None:
+        """Back up file before a write_file / edit_file tool executes."""
+        if self.checkpoint_coordinator is None:
+            return
+        if call.name not in ("write_file", "edit_file"):
+            return
+        file_path = (
+            call.arguments.get("path")
+            or call.arguments.get("file_path")
+            or call.arguments.get("filePath")
+            or call.arguments.get("target_file")
+            or call.arguments.get("target")
+        )
+        if not file_path or not isinstance(file_path, str):
+            return
+        try:
+            await self.checkpoint_coordinator.backup_file(
+                session_id=state.session_id,
+                path=file_path,
+            )
+        except Exception:
+            _logger.warning("[kernel:_backup_file_for_writer_tool] backup skipped sid=%s path=%s",
+                            state.session_id, file_path, exc_info=True)
+
     async def _execute_tool(self, state: RuntimeState, call: ToolCall) -> ToolResult:
         """Execute a single tool call via Kit.
 
@@ -1928,6 +1980,7 @@ class CoreLoopKernel:
         bypassed the waiting-gate contract; do not emit a second approval event
         or execute the tool.
         """
+        await self._backup_file_for_writer_tool(state, call)
         if call.requires_approval:
             return ToolResult(
                 call_id=call.id,

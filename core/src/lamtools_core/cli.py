@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import sqlite3
 import sys
@@ -906,6 +907,11 @@ def _print_live_result(args: argparse.Namespace, result: dict[str, Any], message
 
 
 async def cmd_serve(args: argparse.Namespace) -> int:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(levelname)s [%(name)s] %(message)s",
+        force=True,
+    )
     try:
         import uvicorn
     except ImportError as exc:

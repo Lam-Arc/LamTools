@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import time as time_module
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+_logger = logging.getLogger(__name__)
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -621,6 +625,8 @@ async def handle_turn_start_operation(
     if start_failure is not None:
         failure_event, snapshot = start_failure
         events.append(failure_event)
+    _logger.info("[live:handle_turn_start] dispatched background task thread_id=%s turn_id=%s model=%s",
+                  thread_id, turn_id, runtime_start.get("model_id") or "default")
     return CoreLiveOperationOutcome(
         response=rpc_result(
             request_id,
@@ -1454,6 +1460,8 @@ async def _fail_runtime_start(
 async def _run_core_turn(*, context: CoreLiveContext, runtime_start: dict[str, Any]) -> None:
     thread_id = str(runtime_start.get("thread_id") or "")
     turn_id = str(runtime_start.get("turn_id") or "")
+    _start_ts = time_module.time()
+    _logger.info("[live:_run_core_turn] background task started thread_id=%s turn_id=%s", thread_id, turn_id)
     try:
         payload = {
             **runtime_start,
@@ -1468,10 +1476,15 @@ async def _run_core_turn(*, context: CoreLiveContext, runtime_start: dict[str, A
 
         if isinstance(context.host.member_hooks, DefaultCoreLiveMemberHooks):
             payload["_core_operation"] = execute_core_operation
+        _logger.info("[live:_run_core_turn] entering member_hooks.start_runtime thread_id=%s turn_id=%s",
+                      thread_id, turn_id)
         result = await context.host.member_hooks.start_runtime(
             runtime_start=payload,
         )
         if isinstance(result, OperationResult):
+            _elapsed = time_module.time() - _start_ts
+            _logger.info("[live:_run_core_turn] turn completed thread_id=%s turn_id=%s status=%s elapsed=%.2fs",
+                          thread_id, turn_id, result.status, _elapsed)
             await _persist_operation_result(context=context, thread_id=thread_id, turn_id=turn_id, result=result)
         await _dispatch_next_queue_item(
             context=context,
@@ -1481,6 +1494,9 @@ async def _run_core_turn(*, context: CoreLiveContext, runtime_start: dict[str, A
         )
         context.host.runtime_task_registry.release_run(thread_id, run_id=turn_id)
     except BaseException as exc:
+        _elapsed = time_module.time() - _start_ts
+        _logger.exception("[live:_run_core_turn] turn failed thread_id=%s turn_id=%s elapsed=%.2fs",
+                          thread_id, turn_id, _elapsed)
         cancel_requested = context.host.runtime_task_registry.get_cancel_event(thread_id).is_set()
         if cancel_requested:
             await asyncio.shield(

@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
+import time as time_module
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+_logger = logging.getLogger(__name__)
 
 from lamtools_core.event import CollectingEventSink, EventSink
 from lamtools_core.llm import ChatMessage
@@ -324,6 +328,7 @@ def create_core_agent_operations(
                 work_root=runtime_work_root,
                 plugin_roots=plugin_roots,
             )
+            _logger.info("[default:turn_start] plugin assembly done thread_id=%s", thread_id)
             turn_checkpoint_coordinator = checkpoint_coordinator(runtime_work_root)
             toolbox, mcp_registry = await _build_core_runtime_toolbox(
                 work_root=runtime_work_root,
@@ -348,6 +353,8 @@ def create_core_agent_operations(
                 tier_tools=tier_tools,
                 active_mode=active_mode,
             )
+            _mcp_count = len(mcp_registry._tools_by_name) if mcp_registry is not None else 0
+            _logger.info("[default:turn_start] toolbox built thread_id=%s mcp_tools=%d", thread_id, _mcp_count)
             try:
                 kernel = CoreLoopKernel(
                     kit=CoreBaseAgentKit(
@@ -387,6 +394,9 @@ def create_core_agent_operations(
                         runtime_options.model_id,
                     ),
                 )
+                _logger.info("[default:turn_start] kernel created, starting run thread_id=%s model=%s",
+                              thread_id, runtime_options.model_id)
+                _kernel_start_ts = time_module.time()
                 kernel_result = await kernel.run(
                     RuntimeTurnInput(
                         user_message=message,
@@ -441,6 +451,12 @@ def create_core_agent_operations(
                 )
             finally:
                 await _close_mcp_registry(mcp_registry)
+            _kernel_elapsed = time_module.time() - _kernel_start_ts
+            _logger.info("[default:turn_start] kernel.run returned thread_id=%s decision=%s error=%s steps=%d elapsed=%.2fs",
+                          thread_id, kernel_result.decision,
+                          kernel_result.error or "",
+                          len(kernel_result.steps),
+                          _kernel_elapsed)
             run_items = core_events_to_run_items(sink.events, thread_id=thread_id)
             snapshot = await _persist_run_items(
                 run_items,
