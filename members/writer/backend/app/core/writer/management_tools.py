@@ -4,8 +4,7 @@ from pathlib import Path
 
 from lamtools_core.tool import ToolCall, ToolResult
 from lamtools_core.tool.workspace import validate_workspace_path as _validate_path
-
-from app.core.writer.task_plan import format_checklist_markdown, normalize_checklist_steps
+from lamtools_core.runtime.plan import format_checklist_markdown, normalize_checklist_steps
 
 
 async def request_commit_review(call: ToolCall) -> ToolResult:

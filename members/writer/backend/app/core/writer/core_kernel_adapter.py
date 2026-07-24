@@ -123,7 +123,7 @@ from app.core.writer.runtime_resources import (
     stream_http_client,
 )
 from app.core.writer.sub_agent_projection import project_sub_agent_result
-from app.core.writer.task_plan import (
+from lamtools_core.runtime.plan import (
     apply_checklist_update as _apply_checklist_update,
     auto_advance_plan as _auto_advance_plan,
     has_delivery_progress as _has_delivery_progress,

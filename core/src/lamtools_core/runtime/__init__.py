@@ -12,6 +12,18 @@ from .background_processes import (
     BackgroundProcessRegistry,
     default_background_process_registry,
 )
+from .plan import (
+    apply_checklist_update,
+    auto_advance_plan,
+    find_plan_step,
+    format_checklist_markdown,
+    has_delivery_progress,
+    new_plan_revision,
+    normalize_checklist_steps,
+    plan_is_completed,
+    plan_to_active_plan,
+    start_next_pending_step,
+)
 
 RuntimeStatus = Literal["idle", "running", "waiting", "completed", "failed", "cancelled"]
 RuntimeLoopState = Literal["continue", "wait", "done", "failed"]
@@ -450,4 +462,14 @@ __all__ = [
     "default_runtime_task_registry",
     "CompletionGate",
     "RuntimeDriver",
+    "apply_checklist_update",
+    "auto_advance_plan",
+    "find_plan_step",
+    "format_checklist_markdown",
+    "has_delivery_progress",
+    "new_plan_revision",
+    "normalize_checklist_steps",
+    "plan_is_completed",
+    "plan_to_active_plan",
+    "start_next_pending_step",
 ]

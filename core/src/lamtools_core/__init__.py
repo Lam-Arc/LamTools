@@ -39,6 +39,16 @@ from lamtools_core.snapshot import (
     empty_thread_snapshot,
     reduce_run_item_events,
 )
+from lamtools_core.app import (
+    AgentApp,
+    AgentSpec,
+    OperationCatalog,
+    OperationRequest,
+    OperationResult,
+    TurnInput,
+    TurnResult,
+    normalize_operation_name,
+)
 from lamtools_core.kernel import (
     CoreLoopKernel,
     KernelResult,
@@ -71,16 +81,6 @@ from lamtools_core.run_event import (
     InMemoryRuntimeEventStore,
     RuntimeEventRecord,
     RuntimeEventStore,
-)
-from lamtools_core.app import (
-    AgentApp,
-    AgentSpec,
-    OperationCatalog,
-    OperationRequest,
-    OperationResult,
-    TurnInput,
-    TurnResult,
-    normalize_operation_name,
 )
 from lamtools_core.member import (
     MemberKit,

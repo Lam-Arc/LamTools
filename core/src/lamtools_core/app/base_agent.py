@@ -27,6 +27,12 @@ from lamtools_core.runtime.evidence import (
     prune_turn_scoped_evidence,
     remember_evidence,
 )
+from lamtools_core.runtime.plan import (
+    apply_checklist_update as _apply_checklist_update,
+    auto_advance_plan as _auto_advance_plan,
+    new_plan_revision as _new_plan_revision,
+    plan_to_active_plan as _plan_to_active_plan,
+)
 from lamtools_core.snapshot import reduce_run_item_events
 from lamtools_core.tool import ToolCall, ToolContext, ToolResult
 from lamtools_core.tool.default_toolbox import ApprovalPolicy, CoreToolbox, build_core_toolbox
@@ -198,6 +204,22 @@ class CoreBaseAgentKit:
         context_parts = self._build_project_context_parts()
         for part in context_parts:
             system_lines.extend(["", part.content])
+        # Inject active plan from state metadata
+        if "active_plan" in (state.metadata or {}):
+            ap = state.metadata["active_plan"]
+            plan_lines = []
+            if ap.get("plan_summary"):
+                plan_lines.append(f"Summary: {ap['plan_summary']}")
+            if ap.get("plan_files"):
+                plan_lines.append(f"Planned files: {', '.join(ap['plan_files'])}")
+            if ap.get("plan_steps"):
+                for s in ap["plan_steps"]:
+                    sid = s.get("id", "?")
+                    desc = s.get("description", "")
+                    status = s.get("status", "pending")
+                    plan_lines.append(f"  [{sid}] ({status}) {desc}")
+            if plan_lines:
+                system_lines.extend(["", "[Active Plan — follow this step by step]", "\n".join(plan_lines)])
         if self.verification_policy.required:
             verification_state = self._verification_state(state)
             system_lines.extend([
@@ -541,6 +563,43 @@ class CoreBaseAgentKit:
         decision: str,
     ) -> None:
         state.metadata["last_decision"] = decision
+
+        # Track task plan from write_checklist / update_checklist results
+        plan_changed = False
+        state.metadata.setdefault("task_plan", {})
+        state.metadata.setdefault("active_plan", {})
+
+        for tr in tool_results:
+            if tr.name == "write_checklist" and tr.status == "ok" and tr.metadata:
+                task_plan = tr.metadata.get("task_plan") or {}
+                if isinstance(task_plan, dict):
+                    task_plan.setdefault("revision", 0)
+                    _new_plan_revision(task_plan, "initial checklist created", "create_plan", {
+                        "files": task_plan.get("files", []),
+                    })
+                    state.metadata["task_plan"] = task_plan
+                    plan_changed = True
+                break
+
+        for tr in tool_results:
+            if tr.name != "update_checklist" or tr.status != "ok" or not tr.metadata:
+                continue
+            update = tr.metadata.get("checklist_update")
+            if isinstance(update, dict):
+                current_plan = state.metadata.get("task_plan")
+                state.metadata["task_plan"] = _apply_checklist_update(
+                    current_plan if isinstance(current_plan, dict) else None,
+                    update,
+                )
+                plan_changed = True
+
+        current_plan = state.metadata.get("task_plan")
+        if isinstance(current_plan, dict) and _auto_advance_plan(current_plan, tool_results):
+            state.metadata["task_plan"] = current_plan
+            plan_changed = True
+
+        if plan_changed and isinstance(state.metadata.get("task_plan"), dict):
+            state.metadata["active_plan"] = _plan_to_active_plan(state.metadata["task_plan"])
 
     async def on_run_end(self, state: RuntimeState, result: Any) -> None:
         state.metadata["ended_decision"] = result.decision

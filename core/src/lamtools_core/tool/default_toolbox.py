@@ -40,6 +40,12 @@ from lamtools_core.tool.workspace_files import (
     make_write_file_handler,
     WorkspaceReadOnlyTools,
 )
+from lamtools_core.runtime.plan import (
+    apply_checklist_update as _apply_checklist_update,
+    auto_advance_plan as _auto_advance_plan,
+    format_checklist_markdown,
+    normalize_checklist_steps,
+)
 
 ToolHandler = Callable[[ToolCall], Awaitable[ToolResult]]
 ApprovalPolicy = Literal["require", "auto_approve"]
@@ -79,6 +85,8 @@ DEFAULT_TOOL_PERMISSIONS: dict[str, PermissionTier] = {
     "browser_check": AUTO_ALLOW,
     "mcp_tool": ASK_USER,
     SUB_AGENT_TOOL_NAME: AUTO_ALLOW,
+    "write_checklist": AUTO_ALLOW,
+    "update_checklist": AUTO_ALLOW,
 }
 
 
@@ -101,6 +109,8 @@ DEFAULT_TOOL_ORDER: tuple[str, ...] = (
     "browser_check",
     "mcp_tool",
     SUB_AGENT_TOOL_NAME,
+    "write_checklist",
+    "update_checklist",
 )
 
 
@@ -123,6 +133,8 @@ DEFAULT_TOOL_CATEGORIES: dict[str, str] = {
     "browser_check": "browser",
     "mcp_tool": "mcp",
     SUB_AGENT_TOOL_NAME: "agent",
+    "write_checklist": "control",
+    "update_checklist": "control",
 }
 
 
@@ -406,6 +418,71 @@ DEFAULT_TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
             ["tool_name"],
         ),
     },
+    {
+        "name": "write_checklist",
+        "description": (
+            "Create the active structured checklist for the task. Use short numbered steps; each step becomes a "
+            "Markdown checkbox in the UI."
+        ),
+        "input_schema": _schema(
+            {
+                "design_summary": {
+                    "type": "string",
+                    "description": "One short business-language sentence describing the goal.",
+                },
+                "files": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Files or deliverables expected to change.",
+                },
+                "steps": {
+                    "type": "array",
+                    "description": "Ordered checklist items. Use 3-7 concrete steps for normal engineering tasks.",
+                    "items": _schema(
+                        {
+                            "id": {"type": "string", "description": "Stable id like s1, s2, s3."},
+                            "description": {"type": "string", "description": "User-readable action item."},
+                            "deliverables": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Concrete outputs for this step.",
+                            },
+                        },
+                        ["id", "description"],
+                    ),
+                },
+            },
+            ["design_summary", "steps"],
+        ),
+    },
+    {
+        "name": "update_checklist",
+        "description": (
+            "Update the active structured checklist. Mark a step complete immediately after verifying its deliverable; "
+            "do not rewrite the whole checklist for ordinary progress."
+        ),
+        "input_schema": _schema(
+            {
+                "action": {
+                    "type": "string",
+                    "enum": ["add_step", "update_step", "split_step", "block_step", "complete_step", "replace_plan"],
+                },
+                "step_id": {"type": "string"},
+                "description": {"type": "string"},
+                "deliverables": {"type": "array", "items": {"type": "string"}},
+                "status": {
+                    "type": "string",
+                    "enum": ["pending", "in_progress", "completed", "blocked", "skipped", "replaced"],
+                    "description": "New status for update_step.",
+                },
+                "steps": {"type": "array", "items": {"type": "object"}},
+                "files": {"type": "array", "items": {"type": "string"}},
+                "design_summary": {"type": "string"},
+                "reason": {"type": "string", "description": "Short reason visible in the run log."},
+            },
+            ["action", "reason"],
+        ),
+    },
     deepcopy(SUB_AGENT_TOOL_SPEC),
 )
 
@@ -492,6 +569,91 @@ def strict_tool_schema(schema: dict[str, Any]) -> dict[str, Any]:
 
     visit(normalized)
     return normalized
+
+
+async def _write_checklist_handler(call: ToolCall) -> ToolResult:
+    args = call.arguments if isinstance(call.arguments, dict) else {}
+    files = args.get("files", [])
+    design_summary = args.get("design_summary", "")
+    steps = args.get("steps", [])
+    normalized_steps = normalize_checklist_steps(steps, files)
+    task_plan = {
+        "goal": design_summary or "Task plan",
+        "status": "active",
+        "current_step_id": normalized_steps[0]["id"] if normalized_steps else "",
+        "steps": normalized_steps,
+        "files": files,
+    }
+
+    title = f"Checklist: {design_summary}" if design_summary else "Checklist"
+    content = (
+        format_checklist_markdown(normalized_steps, [str(item) for item in files], title)
+        if normalized_steps
+        else "Checklist recorded (no steps)"
+    )
+
+    return ToolResult(
+        call_id=call.id,
+        name=call.name,
+        status="ok",
+        content=content,
+        metadata={
+            "plan_files": files,
+            "plan_steps": normalized_steps,
+            "plan_summary": design_summary,
+            "task_plan": task_plan,
+        },
+    )
+
+
+async def _update_checklist_handler(call: ToolCall) -> ToolResult:
+    args = call.arguments if isinstance(call.arguments, dict) else {}
+    action = str(args.get("action") or "")
+    reason = str(args.get("reason") or "").strip()
+    allowed = {
+        "add_step",
+        "update_step",
+        "split_step",
+        "block_step",
+        "complete_step",
+        "replace_plan",
+    }
+    if action not in allowed:
+        return ToolResult(
+            call_id=call.id,
+            name=call.name,
+            status="failed",
+            error=f"Unsupported checklist update action: {action}",
+        )
+    if not reason:
+        return ToolResult(
+            call_id=call.id,
+            name=call.name,
+            status="failed",
+            error="Checklist update requires a reason",
+        )
+
+    update = {
+        "action": action,
+        "step_id": args.get("step_id"),
+        "description": args.get("description"),
+        "deliverables": args.get("deliverables"),
+        "status": args.get("status"),
+        "steps": args.get("steps"),
+        "files": args.get("files"),
+        "design_summary": args.get("design_summary"),
+        "reason": reason,
+    }
+    step_suffix = f" {update['step_id']}" if update.get("step_id") else ""
+    check = "x" if action == "complete_step" else " "
+    summary = str(update.get("description") or reason)
+    return ToolResult(
+        call_id=call.id,
+        name=call.name,
+        status="ok",
+        content=f"- [{check}] {action}{step_suffix}: {summary}\n\nReason: {reason}",
+        metadata={"checklist_update": update},
+    )
 
 
 class CoreToolbox:
@@ -813,6 +975,8 @@ class CoreToolbox:
             "browser_check": make_browser_check_handler(str(self.work_root)),
             "mcp_tool": call_mcp,
             SUB_AGENT_TOOL_NAME: call_sub_agent,
+            "write_checklist": _write_checklist_handler,
+            "update_checklist": _update_checklist_handler,
         }
         if operation_executor is not None:
             handlers.update(durable_tool_handlers(operation_executor, work_root=self.work_root))
@@ -833,6 +997,7 @@ def _default_display(category: str) -> dict[str, Any]:
         "browser": "browser",
         "skill": "skill",
         "mcp": "tool",
+        "control": "checklist",
     }
     return {
         "card": card_by_category.get(category, "tool"),
