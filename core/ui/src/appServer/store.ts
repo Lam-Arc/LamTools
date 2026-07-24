@@ -162,20 +162,27 @@ export function createCoreAppServerRuntimeController<
       options.onSessionCreated?.()
       return
     }
-    if (event.method !== 'core/runItem') return
-    pendingEvents.push(event)
-    if (eventFrameScheduled) return
-    eventFrameScheduled = true
-    scheduleFrame(() => {
-      eventFrameScheduled = false
-      const events = pendingEvents.splice(0)
+    if (event.method === 'core/runItem') {
+      pendingEvents.push(event)
+      if (eventFrameScheduled) return
+      eventFrameScheduled = true
+      scheduleFrame(() => {
+        eventFrameScheduled = false
+        const events = pendingEvents.splice(0)
+        if (!runtime.state) return
+        let next = runtime.state as CoreAppSnapshot
+        for (const pending of events) {
+          next = applyCoreRunItemEvent(next, pending)
+        }
+        runtime.state = next as Snapshot
+      })
+      return
+    }
+    // Apply turn/accepted and item/started directly to the top-level snapshot
+    if (event.method === 'turn/accepted' || event.method === 'item/started') {
       if (!runtime.state) return
-      let next = runtime.state as CoreAppSnapshot
-      for (const pending of events) {
-        next = applyCoreRunItemEvent(next, pending)
-      }
-      runtime.state = next as Snapshot
-    })
+      runtime.state = applyAppEvent(runtime.state as CoreAppSnapshot, event) as Snapshot
+    }
   }
 
   function applyResponse(response: Record<string, unknown>) {
@@ -436,6 +443,54 @@ function applyCoreRunItemEvent(snapshot: CoreAppSnapshot, event: CoreAppEvent): 
       ...(itemStatus === 'waiting' ? { status: 'waiting' } : {}),
     },
   }
+}
+
+function applyAppEvent(snapshot: CoreAppSnapshot, event: CoreAppEvent): CoreAppSnapshot {
+  const payload = event.payload || {}
+  const turnId = event.turn_id || (typeof payload.turn_id === 'string' ? payload.turn_id : '') || ''
+  const itemId = event.item_id || (typeof payload.item_id === 'string' ? payload.item_id : '') || ''
+
+  if (event.method === 'turn/accepted') {
+    if (!turnId) return snapshot
+    const turns = { ...(snapshot.turns ?? {}) }
+    const turn = turns[turnId] ?? { turn_id: turnId, items: [] }
+    const input = payload.input
+    turns[turnId] = {
+      ...turn,
+      turn_id: turnId,
+      status: payload.status || 'running',
+      input: input ?? turn.input,
+      work_root: payload.work_root || payload.workRoot || turn.work_root || '',
+    }
+    return { ...snapshot, turns, status: 'running' }
+  }
+
+  if (event.method === 'item/started') {
+    if (!itemId) return snapshot
+    const items = { ...(snapshot.items ?? {}) }
+    const item = items[itemId] ?? { item_id: itemId }
+    items[itemId] = {
+      ...item,
+      item_id: itemId,
+      turn_id: turnId || item.turn_id || null,
+      parent_item_id: event.parent_item_id ?? item.parent_item_id ?? null,
+      type: payload.type ?? item.type ?? 'item',
+      status: payload.status ?? item.status ?? 'running',
+      content: payload.content ?? item.content ?? '',
+    }
+    const itemOrder = [...(snapshot.item_order ?? [])]
+    if (!itemOrder.includes(itemId)) itemOrder.push(itemId)
+    const turns = { ...(snapshot.turns ?? {}) }
+    if (turnId) {
+      const turn = turns[turnId] ?? { turn_id: turnId, items: [], status: 'running' }
+      const turnItems = [...(turn.items ?? [])]
+      if (!turnItems.includes(itemId)) turnItems.push(itemId)
+      turns[turnId] = { ...turn, items: turnItems }
+    }
+    return { ...snapshot, items, item_order: itemOrder, turns }
+  }
+
+  return snapshot
 }
 
 function emptyCoreSnapshot(threadId: string): CoreRuntimeSnapshot {
