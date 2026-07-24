@@ -33,10 +33,10 @@ from .core_db import open_core_app_db
 from .core_session_store import CoreDbSessionStore
 from .default_agent import CoreAgentPaths, CoreAgentSpec, create_core_agent_operations
 from .durable_operations import register_durable_operations
+from .event_store import AppEventInput
 from .factory import create_app
 from .live_hub import CoreAppEventHub
 from .live_operations import CoreLiveContext, CoreLiveOperationHost
-from .persistence_host import AppPersistenceHost
 from .project_store import ActiveProjectSessionsError, CoreProjectStore
 from .live_router import create_core_live_router
 from .operation_catalog import OperationCatalog, OperationRequest, OperationResult
@@ -182,7 +182,6 @@ def create_core_agent_http_app(
     operations.register("approval.respond", execute_core_operation)
 
     # Expose config/project RPC operations directly so UI can query models/projects/sessions.
-    from lamtools_core.cli import list_llm_model_configs
 
     async def _config_models_list(request: OperationRequest) -> OperationResult:
         del request
@@ -300,6 +299,58 @@ def create_core_agent_http_app(
                     })
                 except Exception:
                     pass  # best-effort registration; never block execution
+            # Emit turn/accepted and item/started events so the arrange
+            # instruction appears as a user message in the conversation,
+            # matching the WebSocket turn-acceptance path exactly.
+            if job.operation == "turn.start":
+                message = (job.payload.get("message") or "").strip()
+                if message:
+                    turn_id = payload.get("turn_id", "")
+                    thread_id = job.thread_id
+                    user_item_id = f"{turn_id}:user"
+                    client_message_id = uuid.uuid4().hex
+
+                    async def _emit_arrange_turn_events(db):
+                        accepted = await core_db_handle.persistence.append(
+                            db,
+                            AppEventInput(
+                                thread_id=thread_id,
+                                method="turn/accepted",
+                                turn_id=turn_id,
+                                client_message_id=client_message_id,
+                                payload={
+                                    "type": "turn",
+                                    "input": [{"type": "text", "text": message}],
+                                    "work_root": job.work_root or "",
+                                    "status": "running",
+                                },
+                            ),
+                        )
+                        user = await core_db_handle.persistence.append(
+                            db,
+                            AppEventInput(
+                                thread_id=thread_id,
+                                method="item/started",
+                                turn_id=turn_id,
+                                item_id=user_item_id,
+                                client_message_id=client_message_id,
+                                payload={
+                                    "type": "userMessage",
+                                    "status": "completed",
+                                    "content": [{"type": "text", "text": message}],
+                                },
+                            ),
+                        )
+                        return accepted, user
+
+                    try:
+                        accepted_envelope, user_envelope = await core_db_handle.persistence.write(
+                            _emit_arrange_turn_events
+                        )
+                        await live_hub.publish(accepted_envelope)
+                        await live_hub.publish(user_envelope)
+                    except Exception:
+                        pass  # best-effort; never block arrange execution
             return await agent_operations.execute(
                 job.operation,
                 payload,
@@ -544,7 +595,6 @@ def _register_core_project_operations(catalog: OperationCatalog, *, project_stor
 
 def _register_core_session_operations(catalog: OperationCatalog, *, session_store: Any) -> None:
     async def session_list(request: OperationRequest) -> OperationResult:
-        from lamtools_core.app.core_session_store import CoreDbSessionStore
         sessions = await session_store.list()
         return OperationResult(name="session.list", payload={
             "sessions": [{"id": s.id, "title": s.title, "status": s.status} for s in sessions]
