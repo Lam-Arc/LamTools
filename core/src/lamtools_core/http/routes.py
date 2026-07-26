@@ -7,9 +7,11 @@ import inspect
 import uuid
 from collections.abc import Callable
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Response
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from ..app.operation_catalog import OperationCatalog
@@ -423,6 +425,116 @@ def create_core_router(
         if agents_md is None:
             raise HTTPException(status_code=404, detail="Project not found")
         return agents_md
+
+    # ==================================================================
+    # Project file routes (for Stage pane file tree & preview)
+    # ==================================================================
+
+    _IGNORED_DIRS = {".git", "__pycache__", "node_modules", ".venv", "venv", "dist", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
+
+    @router.get("/projects/{project_id}/files")
+    async def list_project_files(project_id: str, path: str = "") -> dict[str, Any]:
+        store = require_project_store()
+        project = await store.get(project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        root = Path(project.work_root)
+        target = (root / path).resolve() if path else root
+        try:
+            target.relative_to(root)
+        except ValueError:
+            raise HTTPException(status_code=403, detail="Path escapes project root")
+        if not target.exists():
+            raise HTTPException(status_code=404, detail="Path not found")
+        if not target.is_dir():
+            raise HTTPException(status_code=400, detail="Path is not a directory")
+        entries = []
+        try:
+            for item in sorted(target.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
+                if item.is_dir() and item.name in _IGNORED_DIRS:
+                    continue
+                entries.append({
+                    "name": item.name,
+                    "type": "directory" if item.is_dir() else "file",
+                    "size": item.stat().st_size if item.is_file() else 0,
+                    "ext": item.suffix.lower().lstrip(".") if item.is_file() else "",
+                })
+        except PermissionError:
+            raise HTTPException(status_code=403, detail="Permission denied")
+        return {"entries": entries, "path": path}
+
+    @router.get("/projects/{project_id}/files/content")
+    async def read_project_file_content(project_id: str, path: str) -> dict[str, str]:
+        if not path:
+            raise HTTPException(status_code=400, detail="path is required")
+        store = require_project_store()
+        project = await store.get(project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        root = Path(project.work_root)
+        target = (root / path).resolve()
+        try:
+            target.relative_to(root)
+        except ValueError:
+            raise HTTPException(status_code=403, detail="Path escapes project root")
+        if not target.exists():
+            raise HTTPException(status_code=404, detail="File not found")
+        if not target.is_file():
+            raise HTTPException(status_code=400, detail="Path is not a file")
+        try:
+            content = target.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            raise HTTPException(status_code=422, detail="File is not valid UTF-8 text")
+        except PermissionError:
+            raise HTTPException(status_code=403, detail="Permission denied")
+        return {"content": content, "path": path}
+
+    @router.get("/projects/{project_id}/files/raw")
+    async def read_project_file_raw(project_id: str, path: str):
+        if not path:
+            raise HTTPException(status_code=400, detail="path is required")
+        store = require_project_store()
+        project = await store.get(project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        root = Path(project.work_root)
+        target = (root / path).resolve()
+        try:
+            target.relative_to(root)
+        except ValueError:
+            raise HTTPException(status_code=403, detail="Path escapes project root")
+        if not target.exists():
+            raise HTTPException(status_code=404, detail="File not found")
+        if not target.is_file():
+            raise HTTPException(status_code=400, detail="Path is not a file")
+        return FileResponse(str(target))
+
+    @router.put("/projects/{project_id}/files/content")
+    async def write_project_file_content(project_id: str, path: str, body: dict):
+        if not path:
+            raise HTTPException(status_code=400, detail="path is required")
+        content = body.get("content")
+        if content is None:
+            raise HTTPException(status_code=400, detail="content is required")
+        store = require_project_store()
+        project = await store.get(project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        root = Path(project.work_root)
+        target = (root / path).resolve()
+        try:
+            target.relative_to(root)
+        except ValueError:
+            raise HTTPException(status_code=403, detail="Path escapes project root")
+        if not target.exists():
+            raise HTTPException(status_code=404, detail="File not found")
+        if not target.is_file():
+            raise HTTPException(status_code=400, detail="Path is not a file")
+        try:
+            target.write_text(content, encoding="utf-8")
+        except PermissionError:
+            raise HTTPException(status_code=403, detail="Permission denied")
+        return {"content": content, "path": path}
 
     # ==================================================================
     # Event routes

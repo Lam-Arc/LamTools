@@ -33,6 +33,8 @@ export function useShellLayout(options: ShellLayoutOptions) {
   const rightOpen = ref(false)
   const leftPinned = ref(true)
   const rightPinned = ref(false)
+  const stageOpen = ref(false)
+  const stageHeight = ref(300)
   const isNarrowViewport = ref(false)
   const density = ref<DensityMode>(options.density ?? 'standard')
   const contentWidth = ref(options.contentWidth ?? 780)
@@ -42,6 +44,7 @@ export function useShellLayout(options: ShellLayoutOptions) {
   const shellClass = computed(() => ({
     'left-open': leftOpen.value,
     'right-open': rightOpen.value,
+    'stage-open': stageOpen.value,
     [`density-${density.value}`]: true,
   }))
 
@@ -52,6 +55,7 @@ export function useShellLayout(options: ShellLayoutOptions) {
     const cssVars = themeToCSSVars(theme.value)
     return {
       '--content-width': `${Math.min(1120, Math.max(560, contentWidth.value))}px`,
+      '--stage-height': `${stageHeight.value}px`,
       ...cssVars,
     } as Record<string, string>
   })
@@ -98,6 +102,34 @@ export function useShellLayout(options: ShellLayoutOptions) {
   function closeDrawers() {
     leftOpen.value = false
     rightOpen.value = false
+  }
+
+  function toggleStage() {
+    stageOpen.value = !stageOpen.value
+  }
+
+  // --- stage resize (drag handle) ---
+  let resizeActive = false
+  function startStageResize(event: PointerEvent) {
+    resizeActive = true
+    const target = event.target as HTMLElement
+    target.setPointerCapture(event.pointerId)
+    target.classList.add('dragging')
+    document.body.style.cursor = 'ns-resize'
+    document.body.style.userSelect = 'none'
+  }
+  function onStageResizeMove(event: PointerEvent) {
+    if (!resizeActive) return
+    const newHeight = Math.max(80, Math.min(window.innerHeight - 120, event.clientY))
+    stageHeight.value = newHeight
+  }
+  function endStageResize(event: PointerEvent) {
+    if (!resizeActive) return
+    resizeActive = false
+    const target = event.target as HTMLElement
+    target.classList.remove('dragging')
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
   }
 
   function onPointerDown(event: PointerEvent) {
@@ -169,7 +201,7 @@ export function useShellLayout(options: ShellLayoutOptions) {
 
   // --- auto-save with debounce ---
   let saveTimer: ReturnType<typeof setTimeout> | undefined
-  watch([density, contentWidth, theme], () => {
+  watch([density, contentWidth, theme, stageHeight], () => {
     clearTimeout(saveTimer)
     saveTimer = setTimeout(saveSettings, 500)
   })
@@ -201,6 +233,8 @@ export function useShellLayout(options: ShellLayoutOptions) {
       if (saved.density) density.value = saved.density
       if (saved.contentWidth) contentWidth.value = saved.contentWidth
       if (saved.theme) theme.value = migrateThemeDefaults({ ...DEFAULT_THEME, ...saved.theme })
+      if (saved.stageOpen !== undefined) stageOpen.value = saved.stageOpen
+      if (saved.stageHeight) stageHeight.value = saved.stageHeight
     } catch {
       /* ignore */
     }
@@ -213,6 +247,8 @@ export function useShellLayout(options: ShellLayoutOptions) {
         density: density.value,
         contentWidth: contentWidth.value,
         theme: theme.value,
+        stageOpen: stageOpen.value,
+        stageHeight: stageHeight.value,
       }),
     )
   }
@@ -223,6 +259,8 @@ export function useShellLayout(options: ShellLayoutOptions) {
     rightOpen,
     leftPinned,
     rightPinned,
+    stageOpen,
+    stageHeight,
     isNarrowViewport,
     density,
     contentWidth,
@@ -241,6 +279,10 @@ export function useShellLayout(options: ShellLayoutOptions) {
     toggleLeftDrawer,
     toggleRightDrawer,
     closeDrawers,
+    toggleStage,
+    startStageResize,
+    onStageResizeMove,
+    endStageResize,
     goSettings: options.onSettings ?? (() => {}),
     // persistence
     loadSettings,

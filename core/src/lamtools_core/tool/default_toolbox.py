@@ -689,6 +689,8 @@ class CoreToolbox:
         self._failed_sub_agent_calls: dict[tuple[str, str], dict[str, Any]] = {}
         self.approval_policy = approval_policy
         self.disabled_tools = set(disabled_tools or set())
+        # FIXME: web_search 暂不上线（bug 较多），默认禁用
+        self.disabled_tools.add("web_search")
         self.load_tools = load_tools or {}
         self.tool_permissions = dict(DEFAULT_TOOL_PERMISSIONS)
         self.skill_registry = skill_registry or SkillRegistry(explicit_roots=self.loaded_skill_roots)

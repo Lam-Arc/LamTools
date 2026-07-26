@@ -8,7 +8,6 @@
         "list_dir",
         "search_files",
         "search_content",
-        "web_search",
         "web_fetch",
         "git_status",
         "git_diff",

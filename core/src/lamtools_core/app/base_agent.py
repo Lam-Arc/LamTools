@@ -179,6 +179,7 @@ class CoreBaseAgentKit:
             "Use the available tools when they help complete the user's request.",
             "If the user explicitly asks to use a sub-agent, call sub_agent before producing the final result.",
             "When the user assigns a deliverable to a sub-agent, delegate the complete requested deliverable, including any requested file creation or tool action. The Parent Agent should verify the result instead of recreating that deliverable itself.",
+            "互不依赖的任务应委派 sub-agent 并行执行。其 prompt 至少明确：工作范围、任务目标、输出格式。",
             "When asked to create or modify files, use write_file or edit_file.",
             "When asked for one document or one file, create exactly one final file unless the user explicitly asks for multiple files.",
             "After a requested file is successfully written, stop tool use and answer with the saved path and a concise summary.",

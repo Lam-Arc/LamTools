@@ -64,31 +64,6 @@ def test_incomplete_tool_history_is_closed_before_next_user_message():
     assert repaired[2].metadata["history_repair"] == "interrupted_tool_call"
 
 
-def test_failure_diagnosis_structure_accepts_common_english_selection_heading():
-    reply = (
-        "Root Cause: missing file. Evidence: file not found. "
-        "Option A: create it. Option B: search elsewhere. "
-        "Selection: Option B. Verification Signal: recursive search returns no match."
-    )
-
-    assert CoreLoopKernel._has_failure_diagnosis_structure(reply) is True
-
-
-def test_failure_diagnosis_structure_accepts_numbered_list_under_options_heading():
-    reply = """**Diagnosis**
-
-- **Root cause**: missing file.
-- **Evidence**: read failed and directory listing did not contain it.
-- **Options**:
-  1. **Search deeper** — inspect subdirectories.
-  2. **Stop** — accept that the file is absent.
-- **Selected option**: Option 1.
-- **Verification signal**: a recursive search returns no match.
-"""
-
-    assert CoreLoopKernel._has_failure_diagnosis_structure(reply) is True
-
-
 # ---------------------------------------------------------------------------
 # Mock implementations
 # ---------------------------------------------------------------------------
@@ -130,6 +105,7 @@ class MockRuntimeKit:
     """Mock RuntimeKit that follows a scripted sequence of steps."""
 
     name: str = "mock"
+    toolbox = None
 
     def __init__(self, steps: list[MockKitStep] | None = None) -> None:
         self.steps = steps or [MockKitStep()]
@@ -595,12 +571,14 @@ class TestKernelTypes:
     def test_loop_policy_defaults(self):
         policy = LoopPolicy()
         assert policy.model_timeout_seconds == 360.0
-        assert policy.model_retries == 10
+        assert policy.model_retries == 100
         assert policy.tool_timeout_seconds is None
         assert policy.emit_debug_events is False
         assert policy.context_window_tokens is None
         assert policy.compact_trigger_ratio == 0.8
         assert policy.compact_limit_ratio == 0.6
+        assert policy.max_identical_tool_results == 10
+        assert policy.consecutive_failure_rounds_threshold == 3
         assert policy.metadata == {}
 
     def test_kernel_error_hierarchy(self):
@@ -744,12 +722,11 @@ class TestKernelFailed:
 
 
 class TestKernelToolFailure:
+    """Tool failure handling — single failures do NOT trigger diagnosis."""
+
     @pytest.mark.asyncio
     async def test_tool_failure_does_not_auto_fail(self):
-        """Tool failure does NOT automatically cause Kernel to fail.
-
-        The Kernel requires a diagnosis, then the Kit can continue normally.
-        """
+        """A single tool failure continues normally without diagnosis injection."""
         failed_tool_result = ToolResult(
             call_id="c1",
             name="search",
@@ -761,14 +738,7 @@ class TestKernelToolFailure:
                 reply="search failed, trying again",
                 tool_calls=[ToolCall(id="c1", name="search", arguments={"q": "test"})],
                 tool_results=[failed_tool_result],
-                decision="continue",  # Kit decides to continue despite tool failure
-            ),
-            MockKitStep(
-                reply=(
-                    "根因是连接超时。证据是工具返回 connection timeout。"
-                    "方案一检查网络，方案二更换服务。选择方案一；验证信号是请求成功。"
-                ),
-                decision="done",
+                decision="continue",
             ),
             MockKitStep(reply="retry succeeded", decision="done"),
         ])
@@ -776,27 +746,24 @@ class TestKernelToolFailure:
 
         result = await kernel.run(_make_turn_input())
 
-        # Tool failure enters diagnosis but does not fail the run.
         assert result.decision == "done"
         assert len(result.steps) == 2
-        assert result.steps[1].metadata["failure_diagnosis_completed"] is True
-        assert result.message.startswith("根因是连接超时")
         assert result.steps[0].tool_steps[0].result.status == "failed"
-        assert result.steps[0].decision == "continue"
+        # No diagnosis injection for a single failure
+        diagnosis_prompts = [
+            str(message.content)
+            for history in kit.context_histories
+            for message in history
+            if message.role == "system" and "FAILURE_DIAGNOSIS_REQUIRED" in str(message.content)
+        ]
+        assert not diagnosis_prompts
 
     @pytest.mark.asyncio
     async def test_tool_timeout_returns_failed_result_not_kernel_failure(self):
-        """Tool timeout becomes a failed ToolResult; Kit still decides final state."""
+        """Tool timeout becomes a failed ToolResult; single failure, no diagnosis."""
         call = ToolCall(id="c1", name="slow_tool", arguments={})
         kit = SlowToolKit(steps=[
             MockKitStep(tool_calls=[call], decision="done"),
-            MockKitStep(
-                reply=(
-                    "[根因] 工具超时 [证据] timed out [方案1] 缩小任务 "
-                    "[方案2] 调整超时 [选择] 方案1 [验证信号] 工具按时返回"
-                ),
-                decision="done",
-            ),
             MockKitStep(reply="done", decision="done"),
         ])
         policy = LoopPolicy(tool_timeout_seconds=0.001)
@@ -809,6 +776,14 @@ class TestKernelToolFailure:
         assert tool_result is not None
         assert tool_result.status == "failed"
         assert "timed out" in tool_result.error
+        # Single failure, no diagnosis
+        diagnosis_prompts = [
+            str(message.content)
+            for history in kit.context_histories
+            for message in history
+            if message.role == "system" and "FAILURE_DIAGNOSIS_REQUIRED" in str(message.content)
+        ]
+        assert not diagnosis_prompts
 
     @pytest.mark.asyncio
     async def test_tool_exception_returns_failed_result_not_kernel_failure(self):
@@ -819,14 +794,6 @@ class TestKernelToolFailure:
         call = ToolCall(id="c1", name="search_files", arguments={"path": None})
         kit = RaisingToolKit(steps=[
             MockKitStep(tool_calls=[call], decision="done"),
-            MockKitStep(
-                reply=(
-                    "[根因] 参数类型错误 [证据] path must be a string "
-                    "[方案1] 修正参数 [方案2] 改进输入校验 [选择] 方案1 "
-                    "[验证信号] 工具调用成功"
-                ),
-                decision="done",
-            ),
             MockKitStep(reply="done", decision="done"),
         ])
         kernel = _make_kernel(kit)
@@ -839,6 +806,14 @@ class TestKernelToolFailure:
         assert tool_result.status == "failed"
         assert tool_result.metadata["error_type"] == "TypeError"
         assert "path must be a string" in tool_result.error
+        # Single failure, no diagnosis
+        diagnosis_prompts = [
+            str(message.content)
+            for history in kit.context_histories
+            for message in history
+            if message.role == "system" and "FAILURE_DIAGNOSIS_REQUIRED" in str(message.content)
+        ]
+        assert not diagnosis_prompts
 
 
 class TestKernelVerification:
@@ -1762,339 +1737,175 @@ class TestKernelStateSave:
         assert "no_progress" not in result.state.metadata
         assert "pending_waiting_request" not in result.state.metadata
 
+
     @pytest.mark.asyncio
-    async def test_tool_failure_requires_visible_diagnosis_before_selected_plan_continues(self):
-        failed_call = ToolCall(
-            id="failed",
-            name="run_command",
-            arguments={"command": "python -m http.server 8080"},
-        )
-        investigation_call = ToolCall(
-            id="investigate",
-            name="run_command",
-            arguments={"command": "Get-NetTCPConnection -LocalPort 8080"},
-        )
-        selected_plan_call = ToolCall(
-            id="selected-plan",
-            name="run_command",
-            arguments={"command": "python -m http.server 8080 --directory knowledge-base"},
-        )
-        diagnosis = (
-            "根因：服务在错误目录启动。\n"
-            "证据：根路径返回 404。\n"
-            "方案一：停止旧进程并在目标目录启动。\n"
-            "方案二：使用 --directory 显式指定目录。\n"
-            "选择：方案二。\n"
-            "验证信号：GET /index.html 返回 200。"
-        )
+    async def test_three_consecutive_failures_triggers_diagnosis_hint(self):
+        """After 3 consecutive rounds with tool failures, inject failure_diagnosis_hint."""
+        failed_call = ToolCall(id="failed", name="run_command", arguments={"command": "broken"})
         kit = MockRuntimeKit(steps=[
             MockKitStep(
                 tool_calls=[failed_call],
-                tool_results=[ToolResult(
-                    call_id="failed",
-                    name="run_command",
-                    status="failed",
-                    error="HTTP probe returned 404",
-                    metadata={"exit_code": 1},
-                )],
+                tool_results=[ToolResult(call_id="failed", name="run_command", status="failed", error="exit 1")],
             ),
             MockKitStep(
-                tool_calls=[investigation_call],
-                tool_results=[ToolResult(
-                    call_id="investigate",
-                    name="run_command",
-                    content="LocalPort OwningProcess\n8080 1256",
-                )],
+                tool_calls=[failed_call],
+                tool_results=[ToolResult(call_id="failed", name="run_command", status="failed", error="exit 1")],
             ),
-            MockKitStep(reply=diagnosis, decision="continue"),
             MockKitStep(
-                tool_calls=[selected_plan_call],
-                tool_results=[ToolResult(
-                    call_id="selected-plan",
-                    name="run_command",
-                    content="server ready",
-                )],
+                tool_calls=[failed_call],
+                tool_results=[ToolResult(call_id="failed", name="run_command", status="failed", error="exit 1")],
             ),
-            MockKitStep(reply="完成", decision="done"),
+            MockKitStep(reply="got it, will fix", decision="done"),
         ])
 
         result = await _make_kernel(kit).run(_make_turn_input())
 
         assert result.decision == "done"
-        assert len(result.steps) == 5
-        assert result.steps[2].metadata["failure_diagnosis_completed"] is True
-        assert result.steps[2].decision == "continue"
-        assert result.steps[3].tool_steps[0].call.id == "selected-plan"
+        assert result.steps[2].metadata["failure_diagnosis_hint"] is True
+        final_history = kit.context_histories[-1]
+        diagnosis_prompts = [
+            str(message.content)
+            for message in final_history
+            if message.role == "system" and "FAILURE_DIAGNOSIS_REQUIRED" in str(message.content)
+        ]
+        assert len(diagnosis_prompts) == 1
+        assert "exit 1" in diagnosis_prompts[0]
+
+    @pytest.mark.asyncio
+    async def test_single_failure_does_not_trigger_diagnosis(self):
+        """A single failure round does NOT trigger any diagnosis hint."""
+        kit = MockRuntimeKit(steps=[
+            MockKitStep(
+                tool_calls=[ToolCall(id="f1", name="run_command", arguments={"command": "bad"})],
+                tool_results=[ToolResult(call_id="f1", name="run_command", status="failed", error="bad")],
+            ),
+            MockKitStep(reply="fixed", decision="done"),
+        ])
+
+        result = await _make_kernel(kit).run(_make_turn_input())
+
+        assert result.decision == "done"
         diagnosis_prompts = [
             str(message.content)
             for history in kit.context_histories
             for message in history
             if message.role == "system" and "FAILURE_DIAGNOSIS_REQUIRED" in str(message.content)
         ]
-        assert diagnosis_prompts
-        assert "HTTP probe returned 404" in diagnosis_prompts[0]
-        assert "至少两个" in diagnosis_prompts[0]
+        assert not diagnosis_prompts
 
     @pytest.mark.asyncio
-    async def test_failure_diagnosis_blocks_an_exact_retry_but_allows_investigation(self):
-        first = ToolCall(id="first", name="run_command", arguments={"command": "broken"})
-        retry = ToolCall(id="retry", name="run_command", arguments={"command": "broken"})
-        inspect = ToolCall(id="inspect", name="read_file", arguments={"path": "error.log"})
-        kit = MockRuntimeKit(steps=[
-            MockKitStep(
-                tool_calls=[first],
-                tool_results=[ToolResult(
-                    call_id="first",
-                    name="run_command",
-                    status="failed",
-                    error="exit 1",
-                )],
-            ),
-            MockKitStep(tool_calls=[retry]),
-            MockKitStep(
-                tool_calls=[inspect],
-                tool_results=[ToolResult(
-                    call_id="inspect",
-                    name="read_file",
-                    content="real failure evidence",
-                )],
-            ),
-            MockKitStep(reply="根因与证据。方案一。方案二。选择方案一。验证信号。", decision="done"),
-            MockKitStep(reply="完成", decision="done"),
-        ])
-
-        result = await _make_kernel(kit).run(_make_turn_input())
-
-        assert result.decision == "done"
-        blocked = result.steps[1].tool_steps[0].result
-        assert blocked is not None
-        assert blocked.status == "blocked"
-        assert blocked.metadata["failure_diagnosis_required"] is True
-        assert result.steps[2].tool_steps[0].call.id == "inspect"
-
-    @pytest.mark.asyncio
-    async def test_incomplete_failure_diagnosis_allows_a_different_investigation_call(self):
-        failed = ToolCall(id="failed", name="run_command", arguments={"command": "broken"})
-        premature = ToolCall(id="premature", name="run_command", arguments={"command": "different"})
-        complete = "[根因] 未知 [证据] exit 1 [方案1] 查日志 [方案2] 查环境 [选择] 方案1 [验证信号] 命令成功"
+    async def test_consecutive_failures_reset_on_success(self):
+        """Counter resets when a round has zero failures."""
+        failed = ToolCall(id="f", name="run_command", arguments={"command": "bad"})
+        success = ToolCall(id="ok", name="run_command", arguments={"command": "good"})
         kit = MockRuntimeKit(steps=[
             MockKitStep(
                 tool_calls=[failed],
-                tool_results=[ToolResult(call_id="failed", name="run_command", status="failed", error="exit 1")],
+                tool_results=[ToolResult(call_id="f", name="run_command", status="failed", error="bad")],
             ),
-            MockKitStep(reply="根因可能已找到，继续处理。", tool_calls=[premature]),
-            MockKitStep(reply=complete, decision="done"),
-            MockKitStep(reply="完成", decision="done"),
-        ])
-
-        result = await _make_kernel(kit).run(_make_turn_input())
-
-        investigation = result.steps[1].tool_steps[0].result
-        assert investigation is not None
-        assert investigation.status == "ok"
-        assert result.steps[1].metadata["failure_diagnosis_retry_required"] is True
-        assert result.steps[2].metadata["failure_diagnosis_completed"] is True
-
-    @pytest.mark.asyncio
-    async def test_failure_diagnosis_allows_one_investigation_round_then_requires_diagnosis(self):
-        failed = ToolCall(id="failed", name="run_command", arguments={"command": "probe service"})
-        first_probe = ToolCall(id="first-probe", name="run_command", arguments={"command": "inspect process"})
-        drifting_probe = ToolCall(id="drifting-probe", name="run_command", arguments={"command": "inspect another port"})
-        diagnosis = (
-            "[根因] 服务尚未启动 [证据] 进程检查没有目标服务 "
-            "[方案1] 从工作区启动服务 [方案2] 使用静态文件直接验收 "
-            "[选择] 方案1 [验证信号] 目标页面返回 200"
-        )
-        kit = MockRuntimeKit(steps=[
             MockKitStep(
                 tool_calls=[failed],
-                tool_results=[ToolResult(
-                    call_id="failed",
-                    name="run_command",
-                    status="failed",
-                    error="connection refused",
-                )],
+                tool_results=[ToolResult(call_id="f", name="run_command", status="failed", error="bad")],
             ),
             MockKitStep(
-                tool_calls=[first_probe],
-                tool_results=[ToolResult(
-                    call_id="first-probe",
-                    name="run_command",
-                    content="no matching process",
-                )],
+                tool_calls=[success],
+                tool_results=[ToolResult(call_id="ok", name="run_command", status="ok", content="fine")],
             ),
-            MockKitStep(tool_calls=[drifting_probe]),
-            MockKitStep(reply=diagnosis, decision="done"),
-        ])
-
-        result = await _make_kernel(kit).run(_make_turn_input())
-
-        assert result.decision == "done"
-        first_result = result.steps[1].tool_steps[0].result
-        assert first_result is not None
-        assert first_result.status == "ok"
-        blocked = result.steps[2].tool_steps[0].result
-        assert blocked is not None
-        assert blocked.status == "blocked"
-        assert blocked.metadata["failure_diagnosis_required"] is True
-        assert blocked.metadata["investigation_budget_exhausted"] is True
-        assert result.steps[3].metadata["failure_diagnosis_completed"] is True
-
-    @pytest.mark.asyncio
-    async def test_failed_selected_solution_starts_a_new_diagnosis_cycle(self):
-        first_failure = ToolCall(id="first-failure", name="run_command", arguments={"command": "probe"})
-        selected_solution = ToolCall(id="selected-solution", name="run_command", arguments={"command": "start service"})
-        first_diagnosis = (
-            "[根因] 服务未启动 [证据] probe 失败 [方案1] 启动服务 [方案2] 使用静态文件 "
-            "[选择] 方案1 [验证信号] 页面返回 200"
-        )
-        second_diagnosis = (
-            "[根因] 启动命令本身失败 [证据] start service 返回 exit 1 "
-            "[方案1] 检查启动输出 [方案2] 改用静态文件 [选择] 方案2 [验证信号] 页面可打开"
-        )
-        kit = MockRuntimeKit(steps=[
-            MockKitStep(
-                tool_calls=[first_failure],
-                tool_results=[ToolResult(
-                    call_id="first-failure",
-                    name="run_command",
-                    status="failed",
-                    error="connection refused",
-                )],
-            ),
-            MockKitStep(
-                reply=first_diagnosis,
-                tool_calls=[selected_solution],
-                tool_results=[ToolResult(
-                    call_id="selected-solution",
-                    name="run_command",
-                    status="failed",
-                    error="exit 1",
-                )],
-            ),
-            MockKitStep(reply="完成", decision="done"),
-            MockKitStep(reply=second_diagnosis, decision="done"),
-        ])
-
-        result = await _make_kernel(kit).run(_make_turn_input())
-
-        assert result.decision == "done"
-        assert len(result.steps) == 4
-        assert result.steps[1].metadata["failure_diagnosis_completed"] is True
-        assert result.steps[1].metadata["failure_diagnosis_required"] is True
-        assert result.steps[2].metadata["failure_diagnosis_retry_required"] is True
-        assert result.steps[3].metadata["failure_diagnosis_completed"] is True
-
-    @pytest.mark.asyncio
-    async def test_tool_only_streak_requires_visible_progress_before_more_tools(self):
-        calls = [
-            ToolCall(id=f"read-{index}", name="run_command", arguments={"command": f"read chunk {index}"})
-            for index in range(4)
-        ]
-        progress = (
-            "[已确认事实] 已读取前两段。"
-            "[剩余不确定性] 后两段尚未检查。"
-            "[下一步] 只读取剩余区间后进入验收。"
-        )
-        kit = MockRuntimeKit(steps=[
-            MockKitStep(reply="", tool_calls=[calls[0]]),
-            MockKitStep(reply="", tool_calls=[calls[1]]),
-            MockKitStep(reply="", tool_calls=[calls[2]]),
-            MockKitStep(reply=progress, decision="continue"),
-            MockKitStep(reply="", tool_calls=[calls[3]]),
-            MockKitStep(reply="完成", decision="done"),
-        ])
-        policy = LoopPolicy(max_tool_only_rounds_without_progress=2)
-
-        result = await _make_kernel(kit, policy=policy).run(_make_turn_input())
-
-        assert result.decision == "done"
-        blocked = result.steps[2].tool_steps[0].result
-        assert blocked is not None
-        assert blocked.status == "blocked"
-        assert blocked.metadata["tool_progress_required"] is True
-        assert result.steps[3].metadata["tool_progress_completed"] is True
-        resumed = result.steps[4].tool_steps[0].result
-        assert resumed is not None
-        assert resumed.status == "ok"
-
-    @pytest.mark.asyncio
-    async def test_substantive_natural_progress_report_can_resume_with_next_tool(self):
-        calls = [
-            ToolCall(id=f"write-{index}", name="write_file", arguments={"path": f"part-{index}.txt"})
-            for index in range(4)
-        ]
-        natural_progress = (
-            "已确认的事实：架构、设计和种子数据已经读取，目标与约束已经明确。\n"
-            "需要实现的内容：主页面、完整样式、应用逻辑、Markdown 解析和导入导出。\n"
-            "现在我将开始实现这些文件，并逐个写入后运行验证。"
-        )
-        kit = MockRuntimeKit(steps=[
-            MockKitStep(reply="", tool_calls=[calls[0]]),
-            MockKitStep(reply="", tool_calls=[calls[1]]),
-            MockKitStep(reply="", tool_calls=[calls[2]]),
-            MockKitStep(reply=natural_progress, tool_calls=[calls[3]]),
-            MockKitStep(reply="完成", decision="done"),
-        ])
-        policy = LoopPolicy(max_tool_only_rounds_without_progress=2)
-
-        result = await _make_kernel(kit, policy=policy).run(_make_turn_input())
-
-        assert result.decision == "done"
-        resumed = result.steps[3].tool_steps[0].result
-        assert resumed is not None
-        assert resumed.status == "ok"
-        assert result.steps[3].metadata["tool_progress_completed"] is True
-
-    @pytest.mark.asyncio
-    async def test_plain_text_does_not_complete_required_failure_diagnosis(self):
-        failed = ToolCall(id="failed", name="run_command", arguments={"command": "broken"})
-        complete = "[根因] 未知 [证据] exit 1 [方案1] 查日志 [方案2] 查环境 [选择] 方案1 [验证信号] 命令成功"
-        kit = MockRuntimeKit(steps=[
             MockKitStep(
                 tool_calls=[failed],
-                tool_results=[ToolResult(call_id="failed", name="run_command", status="failed", error="exit 1")],
+                tool_results=[ToolResult(call_id="f", name="run_command", status="failed", error="bad")],
             ),
-            MockKitStep(reply="我先猜测一下原因。", decision="done"),
-            MockKitStep(reply=complete, decision="done"),
-            MockKitStep(reply="完成", decision="done"),
-        ])
-
-        result = await _make_kernel(kit).run(_make_turn_input())
-
-        assert result.steps[1].metadata["failure_diagnosis_retry_required"] is True
-        assert result.steps[2].metadata["failure_diagnosis_completed"] is True
-        assert result.decision == "done"
-
-    @pytest.mark.asyncio
-    async def test_complete_diagnosis_with_investigation_tool_is_recorded_once(self):
-        failed = ToolCall(id="failed", name="read_file", arguments={"path": "missing.txt"})
-        investigate = ToolCall(id="search", name="search_files", arguments={"pattern": "missing.txt"})
-        diagnosis = (
-            "[根因] 文件不存在 [证据] read_file failed [方案1] 搜索 [方案2] 询问用户 "
-            "[选择] 方案1 [验证信号] 搜索无结果"
-        )
-        kit = MockRuntimeKit(steps=[
-            MockKitStep(
-                tool_calls=[failed],
-                tool_results=[ToolResult(call_id="failed", name="read_file", status="failed", error="missing")],
-            ),
-            MockKitStep(reply=diagnosis, tool_calls=[investigate]),
-            MockKitStep(reply="验证结果：搜索无结果。", decision="done"),
+            MockKitStep(reply="done", decision="done"),
         ])
 
         result = await _make_kernel(kit).run(_make_turn_input())
 
         assert result.decision == "done"
-        assert result.steps[1].metadata["failure_diagnosis_completed"] is True
-        assert result.message == "验证结果：搜索无结果。"
-        recorded_prompts = [
+        diagnosis_prompts = [
             str(message.content)
             for history in kit.context_histories
             for message in history
-            if message.role == "system" and "FAILURE_DIAGNOSIS_RECORDED" in str(message.content)
+            if message.role == "system" and "FAILURE_DIAGNOSIS_REQUIRED" in str(message.content)
         ]
-        assert recorded_prompts
+        assert not diagnosis_prompts
+
+    @pytest.mark.asyncio
+    async def test_diagnosis_hint_injected_only_once_per_cycle(self):
+        """After 3 consecutive failures trigger the hint, counter resets immediately;
+        the next 3 consecutive failures can trigger it again."""
+        failed = ToolCall(id="f", name="run_command", arguments={"command": "bad"})
+        kit = MockRuntimeKit(steps=[
+            MockKitStep(
+                tool_calls=[failed],
+                tool_results=[ToolResult(call_id="f", name="run_command", status="failed", error="bad")],
+            ),
+            MockKitStep(
+                tool_calls=[failed],
+                tool_results=[ToolResult(call_id="f", name="run_command", status="failed", error="bad")],
+            ),
+            MockKitStep(
+                tool_calls=[failed],
+                tool_results=[ToolResult(call_id="f", name="run_command", status="failed", error="bad")],
+            ),
+            MockKitStep(reply="ok"),
+            MockKitStep(
+                tool_calls=[failed],
+                tool_results=[ToolResult(call_id="f", name="run_command", status="failed", error="bad")],
+            ),
+            MockKitStep(
+                tool_calls=[failed],
+                tool_results=[ToolResult(call_id="f", name="run_command", status="failed", error="bad")],
+            ),
+            MockKitStep(
+                tool_calls=[failed],
+                tool_results=[ToolResult(call_id="f", name="run_command", status="failed", error="bad")],
+            ),
+            MockKitStep(reply="done", decision="done"),
+        ])
+
+        result = await _make_kernel(kit).run(_make_turn_input())
+
+        assert result.decision == "done"
+        # Use the final history snapshot (last build_context call) to avoid
+        # double-counting prompts that appear in every subsequent round.
+        final_history = kit.context_histories[-1]
+        diagnosis_prompts = [
+            str(message.content)
+            for message in final_history
+            if message.role == "system" and "FAILURE_DIAGNOSIS_REQUIRED" in str(message.content)
+        ]
+        assert len(diagnosis_prompts) == 2
+
+    @pytest.mark.asyncio
+    async def test_failure_diagnosis_does_not_block_tools(self):
+        """Even after diagnosis hint is injected, subsequent tools execute normally."""
+        failed = ToolCall(id="f", name="run_command", arguments={"command": "bad"})
+        fix_call = ToolCall(id="fix", name="run_command", arguments={"command": "fix"})
+        kit = MockRuntimeKit(steps=[
+            MockKitStep(
+                tool_calls=[failed],
+                tool_results=[ToolResult(call_id="f", name="run_command", status="failed", error="bad")],
+            ),
+            MockKitStep(
+                tool_calls=[failed],
+                tool_results=[ToolResult(call_id="f", name="run_command", status="failed", error="bad")],
+            ),
+            MockKitStep(
+                tool_calls=[failed],
+                tool_results=[ToolResult(call_id="f", name="run_command", status="failed", error="bad")],
+            ),
+            MockKitStep(
+                reply="let me try a fix",
+                tool_calls=[fix_call],
+                tool_results=[ToolResult(call_id="fix", name="run_command", status="ok", content="fixed")],
+            ),
+            MockKitStep(reply="done", decision="done"),
+        ])
+
+        result = await _make_kernel(kit).run(_make_turn_input())
+
+        assert result.decision == "done"
+        assert result.steps[3].tool_steps[0].result.status == "ok"
 
     @pytest.mark.asyncio
     async def test_identical_side_effect_tool_calls_in_one_turn_are_not_merged(self):

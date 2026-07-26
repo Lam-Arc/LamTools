@@ -70,9 +70,9 @@
       :id="leftDrawerId"
       data-workspace-left-drawer
       class="workspace-drawer drawer-left"
-      :class="{ open: leftOpen, pinned: leftPinned }"
-      :inert="!leftOpen || undefined"
-      :aria-hidden="!leftOpen"
+      :class="{ open: leftOpen || stageOpen, pinned: leftPinned }"
+      :inert="(!leftOpen && !stageOpen) || undefined"
+      :aria-hidden="!leftOpen && !stageOpen"
       @mouseleave="onLeftDrawerLeave"
     >
       <header class="drawer-head">
@@ -115,6 +115,23 @@
         </section>
       </slot>
     </main>
+
+    <!-- ===== Stage Pane (behind main card) ===== -->
+    <div
+      class="workspace-stage"
+      :inert="!stageOpen || undefined"
+      :aria-hidden="!stageOpen"
+    >
+      <slot name="stage" :open="stageOpen" :toggle="toggleStage" />
+      <div
+        v-if="stageOpen"
+        class="stage-resize-handle"
+        @pointerdown="startStageResize"
+        @pointermove="onStageResizeMove"
+        @pointerup="endStageResize"
+        @pointercancel="endStageResize"
+      ></div>
+    </div>
 
     <!-- ===== Floating Composer ===== -->
     <ComposerBar
@@ -170,9 +187,9 @@
       :id="rightDrawerId"
       data-workspace-right-drawer
       class="workspace-drawer drawer-right"
-      :class="{ open: rightOpen, pinned: rightPinned }"
-      :inert="!rightOpen || undefined"
-      :aria-hidden="!rightOpen"
+      :class="{ open: rightOpen || stageOpen, pinned: rightPinned }"
+      :inert="(!rightOpen && !stageOpen) || undefined"
+      :aria-hidden="!rightOpen && !stageOpen"
       @mouseleave="onRightDrawerLeave"
     >
       <header class="drawer-head">
@@ -231,6 +248,7 @@ const props = withDefaults(
     errorText?: string
     noticeText?: string
     showRightPanel?: boolean
+    stageOpen?: boolean
   }>(),
   {
     storageKey: 'lamtools.ui',
@@ -248,6 +266,7 @@ const props = withDefaults(
     errorText: '',
     noticeText: '',
     showRightPanel: true,
+    stageOpen: false,
   },
 )
 
@@ -256,6 +275,7 @@ const emit = defineEmits<{
   settings: []
   'composer-submit': []
   'composer-drop': [event: DragEvent]
+  'update:stageOpen': [value: boolean]
 }>()
 
 const drawerId = useId()
@@ -269,6 +289,8 @@ const {
   rightOpen,
   leftPinned,
   rightPinned,
+  stageOpen,
+  stageHeight,
   isNarrowViewport,
   shellClass,
   shellStyle,
@@ -282,6 +304,10 @@ const {
   toggleLeftDrawer,
   toggleRightDrawer,
   closeDrawers,
+  toggleStage,
+  startStageResize,
+  onStageResizeMove,
+  endStageResize,
 } = useShellLayout({
   storageKey: props.storageKey,
   density: props.density,
@@ -301,6 +327,14 @@ watch([leftOpen, rightOpen], ([left, right], [previousLeft, previousRight]) => {
   lastMobileDrawer = null
   target.value?.focus()
 }, { flush: 'post' })
+
+// Sync stageOpen: prop → useShellLayout, and useShellLayout → emit
+watch(() => props.stageOpen, (val) => {
+  if (val !== stageOpen.value) stageOpen.value = val
+})
+watch(stageOpen, (val) => {
+  if (val !== props.stageOpen) emit('update:stageOpen', val)
+})
 </script>
 
 <style scoped>

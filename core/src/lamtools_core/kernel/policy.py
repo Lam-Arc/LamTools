@@ -54,6 +54,11 @@ class LoopPolicy:
     # This does not classify tool semantics or stop the run; it only requires
     # a concise visible progress note before more tools are allowed.
     max_tool_only_rounds_without_progress: int | None = 8
+    # One-shot failure diagnosis hint: after N consecutive rounds each
+    # containing at least one failed tool call, inject a single diagnostic
+    # prompt and reset. No blocking, no state tracking, no reply validation.
+    # Set to 0 or None to disable.
+    consecutive_failure_rounds_threshold: int = 3
     # Step persistence (OpenAI Rollout-style): when True, Kernel appends a
     # step summary to state.metadata["kernel_steps"] after each iteration.
     # This enables post-run audit and debugging. Full resume/fork requires

@@ -30,6 +30,8 @@
   --main-x-padding: max(22px, 5vw);
   --content-width: 780px;
   --z-background-info: 10;
+  --z-stage: 15;
+  --stage-reveal: 0px;
   --z-main-surface: 20;
   --z-edge-trigger: 35;
   --z-composer: 40;
@@ -58,6 +60,9 @@
 
 .workspace-shell.left-open  { --main-left: var(--left-reveal); }
 .workspace-shell.right-open { --main-right: var(--right-reveal); }
+.workspace-shell.stage-open { --stage-reveal: var(--stage-height, 300px); }
+.workspace-shell.stage-open { --main-left: var(--left-reveal); }
+.workspace-shell.stage-open { --main-right: var(--right-reveal); }
 
 .workspace-shell.density-compact {
   --left-card-width: 322px;
@@ -135,6 +140,9 @@
 }
 .drawer-right:not(.open) { opacity: 0; pointer-events: none; }
 .drawer-right.open { transform: none; }
+
+/* Force drawers visible when stage is open */
+.workspace-shell.stage-open .drawer-right { opacity: 1; pointer-events: auto; }
 
 .drawer-head {
   flex: 0 0 auto;
@@ -224,16 +232,59 @@
 }
 
 /* =========================================================================
+   Stage pane — generic viewport behind the main card
+   (code editor, image/video preview, browser, etc.)
+   ========================================================================= */
+.workspace-stage {
+  position: fixed;
+  top: 0;
+  height: var(--stage-reveal, 0px);
+  left: var(--left-reveal);
+  right: var(--right-reveal);
+  z-index: var(--z-stage, 15);
+  overflow: hidden;
+  border-left: 1px solid color-mix(in srgb, var(--theme-backdrop-text) 10%, transparent);
+  border-right: 1px solid color-mix(in srgb, var(--theme-backdrop-text) 10%, transparent);
+  background: var(--theme-backdrop-background);
+  color: var(--theme-backdrop-text);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .3s ease;
+}
+.workspace-shell.stage-open .workspace-stage {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Drag handle at the bottom edge of the stage */
+.stage-resize-handle {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 6px;
+  z-index: 1;
+  cursor: ns-resize;
+  background: transparent;
+  border-radius: 0 0 12px 12px;
+  transition: background .15s ease;
+}
+.stage-resize-handle:hover,
+.stage-resize-handle.dragging {
+  background: color-mix(in srgb, var(--theme-stage-text, #f2efeb) 20%, transparent);
+}
+
+/* =========================================================================
    Main card — centered content area with top rounding & shadow
    ========================================================================= */
 .workspace-main {
   --text: var(--theme-main-text);
   position: fixed;
-  top: 0; bottom: 0;
+  top: var(--stage-reveal); bottom: 0;
   left: var(--main-left);
   right: var(--main-right);
   z-index: var(--z-main-surface, 20);
-  height: 100vh;
+  height: calc(100vh - var(--stage-reveal));
   overflow: hidden;
   padding: 44px var(--main-x-padding) 142px var(--main-x-padding);
   border: 1px solid color-mix(in srgb, var(--theme-main-text) 14%, transparent);
@@ -248,6 +299,8 @@
   transition:
     left .5s cubic-bezier(.2,.8,.2,1),
     right .5s cubic-bezier(.2,.8,.2,1),
+    top .5s cubic-bezier(.2,.8,.2,1),
+    height .5s cubic-bezier(.2,.8,.2,1),
     padding-bottom .3s ease;
 }
 

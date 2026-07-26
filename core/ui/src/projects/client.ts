@@ -6,6 +6,13 @@ import type {
   CoreProjectSession,
 } from './types'
 
+export interface CoreFileEntry {
+  name: string
+  type: 'directory' | 'file'
+  size: number
+  ext: string
+}
+
 export interface CoreProjectClient {
   list(): Promise<CoreProject[]>
   create(payload: CoreProjectCreatePayload): Promise<CoreProjectCreateResult>
@@ -16,6 +23,10 @@ export interface CoreProjectClient {
   listSessions(projectId: string): Promise<CoreProjectSession[]>
   readAgents(projectId: string): Promise<CoreProjectAgents>
   writeAgents(projectId: string, content: string): Promise<CoreProjectAgents>
+  listFiles(projectId: string, path?: string): Promise<{ entries: CoreFileEntry[]; path: string }>
+  readFile(projectId: string, path: string): Promise<{ content: string; path: string }>
+  writeFile(projectId: string, path: string, content: string): Promise<{ content: string; path: string }>
+  fileRawUrl(projectId: string, path: string): string
 }
 
 type RawProject = {
@@ -76,6 +87,25 @@ export function createCoreProjectClient(apiBase: string): CoreProjectClient {
         method: 'PUT',
         body: { content },
       })
+    },
+    async listFiles(projectId, path = '') {
+      const query = path ? `?path=${encodeURIComponent(path)}` : ''
+      return await request<{ entries: CoreFileEntry[]; path: string }>(base, `${projectPath(projectId)}/files${query}`)
+    },
+    async readFile(projectId, path) {
+      const query = `?path=${encodeURIComponent(path)}`
+      return await request<{ content: string; path: string }>(base, `${projectPath(projectId)}/files/content${query}`)
+    },
+    async writeFile(projectId, path, content) {
+      const query = `?path=${encodeURIComponent(path)}`
+      return await request<{ content: string; path: string }>(base, `${projectPath(projectId)}/files/content${query}`, {
+        method: 'PUT',
+        body: { content },
+      })
+    },
+    fileRawUrl(projectId, path) {
+      const query = `?path=${encodeURIComponent(path)}`
+      return `${base}${projectPath(projectId)}/files/raw${query}`
     },
   }
 }

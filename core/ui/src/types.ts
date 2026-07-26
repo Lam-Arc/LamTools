@@ -342,3 +342,19 @@ export interface ProjectGroup {
   workRoot?: string;
   sessions: SessionItem[];
 }
+
+// ---------------------------------------------------------------------------
+// Stage pane types
+// ---------------------------------------------------------------------------
+
+export type StageKind = 'code' | 'image' | 'video' | 'audio' | 'pdf' | 'browser' | 'markdown' | 'empty';
+
+export interface StageResource {
+  id: string;
+  kind: StageKind;
+  path?: string;
+  url?: string;
+  language?: string;
+  label?: string;
+  content?: string;
+}

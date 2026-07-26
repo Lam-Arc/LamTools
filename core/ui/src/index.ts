@@ -37,6 +37,8 @@ export type {
   SlotValidationResult,
   SessionItem,
   ProjectGroup,
+  StageKind,
+  StageResource,
   ThemeStop,
   ThemeArea,
   ThemeData,
@@ -97,6 +99,13 @@ export type {
 export { default as CoreAgentsEditor } from './components/CoreAgentsEditor.vue';
 export { default as CoreArrangeManager } from './components/CoreArrangeManager.vue';
 export { default as CoreGoalStrip } from './components/CoreGoalStrip.vue';
+export { default as StagePane } from './components/StagePane.vue';
+export { default as StageCodeEditor } from './components/StageCodeEditor.vue';
+export { default as StageImagePreview } from './components/StageImagePreview.vue';
+export { default as StageMediaPreview } from './components/StageMediaPreview.vue';
+export { default as StageBrowser } from './components/StageBrowser.vue';
+export { default as FileTreePanel } from './components/FileTreePanel.vue';
+export { default as FileTreeNode } from './components/FileTreeNode.vue';
 export type {
   CoreSettingsDensity,
   CoreSettingsModel,
@@ -192,6 +201,7 @@ export { CORE_EXECUTION_CONTROLS_STORAGE_KEYS } from './composables';
 export {
   createCoreProjectClient,
   type CoreProjectClient,
+  type CoreFileEntry,
 } from './projects/client';
 
 export {

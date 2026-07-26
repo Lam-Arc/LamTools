@@ -353,7 +353,7 @@ class CoreLoopKernel:
         )
         if current_user_content:
             history.append(ChatMessage(role="user", content=current_user_content))
-        await self._save_checkpoint(state, history)
+        await self._save_checkpoint(state, history, full=True)
         _logger.info("[kernel:_run] checkpoint saved sid=%s", state.session_id)
 
         steps: list[KernelStep] = []
@@ -363,9 +363,7 @@ class CoreLoopKernel:
         recent_tool_result_fingerprints: list[str] = []
         recent_successful_payloads: list[dict[str, Any]] = []
         explicit_input_errors: dict[str, ToolResult] = {}
-        diagnosis_failed_calls: dict[str, ToolResult] = {}
-        failure_diagnosis_pending = False
-        failure_investigation_rounds = 0
+        consecutive_failure_rounds = 0
         tool_only_rounds = 0
         tool_progress_pending = False
         tool_progress_blocked_rounds = 0
@@ -411,7 +409,7 @@ class CoreLoopKernel:
                     if cut > 0:
                         trimmed = len(history) - cut
                         del history[:cut]
-                        await self._save_checkpoint(state, history)
+                        await self._save_checkpoint(state, history, full=True)
                         await self._emit_history_compacted(state, trimmed, len(history))
 
                 context = await self.kit.build_context(state, turn_input, history, index)
@@ -480,16 +478,6 @@ class CoreLoopKernel:
                         "split it into smaller calls."
                     )
                 step.turn = turn
-                failure_diagnosis_completed = (
-                    failure_diagnosis_pending
-                    and bool(turn.reply.strip())
-                    and self._has_failure_diagnosis_structure(turn.reply)
-                )
-                failure_diagnosis_incomplete = (
-                    failure_diagnosis_pending
-                    and bool(turn.reply.strip())
-                    and not self._has_failure_diagnosis_structure(turn.reply)
-                )
                 tool_progress_structured = (
                     tool_progress_pending
                     and bool(turn.reply.strip())
@@ -519,7 +507,7 @@ class CoreLoopKernel:
                 # 5.6 Emit reply and kit events
                 if turn.reply:
                     latest_message = turn.reply
-                    if turn.tool_calls or failure_diagnosis_completed or failure_diagnosis_incomplete:
+                    if turn.tool_calls:
                         await self._emit_text_part(
                             state,
                             turn.reply,
@@ -749,8 +737,6 @@ class CoreLoopKernel:
                     await self._save_checkpoint(state, history)
 
                 executed_tool_round = any(result.status != "blocked" for result in tool_results)
-                if failure_diagnosis_pending and not failure_diagnosis_completed and executed_tool_round:
-                    failure_investigation_rounds += 1
 
                 progress_gate_blocked = any(
                     bool(result.metadata.get("tool_progress_required")) for result in tool_results
@@ -890,61 +876,22 @@ class CoreLoopKernel:
                     for call, result in zip(turn.tool_calls, tool_results)
                     if result.status == "failed"
                 ]
-                if failure_diagnosis_completed:
-                    failure_diagnosis_pending = False
-                    failure_investigation_rounds = 0
-                    diagnosis_failed_calls.clear()
-                    step.metadata["failure_diagnosis_completed"] = True
-                    state.metadata["failure_diagnosis"] = {
-                        "status": "completed",
-                        "response_index": index,
-                    }
-                    if turn.tool_calls and not failed_pairs:
-                        history.append(ChatMessage(
-                            role="system",
-                            content=(
-                                "[FAILURE_DIAGNOSIS_RECORDED] The complete diagnosis is already visible. "
-                                "After the selected tool calls, report only new verification evidence and "
-                                "the final outcome; do not repeat the diagnosis body."
-                            ),
-                        ))
-                    elif not turn.tool_calls:
-                        history.append(ChatMessage(
-                            role="system",
-                            content=(
-                                "[EXECUTE_FIX] The diagnosis is complete. Execute the selected fix "
-                                "using tools. Do not stop at diagnosis — apply the chosen solution, "
-                                "then verify with concrete evidence."
-                            ),
-                        ))
-                    await self._save_checkpoint(state, history)
-                elif failure_diagnosis_incomplete:
-                    history.append(ChatMessage(
-                        role="system",
-                        content=(
-                            "[FAILURE_DIAGNOSIS_INCOMPLETE] The visible diagnosis is missing required fields. "
-                            "Respond without tool calls using exactly these headings: [根因] [证据] [方案1] "
-                            "[方案2] [选择] [验证信号]. Field presence is required; do not invent evidence "
-                            "or describe an unexecuted tool result as if it already happened."
-                        ),
-                    ))
-                    step.metadata["failure_diagnosis_incomplete"] = True
-                    await self._save_checkpoint(state, history)
-
                 if failed_pairs:
-                    for call, result in failed_pairs:
-                        diagnosis_failed_calls[self._tool_call_fingerprint(call)] = result
-                    if not failure_diagnosis_pending:
-                        failure_diagnosis_pending = True
-                        failure_investigation_rounds = 0
+                    consecutive_failure_rounds += 1
+                    threshold = self.policy.consecutive_failure_rounds_threshold
+                    if threshold and threshold > 0 and consecutive_failure_rounds >= threshold:
+                        consecutive_failure_rounds = 0
                         prompt = self._failure_diagnosis_prompt(failed_pairs)
                         history.append(ChatMessage(role="system", content=prompt))
-                        step.metadata["failure_diagnosis_required"] = True
+                        step.metadata["failure_diagnosis_hint"] = True
                         state.metadata["failure_diagnosis"] = {
-                            "status": "required",
+                            "status": "hint",
                             "response_index": index,
+                            "consecutive_rounds": threshold,
                         }
                         await self._save_checkpoint(state, history)
+                else:
+                    consecutive_failure_rounds = 0
 
                 # 5.10 Verify (non-blocking: verification failure does NOT
                 #     trigger automatic repair retry. The model receives tool
@@ -964,12 +911,6 @@ class CoreLoopKernel:
                     decision = "continue"
                     if tool_progress_incomplete:
                         step.metadata["tool_progress_retry_required"] = True
-                elif failure_diagnosis_incomplete:
-                    decision = "continue"
-                    step.metadata["failure_diagnosis_retry_required"] = True
-                elif failure_diagnosis_completed and not turn.tool_calls:
-                    decision = "continue"
-                    step.metadata["failure_diagnosis_fix_required"] = True
                 elif turn.tool_calls and decision == "done":
                     # OpenAI/Claude-style loop contract: tool use is not a
                     # terminal answer. A run may only complete after the model
@@ -1080,7 +1021,7 @@ class CoreLoopKernel:
         if error_msg == "cancelled":
             state.status = "cancelled"
         state.loop_state = final_decision
-        await self._save_checkpoint(state, history)
+        await self._save_checkpoint(state, history, full=True)
 
         # Build result
         result = KernelResult(
@@ -1226,37 +1167,12 @@ class CoreLoopKernel:
             for call, result in failed_pairs
         ]
         return (
-            "[FAILURE_DIAGNOSIS_REQUIRED] A tool failed. Do not repeat the exact call and do not "
-            "jump directly to another speculative fix. First investigate the real evidence. You may "
-            "use one round of different tool calls to collect missing evidence; after that round, "
-            "stop using tools until the diagnosis is visible. Before executing the selected "
-            "solution, produce one visible diagnosis with: 根因、证据、至少两个实质不同的方案、"
-            "明确选择的方案、以及可观察的验证信号. If the evidence is insufficient, say so and "
-            "make the options diagnostic probes rather than inventing a cause. A verification signal "
-            "is a future success criterion unless it was actually observed; never claim an unexecuted "
-            "tool result as evidence.\n"
+            "[FAILURE_DIAGNOSIS_REQUIRED] Multiple consecutive rounds have failed tool calls. "
+            "Pause and investigate root causes before continuing. "
+            "Suggested format: 根因 (root cause), 证据 (evidence), 修复方向 (fix direction), 验证信号 (verification signal). "
+            "Do not repeat the exact failing call with the same arguments.\n"
             f"Failure evidence:\n{json.dumps(evidence, ensure_ascii=False, sort_keys=True, default=str)}"
         )
-
-    @staticmethod
-    def _has_failure_diagnosis_structure(reply: str) -> bool:
-        text = str(reply or "").lower()
-        required_groups = (
-            ("根因", "root cause"),
-            ("证据", "evidence"),
-            ("选择", "明确选择", "selection", "chosen solution", "selected option", "selected approach"),
-            ("验证信号", "verification signal", "success signal"),
-        )
-        if not all(any(marker in text for marker in group) for group in required_groups):
-            return False
-        first_option = re.search(r"(?:方案|option)\s*(?:1|一|a)", text, re.IGNORECASE)
-        second_option = re.search(r"(?:方案|option)\s*(?:2|二|b)", text, re.IGNORECASE)
-        if first_option is not None and second_option is not None:
-            return True
-        has_options_heading = "options" in text or "方案" in text
-        numbered_first = re.search(r"^\s*(?:[-*]\s*)?1[.)]\s+", text, re.MULTILINE)
-        numbered_second = re.search(r"^\s*(?:[-*]\s*)?2[.)]\s+", text, re.MULTILINE)
-        return has_options_heading and numbered_first is not None and numbered_second is not None
 
     @staticmethod
     def _has_tool_progress_structure(reply: str) -> bool:
@@ -1331,9 +1247,22 @@ class CoreLoopKernel:
         messages = [message for item in raw_history if (message := _chat_message_from_dict(item)) is not None]
         return _repair_incomplete_tool_history(messages)
 
-    async def _save_checkpoint(self, state: RuntimeState, history: list[ChatMessage]) -> None:
+    async def _save_checkpoint(
+        self, state: RuntimeState, history: list[ChatMessage], *, full: bool = False
+    ) -> None:
+        """Persist state and optionally full history.
+
+        When *full* is False (the default), only state metadata is saved.
+        Full-history persistence is reserved for the initial checkpoint after
+        the user message and the final checkpoint at loop exit.
+        """
         if isinstance(self.state_store, RuntimeCheckpointStore):
-            await self.state_store.save_checkpoint(state, [message.to_dict() for message in history])
+            if full:
+                await self.state_store.save_checkpoint(
+                    state, [message.to_dict() for message in history]
+                )
+            else:
+                await self.state_store.save(state)
             return
         await self.state_store.save(state)
 
@@ -2154,12 +2083,22 @@ class CoreLoopKernel:
         return summary
 
     def _estimate_request_tokens(self, request: LLMRequest) -> int:
-        """Estimate full request tokens, including tool definitions."""
-        total = estimate_message_tokens([m.to_dict() for m in request.messages])
+        """Estimate full request tokens, including tool definitions.
+
+        Uses the fast estimation path because the result is only used for
+        context-window trigger checks — ±20 % is acceptable here.
+        """
+        total = estimate_message_tokens(
+            [m.to_dict() for m in request.messages], fast=True
+        )
         if request.tools:
-            total += estimate_text_tokens(json.dumps(request.tools, ensure_ascii=False))
+            total += estimate_text_tokens(
+                json.dumps(request.tools, ensure_ascii=False), fast=True
+            )
         if request.response_format:
-            total += estimate_text_tokens(json.dumps(request.response_format, ensure_ascii=False))
+            total += estimate_text_tokens(
+                json.dumps(request.response_format, ensure_ascii=False), fast=True
+            )
         return total
 
     async def _persist_runtime_context_metrics(
@@ -2362,7 +2301,7 @@ class CoreLoopKernel:
                     for message in result.replacement_messages
                     if id(message) not in request_only_ids
                 ]
-                await self._save_checkpoint(state, history)
+                await self._save_checkpoint(state, history, full=True)
         request.metadata["estimated_prompt_tokens"] = result.after_tokens
 
         request.metadata["context_compacted"] = True

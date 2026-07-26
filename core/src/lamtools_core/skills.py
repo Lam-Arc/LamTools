@@ -27,14 +27,27 @@ class SkillRegistry:
         self._explicit_roots = tuple(Path(item).resolve() for item in explicit_roots)
         self._max_content_chars = max_content_chars
         self._sample_files = sample_files
+        # Caching: avoid repeated filesystem scans on every prompt_index call.
+        # signature() yields a hashable tuple of (path, mtime_ns, size) per file;
+        # we compare signatures to detect changes and invalidate accordingly.
+        self._cached_signature: tuple[tuple[str, int, int], ...] | None = None
+        self._cached_skills: list[Skill] | None = None
+        self._cached_index: str | None = None
 
     def available(self, work_root: str | Path | None) -> list[Skill]:
+        sig = self.signature(work_root)
+        if self._cached_signature == sig and self._cached_skills is not None:
+            return self._cached_skills
         skills: dict[str, Skill] = {}
         for path in self._candidate_skill_files(work_root):
             skill = self._read_skill(path)
             if skill and skill.name not in skills:
                 skills[skill.name] = skill
-        return sorted(skills.values(), key=lambda item: item.name)
+        result = sorted(skills.values(), key=lambda item: item.name)
+        self._cached_signature = sig
+        self._cached_skills = result
+        self._cached_index = None  # invalidate prompt_index cache
+        return result
 
     def get(self, work_root: str | Path | None, name: str) -> Skill | None:
         target = name.strip()
@@ -46,6 +59,8 @@ class SkillRegistry:
         return None
 
     def prompt_index(self, work_root: str | Path | None) -> str:
+        if self._cached_index is not None:
+            return self._cached_index
         skills = self.available(work_root)
         if not skills:
             return ""
@@ -65,7 +80,9 @@ class SkillRegistry:
                 ]
             )
         lines.append("</available_skills>")
-        return "\n".join(lines)
+        result = "\n".join(lines)
+        self._cached_index = result
+        return result
 
     def load_prompt_content(self, work_root: str | Path | None, name: str) -> str:
         skill = self.get(work_root, name)
@@ -120,7 +137,6 @@ class SkillRegistry:
                     root / ".codex",
                     root / ".agents",
                     root / ".claude",
-                    root,
                 ]
             )
 
@@ -130,19 +146,30 @@ class SkillRegistry:
 
         seen: set[Path] = set()
         results: list[Path] = []
+
+        def _add_if_skill(path: Path) -> None:
+            resolved = path.resolve()
+            if resolved not in seen and resolved.is_file():
+                seen.add(resolved)
+                results.append(resolved)
+
+        if work_root:
+            wroot = Path(work_root).resolve()
+            # Non-recursive scan for SKILL.md at workspace root only
+            for p in wroot.glob("SKILL.md"):
+                _add_if_skill(p)
+            for p in wroot.glob(".opencode/skills/**/SKILL.md"):
+                _add_if_skill(p)
+
         for root in roots:
             if not root.is_dir():
                 continue
             patterns = ["skills/**/SKILL.md"]
-            if root.name not in {".codex", ".agents", ".claude"}:
+            if root.name.startswith("."):
                 patterns.extend(["SKILL.md", "**/SKILL.md", "skill/**/SKILL.md", ".opencode/skills/**/SKILL.md"])
             for pattern in patterns:
                 for path in root.glob(pattern):
-                    resolved = path.resolve()
-                    if resolved in seen or not resolved.is_file():
-                        continue
-                    seen.add(resolved)
-                    results.append(resolved)
+                    _add_if_skill(path)
         return results
 
     def _read_skill(self, path: Path) -> Skill | None:

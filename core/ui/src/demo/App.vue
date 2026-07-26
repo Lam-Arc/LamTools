@@ -47,6 +47,7 @@
     :composer-action-mode="composerActionMode"
     :error-text="workbenchErrorText"
     :notice-text="runtimeStatusText"
+    v-model:stage-open="stageOpen"
     @new-session="openProjectCreate"
     @settings="showSettings = true"
     @composer-submit="submitComposer"
@@ -99,6 +100,13 @@
           :session-id="activeSessionId"
           :rename="renameActiveSession"
         />
+        <button
+          type="button"
+          class="stage-toggle-btn"
+          :class="{ active: stageOpen }"
+          :title="stageOpen ? '关闭视窗' : '打开视窗'"
+          @click="toggleStage"
+        >{{ stageOpen ? '▾' : '▴' }}</button>
       </div>
     </template>
 
@@ -253,22 +261,43 @@
       </CoreExecutionControls>
     </template>
 
+    <template #stage="{ open: stageIsOpen, toggle: stageToggle }">
+      <StagePane
+        v-if="stageIsOpen"
+        ref="stagePaneRef"
+        :tabs="stageTabs"
+        :active-id="stageActiveId"
+        @activate="stageActivate"
+        @close="stageClose"
+        @update-content="stageUpdateContent"
+        @save="stageSave"
+      />
+    </template>
+
     <template #right-panel>
-      <CoreResourceStats
-        :messages="messages"
-        :context-window="executionControls.activeModel.value?.context_window"
+      <FileTreePanel
+        v-if="stageOpen && activeProjectId"
+        :project-id="activeProjectId"
+        :client="projectClient"
+        @open-file="openFileInStage"
       />
-      <RuntimePanel :step-groups="stepGroups" />
-      <CoreSessionRollback
-        v-if="activeSessionId"
-        :key="activeSessionId"
-        :session-id="activeSessionId"
-        :request="requestConfigOperation"
-        :active-turn="rollbackActiveTurn"
-        :turn-prompts="turnPrompts"
-        @restored="refreshAfterRollback"
-        @undone="refreshAfterRollback"
-      />
+      <template v-else>
+        <CoreResourceStats
+          :messages="messages"
+          :context-window="executionControls.activeModel.value?.context_window"
+        />
+        <RuntimePanel :step-groups="stepGroups" />
+        <CoreSessionRollback
+          v-if="activeSessionId"
+          :key="activeSessionId"
+          :session-id="activeSessionId"
+          :request="requestConfigOperation"
+          :active-turn="rollbackActiveTurn"
+          :turn-prompts="turnPrompts"
+          @restored="refreshAfterRollback"
+          @undone="refreshAfterRollback"
+        />
+      </template>
     </template>
   </WorkspaceShell>
 </template>
@@ -331,6 +360,9 @@ import CoreQueuedInputTray from '../components/CoreQueuedInputTray.vue'
 import CoreAgentsEditor from '../components/CoreAgentsEditor.vue'
 import CoreArrangeManager from '../components/CoreArrangeManager.vue'
 import CoreGoalStrip from '../components/CoreGoalStrip.vue'
+import StagePane from '../components/StagePane.vue'
+import FileTreePanel from '../components/FileTreePanel.vue'
+import type { StageResource, StageKind } from '../types'
 import CoreProjectCreate from '../components/CoreProjectCreate.vue'
 import CoreSessionTitleEditor from '../components/CoreSessionTitleEditor.vue'
 import CoreSessionRollback from '../components/CoreSessionRollback.vue'
@@ -401,6 +433,98 @@ const agentsError = ref('')
 const settingsStorageKey = 'lamtools.core.ui'
 const showSettings = ref(false)
 const showArrange = ref(false)
+
+// --- Stage pane state ---
+const stageOpen = ref(false)
+const stageTabs = ref<StageResource[]>([])
+const stageActiveId = ref<string | null>(null)
+const stagePaneRef = ref<InstanceType<typeof StagePane> | null>(null)
+
+function toggleStage() {
+  stageOpen.value = !stageOpen.value
+}
+
+function stageActivate(id: string) {
+  stageActiveId.value = id
+}
+
+function stageClose(id: string) {
+  stageTabs.value = stageTabs.value.filter((t) => t.id !== id)
+  if (stageActiveId.value === id) {
+    stageActiveId.value = stageTabs.value[0]?.id ?? null
+  }
+  if (stageTabs.value.length === 0) {
+    stageOpen.value = false
+  }
+}
+
+function stageUpdateContent(payload: { id: string; content: string }) {
+  const tab = stageTabs.value.find((t) => t.id === payload.id)
+  if (tab) tab.content = payload.content
+}
+
+async function stageSave(payload: { id: string; content: string }) {
+  const tab = stageTabs.value.find((t) => t.id === payload.id)
+  if (!tab || !tab.path) return
+  const projectId = activeProjectId.value
+  if (!projectId) return
+  try {
+    await projectClient.writeFile(projectId, tab.path, payload.content)
+    stagePaneRef.value?.onSaved()
+  } catch {
+    // 保存失败，保持 dirty 状态让用户重试
+  }
+}
+
+const EXT_TO_KIND: Record<string, StageKind> = {
+  ts: 'code', tsx: 'code', js: 'code', jsx: 'code', mjs: 'code',
+  vue: 'code', py: 'code', rs: 'code', go: 'code', java: 'code',
+  json: 'code', css: 'code', scss: 'code', html: 'code',
+  yaml: 'code', yml: 'code', toml: 'code', sh: 'code', sql: 'code',
+  md: 'markdown',
+  png: 'image', jpg: 'image', jpeg: 'image', gif: 'image',
+  webp: 'image', svg: 'image', bmp: 'image', ico: 'image',
+  mp4: 'video', webm: 'video', mov: 'video', avi: 'video',
+  mp3: 'audio', wav: 'audio', ogg: 'audio', flac: 'audio',
+  pdf: 'pdf',
+}
+
+function inferStageKind(ext: string): StageKind {
+  return EXT_TO_KIND[ext] ?? 'code'
+}
+
+async function openFileInStage(entry: { path: string; name: string; ext: string }) {
+  const projectId = activeProjectId.value
+  if (!projectId) return
+  const kind = inferStageKind(entry.ext)
+  const tabId = `file:${entry.path}`
+  const existing = stageTabs.value.find((t) => t.id === tabId)
+  if (existing) {
+    stageActiveId.value = tabId
+    if (!stageOpen.value) stageOpen.value = true
+    return
+  }
+  const tab: StageResource = {
+    id: tabId,
+    kind,
+    path: entry.path,
+    label: entry.name,
+    language: entry.ext,
+  }
+  if (kind === 'code' || kind === 'markdown') {
+    try {
+      const result = await projectClient.readFile(projectId, entry.path)
+      tab.content = result.content
+    } catch {
+      tab.content = '// 无法加载文件内容'
+    }
+  } else if (kind === 'image' || kind === 'video' || kind === 'audio' || kind === 'pdf') {
+    tab.url = projectClient.fileRawUrl(projectId, entry.path)
+  }
+  stageTabs.value.push(tab)
+  stageActiveId.value = tabId
+  if (!stageOpen.value) stageOpen.value = true
+}
 const uiPreferences = useCoreUiPreferences(settingsStorageKey)
 const { density, contentWidth, theme } = uiPreferences
 const availableModels = ref<RawModel[]>([])
@@ -450,6 +574,13 @@ const activeSessionTitle = computed(() => (
 const selectedProject = computed(() => (
   projects.value.find((project) => project.id === selectedProjectId.value) || null
 ))
+const activeProjectId = computed(() => {
+  const session = sessions.value.find((item) => item.id === activeSessionId.value)
+  const workRoot = session?.metadata?.work_root
+  if (typeof workRoot !== 'string') return null
+  const project = projects.value.find((p) => p.workRoot === workRoot)
+  return project?.id ?? null
+})
 const projectWorkspace = createCoreProjectWorkspaceActions({
   client: projectClient,
   projects,
@@ -1134,6 +1265,29 @@ onUnmounted(() => {
 
 .core-project-header-action {
   position: relative;
+}
+
+.stage-toggle-btn {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted, #888);
+  cursor: pointer;
+  font-size: 14px;
+  display: grid;
+  place-items: center;
+  transition: background 0.15s, color 0.15s;
+}
+.stage-toggle-btn:hover {
+  background: rgba(255,255,255,0.06);
+  color: var(--text, #f2efeb);
+}
+.stage-toggle-btn.active {
+  background: rgba(255,255,255,0.08);
+  color: var(--text, #f2efeb);
 }
 
 .core-project-overlay {

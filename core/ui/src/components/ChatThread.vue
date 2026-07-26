@@ -87,8 +87,8 @@
                   </div>
                 </div>
                 <template
-                  v-for="part in timelineParts(msg)"
-                  :key="part.id"
+                  v-for="group in compactGroups(groupParts(timelineParts(msg)))"
+                  :key="group.kind === 'process-group' ? `live-tl-pg-${processGroupId(group)}` : group.part.id"
                 >
                   <div v-if="part.partType === 'text' && part.content" class="assistant-answer">
                     <slot name="assistant-content" :content="part.content">
@@ -304,8 +304,8 @@
 
                 <div v-if="isProcessExpanded(msg)" class="process-stream process-stream--history">
                   <template
-                    v-for="group in groupParts(processParts(msg))"
-                    :key="group.kind === 'context-group' ? `context-${group.items.map((item) => item.id).join('-')}` : group.part.id"
+                    v-for="group in compactGroups(groupParts(processParts(msg)))"
+                    :key="group.kind === 'context-group' ? `context-${group.items.map((item) => item.id).join('-')}` : group.kind === 'process-group' ? processGroupId(group) : group.part.id"
                   >
                     <div v-if="group.kind === 'context-group'" class="process-step process-step--context" :class="'process-step--' + (group.status || 'pending')">
                       <button
@@ -338,6 +338,84 @@
                         </div>
                       </div>
                     </div>
+
+                    <template v-else-if="group.kind === 'process-group'">
+                      <div class="process-group">
+                        <button
+                          type="button"
+                          class="process-group-summary"
+                          @click="toggleGroupExpand(processGroupId(group))"
+                        >
+                          <span class="process-step-marker" />
+                          <span class="process-group-text">{{ group.summary }}</span>
+                          <span class="process-group-chevron">{{ isGroupExpanded(processGroupId(group)) ? '▾' : '▸' }}</span>
+                        </button>
+                        <div v-if="isGroupExpanded(processGroupId(group))" class="process-group-body">
+                          <template v-for="part in group.parts" :key="part.id">
+                            <div v-if="part.partType === 'reasoning'" class="process-step process-step--reasoning">
+                              <button type="button" class="reasoning-toggle" @click="togglePartExpand(part, false)">
+                                <span class="process-step-marker" />
+                                <span class="process-step-title">思考</span>
+                                <span v-if="reasoningDuration(part)" class="reasoning-duration">{{ reasoningDuration(part) }}</span>
+                                <span class="tool-expand-chevron">{{ isPartExpanded(part, false) ? '▾' : '▸' }}</span>
+                              </button>
+                              <div v-if="isPartExpanded(part, false)" class="reasoning-body">
+                                <slot name="reasoning-content" :content="part.content" :live="false">
+                                  <MarkdownRenderer class="process-step-detail" :content="part.content" />
+                                </slot>
+                              </div>
+                            </div>
+                            <div
+                              v-else-if="(part.partType === 'tool_call' || part.partType === 'tool_result') && !isControlTool(part)"
+                              class="process-step process-step--tool"
+                              :class="'process-step--' + part.status"
+                            >
+                              <button
+                                type="button"
+                                class="tool-card-header"
+                                :class="[{ 'has-detail': hasToolDisplay(part), 'process-tool-row': !isCommandTool(part), 'tool-card-header--command': isCommandTool(part) }, toolColorClass(part)]"
+                                @click="togglePartExpand(part, false)"
+                              >
+                                <span v-if="isCommandTool(part)" class="process-step-marker" />
+                                <template v-if="isCommandTool(part)">
+                                  <span class="tool-type-tag" :class="toolColorClass(part)">{{ toolTypeLabel(part) }}</span>
+                                  <span class="process-step-title">{{ readableProcessTitle(part) }}</span>
+                                  <span v-if="shouldShowToolArgsPreview(part)" class="tool-args-preview">{{ toolArgsPreview(part.toolArgs || {}) }}</span>
+                                </template>
+                                <template v-else>
+                                  <span class="tool-row-name">{{ toolTypeLabel(part) }}</span>
+                                  <span class="process-step-title tool-row-summary">{{ readableProcessTitle(part) }}</span>
+                                  <span v-if="shouldShowToolArgsPreview(part)" class="tool-args-preview tool-row-args">{{ toolArgsPreview(part.toolArgs || {}) }}</span>
+                                  <span class="tool-row-status">{{ toolStatusLabel(part) }}</span>
+                                </template>
+                                <span v-if="hasToolDisplay(part)" class="tool-expand-chevron">{{ shouldShowToolBody(part, false) ? '▾' : '▸' }}</span>
+                              </button>
+                              <div v-if="shouldShowToolBody(part, false)" class="tool-card-body" :class="{ 'tool-card-body--row': !isCommandTool(part) }">
+                                <pre v-if="displayToolError(part)" class="tool-output tool-output--error">{{ displayToolError(part) }}</pre>
+                                <div v-else-if="displayToolResult(part) && isCommandTool(part)" class="command-output">
+                                  <div class="command-terminal-chrome" aria-hidden="true">
+                                    <span class="command-terminal-light command-terminal-light--close" />
+                                    <span class="command-terminal-light command-terminal-light--minimize" />
+                                    <span class="command-terminal-light command-terminal-light--maximize" />
+                                    <span class="command-terminal-title">run command</span>
+                                  </div>
+                                  <div class="command-terminal-body">
+                                    <strong class="command-output-command">$ {{ commandDisplayText(part) }}</strong>
+                                    <pre class="command-output-result">{{ commandOutputText(part) }}</pre>
+                                  </div>
+                                </div>
+                                <div v-else-if="displayToolResult(part)" class="tool-output">
+                                  <div v-if="toolMetaItems(part).length > 0" class="tool-output-meta">
+                                    <span v-for="item in toolMetaItems(part)" :key="item">{{ item }}</span>
+                                  </div>
+                                  <pre class="tool-output-content">{{ toolOutputContent(part) }}</pre>
+                                </div>
+                              </div>
+                            </div>
+                          </template>
+                        </div>
+                      </div>
+                    </template>
 
                     <template v-else-if="group.kind === 'process' && group.part">
                       <div
@@ -508,15 +586,20 @@
                         v-else-if="isSubLinePart(group.part)"
                         class="sub-line-block"
                       >
-                        <div class="sub-line-heading">
+                        <button
+                          type="button"
+                          class="sub-line-heading"
+                          @click="togglePartExpand(group.part, false)"
+                        >
                           <span class="process-step-marker" />
                           <span class="sub-line-title">{{ agentTitle(group.part) }}</span>
                           <span class="sub-line-status">{{ agentStatusLabel(group.part) }}</span>
-                        </div>
+                          <span class="tool-expand-chevron sub-line-chevron">{{ isPartExpanded(group.part, false) ? '▾' : '▸' }}</span>
+                        </button>
                         <div v-if="agentDeliveryMeta(group.part).length > 0" class="sub-line-delivery-meta">
                           <span v-for="item in agentDeliveryMeta(group.part)" :key="item">{{ item }}</span>
                         </div>
-                        <div class="sub-line-body">
+                        <div v-if="isPartExpanded(group.part, false)" class="sub-line-body">
                           <ChatThread
                             class="sub-line-chat"
                             :messages="agentSubMessages(group.part)"
@@ -669,8 +752,8 @@
 
               <!-- Live parts inline with streaming -->
               <template
-                v-for="group in groupParts(processParts(msg))"
-                :key="group.kind === 'context-group' ? `live-ctx-${group.items.map((item) => item.id).join('-')}` : `live-${group.part.id}`"
+                v-for="group in compactGroups(groupParts(processParts(msg)))"
+                :key="group.kind === 'context-group' ? `live-ctx-${group.items.map((item) => item.id).join('-')}` : group.kind === 'process-group' ? `live-pg-${processGroupId(group)}` : `live-${group.part.id}`"
               >
                 <!-- model_text: stream inline -->
                 <div v-if="group.kind === 'process' && group.part.partType === 'model_text' && group.part.content">
@@ -720,13 +803,81 @@
                     <pre v-else-if="displayToolResult(group.part)" class="tool-output-content">{{ displayToolResult(group.part) }}</pre>
                   </div>
                 </div>
+
+                <!-- process-group: batched reasoning + tools during live -->
+                <template v-else-if="group.kind === 'process-group'">
+                  <div class="process-group">
+                    <button
+                      type="button"
+                      class="process-group-summary"
+                      @click="toggleGroupExpand(processGroupId(group))"
+                    >
+                      <span class="process-step-marker" />
+                      <span class="process-group-text">{{ group.summary }}</span>
+                      <span class="process-group-chevron">{{ isGroupExpanded(processGroupId(group)) ? '▾' : '▸' }}</span>
+                    </button>
+                    <div v-if="isGroupExpanded(processGroupId(group))" class="process-group-body">
+                      <template v-for="part in group.parts" :key="part.id">
+                        <div v-if="part.partType === 'reasoning'" class="process-step process-step--reasoning">
+                          <button type="button" class="reasoning-toggle" @click="togglePartExpand(part, true)">
+                            <span class="process-step-marker" />
+                            <span class="process-step-title">思考</span>
+                            <span class="tool-expand-chevron">{{ isPartExpanded(part, true) ? '▾' : '▸' }}</span>
+                          </button>
+                          <div :class="['reasoning-body', { 'reasoning-body--closed': !isPartExpanded(part, true) }]">
+                            <slot name="reasoning-content" :content="part.content" :live="true">
+                              <MarkdownRenderer class="process-step-detail" :content="part.content" />
+                            </slot>
+                          </div>
+                        </div>
+                        <div
+                          v-else-if="(part.partType === 'tool_call' || part.partType === 'tool_result') && !isControlTool(part)"
+                          class="process-step process-step--tool"
+                          :class="'process-step--' + part.status"
+                        >
+                          <button
+                            type="button"
+                            class="tool-card-header process-tool-row"
+                            :class="{ 'has-detail': hasToolDisplay(part) }"
+                            @click="togglePartExpand(part, true)"
+                          >
+                            <span class="tool-row-name">{{ toolTypeLabel(part) }}</span>
+                            <span class="process-step-title tool-row-summary">{{ readableProcessTitle(part) }}</span>
+                            <span class="tool-row-status" :class="{ 'tool-row-status--retry': toolRetryLabel(part) }">{{ toolRetryLabel(part) || toolStatusLabel(part) }}</span>
+                            <span v-if="hasToolDisplay(part)" class="tool-expand-chevron">{{ shouldShowToolBody(part, true) ? '▾' : '▸' }}</span>
+                          </button>
+                          <div :class="['tool-card-body', 'tool-card-body--row', { 'tool-card-body--closed': !shouldShowToolBody(part, true) }]">
+                            <pre v-if="displayToolError(part)" class="tool-output tool-output--error">{{ displayToolError(part) }}</pre>
+                            <pre v-else-if="displayToolResult(part)" class="tool-output-content">{{ displayToolResult(part) }}</pre>
+                          </div>
+                        </div>
+                      </template>
+                    </div>
+                  </div>
+                </template>
+
+                <!-- model retry: progress bar during live -->
+                <div
+                  v-else-if="group.kind === 'process' && isModelRetryPart(group.part)"
+                  class="model-retry-bar"
+                >
+                  <span class="model-retry-bar__label">重试中 {{ modelRetryCounts(group.part).attempt }}/{{ modelRetryCounts(group.part).maxRetries }}</span>
+                  <div class="model-retry-bar__track">
+                    <div
+                      v-for="i in modelRetryCounts(group.part).maxRetries"
+                      :key="i"
+                      class="model-retry-bar__segment"
+                      :class="{ 'model-retry-bar__segment--filled': i <= modelRetryCounts(group.part).attempt }"
+                    />
+                  </div>
+                </div>
               </template>
             </div>
 
             <div v-if="!isTimelineMessage(msg) && !isLiveMessage(msg)" class="process-stream process-stream--history">
               <template
-                v-for="group in groupParts(processParts(msg))"
-                :key="group.kind === 'context-group' ? `context-${group.items.map((item) => item.id).join('-')}` : group.part.id"
+                v-for="group in compactGroups(groupParts(processParts(msg)))"
+                :key="group.kind === 'context-group' ? `context-${group.items.map((item) => item.id).join('-')}` : group.kind === 'process-group' ? processGroupId(group) : group.part.id"
               >
                 <div v-if="group.kind === 'context-group'" class="process-step process-step--context" :class="'process-step--' + (group.status || 'pending')">
                   <button
@@ -759,6 +910,84 @@
                     </div>
                   </div>
                 </div>
+
+                <template v-else-if="group.kind === 'process-group'">
+                  <div class="process-group">
+                    <button
+                      type="button"
+                      class="process-group-summary"
+                      @click="toggleGroupExpand(processGroupId(group))"
+                    >
+                      <span class="process-step-marker" />
+                      <span class="process-group-text">{{ group.summary }}</span>
+                      <span class="process-group-chevron">{{ isGroupExpanded(processGroupId(group)) ? '▾' : '▸' }}</span>
+                    </button>
+                    <div v-if="isGroupExpanded(processGroupId(group))" class="process-group-body">
+                      <template v-for="part in group.parts" :key="part.id">
+                        <div v-if="part.partType === 'reasoning'" class="process-step process-step--reasoning">
+                          <button type="button" class="reasoning-toggle" @click="togglePartExpand(part, false)">
+                            <span class="process-step-marker" />
+                            <span class="process-step-title">思考</span>
+                            <span v-if="reasoningDuration(part)" class="reasoning-duration">{{ reasoningDuration(part) }}</span>
+                            <span class="tool-expand-chevron">{{ isPartExpanded(part, false) ? '▾' : '▸' }}</span>
+                          </button>
+                          <div :class="['reasoning-body', { 'reasoning-body--closed': !isPartExpanded(part, false) }]">
+                            <slot name="reasoning-content" :content="part.content" :live="false">
+                              <MarkdownRenderer class="process-step-detail" :content="part.content" />
+                            </slot>
+                          </div>
+                        </div>
+                        <div
+                          v-else-if="(part.partType === 'tool_call' || part.partType === 'tool_result') && !isControlTool(part)"
+                          class="process-step process-step--tool"
+                          :class="'process-step--' + part.status"
+                        >
+                          <button
+                            type="button"
+                            class="tool-card-header"
+                            :class="[{ 'has-detail': hasToolDisplay(part), 'process-tool-row': !isCommandTool(part), 'tool-card-header--command': isCommandTool(part) }, toolColorClass(part)]"
+                            @click="togglePartExpand(part, false)"
+                          >
+                            <span v-if="isCommandTool(part)" class="process-step-marker" />
+                            <template v-if="isCommandTool(part)">
+                              <span class="tool-type-tag" :class="toolColorClass(part)">{{ toolTypeLabel(part) }}</span>
+                              <span class="process-step-title">{{ readableProcessTitle(part) }}</span>
+                              <span v-if="shouldShowToolArgsPreview(part)" class="tool-args-preview">{{ toolArgsPreview(part.toolArgs || {}) }}</span>
+                            </template>
+                            <template v-else>
+                              <span class="tool-row-name">{{ toolTypeLabel(part) }}</span>
+                              <span class="process-step-title tool-row-summary">{{ readableProcessTitle(part) }}</span>
+                              <span v-if="shouldShowToolArgsPreview(part)" class="tool-args-preview tool-row-args">{{ toolArgsPreview(part.toolArgs || {}) }}</span>
+                              <span class="tool-row-status">{{ toolStatusLabel(part) }}</span>
+                            </template>
+                            <span v-if="hasToolDisplay(part)" class="tool-expand-chevron">{{ shouldShowToolBody(part, false) ? '▾' : '▸' }}</span>
+                          </button>
+                          <div v-if="shouldShowToolBody(part, false)" class="tool-card-body" :class="{ 'tool-card-body--row': !isCommandTool(part) }">
+                            <pre v-if="displayToolError(part)" class="tool-output tool-output--error">{{ displayToolError(part) }}</pre>
+                            <div v-else-if="displayToolResult(part) && isCommandTool(part)" class="command-output">
+                              <div class="command-terminal-chrome" aria-hidden="true">
+                                <span class="command-terminal-light command-terminal-light--close" />
+                                <span class="command-terminal-light command-terminal-light--minimize" />
+                                <span class="command-terminal-light command-terminal-light--maximize" />
+                                <span class="command-terminal-title">run command</span>
+                              </div>
+                              <div class="command-terminal-body">
+                                <strong class="command-output-command">$ {{ commandDisplayText(part) }}</strong>
+                                <pre class="command-output-result">{{ commandOutputText(part) }}</pre>
+                              </div>
+                            </div>
+                            <div v-else-if="displayToolResult(part)" class="tool-output">
+                              <div v-if="toolMetaItems(part).length > 0" class="tool-output-meta">
+                                <span v-for="item in toolMetaItems(part)" :key="item">{{ item }}</span>
+                              </div>
+                              <pre class="tool-output-content">{{ toolOutputContent(part) }}</pre>
+                            </div>
+                          </div>
+                        </div>
+                      </template>
+                    </div>
+                  </div>
+                </template>
 
                 <template v-else-if="group.kind === 'process' && group.part">
                   <div
@@ -894,6 +1123,18 @@
                     </div>
                   </div>
 
+                  <div v-else-if="isModelRetryPart(group.part)" class="model-retry-bar">
+                    <span class="model-retry-bar__label">重试中 {{ modelRetryCounts(group.part).attempt }}/{{ modelRetryCounts(group.part).maxRetries }}</span>
+                    <div class="model-retry-bar__track">
+                      <div
+                        v-for="i in modelRetryCounts(group.part).maxRetries"
+                        :key="i"
+                        class="model-retry-bar__segment"
+                        :class="{ 'model-retry-bar__segment--filled': i <= modelRetryCounts(group.part).attempt }"
+                      />
+                    </div>
+                  </div>
+
                   <div v-else-if="group.part.partType === 'status'" class="process-step process-step--info" :class="'process-step--' + group.part.status">
                     <button
                       v-if="hasExpandableProcessDetail(group.part)"
@@ -971,15 +1212,20 @@
                         v-else-if="isSubLinePart(group.part)"
                         class="sub-line-block"
                       >
-                        <div class="sub-line-heading">
+                        <button
+                          type="button"
+                          class="sub-line-heading"
+                          @click="togglePartExpand(group.part, false)"
+                        >
                           <span class="process-step-marker" />
                           <span class="sub-line-title">{{ agentTitle(group.part) }}</span>
                           <span class="sub-line-status">{{ agentStatusLabel(group.part) }}</span>
-                        </div>
+                          <span class="tool-expand-chevron sub-line-chevron">{{ isPartExpanded(group.part, false) ? '▾' : '▸' }}</span>
+                        </button>
                         <div v-if="agentDeliveryMeta(group.part).length > 0" class="sub-line-delivery-meta">
                           <span v-for="item in agentDeliveryMeta(group.part)" :key="item">{{ item }}</span>
                         </div>
-                        <div class="sub-line-body">
+                        <div v-if="isPartExpanded(group.part, false)" class="sub-line-body">
                           <ChatThread
                             class="sub-line-chat"
                             :messages="agentSubMessages(group.part)"
@@ -1178,7 +1424,6 @@ function isToolExpanded(partId: string): boolean {
 }
 
 function togglePartExpand(part: MessagePart, live = false) {
-  if (live) return // During live streaming, state is auto-managed
   const partId = part.id
   
   // Clear any pending auto-collapse timer
@@ -1193,17 +1438,33 @@ function togglePartExpand(part: MessagePart, live = false) {
   }
 }
 
+function toggleGroupExpand(groupId: string) {
+  const next = new Set(expandedGroupIds.value)
+  if (next.has(groupId)) {
+    next.delete(groupId)
+  } else {
+    next.add(groupId)
+  }
+  expandedGroupIds.value = next
+}
+
+function isGroupExpanded(groupId: string): boolean {
+  return expandedGroupIds.value.has(groupId)
+}
+
+function processGroupId(group: PartGroupProcessGroup): string {
+  return group.parts.map(p => p.id).join('-')
+}
+
 function isPartExpanded(part: MessagePart, live = false): boolean {
-  if (live) return true // During live streaming, everything auto-expanded
+  // All parts default collapsed; only expanded when explicitly toggled
   if (part.partType === 'error') return true // Errors always expanded
-  if (isSubLinePart(part)) return true // Sub-lines always expanded
+  if (isSubLinePart(part)) return autoExpandedPartIds.value.has(part.id) // Sub-agents collapsed by default
   
-  // Auto-expand for reasoning and tool parts
+  // Reasoning, tool, status: collapsed by default unless toggled
   if (part.partType === 'reasoning' || part.partType === 'tool_call' || part.partType === 'tool_result') {
     return autoExpandedPartIds.value.has(part.id)
   }
-  
-  // Status parts: toggleable via autoExpandedPartIds
   if (part.partType === 'status') {
     return autoExpandedPartIds.value.has(part.id)
   }
@@ -1214,6 +1475,7 @@ function isPartExpanded(part: MessagePart, live = false): boolean {
 
 // ── Auto expand/collapse state ──
 const autoExpandedPartIds = ref<Set<string>>(new Set())
+const expandedGroupIds = ref<Set<string>>(new Set())
 const partCompletionTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
 function schedulePartAutoCollapse(partId: string) {
@@ -1224,7 +1486,7 @@ function schedulePartAutoCollapse(partId: string) {
       [...autoExpandedPartIds.value].filter(id => id !== partId)
     )
     partCompletionTimers.delete(partId)
-  }, 3000)
+  }, 1000)
   partCompletionTimers.set(partId, timer)
 }
 
@@ -1242,16 +1504,18 @@ watch(
   },
   () => {
     for (const msg of props.messages) {
+      // Only auto-expand/collapse for live streaming messages
+      if (!isLiveMessage(msg)) continue
       for (const part of (msg.parts || [])) {
         if (part.partType === 'reasoning' || part.partType === 'tool_call' || part.partType === 'tool_result') {
           if (part.status === 'running') {
-            // Auto-expand when running
+            // Running parts enter the set so they're visible during streaming
             autoExpandedPartIds.value = new Set([...autoExpandedPartIds.value, part.id])
             // Clear any collapse timer
             const timer = partCompletionTimers.get(part.id)
             if (timer) { clearTimeout(timer); partCompletionTimers.delete(part.id) }
           } else if (part.status === 'completed') {
-            // Schedule auto-collapse when done (if not already expanded by user)
+            // Completed parts schedule auto-collapse
             if (autoExpandedPartIds.value.has(part.id)) {
               schedulePartAutoCollapse(part.id)
             }
@@ -1708,7 +1972,13 @@ interface PartGroupContext {
   items: MessagePart[]
 }
 
-type PartGroup = PartGroupProcess | PartGroupContext
+interface PartGroupProcessGroup {
+  kind: 'process-group'
+  parts: MessagePart[]
+  summary: string
+}
+
+type PartGroup = PartGroupProcess | PartGroupContext | PartGroupProcessGroup
 
 interface TextGroup {
   content: string
@@ -2833,8 +3103,8 @@ function textGroups(parts: MessagePart[]): TextGroup[] {
 
 const CONTEXT_TOOLS = new Set(['read_file', 'list_dir', 'glob', 'grep', 'search_content', 'search_files', 'read', 'list'])
 
-function groupParts(parts: MessagePart[]): PartGroup[] {
-  const groups: PartGroup[] = []
+function groupParts(parts: MessagePart[]): (PartGroupProcess | PartGroupContext)[] {
+  const groups: (PartGroupProcess | PartGroupContext)[] = []
   let contextBatch: MessagePart[] = []
 
   function flushContext() {
@@ -2864,6 +3134,84 @@ function groupParts(parts: MessagePart[]): PartGroup[] {
   }
   flushContext()
   return groups
+}
+
+// ── Compact process group summary ──
+
+function computeProcessGroupSummary(parts: MessagePart[]): string {
+  let reasoningSeconds = 0
+  let reasoningCount = 0
+  let toolCount = 0
+  let hasRunning = false
+  for (const part of parts) {
+    if (part.status === 'running') hasRunning = true
+    if (part.partType === 'reasoning') {
+      reasoningCount++
+      if (part.startedAt && part.completedAt) {
+        const start = new Date(part.startedAt).getTime()
+        const end = new Date(part.completedAt).getTime()
+        if (Number.isFinite(start) && Number.isFinite(end) && end >= start) {
+          reasoningSeconds += Math.round((end - start) / 1000)
+        }
+      }
+    } else if (part.partType === 'tool_call' || part.partType === 'tool_result') {
+      toolCount++
+    }
+  }
+  if (hasRunning) {
+    if (reasoningCount > 0 && toolCount > 0) {
+      return `思考中…，已调用${toolCount}个工具`
+    }
+    if (toolCount > 0) {
+      return `已调用${toolCount}个工具…`
+    }
+    if (reasoningCount > 0) {
+      return `思考中…`
+    }
+    return '处理中…'
+  }
+  if (reasoningCount > 0 && toolCount > 0) {
+    return `思考了${reasoningSeconds}s，调用了${toolCount}个工具`
+  }
+  if (toolCount > 0) {
+    return `连续调用了${toolCount}个工具`
+  }
+  if (reasoningCount > 0) {
+    return `思考了${reasoningSeconds}s`
+  }
+  return ''
+}
+
+function compactGroups(groups: PartGroup[]): PartGroup[] {
+  const result: PartGroup[] = []
+  let batch: MessagePart[] = []
+
+  function flush() {
+    if (batch.length === 0) return
+    if (batch.length === 1) {
+      result.push({ kind: 'process', part: batch[0] })
+    } else {
+      result.push({ kind: 'process-group', parts: [...batch], summary: computeProcessGroupSummary(batch) })
+    }
+    batch = []
+  }
+
+  for (const g of groups) {
+    if (g.kind === 'context-group') {
+      flush()
+      result.push(g)
+    } else if (g.kind === 'process') {
+      const pt = g.part.partType
+      if (pt === 'reasoning' || pt === 'tool_call' || pt === 'tool_result') {
+        batch.push(g.part)
+      } else {
+        flush()
+        result.push(g)
+      }
+    }
+  }
+  flush()
+  return result
 }
 
 // ── Process summary ──
@@ -3342,34 +3690,33 @@ function formatContextSummary(c: ContextCounts): string {
 .model-retry-bar {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   padding: 3px 0;
-}
-.model-retry-bar__track {
-  flex: 1;
-  height: 4px;
-  display: flex;
-  gap: 2px;
-  background: color-mix(in srgb, var(--theme-main-text, #fff) 8%, transparent);
-  border-radius: 2px;
-  overflow: hidden;
-}
-.model-retry-bar__segment {
-  flex: 1;
-  height: 100%;
-  min-width: 2px;
-  background: transparent;
-  transition: background-color 0.2s ease;
-}
-.model-retry-bar__segment--filled {
-  background: var(--orange, #ff9142);
 }
 .model-retry-bar__label {
   flex: 0 0 auto;
   font-size: 11px;
   font-weight: 550;
-  color: color-mix(in srgb, var(--theme-main-text, #fff) 48%, transparent);
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 44%, transparent);
   white-space: nowrap;
+}
+.model-retry-bar__track {
+  flex: 0 1 auto;
+  display: flex;
+  gap: 1px;
+  height: 4px;
+  background: color-mix(in srgb, var(--theme-main-text, #fff) 6%, transparent);
+  border-radius: 2px;
+}
+.model-retry-bar__segment {
+  flex: 0 0 2px;
+  height: 100%;
+  background: transparent;
+  border-radius: 0.5px;
+  transition: background-color 0.2s ease;
+}
+.model-retry-bar__segment--filled {
+  background: color-mix(in srgb, var(--theme-main-text, #fff) 26%, transparent);
 }
 .tool-card-header--command .tool-type-tag {
   grid-area: type;
@@ -4004,12 +4351,72 @@ function formatContextSummary(c: ContextCounts): string {
   background: color-mix(in srgb, var(--theme-main-text, #fff) 16%, transparent);
 }
 
-.sub-line-heading {
-  min-width: 0;
+/* ── Compact process group summary ── */
+.process-group-summary {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 8px;
   align-items: center;
+  width: 100%;
+  padding: 4px 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: inherit;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background 0.15s ease;
+  opacity: 0.8;
+}
+.process-group-summary:hover {
+  background: color-mix(in srgb, var(--theme-main-text, #fff) 4%, transparent);
+  opacity: 1;
+}
+.process-group-text {
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 72%, transparent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.process-group-chevron {
+  flex-shrink: 0;
+  font-size: 11px;
+  opacity: 0.55;
+}
+.process-group-body {
+  padding: 4px 0 4px 12px;
+  border-left: 2px solid color-mix(in srgb, var(--theme-main-text, #fff) 10%, transparent);
+}
+
+.sub-line-heading {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  padding: 4px 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: inherit;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background 0.15s ease;
+}
+.sub-line-heading:hover {
+  background: color-mix(in srgb, var(--theme-main-text, #fff) 4%, transparent);
+}
+
+.sub-line-chevron {
+  flex-shrink: 0;
+  font-size: 11px;
+  opacity: 0.55;
 }
 
 .sub-line-title {

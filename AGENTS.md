@@ -19,4 +19,13 @@
 .\scripts\dev.ps1 writer            # Writer (6173 / 6174)
 .\scripts\dev.ps1 sage              # Sage (6170 / 6171)
 .\scripts\dev.ps1 all               # 全部
+.\scripts\restart.ps1               # 重启 Core 前后端
 ```
+
+## 数据库
+
+| 组件 | 路径 |
+|------|------|
+| Core | `data/core.db` |
+| Writer | `members/writer/data/lamwriter.db` |
+| Sage | `members/sage/data/sage.db` |
