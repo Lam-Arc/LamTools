@@ -88,8 +88,10 @@
                 </div>
                 <template
                   v-for="group in compactGroups(groupParts(timelineParts(msg)))"
-                  :key="group.kind === 'process-group' ? `live-tl-pg-${processGroupId(group)}` : group.part.id"
+                  :key="group.kind === 'context-group' ? `live-tl-ctx-${group.items.map((item) => item.id).join('-')}` : group.kind === 'process-group' ? `live-tl-pg-${processGroupId(group)}` : group.part.id"
                 >
+                  <template v-if="group.kind === 'process'">
+                    <template v-for="part in [group.part]" :key="part.id">
                   <div v-if="part.partType === 'text' && part.content" class="assistant-answer">
                     <slot name="assistant-content" :content="part.content">
                       <MarkdownRenderer class="part-text-content part-text-content--streaming" :content="part.content" :streaming="true" />
@@ -283,6 +285,122 @@
                       </div>
                     </div>
                   </div>
+                    </template>
+                  </template>
+                  <template v-else-if="group.kind === 'process-group'">
+                    <div class="process-group">
+                      <button
+                        type="button"
+                        class="process-group-summary"
+                        @click="toggleGroupExpand(processGroupId(group))"
+                      >
+                        <span class="process-step-marker" />
+                        <span class="process-group-text">{{ group.summary }}</span>
+                        <span class="process-group-chevron">{{ isGroupExpanded(processGroupId(group)) ? '▾' : '▸' }}</span>
+                      </button>
+                      <div v-if="isGroupExpanded(processGroupId(group))" class="process-group-body">
+                        <template v-for="part in group.parts" :key="part.id">
+                          <div v-if="part.partType === 'reasoning'" class="process-step process-step--reasoning">
+                            <button type="button" class="reasoning-toggle" @click="togglePartExpand(part, true)">
+                              <span class="process-step-marker" />
+                              <span class="process-step-title">思考</span>
+                              <span v-if="reasoningDuration(part, true)" class="reasoning-duration">{{ reasoningDuration(part, true) }}</span>
+                              <span class="tool-expand-chevron">{{ isPartExpanded(part, true) ? '▾' : '▸' }}</span>
+                            </button>
+                            <div v-if="isPartExpanded(part, true)" class="reasoning-body">
+                              <slot name="reasoning-content" :content="part.content" :live="true">
+                                <MarkdownRenderer class="process-step-detail part-text-content--streaming" :content="part.content" :streaming="true" />
+                              </slot>
+                            </div>
+                          </div>
+                          <div
+                            v-else-if="(part.partType === 'tool_call' || part.partType === 'tool_result') && !isControlTool(part)"
+                            class="process-step process-step--tool"
+                            :class="['process-step--' + part.status, toolColorClass(part)]"
+                          >
+                            <button
+                              type="button"
+                              class="tool-card-header"
+                              :class="[{ 'has-detail': hasToolDisplay(part), 'process-tool-row': !isCommandTool(part), 'tool-card-header--command': isCommandTool(part) }, toolColorClass(part)]"
+                              :aria-expanded="!isCommandTool(part) && hasToolDisplay(part) ? shouldShowToolBody(part, true) : undefined"
+                              @click="togglePartExpand(part, true)"
+                            >
+                              <span v-if="isCommandTool(part)" class="process-step-marker" />
+                              <template v-if="isCommandTool(part)">
+                                <span class="tool-type-tag" :class="toolColorClass(part)">{{ toolTypeLabel(part) }}</span>
+                                <span class="process-step-title">{{ readableProcessTitle(part) }}</span>
+                                <span v-if="shouldShowToolArgsPreview(part)" class="tool-args-preview">{{ toolArgsPreview(part.toolArgs || {}) }}</span>
+                              </template>
+                              <template v-else>
+                                <span class="tool-row-name">{{ toolTypeLabel(part) }}</span>
+                                <span class="process-step-title tool-row-summary">{{ readableProcessTitle(part) }}</span>
+                                <span v-if="shouldShowToolArgsPreview(part)" class="tool-args-preview tool-row-args">{{ toolArgsPreview(part.toolArgs || {}) }}</span>
+                                <span class="tool-row-status" :class="{ 'tool-row-status--retry': toolRetryLabel(part) }">{{ toolRetryLabel(part) || toolStatusLabel(part) }}</span>
+                              </template>
+                              <span
+                                v-if="hasToolDisplay(part)"
+                                class="tool-expand-chevron"
+                              >{{ shouldShowToolBody(part, true) ? '▾' : '▸' }}</span>
+                            </button>
+                            <div
+                              v-if="shouldShowToolBody(part, true)"
+                              class="tool-card-body"
+                              :class="{ 'tool-card-body--row': !isCommandTool(part) }"
+                            >
+                              <pre v-if="displayToolError(part)" class="tool-output tool-output--error" @click.stop="copyToolErrorText(part)" title="点击复制错误信息">{{ displayToolError(part) }}</pre>
+                              <div v-if="displayToolResult(part) && isFileTool(part)" class="diff-block" :class="[fileDiffClass(part), { 'diff-block--wrap': isToolWrapEnabled(part.id) }]">
+                                <div class="diff-header">
+                                  <span class="diff-file">{{ diffHeaderText(part) }}</span>
+                                  <button type="button" class="wrap-toggle" @click.stop="toggleToolWrap(part.id)">{{ isToolWrapEnabled(part.id) ? 'wrap' : 'scroll' }}</button>
+                                </div>
+                                <div class="diff-lines">
+                                  <div v-for="(line, li) in diffDisplayLines(part)" :key="li" class="diff-line" :class="diffLineClass(line, part)">
+                                    <span class="diff-line-num">{{ diffLineGutter(line, li, part) }}</span>
+                                    <span class="diff-line-content">{{ diffLineContent(line, part) }}</span>
+                                  </div>
+                                </div>
+                              </div>
+                              <div v-else-if="testArtifact(part)" class="test-result-card" :class="testResultClass(part)">
+                                <div class="test-result-head">
+                                  <span class="test-result-state">{{ testResultTitle(part) }}</span>
+                                  <span class="test-result-command">{{ testResultCommand(part) }}</span>
+                                </div>
+                                <div class="test-result-meta">
+                                  <span v-for="item in testResultMeta(part)" :key="item">{{ item }}</span>
+                                </div>
+                                <pre v-if="testResultOutput(part)" class="test-result-output">{{ testResultOutput(part) }}</pre>
+                              </div>
+                              <div v-else-if="displayToolInputPreview(part)" v-auto-follow-scroll="displayToolInputPreview(part)" class="tool-output tool-input-preview">
+                                <div class="tool-output-meta">
+                                  <span>{{ toolInputPreviewMeta(part) }}</span>
+                                </div>
+                                <pre class="tool-output-content" :class="{ 'tool-output-content--wrap': isToolWrapEnabled(part.id) }" @click="toggleToolWrap(part.id)">{{ displayToolInputPreview(part) }}</pre>
+                              </div>
+                              <div v-else-if="displayToolResult(part) && isCommandTool(part)" class="command-output">
+                                <div class="command-terminal-chrome" aria-hidden="true">
+                                  <span class="command-terminal-light command-terminal-light--close" />
+                                  <span class="command-terminal-light command-terminal-light--minimize" />
+                                  <span class="command-terminal-light command-terminal-light--maximize" />
+                                  <span class="command-terminal-title">run command</span>
+                                </div>
+                                <div class="command-terminal-body">
+                                  <strong class="command-output-command">$ {{ commandDisplayText(part) }}</strong>
+                                  <pre class="command-output-result">{{ commandOutputText(part) }}</pre>
+                                </div>
+                              </div>
+                              <div v-else-if="displayToolResult(part)" class="tool-output">
+                                <div v-if="toolMetaItems(part).length > 0" class="tool-output-meta">
+                                  <span v-for="item in toolMetaItems(part)" :key="item">{{ item }}</span>
+                                </div>
+                                <pre class="tool-output-content" :class="{ 'tool-output-content--wrap': isToolWrapEnabled(part.id) }" @click="toggleToolWrap(part.id)">{{ toolOutputContent(part) }}</pre>
+                              </div>
+                              <pre v-else-if="readableProcessDetail(part)" class="tool-output">{{ readableProcessDetail(part) }}</pre>
+                            </div>
+                          </div>
+                        </template>
+                      </div>
+                    </div>
+                  </template>
                 </template>
 
               </template>
@@ -5048,11 +5166,6 @@ function formatContextSummary(c: ContextCounts): string {
   .reasoning-body,
   .tool-card-body {
     transition: none !important;
-  }
-  .reasoning-body--closed,
-  .tool-card-body--closed {
-    max-height: none;
-    opacity: 1;
   }
 }
 </style>

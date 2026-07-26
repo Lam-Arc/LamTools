@@ -23,8 +23,27 @@
     <!-- Content area -->
     <div class="stage-content">
       <template v-if="activeTab">
+        <!-- HTML code editor with preview toggle -->
+        <template v-if="activeTab.kind === 'code' && activeTab.language === 'html'">
+          <StageCodeEditor
+            v-if="activeTab.previewMode !== 'preview'"
+            ref="codeEditorRef"
+            :content="activeTab.content || ''"
+            :language="activeTab.language"
+            @update:content="(val) => $emit('update-content', { id: activeTab!.id, content: val })"
+            @dirty="(val) => codeDirty = val"
+            @save="handleSave"
+          />
+          <iframe
+            v-else
+            class="stage-html-preview"
+            :srcdoc="activeTab.content || ''"
+            sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+          />
+        </template>
+        <!-- Non-HTML code editor -->
         <StageCodeEditor
-          v-if="activeTab.kind === 'code'"
+          v-else-if="activeTab.kind === 'code'"
           ref="codeEditorRef"
           :content="activeTab.content || ''"
           :language="activeTab.language"
@@ -62,13 +81,22 @@
     <div class="stage-status">
       <span v-if="activeTab" class="stage-status-label">{{ activeTab.label }}</span>
       <span v-else>无打开的标签</span>
-      <button
-        v-if="activeTab?.kind === 'code' && codeDirty"
-        type="button"
-        class="stage-save-btn"
-        :disabled="saving"
-        @click="handleSave"
-      >{{ saving ? '保存中...' : '保存 ⌘S' }}</button>
+      <div class="stage-status-actions">
+        <button
+          v-if="activeTab?.kind === 'code' && activeTab.language === 'html'"
+          type="button"
+          class="stage-toggle-btn"
+          :class="{ active: activeTab.previewMode === 'preview' }"
+          @click="togglePreview"
+        >{{ activeTab.previewMode === 'preview' ? '代码' : '预览' }}</button>
+        <button
+          v-if="activeTab?.kind === 'code' && codeDirty"
+          type="button"
+          class="stage-save-btn"
+          :disabled="saving"
+          @click="handleSave"
+        >{{ saving ? '保存中...' : '保存 ⌘S' }}</button>
+      </div>
     </div>
   </div>
 </template>
@@ -91,6 +119,7 @@ const emit = defineEmits<{
   close: [id: string]
   'update-content': [payload: { id: string; content: string }]
   save: [payload: { id: string; content: string }]
+  'toggle-preview': [id: string, mode: 'code' | 'preview']
 }>()
 
 const codeEditorRef = ref<InstanceType<typeof StageCodeEditor> | null>(null)
@@ -106,6 +135,12 @@ function handleSave() {
   if (!activeTab.value || saving.value) return
   saving.value = true
   emit('save', { id: activeTab.value.id, content: activeTab.value.content || '' })
+}
+
+function togglePreview() {
+  if (!activeTab.value) return
+  const next = activeTab.value.previewMode === 'preview' ? 'code' : 'preview'
+  emit('toggle-preview', activeTab.value.id, next)
 }
 
 function onSaved() {
@@ -199,7 +234,11 @@ function kindIcon(kind: StageResource['kind']): string {
   flex: 1;
   min-height: 0;
   overflow: hidden;
-  background: rgba(0, 0, 0, 0.12);
+  background:
+    var(--theme-main-background),
+    var(--theme-backdrop-background);
+  background-blend-mode: normal;
+  color: var(--theme-main-text, #f2efeb);
 }
 .stage-empty {
   width: 100%;
@@ -245,5 +284,35 @@ function kindIcon(kind: StageResource['kind']): string {
 .stage-save-btn:disabled {
   opacity: 0.5;
   cursor: default;
+}
+.stage-toggle-btn {
+  flex: 0 0 auto;
+  border: 1px solid color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 20%, transparent);
+  border-radius: 6px;
+  background: transparent;
+  color: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 60%, transparent);
+  padding: 2px 10px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.stage-toggle-btn:hover {
+  background: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 6%, transparent);
+  color: var(--theme-backdrop-text, #f2efeb);
+}
+.stage-toggle-btn.active {
+  background: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 10%, transparent);
+  color: var(--theme-backdrop-text, #f2efeb);
+}
+.stage-status-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.stage-html-preview {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #fff;
 }
 </style>

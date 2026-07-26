@@ -271,6 +271,7 @@
         @close="stageClose"
         @update-content="stageUpdateContent"
         @save="stageSave"
+        @toggle-preview="stageTogglePreview"
       />
     </template>
 
@@ -474,6 +475,11 @@ async function stageSave(payload: { id: string; content: string }) {
   } catch {
     // 保存失败，保持 dirty 状态让用户重试
   }
+}
+
+function stageTogglePreview(id: string, mode: 'code' | 'preview') {
+  const tab = stageTabs.value.find((t) => t.id === id)
+  if (tab) tab.previewMode = mode
 }
 
 const EXT_TO_KIND: Record<string, StageKind> = {

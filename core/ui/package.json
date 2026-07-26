@@ -26,6 +26,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build && vue-tsc -b && vue-tsc --noEmit -p tsconfig.demo.json",
+    "build:app": "vite build --config vite.config.core-app.ts",
     "typecheck": "vue-tsc --noEmit && vue-tsc --noEmit -p tsconfig.demo.json",
     "preview": "vite preview",
     "test:contract": "vitest run"

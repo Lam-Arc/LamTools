@@ -357,4 +357,5 @@ export interface StageResource {
   language?: string;
   label?: string;
   content?: string;
+  previewMode?: 'code' | 'preview';
 }

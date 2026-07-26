@@ -189,10 +189,33 @@ watch(() => props.language, (newLang) => {
 .stage-code-editor :deep(.cm-editor) {
   height: 100%;
   background: transparent !important;
+  color: var(--theme-main-text, #f2efeb) !important;
+}
+.stage-code-editor :deep(.cm-content) {
+  color: var(--theme-main-text, #f2efeb) !important;
+}
+.stage-code-editor :deep(.cm-line) {
+  color: var(--theme-main-text, #f2efeb) !important;
 }
 .stage-code-editor :deep(.cm-gutters) {
   background: transparent !important;
   border: none !important;
+  color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 40%, transparent) !important;
+}
+.stage-code-editor :deep(.cm-gutter .cm-gutterElement) {
+  color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 40%, transparent) !important;
+}
+.stage-code-editor :deep(.cm-activeLine) {
+  background: color-mix(in srgb, var(--theme-main-text, #f2efeb) 4%, transparent) !important;
+}
+.stage-code-editor :deep(.cm-activeLineGutter) {
+  background: color-mix(in srgb, var(--theme-main-text, #f2efeb) 4%, transparent) !important;
+}
+.stage-code-editor :deep(.cm-cursor) {
+  border-left-color: var(--theme-main-text, #f2efeb) !important;
+}
+.stage-code-editor :deep(.cm-selectionBackground) {
+  background: color-mix(in srgb, var(--theme-main-text, #f2efeb) 15%, transparent) !important;
 }
 .stage-code-editor :deep(.cm-scroller) {
   overflow: auto;

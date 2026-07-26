@@ -5,7 +5,7 @@
   "identifier": "com.lamtools.lamwriter",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build && npm run desktop:backend && npm run desktop:resources",
+    "beforeBuildCommand": "npx vite build",
     "devUrl": "http://127.0.0.1:6174",
     "frontendDist": "../dist"
   },

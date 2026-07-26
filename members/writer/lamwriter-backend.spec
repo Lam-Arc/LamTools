@@ -3,7 +3,7 @@
 
 a = Analysis(
     ['backend\\desktop_server.py'],
-    pathex=['backend', '..\\..\\core\\src'],
+    pathex=['backend', 'E:/LamTools/core/src'],
     binaries=[],
     datas=[],
     hiddenimports=['aiosqlite', 'aiosqlite.core', 'sqlite3', 'uvicorn.loops.auto', 'uvicorn.protocols.http.auto', 'uvicorn.protocols.websockets.auto'],
