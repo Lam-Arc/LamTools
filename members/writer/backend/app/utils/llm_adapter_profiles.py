@@ -18,7 +18,7 @@ def _writer_source_profile_dir() -> Path:
 
 
 def _core_builtin_profile_dirs() -> list[Path]:
-    return _dedupe_dirs([root / "llm_adapters" for root in core_resource_roots()])
+    return _dedupe_dirs([root / "config" / "llm_adapters" for root in core_resource_roots()])
 
 
 def _writer_builtin_profile_dirs() -> list[Path]:

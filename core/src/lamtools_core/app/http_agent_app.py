@@ -34,7 +34,7 @@ from .core_session_store import CoreDbSessionStore
 from .default_agent import CoreAgentPaths, CoreAgentSpec, create_core_agent_operations
 from .durable_operations import register_durable_operations
 from .event_store import AppEventInput
-from .factory import create_app
+from .factory import add_spa_fallback, create_app
 from .live_hub import CoreAppEventHub
 from .live_operations import CoreLiveContext, CoreLiveOperationHost
 from .project_store import ActiveProjectSessionsError, CoreProjectStore
@@ -132,6 +132,7 @@ def create_core_agent_http_app(
     thinking_budget: int = 10000,
     max_tokens: int | None = None,
     temperature: float = 0.2,
+    frontend_dir: Path | str | None = None,
 ) -> FastAPI:
     config_db_path = _resolve_config_db(config_db)
     config = load_llm_config(config_db_path, model_ref=model_id)
@@ -423,6 +424,7 @@ def create_core_agent_http_app(
         members=members,
         title=runtime_spec.name,
         enable_core_routes=False,
+        frontend_dir=frontend_dir,
         health_payload=lambda: {
             "status": "ok",
             "agent": runtime_spec.member_id,
@@ -485,6 +487,11 @@ def create_core_agent_http_app(
     app.state.core_agent_runtime_task_registry = runtime_task_registry
     app.state.core_agent_work_root = resolved_work_root
     app.state.core_agent_data_dir = resolved_data_dir
+
+    # Register SPA fallback LAST so API routes take precedence.
+    if frontend_dir is not None:
+        add_spa_fallback(app, Path(frontend_dir))
+
     return app
 
 
@@ -720,7 +727,7 @@ def _list_llm_provider_configs(config_db_path: Path) -> list[dict[str, Any]]:
 
 
 def create_default_core_agent_http_app() -> FastAPI:
-    model_id = os.environ.get("LAMTOOLS_CORE_MODEL_ID") or "xopkimik26"
+    model_id = os.environ.get("LAMTOOLS_CORE_MODEL_ID") or "default-model"
     config_db = os.environ.get("LAMTOOLS_LLM_CONFIG_DB") or None
     core_db = os.environ.get("LAMTOOLS_CORE_DB") or None
     data_dir = os.environ.get("LAMTOOLS_CORE_DATA_DIR") or None

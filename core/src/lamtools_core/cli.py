@@ -1714,7 +1714,7 @@ def _resolve_adapter_profile(config: LLMConfig, adapter_dirs: tuple[Path | str, 
 
 def _default_adapter_dirs() -> list[Path]:
     root = _repo_root()
-    dirs = [root / "core" / "llm_adapters"]
+    dirs = [root / "core" / "config" / "llm_adapters"]
     env_dir = os.environ.get("LAMTOOLS_LLM_ADAPTER_DIR")
     if env_dir:
         dirs.append(Path(env_dir))

@@ -296,7 +296,7 @@ def test_core_agent_operations_include_core_plugin_and_hook_catalog(tmp_path):
 @pytest.mark.asyncio
 async def test_core_agent_operations_expose_command_catalog(tmp_path):
     core_root = tmp_path / "core-root"
-    command_dir = core_root / "command"
+    command_dir = core_root / "config" / "command"
     command_dir.mkdir(parents=True)
     (command_dir / "inspect.json").write_text(
         json.dumps(
@@ -335,7 +335,7 @@ async def test_core_agent_operations_expose_command_catalog(tmp_path):
 @pytest.mark.asyncio
 async def test_core_agent_command_execute_compacts_runtime_history(tmp_path):
     core_root = tmp_path / "core-root"
-    command_dir = core_root / "command"
+    command_dir = core_root / "config" / "command"
     command_dir.mkdir(parents=True)
     (command_dir / "compact.json").write_text(
         json.dumps(

@@ -40,15 +40,15 @@ def test_catalog_loads_core_before_member_and_blocks_overrides(tmp_path: Path):
     core = tmp_path / "core"
     member = tmp_path / "members" / "writer"
     write_json(
-        core / "command" / "compact.json",
+        core / "config" / "command" / "compact.json",
         '{"name":"compact","title":"Compact","description":"Core compact","icon":"archive","action":"run_action"}',
     )
     write_json(
-        member / "command" / "git-status.json",
+        member / "config" / "command" / "git-status.json",
         '{"name":"git status","title":"Git status","description":"Show git status","icon":"git-branch","action":"run_action"}',
     )
     write_json(
-        member / "command" / "compact.json",
+        member / "config" / "command" / "compact.json",
         '{"name":"compact","title":"Bad","description":"Override","icon":"x","action":"run_action"}',
     )
 
@@ -64,11 +64,11 @@ def test_member_config_disables_core_command_for_that_member(tmp_path: Path):
     writer = tmp_path / "members" / "writer"
     artist = tmp_path / "members" / "artist"
     write_json(
-        core / "command" / "fork.json",
+        core / "config" / "command" / "fork.json",
         '{"name":"fork","title":"Fork","description":"Fork session","icon":"git-branch","action":"run_action"}',
     )
     write_json(
-        writer / "command" / "config.json",
+        writer / "config" / "command" / "config.json",
         '{"disabled_core_commands":["fork","unknown"]}',
     )
 
@@ -83,15 +83,15 @@ def test_member_cannot_replace_disabled_core_command_name(tmp_path: Path):
     core = tmp_path / "core"
     member = tmp_path / "members" / "member"
     write_json(
-        core / "command" / "fork.json",
+        core / "config" / "command" / "fork.json",
         '{"name":"fork","title":"Fork","description":"Core fork","icon":"git-branch","action":"run_action"}',
     )
     write_json(
-        member / "command" / "config.json",
+        member / "config" / "command" / "config.json",
         '{"disabled_core_commands":["fork"]}',
     )
     write_json(
-        member / "command" / "fork.json",
+        member / "config" / "command" / "fork.json",
         '{"name":"fork","title":"Member fork","description":"Override disabled core","icon":"x","action":"run_action"}',
     )
 
@@ -104,7 +104,7 @@ def test_core_catalog_includes_skills_and_core_prepares_skill_with_attachments(t
     core = tmp_path / "core"
     work_root = tmp_path / "workspace"
     write_json(
-        core / "command" / "compact.json",
+        core / "config" / "command" / "compact.json",
         '{"name":"compact","title":"Compact","description":"Compact context","icon":"archive","action":"run_action"}',
     )
     skill_dir = work_root / ".codex" / "skills" / "reviewer"

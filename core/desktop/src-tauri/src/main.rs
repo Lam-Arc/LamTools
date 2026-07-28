@@ -76,12 +76,29 @@ fn main() {
         .manage(state)
         .setup(|app| {
             let state = app.state::<BackendState>();
-            let api_base = start_backend(app, state.inner())?;
-            *state
-                .api_base
-                .lock()
-                .map_err(|_| "backend state lock failed")? = Some(api_base);
-            Ok(())
+            match start_backend(app, state.inner()) {
+                Ok(api_base) => {
+                    *state
+                        .api_base
+                        .lock()
+                        .map_err(|_| "backend state lock failed")? = Some(api_base);
+                    Ok(())
+                }
+                Err(e) => {
+                    let msg = format!("LamCore 后端启动失败：\n\n{}", e);
+                    eprintln!("{}", msg);
+                    #[cfg(windows)]
+                    {
+                        let msg_wide: Vec<u16> = msg.encode_utf16().chain(std::iter::once(0)).collect();
+                        extern "system" {
+                            fn MessageBoxW(hwnd: isize, text: *const u16, caption: *const u16, utype: u32) -> i32;
+                        }
+                        let caption: Vec<u16> = "LamCore 启动错误".encode_utf16().chain(std::iter::once(0)).collect();
+                        unsafe { MessageBoxW(0, msg_wide.as_ptr(), caption.as_ptr(), 0x00000010) };
+                    }
+                    Err(Box::new(e))
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![get_api_base, minimize_window, toggle_maximize_window, close_window, ping])
         .on_window_event(|window, event| {

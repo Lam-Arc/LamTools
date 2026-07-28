@@ -693,7 +693,7 @@ def _load_tier_tools(context: "CoreLiveContext") -> TierTools | None:
         data_dir = Path(str(data_dir_raw))
         candidates.append(data_dir / "access_tools.jsonc")
     candidates.append(
-        Path(__file__).resolve().parent.parent / "resources" / "access_tools.jsonc"
+        Path(__file__).resolve().parent.parent.parent.parent / "config" / "resources" / "access_tools.jsonc"
     )
     for candidate in candidates:
         try:

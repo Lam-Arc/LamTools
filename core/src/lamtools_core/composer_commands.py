@@ -17,8 +17,8 @@ def default_core_resource_roots() -> list[Path]:
     if packaged_root.is_dir():
         return [packaged_root]
 
-    source_root = module_root.parents[1]
-    if (source_root / "command").is_dir() or (source_root / "skills").is_dir():
+    source_root = module_root.parents[2]
+    if (source_root / "config" / "command").is_dir() or (source_root / "skills").is_dir():
         return [source_root]
     return []
 
@@ -176,7 +176,7 @@ def _resolve_skill(
 def load_disabled_core_commands(member_roots: list[Path]) -> set[str]:
     disabled: set[str] = set()
     for root in member_roots:
-        config = root / "command" / "config.json"
+        config = root / "config" / "command" / "config.json"
         if not config.is_file():
             continue
         try:
@@ -198,7 +198,7 @@ def _load_definitions(
     seen: set[str] = set()
     commands: list[ComposerCommandDefinition] = []
     for root in roots:
-        command_dir = root / "command"
+        command_dir = root / "config" / "command"
         if not command_dir.is_dir():
             continue
         for path in sorted(command_dir.glob("*.json")):

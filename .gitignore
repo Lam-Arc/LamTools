@@ -53,6 +53,7 @@ opencode*.log
 .codex-runtime/
 .writer-artifacts/
 tmp/
+_experiments/
 
 # Desktop build outputs
 LamWriter-*.zip
