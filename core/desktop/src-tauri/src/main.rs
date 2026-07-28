@@ -186,11 +186,11 @@ fn prod_backend_command(
 }
 
 fn find_backend_exe(app: &tauri::App) -> Result<PathBuf, Box<dyn std::error::Error>> {
-    // 1) Tauri resource directory (bundled resources)
+    // 1) Tauri resource directory (bundled flat)
     let resource = app
         .path()
         .resource_dir()?
-        .join("LamCore")
+        .join("lamcore-backend")
         .join("LamCore.exe");
     if resource.exists() {
         return Ok(resource);
@@ -205,6 +205,8 @@ fn find_backend_exe(app: &tauri::App) -> Result<PathBuf, Box<dyn std::error::Err
     if adjacent.exists() {
         return Ok(adjacent);
     }
+
+    // ... rest unchanged
 
     // 3) Project dist directory (dev convenience)
     let project_dist = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

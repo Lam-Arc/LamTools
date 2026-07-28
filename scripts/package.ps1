@@ -55,6 +55,12 @@ try {
 if (-not $SkipTauri) {
     Write-Host "`n=== Step 3/4: Tauri bundle ===" -ForegroundColor Cyan
 
+    # Copy backend into src-tauri as flat resource (avoids _up_ nesting)
+    $ResourceDir = "$Root\core\desktop\src-tauri\lamcore-backend"
+    if (Test-Path $ResourceDir) { Remove-Item -Recurse -Force $ResourceDir }
+    Copy-Item -Recurse "$Root\dist\LamCore" $ResourceDir
+    Write-Host "  Backend copied to src-tauri/lamcore-backend/" -ForegroundColor Green
+
     Push-Location "$Root\core\desktop"
     try {
         & npx tauri build
