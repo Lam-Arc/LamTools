@@ -38,6 +38,19 @@ class HookRegistry:
 
     def load(self) -> list[HookDefinition]:
         hooks: list[HookDefinition] = []
+
+        # 1. Unified config directory (user-modifiable after packaging)
+        from lamtools_core.config.root import core_config_file
+
+        hooks.extend(
+            self._load_file(
+                core_config_file("hooks.json"),
+                source="user",
+                source_name="config",
+            )
+        )
+
+        # 2. Project hooks
         if self.project_root is not None:
             hooks.extend(
                 self._load_file(
@@ -46,6 +59,7 @@ class HookRegistry:
                     source_name="project",
                 )
             )
+        # 3. User hooks (legacy)
         hooks.extend(self._load_file(self.user_hooks_path, source="user", source_name="user"))
         for plugin in self.plugins:
             if not plugin.enabled:

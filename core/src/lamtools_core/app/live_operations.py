@@ -22,7 +22,6 @@ from lamtools_core.composer_commands import (
     normalize_command_name,
 )
 from lamtools_core.runtime import RuntimeStateStore, default_runtime_task_registry
-from lamtools_core.project.directory_picker import ProjectDirectoryPickerUnavailable, pick_project_directory
 from lamtools_core.tool.approval import load_access_tools, normalize_command_policies
 from lamtools_core.tool.approval import PermissionMode, TierTools
 from lamtools_core.tool.loadtools import LoadTools, default_load_tools, load_loadtools, mode_names
@@ -39,6 +38,7 @@ from .persistence_host import AppPersistenceHost
 from .queue_state import (
     build_queue_guidance_plan,
     build_queue_update_plan,
+    effective_thread_status,
     input_items_text,
     latest_active_turn_id,
     next_dispatchable_queue_item,
@@ -58,15 +58,6 @@ from .turn_acceptance import (
 TERMINAL_TURN_STATUSES = {"completed", "failed", "cancelled", "skipped"}
 
 
-async def handle_project_directory_pick_operation(
-    *, request_id: int | str | None, params: dict[str, Any], context: "CoreLiveContext"
-) -> "CoreLiveOperationOutcome":
-    del params, context
-    try:
-        selected = await asyncio.to_thread(pick_project_directory)
-    except (ProjectDirectoryPickerUnavailable, OSError) as exc:
-        return CoreLiveOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
-    return CoreLiveOperationOutcome(response=rpc_result(request_id, {"path": selected}))
 
 
 async def handle_command_catalog_operation(
@@ -692,15 +683,18 @@ async def _resolve_turn_approval_policy(*, context: "CoreLiveContext", params: d
 
 
 def _load_tier_tools(context: "CoreLiveContext") -> TierTools | None:
-    """Load access_tools.jsonc from the data directory."""
+    """Load access_tools.jsonc — prefer .lam/core/config/, then data_dir, then bundled."""
+    from lamtools_core.config.root import core_config_file
+
+    candidates: list[Path] = [core_config_file("access_tools.jsonc")]
+
     data_dir_raw = context.host.runtime_task_registry._data_dir if hasattr(context.host.runtime_task_registry, "_data_dir") else None
-    if data_dir_raw is None:
-        return None
-    data_dir = Path(str(data_dir_raw))
-    candidates = [
-        data_dir / "access_tools.jsonc",
-        Path(__file__).resolve().parent.parent / "resources" / "access_tools.jsonc",
-    ]
+    if data_dir_raw is not None:
+        data_dir = Path(str(data_dir_raw))
+        candidates.append(data_dir / "access_tools.jsonc")
+    candidates.append(
+        Path(__file__).resolve().parent.parent / "resources" / "access_tools.jsonc"
+    )
     for candidate in candidates:
         try:
             if candidate.exists():
@@ -711,7 +705,20 @@ def _load_tier_tools(context: "CoreLiveContext") -> TierTools | None:
 
 
 def _load_load_tools(context: "CoreLiveContext") -> LoadTools:
-    """Load loadtools.jsonc — prefer data_dir, fallback to Core default."""
+    """Load loadtools.jsonc — prefer .lam/core/config/, then data_dir, fallback to Core default."""
+    from lamtools_core.config.root import core_config_file
+
+    # 1. Unified config directory (user-modifiable after packaging)
+    candidate = core_config_file("loadtools.jsonc")
+    try:
+        if candidate.exists():
+            member_tools = load_loadtools(candidate)
+            if member_tools:
+                return member_tools
+    except (OSError, ValueError):
+        pass
+
+    # 2. data_dir override (legacy)
     data_dir_raw = context.host.runtime_task_registry._data_dir if hasattr(context.host.runtime_task_registry, "_data_dir") else None
     if data_dir_raw:
         data_dir = Path(str(data_dir_raw))
@@ -1486,6 +1493,7 @@ async def _run_core_turn(*, context: CoreLiveContext, runtime_start: dict[str, A
             _logger.info("[live:_run_core_turn] turn completed thread_id=%s turn_id=%s status=%s elapsed=%.2fs",
                           thread_id, turn_id, result.status, _elapsed)
             await _persist_operation_result(context=context, thread_id=thread_id, turn_id=turn_id, result=result)
+            await _ensure_turn_terminal(context=context, thread_id=thread_id, turn_id=turn_id)
         await _dispatch_next_queue_item(
             context=context,
             thread_id=thread_id,
@@ -1514,6 +1522,52 @@ async def _run_core_turn(*, context: CoreLiveContext, runtime_start: dict[str, A
                 turn_id=turn_id,
                 message=str(exc) or "member runtime failed",
             )
+        )
+
+
+async def _ensure_turn_terminal(
+    *,
+    context: CoreLiveContext,
+    thread_id: str,
+    turn_id: str,
+) -> None:
+    """After a normal turn completion, ensure the thread status reflects completion
+    so that queued items can be dispatched.  This covers the case where member
+    hooks persist events live and the terminal status may not be reflected in the
+    snapshot store yet."""
+    async with context.session_factory() as db:
+        snapshot = await context.persistence.load(db, thread_id)
+    queue = snapshot.get("queue")
+    if not isinstance(queue, list) or not queue:
+        return
+    if effective_thread_status(snapshot) in {"completed", "idle"}:
+        return
+    # Check if the current turn is the last active turn
+    core_state = snapshot.get("core") if isinstance(snapshot.get("core"), dict) else {}
+    latest_active = latest_active_turn_id({"core": core_state, "turns": snapshot.get("turns", {})})
+    if latest_active is not None and latest_active != turn_id:
+        return
+    # Write a completed terminal status event
+    terminal = RunItemEvent(
+        kind="status",
+        thread_id=thread_id,
+        event_id=f"{turn_id}:terminal",
+        run_id=turn_id,
+        turn_id=turn_id,
+        item_id=f"{turn_id}:terminal",
+        status="completed",
+    )
+
+    async def write(db):
+        return await _append_run_item(db, context=context, event=terminal)
+
+    try:
+        event = await context.persistence.write(write)
+        await context.hub.publish(event)
+    except BaseException:
+        _logger.exception(
+            "[live:_ensure_turn_terminal] failed thread_id=%s turn_id=%s",
+            thread_id, turn_id,
         )
 
 
@@ -2086,7 +2140,6 @@ _CORE_LIVE_OPERATION_EXECUTORS = {
     "queue.update": handle_queue_update_operation,
     "queue.delete": handle_queue_delete_operation,
     "queue.guide": handle_queue_guidance_operation,
-    "project.directory.pick": handle_project_directory_pick_operation,
 }
 
 
@@ -2102,7 +2155,6 @@ __all__ = [
     "handle_thread_read_operation",
     "handle_thread_start_operation",
     "handle_thread_resume_operation",
-    "handle_project_directory_pick_operation",
     "handle_turn_cancel_operation",
     "handle_turn_start_operation",
     "handle_turn_steer_operation",

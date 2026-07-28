@@ -69,7 +69,11 @@ def _config_paths(
     env_var: str,
     default_paths: list[Path | str] | tuple[Path | str, ...] | None,
 ) -> list[Path]:
+    from lamtools_core.config.root import core_config_file
+
     paths: list[Path] = []
+    # 1. Unified config directory (user-modifiable after packaging)
+    paths.append(core_config_file("mcp.json"))
     explicit = os.environ.get(env_var, "").strip()
     if explicit:
         paths.append(Path(explicit))

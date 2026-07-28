@@ -147,6 +147,7 @@ class CoreBaseAgentKit:
                 state.metadata[key] = turn_input.metadata[key]
         if turn_input.user_message:
             state.metadata.setdefault("original_user_message", turn_input.user_message)
+        state.metadata.setdefault("activated_mcp_servers", [])
         if self.verification_policy.required:
             self._verification_state(state)
 
@@ -176,25 +177,15 @@ class CoreBaseAgentKit:
             self.config.instructions,
             f"当前项目: {state.metadata.get('work_root', '')}, 当前会话: {state.session_id}, 当前模型: {self.config.model_display_name or self.config.model_id}",
             command_shell_prompt(),
-            "Use the available tools when they help complete the user's request.",
-            "If the user explicitly asks to use a sub-agent, call sub_agent before producing the final result.",
-            "When the user assigns a deliverable to a sub-agent, delegate the complete requested deliverable, including any requested file creation or tool action. The Parent Agent should verify the result instead of recreating that deliverable itself.",
+            "在有助于完成用户请求时使用可用工具。",
             "互不依赖的任务应委派 sub-agent 并行执行。其 prompt 至少明确：工作范围、任务目标、输出格式。",
-            "When asked to create or modify files, use write_file or edit_file.",
-            "When asked for one document or one file, create exactly one final file unless the user explicitly asks for multiple files.",
-            "After a requested file is successfully written, stop tool use and answer with the saved path and a concise summary.",
-            "Use load_skill when an available skill matches the task.",
-            "After tool results are returned, continue with the next useful step or final answer.",
-            (
-                "Treat successful tool results as reusable evidence. Before querying the same file, URL, process, "
-                "port, or other resource again with different syntax, state the exact missing fact and why the "
-                "existing result does not answer it; otherwise reuse the existing result."
-            ),
-            (
-                "After several tool-only steps, briefly report confirmed facts, remaining uncertainty, and the next "
-                "action before calling more tools. Keep this progress note concise and do not repeat prior evidence."
-            ),
-            "Final answers should summarize the outcome and mention important saved paths.",
+            "创建或修改文件时使用 write_file 或 edit_file。",
+            "工作过程中不要破坏项目目录的结构性与整洁度。",
+            "当可用技能与任务匹配时使用 load_skill。",
+            "收到工具结果后，继续下一步或给出最终回复。",
+            "将成功的工具结果视为可复用证据。在对同一文件、URL、进程、端口等资源再次使用不同参数查询之前，先说明确缺失的事实以及现有结果为何不能回答；否则直接复用现有结果。",
+            "经过多个纯工具步骤后，简要汇报已确认事实、仍存疑点及下一步，再继续调用工具。保持进度摘要简洁，不重复已有证据。",
+            "任务完成后向用户回复简要摘要，最终回复应总结结果并提及重要的保存路径，包括但不限于工作完成情况、范围、产物位置、需用户确认项。",
         ]
         mode_line = mode_prompt_line(self.toolbox.load_tools, self.config.active_mode)
         if mode_line:
@@ -202,6 +193,12 @@ class CoreBaseAgentKit:
         skill_index = self.toolbox.skill_index()
         if skill_index:
             system_lines.extend(["", skill_index])
+        # List available MCP servers for mcp_activate tool
+        mcp_caller = getattr(self.toolbox, "mcp_caller", None)
+        if mcp_caller is not None and hasattr(mcp_caller, "server_names"):
+            servers = mcp_caller.server_names
+            if servers:
+                system_lines.extend(["", f"Available MCP servers (use mcp_activate to load): {', '.join(servers)}"])
         context_parts = self._build_project_context_parts()
         for part in context_parts:
             system_lines.extend(["", part.content])
@@ -220,25 +217,21 @@ class CoreBaseAgentKit:
                     status = s.get("status", "pending")
                     plan_lines.append(f"  [{sid}] ({status}) {desc}")
             if plan_lines:
-                system_lines.extend(["", "[Active Plan — follow this step by step]", "\n".join(plan_lines)])
+                system_lines.extend(["", "[当前计划 — 逐步执行]", "\n".join(plan_lines)])
         if self.verification_policy.required:
             verification_state = self._verification_state(state)
             system_lines.extend([
                 "",
-                (
-                    "This member requires tool-backed verification evidence before a final answer can complete. "
-                    "Use an eligible evidence-producing tool and ground the answer in its observed result."
-                ),
+                "此成员要求工具验证证据后方可给出最终回复。使用可产生证据的工具，并基于观察到的结果作答。",
             ])
             repair_prompt = str(verification_state.get("repair_prompt") or "").strip()
             if repair_prompt:
-                system_lines.append(f"Verification repair required: {repair_prompt}")
+                system_lines.append(f"验证修复要求：{repair_prompt}")
             evidence_call_ids = known_evidence_call_ids(state)
             if evidence_call_ids:
                 system_lines.append(
-                    "Known successful evidence call IDs are opaque references. "
-                    "When a tool asks for an evidence tool_call_id, copy one of these values exactly; "
-                    "do not add, remove, or normalize a prefix: "
+                    "已知成功证据调用 ID 为不可见引用。当工具要求提供 evidence tool_call_id 时，原样复制以下值之一；"
+                    "不要添加、删除或规范化前缀："
                     + json.dumps(evidence_call_ids, ensure_ascii=False)
                 )
         empty_stop_retry = (state.metadata or {}).get("empty_stop_retry_instruction")
@@ -745,11 +738,15 @@ def assemble_core_agent_plugins(
     from lamtools_core.plugins.registry import PluginRegistry, PluginStateStore
     from lamtools_core.plugins.trust import HookTrustStore
 
-    roots = (
+    from lamtools_core.config.root import core_plugins_root
+
+    roots: list[Path] = (
         [Path(item) for item in plugin_roots]
         if plugin_roots is not None
         else default_core_agent_plugin_roots(work_root, include_user_plugins=include_user_plugins)
     )
+    # Unified config directory — user-modifiable after packaging
+    roots.insert(0, core_plugins_root())
     state_store = PluginStateStore(Path(data_dir) / "plugins.json")
     plugins = PluginRegistry(plugin_roots=roots, state_store=state_store).discover()
     enabled_plugins = [plugin for plugin in plugins if plugin.enabled]

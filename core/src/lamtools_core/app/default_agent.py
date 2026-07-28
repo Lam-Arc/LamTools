@@ -67,7 +67,7 @@ class CoreAgentSpec:
     id: str = "core-agent"
     member_id: str = "core"
     name: str = "Core Agent"
-    instructions: str = "You are a general LamTools Core agent. Use available tools when useful."
+    instructions: str = "你是 LamTools 通用 Core Agent。大道至简，按需使用可用工具。"
     default_model: str = ""
     prompt_fragments: list[PromptFragment] = field(default_factory=list)
     tool_specs: list[ToolSpec] = field(default_factory=list)
@@ -241,8 +241,11 @@ def create_core_agent_operations(
             work_root=paths.work_root,
             plugin_roots=plugin_roots,
         )
+        from lamtools_core.config.root import core_skills_root
+
         return SkillRegistry(
             explicit_roots=[
+                core_skills_root(),
                 *resolved_command_member_roots,
                 *resolved_command_core_roots,
                 *plugin_assembly.get("skill_roots", []),
@@ -329,6 +332,17 @@ def create_core_agent_operations(
                 plugin_roots=plugin_roots,
             )
             _logger.info("[default:turn_start] plugin assembly done thread_id=%s", thread_id)
+            # Load existing session state to get activated MCP servers
+            activated_mcp_servers: set[str] = set()
+            if runtime_state_store is not None and thread_id:
+                try:
+                    existing_state = await runtime_state_store.get(thread_id)
+                    if existing_state is not None and existing_state.metadata:
+                        raw = existing_state.metadata.get("activated_mcp_servers")
+                        if isinstance(raw, list):
+                            activated_mcp_servers = {str(item) for item in raw}
+                except Exception:
+                    pass
             turn_checkpoint_coordinator = checkpoint_coordinator(runtime_work_root)
             toolbox, mcp_registry = await _build_core_runtime_toolbox(
                 work_root=runtime_work_root,
@@ -352,6 +366,7 @@ def create_core_agent_operations(
                 active_tier=active_tier,
                 tier_tools=tier_tools,
                 active_mode=active_mode,
+                activated_mcp_servers=activated_mcp_servers,
             )
             _mcp_count = len(mcp_registry._tools_by_name) if mcp_registry is not None else 0
             _logger.info("[default:turn_start] toolbox built thread_id=%s mcp_tools=%d", thread_id, _mcp_count)
@@ -682,6 +697,12 @@ def create_core_agent_operations(
                 )
                 mcp_registry = None
                 try:
+                    # Load activated MCP servers from session state
+                    delegated_activated_mcp: set[str] = set()
+                    if isinstance(state.metadata, dict):
+                        raw = state.metadata.get("activated_mcp_servers")
+                        if isinstance(raw, list):
+                            delegated_activated_mcp = {str(item) for item in raw}
                     plugin_assembly = assemble_core_agent_plugins(
                         data_dir=paths.data_dir,
                         work_root=runtime_work_root,
@@ -705,6 +726,7 @@ def create_core_agent_operations(
                         operation_catalog=catalog,
                         enable_goal_tool=goal_manager is not None,
                         enable_arrange_tool=arrange_manager is not None,
+                        activated_mcp_servers=delegated_activated_mcp,
                     )
                     sub_agent_runner = toolbox.sub_agent_runner
                     if sub_agent_runner is None or not hasattr(sub_agent_runner, "resume_approved"):
@@ -924,6 +946,12 @@ def create_core_agent_operations(
             else:
                 mcp_registry = None
                 try:
+                    # Load activated MCP servers from session state
+                    approval_activated_mcp: set[str] = set()
+                    if isinstance(state.metadata, dict):
+                        raw = state.metadata.get("activated_mcp_servers")
+                        if isinstance(raw, list):
+                            approval_activated_mcp = {str(item) for item in raw}
                     plugin_assembly = assemble_core_agent_plugins(
                         data_dir=paths.data_dir,
                         work_root=runtime_work_root,
@@ -946,6 +974,7 @@ def create_core_agent_operations(
                         operation_catalog=catalog,
                         enable_goal_tool=goal_manager is not None,
                         enable_arrange_tool=arrange_manager is not None,
+                        activated_mcp_servers=approval_activated_mcp,
                     )
                     call = ToolCall(
                         id=str(pending_call.get("id") or ""),
@@ -1036,6 +1065,12 @@ def create_core_agent_operations(
             )
             mcp_registry = None
             try:
+                # Load activated MCP servers from session state
+                continuation_activated_mcp: set[str] = set()
+                if isinstance(lifecycle.state.metadata, dict):
+                    raw = lifecycle.state.metadata.get("activated_mcp_servers")
+                    if isinstance(raw, list):
+                        continuation_activated_mcp = {str(item) for item in raw}
                 plugin_assembly = assemble_core_agent_plugins(
                     data_dir=paths.data_dir,
                     work_root=runtime_work_root,
@@ -1059,6 +1094,7 @@ def create_core_agent_operations(
                     operation_catalog=catalog,
                     enable_goal_tool=goal_manager is not None,
                     enable_arrange_tool=arrange_manager is not None,
+                    activated_mcp_servers=continuation_activated_mcp,
                 )
                 kernel = CoreLoopKernel(
                     kit=CoreBaseAgentKit(
@@ -1598,6 +1634,7 @@ async def _build_core_runtime_toolbox(
     active_tier: str | None = None,
     tier_tools: dict | None = None,
     active_mode: str | None = None,
+    activated_mcp_servers: set[str] | None = None,
 ):
     from lamtools_core.mcp import MCPToolRegistry
     from lamtools_core.tool.sub_agent_runner import KernelSubAgentRunner
@@ -1611,17 +1648,31 @@ async def _build_core_runtime_toolbox(
     if hook_engine is not None:
         hook_engine.set_mcp_caller(registry if mcp_tool_specs else None)
     normalized_policy = approval_policy if approval_policy in {"require", "auto_approve"} else "require"
+    from lamtools_core.config.root import core_skills_root
+
     skill_roots = {
+        core_skills_root(),
         *default_core_skill_roots(),
         *(plugin_assembly.get("skill_roots") or []),
     }
-    # Load tools configuration — prefer member override, fallback to Core default
+    # Load tools configuration — prefer config dir, then member override, fallback to Core default
     load_tools: LoadTools = default_load_tools()
-    data_dir = plugin_assembly.get("data_dir")
-    if data_dir:
-        member_loadtools = load_loadtools(Path(data_dir) / "loadtools.jsonc")
-        if member_loadtools:
-            load_tools = member_loadtools
+    from lamtools_core.config.root import core_config_file
+
+    config_candidate = core_config_file("loadtools.jsonc")
+    try:
+        if config_candidate.exists():
+            member_loadtools = load_loadtools(config_candidate)
+            if member_loadtools:
+                load_tools = member_loadtools
+    except (OSError, ValueError):
+        pass
+    if load_tools is default_load_tools():
+        data_dir = plugin_assembly.get("data_dir")
+        if data_dir:
+            member_loadtools = load_loadtools(Path(data_dir) / "loadtools.jsonc")
+            if member_loadtools:
+                load_tools = member_loadtools
     sub_agent_runner = None
     if llm_client is not None:
         sub_agent_runner = KernelSubAgentRunner(
@@ -1642,6 +1693,7 @@ async def _build_core_runtime_toolbox(
             session_prefix=sub_agent_session_prefix,
             parent_event_sink=sub_agent_event_sink,
             checkpoint_coordinator=checkpoint_coordinator,
+            activated_mcp_servers=activated_mcp_servers,
         )
     async def execute_operation(name: str, payload: dict[str, Any], metadata: dict[str, Any]) -> Any:
         if operation_catalog is None:
@@ -1661,6 +1713,7 @@ async def _build_core_runtime_toolbox(
         active_tier=active_tier,
         tier_tools=tier_tools,
         load_tools=load_tools,
+        activated_mcp_servers=activated_mcp_servers,
     )
     return toolbox, registry
 
