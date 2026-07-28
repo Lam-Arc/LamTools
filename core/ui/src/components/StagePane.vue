@@ -68,6 +68,18 @@
         <div v-else-if="activeTab.kind === 'empty'" class="stage-empty">
           <p>从右侧文件树选择文件，或输入网址打开浏览器</p>
         </div>
+        <div v-else-if="activeTab.kind === 'markdown'" class="stage-markdown">
+          <StageCodeEditor
+            v-if="activeTab.previewMode !== 'preview'"
+            ref="codeEditorRef"
+            :content="activeTab.content || ''"
+            language="markdown"
+            @update:content="(val) => $emit('update-content', { id: activeTab!.id, content: val })"
+            @dirty="(val) => codeDirty = val"
+            @save="handleSave"
+          />
+          <MarkdownRenderer v-else :content="activeTab.content || ''" />
+        </div>
         <div v-else class="stage-empty">
           <p>不支持预览此文件类型</p>
         </div>
@@ -88,7 +100,14 @@
           class="stage-toggle-btn"
           :class="{ active: activeTab.previewMode === 'preview' }"
           @click="togglePreview"
-        >{{ activeTab.previewMode === 'preview' ? '代码' : '预览' }}</button>
+        >{{ activeTab.previewMode === 'preview' ? '源码' : '预览' }}</button>
+        <button
+          v-if="activeTab?.kind === 'markdown'"
+          type="button"
+          class="stage-toggle-btn"
+          :class="{ active: activeTab.previewMode === 'preview' }"
+          @click="togglePreview"
+        >{{ activeTab.previewMode === 'preview' ? '源码' : '预览' }}</button>
         <button
           v-if="activeTab?.kind === 'code' && codeDirty"
           type="button"
@@ -108,6 +127,7 @@ import StageCodeEditor from './StageCodeEditor.vue'
 import StageImagePreview from './StageImagePreview.vue'
 import StageMediaPreview from './StageMediaPreview.vue'
 import StageBrowser from './StageBrowser.vue'
+import MarkdownRenderer from './MarkdownRenderer.vue'
 
 const props = defineProps<{
   tabs: StageResource[]
@@ -246,8 +266,16 @@ function kindIcon(kind: StageResource['kind']): string {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 35%, transparent);
+  background: color-mix(in srgb, var(--theme-titlebar-bg, #202020), var(--theme-main-solid, #111111));
+  color: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 50%, transparent);
   font-size: 13px;
+}
+.stage-markdown {
+  width: 100%;
+  height: 100%;
+  overflow-y: auto;
+  padding: 24px 28px;
+  background: color-mix(in srgb, var(--theme-titlebar-bg, #202020), var(--theme-main-solid, #111111));
 }
 .stage-status {
   flex: 0 0 auto;

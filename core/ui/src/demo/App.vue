@@ -1,4 +1,10 @@
 <template>
+  <TitleBar
+    :left-pinned="leftPinned"
+    :right-pinned="rightPinned"
+    @toggle-left-pinned="toggleLeftPinned"
+    @toggle-right-pinned="toggleRightPinned"
+  />
   <CoreSettings
     v-if="showSettings"
     :models="availableModels"
@@ -31,19 +37,19 @@
 	    @set-default-model="setDefaultModel"
   />
   <CoreArrangeManager
-    v-else-if="showArrange"
+    v-if="showArrange"
     :work-root="currentWorkRoot()"
     @back="showArrange = false"
   />
   <WorkspaceShell
-    v-else
+    ref="shellRef"
     product-name="LamTools Core"
     sidebar-title="Core"
     :storage-key="settingsStorageKey"
     :density="density"
     :theme="theme"
     :content-width="contentWidth"
-    :composer-disabled="composerActionMode === 'send' && (!activeSessionId || (!composerText.trim() && pendingAttachments.length === 0))"
+    :composer-disabled="composerActionMode === 'send' && (sendingDisabled || !activeSessionId || (!composerText.trim() && pendingAttachments.length === 0))"
     :composer-action-mode="composerActionMode"
     :error-text="workbenchErrorText"
     :notice-text="runtimeStatusText"
@@ -60,7 +66,6 @@
           v-if="showProjectCreate"
           :loading="projectCreateLoading"
           :error="projectCreateError"
-          :select-work-root="pickProjectDirectory"
           @submit="createProject"
           @cancel="closeProjectCreate"
         />
@@ -120,9 +125,15 @@
         <ChatThread
           :messages="messages"
           :process-expanded-ids="processExpandedIds"
+          :typing-message-ids="typingMessageIds"
           @toggle-process="toggleProcess"
           @decision-select="approvalController.handleDecision"
         />
+        <div v-if="pendingPlaceholder" class="user-row">
+          <div class="user-stack">
+            <div class="user-bubble user-bubble--placeholder">{{ pendingPlaceholder.content }}</div>
+          </div>
+        </div>
       </section>
     </template>
 
@@ -374,6 +385,7 @@ import CoreSettings, {
 import RuntimePanel from '../components/RuntimePanel.vue'
 import SessionSidebar from '../components/SessionSidebar.vue'
 import WorkspaceShell from '../components/WorkspaceShell.vue'
+import TitleBar from '../components/TitleBar.vue'
 
 type RawSession = {
   id: string
@@ -406,7 +418,8 @@ type RawProvider = {
   has_api_key?: boolean
 }
 
-const apiBase = (import.meta.env.VITE_CORE_API_BASE || '/api/core').replace(/\/$/, '')
+const _rawBase = ((window as any).__LAMTOOLS_API_BASE__ as string || (import.meta as any).env?.VITE_CORE_API_BASE || '/api/core').replace(/\/$/, '')
+const apiBase = /^https?:\/\//.test(_rawBase) ? _rawBase : (window.location.origin + (/^\//.test(_rawBase) ? '' : '/') + _rawBase).replace(/\/$/, '')
 const projectClient = createCoreProjectClient(apiBase)
 const projects = ref<CoreProject[]>([])
 const sessions = ref<CoreSessionListItem[]>([])
@@ -419,6 +432,14 @@ const composerTextareaEl = ref<HTMLTextAreaElement | null>(null)
 const attachmentFileInput = ref<HTMLInputElement | null>(null)
 const composerErrorText = ref('')
 const runtimeStatusText = ref('')
+let runtimeStatusTimer: ReturnType<typeof setTimeout> | null = null
+
+function setRuntimeStatus(text: string, duration = 3000) {
+  if (runtimeStatusTimer) { clearTimeout(runtimeStatusTimer); runtimeStatusTimer = null }
+  runtimeStatusText.value = text
+  if (text) { runtimeStatusTimer = window.setTimeout(() => { runtimeStatusText.value = '' }, duration) }
+}
+
 const loadError = ref<string | null>(null)
 const showProjectCreate = ref(false)
 const projectCreateLoading = ref(false)
@@ -431,6 +452,19 @@ const agentsProjectId = ref<string | null>(null)
 const agentsContent = ref('')
 const agentsLoading = ref(false)
 const agentsError = ref('')
+const shellRef = ref<InstanceType<typeof WorkspaceShell> | null>(null)
+const leftPinned = ref(true)
+const rightPinned = ref(false)
+const sendingDisabled = ref(false)
+
+function toggleLeftPinned() {
+  leftPinned.value = !leftPinned.value
+  shellRef.value?.toggleLeftPinned()
+}
+function toggleRightPinned() {
+  rightPinned.value = !rightPinned.value
+  shellRef.value?.toggleRightPinned()
+}
 const settingsStorageKey = 'lamtools.core.ui'
 const showSettings = ref(false)
 const showArrange = ref(false)
@@ -606,11 +640,6 @@ const runtimeController = createCoreAppServerRuntimeController(runtime, {
       onSnapshot,
       onConnectionState: (state) => {
         onConnectionState(state)
-        if (state === 'error') {
-          loadError.value = 'Core App Server 连接失败'
-        } else if (state === 'open' && loadError.value === 'Core App Server 连接失败') {
-          loadError.value = null
-        }
       },
     }),
   })
@@ -643,7 +672,7 @@ const liveComposerController = useCoreLiveComposerController({
   clearAttachments,
   focusComposer,
   setStatusText: (text) => {
-    runtimeStatusText.value = text
+    setRuntimeStatus(text)
   },
   onError: (text) => {
     composerErrorText.value = text
@@ -685,6 +714,8 @@ const projectionController = useCoreWorkbenchProjectionController({
   onStatusChange: ({ status }) => syncActiveSessionStatus(status),
 })
 const { messages, processExpandedIds, toggleProcess } = projectionController
+const typingMessageIds = ref(new Set<string>())
+const pendingPlaceholder = ref<{ id: string; content: string } | null>(null)
 const stepGroups = computed(() => buildCurrentTurnChecklistGroups(messages.value))
 
 const { activeGoal, goalError, refreshGoal, handleCancelGoal } = useCoreGoals({ activeSessionId })
@@ -727,6 +758,24 @@ const workbenchErrorText = computed(() => (
 const queuedInputs = computed<CoreQueuedInput[]>(() => {
   if (!snapshot.value || snapshot.value.thread_id !== activeSessionId.value) return []
   return selectCoreQueuedInputs(snapshot.value)
+})
+
+watch(queuedInputs, (items) => {
+  const shell = document.querySelector('.workspace-shell') as HTMLElement | null
+  if (!shell) return
+  const count = items.length
+  if (count === 0) {
+    shell.style.removeProperty('--queued-tray-offset')
+  } else {
+    // each row: min-height 34px + padding 6px×2 = 46px, tray margin: 4px+6px = 10px
+    const offset = count * 46 + 10
+    shell.style.setProperty('--queued-tray-offset', `${offset}px`)
+  }
+}, { immediate: true })
+
+onUnmounted(() => {
+  const shell = document.querySelector('.workspace-shell') as HTMLElement | null
+  shell?.style.removeProperty('--queued-tray-offset')
 })
 const queueController = useCoreQueuedInputController({
   activeTurnId,
@@ -792,17 +841,6 @@ async function createProject(payload: CoreProjectCreatePayload) {
     projectCreateError.value = messageFromError(error)
   } finally {
     projectCreateLoading.value = false
-  }
-}
-
-async function pickProjectDirectory() {
-  projectCreateError.value = ''
-  try {
-    const result = await requestConfigOperation('project.directory.pick')
-    return typeof result.path === 'string' ? result.path : ''
-  } catch (error) {
-    projectCreateError.value = messageFromError(error)
-    return ''
   }
 }
 
@@ -894,7 +932,7 @@ async function saveAgents(content: string) {
   try {
     const agents = await projectWorkspace.writeAgents(projectId, content)
     agentsContent.value = agents.content
-    runtimeStatusText.value = 'AGENTS.md 已保存'
+    setRuntimeStatus('AGENTS.md 已保存')
     agentsProjectId.value = null
     agentsContent.value = ''
   } catch (error) {
@@ -939,7 +977,7 @@ async function selectSession(id: string) {
   runtimeController.disconnect()
   liveComposerController.resetForThreadChange()
   composerErrorText.value = ''
-  runtimeStatusText.value = ''
+  setRuntimeStatus('', 0)
   await connectLive(id)
   await liveComposerController.loadCommandCatalog(id)
   await refreshGoal(id)
@@ -954,12 +992,61 @@ async function refreshAfterRollback() {
 }
 
 async function connectLive(threadId: string) {
-  await runtimeController.connect(window.location.origin, threadId)
+  await runtimeController.connect(apiBase, threadId)
 }
 
 async function submitComposer() {
   composerErrorText.value = ''
-  await liveComposerController.submit({ clearComposer: true })
+  const text = composerText.value.trim()
+  if (!text) return
+
+  sendingDisabled.value = true
+
+  // Show placeholder bubble while sending
+  pendingPlaceholder.value = { id: `placeholder-${Date.now()}`, content: '…' }
+
+  // Start typing-back animation (delete chars from the end)
+  const rawText = composerText.value
+  const intervalMs = Math.max(16, Math.min(50, 1000 / Math.max(1, rawText.length)))
+  let timer: ReturnType<typeof setInterval> | null = null
+  let timerDone = false
+
+  function finishSending() {
+    if (!timerDone) {
+      timerDone = true
+      sendingDisabled.value = false
+    }
+  }
+
+  timer = setInterval(() => {
+    if (composerText.value.length > 0) {
+      composerText.value = composerText.value.slice(0, -1)
+    } else {
+      clearInterval(timer!)
+      timer = null
+      finishSending()
+    }
+  }, intervalMs)
+
+  const startTime = Date.now()
+  try {
+    await liveComposerController.submit({ clearComposer: false })
+  } catch {
+    // error handled by controller
+  }
+  const elapsed = Date.now() - startTime
+
+  if (timer) {
+    if (elapsed <= 200) {
+      // Fast round-trip — clear remaining text immediately
+      clearInterval(timer)
+      timer = null
+      composerText.value = ''
+      void nextTick(resizeComposerTextarea)
+      finishSending()
+    }
+    // Otherwise let the interval finish the wipe naturally (max ~1s)
+  }
 }
 
 async function uploadFiles(files: FileList | File[]) {
@@ -1001,21 +1088,23 @@ function retryPendingAttachment(id: string) {
 async function previewPendingAttachment(id: string) {
   if (id.startsWith('failed:')) return
   const response = await fetch(`${apiBase}/attachments/${encodeURIComponent(id)}/preview`)
-  runtimeStatusText.value = response.ok ? '附件预览已读取' : '附件预览失败'
+  setRuntimeStatus(response.ok ? '附件预览已读取' : '附件预览失败')
 }
 
 async function openPendingAttachment(id: string) {
   if (id.startsWith('failed:')) return
   const response = await fetch(`${apiBase}/attachments/${encodeURIComponent(id)}/open`, { method: 'POST' })
-  if (!response.ok) runtimeStatusText.value = '打开附件失败'
+  if (!response.ok) setRuntimeStatus('打开附件失败')
 }
 
 async function handleComposerKeydown(event: KeyboardEvent) {
+  if (sendingDisabled.value) return
   updateComposerCursor()
   await liveComposerController.handleKeydown(event)
 }
 
 async function handleComposerKeyup(event: KeyboardEvent) {
+  if (sendingDisabled.value) return
   updateComposerCursor()
   await liveComposerController.handleKeyup(event)
 }
@@ -1124,25 +1213,51 @@ async function mutateConfig(method: string, params: object, successText: string)
     loadError.value = null
     await requestConfigOperation(method, params as Record<string, unknown>)
     await loadModelOptions()
-    runtimeStatusText.value = successText
+    setRuntimeStatus(successText)
   } catch (error) {
     loadError.value = error instanceof Error ? error.message : String(error)
   }
 }
 
 async function requestConfigOperation(method: string, params: Record<string, unknown> = {}) {
-  if (!configClient) {
-    const client = new CoreAppServerClient({
-      url: appServerUrl(window.location.origin, { path: '/api/core/app-server' }),
-      clientInfo: { name: 'lamtools_core_settings', title: 'LamTools Core Settings', version: '0.1.0' },
-      onConnectionState: (state) => {
-        if (state === 'closed' || state === 'error') configClient = null
-      },
-    })
-    await client.connect()
-    configClient = client
+  let lastError: Error | null = null
+  const maxRetries = 5
+  const baseDelay = 200
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    if (!configClient) {
+      const client = new CoreAppServerClient({
+        url: appServerUrl(apiBase, { path: '/api/core/app-server' }),
+        clientInfo: { name: 'lamtools_core_settings', title: 'LamTools Core Settings', version: '0.1.0' },
+        onConnectionState: (state) => {
+          if (state === 'closed' || state === 'error') configClient = null
+        },
+      })
+      try {
+        await client.connect()
+        configClient = client
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error))
+        configClient = null
+        if (attempt < maxRetries) {
+          await new Promise((r) => setTimeout(r, baseDelay * 2 ** attempt))
+          continue
+        }
+        throw lastError
+      }
+    }
+    try {
+      return await configClient.request(method, params)
+    } catch (error) {
+      configClient = null
+      lastError = error instanceof Error ? error : new Error(String(error))
+      if (attempt < maxRetries) {
+        await new Promise((r) => setTimeout(r, baseDelay * 2 ** attempt))
+        continue
+      }
+      throw lastError
+    }
   }
-  return await configClient.request(method, params)
+  throw lastError ?? new Error('Core App Server 连接失败')
 }
 
 function currentWorkRoot(): string {
@@ -1240,14 +1355,30 @@ watch(composerText, () => {
   void nextTick(resizeComposerTextarea)
 })
 
-watch(messages, async () => {
+watch(messages, async (newVal, oldVal) => {
   await nextTick()
   syncThreadResizeObserver()
   await threadScroll.scrollToBottom()
+  await nextTick()
+
+  const oldIds = new Set((oldVal || []).map(m => m.id))
+  const newUserMsgs = (newVal || []).filter(m => !oldIds.has(m.id) && m.role === 'user')
+  for (const msg of newUserMsgs) {
+    typingMessageIds.value.add(msg.id)
+    pendingPlaceholder.value = null
+  }
 }, { deep: true })
 
 watch([activeSessionId, messages, latestStatus], ([threadId]) => {
   void refreshGoal(threadId)
+})
+
+// Sync pin state from WorkspaceShell when it mounts
+watch(shellRef, (shell) => {
+  if (shell) {
+    leftPinned.value = shell.leftPinned
+    rightPinned.value = shell.rightPinned
+  }
 })
 
 onMounted(() => {
@@ -1312,7 +1443,7 @@ onUnmounted(() => {
   padding: 24px;
   border: 1px solid color-mix(in srgb, var(--theme-main-text) 12%, transparent);
   border-radius: 16px;
-  background: var(--bg);
+  background: var(--theme-main-background, var(--bg, #111111));
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.35);
 }
 
@@ -1350,7 +1481,7 @@ onUnmounted(() => {
   padding: 20px;
   border: 1px solid color-mix(in srgb, var(--theme-main-text) 12%, transparent);
   border-radius: 16px;
-  background: var(--bg);
+  background: var(--theme-main-background, var(--bg, #111111));
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.35);
 }
 

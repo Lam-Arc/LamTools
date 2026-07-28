@@ -53,12 +53,31 @@ export function useShellLayout(options: ShellLayoutOptions) {
   // --- shell CSS variables ---
   const shellStyle = computed(() => {
     const cssVars = themeToCSSVars(theme.value)
+    // Extract the first gradient stop color for the Edge title bar.
+    const stops = [...(theme.value.backdropStops || [])].sort(
+      (a, b) => (a.position ?? 0) - (b.position ?? 0),
+    )
+    const titlebarBg = stops.length > 0 ? (stops[0].color || '#111111') : '#111111'
     return {
       '--content-width': `${Math.min(1120, Math.max(560, contentWidth.value))}px`,
       '--stage-height': `${stageHeight.value}px`,
+      '--theme-titlebar-bg': titlebarBg,
       ...cssVars,
     } as Record<string, string>
   })
+
+  // Sync title bar color to :root and meta tag for Edge app window.
+  watch(
+    () => [shellStyle.value['--theme-titlebar-bg'], shellStyle.value['--theme-main-solid']] as const,
+    ([titlebarBg, mainSolid]) => {
+      if (typeof document === 'undefined') return
+      if (titlebarBg) document.documentElement.style.setProperty('--theme-titlebar-bg', titlebarBg)
+      if (mainSolid) document.documentElement.style.setProperty('--theme-main-solid', mainSolid)
+      const meta = document.querySelector('meta[name="theme-color"]')
+      if (meta && titlebarBg) meta.setAttribute('content', titlebarBg)
+    },
+    { immediate: true },
+  )
 
   // --- drawer controls ---
   function toggleLeftPinned() {

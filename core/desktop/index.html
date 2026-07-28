@@ -5,9 +5,17 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>LamTools Core</title>
   <style>
+    :root { --titlebar-offset: 36px; }
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { background: #111; color: #e0e0e0; font-family: system-ui, sans-serif; }
+    body { background: #202020; color: #e0e0e0; font-family: system-ui, sans-serif; }
   </style>
+  <script>
+    // Desktop: point all API calls at the local backend.
+    // In dev mode Vite proxy handles this; in production the backend is on fixed port 5172.
+    if (!window.__LAMTOOLS_API_BASE__) {
+      window.__LAMTOOLS_API_BASE__ = 'http://127.0.0.1:5172';
+    }
+  </script>
 </head>
 <body>
   <div id="app"></div>

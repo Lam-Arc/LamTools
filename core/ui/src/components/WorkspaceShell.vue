@@ -76,16 +76,7 @@
       @mouseleave="onLeftDrawerLeave"
     >
       <header class="drawer-head">
-        <button
-          class="pin-plain"
-          :class="{ active: leftPinned }"
-          :title="leftPinned ? '取消固定' : '固定侧栏'"
-          :aria-label="leftPinned ? '取消固定左侧栏' : '固定左侧栏'"
-          @click="toggleLeftPinned"
-        >
-          {{ leftPinned ? '◆' : '◇' }}
-        </button>
-        <strong>{{ sidebarTitle || productName }}</strong>
+        <span class="sidebar-label">项目</span>
         <slot name="sidebar-header-action">
           <button class="icon-btn" title="新建" aria-label="新建会话" @click="$emit('new-session')">+</button>
         </slot>
@@ -99,8 +90,8 @@
 
       <footer class="drawer-footer">
         <button class="settings-entry" aria-label="打开设置" @click="$emit('settings')">
-          <span>⌘</span>
-          <span>Settings</span>
+          <span aria-hidden="true">⌘</span>
+          <span>设置</span>
         </button>
         <slot name="sidebar-footer" />
       </footer>
@@ -194,15 +185,6 @@
     >
       <header class="drawer-head">
         <strong>{{ rightPanelTitle }}</strong>
-        <button
-          class="pin-plain"
-          :class="{ active: rightPinned }"
-          :title="rightPinned ? '取消固定' : '固定侧栏'"
-          :aria-label="rightPinned ? '取消固定右侧栏' : '固定右侧栏'"
-          @click="toggleRightPinned"
-        >
-          {{ rightPinned ? '◆' : '◇' }}
-        </button>
       </header>
       <div class="drawer-body right-body">
         <slot name="right-panel" />
@@ -295,6 +277,9 @@ const {
   shellClass,
   shellStyle,
   rightDrawerModal,
+  density: shellDensity,
+  contentWidth: shellContentWidth,
+  theme: shellTheme,
   toggleLeftPinned,
   toggleRightPinned,
   onLeftDrawerLeave,
@@ -335,14 +320,35 @@ watch(() => props.stageOpen, (val) => {
 watch(stageOpen, (val) => {
   if (val !== props.stageOpen) emit('update:stageOpen', val)
 })
+
+// Sync theme/density/contentWidth from parent into useShellLayout state
+watch(() => props.theme, (val) => {
+  if (val !== undefined && val !== shellTheme.value) shellTheme.value = val
+})
+watch(() => props.density, (val) => {
+  if (val !== undefined && val !== shellDensity.value) shellDensity.value = val
+})
+watch(() => props.contentWidth, (val) => {
+  if (val !== undefined && val !== shellContentWidth.value) shellContentWidth.value = val
+})
+
+defineExpose({ leftPinned, rightPinned, toggleLeftPinned, toggleRightPinned })
 </script>
 
 <style scoped>
+.sidebar-label {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--text, #f2efeb);
+  opacity: 0.8;
+  letter-spacing: -0.02em;
+}
 .icon-btn {
   width: 28px;
   height: 28px;
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.08);
+  background: color-mix(in srgb, var(--theme-main-text, #fff) 8%, transparent);
   color: var(--muted);
   display: grid;
   place-items: center;
@@ -350,7 +356,7 @@ watch(stageOpen, (val) => {
   font-weight: 700;
 }
 .icon-btn:hover {
-  background: rgba(255, 255, 255, 0.14);
+  background: color-mix(in srgb, var(--theme-main-text, #fff) 14%, transparent);
   color: var(--text);
 }
 </style>

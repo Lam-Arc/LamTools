@@ -2,10 +2,10 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "LamCore",
   "version": "0.1.0",
-  "identifier": "com.lamtools.core",
+  "identifier": "com.lamtools.lamcore",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npx vite build",
+    "beforeBuildCommand": "npm run build",
     "devUrl": "http://127.0.0.1:5173",
     "frontendDist": "../dist"
   },
@@ -15,17 +15,41 @@
         "title": "LamCore",
         "width": 1440,
         "height": 900,
-        "minWidth": 1000,
-        "minHeight": 680
+        "minWidth": 800,
+        "minHeight": 600,
+        "decorations": false
       }
     ],
     "security": {
-      "csp": null
+      "csp": null,
+      "capabilities": [
+        {
+          "identifier": "default",
+          "windows": ["main"],
+          "permissions": [
+            "core:window:allow-minimize",
+            "core:window:allow-toggle-maximize",
+            "core:window:allow-close",
+            "core:window:allow-start-dragging"
+          ]
+        }
+      ]
     }
   },
   "bundle": {
     "active": true,
     "targets": ["nsis"],
-    "resources": ["../../dist/lamtools-core-backend"]
+    "icon": ["icons/icon.ico"],
+    "resources": ["../../../dist/LamCore"],
+    "windows": {
+      "nsis": {
+        "languages": ["SimpChinese"],
+        "displayLanguageSelector": false,
+        "installMode": "currentUser"
+      },
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      }
+    }
   }
 }

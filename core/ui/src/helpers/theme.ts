@@ -243,8 +243,10 @@ export function migrateThemeDefaults(theme: ThemeData): ThemeData {
 export interface ThemeCSSVars {
   '--theme-backdrop-background': string
   '--theme-backdrop-text': string
+  '--theme-backdrop-solid': string
   '--theme-main-background': string
   '--theme-main-text': string
+  '--theme-main-solid': string
   '--theme-main-soft-background': string
   '--theme-main-subtle-background': string
   '--theme-main-border': string
@@ -256,7 +258,7 @@ export interface ThemeCSSVars {
   '--theme-control-soft-background': string
 }
 
-function relativeLuminance(hex: string): number {
+export function relativeLuminance(hex: string): number {
   const clean = normalizeColor(hex, '#000000').slice(1)
   const value = Number.parseInt(clean, 16)
   const channels = [
@@ -277,8 +279,10 @@ export function themeToCSSVars(theme: ThemeData): ThemeCSSVars {
   return {
     '--theme-backdrop-background': gradientFromStops(theme.backdropAngle, theme.backdropStops, 1),
     '--theme-backdrop-text': theme.backdropText,
+    '--theme-backdrop-solid': theme.backdropStops[0]?.color || '#202020',
     '--theme-main-background': gradientFromStops(theme.mainAngle, theme.mainStops, theme.mainOpacity),
     '--theme-main-text': theme.mainText,
+    '--theme-main-solid': theme.mainStops[0]?.color || '#111111',
     '--theme-main-soft-background': lightMain ? 'rgba(255, 254, 250, 0.78)' : 'rgba(255, 255, 255, 0.045)',
     '--theme-main-subtle-background': lightMain ? 'rgba(255, 254, 250, 0.52)' : 'rgba(255, 255, 255, 0.028)',
     '--theme-main-border': lightMain ? 'rgba(31, 31, 31, 0.10)' : 'rgba(255, 255, 255, 0.10)',
