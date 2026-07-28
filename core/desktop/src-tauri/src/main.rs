@@ -96,7 +96,7 @@ fn main() {
                         let caption: Vec<u16> = "LamCore 启动错误".encode_utf16().chain(std::iter::once(0)).collect();
                         unsafe { MessageBoxW(0, msg_wide.as_ptr(), caption.as_ptr(), 0x00000010) };
                     }
-                    Err(Box::new(e))
+                    Err(e)
                 }
             }
         })

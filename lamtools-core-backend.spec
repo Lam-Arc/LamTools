@@ -127,6 +127,7 @@ _hiddenimports = [
     "lamtools_core.config.read",
     "lamtools_core.config.shared_database",
     "lamtools_core.config.write",
+    "lamtools_core.config.root",
 
     # === event/ submodules ===
     "lamtools_core.event.run_item",
