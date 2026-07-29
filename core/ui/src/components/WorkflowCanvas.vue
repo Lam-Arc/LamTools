@@ -16,6 +16,7 @@
       :default-viewport="{ zoom: 1 }"
       fit-view-on-init
       @node-click="onNodeClick"
+      @connect="onConnect"
     >
       <Background :gap="22" :size="1" pattern-color="transparent" />
     </VueFlow>
@@ -217,6 +218,22 @@ function openEdit(id: string, x?: number, y?: number) {
 }
 
 // ---- node mutations ----
+// Vue Flow fires `connect` when the user finishes dragging a handle-to-handle
+// connection; it does NOT auto-create an edge, so we add it here.
+function onConnect(params: { source: string; target: string; sourceHandle?: string | null; targetHandle?: string | null }) {
+  const id = `e-${params.source}-${params.sourceHandle ?? ''}-${params.target}-${params.targetHandle ?? ''}`
+  if (vfEdges.value.some((e) => e.id === id)) return
+  const edge = {
+    id,
+    source: params.source,
+    target: params.target,
+    sourceHandle: params.sourceHandle ?? undefined,
+    targetHandle: params.targetHandle ?? undefined,
+  }
+  // Cast through unknown to avoid Vue Flow's deeply-recursive Edge generic
+  // (TS2589); the shape is correct at runtime.
+  ;(vfEdges.value as Edge[]).push(edge as unknown as Edge)
+}
 function addNodeAt(kind: WorkflowNodeKind, pos: MenuPos) {
   const flowPos = safeScreenToFlow(pos)
   const id = `${kind}-${Math.random().toString(36).slice(2, 6)}`
