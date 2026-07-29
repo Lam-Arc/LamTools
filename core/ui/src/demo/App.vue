@@ -285,8 +285,8 @@
         <textarea
           ref="composerTextareaEl"
           v-model="composerText"
-          :disabled="!activeSessionId"
-          placeholder="给 Core Agent 发送任务..."
+          :disabled="workflowMode ? false : !activeSessionId"
+          :placeholder="workflowMode ? '用自然语言编辑工作流图…' : '给 Core Agent 发送任务...'"
           rows="1"
           @input="handleComposerInput"
           @click="updateComposerCursor"
@@ -1315,6 +1315,8 @@ async function submitWorkflowEdit() {
   }
   const message = composerText.value.trim()
   if (!message || workflowEditing.value) return
+  // Show the conversation (not selected-node info) so the exchange is visible.
+  selectedNodeId.value = null
   workflowEditMessages.value.push({ role: 'user', content: message })
   composerText.value = ''
   workflowEditing.value = true
@@ -1393,6 +1395,13 @@ async function openPendingAttachment(id: string) {
 }
 
 async function handleComposerKeydown(event: KeyboardEvent) {
+  // In workflow mode Enter submits the NL graph edit (bypass the live-turn
+  // path which assumes an active session).
+  if (workflowMode.value && event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+    event.preventDefault()
+    void submitWorkflowEdit()
+    return
+  }
   if (sendingDisabled.value) return
   updateComposerCursor()
   await liveComposerController.handleKeydown(event)
