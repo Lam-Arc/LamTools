@@ -143,6 +143,7 @@ export type {
   CoreSettingsModelPayload,
   CoreSettingsProvider,
   CoreSettingsProviderPayload,
+  WorkflowListItem,
 } from './components/CoreSettings.vue';
 
 // Helpers

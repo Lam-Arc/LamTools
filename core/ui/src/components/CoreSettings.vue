@@ -221,7 +221,7 @@
         <CoreHooksEditor :request-rpc="requestRpc || defaultRequestRpc" />
       </section>
 
-      <section v-else class="settings-panel">
+      <section v-else-if="activeSection === 'permissions'" class="settings-panel">
         <header class="settings-title">
           <h1>权限策略</h1>
         </header>
@@ -247,6 +247,53 @@
               </div>
             </div>
           </div>
+        </article>
+      </section>
+
+      <section v-else-if="activeSection === 'workflow'" class="settings-panel">
+        <header class="settings-title">
+          <h1>工作流</h1>
+          <p class="settings-subhead">管理与创建 Workflow，并控制是否暴露为 Agent 工具。</p>
+        </header>
+        <article class="setting-card">
+          <div class="subhead">
+            <h3>已创建的工作流</h3>
+            <div class="subhead-actions">
+              <button class="small-btn" type="button" @click="refreshWorkflowList">↻ 刷新</button>
+            </div>
+          </div>
+          <div v-if="workflowListLoading" class="model-empty">加载中…</div>
+          <div v-else-if="workflowList.length" class="provider-list">
+            <div v-for="wf in workflowList" :key="wf.name" class="provider-group">
+              <div class="provider-head">
+                <strong>{{ wf.name }}</strong>
+                <span v-if="wf.exposed" class="tool-status ok">已暴露</span>
+                <span v-else class="tool-status">未暴露</span>
+                <div class="row-actions">
+                  <button
+                    type="button"
+                    class="text-btn"
+                    :class="{ 'is-on': wf.exposed }"
+                    @click="$emit('toggle-workflow-exposed', wf.name, !wf.exposed)"
+                  >{{ wf.exposed ? '取消暴露' : '暴露为工具' }}</button>
+                </div>
+              </div>
+              <div class="model-list">
+                <div class="model-row">
+                  <div class="model-identity">
+                    <span>{{ wf.nodes.length }} 个节点 · {{ wf.edges.length }} 条连线</span>
+                    <span v-if="wf.description" class="hook-meta">{{ wf.description }}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <p v-else class="model-empty">暂无工作流。在侧栏点击「工作流」进入画布模式创建。</p>
+        </article>
+        <article class="setting-card">
+          <h3>说明</h3>
+          <p class="hook-meta">Workflow 定义以 JSON 文件存储（项目级 <code>{work_root}/.lam/workflows/</code> 或全局 <code>~/.lam/workflows/</code>）。「暴露」会将对应 Workflow 注册为 Agent 可调用工具，文件内 <code>exposed</code> 标志为单一真相源。</p>
+          <p class="hook-meta">CLI：<code>core workflow new/ls/describe/run/expose/unexpose</code></p>
         </article>
       </section>
     </template>
@@ -331,6 +378,8 @@ const props = defineProps<{
   allowEnvironmentImport?: boolean
   permissionMode?: 'read_only' | 'limited_edit' | 'full_edit'
   requestRpc?: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>
+  workflows?: WorkflowListItem[]
+  workflowListLoading?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -355,7 +404,23 @@ const emit = defineEmits<{
   'update-model': [payload: CoreSettingsModelPayload]
   'delete-model': [modelRecordId: string]
   'set-default-model': [modelId: string]
+  'refresh-workflows': []
+  'toggle-workflow-exposed': [name: string, exposed: boolean]
 }>()
+
+export interface WorkflowListItem {
+  name: string
+  description: string
+  nodes: { id: string }[]
+  edges: { id: string }[]
+  exposed: boolean
+  tool_name: string
+}
+
+const workflowList = computed(() => props.workflows ?? [])
+function refreshWorkflowList() {
+  emit('refresh-workflows')
+}
 
 const sections: SettingsSection[] = [
   { id: 'models', label: '模型与供应商', icon: '◈' },
@@ -363,6 +428,7 @@ const sections: SettingsSection[] = [
   { id: 'skills', label: 'Skills', icon: '✦' },
   { id: 'hooks', label: 'Hooks', icon: '⌘' },
   { id: 'permissions', label: '权限', icon: '◇' },
+  { id: 'workflow', label: '工作流', icon: '◆' },
 ]
 
 const densityOptions: Array<{ value: CoreSettingsDensity; label: string }> = [

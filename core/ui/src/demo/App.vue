@@ -15,6 +15,8 @@
     :allow-environment-import="true"
     :permission-mode="permissionMode"
     :request-rpc="requestConfigOperation"
+    :workflows="settingsWorkflowList"
+    :workflow-list-loading="settingsWorkflowLoading"
     @close="showSettings = false"
     @update:density="uiPreferences.setDensity"
     @update:content-width="uiPreferences.setContentWidth"
@@ -36,6 +38,8 @@
 	    @update-model="updateModel"
 	    @delete-model="deleteModel"
 	    @set-default-model="setDefaultModel"
+    @refresh-workflows="loadSettingsWorkflows"
+    @toggle-workflow-exposed="onToggleWorkflowExposed"
   />
   <CoreArrangeManager
     v-if="showArrange"
@@ -57,7 +61,7 @@
     :hide-composer="workflowMode"
     v-model:stage-open="stageOpen"
     @new-session="openProjectCreate"
-    @settings="showSettings = true"
+    @settings="openSettings"
     @composer-submit="submitComposer"
     @composer-drop="handleComposerDrop"
   >
@@ -527,6 +531,8 @@ const workflowDefinition = ref<WorkflowDef | null>(null)
 const workflowNodeStates = ref<Record<string, NodeStateStatus>>({})
 const workflowRunning = ref(false)
 const workflowStatusText = ref('')
+const settingsWorkflowList = ref<WorkflowDef[]>([])
+const settingsWorkflowLoading = ref(false)
 
 const emptyWorkflow: WorkflowDef = {
   name: '',
@@ -1376,6 +1382,11 @@ function toggleWorkflowMode() {
   }
 }
 
+function openSettings() {
+  showSettings.value = true
+  void loadSettingsWorkflows()
+}
+
 async function selectWorkflow(name: string) {
   if (!name) {
     workflowDefinition.value = null
@@ -1495,6 +1506,27 @@ async function toggleExpose() {
   } catch (err) {
     console.error('[workflow] expose failed', err)
     setRuntimeStatus(`操作失败：${(err as Error).message}`, 4000)
+  }
+}
+
+async function loadSettingsWorkflows() {
+  settingsWorkflowLoading.value = true
+  try {
+    settingsWorkflowList.value = await listWorkflows(currentWorkRoot() || undefined)
+  } catch (err) {
+    console.error('[workflow] settings list failed', err)
+    settingsWorkflowList.value = []
+  } finally {
+    settingsWorkflowLoading.value = false
+  }
+}
+
+async function onToggleWorkflowExposed(name: string, exposed: boolean) {
+  try {
+    await setWorkflowExposed(name, exposed, currentWorkRoot() || undefined)
+    await loadSettingsWorkflows()
+  } catch (err) {
+    console.error('[workflow] settings toggle expose failed', err)
   }
 }
 
