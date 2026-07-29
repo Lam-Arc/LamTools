@@ -125,6 +125,8 @@ def register_workflow_operations(
                 max_steps = int(max_steps)
             except (TypeError, ValueError):
                 max_steps = None
+        start_node = str(payload.get("start_node") or payload.get("startNode") or "") or None
+        single_node = str(payload.get("single_node") or payload.get("singleNode") or "") or None
         prior_values = dict(payload.get("prior_values") or payload.get("priorValues") or {})
         prior_states_raw = payload.get("prior_node_states") or payload.get("priorNodeStates") or {}
         prior_states: dict[str, Any] = {}
@@ -155,6 +157,8 @@ def register_workflow_operations(
                 prior_values=prior_values,
                 prior_node_states=prior_states or None,
                 max_steps=max_steps,
+                start_node=start_node,
+                single_node=single_node,
             )
         except Exception as exc:  # noqa: BLE001 — surface as operation error
             return _error(request, exc)

@@ -67,7 +67,7 @@ const stateDot = computed(() => {
 const summary = computed(() => {
   const cfg = node.value.config
   if (kind.value === 'input') {
-    return '入参: ' + node.value.output_ports().map((p) => p.name).join(', ')
+    return '入参: ' + node.value.ports.filter((p) => p.direction === 'out').map((p) => p.name).join(', ')
   }
   if (kind.value === 'output') {
     return '输出'

@@ -109,22 +109,11 @@
 
     <template #main-header>
       <div v-if="workflowMode" class="thread-header">
-        <span class="wf-mode-label">工作流</span>
-        <UiSelect
-          :model-value="activeWorkflowName || ''"
-          :options="workflowSelectOptions"
-          placeholder="选择工作流…"
-          aria-label="选择工作流"
-          @update:model-value="selectWorkflow"
+        <CoreSessionTitleEditor
+          :title="workflowDefinition?.name || ''"
+          :session-id="workflowDefinition?.name || ''"
+          :rename="renameWorkflow"
         />
-        <button type="button" class="small-btn quiet" title="新建工作流" @click="newWorkflow">＋ 新建</button>
-        <button
-          type="button"
-          class="small-btn"
-          :class="{ 'is-on': workflowDefinition?.exposed }"
-          :title="workflowDefinition?.exposed ? '已暴露为工具' : '暴露为工具'"
-          @click="toggleExpose"
-        >{{ workflowDefinition?.exposed ? '已暴露' : '暴露' }}</button>
       </div>
       <div v-else-if="activeSessionId" class="thread-header">
         <CoreSessionTitleEditor
@@ -147,12 +136,11 @@
         v-if="workflowMode"
         :definition="workflowDefinition || emptyWorkflow"
         :node-states="workflowNodeStates"
-        :running="workflowRunning"
-        :status-text="workflowStatusText"
+        :selected-node-id="selectedNodeId || undefined"
         @update:definition="onWorkflowUpdate"
-        @run="runWorkflow"
-        @step="stepWorkflow"
-        @save="saveWorkflow"
+        @select-node="onSelectNode"
+        @run-from="runFromNode"
+        @run-node="runSingleNode"
       />
       <section
         v-else
@@ -400,6 +388,7 @@ import {
   getWorkflow,
   createWorkflow,
   updateWorkflow,
+  deleteWorkflow,
   runWorkflow as runWorkflowApi,
   setWorkflowExposed,
 } from '../workflow/api'
@@ -531,8 +520,10 @@ const workflowDefinition = ref<WorkflowDef | null>(null)
 const workflowNodeStates = ref<Record<string, NodeStateStatus>>({})
 const workflowRunning = ref(false)
 const workflowStatusText = ref('')
+const selectedNodeId = ref<string | null>(null)
 const settingsWorkflowList = ref<WorkflowDef[]>([])
 const settingsWorkflowLoading = ref(false)
+let autosaveTimer: ReturnType<typeof setTimeout> | null = null
 
 const emptyWorkflow: WorkflowDef = {
   name: '',
@@ -1412,6 +1403,49 @@ function newWorkflow() {
 
 function onWorkflowUpdate(def: WorkflowDef) {
   workflowDefinition.value = def
+  scheduleAutosave()
+}
+
+function scheduleAutosave() {
+  if (autosaveTimer) clearTimeout(autosaveTimer)
+  autosaveTimer = setTimeout(() => { void saveWorkflow() }, 800)
+}
+
+async function renameWorkflow(title: string): Promise<void> {
+  const def = workflowDefinition.value
+  if (!def) return
+  const oldName = def.name
+  const newName = title.trim()
+  if (!newName || newName === oldName) return
+  const renamed = { ...def, name: newName }
+  // Workflow key == file name; update_fields cannot rename. Delete the old
+  // file then create the renamed one to avoid leaving a stale duplicate.
+  const existed = workflows.value.some((w) => w.name === oldName)
+  const workRoot = currentWorkRoot() || undefined
+  try {
+    if (existed && oldName) await deleteWorkflow(oldName, workRoot)
+    const saved = await createWorkflow({ ...renamed, work_root: workRoot || '' })
+    workflowDefinition.value = saved
+    activeWorkflowName.value = saved.name
+    await refreshWorkflows()
+    setRuntimeStatus(`已重命名：${saved.name}`, 2500)
+  } catch (err) {
+    console.error('[workflow] rename failed', err)
+    setRuntimeStatus(`重命名失败：${(err as Error).message}`, 4000)
+    throw err
+  }
+}
+
+function onSelectNode(id: string | null) {
+  selectedNodeId.value = id
+}
+
+async function runFromNode(nodeId: string) {
+  await executeWorkflowRun(undefined, { startNode: nodeId })
+}
+
+async function runSingleNode(nodeId: string) {
+  await executeWorkflowRun(undefined, { singleNode: nodeId })
 }
 
 async function saveWorkflow() {
@@ -1451,14 +1485,14 @@ async function stepWorkflow() {
   await executeWorkflowRun(1)
 }
 
-async function executeWorkflowRun(maxSteps: number | undefined) {
+async function executeWorkflowRun(maxSteps: number | undefined, options: { startNode?: string; singleNode?: string } = {}) {
   const def = workflowDefinition.value
   if (!def || !def.name) {
     setRuntimeStatus('先保存工作流再运行', 3000)
     return
   }
   workflowRunning.value = true
-  workflowStatusText.value = '运行中…'
+  workflowStatusText.value = options.singleNode ? '运行节点…' : options.startNode ? '从此节点运行…' : '运行中…'
   // Mark all nodes idle before running.
   workflowNodeStates.value = def.nodes.reduce(
     (acc, n) => ({ ...acc, [n.id]: 'idle' as NodeStateStatus }),
@@ -1468,6 +1502,8 @@ async function executeWorkflowRun(maxSteps: number | undefined) {
     const result = await runWorkflowApi(def.name, {
       workRoot: currentWorkRoot() || undefined,
       maxSteps,
+      startNode: options.startNode,
+      singleNode: options.singleNode,
     })
     const states = result.run.node_states || {}
     const mapped: Record<string, NodeStateStatus> = {}

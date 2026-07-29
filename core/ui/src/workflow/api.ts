@@ -71,6 +71,8 @@ export function runWorkflow(
     inputs?: Record<string, unknown>
     maxSteps?: number
     priorValues?: Record<string, unknown>
+    startNode?: string
+    singleNode?: string
   } = {},
 ): Promise<{ run: WorkflowRunResult; thread_id: string; run_id: string }> {
   const params: Record<string, unknown> = { name }
@@ -78,6 +80,8 @@ export function runWorkflow(
   if (options.inputs) params.inputs = options.inputs
   if (options.maxSteps !== undefined) params.max_steps = options.maxSteps
   if (options.priorValues) params.prior_values = options.priorValues
+  if (options.startNode) params.start_node = options.startNode
+  if (options.singleNode) params.single_node = options.singleNode
   return appServerOperation<{ run?: WorkflowRunResult; thread_id?: string; run_id?: string }>(
     'workflow.run',
     params,

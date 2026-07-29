@@ -417,12 +417,17 @@ class WorkflowRunner:
         prior_values: dict[str, Any] | None = None,
         prior_node_states: dict[str, WorkflowNodeState] | None = None,
         max_steps: int | None = None,
+        start_node: str | None = None,
+        single_node: str | None = None,
     ) -> WorkflowRunResult:
         """Run the workflow.
 
         ``max_steps=None`` runs to completion (整跑); an integer runs at most
         that many *ready* nodes then returns ``status="paused"`` (单步调试).
         ``prior_values`` / ``prior_node_states`` resume a paused run.
+        ``start_node`` runs the subgraph from that node onward (nodes before it
+        are skipped; their outputs must be in ``prior_values``).
+        ``single_node`` runs exactly one node in isolation.
         """
         inputs = dict(inputs or {})
         work_root = work_root or workflow.work_root
@@ -432,6 +437,15 @@ class WorkflowRunner:
         order = _topological_order(workflow)
         if order is None:
             return WorkflowRunResult(status="failed", error="workflow graph has a cycle", run_id=run_id)
+        if single_node:
+            if single_node not in order:
+                return WorkflowRunResult(status="failed", error=f"unknown node: {single_node}", run_id=run_id)
+            order = [single_node]
+        elif start_node:
+            if start_node not in order:
+                return WorkflowRunResult(status="failed", error=f"unknown node: {start_node}", run_id=run_id)
+            idx = order.index(start_node)
+            order = order[idx:]
 
         values: dict[str, Any] = dict(prior_values or {})
         # Bind workflow inputs under the __input__ namespace. Input names come
