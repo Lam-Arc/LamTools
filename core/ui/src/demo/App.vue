@@ -1681,7 +1681,7 @@ function onWorkflowUpdate(def: WorkflowDef) {
 
 function scheduleAutosave() {
   if (autosaveTimer) clearTimeout(autosaveTimer)
-  autosaveTimer = setTimeout(() => { void saveWorkflow() }, 800)
+  autosaveTimer = setTimeout(() => { void saveWorkflow(true) }, 800)
 }
 
 async function renameWorkflow(title: string): Promise<void> {
@@ -1721,7 +1721,7 @@ async function runSingleNode(nodeId: string) {
   await executeWorkflowRun(undefined, { singleNode: nodeId })
 }
 
-async function saveWorkflow() {
+async function saveWorkflow(silent = false) {
   const def = workflowDefinition.value
   if (!def) return
   const workRoot = currentWorkRoot() || undefined
@@ -1743,10 +1743,10 @@ async function saveWorkflow() {
     workflowDefinition.value = saved
     activeWorkflowName.value = saved.name
     await refreshWorkflows()
-    setRuntimeStatus(`已保存：${saved.name}`, 2500)
+    if (!silent) setRuntimeStatus(`已保存：${saved.name}`, 2500)
   } catch (err) {
     console.error('[workflow] save failed', err)
-    setRuntimeStatus(`保存失败：${(err as Error).message}`, 4000)
+    if (!silent) setRuntimeStatus(`保存失败：${(err as Error).message}`, 4000)
   }
 }
 
