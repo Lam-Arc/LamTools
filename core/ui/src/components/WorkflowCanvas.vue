@@ -1,5 +1,12 @@
 <template>
   <div class="wf-canvas" @contextmenu.prevent="onContextMenu">
+    <button
+      type="button"
+      class="wf-lock-btn"
+      :class="{ locked }"
+      :title="locked ? '已锁定（拖拽/缩放不可用）' : '锁定画布'"
+      @click="toggleLock"
+    >{{ locked ? '🔒' : '🔓' }}</button>
     <VueFlow
       v-model:nodes="vfNodes"
       v-model:edges="vfEdges"
@@ -11,7 +18,6 @@
       @node-click="onNodeClick"
     >
       <Background :gap="22" :size="1" pattern-color="rgba(130,130,140,0.22)" />
-      <Controls />
     </VueFlow>
 
     <!-- pane (empty-space) context menu -->
@@ -72,12 +78,10 @@
 import { markRaw, ref, watch } from 'vue'
 import { VueFlow, useVueFlow, type Node, type Edge } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
-import { Controls } from '@vue-flow/controls'
 // Vue Flow styles must load as global CSS (not inside <style scoped> @import,
 // which Vite scopes and breaks internal class selectors + load order).
 import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
-import '@vue-flow/controls/dist/style.css'
 import WorkflowNodeComp from './WorkflowNode.vue'
 import NodeEditCard from './NodeEditCard.vue'
 import type { WorkflowDef, WorkflowNodeKind, WorkflowNodeData, NodeStateStatus } from '../workflow/types'
@@ -95,8 +99,13 @@ const emit = defineEmits<{
   'run-node': [nodeId: string]
 }>()
 
-const { screenToFlowCoordinate } = useVueFlow()
+const { screenToFlowCoordinate, setInteractive } = useVueFlow()
 const nodeTypes = { workflow: markRaw(WorkflowNodeComp) as any }
+const locked = ref(false)
+function toggleLock() {
+  locked.value = !locked.value
+  setInteractive(!locked.value)
+}
 
 // ---- WorkflowDef <-> VueFlow mapping ----
 const vfNodes = ref<Node[]>([])
@@ -282,6 +291,26 @@ if (typeof document !== 'undefined') {
 </script>
 
 <style scoped>
+
+.wf-lock-btn {
+  position: absolute;
+  top: 10px;
+  left: 12px;
+  z-index: var(--z-popover, 60);
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  font-size: 15px;
+  cursor: pointer;
+  opacity: 0.55;
+  transition: opacity 0.15s, background 0.15s;
+}
+.wf-lock-btn:hover { opacity: 1; background: rgba(255, 255, 255, 0.06); }
+.wf-lock-btn.locked { opacity: 0.9; }
 
 .wf-canvas {
   /* Fill the entire workspace-main (ignore its padding) so the whole main
