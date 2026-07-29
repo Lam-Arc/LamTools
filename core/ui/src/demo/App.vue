@@ -54,6 +54,7 @@
     :composer-action-mode="composerActionMode"
     :error-text="workbenchErrorText"
     :notice-text="runtimeStatusText"
+    :hide-composer="workflowMode"
     v-model:stage-open="stageOpen"
     @new-session="openProjectCreate"
     @settings="showSettings = true"
@@ -94,13 +95,34 @@
     </template>
 
     <template #sidebar-footer>
+      <button class="sidebar-action" type="button" :class="{ 'is-active': workflowMode }" @click="toggleWorkflowMode">
+        <span aria-hidden="true">&#x25C6;</span><span>工作流</span>
+      </button>
       <button class="sidebar-action" type="button" @click="showArrange = true">
         <span aria-hidden="true">&#x25F7;</span><span>长期安排</span>
       </button>
     </template>
 
     <template #main-header>
-      <div v-if="activeSessionId" class="thread-header">
+      <div v-if="workflowMode" class="thread-header">
+        <span class="wf-mode-label">工作流</span>
+        <UiSelect
+          :model-value="activeWorkflowName || ''"
+          :options="workflowSelectOptions"
+          placeholder="选择工作流…"
+          aria-label="选择工作流"
+          @update:model-value="selectWorkflow"
+        />
+        <button type="button" class="small-btn quiet" title="新建工作流" @click="newWorkflow">＋ 新建</button>
+        <button
+          type="button"
+          class="small-btn"
+          :class="{ 'is-on': workflowDefinition?.exposed }"
+          :title="workflowDefinition?.exposed ? '已暴露为工具' : '暴露为工具'"
+          @click="toggleExpose"
+        >{{ workflowDefinition?.exposed ? '已暴露' : '暴露' }}</button>
+      </div>
+      <div v-else-if="activeSessionId" class="thread-header">
         <CoreSessionTitleEditor
           :title="activeSessionTitle"
           :session-id="activeSessionId"
@@ -117,7 +139,19 @@
     </template>
 
     <template #main-content>
+      <WorkflowCanvas
+        v-if="workflowMode"
+        :definition="workflowDefinition || emptyWorkflow"
+        :node-states="workflowNodeStates"
+        :running="workflowRunning"
+        :status-text="workflowStatusText"
+        @update:definition="onWorkflowUpdate"
+        @run="runWorkflow"
+        @step="stepWorkflow"
+        @save="saveWorkflow"
+      />
       <section
+        v-else
         ref="threadScrollEl"
         class="thread"
         @scroll.passive="threadScroll.handleScroll"
@@ -358,6 +392,15 @@ import { buildCoreComposerHighlightSegments } from '../composer/inputItems'
 import { buildCurrentTurnChecklistGroups } from '../runtime/checklist'
 import { listArrangeJobs, updateArrangeJob } from '../durable/api'
 import {
+  listWorkflows,
+  getWorkflow,
+  createWorkflow,
+  updateWorkflow,
+  runWorkflow as runWorkflowApi,
+  setWorkflowExposed,
+} from '../workflow/api'
+import type { WorkflowDef, WorkflowNodeData, NodeStateStatus } from '../workflow/types'
+import {
   useCoreApprovalController,
   useCoreAutoFollowScroll,
   useCoreExecutionControlsState,
@@ -371,6 +414,8 @@ import {
 
 import AttachmentTray from '../components/AttachmentTray.vue'
 import ChatThread from '../components/ChatThread.vue'
+import WorkflowCanvas from '../components/WorkflowCanvas.vue'
+import UiSelect from '../components/UiSelect.vue'
 import FloatingApprovalCard, { type PendingDecision } from '../components/FloatingApprovalCard.vue'
 import CommandPalette from '../components/CommandPalette.vue'
 import CoreExecutionControls from '../components/CoreExecutionControls.vue'
@@ -475,6 +520,31 @@ function toggleRightPinned() {
 const settingsStorageKey = 'lamtools.core.ui'
 const showSettings = ref(false)
 const showArrange = ref(false)
+const workflowMode = ref(false)
+const workflows = ref<WorkflowDef[]>([])
+const activeWorkflowName = ref<string>('')
+const workflowDefinition = ref<WorkflowDef | null>(null)
+const workflowNodeStates = ref<Record<string, NodeStateStatus>>({})
+const workflowRunning = ref(false)
+const workflowStatusText = ref('')
+
+const emptyWorkflow: WorkflowDef = {
+  name: '',
+  description: '',
+  nodes: [],
+  edges: [],
+  input_params: [],
+  output_port: '',
+  exposed: false,
+  tool_name: '',
+  work_root: '',
+  created_at: '',
+  updated_at: '',
+}
+
+const workflowSelectOptions = computed(() =>
+  workflows.value.map((w) => ({ value: w.name, label: w.name + (w.exposed ? ' ◇' : '') })),
+)
 
 // --- Stage pane state ---
 const stageOpen = ref(false)
@@ -1286,6 +1356,148 @@ function currentWorkRoot(): string {
   return typeof workRoot === 'string' ? workRoot : ''
 }
 
+// ---------------------------------------------------------------------------
+// Workflow mode
+// ---------------------------------------------------------------------------
+
+async function refreshWorkflows() {
+  try {
+    workflows.value = await listWorkflows(currentWorkRoot() || undefined)
+  } catch (err) {
+    console.error('[workflow] list failed', err)
+    workflows.value = []
+  }
+}
+
+function toggleWorkflowMode() {
+  workflowMode.value = !workflowMode.value
+  if (workflowMode.value) {
+    void refreshWorkflows()
+  }
+}
+
+async function selectWorkflow(name: string) {
+  if (!name) {
+    workflowDefinition.value = null
+    activeWorkflowName.value = ''
+    return
+  }
+  activeWorkflowName.value = name
+  try {
+    workflowDefinition.value = await getWorkflow(name, currentWorkRoot() || undefined)
+    workflowNodeStates.value = {}
+  } catch (err) {
+    console.error('[workflow] get failed', err)
+    workflowDefinition.value = null
+  }
+}
+
+function newWorkflow() {
+  const draft = { ...emptyWorkflow, name: `workflow-${Math.random().toString(36).slice(2, 6)}` }
+  workflowDefinition.value = draft
+  activeWorkflowName.value = ''
+  workflowNodeStates.value = {}
+}
+
+function onWorkflowUpdate(def: WorkflowDef) {
+  workflowDefinition.value = def
+}
+
+async function saveWorkflow() {
+  const def = workflowDefinition.value
+  if (!def) return
+  const workRoot = currentWorkRoot() || undefined
+  try {
+    const saved = await (def.name && workflows.value.some((w) => w.name === def.name)
+      ? updateWorkflow(def.name, {
+          description: def.description,
+          nodes: def.nodes as unknown as Record<string, unknown>[],
+          edges: def.edges as unknown as Record<string, unknown>[],
+          input_params: def.input_params as unknown as Record<string, unknown>[],
+          output_port: def.output_port,
+          exposed: def.exposed,
+          tool_name: def.tool_name,
+        }, workRoot)
+      : createWorkflow({
+          ...def,
+          work_root: workRoot || '',
+        }))
+    workflowDefinition.value = saved
+    activeWorkflowName.value = saved.name
+    await refreshWorkflows()
+    setRuntimeStatus(`已保存：${saved.name}`, 2500)
+  } catch (err) {
+    console.error('[workflow] save failed', err)
+    setRuntimeStatus(`保存失败：${(err as Error).message}`, 4000)
+  }
+}
+
+async function runWorkflow() {
+  await executeWorkflowRun(undefined)
+}
+
+async function stepWorkflow() {
+  await executeWorkflowRun(1)
+}
+
+async function executeWorkflowRun(maxSteps: number | undefined) {
+  const def = workflowDefinition.value
+  if (!def || !def.name) {
+    setRuntimeStatus('先保存工作流再运行', 3000)
+    return
+  }
+  workflowRunning.value = true
+  workflowStatusText.value = '运行中…'
+  // Mark all nodes idle before running.
+  workflowNodeStates.value = def.nodes.reduce(
+    (acc, n) => ({ ...acc, [n.id]: 'idle' as NodeStateStatus }),
+    {},
+  )
+  try {
+    const result = await runWorkflowApi(def.name, {
+      workRoot: currentWorkRoot() || undefined,
+      maxSteps,
+    })
+    const states = result.run.node_states || {}
+    const mapped: Record<string, NodeStateStatus> = {}
+    for (const [nid, s] of Object.entries(states)) {
+      const status = (s as { status?: NodeStateStatus } | undefined)?.status
+      mapped[nid] = status ?? 'idle'
+    }
+    workflowNodeStates.value = mapped
+    if (result.run.status === 'paused') {
+      workflowStatusText.value = '已暂停（单步）'
+    } else if (result.run.status === 'completed') {
+      workflowStatusText.value = '完成'
+    } else {
+      workflowStatusText.value = result.run.status
+    }
+  } catch (err) {
+    console.error('[workflow] run failed', err)
+    workflowStatusText.value = `运行失败：${(err as Error).message}`
+  } finally {
+    workflowRunning.value = false
+  }
+}
+
+async function toggleExpose() {
+  const def = workflowDefinition.value
+  if (!def) return
+  try {
+    const updated = await setWorkflowExposed(
+      def.name,
+      !def.exposed,
+      currentWorkRoot() || undefined,
+    )
+    workflowDefinition.value = updated
+    await refreshWorkflows()
+    setRuntimeStatus(updated.exposed ? `已暴露：${updated.tool_name || 'workflow_' + updated.name}` : '已取消暴露', 2500)
+  } catch (err) {
+    console.error('[workflow] expose failed', err)
+    setRuntimeStatus(`操作失败：${(err as Error).message}`, 4000)
+  }
+}
+
 function syncActiveSessionStatus(status: string) {
   const sessionId = activeSessionId.value
   if (!sessionId) return
@@ -1555,6 +1767,23 @@ onUnmounted(() => {
   color: var(--red);
   font-size: 12px;
   line-height: 1.35;
+}
+
+/* Workflow mode */
+.thread-header .wf-mode-label {
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--text);
+  opacity: 0.85;
+  letter-spacing: -0.02em;
+  margin-right: 4px;
+}
+.thread-header:has(.wf-mode-label) {
+  gap: 8px;
+}
+.sidebar-action.is-active {
+  background: color-mix(in srgb, var(--theme-main-text, #fff) 12%, transparent);
+  color: var(--text);
 }
 
 </style>

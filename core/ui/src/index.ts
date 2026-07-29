@@ -48,6 +48,32 @@ export type {
 
 export type { CoreGoal, CoreArrangeJob } from './durable/types';
 
+export type {
+  WorkflowNodeKind,
+  ActionKind,
+  PortDirection,
+  NodeStateStatus,
+  WorkflowPort,
+  WorkflowNodeData,
+  WorkflowEdge,
+  WorkflowInputParam,
+  WorkflowDef,
+  WorkflowNodeState,
+  WorkflowRunStatus,
+  WorkflowRunResult,
+} from './workflow/types';
+
+export {
+  listWorkflows,
+  getWorkflow,
+  createWorkflow,
+  updateWorkflow,
+  deleteWorkflow,
+  runWorkflow,
+  setWorkflowExposed,
+  listToolNames,
+} from './workflow/api';
+
 export {
   listGoals,
   updateGoal,
@@ -99,6 +125,10 @@ export type {
 export { default as CoreAgentsEditor } from './components/CoreAgentsEditor.vue';
 export { default as CoreArrangeManager } from './components/CoreArrangeManager.vue';
 export { default as CoreGoalStrip } from './components/CoreGoalStrip.vue';
+export { default as WorkflowCanvas } from './components/WorkflowCanvas.vue';
+export { default as WorkflowNode } from './components/WorkflowNode.vue';
+export { default as NodeEditCard } from './components/NodeEditCard.vue';
+export { default as WorkflowControlBar } from './components/WorkflowControlBar.vue';
 export { default as StagePane } from './components/StagePane.vue';
 export { default as StageCodeEditor } from './components/StageCodeEditor.vue';
 export { default as StageImagePreview } from './components/StageImagePreview.vue';

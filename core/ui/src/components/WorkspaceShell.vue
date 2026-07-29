@@ -126,6 +126,7 @@
 
     <!-- ===== Floating Composer ===== -->
     <ComposerBar
+      v-if="!hideComposer"
       :inert="rightDrawerModal || undefined"
       variant="floating"
       :placeholder="composerPlaceholder"
@@ -231,6 +232,7 @@ const props = withDefaults(
     noticeText?: string
     showRightPanel?: boolean
     stageOpen?: boolean
+    hideComposer?: boolean
   }>(),
   {
     storageKey: 'lamtools.ui',
