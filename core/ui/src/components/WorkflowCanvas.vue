@@ -126,7 +126,23 @@ const vfNodes = ref<Node[]>([])
 const vfEdges = ref<Edge[]>([])
 let syncing = false
 
+// Re-sync from the definition only when the structural identity (node/edge
+// ids) or node content (title/config/ports) changes — NOT on every position
+// update. Otherwise dragging a node emits update:definition, the parent
+// rewrites the def ref, this watch fires, and syncFromDefinition resets
+// vfNodes positions mid-drag (causing flicker/jump back). Position is owned
+// by Vue Flow during drag and only emitted outward.
+let lastSignature = ''
+function _nodeSignature(n: WorkflowNodeData): string {
+  // position intentionally excluded — it's owned by the canvas during drag.
+  return [n.id, n.kind, n.title, JSON.stringify(n.config), n.ports.map((p) => `${p.name}:${p.direction}`).join(',')].join('::')
+}
 function syncFromDefinition() {
+  const sig = props.definition.nodes.map(_nodeSignature).join('||') + '##' + props.definition.edges.map((e) => e.id).join('|')
+  if (sig === lastSignature) {
+    return
+  }
+  lastSignature = sig
   syncing = true
   vfNodes.value = props.definition.nodes.map((n): Node => ({
     id: n.id,
@@ -146,7 +162,15 @@ function syncFromDefinition() {
 }
 
 watch(() => props.definition, syncFromDefinition, { deep: false, immediate: true })
-watch(() => props.nodeStates, syncFromDefinition, { deep: false })
+// Node-state changes (runtime status) update each node's data.state in place
+// WITHOUT touching positions or structure (so a running node doesn't reset
+// dragged positions).
+watch(() => props.nodeStates, () => {
+  vfNodes.value = vfNodes.value.map((n) => ({
+    ...n,
+    data: { ...n.data, state: props.nodeStates[n.id] ?? (n.data as any)?.state ?? 'idle' },
+  }))
+}, { deep: false })
 watch(() => props.selectedNodeId, () => {
   vfNodes.value = vfNodes.value.map((n) => ({ ...n, class: n.id === props.selectedNodeId ? 'wf-node-selected' : '' }))
 })
