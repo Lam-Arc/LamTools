@@ -1,0 +1,27 @@
+/*
+ * 工具权限配置 — 控制各权限级别下自动批准的工具
+ *
+ * 修改后重启 LamCore 生效。
+ * 三级权限: read_only / limited_edit / full_edit
+ * 每个权限级别下列出自动批准（无需用户确认）的工具名。
+ */
+{
+  "read_only": [
+    "read",
+    "list_files",
+    "search"
+  ],
+  "limited_edit": [
+    "read",
+    "list_files",
+    "search",
+    "write"
+  ],
+  "full_edit": [
+    "read",
+    "write",
+    "list_files",
+    "search",
+    "execute_command"
+  ]
+}

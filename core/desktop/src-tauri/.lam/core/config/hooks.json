@@ -1,0 +1,28 @@
+/*
+ * 事件钩子配置 — 在 Agent 执行的各个阶段触发自定义操作
+ *
+ * 修改后重启 LamCore 生效。
+ *
+ * 事件: PreToolUse（调工具前）
+ * 处理方式:
+ *   command — 执行本地命令
+ *   http    — 发 HTTP 请求  
+ *   mcp     — 调另一个 MCP 工具
+ *   prompt  — 动态注入提示词
+ *
+ * 示例（取消注释即可启用）:
+ *
+ * {
+ *   "hooks": {
+ *     "PreToolUse": [{
+ *       "id": "log-every-tool",
+ *       "handler": {
+ *         "type": "command",
+ *         "command": "echo",
+ *         "timeout": 1
+ *       }
+ *     }]
+ *   }
+ * }
+ */
+{}

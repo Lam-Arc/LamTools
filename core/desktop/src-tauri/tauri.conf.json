@@ -40,7 +40,7 @@
     "active": true,
     "targets": ["nsis"],
     "icon": ["icons/icon.ico"],
-    "resources": ["lamcore-backend"],
+    "resources": ["lamcore-backend", ".lam"],
     "windows": {
       "nsis": {
         "languages": ["SimpChinese"],

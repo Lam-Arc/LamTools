@@ -1,0 +1,18 @@
+/*
+ * MCP 服务器配置 — 扩展 Agent 工具
+ *
+ * 修改后重启 LamCore 生效。
+ * 可以配置多个 MCP 服务器，每个服务器提供一组工具。
+ *
+ * 示例（取消注释即可启用）:
+ *
+ * {
+ *   "mcpServers": {
+ *     "filesystem": {
+ *       "command": "npx",
+ *       "args": ["-y", "@anthropic/mcp-filesystem", "C:/path/to/dir"]
+ *     }
+ *   }
+ * }
+ */
+{}
