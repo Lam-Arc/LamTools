@@ -476,6 +476,7 @@ import {
   runWorkflow as runWorkflowApi,
   setWorkflowExposed,
   editWorkflow,
+  readWorkflowEdit,
   listToolNames,
 } from '../workflow/api'
 import type { WorkflowDef, WorkflowNodeData, NodeStateStatus } from '../workflow/types'
@@ -1317,6 +1318,8 @@ async function submitWorkflowEdit() {
   if (!message || workflowEditing.value) return
   // Show the conversation (not selected-node info) so the exchange is visible.
   selectedNodeId.value = null
+  // Optimistically show the user message; the server persists it to the
+  // workflow's thread and returns the full conversation.
   workflowEditMessages.value.push({ role: 'user', content: message })
   composerText.value = ''
   workflowEditing.value = true
@@ -1324,12 +1327,12 @@ async function submitWorkflowEdit() {
   try {
     const result = await editWorkflow(def.name, {
       message,
-      history: workflowEditMessages.value.slice(0, -1),
       workRoot: currentWorkRoot() || undefined,
       modelId: selectedModelId.value || undefined,
       reasoningEffort: selectedThinkingMode.value || undefined,
     })
-    workflowEditMessages.value.push({ role: 'assistant', content: result.reply || '(无回复)' })
+    // Replace the optimistic convo with the server-persisted messages.
+    workflowEditMessages.value = result.messages
     if (result.applied && result.workflow) {
       workflowDefinition.value = result.workflow
       workflowNodeStates.value = {}
@@ -1632,6 +1635,9 @@ async function selectWorkflow(name: string) {
   try {
     workflowDefinition.value = await getWorkflow(name, currentWorkRoot() || undefined)
     workflowNodeStates.value = {}
+    // Load the persisted NL-edit conversation bound to this workflow's thread.
+    const convo = await readWorkflowEdit(name)
+    workflowEditMessages.value = convo.messages
   } catch (err) {
     console.error('[workflow] get failed', err)
     workflowDefinition.value = null

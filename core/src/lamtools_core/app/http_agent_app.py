@@ -17,6 +17,7 @@ from lamtools_core.cli import (
     _resolve_adapter_profile,
     _resolve_config_db,
     _resolve_core_db,
+    configure_model_store_context,
     list_llm_model_configs,
     load_llm_config,
 )
@@ -165,6 +166,7 @@ def create_core_agent_http_app(
             "thinking_enabled": thinking_enabled,
             "thinking_budget": thinking_budget or config.thinking_budget,
             "context_window": config.context_window,
+            "capability": config.capability,
         },
     )
 
@@ -173,6 +175,9 @@ def create_core_agent_http_app(
     resolved_data_dir = Path(data_dir or os.environ.get("LAMTOOLS_CORE_DATA_DIR") or core_db_path.parent / "core-agent").resolve()
     resolved_work_root.mkdir(parents=True, exist_ok=True)
     resolved_data_dir.mkdir(parents=True, exist_ok=True)
+    # Register the project work_root so load_llm_config resolves project-scoped
+    # model jsonc files and triggers the one-time DB→jsonc migration.
+    configure_model_store_context(work_root=str(resolved_work_root))
 
     operations = OperationCatalog()
     app_state: dict[str, Any] = {}
@@ -275,6 +280,7 @@ def create_core_agent_http_app(
             agent_operations,
             config_db_path=config_db_path,
             default_model_id=config.model_record_id,
+            work_root=resolved_work_root,
         )
         _register_missing_operations(
             agent_operations,
@@ -455,6 +461,7 @@ def create_core_agent_http_app(
             runner=workflow_runner,
             runtime_task_registry=runtime_task_registry,
             list_tool_specs=_list_tool_specs,
+            session_store=session_store,
         )
         app_state["workflow_store"] = workflow_store
         app_state["workflow_manager"] = workflow_manager
@@ -704,6 +711,7 @@ def _register_core_config_operations(
     *,
     config_db_path: Path,
     default_model_id: str,
+    work_root: Path | str | None = None,
 ) -> None:
     async def config_models_list(request: OperationRequest) -> OperationResult:
         del request
@@ -752,6 +760,179 @@ def _register_core_config_operations(
         "config.models.list": config_models_list,
         "config.providers.list": config_providers_list,
         "config.resolved.get": config_resolved_get,
+    }.items():
+        if not catalog.has(name):
+            catalog.register(name, handler)
+
+    _register_subagent_guide_operations(catalog, work_root=work_root)
+    _register_model_operations(catalog, work_root=work_root)
+
+
+def _register_model_operations(
+    catalog: OperationCatalog,
+    *,
+    work_root: Path | str | None = None,
+) -> None:
+    from lamtools_core.config.model_store import ModelConfig, ModelStore
+
+    def _store() -> ModelStore:
+        from lamtools_core.cli import _get_model_store
+
+        return _get_model_store()
+
+    def _payload_model_config(model_id: str, payload: dict[str, Any]) -> ModelConfig:
+        thinking = payload.get("thinking") if isinstance(payload.get("thinking"), dict) else {}
+        request_body = payload.get("request_body") if isinstance(payload.get("request_body"), dict) else {}
+        return ModelConfig(
+            model_id=str(payload.get("model_id") or model_id),
+            display_name=str(payload.get("display_name") or ""),
+            provider=str(payload.get("provider") or payload.get("provider_name") or ""),
+            provider_id=str(payload.get("provider_id") or ""),
+            context_window=int(payload.get("context_window") or 0),
+            max_output_tokens=int(payload.get("max_output_tokens") or 4096),
+            temperature=float(payload.get("temperature") or 0.2),
+            thinking_supported=bool(thinking.get("supported", payload.get("thinking_supported") or False)),
+            thinking_budget=int(thinking.get("budget", payload.get("thinking_budget") or 10000)),
+            reasoning_effort=str(payload.get("reasoning_effort") or ""),
+            adapter_profile_id=str(payload.get("adapter_profile_id") or ""),
+            request_body=request_body,
+            capability=str(payload.get("capability") or "").strip().lower(),
+            is_default=bool(payload.get("is_default") or False),
+        )
+
+    async def models_upsert(request: OperationRequest) -> OperationResult:
+        payload = request.payload if isinstance(request.payload, dict) else {}
+        model_id = str(payload.get("model_id") or "").strip()
+        if not model_id:
+            return OperationResult(name=request.name, status="error", payload={"error": "model_id is required"})
+        scope = str(payload.get("scope") or "global").strip()
+        if scope not in ("project", "global"):
+            return OperationResult(name=request.name, status="error", payload={"error": "scope must be 'project' or 'global'"})
+        root = str(payload.get("work_root") or payload.get("workRoot") or "").strip() or work_root
+        if scope == "project" and not root:
+            return OperationResult(name=request.name, status="error", payload={"error": "work_root is required for project scope"})
+        # Clear is_default on all other models when setting a new default.
+        store = _store()
+        model = _payload_model_config(model_id, payload)
+        if model.is_default:
+            for existing in store.list_sync(work_root=str(root) if root else None):
+                if existing.model_id != model.model_id and existing.is_default:
+                    existing.is_default = False
+                    store.write(existing, scope=scope, work_root=root)
+        path = store.write(model, scope=scope, work_root=root)
+        return OperationResult(name=request.name, payload={"path": str(path), "model_id": model.model_id, "scope": scope})
+
+    async def models_delete(request: OperationRequest) -> OperationResult:
+        from pathlib import Path as _Path
+
+        payload = request.payload if isinstance(request.payload, dict) else {}
+        model_id = str(payload.get("model_id") or "").strip()
+        scope = str(payload.get("scope") or "global").strip()
+        if not model_id:
+            return OperationResult(name=request.name, status="error", payload={"error": "model_id is required"})
+        root = str(payload.get("work_root") or payload.get("workRoot") or "").strip() or work_root
+        path = ModelStore.write_path(model_id, scope=scope, work_root=root)
+        if not path.is_file():
+            return OperationResult(name=request.name, status="error", payload={"error": f"no model file at {path}"})
+        path.unlink()
+        _store()._cached_signature = None  # invalidate cache
+        _store()._cached_models = None
+        return OperationResult(name=request.name, payload={"deleted": str(path)})
+
+    async def models_import_from_db(request: OperationRequest) -> OperationResult:
+        from lamtools_core.config.migrate_models import migrate_models_from_db
+
+        payload = request.payload if isinstance(request.payload, dict) else {}
+        config_db_str = str(payload.get("config_db") or "").strip()
+        if not config_db_str:
+            return OperationResult(name=request.name, status="error", payload={"error": "config_db is required"})
+        root = str(payload.get("work_root") or payload.get("workRoot") or "").strip() or work_root
+        count, paths = migrate_models_from_db(
+            _Path(config_db_str),
+            model_store=_store(),
+            work_root=root,
+            scope=str(payload.get("scope") or "global"),
+            force=bool(payload.get("force") or False),
+        )
+        return OperationResult(name=request.name, payload={"exported": count, "paths": [str(p) for p in paths]})
+
+    for name, handler in {
+        "config.models.upsert": models_upsert,
+        "config.models.delete": models_delete,
+        "config.models.import_from_db": models_import_from_db,
+    }.items():
+        if not catalog.has(name):
+            catalog.register(name, handler)
+
+
+def _register_subagent_guide_operations(
+    catalog: OperationCatalog,
+    *,
+    work_root: Path | str | None = None,
+) -> None:
+    from lamtools_core.config.subagent_prompt import (
+        DEFAULT_SUBAGENT_GUIDE,
+        guide_path_for_scope,
+        load_subagent_guide,
+        resolve_subagent_guide_path,
+        write_subagent_guide,
+    )
+
+    async def subagent_guide_get(request: OperationRequest) -> OperationResult:
+        # Payload may override the work root the server was started with.
+        root = str(request.payload.get("work_root") or request.payload.get("workRoot") or "").strip()
+        effective_root = root or work_root
+        from lamtools_core.config.subagent_prompt import subagent_guide_dirs
+
+        dirs = subagent_guide_dirs(effective_root)
+        resolved = resolve_subagent_guide_path(effective_root)
+        if resolved is None:
+            scope = "builtin"
+        elif resolved == (dirs[0] / "guide.md") if dirs else False:
+            scope = "project"
+        else:
+            scope = "global"
+        content = load_subagent_guide(effective_root)
+        return OperationResult(
+            name=request.name,
+            payload={
+                "content": content,
+                "scope": scope,
+                "resolved_path": str(resolved) if resolved is not None else "",
+                "is_builtin": resolved is None,
+            },
+        )
+
+    async def subagent_guide_set(request: OperationRequest) -> OperationResult:
+        content = str(request.payload.get("content") or "")
+        scope = str(request.payload.get("scope") or "global").strip()
+        if scope not in ("project", "global"):
+            return OperationResult(
+                name=request.name, status="error",
+                payload={"error": "scope must be 'project' or 'global'"},
+            )
+        root = str(request.payload.get("work_root") or request.payload.get("workRoot") or "").strip()
+        effective_root = root or work_root
+        if scope == "project" and not effective_root:
+            return OperationResult(
+                name=request.name, status="error",
+                payload={"error": "work_root is required to save a project-scoped guide"},
+            )
+        try:
+            path = write_subagent_guide(content, scope=scope, work_root=effective_root)
+        except OSError as exc:
+            return OperationResult(
+                name=request.name, status="error",
+                payload={"error": f"failed to write guide: {exc}"},
+            )
+        return OperationResult(
+            name=request.name,
+            payload={"path": str(path), "scope": scope},
+        )
+
+    for name, handler in {
+        "config.subagent.guide.get": subagent_guide_get,
+        "config.subagent.guide.set": subagent_guide_set,
     }.items():
         if not catalog.has(name):
             catalog.register(name, handler)

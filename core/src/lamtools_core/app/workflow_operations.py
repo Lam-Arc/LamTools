@@ -30,6 +30,7 @@ def register_workflow_operations(
     runner: WorkflowRunner,
     runtime_task_registry: Any = None,
     list_tool_specs: Callable[[], list[Any]] | None = None,
+    session_store: Any = None,
 ) -> None:
     """Register all workflow.* operations onto ``catalog``."""
 
@@ -199,7 +200,11 @@ def register_workflow_operations(
 
     async def workflow_edit(request: OperationRequest) -> OperationResult:
         """Natural-language graph editing: one structured LLM call that returns
-        ``{reply, graph}``. The graph is validated, saved, and returned."""
+        ``{reply, graph}``. The graph is validated, saved, and returned.
+
+        The conversation (user + assistant messages) is persisted to a Core
+        session thread bound to the workflow (``wf_edit_<name>``), so it
+        survives refreshes and belongs to the workflow, not the frontend."""
         payload = request.payload
         name = _name(payload)
         if not name:
@@ -218,18 +223,17 @@ def register_workflow_operations(
         if not work_root:
             work_root = definition.work_root
 
-        raw_history = payload.get("history") or payload.get("messages") or []
-        history = [m for m in raw_history if isinstance(m, dict)] if isinstance(raw_history, list) else []
+        thread_id = _workflow_edit_thread_id(name)
+        # Load prior conversation from the session (the source of truth).
+        history = await _load_edit_messages(session_store, thread_id)
+        await _append_edit_message(session_store, thread_id, "user", message)
 
         from lamtools_core.llm import ChatMessage, LLMRequest
 
         system_prompt = _workflow_edit_system_prompt(definition)
         messages: list[ChatMessage] = [ChatMessage(role="system", content=system_prompt)]
         for entry in history:
-            role = str(entry.get("role") or "").strip()
-            content = str(entry.get("content") or "").strip()
-            if role in ("user", "assistant") and content:
-                messages.append(ChatMessage(role=role, content=content))
+            messages.append(ChatMessage(role=str(entry.get("role")), content=str(entry.get("content"))))
         messages.append(ChatMessage(role="user", content=message))
 
         response_format = {
@@ -289,10 +293,16 @@ def register_workflow_operations(
             return _error(request, f"failed to parse LLM graph output: {exc}")
 
         if edited_def is None:
-            # No valid graph — return only the reply so the conversation continues.
+            await _append_edit_message(session_store, thread_id, "assistant", reply_text or response.content)
+            conv = await _load_edit_messages(session_store, thread_id)
             return OperationResult(
                 name=request.name,
-                payload={"reply": reply_text or response.content, "workflow": definition.to_dict(), "applied": False},
+                payload={
+                    "reply": reply_text or response.content,
+                    "workflow": definition.to_dict(),
+                    "applied": False,
+                    "messages": conv,
+                },
             )
 
         try:
@@ -309,10 +319,21 @@ def register_workflow_operations(
             )
         except (LookupError, TypeError, ValueError) as exc:
             return _error(request, exc)
+        await _append_edit_message(session_store, thread_id, "assistant", reply_text)
+        conv = await _load_edit_messages(session_store, thread_id)
         return OperationResult(
             name=request.name,
-            payload={"reply": reply_text, "workflow": saved.to_dict(), "applied": True},
+            payload={"reply": reply_text, "workflow": saved.to_dict(), "applied": True, "messages": conv},
         )
+
+    async def workflow_edit_read(request: OperationRequest) -> OperationResult:
+        """Load the persisted NL-edit conversation for a workflow."""
+        name = _name(request.payload)
+        if not name:
+            return _error(request, "name is required")
+        thread_id = _workflow_edit_thread_id(name)
+        messages = await _load_edit_messages(session_store, thread_id)
+        return OperationResult(name=request.name, payload={"messages": messages, "thread_id": thread_id})
 
     async def workflow_tools_list(request: OperationRequest) -> OperationResult:
         specs: list[Any] = []
@@ -338,6 +359,7 @@ def register_workflow_operations(
         "workflow.run": workflow_run,
         "workflow.cancel": workflow_cancel,
         "workflow.edit": workflow_edit,
+        "workflow.edit.read": workflow_edit_read,
         "workflow.expose": lambda req: workflow_expose(req, True),
         "workflow.unexpose": lambda req: workflow_expose(req, False),
         "workflow.tools.list": workflow_tools_list,
@@ -395,6 +417,63 @@ def _workflow_edit_system_prompt(definition: WorkflowDef) -> str:
         "4. reply 用一句话简述改动。\n\n"
         f"当前工作流图 JSON：\n{current_graph}"
     )
+
+
+def _workflow_edit_thread_id(workflow_name: str) -> str:
+    """Stable thread id for a workflow's NL-edit conversation."""
+    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in workflow_name)
+    return f"wf_edit_{safe}"
+
+
+async def _load_edit_messages(session_store: Any, thread_id: str) -> list[dict[str, Any]]:
+    """Read the workflow's edit conversation from the session store."""
+    if session_store is None:
+        return []
+    try:
+        records = await session_store.list_messages(thread_id)
+    except Exception:  # noqa: BLE001 — missing session is not fatal
+        return []
+    return [
+        {"role": str(getattr(m, "role", "")), "content": str(getattr(m, "content", ""))}
+        for m in records
+        if getattr(m, "role", "") in ("user", "assistant")
+    ]
+
+
+async def _append_edit_message(session_store: Any, thread_id: str, role: str, content: str) -> None:
+    """Persist one edit-conversation message, creating the session if needed."""
+    if session_store is None:
+        return
+    import uuid
+
+    from lamtools_core.session import MessageRecord, SessionRecord
+
+    # Ensure the session exists (first message creates it).
+    if getattr(session_store, "get", None) is not None:
+        existing = await session_store.get(thread_id)
+        if existing is None:
+            try:
+                await session_store.create(
+                    SessionRecord(
+                        id=thread_id,
+                        member_id="workflow",
+                        title=f"工作流编辑：{thread_id}",
+                        status="active",
+                        metadata={"kind": "workflow_edit"},
+                    )
+                )
+            except Exception:  # noqa: BLE001 — may already exist concurrently
+                pass
+    message = MessageRecord(
+        id=uuid.uuid4().hex,
+        session_id=thread_id,
+        role=role,
+        content=content,
+    )
+    try:
+        await session_store.add_message(message)
+    except Exception:  # noqa: BLE001 — persistence must not break the op
+        pass
 
 
 __all__ = ["register_workflow_operations"]
