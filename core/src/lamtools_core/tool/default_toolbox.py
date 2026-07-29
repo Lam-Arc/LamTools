@@ -701,6 +701,7 @@ class CoreToolbox:
         tier_tools: "TierTools | None" = None,
         load_tools: LoadTools | None = None,
         activated_mcp_servers: set[str] | None = None,
+        workflow_tool_provider: Callable[[], Any] | None = None,
     ) -> None:
         self.work_root = Path(work_root).resolve()
         self.work_root.mkdir(parents=True, exist_ok=True)
@@ -716,6 +717,7 @@ class CoreToolbox:
         self.activated_mcp_servers = activated_mcp_servers or set()
         self.tool_permissions = dict(DEFAULT_TOOL_PERMISSIONS)
         self.skill_registry = skill_registry or SkillRegistry(explicit_roots=self.loaded_skill_roots)
+        self.workflow_tool_provider = workflow_tool_provider
         self._dynamic_mcp_tool_names = {spec.name for spec in mcp_tool_specs or [] if spec.name.startswith("mcp__")}
         for spec in mcp_tool_specs or []:
             self.tool_permissions[spec.name] = spec.permission  # type: ignore[assignment]
@@ -744,12 +746,27 @@ class CoreToolbox:
             operation_executor=operation_executor,
         )
 
+    def _workflow_specs(self) -> list[ToolSpec]:
+        if self.workflow_tool_provider is None:
+            return []
+        try:
+            bundle = self.workflow_tool_provider()
+        except Exception:  # noqa: BLE001 — workflow tools must never break the toolbox
+            return []
+        return list(getattr(bundle, "specs", []) or [])
+
     def tool_specs(self) -> list[ToolSpec]:
-        return [
+        specs = [
             replace(spec, permission=self.tool_permissions.get(spec.name, HARD_BLOCK))
             for spec in self._specs
             if spec.name not in self.disabled_tools
         ]
+        workflow_specs = [
+            replace(spec, permission=self.tool_permissions.get(spec.name, spec.permission))
+            for spec in self._workflow_specs()
+            if spec.name not in self.disabled_tools
+        ]
+        return [*specs, *workflow_specs]
 
     def model_tools(
         self,
@@ -827,6 +844,12 @@ class CoreToolbox:
         handler = self._handlers.get(call.name)
         if handler is None and call.name in self._dynamic_mcp_tool_names:
             handler = self._handlers.get("mcp_tool")
+        if handler is None and self.workflow_tool_provider is not None:
+            try:
+                bundle = self.workflow_tool_provider()
+                handler = (getattr(bundle, "handlers", {}) or {}).get(call.name)
+            except Exception:  # noqa: BLE001
+                handler = None
         if handler is None:
             return ToolResult(call_id=call.id, name=call.name, status="blocked", error=f"Unknown tool: {call.name}")
         return await handler(call)

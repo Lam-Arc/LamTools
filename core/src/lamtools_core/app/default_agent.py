@@ -184,6 +184,7 @@ def create_core_agent_operations(
     runtime_task_registry: RuntimeTaskRegistry | None = None,
     goal_manager: GoalManager | None = None,
     arrange_manager: ArrangeManager | None = None,
+    workflow_store: Any = None,
     enable_turn_checkpoints: bool = False,
     attachment_service: Any | None = None,
     model_display_resolver: Callable[[str], str] | None = None,
@@ -365,6 +366,8 @@ def create_core_agent_operations(
                 operation_catalog=catalog,
                 enable_goal_tool=goal_manager is not None,
                 enable_arrange_tool=arrange_manager is not None,
+                workflow_store=workflow_store,
+                enable_workflow_tool=workflow_store is not None,
                 active_tier=active_tier,
                 tier_tools=tier_tools,
                 active_mode=active_mode,
@@ -1639,11 +1642,14 @@ async def _build_core_runtime_toolbox(
     tier_tools: dict | None = None,
     active_mode: str | None = None,
     activated_mcp_servers: set[str] | None = None,
+    workflow_store: Any = None,
+    enable_workflow_tool: bool = False,
 ):
     from lamtools_core.mcp import MCPToolRegistry
     from lamtools_core.tool.sub_agent_runner import KernelSubAgentRunner
     from lamtools_core.tool.default_toolbox import build_core_toolbox
     from lamtools_core.tool.loadtools import LoadTools, default_load_tools, load_loadtools
+    from lamtools_core.tool.workflow_tools import workflow_tool_provider
 
     registry = MCPToolRegistry(work_root, config_files=plugin_assembly.get("mcp_files") or [])
     await registry.load()
@@ -1704,6 +1710,13 @@ async def _build_core_runtime_toolbox(
             raise RuntimeError("Operation catalog is not configured")
         return await operation_catalog.execute(name, payload, metadata=metadata)
 
+    workflow_provider = None
+    if enable_workflow_tool and workflow_store is not None and operation_catalog is not None:
+        workflow_provider = workflow_tool_provider(
+            workflow_store,
+            execute_operation,
+            work_root=work_root,
+        )
     toolbox = build_core_toolbox(
         work_root=work_root,
         approval_policy=normalized_policy,
@@ -1718,6 +1731,7 @@ async def _build_core_runtime_toolbox(
         tier_tools=tier_tools,
         load_tools=load_tools,
         activated_mcp_servers=activated_mcp_servers,
+        workflow_tool_provider=workflow_provider,
     )
     return toolbox, registry
 

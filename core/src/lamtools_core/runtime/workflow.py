@@ -708,10 +708,17 @@ class WorkflowRunner:
         extra_env = cfg.get("env") or {}
         if isinstance(extra_env, dict):
             env.update({str(k): str(v) for k, v in extra_env.items()})
-        # Bind inputs as environment variables INPUT_<PORTNAME>.
+        # Bind inputs as INPUT_<PORTNAME> env vars AND substitute ${VAR}/$VAR
+        # tokens in the command ourselves — Windows cmd.exe does not expand
+        # $VAR, so relying on the shell would break portability.
+        substitutions: dict[str, str] = {}
         for name, value in bound_inputs.items():
-            if value is not None:
-                env[f"INPUT_{name.upper()}"] = str(value)
+            if value is None:
+                continue
+            env_name = f"INPUT_{name.upper()}"
+            env[env_name] = str(value)
+            substitutions[env_name] = str(value)
+        command = _substitute_env_vars(command, substitutions)
         timeout = _as_float(cfg.get("timeout"), default=60.0)
         proc = await asyncio.create_subprocess_shell(
             command,
@@ -991,6 +998,24 @@ def _summarize(value: Any) -> str:
     except (TypeError, ValueError):
         text = str(value)
     return text if len(text) <= 500 else text[:500] + "…"
+
+
+def _substitute_env_vars(command: str, substitutions: dict[str, str]) -> str:
+    """Replace ${VAR} and $VAR tokens in ``command`` with the given values.
+
+    Shell-agnostic: Windows cmd.exe does not expand ``$VAR``, so we substitute
+    the known INPUT_<PORT> variables ourselves before handing the command to the
+    shell. Unknown ``$tokens`` are left untouched.
+    """
+    if not substitutions:
+        return command
+    result = command
+    # ${VAR} form first (longer token), then $VAR form.
+    for var, value in substitutions.items():
+        result = result.replace("${" + var + "}", value)
+    for var, value in substitutions.items():
+        result = result.replace("$" + var, value)
+    return result
 
 
 __all__ = [

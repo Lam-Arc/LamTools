@@ -250,6 +250,7 @@ def create_core_agent_http_app(
             except Exception:
                 return ""
 
+        workflow_store = WorkflowStore()
         agent_operations = create_core_agent_operations(
             spec=runtime_spec,
             member_kit=member_kit,
@@ -264,6 +265,7 @@ def create_core_agent_http_app(
             runtime_task_registry=runtime_task_registry,
             goal_manager=goal_manager,
             arrange_manager=arrange_manager,
+            workflow_store=workflow_store,
             enable_turn_checkpoints=True,
             model_display_resolver=_resolve_model_display,
         )
@@ -407,8 +409,9 @@ def create_core_agent_http_app(
         # Workflow mode: file-backed definitions + deterministic runner. The
         # runner streams per-node state as core/runItem events (the existing
         # GUI reducer renders them with no new channel) and cooperatively
-        # cancels via the same runtime_task_registry the kernel uses.
-        workflow_store = WorkflowStore()
+        # cancels via the same runtime_task_registry the kernel uses. The
+        # toolbox (built per-turn) reads enrolled workflows from the same store
+        # via a cached provider so exposing one makes it callable next turn.
         workflow_manager = WorkflowManager(workflow_store)
 
         async def _emit_workflow_event(event: Any) -> None:
@@ -437,11 +440,21 @@ def create_core_agent_http_app(
             emit=_emit_workflow_event,
             runtime_task_registry=runtime_task_registry,
         )
+
+        def _list_tool_specs() -> list[Any]:
+            try:
+                from lamtools_core.tool.default_toolbox import default_core_tool_specs
+
+                return default_core_tool_specs()
+            except Exception:  # noqa: BLE001
+                return []
+
         register_workflow_operations(
             agent_operations,
             workflow_manager=workflow_manager,
             runner=workflow_runner,
             runtime_task_registry=runtime_task_registry,
+            list_tool_specs=_list_tool_specs,
         )
         app_state["workflow_store"] = workflow_store
         app_state["workflow_manager"] = workflow_manager

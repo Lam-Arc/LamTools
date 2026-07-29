@@ -76,12 +76,15 @@ class WorkflowStore:
     # -- async API (mirrors ArrangeStore shape) ---------------------------
 
     async def list(self, *, work_root: str | None = None) -> list[WorkflowDef]:
+        return await asyncio.to_thread(self.list_sync, work_root=work_root)
+
+    def list_sync(self, *, work_root: str | None = None) -> list[WorkflowDef]:
         sig = self._signature(work_root)
         if self._cached_signature == sig and self._cached_defs is not None:
             return self._cached_defs
         defs: list[WorkflowDef] = []
         for path in self._candidate_files(work_root):
-            definition = await self._read(path)
+            definition = self._read_sync(path)
             if definition is not None:
                 defs.append(definition)
         defs.sort(key=lambda item: item.name)
@@ -89,11 +92,23 @@ class WorkflowStore:
         self._cached_defs = defs
         return defs
 
+    def list_exposed_sync(self, *, work_root: str | None = None) -> list[WorkflowDef]:
+        return [w for w in self.list_sync(work_root=work_root) if w.exposed]
+
     async def get(self, name: str, *, work_root: str | None = None) -> WorkflowDef | None:
         target = name.strip()
         if not target:
             return None
         for definition in await self.list(work_root=work_root):
+            if definition.name == target:
+                return definition
+        return None
+
+    def get_sync(self, name: str, *, work_root: str | None = None) -> WorkflowDef | None:
+        target = name.strip()
+        if not target:
+            return None
+        for definition in self.list_sync(work_root=work_root):
             if definition.name == target:
                 return definition
         return None
@@ -142,8 +157,11 @@ class WorkflowStore:
         return Path.home() / ".lam" / "workflows"
 
     async def _read(self, path: Path) -> WorkflowDef | None:
+        return self._read_sync(path)
+
+    def _read_sync(self, path: Path) -> WorkflowDef | None:
         try:
-            text = await asyncio.to_thread(_read_text, path)
+            text = _read_text(path)
         except OSError:
             return None
         try:
