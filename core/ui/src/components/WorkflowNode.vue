@@ -43,6 +43,8 @@ const state = computed<NodeStateStatus>(() => props.data.state ?? 'idle')
 const icon = computed(() => {
   if (kind.value === 'llm') return '◇'
   if (kind.value === 'agent') return '◈'
+  if (kind.value === 'input') return '⤓'
+  if (kind.value === 'output') return '⤒'
   return '◆'
 })
 
@@ -64,6 +66,12 @@ const stateDot = computed(() => {
 
 const summary = computed(() => {
   const cfg = node.value.config
+  if (kind.value === 'input') {
+    return '入参: ' + node.value.output_ports().map((p) => p.name).join(', ')
+  }
+  if (kind.value === 'output') {
+    return '输出'
+  }
   if (kind.value === 'llm') {
     const mode = cfg.mode || 'single'
     const tools = Array.isArray(cfg.allowed_tools) ? cfg.allowed_tools.length : 0
@@ -94,6 +102,8 @@ const summary = computed(() => {
 .wf-node.kind-llm { border-left: 3px solid var(--purple, #bd8cff); }
 .wf-node.kind-agent { border-left: 3px solid var(--green, #32d17d); }
 .wf-node.kind-action { border-left: 3px solid var(--orange, #ff9142); }
+.wf-node.kind-input { border-left: 3px solid var(--blue, #79bcff); }
+.wf-node.kind-output { border-left: 3px solid var(--red, #f5555d); }
 .wf-node.state-running { box-shadow: 0 0 0 2px color-mix(in srgb, var(--blue, #79bcff) 60%, transparent), var(--shadow, 0 2px 8px rgba(0,0,0,0.35)); }
 .wf-node.state-error { box-shadow: 0 0 0 2px color-mix(in srgb, var(--red, #f5555d) 60%, transparent), var(--shadow, 0 2px 8px rgba(0,0,0,0.35)); }
 .wf-node-head {

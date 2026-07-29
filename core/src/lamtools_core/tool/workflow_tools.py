@@ -47,16 +47,18 @@ def workflow_tool_specs(enrolled: list[WorkflowDef]) -> list[ToolSpec]:
         tool_name = wf.effective_tool_name()
         properties: dict[str, Any] = {}
         required: list[str] = []
-        for param in wf.input_params:
+        # Input params come from the Input system node's output ports
+        # (preferred), falling back to the legacy input_params array.
+        input_ports = _workflow_input_ports(wf)
+        for name, ptype, desc in input_ports:
             entry: dict[str, Any] = {}
-            if param.description:
-                entry["description"] = param.description
-            json_type = _json_type(param.type)
+            if desc:
+                entry["description"] = desc
+            json_type = _json_type(ptype)
             if json_type:
                 entry["type"] = json_type
-            properties[param.name] = entry
-            if param.required:
-                required.append(param.name)
+            properties[name] = entry
+            required.append(name)
         schema: dict[str, Any] = {"type": "object", "properties": properties}
         if required:
             schema["required"] = required
@@ -73,6 +75,24 @@ def workflow_tool_specs(enrolled: list[WorkflowDef]) -> list[ToolSpec]:
             )
         )
     return specs
+
+
+def _workflow_input_ports(wf: WorkflowDef) -> list[tuple[str, str, str]]:
+    """Return (name, type, description) for workflow inputs, sourced from Input
+    nodes' output ports (plus legacy input_params)."""
+    seen: set[str] = set()
+    result: list[tuple[str, str, str]] = []
+    for node in wf.nodes:
+        if node.kind == "input":
+            for port in node.output_ports():
+                if port.name and port.name not in seen:
+                    seen.add(port.name)
+                    result.append((port.name, port.type, port.description))
+    for param in wf.input_params:
+        if param.name and param.name not in seen:
+            seen.add(param.name)
+            result.append((param.name, param.type, param.description))
+    return result
 
 
 def workflow_tool_handlers(

@@ -32,7 +32,7 @@ from typing import Any, Literal
 from lamtools_core.event.run_item import RunItemEvent, RunItemStatus
 
 
-WorkflowNodeKind = Literal["llm", "agent", "action"]
+WorkflowNodeKind = Literal["llm", "agent", "action", "input", "output"]
 ActionKind = Literal["shell", "script", "http", "file-data"]
 PortDirection = Literal["in", "out"]
 NodeStateStatus = Literal["idle", "running", "done", "error", "skipped", "cancelled"]
@@ -434,13 +434,16 @@ class WorkflowRunner:
             return WorkflowRunResult(status="failed", error="workflow graph has a cycle", run_id=run_id)
 
         values: dict[str, Any] = dict(prior_values or {})
-        # Bind workflow inputs under the __input__ namespace.
-        for param in workflow.input_params:
-            key = f"__input__.{param.name}"
-            if param.name in inputs:
-                values[key] = inputs[param.name]
+        # Bind workflow inputs under the __input__ namespace. Input names come
+        # from the system Input node's output ports (preferred) plus the legacy
+        # input_params array (backward compatible).
+        input_names = _workflow_input_names(workflow)
+        for name in input_names:
+            key = f"__input__.{name}"
+            if name in inputs:
+                values[key] = inputs[name]
             elif key not in values:
-                values[key] = param.default
+                values[key] = _workflow_input_default(workflow, name)
 
         node_states: dict[str, WorkflowNodeState] = dict(prior_node_states or {})
         for node in workflow.nodes:
@@ -483,7 +486,7 @@ class WorkflowRunner:
             state.started_at = self.clock()
 
             try:
-                outputs = await self._execute_with_retries(node, bound_inputs, work_root, state)
+                outputs = await self._execute_with_retries(node, bound_inputs, work_root, state, values)
             except asyncio.CancelledError:
                 state.status = "cancelled"
                 state.finished_at = self.clock()
@@ -538,7 +541,13 @@ class WorkflowRunner:
         bound_inputs: dict[str, Any],
         work_root: str,
         state: WorkflowNodeState,
+        values: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        # System Input/Output nodes don't retry — they just route data.
+        if node.kind == "input":
+            return self._execute_input(node, values or {})
+        if node.kind == "output":
+            return self._execute_output(node, bound_inputs)
         retries = _as_int(node.config.get("retries"), default=0)
         last_exc: Exception | None = None
         for attempt in range(retries + 1):
@@ -556,6 +565,23 @@ class WorkflowRunner:
                 if attempt < retries:
                     await asyncio.sleep(0.1 * (attempt + 1))
         raise last_exc if last_exc is not None else RuntimeError("node execution failed")
+
+    def _execute_input(self, node: WorkflowNode, values: dict[str, Any]) -> dict[str, Any]:
+        """Input node: expose workflow inputs on its output ports.
+
+        Each output port name is a workflow input name; its value is read from
+        the ``__input__.<name>`` slot bound by the runner (which applies
+        defaults when the raw input was absent).
+        """
+        outputs: dict[str, Any] = {}
+        for port in node.output_ports():
+            outputs[port.name] = values.get(f"__input__.{port.name}")
+        return outputs
+
+    def _execute_output(self, node: WorkflowNode, bound_inputs: dict[str, Any]) -> dict[str, Any]:
+        """Output node: pass through its bound input as the node output."""
+        value = next(iter(bound_inputs.values())) if bound_inputs else None
+        return {"__out__": value}
 
     async def _execute_llm(
         self, node: WorkflowNode, bound_inputs: dict[str, Any], work_root: str
@@ -934,7 +960,7 @@ def _input_value_key(node: WorkflowNode, port_name: str, workflow: WorkflowDef) 
     for edge in workflow.edges:
         if edge.target == node.id and edge.target_port == port_name:
             return f"{edge.source}.{edge.source_port}"
-    if any(p.name == port_name for p in workflow.input_params):
+    if port_name in _workflow_input_names(workflow):
         return f"__input__.{port_name}"
     return None
 
@@ -947,6 +973,11 @@ def _default_output_port(node: WorkflowNode) -> str:
 
 
 def _resolve_output(workflow: WorkflowDef, values: dict[str, Any]) -> Any:
+    # Preferred: the Output system node's pass-through value.
+    for node in workflow.nodes:
+        if node.kind == "output":
+            return values.get(f"{node.id}.__out__")
+    # Legacy: the output_port spec ("nodeId" or "nodeId.portName").
     spec = workflow.output_port.strip()
     if not spec:
         # Default: the last node's default output.
@@ -962,6 +993,28 @@ def _resolve_output(workflow: WorkflowDef, values: dict[str, Any]) -> Any:
         return values.get(spec)
     port = _default_output_port(node)
     return values.get(f"{spec}.{port}" if port else spec)
+
+
+def _workflow_input_names(workflow: WorkflowDef) -> list[str]:
+    """Workflow input names: the Output ports of any Input system node, plus the
+    legacy ``input_params`` array (backward compatible)."""
+    names: list[str] = []
+    for node in workflow.nodes:
+        if node.kind == "input":
+            for port in node.output_ports():
+                if port.name and port.name not in names:
+                    names.append(port.name)
+    for param in workflow.input_params:
+        if param.name and param.name not in names:
+            names.append(param.name)
+    return names
+
+
+def _workflow_input_default(workflow: WorkflowDef, name: str) -> Any:
+    for param in workflow.input_params:
+        if param.name == name:
+            return param.default
+    return None
 
 
 def _mark_cancelled(
