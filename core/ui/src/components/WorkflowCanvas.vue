@@ -17,7 +17,7 @@
       fit-view-on-init
       @node-click="onNodeClick"
     >
-      <Background :gap="22" :size="1" pattern-color="rgba(130,130,140,0.22)" />
+      <Background :gap="22" :size="1" pattern-color="transparent" />
     </VueFlow>
 
     <!-- pane (empty-space) context menu -->
@@ -309,7 +309,7 @@ if (typeof document !== 'undefined') {
   opacity: 0.55;
   transition: opacity 0.15s, background 0.15s;
 }
-.wf-lock-btn:hover { opacity: 1; background: rgba(255, 255, 255, 0.06); }
+.wf-lock-btn:hover { opacity: 1; background: var(--theme-main-soft-background); }
 .wf-lock-btn.locked { opacity: 0.9; }
 
 .wf-canvas {
@@ -323,13 +323,14 @@ if (typeof document !== 'undefined') {
   background: transparent;
 }
 .wf-canvas :deep(.vue-flow) { background: transparent; }
+.wf-canvas :deep(.vue-flow__background circle) { fill: color-mix(in srgb, var(--theme-main-text) 14%, transparent); }
 .wf-canvas :deep(.vue-flow__nodes) { z-index: 5; }
 .wf-canvas :deep(.vue-flow__node) { width: auto; z-index: 10; }
 .wf-canvas :deep(.vue-flow__node.selected .wf-node) {
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--blue, #79bcff) 70%, transparent), var(--shadow, 0 2px 8px rgba(0,0,0,0.35));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--blue) 70%, transparent), var(--shadow);
 }
 .wf-canvas :deep(.vue-flow__node.wf-node-selected .wf-node) {
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--blue, #79bcff) 70%, transparent), var(--shadow, 0 2px 8px rgba(0,0,0,0.35));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--blue) 70%, transparent), var(--shadow);
 }
 .wf-context-menu {
   position: fixed;
@@ -337,19 +338,19 @@ if (typeof document !== 'undefined') {
   min-width: 150px;
   padding: 4px;
   border-radius: 10px;
-  border: 1px solid color-mix(in srgb, var(--theme-main-text, #fff) 12%, transparent);
-  background: var(--theme-main-background, #1d1e1e);
-  color: var(--theme-main-text, #f2efeb);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  border: 1px solid var(--theme-main-border);
+  background: var(--theme-main-background);
+  color: var(--theme-main-text);
+  box-shadow: var(--shadow);
 }
 .wf-menu-group { display: flex; flex-direction: column; }
 .wf-menu-label { font-size: 10px; opacity: 0.4; padding: 4px 8px 2px; text-transform: uppercase; letter-spacing: 0.04em; }
-.wf-menu-sep { display: block; height: 1px; margin: 4px 6px; background: color-mix(in srgb, var(--theme-main-text, #fff) 10%, transparent); }
+.wf-menu-sep { display: block; height: 1px; margin: 4px 6px; background: var(--theme-main-border); }
 .menu-item {
   border: 0; background: transparent; color: inherit; text-align: left;
   padding: 6px 10px; border-radius: 6px; font-size: 12px; cursor: pointer;
 }
-.menu-item:hover:not(:disabled) { background: color-mix(in srgb, var(--theme-main-text, #fff) 8%, transparent); }
+.menu-item:hover:not(:disabled) { background: var(--theme-main-soft-background); }
 .menu-item:disabled { opacity: 0.35; cursor: default; }
-.menu-item.danger { color: var(--red, #f5555d); }
+.menu-item.danger { color: var(--red); }
 </style>

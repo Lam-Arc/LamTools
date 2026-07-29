@@ -1992,9 +1992,9 @@ onUnmounted(() => {
   max-width: calc(100vw - 32px);
   padding: 16px;
   border-radius: 14px;
-  background: var(--theme-surface-background, #1c1c1e);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  box-shadow: var(--shadow, 0 12px 40px rgba(0, 0, 0, 0.5));
+  background: var(--theme-surface-background);
+  border: 1px solid var(--theme-main-border);
+  box-shadow: var(--shadow);
   display: grid;
   gap: 10px;
 }
@@ -2005,28 +2005,28 @@ onUnmounted(() => {
   margin: 0;
   font-size: 15px;
   font-weight: 700;
-  color: var(--theme-main-text, #f2efeb);
+  color: var(--theme-main-text);
 }
 .wf-create-input {
   width: 100%;
   height: 30px;
   box-sizing: border-box;
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  border: 1px solid var(--theme-main-border);
   border-radius: 7px;
-  background: rgba(0, 0, 0, 0.24);
-  color: var(--theme-main-text, #f2efeb);
+  background: var(--theme-main-subtle-background);
+  color: var(--theme-main-text);
   padding: 0 8px;
   font: inherit;
   font-size: 13px;
   outline: 0;
 }
 .wf-create-input:focus {
-  border-color: color-mix(in srgb, var(--blue, #79bcff) 60%, transparent);
+  border-color: color-mix(in srgb, var(--blue) 60%, transparent);
 }
 .wf-create-error {
   margin: 0;
   font-size: 11px;
-  color: var(--red, #ff8a80);
+  color: var(--red);
 }
 .wf-create-actions {
   display: flex;
@@ -2044,11 +2044,11 @@ onUnmounted(() => {
 }
 .wf-create-actions .text-btn {
   background: transparent;
-  color: var(--muted, #888);
+  color: var(--muted);
 }
 .wf-create-actions .primary-btn {
-  background: color-mix(in srgb, var(--blue, #79bcff) 80%, transparent);
-  color: #0b0b0c;
+  background: color-mix(in srgb, var(--blue) 80%, transparent);
+  color: color-mix(in srgb, var(--theme-backdrop-text) 90%, transparent);
   font-weight: 600;
 }
 .wf-create-actions .primary-btn:disabled {
@@ -2242,7 +2242,7 @@ onUnmounted(() => {
   flex: 0 0 auto;
   max-height: 45%;
   padding: 12px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: 1px solid var(--theme-main-border);
   overflow: auto;
 }
 .wf-node-list {
@@ -2260,14 +2260,14 @@ onUnmounted(() => {
   border-radius: 7px;
   cursor: pointer;
   font-size: 13px;
-  color: var(--theme-main-text, #f2efeb);
+  color: var(--theme-main-text);
   transition: background 0.12s;
 }
 .wf-node-list-item:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--theme-main-soft-background);
 }
 .wf-node-list-item.active {
-  background: color-mix(in srgb, var(--blue, #79bcff) 22%, transparent);
+  background: color-mix(in srgb, var(--blue) 22%, transparent);
 }
 .wf-node-list-kind {
   opacity: 0.7;
@@ -2291,8 +2291,8 @@ onUnmounted(() => {
   height: 100%;
   min-height: 0;
   border-radius: 12px;
-  background: color-mix(in srgb, var(--theme-surface-background, #1c1c1e) 60%, transparent);
-  border: 1px solid rgba(255, 255, 255, 0.07);
+  background: color-mix(in srgb, var(--theme-surface-background) 60%, transparent);
+  border: 1px solid var(--theme-main-border);
   overflow: hidden;
 }
 .wf-convo-head {
@@ -2300,7 +2300,7 @@ onUnmounted(() => {
   align-items: center;
   justify-content: space-between;
   padding: 8px 10px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid var(--theme-main-border);
 }
 .wf-convo-head h3 {
   margin: 0;
@@ -2330,16 +2330,16 @@ onUnmounted(() => {
   height: 100%;
   display: flex;
   flex-direction: column;
-  background: var(--theme-main-background, #141416);
-  border-left: 1px solid rgba(255, 255, 255, 0.1);
-  box-shadow: var(--shadow, 0 12px 40px rgba(0, 0, 0, 0.5));
+  background: var(--theme-main-background);
+  border-left: 1px solid var(--theme-main-border);
+  box-shadow: var(--shadow);
 }
 .wf-convo-float-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 12px 16px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: 1px solid var(--theme-main-border);
 }
 .wf-convo-float-head h3 {
   margin: 0;
@@ -2366,7 +2366,7 @@ onUnmounted(() => {
 .wf-right-empty {
   margin: 0;
   font-size: 12px;
-  color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 40%, transparent);
+  color: color-mix(in srgb, var(--theme-main-text) 40%, transparent);
 }
 .wf-node-info-body {
   display: grid;
@@ -2380,7 +2380,7 @@ onUnmounted(() => {
   margin: 0;
 }
 .wf-node-info-row > span {
-  color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 50%, transparent);
+  color: color-mix(in srgb, var(--theme-main-text) 50%, transparent);
 }
 .wf-node-info-block {
   margin: 0;
@@ -2388,13 +2388,13 @@ onUnmounted(() => {
   gap: 4px;
 }
 .wf-node-info-block > span {
-  color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 50%, transparent);
+  color: color-mix(in srgb, var(--theme-main-text) 50%, transparent);
 }
 .wf-node-info-block pre {
   margin: 0;
   padding: 8px;
   border-radius: 7px;
-  background: rgba(0, 0, 0, 0.28);
+  background: var(--theme-main-subtle-background);
   font-size: 11px;
   white-space: pre-wrap;
   word-break: break-word;

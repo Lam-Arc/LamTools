@@ -288,10 +288,10 @@ function apply() {
   display: flex;
   flex-direction: column;
   border-radius: var(--radius-lg, 18px);
-  border: 1px solid color-mix(in srgb, var(--theme-main-text, #fff) 14%, transparent);
-  background: var(--theme-main-background, #1d1e1e);
-  color: var(--theme-main-text, #f2efeb);
-  box-shadow: var(--shadow, 0 8px 32px rgba(0, 0, 0, 0.5));
+  border: 1px solid var(--theme-main-border);
+  background: var(--theme-main-background);
+  color: var(--theme-main-text);
+  box-shadow: var(--shadow);
   overflow: hidden;
 }
 .wf-edit-head {
@@ -299,7 +299,7 @@ function apply() {
   align-items: center;
   justify-content: space-between;
   padding: 10px 14px;
-  border-bottom: 1px solid color-mix(in srgb, var(--theme-main-text, #fff) 10%, transparent);
+  border-bottom: 1px solid var(--theme-main-border);
 }
 .wf-edit-title { font-size: 13px; font-weight: 650; }
 .wf-edit-body {
@@ -311,7 +311,7 @@ function apply() {
 }
 .wf-edit-foot {
   padding: 8px 14px;
-  border-top: 1px solid color-mix(in srgb, var(--theme-main-text, #fff) 10%, transparent);
+  border-top: 1px solid var(--theme-main-border);
   display: flex;
   justify-content: flex-end;
 }
@@ -321,8 +321,8 @@ function apply() {
 .wf-edit-card :deep(.field input),
 .wf-edit-card :deep(.field textarea) {
   width: 100%;
-  background: color-mix(in srgb, var(--theme-main-text, #fff) 6%, transparent);
-  border: 1px solid color-mix(in srgb, var(--theme-main-text, #fff) 12%, transparent);
+  background: var(--theme-main-subtle-background);
+  border: 1px solid var(--theme-main-border);
   border-radius: var(--radius-sm, 6px);
   color: inherit;
   padding: 6px 8px;
@@ -330,7 +330,7 @@ function apply() {
 }
 .wf-edit-card :deep(.field textarea) { min-height: 60px; resize: vertical; font-family: var(--font-mono, monospace); }
 .wf-edit-card :deep(.toggle-line) { display: flex; align-items: center; gap: 6px; font-size: 12px; }
-.wf-edit-card :deep(.settings-advanced) { border-top: 1px solid color-mix(in srgb, var(--theme-main-text, #fff) 8%, transparent); padding-top: 8px; }
+.wf-edit-card :deep(.settings-advanced) { border-top: 1px solid var(--theme-main-border); padding-top: 8px; }
 .wf-edit-card :deep(.settings-advanced summary) { font-size: 11px; opacity: 0.65; cursor: pointer; }
 
 .wf-tool-checklist {
@@ -340,7 +340,7 @@ function apply() {
   gap: 2px;
   padding: 4px;
   border-radius: 7px;
-  background: rgba(0, 0, 0, 0.18);
+  background: var(--theme-main-subtle-background);
 }
 .wf-tool-check {
   display: flex;
@@ -351,7 +351,7 @@ function apply() {
   font-size: 12px;
   cursor: pointer;
 }
-.wf-tool-check:hover { background: rgba(255, 255, 255, 0.05); }
+.wf-tool-check:hover { background: var(--theme-main-soft-background); }
 .wf-tool-check input { margin: 0; }
 .wf-tool-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wf-tool-empty { margin: 0; padding: 4px; font-size: 11px; opacity: 0.5; }
