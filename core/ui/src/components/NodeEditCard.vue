@@ -338,25 +338,63 @@ function apply() {
 .wf-edit-card :deep(.settings-advanced summary) { font-size: 11px; opacity: 0.65; cursor: pointer; }
 
 .wf-tool-checklist {
-  max-height: 160px;
+  max-height: 168px;
   overflow: auto;
-  display: grid;
-  gap: 2px;
-  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 3px;
   border-radius: 7px;
   background: var(--theme-main-subtle-background);
 }
 .wf-tool-check {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 3px 6px;
+  gap: 7px;
+  padding: 4px 7px;
   border-radius: 5px;
   font-size: 12px;
   cursor: pointer;
+  line-height: 1.3;
 }
 .wf-tool-check:hover { background: var(--theme-main-soft-background); }
-.wf-tool-check input { margin: 0; }
-.wf-tool-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Small, restrained checkbox — the tool name is the focus, not the box. */
+.wf-tool-check input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: 0 0 auto;
+  width: 11px;
+  height: 11px;
+  margin: 0;
+  border-radius: 3px;
+  border: 1px solid color-mix(in srgb, var(--theme-main-text) 35%, transparent);
+  background: transparent;
+  cursor: pointer;
+  position: relative;
+  transition: background 0.12s, border-color 0.12s;
+}
+.wf-tool-check input[type="checkbox"]:checked {
+  background: var(--blue);
+  border-color: var(--blue);
+}
+.wf-tool-check input[type="checkbox"]:checked::after {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 0px;
+  width: 4px;
+  height: 7px;
+  border: solid color-mix(in srgb, var(--theme-backdrop-text) 92%, transparent);
+  border-width: 0 1.6px 1.6px 0;
+  transform: rotate(45deg);
+}
+.wf-tool-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
 .wf-tool-empty { margin: 0; padding: 4px; font-size: 11px; opacity: 0.5; }
 </style>
