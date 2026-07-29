@@ -108,6 +108,7 @@
         :allow-project-click="true"
         :allow-project-context-menu="!workflowMode"
         :allow-session-delete="!workflowMode"
+        :new-session-label="workflowMode ? '新建工作流' : '新建会话'"
         @select-session="workflowMode ? selectWorkflow($event) : selectSession($event)"
         @select-project="workflowMode ? selectWorkflowProject($event) : openProjectActions($event)"
         @new-session="workflowMode ? openWorkflowCreate() : createProjectSession($event)"

@@ -128,7 +128,7 @@
           :disabled="isProjectBusy(group.id)"
           :data-project-new="group.id"
           @click="runProjectAction(group.id, 'new-session')"
-        >{{ isProjectBusy(group.id) ? '正在创建…' : '新建会话' }}</button>
+        >{{ isProjectBusy(group.id) ? '正在创建…' : newSessionLabel }}</button>
         <button role="menuitem" :data-project-pin="group.id" @click="runProjectAction(group.id, 'pin')">
           {{ isPinned(group.id) ? '取消置顶' : '置顶项目' }}
         </button>
@@ -190,6 +190,8 @@ const props = withDefaults(
     projectSessionLimit?: number
     /** Show + button per project */
     allowProjectNewSession?: boolean
+    /** Label for the per-project new-session button (e.g. '新建工作流' in workflow mode). */
+    newSessionLabel?: string
     /** Show × delete button per project */
     allowProjectDelete?: boolean
     /** Show × delete button per session */
@@ -206,6 +208,7 @@ const props = withDefaults(
   {
     projectSessionLimit: 0,
     allowProjectNewSession: true,
+    newSessionLabel: '新建会话',
     allowProjectDelete: false,
     allowSessionDelete: false,
     allowProjectClick: false,
