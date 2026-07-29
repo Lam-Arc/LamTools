@@ -461,7 +461,6 @@ def create_core_agent_http_app(
             runner=workflow_runner,
             runtime_task_registry=runtime_task_registry,
             list_tool_specs=_list_tool_specs,
-            session_store=session_store,
         )
         app_state["workflow_store"] = workflow_store
         app_state["workflow_manager"] = workflow_manager
