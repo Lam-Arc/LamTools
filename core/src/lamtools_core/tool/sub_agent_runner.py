@@ -45,6 +45,7 @@ class KernelSubAgentRunner:
         session_prefix: str = "core-sub-agent",
         parent_event_sink: EventSink | None = None,
         checkpoint_coordinator: Any | None = None,
+        activated_mcp_servers: set[str] | None = None,
     ) -> None:
         self.work_root = Path(work_root)
         self.llm_client = llm_client
@@ -64,6 +65,7 @@ class KernelSubAgentRunner:
         self.session_prefix = str(session_prefix or "core-sub-agent")
         self.parent_event_sink = parent_event_sink
         self.checkpoint_coordinator = checkpoint_coordinator
+        self.activated_mcp_servers = activated_mcp_servers or set()
 
     async def run(
         self,
@@ -82,6 +84,7 @@ class KernelSubAgentRunner:
             mcp_caller=self.mcp_caller,
             mcp_tool_specs=self.mcp_tool_specs,
             disabled_tools=disabled_tools,
+            activated_mcp_servers=self.activated_mcp_servers,
         )
         agent_name = normalize_sub_session_agent_name(agent)
         child_sink = SubAgentEventForwardingSink(
@@ -227,6 +230,7 @@ class KernelSubAgentRunner:
             mcp_caller=self.mcp_caller,
             mcp_tool_specs=self.mcp_tool_specs,
             disabled_tools={SUB_AGENT_TOOL_NAME},
+            activated_mcp_servers=self.activated_mcp_servers,
         )
         tool_result = await approval_toolbox.execute(call)
         await child_sink.emit(CoreEvent(
@@ -306,6 +310,7 @@ class KernelSubAgentRunner:
             mcp_caller=self.mcp_caller,
             mcp_tool_specs=self.mcp_tool_specs,
             disabled_tools=disabled_tools,
+            activated_mcp_servers=self.activated_mcp_servers,
         )
         agent_name = normalize_sub_session_agent_name(agent)
         child_sink = SubAgentEventForwardingSink(

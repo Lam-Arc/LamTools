@@ -70,10 +70,6 @@ class AppServerClient(CoreAppServerClient):
         projects = response.get("projects")
         return projects if isinstance(projects, list) else []
 
-    async def pick_project_directory(self) -> str:
-        response = await self.request("project.directory.pick", {})
-        return str(response.get("path") or "")
-
     async def get_session(self, *, session_id: str) -> dict[str, Any]:
         response = await self.request("session.get", {"session_id": session_id})
         session = response.get("session")

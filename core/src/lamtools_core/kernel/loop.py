@@ -21,7 +21,7 @@ import logging
 import re
 import uuid
 import time as time_module
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, TYPE_CHECKING
 
 _logger = logging.getLogger(__name__)
@@ -345,6 +345,9 @@ class CoreLoopKernel:
         # 3. Kit on_run_start
         await self.kit.on_run_start(state, turn_input)
 
+        # 3b. SessionStart hook
+        await self._apply_session_start_hook(state, turn_input)
+
         # 4. Extend persisted conversation history with this user input.
         current_user_content = (
             turn_input.user_content
@@ -355,6 +358,9 @@ class CoreLoopKernel:
             history.append(ChatMessage(role="user", content=current_user_content))
         await self._save_checkpoint(state, history, full=True)
         _logger.info("[kernel:_run] checkpoint saved sid=%s", state.session_id)
+
+        # 4b. UserPromptSubmit hook
+        await self._apply_user_prompt_submit_hook(state, turn_input, current_user_content)
 
         steps: list[KernelStep] = []
         latest_message = ""
@@ -599,38 +605,47 @@ class CoreLoopKernel:
                 ]
                 if approval_calls:
                     approval_call = approval_calls[0]
-                    state.metadata["pending_approval"] = {
-                        "request_id": approval_call.id,
-                        "tool_call": approval_call.to_dict(),
-                        "response_index": index,
-                        "status": "waiting",
-                    }
-                    state.metadata["pending_waiting_request"] = {
-                        "request_kind": "permission",
-                        "tool_call_id": approval_call.id,
-                        "tool_name": approval_call.name,
-                        "arguments": approval_call.arguments,
-                        "metadata": dict(approval_call.metadata),
-                        "message": self._approval_request_message(approval_call),
-                    }
-                    step.metadata["pending_approval"] = state.metadata["pending_approval"]
-                    decision = "wait"
-                    step.decision = decision
-                    final_decision = decision
-                    await self.kit.writeback(state, turn, tool_results, VerificationResult(passed=True), decision)
-                    state.loop_state = decision
-                    state.turn_count += 1
-                    if self.policy.persist_steps:
-                        steps_log = state.metadata.setdefault("kernel_steps", [])
-                        steps_log.append(self._summarize_step(step))
-                    await self._save_checkpoint(state, history)
-                    await self._emit_tool_waiting_for_approval(
-                        state,
-                        approval_call,
-                        response_index=index,
-                    )
-                    await self._emit_approval_request(state, approval_call, response_index=index)
-                    break
+                    # PermissionRequest hook — allows hook-driven auto-approve / deny
+                    perm_hook_result = await self._apply_permission_request_hook(state, approval_call)
+                    if not approval_call.requires_approval:
+                        # Hook auto-approved the call — skip waiting gate, proceed
+                        pass
+                    elif perm_hook_result is not None:
+                        # Hook denied the call — treat as blocked
+                        blocked_results[approval_call.id] = perm_hook_result
+                    else:
+                        state.metadata["pending_approval"] = {
+                            "request_id": approval_call.id,
+                            "tool_call": approval_call.to_dict(),
+                            "response_index": index,
+                            "status": "waiting",
+                        }
+                        state.metadata["pending_waiting_request"] = {
+                            "request_kind": "permission",
+                            "tool_call_id": approval_call.id,
+                            "tool_name": approval_call.name,
+                            "arguments": approval_call.arguments,
+                            "metadata": dict(approval_call.metadata),
+                            "message": self._approval_request_message(approval_call),
+                        }
+                        step.metadata["pending_approval"] = state.metadata["pending_approval"]
+                        decision = "wait"
+                        step.decision = decision
+                        final_decision = decision
+                        await self.kit.writeback(state, turn, tool_results, VerificationResult(passed=True), decision)
+                        state.loop_state = decision
+                        state.turn_count += 1
+                        if self.policy.persist_steps:
+                            steps_log = state.metadata.setdefault("kernel_steps", [])
+                            steps_log.append(self._summarize_step(step))
+                        await self._save_checkpoint(state, history)
+                        await self._emit_tool_waiting_for_approval(
+                            state,
+                            approval_call,
+                            response_index=index,
+                        )
+                        await self._emit_approval_request(state, approval_call, response_index=index)
+                        break
                 parallel_names = set(self.policy.parallel_tool_names)
                 can_parallelize_named_tools = (
                     bool(parallel_names)
@@ -654,6 +669,11 @@ class CoreLoopKernel:
                         await self._emit_tool_started(state, call, response_index=index)
                     executable_calls = [call for call in turn.tool_calls if call.id not in blocked_results]
                     executed_results = await self._execute_tools_parallel(state, executable_calls) if executable_calls else []
+                    # PostToolUse / PostToolUseFailure hooks for parallel execution
+                    executed_results = [
+                        await self._apply_post_tool_hook(state, call, result)
+                        for call, result in zip(executable_calls, executed_results)
+                    ] if executable_calls else []
                     executed_by_id = {call.id: result for call, result in zip(executable_calls, executed_results)}
                     tool_results = [
                         blocked_results.get(call.id) or executed_by_id[call.id]
@@ -673,6 +693,8 @@ class CoreLoopKernel:
                             result = blocked_results[call.id]
                         else:
                             result = await self._execute_tool(state, call)
+                            # PostToolUse / PostToolUseFailure hook
+                            result = await self._apply_post_tool_hook(state, call, result)
                         tool_results.append(result)
                         step.tool_steps.append(RuntimeToolStep(call=call, result=result))
                         await self._emit_tool_finished(state, call, result, response_index=index)
@@ -893,6 +915,24 @@ class CoreLoopKernel:
                 else:
                     consecutive_failure_rounds = 0
 
+                # 5.9b Track MCP server activation from mcp_activate tool calls
+                for result in tool_results:
+                    if (
+                        result.name == "mcp_activate"
+                        and result.status == "ok"
+                        and isinstance(result.metadata, dict)
+                    ):
+                        server = str(result.metadata.get("activated_server") or "").strip()
+                        if server:
+                            activated = [
+                                s
+                                for s in state.metadata.get("activated_mcp_servers", [])
+                                if isinstance(s, str)
+                            ]
+                            if server not in activated:
+                                activated.append(server)
+                                state.metadata["activated_mcp_servers"] = activated
+
                 # 5.10 Verify (non-blocking: verification failure does NOT
                 #     trigger automatic repair retry. The model receives tool
                 #     results directly and self-corrects on the next turn.)
@@ -1045,6 +1085,9 @@ class CoreLoopKernel:
 
         # 7. Kit on_run_end
         await self.kit.on_run_end(state, result)
+
+        # 7b. Stop hook — emit before on_run_end so downstream can still use state
+        await self._apply_session_stop_hook(state, result)
 
         # 8. Emit final event
         await self._emit_terminal_event(state, result)
@@ -1954,6 +1997,7 @@ class CoreLoopKernel:
             event_name="PreToolUse",
             session_id=state.session_id,
             run_id=state.run_id,
+            tool_call_id=call.id,
             cwd=str(call.metadata.get("cwd") or ""),
             project_root=str(call.metadata.get("work_root") or call.metadata.get("project_root") or ""),
             metadata=dict(call.metadata),
@@ -1983,7 +2027,232 @@ class CoreLoopKernel:
             )
         if decision.audit_events:
             call.metadata["hook_audit"] = decision.audit_events
+        if decision.status_message:
+            await self._emit_hook_status(state, call.name, decision.status_message)
         return None
+
+    # ── Post‑tool hook (PostToolUse / PostToolUseFailure) ────────
+
+    def _tool_result_as_dict(self, result: ToolResult) -> dict[str, Any]:
+        """Export ToolResult fields into a plain dict for hook payload."""
+        return {
+            "call_id": result.call_id,
+            "name": result.name,
+            "status": result.status,
+            "content": result.content,
+            "error": result.error,
+        }
+
+    def _apply_tool_result_updates(self, result: ToolResult, updates: dict[str, Any]) -> ToolResult:
+        """Return a new ToolResult with fields merged from *updates*."""
+        return ToolResult(
+            call_id=result.call_id,
+            name=result.name,
+            status=str(updates.get("status") or result.status),
+            content=str(updates.get("content") or result.content),
+            error=str(updates.get("error") or result.error),
+            artifacts=result.artifacts,
+            usage=result.usage,
+            metadata={
+                **result.metadata,
+                **({"hook_updated_output": True} if updates else {}),
+            },
+        )
+
+    async def _apply_post_tool_hook(
+        self,
+        state: RuntimeState,
+        call: ToolCall,
+        result: ToolResult,
+    ) -> ToolResult:
+        if self.hook_engine is None:
+            return result
+        if result.status == "blocked":
+            # Tool was blocked at pre‑tool stage — never executed; skip post‑hook.
+            return result
+        event_name = (
+            "PostToolUse" if result.status == "ok"
+            else "PostToolUseFailure"
+        )
+        decision = await self.hook_engine.run(HookEvent(
+            event_name=event_name,
+            session_id=state.session_id,
+            run_id=state.run_id,
+            tool_call_id=call.id,
+            cwd=str(call.metadata.get("cwd") or ""),
+            project_root=str(call.metadata.get("work_root") or call.metadata.get("project_root") or ""),
+            metadata=dict(call.metadata),
+            tool_name=call.name,
+            tool_input=dict(call.arguments if isinstance(call.arguments, dict) else {}),
+            tool_result=self._tool_result_as_dict(result),
+            error=result.error,
+            error_type=result.metadata.get("error_type", ""),
+        ))
+        if decision.updated_output is not None:
+            result = self._apply_tool_result_updates(result, decision.updated_output)
+        if decision.additional_context:
+            call.metadata["hook_additional_context"] = decision.additional_context
+        if decision.audit_events:
+            call.metadata["hook_audit"] = decision.audit_events
+        if decision.status_message:
+            await self._emit_hook_status(state, call.name, decision.status_message)
+        if decision.decision == "block":
+            reason = decision.reason or "blocked by post‑tool hook"
+            return ToolResult(
+                call_id=call.id,
+                name=call.name,
+                status="blocked",
+                content=reason,
+                error=reason,
+                metadata={
+                    "hook_decision": "blocked",
+                    "hook_audit": decision.audit_events,
+                },
+            )
+        return result
+
+    # ── Session lifecycle hooks ──────────────────────────────────
+
+    async def _apply_session_start_hook(
+        self,
+        state: RuntimeState,
+        turn_input: RuntimeTurnInput,
+    ) -> None:
+        if self.hook_engine is None:
+            return
+        cwd = str(turn_input.metadata.get("cwd") or "")
+        project_root = str(turn_input.metadata.get("work_root") or turn_input.metadata.get("project_root") or "")
+        decision = await self.hook_engine.run(HookEvent(
+            event_name="SessionStart",
+            session_id=state.session_id,
+            run_id=state.run_id,
+            cwd=cwd,
+            project_root=project_root,
+            metadata=dict(turn_input.metadata),
+        ))
+        if decision.status_message:
+            await self._emit_hook_status(state, "", decision.status_message)
+
+    async def _apply_session_stop_hook(
+        self,
+        state: RuntimeState,
+        result: KernelResult,
+    ) -> None:
+        if self.hook_engine is None:
+            return
+        cwd = str(result.metadata.get("cwd") or "")
+        project_root = str(result.metadata.get("project_root") or "")
+        decision = await self.hook_engine.run(HookEvent(
+            event_name="Stop",
+            session_id=state.session_id,
+            run_id=state.run_id,
+            cwd=cwd,
+            project_root=project_root,
+            metadata={
+                "decision": result.decision,
+                "error": result.error,
+                "steps": len(result.steps),
+                **result.metadata,
+            },
+        ))
+        if decision.status_message:
+            await self._emit_hook_status(state, "", decision.status_message)
+
+    # ── UserPromptSubmit hook ────────────────────────────────────
+
+    async def _apply_user_prompt_submit_hook(
+        self,
+        state: RuntimeState,
+        turn_input: RuntimeTurnInput,
+        user_content: str,
+    ) -> None:
+        if self.hook_engine is None:
+            return
+        cwd = str(turn_input.metadata.get("cwd") or "")
+        project_root = str(turn_input.metadata.get("work_root") or turn_input.metadata.get("project_root") or "")
+        decision = await self.hook_engine.run(HookEvent(
+            event_name="UserPromptSubmit",
+            session_id=state.session_id,
+            run_id=state.run_id,
+            cwd=cwd,
+            project_root=project_root,
+            metadata=dict(turn_input.metadata),
+            user_message=user_content or "",
+        ))
+        if decision.status_message:
+            await self._emit_hook_status(state, "", decision.status_message)
+
+    # ── PermissionRequest hook ───────────────────────────────────
+
+    async def _apply_permission_request_hook(
+        self,
+        state: RuntimeState,
+        call: ToolCall,
+    ) -> ToolResult | None:
+        """Let hooks inspect / auto‑resolve a permission request.
+
+        Returns:
+            None  → no resolution; normal approval flow continues.
+            ToolResult  → block the call outright (hook denied).
+            In both cases the hook may have modified call.requires_approval.
+        """
+        if self.hook_engine is None:
+            return None
+        cwd = str(call.metadata.get("cwd") or "")
+        project_root = str(call.metadata.get("work_root") or call.metadata.get("project_root") or "")
+        decision = await self.hook_engine.run(HookEvent(
+            event_name="PermissionRequest",
+            session_id=state.session_id,
+            run_id=state.run_id,
+            tool_call_id=call.id,
+            cwd=cwd,
+            project_root=project_root,
+            metadata=dict(call.metadata),
+            tool_name=call.name,
+            tool_input=dict(call.arguments if isinstance(call.arguments, dict) else {}),
+            permission_request={
+                "tool_name": call.name,
+                "tool_call_id": call.id,
+                "arguments": call.arguments,
+                "permission_reason": call.metadata.get("hook_permission_reason", ""),
+            },
+        ))
+        # Auto‑approve: clear the requirement
+        if decision.permission_decision == "allow":
+            call.requires_approval = False
+            call.metadata["hook_permission_auto_approved"] = True
+        # Auto‑deny
+        if decision.permission_decision == "deny" or decision.decision == "block":
+            reason = decision.permission_decision_reason or decision.reason or "denied by permission hook"
+            return ToolResult(
+                call_id=call.id,
+                name=call.name,
+                status="blocked",
+                content=reason,
+                error=reason,
+                metadata={
+                    "hook_decision": "blocked",
+                    "hook_audit": decision.audit_events,
+                },
+            )
+        if decision.status_message:
+            await self._emit_hook_status(state, call.name, decision.status_message)
+        return None
+
+    # ── Hook status visibility ───────────────────────────────────
+
+    async def _emit_hook_status(self, state: RuntimeState, tool_name: str, message: str) -> None:
+        await self.event_sink.emit(CoreEvent(
+            name="runtime.hook_status",
+            category="progress",
+            payload={
+                "tool_name": tool_name,
+                "message": message,
+            },
+            session_id=state.session_id,
+            run_id=state.run_id,
+            tags=["hook", "status"],
+        ))
 
     async def _emit_final_stream_text_parts(
         self,

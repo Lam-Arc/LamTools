@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 
 @dataclass(frozen=True)
@@ -129,20 +130,15 @@ class SkillRegistry:
         return tuple(paths)
 
     def _candidate_skill_files(self, work_root: str | Path | None) -> list[Path]:
-        roots: list[Path] = []
-        if work_root:
-            root = Path(work_root).resolve()
-            roots.extend(
-                [
-                    root / ".codex",
-                    root / ".agents",
-                    root / ".claude",
-                ]
-            )
-
+        # LamTools skill roots.
+        # Global:  ~/.lam/skills/*/SKILL.md (one level deep)
+        # Project: {work_root}/.lam/**/SKILL.md (recursive)
+        global_roots: list[Path] = []
         home = Path.home()
-        roots.extend([home / ".codex", home / ".agents", home / ".claude"])
-        roots.extend(self._explicit_roots)
+        home_lam = home / ".lam"
+        if home_lam.is_dir():
+            global_roots.append(home_lam)
+        global_roots.extend(self._explicit_roots)
 
         seen: set[Path] = set()
         results: list[Path] = []
@@ -153,23 +149,19 @@ class SkillRegistry:
                 seen.add(resolved)
                 results.append(resolved)
 
-        if work_root:
-            wroot = Path(work_root).resolve()
-            # Non-recursive scan for SKILL.md at workspace root only
-            for p in wroot.glob("SKILL.md"):
-                _add_if_skill(p)
-            for p in wroot.glob(".opencode/skills/**/SKILL.md"):
-                _add_if_skill(p)
+        # Global skills: {root}/skills/*/SKILL.md (one level deep)
+        for root in global_roots:
+            if root.is_dir():
+                for p in root.glob("skills/*/SKILL.md"):
+                    _add_if_skill(p)
 
-        for root in roots:
-            if not root.is_dir():
-                continue
-            patterns = ["skills/**/SKILL.md"]
-            if root.name.startswith("."):
-                patterns.extend(["SKILL.md", "**/SKILL.md", "skill/**/SKILL.md", ".opencode/skills/**/SKILL.md"])
-            for pattern in patterns:
-                for path in root.glob(pattern):
-                    _add_if_skill(path)
+        # Project skills: {work_root}/.lam/**/SKILL.md (recursive)
+        if work_root:
+            lam_dir = Path(work_root).resolve() / ".lam"
+            if lam_dir.is_dir():
+                for p in lam_dir.rglob("SKILL.md"):
+                    _add_if_skill(p)
+
         return results
 
     def _read_skill(self, path: Path) -> Skill | None:
@@ -219,4 +211,41 @@ class SkillRegistry:
         return files
 
 
-__all__ = ["Skill", "SkillRegistry"]
+class SkillStateStore:
+    """Persistent enable/disable state for skills (mirrors PluginStateStore pattern)."""
+
+    def __init__(self, path: str | Path) -> None:
+        self.path = Path(path)
+
+    def _load(self) -> dict[str, Any]:
+        if not self.path.exists():
+            return {"skills": {}}
+        data = json.loads(self.path.read_text(encoding="utf-8-sig"))
+        return data if isinstance(data, dict) else {"skills": {}}
+
+    def _save(self, data: dict[str, Any]) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def is_enabled(self, name: str) -> bool:
+        skills = self._load().get("skills", {})
+        if not isinstance(skills, dict):
+            return True
+        raw = skills.get(name, {})
+        return bool(raw.get("enabled", True)) if isinstance(raw, dict) else True
+
+    def set_enabled(self, name: str, enabled: bool) -> None:
+        data = self._load()
+        skills = data.setdefault("skills", {})
+        if not isinstance(skills, dict):
+            skills = {}
+            data["skills"] = skills
+        entry = skills.setdefault(name, {})
+        if not isinstance(entry, dict):
+            entry = {}
+            skills[name] = entry
+        entry["enabled"] = bool(enabled)
+        self._save(data)
+
+
+__all__ = ["Skill", "SkillRegistry", "SkillStateStore"]

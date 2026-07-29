@@ -14,5 +14,8 @@ export default defineConfig({
     outDir: 'dist-core-app',
     emptyOutDir: true,
     chunkSizeWarningLimit: 1000,
+    rollupOptions: {
+      input: resolve(__dirname, 'index-core.html'),
+    },
   },
 });

@@ -1,11 +1,17 @@
 <template>
-  <SettingsShell
-    :sections="sections"
-    title="Core 设置"
-    :settings-theme-style="settingsThemeStyle"
-    @close="$emit('close')"
-  >
-    <template #default="{ activeSection }">
+  <Teleport to="body">
+    <div
+      class="settings-overlay"
+      @click.self="$emit('close')"
+    >
+      <div class="settings-card">
+        <SettingsShell
+          :sections="sections"
+          title="Core 设置"
+          :settings-theme-style="settingsThemeStyle"
+          @close="$emit('close')"
+        >
+          <template #default="{ activeSection }">
       <section v-if="activeSection === 'models'" class="settings-panel">
         <header class="settings-title">
           <h1>模型与供应商</h1>
@@ -207,6 +213,14 @@
         />
       </section>
 
+      <section v-else-if="activeSection === 'skills'" class="settings-panel">
+        <CoreSkillsEditor :request-rpc="requestRpc || defaultRequestRpc" />
+      </section>
+
+      <section v-else-if="activeSection === 'hooks'" class="settings-panel">
+        <CoreHooksEditor :request-rpc="requestRpc || defaultRequestRpc" />
+      </section>
+
       <section v-else class="settings-panel">
         <header class="settings-title">
           <h1>权限策略</h1>
@@ -215,13 +229,13 @@
           <h3>放行模式</h3>
           <div class="permission-list">
             <div v-for="tier in permissionTiers" :key="tier.id" class="permission-row">
-              <div class="permission-row-top">
-                <button type="button" class="permission-row-header" @click="expandedTier = expandedTier === tier.id ? null : tier.id">
+              <div class="permission-row-top" :class="{ active: permissionMode === tier.id }" @click="$emit('update-permission-mode', tier.id)" role="button" tabindex="0" :aria-pressed="permissionMode === tier.id ? 'true' : 'false'" :aria-label="'选择' + tier.label" @keydown.enter.prevent="$emit('update-permission-mode', tier.id)" @keydown.space.prevent="$emit('update-permission-mode', tier.id)">
+                <button type="button" class="permission-row-header" @click.stop="expandedTier = expandedTier === tier.id ? null : tier.id">
                   {{ tier.label }}
                 </button>
-                <button type="button" class="permission-radio" :class="{ active: permissionMode === tier.id }" @click="$emit('update-permission-mode', tier.id)" :aria-label="'选择' + tier.label">
+                <span class="permission-radio" :class="{ active: permissionMode === tier.id }" aria-hidden="true">
                   <span class="permission-radio-dot" />
-                </button>
+                </span>
               </div>
               <div v-if="expandedTier === tier.id" class="permission-tools">
                 <template v-if="tier.id === 'full_edit'">
@@ -237,14 +251,18 @@
       </section>
     </template>
   </SettingsShell>
+      </div>
+    </div>
+  </Teleport>
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { PROVIDER_PRESETS } from '../data/provider-presets'
 import { THEME_PRESETS } from '../data/theme-presets'
 import {
   gradientFromStops,
+  relativeLuminance,
   type ThemeArea,
   type ThemeData,
   type ThemePreset,
@@ -252,6 +270,8 @@ import {
 } from '../helpers/theme'
 import SettingsShell, { type SettingsSection } from './SettingsShell.vue'
 import ThemeEditor from './ThemeEditor.vue'
+import CoreSkillsEditor from './CoreSkillsEditor.vue'
+import CoreHooksEditor from './CoreHooksEditor.vue'
 
 export type CoreSettingsDensity = 'compact' | 'standard' | 'loose'
 
@@ -310,6 +330,7 @@ const props = defineProps<{
   contentWidth?: number
   allowEnvironmentImport?: boolean
   permissionMode?: 'read_only' | 'limited_edit' | 'full_edit'
+  requestRpc?: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>
 }>()
 
 const emit = defineEmits<{
@@ -339,6 +360,8 @@ const emit = defineEmits<{
 const sections: SettingsSection[] = [
   { id: 'models', label: '模型与供应商', icon: '◈' },
   { id: 'appearance', label: '界面', icon: '◐' },
+  { id: 'skills', label: 'Skills', icon: '✦' },
+  { id: 'hooks', label: 'Hooks', icon: '⌘' },
   { id: 'permissions', label: '权限', icon: '◇' },
 ]
 
@@ -361,6 +384,10 @@ const providerEditor = ref<ProviderEditor | null>(null)
 const modelEditor = ref<ModelEditor | null>(null)
 const noticeText = ref('')
 const expandedTier = ref<string | null>(null)
+const defaultRequestRpc = async (_method: string, _params?: Record<string, unknown>) => {
+  throw new Error('requestRpc not provided — connect CoreSettings to a CoreAppServerClient')
+}
+
 const permissionMode = computed(() => props.permissionMode || 'full_edit')
 const permissionTiers = [
   {
@@ -378,28 +405,34 @@ const permissionTiers = [
 ]
 const providerPresets = PROVIDER_PRESETS
 
-const settingsThemeStyle = computed(() => ({
-  '--settings-backdrop-background': gradientFromStops(
-    props.theme.backdropAngle,
-    props.theme.backdropStops,
-    1,
-  ),
-  '--settings-backdrop-text': props.theme.backdropText,
-  '--settings-main-background': gradientFromStops(
-    props.theme.mainAngle,
-    props.theme.mainStops,
-    props.theme.mainOpacity,
-  ),
-  '--settings-main-text': props.theme.mainText,
-  '--settings-card-background': 'color-mix(in srgb, var(--settings-main-text) 4%, transparent)',
-  '--settings-card-text': props.theme.mainText,
-  '--settings-control-background': gradientFromStops(
-    props.theme.controlAngle,
-    props.theme.controlStops,
-    props.theme.controlOpacity,
-  ),
-  '--settings-control-text': props.theme.controlText,
-}))
+const settingsThemeStyle = computed(() => {
+  const lightMain = relativeLuminance(props.theme.mainText) < 0.45
+  return {
+    '--settings-backdrop-background': gradientFromStops(
+      props.theme.backdropAngle,
+      props.theme.backdropStops,
+      1,
+    ),
+    '--settings-backdrop-text': props.theme.backdropText,
+    '--settings-main-background': gradientFromStops(
+      props.theme.mainAngle,
+      props.theme.mainStops,
+      props.theme.mainOpacity,
+    ),
+    '--settings-main-text': props.theme.mainText,
+    '--settings-card-background': 'color-mix(in srgb, var(--settings-main-text) 4%, transparent)',
+    '--settings-card-text': props.theme.mainText,
+    '--settings-control-background': gradientFromStops(
+      props.theme.controlAngle,
+      props.theme.controlStops,
+      props.theme.controlOpacity,
+    ),
+    '--settings-control-text': props.theme.controlText,
+    '--settings-panel-2': lightMain ? '#f0efeb' : '#1d1e1e',
+    '--settings-line': lightMain ? '#d4d0cc' : '#3b3a38',
+    '--settings-muted': lightMain ? '#8a8580' : '#a7a29b',
+  }
+})
 
 const themePreviewStyle = computed(() => ({
   background: gradientFromStops(props.theme.backdropAngle, props.theme.backdropStops, 1),
@@ -576,9 +609,54 @@ function presetsByGroup(group: ThemePreset['group']): ThemePreset[] {
 }
 
 const presets = THEME_PRESETS
+
+function onKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape') {
+    emit('close')
+  }
+}
+
+onMounted(() => document.addEventListener('keydown', onKeydown))
+onUnmounted(() => document.removeEventListener('keydown', onKeydown))
 </script>
 
 <style scoped>
+/* ── Overlay — full-viewport backdrop with centered card ── */
+.settings-overlay {
+  position: fixed;
+  inset: var(--titlebar-offset, 36px) 0 0 0;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+}
+
+.settings-card {
+  position: relative;
+  width: min(960px, calc(100vw - 48px));
+  max-height: calc(100dvh - var(--titlebar-offset, 36px) - 48px);
+  border: 1px solid color-mix(in srgb, var(--theme-main-text, #f2efeb) 12%, transparent);
+  border-radius: 16px;
+  background: var(--bg, #111111);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Responsive: full-screen on narrow viewports ── */
+@media (max-width: 640px) {
+  .settings-card {
+    width: 100vw;
+    max-height: calc(100dvh - var(--titlebar-offset, 36px));
+    border-radius: 0;
+  }
+}
+
+/* ── Existing settings editor styles ── */
 .settings-editor {
   padding: 18px 0;
   border-top: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 14%, transparent);
@@ -717,21 +795,34 @@ const presets = THEME_PRESETS
   display: flex;
   align-items: center;
   justify-content: space-between;
+  cursor: pointer;
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin: -4px -10px;
+  transition: background 0.12s ease;
+}
+
+.permission-row-top:hover {
+  background: color-mix(in srgb, var(--settings-main-text, #fff) 6%, transparent);
+}
+
+.permission-row-top.active {
+  background: color-mix(in srgb, var(--green) 10%, transparent);
 }
 
 .permission-row-header {
   border: 0;
-  padding: 6px 0;
+  padding: 0;
   background: transparent;
   color: var(--text);
   font: inherit;
   font-size: 14px;
   font-weight: 650;
   text-align: left;
-  cursor: pointer;
+  cursor: inherit;
 }
 
-.permission-row-header:hover {
+.permission-row-top:hover .permission-row-header {
   color: color-mix(in srgb, var(--blue) 70%, var(--text));
 }
 
@@ -742,11 +833,11 @@ const presets = THEME_PRESETS
   border: 2px solid color-mix(in srgb, var(--theme-main-text) 45%, transparent);
   background: transparent;
   padding: 0;
-  cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  cursor: default;
 }
 
 .permission-radio .permission-radio-dot {

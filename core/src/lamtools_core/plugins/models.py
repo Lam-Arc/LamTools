@@ -9,6 +9,25 @@ HookSource = Literal["user", "project", "plugin", "managed"]
 HookHandlerType = Literal["command", "http", "mcp", "prompt"]
 HookDecisionKind = Literal["allow", "block"]
 
+# ── canonical hook event names ──────────────────────────────
+HOOK_EVENT_PRE_TOOL_USE = "PreToolUse"
+HOOK_EVENT_POST_TOOL_USE = "PostToolUse"
+HOOK_EVENT_POST_TOOL_USE_FAILURE = "PostToolUseFailure"
+HOOK_EVENT_SESSION_START = "SessionStart"
+HOOK_EVENT_SESSION_STOP = "Stop"
+HOOK_EVENT_USER_PROMPT_SUBMIT = "UserPromptSubmit"
+HOOK_EVENT_PERMISSION_REQUEST = "PermissionRequest"
+
+_ALL_HOOK_EVENTS = (
+    HOOK_EVENT_SESSION_START,
+    HOOK_EVENT_USER_PROMPT_SUBMIT,
+    HOOK_EVENT_PRE_TOOL_USE,
+    HOOK_EVENT_PERMISSION_REQUEST,
+    HOOK_EVENT_POST_TOOL_USE,
+    HOOK_EVENT_POST_TOOL_USE_FAILURE,
+    HOOK_EVENT_SESSION_STOP,
+)
+
 
 @dataclass(frozen=True)
 class PluginManifest:
@@ -75,6 +94,15 @@ class HookEvent:
     metadata: dict[str, Any] = field(default_factory=dict)
     tool_name: str = ""
     tool_input: dict[str, Any] = field(default_factory=dict)
+    # ── PostToolUse / PostToolUseFailure ─────────────────────
+    tool_call_id: str = ""
+    tool_result: dict[str, Any] = field(default_factory=dict)
+    error: str = ""
+    error_type: str = ""
+    # ── UserPromptSubmit ─────────────────────────────────────
+    user_message: str = ""
+    # ── PermissionRequest ────────────────────────────────────
+    permission_request: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -86,3 +114,7 @@ class HookDecision:
     permission_decision: str = ""
     permission_decision_reason: str = ""
     audit_events: list[dict[str, Any]] = field(default_factory=list)
+    # ── PostToolUse 输出改写 ─────────────────────────────────
+    updated_output: dict[str, Any] | None = None
+    # ── 用户可见的状态消息 ──────────────────────────────────
+    status_message: str = ""

@@ -7,6 +7,14 @@ from .models import (
     HookHandler,
     PluginManifest,
     PluginResource,
+    # canonical hook event names
+    HOOK_EVENT_PRE_TOOL_USE,
+    HOOK_EVENT_POST_TOOL_USE,
+    HOOK_EVENT_POST_TOOL_USE_FAILURE,
+    HOOK_EVENT_SESSION_START,
+    HOOK_EVENT_SESSION_STOP,
+    HOOK_EVENT_USER_PROMPT_SUBMIT,
+    HOOK_EVENT_PERMISSION_REQUEST,
 )
 from .operations import build_plugin_operation_catalog
 from .registry import (
@@ -34,4 +42,12 @@ __all__ = [
     "default_project_plugin_root",
     "default_user_hooks_path",
     "default_user_plugin_root",
+    # canonical hook event names
+    "HOOK_EVENT_PRE_TOOL_USE",
+    "HOOK_EVENT_POST_TOOL_USE",
+    "HOOK_EVENT_POST_TOOL_USE_FAILURE",
+    "HOOK_EVENT_SESSION_START",
+    "HOOK_EVENT_SESSION_STOP",
+    "HOOK_EVENT_USER_PROMPT_SUBMIT",
+    "HOOK_EVENT_PERMISSION_REQUEST",
 ]

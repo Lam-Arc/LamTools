@@ -87,6 +87,9 @@ class AppPersistenceHost:
     async def load(self, db: AsyncSession, thread_id: str) -> dict[str, Any]:
         return await self.snapshot_store.load(db, thread_id)
 
+    async def list_thread_ids(self, db: AsyncSession) -> list[str]:
+        return await self.snapshot_store.list_thread_ids(db)
+
     async def rebuild(self, db: AsyncSession, thread_id: str) -> dict[str, Any]:
         events = await self.list_thread(db, thread_id=thread_id)
         return await self.snapshot_store.rebuild(db, thread_id, events)

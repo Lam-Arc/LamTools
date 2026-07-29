@@ -15,6 +15,7 @@ import {
   migrateThemeDefaults,
   gradientFromStops,
   themeToCSSVars,
+  relativeLuminance,
   addGradientStop,
   removeGradientStop,
   sortGradientStops,
@@ -26,26 +27,32 @@ export function useTheme(storageKey: string) {
   const theme = ref<ThemeData>({ ...DEFAULT_THEME })
 
   // --- CSS variable injection for settings page ---
-  const settingsThemeStyle = computed(() => ({
-    '--settings-backdrop-background': gradientFromStops(
-      theme.value.backdropAngle,
-      theme.value.backdropStops,
-      1,
-    ),
-    '--settings-backdrop-text': theme.value.backdropText,
-    '--settings-main-background': gradientFromStops(
-      theme.value.mainAngle,
-      theme.value.mainStops,
-      theme.value.mainOpacity,
-    ),
-    '--settings-main-text': theme.value.mainText,
-    '--settings-card-background': gradientFromStops(
-      theme.value.composerAngle,
-      theme.value.composerStops,
-      theme.value.composerOpacity,
-    ),
-    '--settings-card-text': theme.value.composerText,
-  }))
+  const settingsThemeStyle = computed(() => {
+    const lightMain = relativeLuminance(theme.value.mainText) < 0.45
+    return {
+      '--settings-backdrop-background': gradientFromStops(
+        theme.value.backdropAngle,
+        theme.value.backdropStops,
+        1,
+      ),
+      '--settings-backdrop-text': theme.value.backdropText,
+      '--settings-main-background': gradientFromStops(
+        theme.value.mainAngle,
+        theme.value.mainStops,
+        theme.value.mainOpacity,
+      ),
+      '--settings-main-text': theme.value.mainText,
+      '--settings-card-background': gradientFromStops(
+        theme.value.composerAngle,
+        theme.value.composerStops,
+        theme.value.composerOpacity,
+      ),
+      '--settings-card-text': theme.value.composerText,
+      '--settings-panel-2': lightMain ? '#f0efeb' : '#1d1e1e',
+      '--settings-line': lightMain ? '#d4d0cc' : '#3b3a38',
+      '--settings-muted': lightMain ? '#8a8580' : '#a7a29b',
+    }
+  })
 
   // --- Preview styles ---
   const themePreviewStyle = computed(() => ({

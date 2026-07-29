@@ -589,41 +589,6 @@ async def test_cli_delete_uses_app_server_session_delete(monkeypatch, capsys):
 
 
 @pytest.mark.asyncio
-async def test_cli_pick_directory_uses_app_server_project_directory_pick(monkeypatch, capsys):
-    calls = []
-
-    class FakeAppServerClient:
-        def __init__(self, base_url):
-            calls.append(("init", base_url))
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *args):
-            calls.append(("exit",))
-
-        async def connect(self, *, thread_id=None, last_seen_seq=0):
-            calls.append(("connect", thread_id, last_seen_seq))
-
-        async def pick_project_directory(self):
-            calls.append(("project.directory.pick",))
-            return "E:\\Picked"
-
-    monkeypatch.setattr("writer_cli.__main__.AppServerClient", FakeAppServerClient)
-
-    result = await cmd_pick_directory(SimpleNamespace(base_url="http://writer.test"))
-
-    assert result == 0
-    assert calls == [
-        ("init", "http://writer.test"),
-        ("connect", None, 0),
-        ("project.directory.pick",),
-        ("exit",),
-    ]
-    assert "E:\\Picked" in capsys.readouterr().out
-
-
-@pytest.mark.asyncio
 async def test_cli_compact_executes_app_server_command(monkeypatch, capsys):
     calls = []
 

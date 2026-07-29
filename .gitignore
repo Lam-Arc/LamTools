@@ -61,9 +61,30 @@ members/writer/frontend/src-tauri/target/
 members/writer/frontend/src-tauri/gen/
 members/writer/frontend/.electron-app-stage/
 .acceptance/
+core/desktop/src-tauri/target/
+core/desktop/src-tauri/lamcore-backend/
 
 data/
 .codex-tmp/
 .tmp/
 .playwright-mcp/
 .zcode/plans/
+
+# Root-level runtime/debug artifacts (not project code)
+/test-blog-project/
+/test-mod-site/
+/test-website-demo/
+/test-website-demo2/
+/test-tool-result-demo/
+/check-port.ps1
+/kill-lamcore.ps1
+/kill-port.ps1
+/start-core.bat
+/playwright-verify.js
+/playwright-verify-*.png
+/test-arrange-*.png
+/verify-*.png
+/writer-*.png
+/xfyun-*.png
+/小说.txt
+/睡前故事_月亮摇篮曲.md

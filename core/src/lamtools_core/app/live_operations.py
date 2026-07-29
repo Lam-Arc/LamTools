@@ -36,6 +36,7 @@ from .operation_catalog import OperationCatalog, OperationHandler, OperationRequ
 from .operation_groups import CORE_WORKBENCH_OPERATION_NAMES
 from .persistence_host import AppPersistenceHost
 from .queue_state import (
+    ACTIVE_TURN_STATUSES,
     build_queue_guidance_plan,
     build_queue_update_plan,
     effective_thread_status,
@@ -562,6 +563,8 @@ async def handle_turn_start_operation(
         "active_tier": resolved["active_tier"],
         "tier_tools": resolved["tier_tools"],
         "active_mode": resolved["active_mode"],
+        "allow_agent_install_skill": resolved.get("allow_agent_install_skill", False),
+        "allow_agent_create_hooks": resolved.get("allow_agent_create_hooks", False),
         "model_id": str(params.get("model_id") or params.get("modelId") or ""),
         "thinking_enabled": params.get("thinking_enabled") if isinstance(params.get("thinking_enabled"), bool) else None,
         "thinking_budget": params.get("thinking_budget") if isinstance(params.get("thinking_budget"), int) else None,
@@ -649,6 +652,8 @@ async def _resolve_turn_approval_policy(*, context: "CoreLiveContext", params: d
         "active_tier": None,
         "tier_tools": None,
         "active_mode": active_mode,
+        "allow_agent_install_skill": False,
+        "allow_agent_create_hooks": False,
     }
     if explicit is not None:
         default_result["approval_policy"] = "auto_approve" if explicit == "auto_approve" else "require"
@@ -674,11 +679,15 @@ async def _resolve_turn_approval_policy(*, context: "CoreLiveContext", params: d
     active_tier: PermissionMode = permission_mode  # type: ignore[assignment]
     tier_tools = _load_tier_tools(context)
     approval_policy = "auto_approve" if active_tier == "full_edit" else "require"
+    allow_agent_install_skill = bool(value.get("allow_agent_install_skill"))
+    allow_agent_create_hooks = bool(value.get("allow_agent_create_hooks"))
     return {
         "approval_policy": approval_policy,
         "active_tier": active_tier,
         "tier_tools": tier_tools,
         "active_mode": active_mode,
+        "allow_agent_install_skill": allow_agent_install_skill,
+        "allow_agent_create_hooks": allow_agent_create_hooks,
     }
 
 
@@ -1653,6 +1662,8 @@ async def _dispatch_next_queue_item(
                 "active_tier": resolved["active_tier"],
                 "tier_tools": resolved["tier_tools"],
                 "active_mode": resolved["active_mode"],
+                "allow_agent_install_skill": resolved.get("allow_agent_install_skill", False),
+                "allow_agent_create_hooks": resolved.get("allow_agent_create_hooks", False),
                 **prepared.runtime_extras,
                 **materialized.runtime_extras,
             }
@@ -1734,6 +1745,88 @@ async def _reconcile_cancelled_runtime_state(
     state.loop_state = "failed"
     state.metadata.pop("pending_approval", None)
     await store.save(state)
+
+
+async def recover_stale_active_turns(*, context: "CoreLiveContext") -> int:
+    """Startup reaper mirroring ``ArrangeJobStore.recover_running``.
+
+    An unexpected shutdown can leave a turn durably marked ``running`` /
+    ``waiting`` / ``interrupting`` in the snapshot (the ``turn/accepted`` +
+    ``running`` events commit before any terminal status is written). On
+    restart the in-memory registry is empty, so the durable-snapshot guard in
+    ``handle_turn_start_operation`` blocks every subsequent ``turn.start`` on
+    that thread with "active turn already exists". This writes a ``cancelled``
+    terminal run-item for every leftover active turn and reconciles the
+    runtime state, unblocking the thread. Best-effort: never raises.
+    """
+    try:
+        async with context.session_factory() as db:
+            thread_ids = await context.persistence.list_thread_ids(db)
+    except BaseException:
+        _logger.exception("[live:recover] failed to enumerate threads")
+        return 0
+
+    recovered = 0
+    for thread_id in thread_ids:
+        async def write(db: AsyncSession, *, thread_id: str = thread_id) -> list[tuple[str, AppEventEnvelope]]:
+            events: list[tuple[str, AppEventEnvelope]] = []
+            seen: set[str] = set()
+            while True:
+                snapshot = await context.persistence.load(db, thread_id)
+                active = latest_active_turn_id(snapshot)
+                if not active or active in seen:
+                    break
+                seen.add(active)
+                event = await _append_run_item(
+                    db,
+                    context=context,
+                    event=RunItemEvent(
+                        kind="status",
+                        thread_id=thread_id,
+                        event_id=f"{active}:recovered",
+                        run_id=active,
+                        turn_id=active,
+                        item_id=f"{active}:recovered",
+                        status="cancelled",
+                        payload={
+                            "type": "turn",
+                            "status": "cancelled",
+                            "raw_end_reason": "unexpected_shutdown",
+                            "message": "Recovered after unexpected shutdown",
+                        },
+                    ),
+                )
+                events.append((active, event))
+                if len(events) > 50:  # guard against a runaway loop
+                    break
+            return events
+
+        try:
+            items = await context.persistence.write(write)
+        except BaseException:
+            _logger.exception("[live:recover] failed thread_id=%s", thread_id)
+            continue
+        for turn_id, event in items:
+            try:
+                await _persist_cancelled_runtime_state(
+                    context=context, thread_id=thread_id, turn_id=turn_id
+                )
+            except BaseException:
+                _logger.exception(
+                    "[live:recover] runtime-state reconcile failed thread_id=%s turn_id=%s",
+                    thread_id, turn_id,
+                )
+            try:
+                await context.hub.publish(event)
+            except BaseException:
+                pass
+        recovered += len(items)
+    if recovered:
+        _logger.info(
+            "[live:recover] recovered %d stale active turn(s) after unexpected shutdown",
+            recovered,
+        )
+    return recovered
 
 
 def _turn_is_terminal(snapshot: dict[str, Any], turn_id: str) -> bool:

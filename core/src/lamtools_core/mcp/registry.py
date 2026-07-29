@@ -33,8 +33,26 @@ class MCPToolRegistry:
         self._tools_by_name: dict[str, MCPTool] = {}
 
     @property
+    def server_names(self) -> list[str]:
+        return list(self._clients.keys())
+
+    @property
     def tools(self) -> list[MCPTool]:
         return list(self._tools_by_name.values())
+
+    def tool_summary(self, server_name: str) -> str:
+        tools = [t for t in self._tools_by_name.values() if t.server == server_name]
+        if not tools:
+            available = self.server_names
+            return (
+                f"MCP server '{server_name}' not found. "
+                f"Available servers: {', '.join(available) if available else 'none'}"
+            )
+        lines = [f"[MCP:{server_name}] {len(tools)} tools available:"]
+        for tool in tools:
+            desc = str(tool.description or tool.name).strip()
+            lines.append(f"  {tool.function_name} — {desc}")
+        return "\n".join(lines)
 
     async def load(self) -> None:
         configs = self.config_loader(self.work_root) if self.config_loader else load_mcp_server_configs(

@@ -31,12 +31,35 @@
     <!-- Main content -->
     <main class="settings-main">
       <slot name="notice" />
-      <div class="settings-content">
+      <div class="settings-content" :key="activeSection">
         <slot :activeSection="activeSection" />
       </div>
     </main>
   </div>
 </template>
+
+<style scoped>
+.settings-content {
+  animation: contentEnter 260ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes contentEnter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-content {
+    animation: none;
+  }
+}
+</style>
 
 <script setup lang="ts">
 /**

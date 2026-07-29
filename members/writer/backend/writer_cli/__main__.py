@@ -143,14 +143,6 @@ async def cmd_health(args: argparse.Namespace) -> int:
     return 0
 
 
-async def cmd_pick_directory(args: argparse.Namespace) -> int:
-    async with AppServerClient(_base_url(args)) as client:
-        await client.connect()
-        path = await client.pick_project_directory()
-    print(path)
-    return 0
-
-
 async def cmd_project_create(args: argparse.Namespace) -> int:
     work_root = str(args.work_root or "").strip()
     if not work_root:
@@ -638,8 +630,6 @@ def build_parser() -> argparse.ArgumentParser:
     project_create.add_argument("--work-root", required=True)
     project_create.set_defaults(func=cmd_project_create)
     project_sub.add_parser("list", help="List projects").set_defaults(func=cmd_project_list)
-    project_pick = project_sub.add_parser("pick-directory", help="Open the local directory picker")
-    project_pick.set_defaults(func=cmd_pick_directory)
 
     plugin_parser = sub.add_parser("plugin", help="Plugin utilities")
     plugin_sub = plugin_parser.add_subparsers(dest="plugin_command", required=True)

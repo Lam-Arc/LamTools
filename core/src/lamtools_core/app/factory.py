@@ -5,9 +5,13 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, Callable
 
 from fastapi import APIRouter, FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
 
 from ..member import MemberManifest, MemberRegistry
 
@@ -41,6 +45,7 @@ def create_app(
     on_shutdown: list[Callable] | None = None,
     enable_core_routes: bool = False,
     health_payload: dict[str, Any] | Callable[[], dict[str, Any]] | None = None,
+    frontend_dir: Path | str | None = None,
 ) -> FastAPI:
     """Create and configure the LamTools Core FastAPI application.
 
@@ -56,6 +61,11 @@ def create_app(
         health_payload: Custom payload for /api/health endpoint. Can be a
             dict (returned directly) or a callable (called per request).
             If not provided, returns {"status": "ok"}.
+        frontend_dir: When provided, mount the directory as the SPA frontend
+            root.  ``/assets/`` is served via ``StaticFiles`` and every other
+            unmatched path falls back to ``index.html`` so that client-side
+            routing (Vue Router history mode) works correctly.  API routes
+            always take precedence over the catch-all.
 
     Returns:
         Configured FastAPI application instance.
@@ -81,6 +91,15 @@ def create_app(
         title=title,
         version=version,
         lifespan=lambda app: _lifespan(app, startup_hooks, shutdown_hooks),
+    )
+
+    # Allow all origins in Tauri/desktop mode (localhost webview).
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
     )
 
     # --- Core routes ---
@@ -116,7 +135,66 @@ def create_app(
     # Store registry on app state for external access
     app.state.member_registry = registry
 
+    # --- Serve frontend SPA (desktop / packaged mode) ---
+    # Only mount static assets here.  The SPA fallback catch-all must be
+    # registered *after* every API route, so the caller is responsible for
+    # calling ``add_spa_fallback(app, frontend_dir)`` at the very end.
+    if frontend_dir is not None:
+        _mount_frontend_assets(app, Path(frontend_dir))
+
+    app.state._frontend_dir = str(Path(frontend_dir)) if frontend_dir else None
+
     return app
 
 
-__all__ = ["create_app"]
+def add_spa_fallback(app: FastAPI, frontend_dir: Path | str) -> None:
+    """Register the SPA catch-all route — call *after* all API routes.
+
+    Every unmatched GET request returns ``index.html`` (or ``index-core.html``)
+    so that Vue Router (history mode) can handle client-side navigation.
+    """
+    resolved = Path(frontend_dir).resolve()
+    index_path = resolved / "index.html"
+    if not index_path.is_file():
+        index_path = resolved / "index-core.html"
+    if not index_path.is_file():
+        raise FileNotFoundError(
+            f"Neither index.html nor index-core.html found in {resolved}"
+        )
+    _index_html = index_path.read_text(encoding="utf-8")
+
+    @app.get("/{filename:path}", include_in_schema=False)
+    async def _spa_fallback(filename: str) -> HTMLResponse:
+        # Try to serve as a static file first (non-/assets files like favicon).
+        candidate = resolved / filename
+        if candidate.is_file():
+            return FileResponse(str(candidate))
+        return HTMLResponse(content=_index_html)
+
+
+def _mount_frontend_assets(app: FastAPI, frontend_path: Path) -> None:
+    """Mount frontend static assets (JS, CSS, images) and the root route."""
+    resolved = frontend_path.resolve()
+    if not resolved.is_dir():
+        raise FileNotFoundError(f"Frontend directory not found: {resolved}")
+
+    index_path = resolved / "index.html"
+    if not index_path.is_file():
+        index_path = resolved / "index-core.html"
+    if not index_path.is_file():
+        raise FileNotFoundError(f"No index page found in frontend directory: {resolved}")
+
+    _index_html = index_path.read_text(encoding="utf-8")
+
+    # -- Static assets (JS / CSS / images / fonts) -----------------
+    assets_dir = resolved / "assets"
+    if assets_dir.is_dir():
+        app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="frontend_assets")
+
+    # -- Root ------------------------------------------------------
+    @app.get("/", include_in_schema=False)
+    async def _serve_root() -> HTMLResponse:
+        return HTMLResponse(content=_index_html)
+
+
+__all__ = ["add_spa_fallback", "create_app"]

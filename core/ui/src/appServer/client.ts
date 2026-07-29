@@ -163,7 +163,7 @@ export async function fetchAppServerToken(apiBase: string, tokenPath = '/api/app
 }
 
 export function appServerUrl(apiBase: string, options: { path?: string; token?: string } = {}): string {
-  const base = apiBase || window.location.origin
+  const base = apiBase || (typeof window !== 'undefined' && (window as any).__LAMTOOLS_API_BASE__) || window.location.origin
   const url = new URL(options.path || '/api/core/app-server', base)
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
   if (options.token) {

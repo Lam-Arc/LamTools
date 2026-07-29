@@ -648,14 +648,14 @@ def resolve_command_shell() -> CommandShell:
 def command_shell_prompt() -> str:
     shell = resolve_command_shell()
     if shell.kind == "git-bash":
-        syntax = "Use Bash syntax and Unix commands. Do not use PowerShell cmdlets or Windows PowerShell quoting."
+        syntax = "使用 Bash 语法和 Unix 命令。"
     elif shell.kind == "direct":
-        syntax = "Commands are executed directly without shell expansion. Avoid shell-only pipelines and redirection."
+        syntax = "命令直接执行，无 shell 扩展。避免使用仅 shell 支持的管道和重定向。"
     elif shell.kind == "pwsh":
-        syntax = "Use PowerShell 7 syntax. Do not assume Windows PowerShell 5.1 limitations or Bash syntax."
+        syntax = "使用 PowerShell 7 语法。不要假设 Windows PowerShell 5.1 限制或 Bash 语法。"
     else:
-        syntax = "Use Windows PowerShell 5.1 syntax. Do not use PowerShell 7-only operators such as && or Bash syntax."
-    return f"[Command Shell]\nrun_command uses {shell.name} ({shell.executable}). {syntax}"
+        syntax = "使用 Windows PowerShell 5.1 语法。不要使用 PowerShell 7 专有操作符（如 &&）或 Bash 语法。"
+    return f"[命令 Shell]\nrun_command 使用 {shell.name}（{shell.executable}）。{syntax}"
 
 
 def _powershell_argv(command: str, *, executable: str = "powershell.exe") -> list[str]:

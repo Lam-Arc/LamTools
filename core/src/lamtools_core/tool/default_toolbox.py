@@ -84,6 +84,7 @@ DEFAULT_TOOL_PERMISSIONS: dict[str, PermissionTier] = {
     "web_fetch": ASK_USER,
     "browser_check": AUTO_ALLOW,
     "mcp_tool": ASK_USER,
+    "mcp_activate": AUTO_ALLOW,
     SUB_AGENT_TOOL_NAME: AUTO_ALLOW,
     "write_checklist": AUTO_ALLOW,
     "update_checklist": AUTO_ALLOW,
@@ -107,6 +108,7 @@ DEFAULT_TOOL_ORDER: tuple[str, ...] = (
     "web_search",
     "web_fetch",
     "browser_check",
+    "mcp_activate",
     "mcp_tool",
     SUB_AGENT_TOOL_NAME,
     "write_checklist",
@@ -132,6 +134,7 @@ DEFAULT_TOOL_CATEGORIES: dict[str, str] = {
     "web_fetch": "web",
     "browser_check": "browser",
     "mcp_tool": "mcp",
+    "mcp_activate": "mcp",
     SUB_AGENT_TOOL_NAME: "agent",
     "write_checklist": "control",
     "update_checklist": "control",
@@ -191,6 +194,9 @@ DEFAULT_TOOL_FAILURE_MODES: dict[str, list[dict[str, str]]] = {
         {"type": "file_protocol_blocked", "message": "Access to file: protocol is blocked"},
         {"type": "fetch_failed", "message": "Failed to fetch URL"},
     ],
+    "mcp_activate": [
+        {"type": "server_not_found", "message": "MCP server not found"},
+    ],
     "mcp_tool": [
         {"type": "mcp_error", "message": "MCP TOOL ERROR: {reason}"},
         {"type": "tool_not_found", "message": "MCP tool not found"},
@@ -218,6 +224,7 @@ DEFAULT_TOOL_RECOVERY: dict[str, str] = {
     "web_search": "Retry with simpler query, try different search terms",
     "web_fetch": "Check URL validity, try alternative URL",
     "browser_check": "Use local static server with http://127.0.0.1:<port>/ instead of file://",
+    "mcp_activate": "Check the server name against available MCP servers; use exact names listed in the system prompt.",
     "mcp_tool": "Check tool name and arguments, verify MCP server status",
 }
 
@@ -405,6 +412,19 @@ DEFAULT_TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
                 "expect": {"type": "string", "description": "Expected text"},
             },
             ["url"],
+        ),
+    },
+    {
+        "name": "mcp_activate",
+        "description": (
+            "Activate an MCP (Model Context Protocol) tool server to gain access to its full tool set. "
+            "Call this first when you need browser automation or other MCP-provided tools. "
+            "The server's full tool definitions will be available on the next turn. "
+            "Returns a complete list of available tools from that server."
+        ),
+        "input_schema": _schema(
+            {"server_name": {"type": "string", "description": "Name of the MCP server to activate (e.g. 'playwright')"}},
+            ["server_name"],
         ),
     },
     {
@@ -680,6 +700,7 @@ class CoreToolbox:
         active_tier: "PermissionMode | None" = None,
         tier_tools: "TierTools | None" = None,
         load_tools: LoadTools | None = None,
+        activated_mcp_servers: set[str] | None = None,
     ) -> None:
         self.work_root = Path(work_root).resolve()
         self.work_root.mkdir(parents=True, exist_ok=True)
@@ -692,6 +713,7 @@ class CoreToolbox:
         # FIXME: web_search 暂不上线（bug 较多），默认禁用
         self.disabled_tools.add("web_search")
         self.load_tools = load_tools or {}
+        self.activated_mcp_servers = activated_mcp_servers or set()
         self.tool_permissions = dict(DEFAULT_TOOL_PERMISSIONS)
         self.skill_registry = skill_registry or SkillRegistry(explicit_roots=self.loaded_skill_roots)
         self._dynamic_mcp_tool_names = {spec.name for spec in mcp_tool_specs or [] if spec.name.startswith("mcp__")}
@@ -744,6 +766,19 @@ class CoreToolbox:
                 # Build exclude set = all tool names NOT in allowed set
                 all_names = {spec.name for spec in self.tool_specs()}
                 effective_exclude |= (all_names - allowed)
+        # Filter out MCP tools from non-activated servers
+        # Activated servers have their full mcp__{server}__* tools exposed;
+        # unactivated servers only expose the mcp_activate gateway tool.
+        for spec in self.tool_specs():
+            name = spec.name
+            if not name.startswith("mcp__"):
+                continue
+            # name format: mcp__{server}__{tool_name}
+            parts = name.split("__", 2)
+            if len(parts) >= 2:
+                server = parts[1]
+                if server not in self.activated_mcp_servers:
+                    effective_exclude.add(name)
         return core_model_tools(self.tool_specs(), include_tools=include_tools, exclude_tools=effective_exclude or None)
 
     def skill_index(self) -> str:
@@ -823,6 +858,41 @@ class CoreToolbox:
 
         async def call_mcp(call: ToolCall) -> ToolResult:
             return await execute_mcp_tool_call(call, caller=self.mcp_caller)
+
+        async def activate_mcp(call: ToolCall) -> ToolResult:
+            args = call.arguments if isinstance(call.arguments, dict) else {}
+            server_name = str(args.get("server_name") or "").strip()
+            if not server_name:
+                return ToolResult(
+                    call_id=call.id,
+                    name=call.name,
+                    status="failed",
+                    error="Missing 'server_name' argument",
+                )
+            if self.mcp_caller is None:
+                return ToolResult(
+                    call_id=call.id,
+                    name=call.name,
+                    status="failed",
+                    error="MCP tool caller not available",
+                )
+            if not hasattr(self.mcp_caller, "tool_summary"):
+                return ToolResult(
+                    call_id=call.id,
+                    name=call.name,
+                    status="failed",
+                    error="MCP registry does not support tool summaries",
+                )
+            summary = self.mcp_caller.tool_summary(server_name)
+            not_found = "not found" in summary.lower() and "available servers:" in summary.lower()
+            return ToolResult(
+                call_id=call.id,
+                name=call.name,
+                status="failed" if not_found else "ok",
+                content=summary,
+                error="" if not not_found else f"MCP server '{server_name}' not found",
+                metadata={"activated_server": server_name} if not not_found else {},
+            )
 
         async def load_skill(call: ToolCall) -> ToolResult:
             args = call.arguments if isinstance(call.arguments, dict) else {}
@@ -976,6 +1046,7 @@ class CoreToolbox:
             "web_fetch": make_web_fetch_handler(str(self.work_root)),
             "browser_check": make_browser_check_handler(str(self.work_root)),
             "mcp_tool": call_mcp,
+            "mcp_activate": activate_mcp,
             SUB_AGENT_TOOL_NAME: call_sub_agent,
             "write_checklist": _write_checklist_handler,
             "update_checklist": _update_checklist_handler,

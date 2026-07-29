@@ -17,7 +17,10 @@
       <!-- User message -->
       <div v-else-if="msg.role === 'user'" class="user-row">
         <div class="user-stack">
-          <div class="user-bubble">{{ msg.content }}</div>
+          <div class="user-bubble">
+            <TypewriterText v-if="typingMessageIds?.has(msg.id)" :text="msg.content" />
+            <template v-else>{{ msg.content }}</template>
+          </div>
           <div v-if="attachmentParts(msg).length" class="message-attachment-list" aria-label="消息附件">
             <div
               v-for="part in attachmentParts(msg)"
@@ -1454,6 +1457,7 @@
 import type { CoreAttachment, CoreMessage, MessagePart, MessagePartStatus } from '../types'
 import { ref, watch } from 'vue'
 import MarkdownRenderer from './MarkdownRenderer.vue'
+import TypewriterText from './TypewriterText.vue'
 import { autoFollowScrollDirective as vAutoFollowScroll } from '../directives/autoFollowScroll'
 
 defineOptions({ name: 'ChatThread' })
@@ -1473,10 +1477,13 @@ const props = withDefaults(
     assistantLabel?: string
     /** Set of message ids whose process section is expanded */
     processExpandedIds?: Set<string>
+    /** Set of message ids that should play a typewriter reveal */
+    typingMessageIds?: Set<string>
   }>(),
   {
     assistantLabel: 'Assistant',
     processExpandedIds: () => new Set(),
+    typingMessageIds: () => new Set(),
   },
 )
 

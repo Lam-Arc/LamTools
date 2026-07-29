@@ -106,6 +106,7 @@ export { default as StageMediaPreview } from './components/StageMediaPreview.vue
 export { default as StageBrowser } from './components/StageBrowser.vue';
 export { default as FileTreePanel } from './components/FileTreePanel.vue';
 export { default as FileTreeNode } from './components/FileTreeNode.vue';
+export { default as FolderBrowserDialog } from './components/FolderBrowserDialog.vue';
 export type {
   CoreSettingsDensity,
   CoreSettingsModel,

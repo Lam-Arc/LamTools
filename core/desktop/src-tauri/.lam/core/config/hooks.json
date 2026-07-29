@@ -3,24 +3,88 @@
  *
  * 修改后重启 LamCore 生效。
  *
- * 事件: PreToolUse（调工具前）
- * 处理方式:
- *   command — 执行本地命令
- *   http    — 发 HTTP 请求  
- *   mcp     — 调另一个 MCP 工具
- *   prompt  — 动态注入提示词
+ * 支持的 7 个事件:
+ *   SessionStart         — 会话开始时触发
+ *   UserPromptSubmit     — 用户提交 prompt 后触发
+ *   PreToolUse           — 工具调用执行前触发
+ *   PermissionRequest    — 工具需要审批时触发
+ *   PostToolUse          — 工具执行成功后触发
+ *   PostToolUseFailure   — 工具执行失败后触发
+ *   Stop                 — 会话结束时触发
  *
- * 示例（取消注释即可启用）:
+ * 处理方式 (handler.type):
+ *   command — 执行本地命令（JSON payload 通过 stdin，结果从 stdout 读取）
+ *   http    — 发 HTTP POST 请求
+ *   mcp     — 调另一个 MCP 工具
+ *   prompt  — 动态注入提示词（不调用外部进程）
+ *
+ * Hook 返回的 JSON 字段:
+ *   decision: "allow" | "block"
+ *   reason: 阻断原因说明
+ *   updatedInput: PreToolUse 改写工具入参
+ *   updatedOutput: PostToolUse 改写工具输出
+ *   additionalContext: 注入附加上下文
+ *   permissionDecision: "allow" | "ask_user" | "deny"
+ *   statusMessage: 用户可见的状态提示
+ *
+ * ====== 示例配置（取消注释即可启用） ======
  *
  * {
  *   "hooks": {
+ *     "SessionStart": [{
+ *       "matcher": "*",
+ *       "hooks": [{
+ *         "type": "prompt",
+ *         "prompt": "会话已开始。工作目录: ${PROJECT_ROOT}。请优先检查 .lamtools/ 配置。"
+ *       }]
+ *     }],
  *     "PreToolUse": [{
- *       "id": "log-every-tool",
- *       "handler": {
+ *       "matcher": "run_command",
+ *       "hooks": [{
  *         "type": "command",
- *         "command": "echo",
- *         "timeout": 1
- *       }
+ *         "command": "python .lamtools/hooks/validate_command.py",
+ *         "timeout": 5,
+ *         "statusMessage": "验证命令安全性..."
+ *       }]
+ *     }],
+ *     "PostToolUse": [{
+ *       "matcher": "*",
+ *       "hooks": [{
+ *         "type": "command",
+ *         "command": "python .lamtools/hooks/log_tool_result.py",
+ *         "timeout": 3
+ *       }]
+ *     }],
+ *     "PostToolUseFailure": [{
+ *       "matcher": "*",
+ *       "hooks": [{
+ *         "type": "prompt",
+ *         "prompt": "工具 ${TOOL_NAME} 执行失败。错误: 请查看 tool_result.error"
+ *       }]
+ *     }],
+ *     "PermissionRequest": [{
+ *       "matcher": "run_command",
+ *       "hooks": [{
+ *         "type": "command",
+ *         "command": "python .lamtools/hooks/auto_approve_safe.py",
+ *         "timeout": 3
+ *       }]
+ *     }],
+ *     "UserPromptSubmit": [{
+ *       "matcher": "*",
+ *       "hooks": [{
+ *         "type": "command",
+ *         "command": "python .lamtools/hooks/log_prompt.py",
+ *         "timeout": 3
+ *       }]
+ *     }],
+ *     "Stop": [{
+ *       "matcher": "*",
+ *       "hooks": [{
+ *         "type": "command",
+ *         "command": "python .lamtools/hooks/session_cleanup.py",
+ *         "timeout": 5
+ *       }]
  *     }]
  *   }
  * }

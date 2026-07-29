@@ -133,7 +133,7 @@ export function createCoreAppServerRuntimeController<
   }
 
   function scheduleReconnect() {
-    if (!runtime.activeApiBase || !runtime.activeThreadId || runtime.reconnectTimer) return
+    if (!runtime.activeApiBase || runtime.reconnectTimer) return
     const delay = Math.min(reconnectMaxMs, reconnectBaseMs * 2 ** runtime.reconnectAttempt)
     runtime.reconnectAttempt += 1
     runtime.reconnectTimer = setTimeout(() => {
@@ -143,9 +143,9 @@ export function createCoreAppServerRuntimeController<
   }
 
   async function reconnectActiveThread() {
-    if (!runtime.activeApiBase || !runtime.activeThreadId) return
+    if (!runtime.activeApiBase) return
     try {
-      await openClient(runtime.activeApiBase, runtime.activeThreadId)
+      await openClient(runtime.activeApiBase, runtime.activeThreadId || undefined)
     } catch (error) {
       runtime.lastError = error instanceof Error ? error.message : String(error)
       runtime.connectionState = 'error'

@@ -467,6 +467,10 @@ class SqlAlchemyThreadSnapshotStore:
                 matches.append((str(row.thread_id), dict(request)))
         return matches[0] if len(matches) == 1 else None
 
+    async def list_thread_ids(self, db: AsyncSession) -> list[str]:
+        result = await db.execute(select(self.snapshot_model.thread_id))
+        return [str(row[0]) for row in result.all() if row[0]]
+
     def _state_from_row(self, row: Any, thread_id: str) -> dict[str, Any]:
         state = dict(row.snapshot_json or self.projector.empty(thread_id))
         state["snapshot_seq"] = row.snapshot_seq

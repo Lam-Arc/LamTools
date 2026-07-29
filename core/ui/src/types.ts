@@ -359,3 +359,47 @@ export interface StageResource {
   content?: string;
   previewMode?: 'code' | 'preview';
 }
+
+// ---------------------------------------------------------------------------
+// Skills
+// ---------------------------------------------------------------------------
+
+export interface CoreSkillItem {
+  name: string;
+  description: string;
+  location: string;
+  source: string;
+  enabled: boolean;
+}
+
+export interface CoreSkillListPayload {
+  skills: CoreSkillItem[];
+  total_count: number;
+  enabled_count: number;
+}
+
+// ---------------------------------------------------------------------------
+// Hooks
+// ---------------------------------------------------------------------------
+
+export interface CoreHookItem {
+  id: string;
+  event: string;
+  matcher: string;
+  source: string;
+  source_name: string;
+  plugin_name: string;
+  config_path: string;
+  handler_type: string;
+  command: string;
+  definition_hash: string;
+  trusted: boolean;
+  status: string;
+}
+
+export interface CoreHookListPayload {
+  hooks: CoreHookItem[];
+  trustable_count: number;
+  total_count: number;
+  trusted_count: number;
+}

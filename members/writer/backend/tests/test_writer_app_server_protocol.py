@@ -37,7 +37,6 @@ from app.app_server.operations import (
     handle_project_agents_md_update_operation,
     handle_project_create_operation,
     handle_project_delete_operation,
-    handle_project_directory_pick_operation,
     handle_project_get_operation,
     handle_project_list_operation,
     handle_project_sessions_list_operation,
@@ -544,7 +543,6 @@ def test_writer_operation_catalog_covers_app_server_rpc_methods():
         "project.agents_md.update",
         "project.create",
         "project.delete",
-        "project.directory.pick",
             "project.get",
             "project.list",
             "project.sessions.create",
@@ -597,8 +595,6 @@ def test_writer_operation_catalog_is_core_workbench_plus_writer_overlay():
 
     assert set(catalog.list()) == set(CORE_WORKBENCH_OPERATION_NAMES) | set(WRITER_OVERLAY_OPERATION_NAMES)
     assert not (set(CORE_WORKBENCH_OPERATION_NAMES) & set(WRITER_OVERLAY_OPERATION_NAMES))
-    assert "project.directory.pick" in CORE_WORKBENCH_OPERATION_NAMES
-    assert "project.directory.pick" not in WRITER_OVERLAY_OPERATION_NAMES
 
 
 @pytest.mark.asyncio
@@ -2086,20 +2082,6 @@ async def test_project_operations_create_list_update_get_and_delete(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_project_directory_pick_operation_returns_selected_path(tmp_path):
-    selected_dir = tmp_path / "picked"
-    selected_dir.mkdir()
-
-    outcome = await handle_project_directory_pick_operation(
-        request_id=1,
-        params={},
-        directory_picker=lambda: str(selected_dir),
-    )
-
-    assert outcome.response["result"] == {"path": str(selected_dir)}
-
-
-@pytest.mark.asyncio
 async def test_project_agents_md_operations_read_and_write_file(tmp_path):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'project-agents.db'}", future=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -2589,7 +2571,7 @@ def test_writer_injects_only_non_lifecycle_core_operation_adapters():
     lifecycle_names = {
         "thread.start", "thread.read", "thread.resume", "turn.start", "turn.steer",
         "turn.cancel", "queue.create", "queue.update", "queue.delete",
-        "queue.guide", "project.directory.pick",
+        "queue.guide",
     }
 
     core_owned_names = lifecycle_names | {

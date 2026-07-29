@@ -56,7 +56,6 @@ import { useConfigStore } from '@/stores/config'
 import { useWriterAppServerStore } from '@/appServer/store'
 import { selectLatestTurnStatus } from '@/appServer/selectors'
 import { workbenchSessionRouteQuery, type WorkbenchRouteQuery } from '@/utils/workbenchRoute'
-import { pickProjectDirectory } from '@/lib/project-directory-picker'
 import { createWriterProjectWorkspace } from '@/lib/project-workspace'
 import {
   createWriterProjectAgentsSaveHandler,
@@ -1883,15 +1882,6 @@ function closeNewProject() {
   projectActionError.value = ''
 }
 
-async function selectProjectDirectory() {
-  const selected = await pickProjectDirectory({
-    desktop: window.lamwriterDesktop,
-    appServerPickDirectory: api.pickProjectDirectory,
-  })
-  if (selected.message) window.alert(selected.message)
-  return selected.path
-}
-
 async function handleNewProject(payload: { name: string; work_root: string }) {
   if (!payload.work_root.trim() || projectActionLoading.value) return
   projectActionLoading.value = true
@@ -1954,7 +1944,6 @@ onMounted(async () => {
           v-if="showNewProject"
           :loading="projectActionLoading"
           :error="projectActionError"
-          :select-work-root="selectProjectDirectory"
           @submit="handleNewProject"
           @cancel="closeNewProject"
         />

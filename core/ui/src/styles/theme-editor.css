@@ -253,6 +253,9 @@
   padding: 4px 6px;
   font-size: 12px;
   text-align: center;
+  background: var(--settings-control-background, color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 5.5%, transparent));
+  color: var(--settings-control-text, var(--text));
+  border-color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 12%, transparent);
 }
 
 .field {

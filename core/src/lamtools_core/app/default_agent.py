@@ -326,6 +326,8 @@ def create_core_agent_operations(
             active_mode = request.payload.get("active_mode")
             if not isinstance(active_mode, str) or not active_mode.strip():
                 active_mode = None
+            allow_agent_install_skill = bool(request.payload.get("allow_agent_install_skill"))
+            allow_agent_create_hooks = bool(request.payload.get("allow_agent_create_hooks"))
             plugin_assembly = assemble_core_agent_plugins(
                 data_dir=paths.data_dir,
                 work_root=runtime_work_root,
@@ -386,6 +388,8 @@ def create_core_agent_operations(
                             max_tokens=runtime_options.max_tokens,
                             approval_policy=approval_policy,  # type: ignore[arg-type]
                             active_mode=active_mode,
+                            allow_agent_install_skill=allow_agent_install_skill,
+                            allow_agent_create_hooks=allow_agent_create_hooks,
                         ),
                         toolbox=toolbox,
                         verification_policy=kit.verification_policy(),

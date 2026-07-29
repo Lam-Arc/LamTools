@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import inspect
+import os
 import uuid
 from collections.abc import Callable
 from datetime import datetime
@@ -535,6 +536,65 @@ def create_core_router(
         except PermissionError:
             raise HTTPException(status_code=403, detail="Permission denied")
         return {"content": content, "path": path}
+
+    # ==================================================================
+    # Directory browser route (for FolderBrowserDialog, no project required)
+    # ==================================================================
+
+    _BROWSER_IGNORED_DIRS = {".git", "__pycache__", "node_modules", ".venv", "venv", "dist", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
+
+    def _list_dir(target: Path) -> list[dict[str, Any]]:
+        """List a directory, skipping PermissionError per-item."""
+        entries: list[dict[str, Any]] = []
+        try:
+            with os.scandir(target) as it:
+                for item in sorted(it, key=lambda p: (not p.is_dir(), p.name.lower())):
+                    if item.is_dir() and item.name in _BROWSER_IGNORED_DIRS:
+                        continue
+                    if item.name.startswith(".") and item.name != ".":
+                        continue
+                    try:
+                        st = item.stat()
+                    except OSError:
+                        st = type("_st", (), {"st_size": 0})()
+                    entries.append({
+                        "name": item.name,
+                        "type": "directory" if item.is_dir() else "file",
+                        "size": st.st_size if not item.is_dir() else 0,
+                        "ext": item.name.rsplit(".", 1)[-1].lower() if item.is_file() and "." in item.name else "",
+                    })
+        except PermissionError:
+            raise HTTPException(status_code=403, detail="Permission denied")
+        return entries
+
+    @router.get("/browse-directory")
+    async def browse_directory(path: str = "") -> dict[str, Any]:
+        if not path:
+            return _browse_root()
+        target = Path(path)
+        if not target.exists():
+            raise HTTPException(status_code=404, detail="Path not found")
+        if not target.is_dir():
+            raise HTTPException(status_code=400, detail="Path is not a directory")
+        return {"entries": _list_dir(target), "path": str(target)}
+
+    def _browse_root() -> dict[str, Any]:
+        """Filesystem root — drives on Windows, / on Unix."""
+        if os.name == "nt":
+            import string
+            drives = []
+            for letter in string.ascii_uppercase:
+                root = f"{letter}:\\"
+                if Path(root).exists():
+                    drives.append({
+                        "name": f"{letter}:",
+                        "type": "directory",
+                        "size": 0,
+                        "ext": "",
+                        "path": root,
+                    })
+            return {"entries": drives, "path": ""}
+        return {"entries": _list_dir(Path("/")), "path": "/"}
 
     # ==================================================================
     # Event routes

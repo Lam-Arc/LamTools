@@ -62,6 +62,7 @@ def build_queue_guidance_plan(
     if not input_items:
         return QueueGuidancePlan(False, "queue_input_unavailable", [], [], ())
 
+    user_item_id = f"{turn_id}:user:guide:{queue_item_id}"
     events = (
         CoreAppEventSpec(
             event_id=f"{client_message_id}:steer",
@@ -70,6 +71,15 @@ def build_queue_guidance_plan(
             turn_id=turn_id,
             client_message_id=client_message_id,
             payload={"type": "turn", "input": input_items},
+        ),
+        CoreAppEventSpec(
+            event_id=f"{client_message_id}:usermsg",
+            thread_id=thread_id,
+            method="item/started",
+            turn_id=turn_id,
+            item_id=user_item_id,
+            client_message_id=client_message_id,
+            payload={"type": "userMessage", "status": "completed", "content": input_items},
         ),
         CoreAppEventSpec(
             event_id=f"{client_message_id}:consume",

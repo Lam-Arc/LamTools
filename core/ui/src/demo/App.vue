@@ -14,6 +14,7 @@
     :content-width="contentWidth"
     :allow-environment-import="true"
     :permission-mode="permissionMode"
+    :request-rpc="requestConfigOperation"
     @close="showSettings = false"
     @update:density="uiPreferences.setDensity"
     @update:content-width="uiPreferences.setContentWidth"
@@ -312,6 +313,11 @@
       </template>
     </template>
   </WorkspaceShell>
+
+  <FloatingApprovalCard
+    :pending-decisions="pendingDecisions"
+    @decision-select="approvalController.handleDecision"
+  />
 </template>
 
 <script setup lang="ts">
@@ -365,6 +371,7 @@ import {
 
 import AttachmentTray from '../components/AttachmentTray.vue'
 import ChatThread from '../components/ChatThread.vue'
+import FloatingApprovalCard, { type PendingDecision } from '../components/FloatingApprovalCard.vue'
 import CommandPalette from '../components/CommandPalette.vue'
 import CoreExecutionControls from '../components/CoreExecutionControls.vue'
 import CoreResourceStats from '../components/CoreResourceStats.vue'
@@ -714,6 +721,19 @@ const projectionController = useCoreWorkbenchProjectionController({
   onStatusChange: ({ status }) => syncActiveSessionStatus(status),
 })
 const { messages, processExpandedIds, toggleProcess } = projectionController
+
+const pendingDecisions = computed<PendingDecision[]>(() => {
+  const result: PendingDecision[] = []
+  for (const msg of messages.value) {
+    if (!msg.parts) continue
+    for (const part of msg.parts) {
+      if (part.partType === 'decision' && part.status === 'pending') {
+        result.push({ messageId: msg.id, part })
+      }
+    }
+  }
+  return result
+})
 const typingMessageIds = ref(new Set<string>())
 const pendingPlaceholder = ref<{ id: string; content: string } | null>(null)
 const stepGroups = computed(() => buildCurrentTurnChecklistGroups(messages.value))
@@ -1333,6 +1353,7 @@ async function requestJson<T = unknown>(
     const text = await response.text()
     throw new Error(text || `${response.status} ${response.statusText}`)
   }
+  if (response.status === 204) return undefined as T
   return await response.json() as T
 }
 

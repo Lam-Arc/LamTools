@@ -7,6 +7,7 @@ import uuid
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
+import logging
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -36,10 +37,13 @@ from .durable_operations import register_durable_operations
 from .event_store import AppEventInput
 from .factory import add_spa_fallback, create_app
 from .live_hub import CoreAppEventHub
-from .live_operations import CoreLiveContext, CoreLiveOperationHost
+from .live_operations import CoreLiveContext, CoreLiveOperationHost, recover_stale_active_turns
 from .project_store import ActiveProjectSessionsError, CoreProjectStore
 from .live_router import create_core_live_router
 from .operation_catalog import OperationCatalog, OperationRequest, OperationResult
+
+
+_logger = logging.getLogger(__name__)
 
 
 class CoreConfigRoutingLLMClient:
@@ -386,6 +390,14 @@ def create_core_agent_http_app(
         app_state["operations"] = agent_operations
         app_state["arrange_runner"] = arrange_runner
         app_state["observer_supervisor"] = observer_supervisor
+        # Reap turns left durably "running"/"waiting"/"interrupting" by an
+        # unexpected shutdown, mirroring arrange job recovery. Without this the
+        # durable-snapshot guard in turn.start blocks the thread with
+        # "active turn already exists" until a manual turn.cancel.
+        try:
+            await recover_stale_active_turns(context=live_context())
+        except BaseException:
+            _logger.exception("[startup] stale active turn recovery failed (non-fatal)")
         await arrange_runner.start()
         await observer_supervisor.start()
 

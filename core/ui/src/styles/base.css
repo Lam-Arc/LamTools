@@ -5,8 +5,8 @@
 * { box-sizing: border-box; }
 *::-webkit-scrollbar { width: 8px; height: 8px; }
 *::-webkit-scrollbar-track { background: transparent; }
-*::-webkit-scrollbar-thumb { background: rgba(255,255,255,.18); border-radius: 999px; border: 2px solid transparent; background-clip: content-box; }
-*::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.34); }
+*::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--theme-main-text, #fff) 18%, transparent); border-radius: 999px; border: 2px solid transparent; background-clip: content-box; }
+*::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--theme-main-text, #fff) 34%, transparent); }
 
 .sr-only {
   position: absolute !important;

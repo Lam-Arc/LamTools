@@ -204,3 +204,160 @@ async def test_mcp_hook_can_block_tool(tmp_path: Path):
     assert caller.calls[0][1]["tool_input"] == {"command": "pytest"}
     assert decision.decision == "block"
     assert decision.reason == "mcp blocked pytest"
+
+
+@pytest.mark.asyncio
+async def test_post_tool_use_hook_can_update_output(tmp_path: Path):
+    """PostToolUse hook returns updatedOutput to modify the tool result."""
+    script = tmp_path / "post_rewrite.py"
+    make_script(script, """
+import json, sys
+payload = json.load(sys.stdin)
+# Rewrite the tool result content
+updated = dict(payload.get("tool_result") or {})
+updated["content"] = "sanitized: " + updated.get("content", "")
+print(json.dumps({"updatedOutput": updated}))
+""".strip())
+    hook = HookDefinition(
+        id="hook-post-1",
+        event="PostToolUse",
+        matcher="run_command",
+        source="project",
+        source_name="project",
+        config_path=tmp_path / "hooks.json",
+        handler=HookHandler(type="command", command=f"python {script}", timeout=5),
+        trusted=True,
+        status="trusted",
+    )
+
+    decision = await HookEngine([hook]).run(HookEvent(
+        event_name="PostToolUse",
+        project_root=str(tmp_path),
+        tool_name="run_command",
+        tool_call_id="call-1",
+        tool_input={"command": "pytest"},
+        tool_result={"call_id": "call-1", "name": "run_command", "status": "ok", "content": "raw output"},
+    ))
+
+    assert decision.updated_output == {
+        "call_id": "call-1", "name": "run_command", "status": "ok",
+        "content": "sanitized: raw output",
+    }
+
+
+@pytest.mark.asyncio
+async def test_post_tool_use_failure_hook_receives_error(tmp_path: Path):
+    """PostToolUseFailure hook receives tool error fields."""
+    script = tmp_path / "failure_handler.py"
+    make_script(script, """
+import json, sys
+payload = json.load(sys.stdin)
+assert payload["event_name"] == "PostToolUseFailure"
+assert payload["error"] == "connection refused"
+assert payload["error_type"] == "ConnectionError"
+print(json.dumps({"updatedOutput": {"error": "handled: connection refused"}}))
+""".strip())
+    hook = HookDefinition(
+        id="hook-fail-1",
+        event="PostToolUseFailure",
+        matcher="run_command",
+        source="project",
+        source_name="project",
+        config_path=tmp_path / "hooks.json",
+        handler=HookHandler(type="command", command=f"python {script}", timeout=5),
+        trusted=True,
+        status="trusted",
+    )
+
+    decision = await HookEngine([hook]).run(HookEvent(
+        event_name="PostToolUseFailure",
+        project_root=str(tmp_path),
+        tool_name="run_command",
+        tool_call_id="call-1",
+        tool_input={"command": "curl"},
+        tool_result={"call_id": "call-1", "name": "run_command", "status": "failed", "error": "connection refused"},
+        error="connection refused",
+        error_type="ConnectionError",
+    ))
+
+    assert decision.updated_output == {"error": "handled: connection refused"}
+
+
+@pytest.mark.asyncio
+async def test_session_start_hook_receives_session_metadata(tmp_path: Path):
+    """SessionStart hook receives session_id and project_root."""
+    script = tmp_path / "session_start.py"
+    make_script(script, """
+import json, sys
+payload = json.load(sys.stdin)
+assert payload["event_name"] == "SessionStart"
+assert payload["session_id"] == "sess-abc"
+assert payload["project_root"] != ""
+print(json.dumps({"statusMessage": "session started"}))
+""".strip())
+    hook = HookDefinition(
+        id="hook-ss-1",
+        event="SessionStart",
+        matcher="*",
+        source="project",
+        source_name="project",
+        config_path=tmp_path / "hooks.json",
+        handler=HookHandler(type="command", command=f"python {script}", timeout=5),
+        trusted=True,
+        status="trusted",
+    )
+
+    decision = await HookEngine([hook]).run(HookEvent(
+        event_name="SessionStart",
+        session_id="sess-abc",
+        project_root=str(tmp_path),
+    ))
+
+    assert decision.status_message == "session started"
+
+
+@pytest.mark.asyncio
+async def test_post_tool_use_can_chain_multiple_hooks(tmp_path: Path):
+    """Multiple PostToolUse hooks chain: first hook's output feeds second."""
+    script1 = tmp_path / "chain1.py"
+    make_script(script1, """
+import json, sys
+payload = json.load(sys.stdin)
+updated = dict(payload.get("tool_result") or {})
+updated["content"] = updated.get("content", "") + " [step1]"
+print(json.dumps({"updatedOutput": updated}))
+""".strip())
+    script2 = tmp_path / "chain2.py"
+    make_script(script2, """
+import json, sys
+payload = json.load(sys.stdin)
+updated = payload.get("tool_result") or {}
+updated["content"] = updated.get("content", "") + " [step2]"
+print(json.dumps({"updatedOutput": updated}))
+""".strip())
+    hook1 = HookDefinition(
+        id="chain-1", event="PostToolUse", matcher="run_command",
+        source="project", source_name="project", config_path=tmp_path / "hooks.json",
+        handler=HookHandler(type="command", command=f"python {script1}", timeout=5),
+        trusted=True, status="trusted",
+    )
+    hook2 = HookDefinition(
+        id="chain-2", event="PostToolUse", matcher="run_command",
+        source="project", source_name="project", config_path=tmp_path / "hooks.json",
+        handler=HookHandler(type="command", command=f"python {script2}", timeout=5),
+        trusted=True, status="trusted",
+    )
+
+    decision = await HookEngine([hook1, hook2]).run(HookEvent(
+        event_name="PostToolUse",
+        project_root=str(tmp_path),
+        tool_name="run_command",
+        tool_call_id="call-1",
+        tool_input={"command": "ls"},
+        tool_result={"call_id": "call-1", "name": "run_command", "status": "ok", "content": "orig"},
+    ))
+
+    assert decision.updated_output == {
+        "call_id": "call-1", "name": "run_command", "status": "ok",
+        "content": "orig [step1] [step2]",
+    }

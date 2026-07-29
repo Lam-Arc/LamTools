@@ -29,15 +29,33 @@ class HookEngine:
         decision = HookDecision()
         audit_events: list[dict[str, Any]] = []
         current_input = dict(event.tool_input)
+        current_output: dict[str, Any] | None = None
         for hook in self._matching_hooks(event):
             if not hook.trusted:
                 audit_events.append({"hook_id": hook.id, "status": "skipped_untrusted"})
                 continue
-            result, audit = await self._run_hook(hook, replace(event, tool_input=current_input))
+            # emit status message before running the hook
+            if hook.handler.status_message:
+                decision = replace(decision, status_message=hook.handler.status_message)
+            # build the event payload: input/output reflects cumulative prior hooks
+            event_for_hook = event
+            if current_input != event.tool_input:
+                event_for_hook = replace(event_for_hook, tool_input=current_input)
+            if current_output is not None and event.tool_result:
+                event_for_hook = replace(event_for_hook, tool_result=current_output)
+            result, audit = await self._run_hook(hook, event_for_hook)
             audit_events.append(audit)
+            # PreToolUse-style: merge updated_input
             if result.updated_input is not None:
                 current_input.update(result.updated_input)
                 decision = replace(decision, updated_input=dict(current_input))
+            # PostToolUse-style: merge updated_output
+            if result.updated_output is not None:
+                if current_output is None:
+                    current_output = dict(result.updated_output)
+                else:
+                    current_output.update(result.updated_output)
+                decision = replace(decision, updated_output=dict(current_output))
             if result.additional_context:
                 joined = "\n".join(
                     item for item in [decision.additional_context, result.additional_context] if item
@@ -49,6 +67,8 @@ class HookEngine:
                     permission_decision=result.permission_decision,
                     permission_decision_reason=result.permission_decision_reason,
                 )
+            if result.status_message:
+                decision = replace(decision, status_message=result.status_message)
             if result.decision == "block":
                 decision = replace(decision, decision="block", reason=result.reason)
                 break
@@ -190,10 +210,12 @@ class HookEngine:
             permission_decision_reason=str(
                 data.get("permissionDecisionReason") or data.get("permission_decision_reason") or ""
             ),
+            updated_output=data.get("updatedOutput") if isinstance(data.get("updatedOutput"), dict) else None,
+            status_message=str(data.get("statusMessage") or data.get("status_message") or ""),
         )
 
     def _payload(self, hook: HookDefinition, event: HookEvent) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "event_name": event.event_name,
             "session_id": event.session_id,
             "run_id": event.run_id,
@@ -208,6 +230,22 @@ class HookEngine:
             "tool_name": event.tool_name,
             "tool_input": event.tool_input,
         }
+        # PostToolUse / PostToolUseFailure fields
+        if event.tool_call_id:
+            payload["tool_call_id"] = event.tool_call_id
+        if event.tool_result:
+            payload["tool_result"] = event.tool_result
+        if event.error:
+            payload["error"] = event.error
+        if event.error_type:
+            payload["error_type"] = event.error_type
+        # UserPromptSubmit fields
+        if event.user_message:
+            payload["user_message"] = event.user_message
+        # PermissionRequest fields
+        if event.permission_request:
+            payload["permission_request"] = event.permission_request
+        return payload
 
     def _expanded_command(self, hook: HookDefinition, event: HookEvent) -> str:
         plugin_root = str(hook.plugin_root or event.plugin_root or "")
@@ -216,6 +254,9 @@ class HookEngine:
             .replace("${PLUGIN_ROOT}", plugin_root)
             .replace("${PLUGIN_DATA}", event.plugin_data)
             .replace("${PROJECT_ROOT}", event.project_root)
+            .replace("${TOOL_NAME}", event.tool_name)
+            .replace("${TOOL_CALL_ID}", event.tool_call_id)
+            .replace("${EVENT_NAME}", event.event_name)
         )
 
     def _expanded_prompt(self, hook: HookDefinition, event: HookEvent) -> str:
@@ -226,4 +267,7 @@ class HookEngine:
             .replace("${PLUGIN_DATA}", event.plugin_data)
             .replace("${PROJECT_ROOT}", event.project_root)
             .replace("${TOOL_NAME}", event.tool_name)
+            .replace("${TOOL_CALL_ID}", event.tool_call_id)
+            .replace("${EVENT_NAME}", event.event_name)
+            .replace("${USER_MESSAGE}", event.user_message)
         )

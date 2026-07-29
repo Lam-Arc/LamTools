@@ -27,6 +27,7 @@ export interface CoreProjectClient {
   readFile(projectId: string, path: string): Promise<{ content: string; path: string }>
   writeFile(projectId: string, path: string, content: string): Promise<{ content: string; path: string }>
   fileRawUrl(projectId: string, path: string): string
+  browseDirectory(path?: string): Promise<{ entries: CoreFileEntry[]; path: string }>
 }
 
 type RawProject = {
@@ -106,6 +107,10 @@ export function createCoreProjectClient(apiBase: string): CoreProjectClient {
     fileRawUrl(projectId, path) {
       const query = `?path=${encodeURIComponent(path)}`
       return `${base}${projectPath(projectId)}/files/raw${query}`
+    },
+    async browseDirectory(path = '') {
+      const query = path ? `?path=${encodeURIComponent(path)}` : ''
+      return await request<{ entries: CoreFileEntry[]; path: string }>(base, `/browse-directory${query}`)
     },
   }
 }

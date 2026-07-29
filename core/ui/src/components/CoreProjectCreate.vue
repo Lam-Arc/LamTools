@@ -6,7 +6,7 @@
         role="dialog"
         aria-modal="true"
         aria-labelledby="core-project-dialog-title"
-        :aria-busy="loading || selectingRoot"
+        :aria-busy="loading"
       >
         <header class="core-project-dialog-header">
           <h2 id="core-project-dialog-title">新建项目</h2>
@@ -25,17 +25,16 @@
                 autocomplete="off"
                 placeholder="选择或填写项目地址"
                 required
-                :disabled="loading || selectingRoot"
+                :disabled="loading"
               />
               <button
-                v-if="selectWorkRoot"
                 type="button"
                 class="core-project-browse"
                 data-project-browse
-                :disabled="loading || selectingRoot"
-                :aria-label="selectingRoot ? '正在选择项目目录' : '选择项目目录'"
-                :title="selectingRoot ? '选择中' : '选择项目目录'"
-                @click="browse"
+                :disabled="loading"
+                aria-label="选择项目目录"
+                title="选择项目目录"
+                @click="openBrowser"
               >
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <path d="M3.5 6.5A2.5 2.5 0 0 1 6 4h4l2 2h6A2.5 2.5 0 0 1 20.5 8.5v8A2.5 2.5 0 0 1 18 19H6a2.5 2.5 0 0 1-2.5-2.5z" />
@@ -61,27 +60,32 @@
 
           <footer class="core-project-actions">
             <button type="button" class="core-project-cancel" data-project-cancel :disabled="loading" @click="cancel">取消</button>
-            <button type="submit" class="core-project-submit" data-project-submit :disabled="loading || selectingRoot || !workRoot.trim()">
+            <button type="submit" class="core-project-submit" data-project-submit :disabled="loading || !workRoot.trim()">
               {{ loading ? '创建中' : '创建项目' }}
             </button>
           </footer>
-        </form>
-      </section>
-    </div>
+</form>
+    </section>
+
+    <FolderBrowserDialog
+      v-model="showBrowser"
+      :initial-path="workRoot"
+      @selected="onDirectorySelected"
+    />
+  </div>
   </Teleport>
 </template>
 
 <script setup lang="ts">
 import { nextTick, onMounted, ref } from 'vue'
+import FolderBrowserDialog from './FolderBrowserDialog.vue'
 
 const props = withDefaults(defineProps<{
   loading?: boolean
   error?: string
-  selectWorkRoot?: () => Promise<string | null | undefined>
 }>(), {
   loading: false,
   error: '',
-  selectWorkRoot: undefined,
 })
 
 const emit = defineEmits<{
@@ -92,13 +96,13 @@ const emit = defineEmits<{
 const name = ref('')
 const workRoot = ref('')
 const workRootInput = ref<HTMLInputElement | null>(null)
-const selectingRoot = ref(false)
+const showBrowser = ref(false)
 
 onMounted(() => nextTick(() => workRootInput.value?.focus()))
 
 function submit() {
   const root = workRoot.value.trim()
-  if (!root || props.loading || selectingRoot.value) return
+  if (!root || props.loading) return
   emit('submit', { name: name.value.trim(), work_root: root })
 }
 
@@ -106,17 +110,15 @@ function cancel() {
   if (!props.loading) emit('cancel')
 }
 
-async function browse() {
-  if (!props.selectWorkRoot || props.loading || selectingRoot.value) return
-  selectingRoot.value = true
-  try {
-    const selected = await props.selectWorkRoot()
-    if (selected) workRoot.value = selected.trim()
-  } finally {
-    selectingRoot.value = false
-    await nextTick()
-    workRootInput.value?.focus()
-  }
+function openBrowser() {
+  if (props.loading) return
+  showBrowser.value = true
+}
+
+function onDirectorySelected(path: string) {
+  workRoot.value = path
+  showBrowser.value = false
+  nextTick(() => workRootInput.value?.focus())
 }
 </script>
 

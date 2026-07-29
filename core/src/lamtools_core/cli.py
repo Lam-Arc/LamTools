@@ -564,11 +564,13 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--core-db", default="")
     serve.add_argument("--data-dir", default="")
     serve.add_argument("--work-root", "--project", dest="work_root", default="")
+    serve.add_argument("--frontend-dir", default="", help="Path to built frontend SPA directory (desktop/packaged mode)")
     serve.add_argument("--thinking", choices=("enabled", "disabled"), default="enabled")
     serve.add_argument("--thinking-budget", type=int, default=10000)
     serve.add_argument("--max-tokens", type=int, default=None)
     serve.add_argument("--temperature", type=float, default=0.2)
     serve.add_argument("--raw", action="store_true")
+    serve.add_argument("--reload", action="store_true", help="Enable auto-reload on code changes")
     serve.set_defaults(func=cmd_serve)
 
     run = sub.add_parser("run", help="Start a Core Agent task")
@@ -924,6 +926,7 @@ async def cmd_serve(args: argparse.Namespace) -> int:
         core_db=args.core_db or None,
         data_dir=args.data_dir or None,
         work_root=args.work_root or None,
+        frontend_dir=args.frontend_dir or None,
         thinking_enabled=args.thinking == "enabled",
         thinking_budget=args.thinking_budget,
         max_tokens=args.max_tokens,
@@ -931,7 +934,7 @@ async def cmd_serve(args: argparse.Namespace) -> int:
     )
     url = f"http://{args.host}:{args.port}"
     _print_live_result(args, {"url": url}, f"serving {url}")
-    server = uvicorn.Server(uvicorn.Config(app, host=args.host, port=args.port))
+    server = uvicorn.Server(uvicorn.Config(app, host=args.host, port=args.port, reload=bool(args.reload)))
     await server.serve()
     return 0
 
