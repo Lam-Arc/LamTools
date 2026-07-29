@@ -197,6 +197,123 @@ def register_workflow_operations(
             payload={"cancelled": True, "thread_id": thread_id, "run_id": run_id},
         )
 
+    async def workflow_edit(request: OperationRequest) -> OperationResult:
+        """Natural-language graph editing: one structured LLM call that returns
+        ``{reply, graph}``. The graph is validated, saved, and returned."""
+        payload = request.payload
+        name = _name(payload)
+        if not name:
+            return _error(request, "name is required")
+        work_root = _optional_text(payload, "work_root", "workRoot")
+        message = str(payload.get("message") or "").strip()
+        if not message:
+            return _error(request, "message is required")
+        model_id = str(payload.get("model_id") or payload.get("modelId") or "") or None
+        reasoning_effort = str(payload.get("reasoning_effort") or payload.get("reasoningEffort") or "") or None
+        temperature = payload.get("temperature")
+
+        definition = await workflow_manager.get(name, work_root=work_root)
+        if definition is None:
+            return _error(request, f"Workflow not found: {name}")
+        if not work_root:
+            work_root = definition.work_root
+
+        raw_history = payload.get("history") or payload.get("messages") or []
+        history = [m for m in raw_history if isinstance(m, dict)] if isinstance(raw_history, list) else []
+
+        from lamtools_core.llm import ChatMessage, LLMRequest
+
+        system_prompt = _workflow_edit_system_prompt(definition)
+        messages: list[ChatMessage] = [ChatMessage(role="system", content=system_prompt)]
+        for entry in history:
+            role = str(entry.get("role") or "").strip()
+            content = str(entry.get("content") or "").strip()
+            if role in ("user", "assistant") and content:
+                messages.append(ChatMessage(role=role, content=content))
+        messages.append(ChatMessage(role="user", content=message))
+
+        response_format = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "workflow_edit",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "reply": {"type": "string", "description": "简短说明这次做了什么改动"},
+                        "graph": {
+                            "type": "object",
+                            "description": "完整的 WorkflowDef JSON（修改后的整个图）",
+                            "properties": {
+                                "name": {"type": "string"},
+                                "description": {"type": "string"},
+                                "nodes": {"type": "array"},
+                                "edges": {"type": "array"},
+                                "input_params": {"type": "array"},
+                                "output_port": {"type": "string"},
+                                "exposed": {"type": "boolean"},
+                                "tool_name": {"type": "string"},
+                            },
+                            "required": ["name", "nodes", "edges"],
+                        },
+                    },
+                    "required": ["reply", "graph"],
+                },
+            },
+        }
+
+        try:
+            request_obj = LLMRequest(
+                messages=messages,
+                model=model_id,
+                temperature=float(temperature) if temperature is not None else None,
+                response_format=response_format,
+                metadata={"reasoning_effort": reasoning_effort} if reasoning_effort else {},
+            )
+            response = await runner.llm_client.complete(request_obj)
+        except Exception as exc:  # noqa: BLE001
+            return _error(request, f"LLM call failed: {exc}")
+
+        import json as _json
+
+        reply_text = ""
+        edited_def = None
+        try:
+            parsed = _json.loads(response.content)
+            reply_text = str(parsed.get("reply") or "")
+            graph = parsed.get("graph")
+            if isinstance(graph, dict):
+                graph.setdefault("name", definition.name)
+                graph["work_root"] = work_root
+                edited_def = WorkflowDef.from_dict(graph)
+        except (TypeError, ValueError) as exc:
+            return _error(request, f"failed to parse LLM graph output: {exc}")
+
+        if edited_def is None:
+            # No valid graph — return only the reply so the conversation continues.
+            return OperationResult(
+                name=request.name,
+                payload={"reply": reply_text or response.content, "workflow": definition.to_dict(), "applied": False},
+            )
+
+        try:
+            saved = await workflow_manager.update_fields(
+                name,
+                work_root=work_root,
+                description=edited_def.description,
+                nodes=[n.to_dict() for n in edited_def.nodes],
+                edges=[e.to_dict() for e in edited_def.edges],
+                input_params=[p.to_dict() for p in edited_def.input_params],
+                output_port=edited_def.output_port,
+                exposed=edited_def.exposed,
+                tool_name=edited_def.tool_name,
+            )
+        except (LookupError, TypeError, ValueError) as exc:
+            return _error(request, exc)
+        return OperationResult(
+            name=request.name,
+            payload={"reply": reply_text, "workflow": saved.to_dict(), "applied": True},
+        )
+
     async def workflow_tools_list(request: OperationRequest) -> OperationResult:
         specs: list[Any] = []
         if list_tool_specs is not None:
@@ -220,6 +337,7 @@ def register_workflow_operations(
         "workflow.delete": workflow_delete,
         "workflow.run": workflow_run,
         "workflow.cancel": workflow_cancel,
+        "workflow.edit": workflow_edit,
         "workflow.expose": lambda req: workflow_expose(req, True),
         "workflow.unexpose": lambda req: workflow_expose(req, False),
         "workflow.tools.list": workflow_tools_list,
@@ -242,6 +360,37 @@ def _optional_text(payload: dict[str, Any], *keys: str) -> str | None:
 
 def _error(request: OperationRequest, error: object) -> OperationResult:
     return OperationResult(name=request.name, status="error", payload={"error": str(error)})
+
+
+def _workflow_edit_system_prompt(definition: WorkflowDef) -> str:
+    """System prompt describing the WorkflowDef schema + current graph."""
+    import json as _json
+
+    current_graph = _json.dumps(definition.to_dict(), ensure_ascii=False, indent=2)
+    return (
+        "你是一个工作流图的编辑助手。用户会用自然语言描述对工作流的修改，"
+        "你需要返回修改后的【完整】工作流图（不是增量，是整个图）。\n\n"
+        "工作流图结构（WorkflowDef）：\n"
+        "- name: 工作流名称（通常不改）\n"
+        "- description: 描述\n"
+        "- nodes: 节点数组。每个节点：{id, kind, title, config, ports, position}\n"
+        "  - kind: 'llm' | 'agent' | 'action' | 'input' | 'output'\n"
+        "  - config: 节点配置（llm: instruction/mode/allowed_tools/model_id 等；"
+        "action: action_type/command 等；input/output: {}）\n"
+        "  - ports: [{name, type, direction('in'|'out')}]。input 节点只有 out 端口；"
+        "output 节点只有 in 端口\n"
+        "  - position: {x, y} 画布坐标\n"
+        "- edges: 连线数组。{id, source, source_port, target, target_port}\n"
+        "- input_params/output_port: 已被 Input/Output 节点取代，保留空即可\n"
+        "- exposed/tool_name: 暴露相关，通常不改\n\n"
+        "规则：\n"
+        "1. 返回完整图（包含未改动的节点），不要只给增量。\n"
+        "2. 新节点要给唯一 id 和合理 position（避免重叠）。\n"
+        "3. 连线要引用真实存在的节点 id 和端口名。\n"
+        "4. Input 节点是入参来源，Output 节点是输出归宿。\n"
+        "5. reply 用一句话简述改动。\n\n"
+        f"当前工作流图 JSON：\n{current_graph}"
+    )
 
 
 __all__ = ["register_workflow_operations"]

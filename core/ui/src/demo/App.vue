@@ -54,15 +54,14 @@
     :density="density"
     :theme="theme"
     :content-width="contentWidth"
-    :composer-disabled="composerActionMode === 'send' && (sendingDisabled || !activeSessionId || (!composerText.trim() && pendingAttachments.length === 0))"
+    :composer-disabled="composerDisabled"
     :composer-action-mode="composerActionMode"
     :error-text="workbenchErrorText"
     :notice-text="runtimeStatusText"
-    :hide-composer="workflowMode"
     v-model:stage-open="stageOpen"
     @new-session="openProjectCreate"
     @settings="openSettings"
-    @composer-submit="submitComposer"
+    @composer-submit="workflowMode ? submitWorkflowEdit() : submitComposer()"
     @composer-drop="handleComposerDrop"
   >
     <template #sidebar-header-action>
@@ -412,6 +411,7 @@ import {
   deleteWorkflow,
   runWorkflow as runWorkflowApi,
   setWorkflowExposed,
+  editWorkflow,
 } from '../workflow/api'
 import type { WorkflowDef, WorkflowNodeData, NodeStateStatus } from '../workflow/types'
 import {
@@ -522,6 +522,12 @@ const shellRef = ref<InstanceType<typeof WorkspaceShell> | null>(null)
 const leftPinned = ref(true)
 const rightPinned = ref(false)
 const sendingDisabled = ref(false)
+const composerDisabled = computed(() => {
+  if (workflowMode.value) {
+    return workflowEditing.value || (!composerText.value.trim()) || !activeWorkflowName.value
+  }
+  return composerActionMode.value === 'send' && (sendingDisabled.value || !activeSessionId.value || (!composerText.value.trim() && pendingAttachments.value.length === 0))
+})
 
 function toggleLeftPinned() {
   leftPinned.value = !leftPinned.value
@@ -549,6 +555,9 @@ const showWorkflowCreate = ref(false)
 const workflowCreateLoading = ref(false)
 const workflowCreateError = ref('')
 const workflowNameDraft = ref('')
+// Natural-language graph-edit conversation (Phase 5D).
+const workflowEditMessages = ref<Array<{ role: 'user' | 'assistant'; content: string }>>([])
+const workflowEditing = ref(false)
 let autosaveTimer: ReturnType<typeof setTimeout> | null = null
 
 const emptyWorkflow: WorkflowDef = {
@@ -1218,6 +1227,46 @@ async function submitComposer() {
   }
 }
 
+// Natural-language workflow graph editing (Phase 5D): composer in workflow
+// mode routes here. One structured LLM call returns {reply, graph}; the graph
+// is applied (autosaved) and the reply is appended to the edit conversation.
+async function submitWorkflowEdit() {
+  const def = workflowDefinition.value
+  if (!def || !def.name) {
+    setRuntimeStatus('先选择或创建工作流再编辑', 3000)
+    return
+  }
+  const message = composerText.value.trim()
+  if (!message || workflowEditing.value) return
+  workflowEditMessages.value.push({ role: 'user', content: message })
+  composerText.value = ''
+  workflowEditing.value = true
+  workflowStatusText.value = '编辑中…'
+  try {
+    const result = await editWorkflow(def.name, {
+      message,
+      history: workflowEditMessages.value.slice(0, -1),
+      workRoot: currentWorkRoot() || undefined,
+      modelId: selectedModelId.value || undefined,
+      reasoningEffort: selectedThinkingMode.value || undefined,
+    })
+    workflowEditMessages.value.push({ role: 'assistant', content: result.reply || '(无回复)' })
+    if (result.applied && result.workflow) {
+      workflowDefinition.value = result.workflow
+      workflowNodeStates.value = {}
+    }
+    workflowStatusText.value = result.applied ? '已应用' : '未改动'
+    setRuntimeStatus(result.applied ? '图已更新' : '未改动', 2500)
+  } catch (err) {
+    console.error('[workflow] edit failed', err)
+    workflowEditMessages.value.push({ role: 'assistant', content: `编辑失败：${(err as Error).message}` })
+    workflowStatusText.value = '编辑失败'
+    setRuntimeStatus(`编辑失败：${(err as Error).message}`, 4000)
+  } finally {
+    workflowEditing.value = false
+  }
+}
+
 async function uploadFiles(files: FileList | File[]) {
   const sessionId = activeSessionId.value
   if (!sessionId) {
@@ -1476,9 +1525,11 @@ async function selectWorkflow(name: string) {
   if (!name) {
     workflowDefinition.value = null
     activeWorkflowName.value = ''
+    workflowEditMessages.value = []
     return
   }
   activeWorkflowName.value = name
+  workflowEditMessages.value = []
   try {
     workflowDefinition.value = await getWorkflow(name, currentWorkRoot() || undefined)
     workflowNodeStates.value = {}

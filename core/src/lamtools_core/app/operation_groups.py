@@ -93,6 +93,7 @@ CORE_WORKFLOW_OPERATION_NAMES: tuple[str, ...] = (
     "workflow.delete",
     "workflow.run",
     "workflow.cancel",
+    "workflow.edit",
     "workflow.expose",
     "workflow.unexpose",
     "workflow.tools.list",

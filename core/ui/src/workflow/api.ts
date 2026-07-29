@@ -122,3 +122,41 @@ export async function listToolNames(): Promise<Array<{ name: string; description
   )
   return r.tools ?? []
 }
+
+export interface WorkflowEditMessage {
+  role: 'user' | 'assistant'
+  content: string
+}
+
+export interface WorkflowEditResult {
+  reply: string
+  workflow: WorkflowDef
+  applied: boolean
+}
+
+export function editWorkflow(
+  name: string,
+  options: {
+    message: string
+    history?: WorkflowEditMessage[]
+    workRoot?: string
+    modelId?: string
+    reasoningEffort?: string
+    temperature?: number
+  },
+): Promise<WorkflowEditResult> {
+  const params: Record<string, unknown> = { name, message: options.message }
+  if (options.workRoot) params.work_root = options.workRoot
+  if (options.history?.length) params.history = options.history
+  if (options.modelId) params.model_id = options.modelId
+  if (options.reasoningEffort) params.reasoning_effort = options.reasoningEffort
+  if (options.temperature !== undefined) params.temperature = options.temperature
+  return appServerOperation<{ reply?: string; workflow?: WorkflowDef; applied?: boolean }>(
+    'workflow.edit',
+    params,
+  ).then((r) => ({
+    reply: r.reply ?? '',
+    workflow: r.workflow ?? { name, description: '', nodes: [], edges: [], input_params: [], output_port: '', exposed: false, tool_name: '', work_root: options.workRoot ?? '', created_at: '', updated_at: '' },
+    applied: !!r.applied,
+  }))
+}
