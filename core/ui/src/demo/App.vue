@@ -162,6 +162,7 @@
         :definition="workflowDefinition || emptyWorkflow"
         :node-states="workflowNodeStates"
         :selected-node-id="selectedNodeId || undefined"
+        :available-tools="availableTools"
         @update:definition="onWorkflowUpdate"
         @select-node="onSelectNode"
         @run-from="runFromNode"
@@ -475,6 +476,7 @@ import {
   runWorkflow as runWorkflowApi,
   setWorkflowExposed,
   editWorkflow,
+  listToolNames,
 } from '../workflow/api'
 import type { WorkflowDef, WorkflowNodeData, NodeStateStatus } from '../workflow/types'
 import {
@@ -618,6 +620,8 @@ const showWorkflowCreate = ref(false)
 const workflowCreateLoading = ref(false)
 const workflowCreateError = ref('')
 const workflowNameDraft = ref('')
+// Available tool specs for node tool-set selection (checkbox list).
+const availableTools = ref<Array<{ name: string; description: string }>>([])
 // Natural-language graph-edit conversation (Phase 5D).
 const workflowEditMessages = ref<Array<{ role: 'user' | 'assistant'; content: string }>>([])
 const workflowEditing = ref(false)
@@ -1586,8 +1590,19 @@ function toggleWorkflowMode() {
   workflowMode.value = !workflowMode.value
   if (workflowMode.value) {
     void refreshWorkflows()
+    void loadAvailableTools()
     // Open the right panel so the node list + NL conversation are visible.
     if (!rightPinned.value) toggleRightPinned()
+  }
+}
+
+async function loadAvailableTools() {
+  if (availableTools.value.length) return
+  try {
+    availableTools.value = await listToolNames()
+  } catch (err) {
+    console.error('[workflow] list tools failed', err)
+    availableTools.value = []
   }
 }
 

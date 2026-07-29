@@ -37,8 +37,18 @@
           <span>允许工具调用</span>
         </label>
         <label v-if="allowTools" class="field field-wide">
-          <span class="field-label">允许的工具（逗号分隔）</span>
-          <input v-model="allowedTools" type="text" placeholder="read_file, list_dir…" />
+          <span class="field-label">允许的工具</span>
+          <div class="wf-tool-checklist">
+            <label v-for="t in toolList" :key="t.name" class="wf-tool-check">
+              <input
+                type="checkbox"
+                :checked="selectedTools.includes(t.name)"
+                @change="toggleTool(t.name)"
+              />
+              <span class="wf-tool-name" :title="t.description">{{ t.name }}</span>
+            </label>
+            <p v-if="!toolList.length" class="wf-tool-empty">暂无可用工具</p>
+          </div>
         </label>
         <details class="settings-advanced">
           <summary>高级设置</summary>
@@ -60,8 +70,18 @@
           <textarea v-model="instruction" rows="4" placeholder="让 agent 完成的目标…"></textarea>
         </label>
         <label class="field field-wide">
-          <span class="field-label">工具集（逗号分隔）</span>
-          <input v-model="allowedTools" type="text" placeholder="read_file, run_command…" />
+          <span class="field-label">工具集</span>
+          <div class="wf-tool-checklist">
+            <label v-for="t in toolList" :key="t.name" class="wf-tool-check">
+              <input
+                type="checkbox"
+                :checked="selectedTools.includes(t.name)"
+                @change="toggleTool(t.name)"
+              />
+              <span class="wf-tool-name" :title="t.description">{{ t.name }}</span>
+            </label>
+            <p v-if="!toolList.length" class="wf-tool-empty">暂无可用工具</p>
+          </div>
         </label>
         <details class="settings-advanced">
           <summary>高级设置</summary>
@@ -123,6 +143,7 @@ interface SelectOption {
 const props = defineProps<{
   node: WorkflowNode
   anchor: { x: number; y: number }
+  availableTools?: Array<{ name: string; description: string }>
 }>()
 const emit = defineEmits<{
   close: []
@@ -174,7 +195,20 @@ const outputFormatText = ref(String(props.node.config.output_format_text ?? ''))
 const mode = ref(String(props.node.config.mode ?? 'single'))
 const loopMax = ref(Number(props.node.config.loop_max_iterations ?? 3))
 const allowTools = ref(!!props.node.config.allow_tools)
-const allowedTools = ref(Array.isArray(props.node.config.allowed_tools) ? (props.node.config.allowed_tools as string[]).join(', ') : String(props.node.config.tools ?? ''))
+// Selected tool names (checkbox list, not free text).
+const selectedTools = ref<string[]>(
+  Array.isArray(props.node.config.allowed_tools)
+    ? [...(props.node.config.allowed_tools as string[])]
+    : Array.isArray(props.node.config.tools)
+      ? [...(props.node.config.tools as string[])]
+      : [],
+)
+const toolList = computed(() => props.availableTools ?? [])
+function toggleTool(name: string) {
+  const idx = selectedTools.value.indexOf(name)
+  if (idx >= 0) selectedTools.value.splice(idx, 1)
+  else selectedTools.value.push(name)
+}
 const modelId = ref(String(props.node.config.model_id ?? ''))
 const temperature = ref<number | ''>(props.node.config.temperature === undefined ? '' : Number(props.node.config.temperature))
 const reasoningEffort = ref(String(props.node.config.reasoning_effort ?? ''))
@@ -212,7 +246,7 @@ function apply() {
     cfg.mode = mode.value
     if (mode.value === 'loop') cfg.loop_max_iterations = loopMax.value
     cfg.allow_tools = allowTools.value
-    if (allowTools.value) cfg.allowed_tools = allowedTools.value.split(',').map((s) => s.trim()).filter(Boolean)
+    if (allowTools.value) cfg.allowed_tools = [...selectedTools.value]
     cfg.model_id = modelId.value
     if (temperature.value !== '') cfg.temperature = temperature.value
     cfg.reasoning_effort = reasoningEffort.value
@@ -221,7 +255,7 @@ function apply() {
     cfg.retries = retries.value
   } else if (props.node.kind === 'agent') {
     cfg.instruction = instruction.value
-    cfg.tools = allowedTools.value.split(',').map((s) => s.trim()).filter(Boolean)
+    cfg.tools = [...selectedTools.value]
     cfg.model_id = modelId.value
     cfg.reasoning_effort = reasoningEffort.value
     if (temperature.value !== '') cfg.temperature = temperature.value
@@ -298,4 +332,27 @@ function apply() {
 .wf-edit-card :deep(.toggle-line) { display: flex; align-items: center; gap: 6px; font-size: 12px; }
 .wf-edit-card :deep(.settings-advanced) { border-top: 1px solid color-mix(in srgb, var(--theme-main-text, #fff) 8%, transparent); padding-top: 8px; }
 .wf-edit-card :deep(.settings-advanced summary) { font-size: 11px; opacity: 0.65; cursor: pointer; }
+
+.wf-tool-checklist {
+  max-height: 160px;
+  overflow: auto;
+  display: grid;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.18);
+}
+.wf-tool-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  border-radius: 5px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.wf-tool-check:hover { background: rgba(255, 255, 255, 0.05); }
+.wf-tool-check input { margin: 0; }
+.wf-tool-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf-tool-empty { margin: 0; padding: 4px; font-size: 11px; opacity: 0.5; }
 </style>

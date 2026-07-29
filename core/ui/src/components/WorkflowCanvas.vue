@@ -61,6 +61,7 @@
       v-if="editNode"
       :node="editNode"
       :anchor="editAnchor"
+      :available-tools="availableTools"
       @close="editNode = null"
       @update="onUpdateNode"
     />
@@ -85,6 +86,7 @@ const props = defineProps<{
   definition: WorkflowDef
   nodeStates: Record<string, NodeStateStatus>
   selectedNodeId?: string
+  availableTools?: Array<{ name: string; description: string }>
 }>()
 const emit = defineEmits<{
   'update:definition': [def: WorkflowDef]
