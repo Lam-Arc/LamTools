@@ -84,6 +84,20 @@ CORE_DURABLE_OPERATION_NAMES: tuple[str, ...] = (
 )
 
 
+CORE_WORKFLOW_OPERATION_NAMES: tuple[str, ...] = (
+    "workflow.create",
+    "workflow.get",
+    "workflow.list",
+    "workflow.update",
+    "workflow.delete",
+    "workflow.run",
+    "workflow.cancel",
+    "workflow.expose",
+    "workflow.unexpose",
+    "workflow.tools.list",
+)
+
+
 def register_operation_handlers(
     catalog: OperationCatalog,
     names: Sequence[str],
@@ -116,6 +130,7 @@ def build_member_operation_catalog(
 __all__ = [
     "CORE_DURABLE_OPERATION_NAMES",
     "CORE_WORKBENCH_OPERATION_NAMES",
+    "CORE_WORKFLOW_OPERATION_NAMES",
     "build_member_operation_catalog",
     "register_operation_handlers",
 ]

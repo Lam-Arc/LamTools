@@ -883,6 +883,54 @@ def build_parser() -> argparse.ArgumentParser:
     arrange_edit.add_argument("--ws-path", default=os.environ.get("LAMTOOLS_CORE_WS_PATH", "/api/core/app-server"))
     arrange_edit.add_argument("--token", default=os.environ.get("LAMTOOLS_CORE_TOKEN", ""))
     arrange_edit.set_defaults(func=cmd_arrange_edit, raw=False)
+
+    workflow = sub.add_parser("workflow", help="Manage workflow node graphs")
+    workflow_sub = workflow.add_subparsers(dest="workflow_command")
+    wf_new = workflow_sub.add_parser("new", help="Create a workflow from a JSON definition file")
+    wf_new.add_argument("--name", default="", help="Workflow name (overrides the name in --from-file)")
+    wf_new.add_argument("--from-file", required=True, help="Path to a JSON workflow definition")
+    wf_new.add_argument("--work-root", required=True, default="", help="Project work root absolute path (required)")
+    wf_new.add_argument("--exposed", action="store_true", help="Expose this workflow as an agent tool immediately")
+    wf_new.add_argument("--base-url", default=os.environ.get("LAMTOOLS_CORE_API_URL", "http://127.0.0.1:5172"))
+    wf_new.add_argument("--ws-path", default=os.environ.get("LAMTOOLS_CORE_WS_PATH", "/api/core/app-server"))
+    wf_new.add_argument("--token", default=os.environ.get("LAMTOOLS_CORE_TOKEN", ""))
+    wf_new.set_defaults(func=cmd_workflow_new, raw=False)
+    wf_list = workflow_sub.add_parser("ls", help="List workflows")
+    wf_list.add_argument("--work-root", default="", help="Filter by project work_root")
+    wf_list.add_argument("--base-url", default=os.environ.get("LAMTOOLS_CORE_API_URL", "http://127.0.0.1:5172"))
+    wf_list.add_argument("--ws-path", default=os.environ.get("LAMTOOLS_CORE_WS_PATH", "/api/core/app-server"))
+    wf_list.add_argument("--token", default=os.environ.get("LAMTOOLS_CORE_TOKEN", ""))
+    wf_list.set_defaults(func=cmd_workflow_list, raw=False)
+    wf_show = workflow_sub.add_parser("describe", help="Show a workflow definition")
+    wf_show.add_argument("name", help="Workflow name")
+    wf_show.add_argument("--work-root", default="", help="Project work root")
+    wf_show.add_argument("--base-url", default=os.environ.get("LAMTOOLS_CORE_API_URL", "http://127.0.0.1:5172"))
+    wf_show.add_argument("--ws-path", default=os.environ.get("LAMTOOLS_CORE_WS_PATH", "/api/core/app-server"))
+    wf_show.add_argument("--token", default=os.environ.get("LAMTOOLS_CORE_TOKEN", ""))
+    wf_show.set_defaults(func=cmd_workflow_describe, raw=False)
+    wf_run = workflow_sub.add_parser("run", help="Run a workflow")
+    wf_run.add_argument("name", help="Workflow name")
+    wf_run.add_argument("--work-root", default="", help="Project work root")
+    wf_run.add_argument("--input", action="append", default=[], metavar="KEY=VALUE", help="Workflow input (repeatable; VALUE parsed as JSON if possible)")
+    wf_run.add_argument("--max-steps", type=int, default=None, help="Run at most N nodes (single-step debugging)")
+    wf_run.add_argument("--base-url", default=os.environ.get("LAMTOOLS_CORE_API_URL", "http://127.0.0.1:5172"))
+    wf_run.add_argument("--ws-path", default=os.environ.get("LAMTOOLS_CORE_WS_PATH", "/api/core/app-server"))
+    wf_run.add_argument("--token", default=os.environ.get("LAMTOOLS_CORE_TOKEN", ""))
+    wf_run.set_defaults(func=cmd_workflow_run, raw=False)
+    wf_expose = workflow_sub.add_parser("expose", help="Expose a workflow as an agent tool")
+    wf_expose.add_argument("name", help="Workflow name")
+    wf_expose.add_argument("--work-root", default="", help="Project work root")
+    wf_expose.add_argument("--base-url", default=os.environ.get("LAMTOOLS_CORE_API_URL", "http://127.0.0.1:5172"))
+    wf_expose.add_argument("--ws-path", default=os.environ.get("LAMTOOLS_CORE_WS_PATH", "/api/core/app-server"))
+    wf_expose.add_argument("--token", default=os.environ.get("LAMTOOLS_CORE_TOKEN", ""))
+    wf_expose.set_defaults(func=cmd_workflow_expose, raw=False)
+    wf_unexpose = workflow_sub.add_parser("unexpose", help="Unexpose a workflow (no longer an agent tool)")
+    wf_unexpose.add_argument("name", help="Workflow name")
+    wf_unexpose.add_argument("--work-root", default="", help="Project work root")
+    wf_unexpose.add_argument("--base-url", default=os.environ.get("LAMTOOLS_CORE_API_URL", "http://127.0.0.1:5172"))
+    wf_unexpose.add_argument("--ws-path", default=os.environ.get("LAMTOOLS_CORE_WS_PATH", "/api/core/app-server"))
+    wf_unexpose.add_argument("--token", default=os.environ.get("LAMTOOLS_CORE_TOKEN", ""))
+    wf_unexpose.set_defaults(func=cmd_workflow_unexpose, raw=False)
     return parser
 
 
@@ -1588,6 +1636,157 @@ async def cmd_arrange_edit(args: argparse.Namespace) -> int:
     job = result.get("job", {}) if isinstance(result, dict) else {}
     jid = str(job.get("id") or args.job_id)
     print(f"[arrange] {jid} updated")
+    return 0
+
+
+def _parse_workflow_inputs(items: list[str]) -> dict[str, Any]:
+    inputs: dict[str, Any] = {}
+    for item in items or []:
+        if "=" not in item:
+            print(f"warning: ignoring malformed --input '{item}' (expected KEY=VALUE)", file=sys.stderr)
+            continue
+        key, value = item.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
+        parsed: Any = value
+        stripped = value.strip()
+        if stripped and stripped[0] in "{[" and stripped[-1] in "}]":
+            try:
+                parsed = json.loads(stripped)
+            except json.JSONDecodeError:
+                parsed = value  # keep raw string
+        elif stripped.lower() in {"true", "false"}:
+            parsed = stripped.lower() == "true"
+        elif _looks_like_int(stripped):
+            parsed = int(stripped)
+        inputs[key] = parsed
+    return inputs
+
+
+def _looks_like_int(text: str) -> bool:
+    try:
+        int(text)
+        return True
+    except ValueError:
+        return False
+
+
+async def cmd_workflow_new(args: argparse.Namespace) -> int:
+    with open(args.from_file, "r", encoding="utf-8") as fh:
+        definition = json.loads(fh.read())
+    if not isinstance(definition, dict):
+        print("error: --from-file must contain a JSON object", file=sys.stderr)
+        return 1
+    if args.name:
+        definition["name"] = args.name
+    definition["work_root"] = args.work_root
+    if args.exposed:
+        definition["exposed"] = True
+    async def op(client: CoreAppServerClient) -> dict[str, Any]:
+        return await client.request("workflow.create", definition)
+    result = await _invoke_live(args, op)
+    wf = result.get("workflow", {}) if isinstance(result, dict) else {}
+    print(f"[workflow] created {wf.get('name', '?')}")
+    print(f"  nodes: {len(wf.get('nodes') or [])}  edges: {len(wf.get('edges') or [])}")
+    if wf.get("exposed"):
+        print(f"  exposed as tool: {wf.get('tool_name') or ''}")
+    return 0
+
+
+async def cmd_workflow_list(args: argparse.Namespace) -> int:
+    params: dict[str, Any] = {}
+    if args.work_root:
+        params["work_root"] = args.work_root
+    async def op(client: CoreAppServerClient) -> dict[str, Any]:
+        return await client.request("workflow.list", params)
+    result = await _invoke_live(args, op)
+    workflows = result.get("workflows", []) if isinstance(result, dict) else []
+    if isinstance(workflows, list):
+        for w in workflows:
+            if isinstance(w, dict):
+                name = str(w.get("name") or "?")[:32]
+                nodes = len(w.get("nodes") or [])
+                exposed = "exposed" if w.get("exposed") else "-"
+                print(f"{name:32s}  nodes={nodes:<3d} {exposed}")
+    return 0
+
+
+async def cmd_workflow_describe(args: argparse.Namespace) -> int:
+    params: dict[str, Any] = {"name": args.name}
+    if args.work_root:
+        params["work_root"] = args.work_root
+    async def op(client: CoreAppServerClient) -> dict[str, Any]:
+        return await client.request("workflow.get", params)
+    result = await _invoke_live(args, op)
+    wf = result.get("workflow", {}) if isinstance(result, dict) else {}
+    if isinstance(wf, dict):
+        print(f"  name: {wf.get('name')}")
+        print(f"  description: {wf.get('description', '')}")
+        print(f"  nodes: {len(wf.get('nodes') or [])}")
+        for n in (wf.get("nodes") or []):
+            if isinstance(n, dict):
+                print(f"    - [{n.get('kind')}] {n.get('id')} {n.get('title') or ''}")
+        print(f"  edges: {len(wf.get('edges') or [])}")
+        print(f"  output_port: {wf.get('output_port', '')}")
+        print(f"  exposed: {wf.get('exposed', False)}")
+        if wf.get("exposed"):
+            print(f"  tool_name: {wf.get('tool_name', '')}")
+    return 0
+
+
+async def cmd_workflow_run(args: argparse.Namespace) -> int:
+    payload: dict[str, Any] = {"name": args.name}
+    if args.work_root:
+        payload["work_root"] = args.work_root
+    if args.max_steps is not None:
+        payload["max_steps"] = args.max_steps
+    inputs = _parse_workflow_inputs(args.input)
+    if inputs:
+        payload["inputs"] = inputs
+    async def op(client: CoreAppServerClient) -> dict[str, Any]:
+        return await client.request("workflow.run", payload)
+    result = await _invoke_live(args, op)
+    run = result.get("run", {}) if isinstance(result, dict) else {}
+    status = str(run.get("status") or "?")
+    print(f"[workflow] run status={status} run_id={run.get('run_id', '')}")
+    states = run.get("node_states") or {}
+    if isinstance(states, dict):
+        for nid, state in states.items():
+            if isinstance(state, dict):
+                print(f"  {nid}: {state.get('status')} attempts={state.get('attempts')}" + (f" error={state.get('error')}" if state.get("error") else ""))
+    if run.get("error"):
+        print(f"  error: {run['error']}", file=sys.stderr)
+    output = run.get("output")
+    if output is not None:
+        if isinstance(output, str) and len(output) > 500:
+            print(f"  output: {output[:500]}…")
+        else:
+            print(f"  output: {json.dumps(output, ensure_ascii=False) if not isinstance(output, str) else output}")
+    return 0 if status == "completed" else (0 if status == "paused" else 1)
+
+
+async def cmd_workflow_expose(args: argparse.Namespace) -> int:
+    payload: dict[str, Any] = {"name": args.name}
+    if args.work_root:
+        payload["work_root"] = args.work_root
+    async def op(client: CoreAppServerClient) -> dict[str, Any]:
+        return await client.request("workflow.expose", payload)
+    result = await _invoke_live(args, op)
+    wf = result.get("workflow", {}) if isinstance(result, dict) else {}
+    print(f"[workflow] {wf.get('name', args.name)} exposed as tool: {wf.get('tool_name', '')}")
+    return 0
+
+
+async def cmd_workflow_unexpose(args: argparse.Namespace) -> int:
+    payload: dict[str, Any] = {"name": args.name}
+    if args.work_root:
+        payload["work_root"] = args.work_root
+    async def op(client: CoreAppServerClient) -> dict[str, Any]:
+        return await client.request("workflow.unexpose", payload)
+    result = await _invoke_live(args, op)
+    wf = result.get("workflow", {}) if isinstance(result, dict) else {}
+    print(f"[workflow] {wf.get('name', args.name)} unexposed")
     return 0
 
 

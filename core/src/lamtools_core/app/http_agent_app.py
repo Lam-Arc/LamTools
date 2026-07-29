@@ -28,12 +28,15 @@ from lamtools_core.runtime import RuntimeTaskRegistry
 from lamtools_core.runtime.arrange import ArrangeManager, ArrangeRunner, arranged_operation_payload
 from lamtools_core.runtime.goal import GoalManager
 from lamtools_core.runtime.observer import ObserverSupervisor
+from lamtools_core.runtime.workflow import WorkflowManager, WorkflowRunner
+from lamtools_core.project.workflow_store import WorkflowStore
 from lamtools_core.member import MemberKit, MemberManifest
 
 from .core_db import open_core_app_db
 from .core_session_store import CoreDbSessionStore
 from .default_agent import CoreAgentPaths, CoreAgentSpec, create_core_agent_operations
 from .durable_operations import register_durable_operations
+from .workflow_operations import register_workflow_operations
 from .event_store import AppEventInput
 from .factory import add_spa_fallback, create_app
 from .live_hub import CoreAppEventHub
@@ -400,6 +403,49 @@ def create_core_agent_http_app(
             _logger.exception("[startup] stale active turn recovery failed (non-fatal)")
         await arrange_runner.start()
         await observer_supervisor.start()
+
+        # Workflow mode: file-backed definitions + deterministic runner. The
+        # runner streams per-node state as core/runItem events (the existing
+        # GUI reducer renders them with no new channel) and cooperatively
+        # cancels via the same runtime_task_registry the kernel uses.
+        workflow_store = WorkflowStore()
+        workflow_manager = WorkflowManager(workflow_store)
+
+        async def _emit_workflow_event(event: Any) -> None:
+            async def _write(db: Any) -> Any:
+                return await core_db_handle.persistence.append(
+                    db,
+                    AppEventInput(
+                        thread_id=event.thread_id,
+                        method="core/runItem",
+                        turn_id=event.turn_id,
+                        item_id=event.item_id,
+                        client_message_id=uuid.uuid4().hex,
+                        payload=event.to_dict(),
+                    ),
+                )
+
+            try:
+                envelope = await core_db_handle.persistence.write(_write)
+                await live_hub.publish(envelope)
+            except Exception:  # noqa: BLE001 — streaming must never break a run
+                pass
+
+        workflow_runner = WorkflowRunner(
+            llm_client=llm_client,
+            sub_agent_runner=None,  # wired with the agent's runner in a later phase
+            emit=_emit_workflow_event,
+            runtime_task_registry=runtime_task_registry,
+        )
+        register_workflow_operations(
+            agent_operations,
+            workflow_manager=workflow_manager,
+            runner=workflow_runner,
+            runtime_task_registry=runtime_task_registry,
+        )
+        app_state["workflow_store"] = workflow_store
+        app_state["workflow_manager"] = workflow_manager
+        app_state["workflow_runner"] = workflow_runner
 
     async def shutdown_core_agent() -> None:
         observer_supervisor = app_state.get("observer_supervisor")
