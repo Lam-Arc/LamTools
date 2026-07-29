@@ -401,23 +401,21 @@
         </div>
       </template>
       <Teleport v-if="workflowMode && conversationExpanded" defer to=".workspace-shell">
-        <div class="wf-convo-overlay" @mousedown.self="conversationExpanded = false">
-          <section class="wf-convo-float" role="dialog" aria-modal="false" aria-label="工作流对话">
-            <header class="wf-convo-float-head">
-              <h3>{{ activeWorkflowName || '工作流' }} · 对话</h3>
-              <button type="button" class="text-btn" title="收起" @click="conversationExpanded = false">✕</button>
-            </header>
-            <div class="wf-convo-float-body">
-              <ChatThread
-                :messages="messages"
-                :process-expanded-ids="processExpandedIds"
-                :typing-message-ids="typingMessageIds"
-                @toggle-process="toggleProcess"
-                @decision-select="approvalController.handleDecision"
-              />
-            </div>
-          </section>
-        </div>
+        <section class="wf-convo-float" role="dialog" aria-modal="false" aria-label="工作流对话">
+          <header class="wf-convo-float-head">
+            <h3>{{ activeWorkflowName || '工作流' }} · 对话</h3>
+            <button type="button" class="text-btn" title="收起" @click="conversationExpanded = false">✕</button>
+          </header>
+          <div class="wf-convo-float-body">
+            <ChatThread
+              :messages="messages"
+              :process-expanded-ids="processExpandedIds"
+              :typing-message-ids="typingMessageIds"
+              @toggle-process="toggleProcess"
+              @decision-select="approvalController.handleDecision"
+            />
+          </div>
+        </section>
       </Teleport>
       <FileTreePanel
         v-else-if="stageOpen && activeProjectId"
@@ -2315,24 +2313,24 @@ onUnmounted(() => {
 }
 
 /* Right-half floating window */
-.wf-convo-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: var(--z-modal, 80);
-  display: flex;
-  justify-content: flex-end;
-  background: rgba(0, 0, 0, 0.28);
-  backdrop-filter: blur(2px);
-}
+/* Centered floating conversation card (no full-screen overlay; the canvas
+   and composer remain interactive). 0.8 opacity so the graph stays visible. */
 .wf-convo-float {
-  width: 50vw;
-  max-width: 50vw;
-  height: 100%;
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: var(--z-modal, 80);
+  width: min(640px, 70vw);
+  height: min(560px, 76vh);
   display: flex;
   flex-direction: column;
   background: var(--theme-main-background);
-  border-left: 1px solid var(--theme-main-border);
+  border: 1px solid var(--theme-main-border);
+  border-radius: 16px;
   box-shadow: var(--shadow);
+  opacity: 0.8;
+  pointer-events: auto;
 }
 .wf-convo-float-head {
   display: flex;
