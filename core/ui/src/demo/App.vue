@@ -386,7 +386,6 @@
                   <button type="button" class="text-btn" title="放大" @click="conversationExpanded = true">⤢</button>
                 </header>
                 <div class="wf-convo-body">
-                  <div v-if="!messages.length" class="wf-right-empty">在下方输入框与工作流对话</div>
                   <ChatThread
                     :messages="messages"
                     :process-expanded-ids="processExpandedIds"
