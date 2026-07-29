@@ -12,7 +12,7 @@
       @node-context-menu="onNodeContextMenu"
       @node-click="onNodeClick"
     >
-      <Background />
+      <Background :gap="22" :size="1" pattern-color="rgba(130,130,140,0.22)" />
       <Controls />
     </VueFlow>
 
@@ -263,10 +263,14 @@ if (typeof document !== 'undefined') {
 @import '@vue-flow/controls/dist/style.css';
 
 .wf-canvas {
-  position: relative;
+  /* Fill the entire workspace-main (ignore its padding) so the whole main
+     area is the canvas, not a small sub-region. Background is transparent so
+     the canvas blends with the main surface (simple/restrained). */
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
-  background: color-mix(in srgb, var(--theme-backdrop-background, #111) 60%, #000);
+  background: transparent;
 }
 .wf-canvas :deep(.vue-flow) { background: transparent; }
 .wf-canvas :deep(.vue-flow__nodes) { z-index: 5; }

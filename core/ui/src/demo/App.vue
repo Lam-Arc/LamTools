@@ -127,7 +127,7 @@
     </template>
 
     <template #main-header>
-      <div v-if="workflowMode" class="thread-header">
+      <div v-if="workflowMode" class="thread-header wf-floating-header">
         <CoreSessionTitleEditor
           :title="workflowDefinition?.name || ''"
           :session-id="workflowDefinition?.name || ''"
@@ -2183,6 +2183,22 @@ onUnmounted(() => {
 .sidebar-action.is-active {
   background: color-mix(in srgb, var(--theme-main-text, #fff) 12%, transparent);
   color: var(--text);
+}
+
+/* Workflow mode: the whole main area is the canvas; the thin title floats
+   over it instead of taking vertical space. */
+.wf-floating-header {
+  position: absolute;
+  top: 12px;
+  left: 18px;
+  right: 18px;
+  z-index: var(--z-popover, 60);
+  padding: 6px 12px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--theme-surface-background, #1c1c1e) 72%, transparent);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  pointer-events: auto;
 }
 
 /* ---- Workflow right panel (Phase 5E) ---- */
