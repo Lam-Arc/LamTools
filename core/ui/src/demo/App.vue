@@ -380,8 +380,34 @@
               </div>
             </template>
             <template v-else>
-              <h3>对话</h3>
-              <div v-if="!messages.length" class="wf-right-empty">在下方输入框与工作流对话</div>
+              <div class="wf-convo-card">
+                <header class="wf-convo-head">
+                  <h3>对话</h3>
+                  <button type="button" class="text-btn" title="放大" @click="conversationExpanded = true">⤢</button>
+                </header>
+                <div class="wf-convo-body">
+                  <div v-if="!messages.length" class="wf-right-empty">在下方输入框与工作流对话</div>
+                  <ChatThread
+                    :messages="messages"
+                    :process-expanded-ids="processExpandedIds"
+                    :typing-message-ids="typingMessageIds"
+                    @toggle-process="toggleProcess"
+                    @decision-select="approvalController.handleDecision"
+                  />
+                </div>
+              </div>
+            </template>
+          </section>
+        </div>
+      </template>
+      <Teleport v-if="workflowMode && conversationExpanded" defer to=".workspace-shell">
+        <div class="wf-convo-overlay" @mousedown.self="conversationExpanded = false">
+          <section class="wf-convo-float" role="dialog" aria-modal="false" aria-label="工作流对话">
+            <header class="wf-convo-float-head">
+              <h3>{{ activeWorkflowName || '工作流' }} · 对话</h3>
+              <button type="button" class="text-btn" title="收起" @click="conversationExpanded = false">✕</button>
+            </header>
+            <div class="wf-convo-float-body">
               <ChatThread
                 :messages="messages"
                 :process-expanded-ids="processExpandedIds"
@@ -389,10 +415,10 @@
                 @toggle-process="toggleProcess"
                 @decision-select="approvalController.handleDecision"
               />
-            </template>
+            </div>
           </section>
         </div>
-      </template>
+      </Teleport>
       <FileTreePanel
         v-else-if="stageOpen && activeProjectId"
         :project-id="activeProjectId"
@@ -617,6 +643,8 @@ const workflowCreateError = ref('')
 const workflowNameDraft = ref('')
 // Available tool specs for node tool-set selection (checkbox list).
 const availableTools = ref<Array<{ name: string; description: string }>>([])
+// Conversation card expanded into a right-half floating window.
+const conversationExpanded = ref(false)
 let autosaveTimer: ReturnType<typeof setTimeout> | null = null
 
 const emptyWorkflow: WorkflowDef = {
@@ -2254,6 +2282,75 @@ onUnmounted(() => {
   flex: 1 1 auto;
   padding: 12px;
   overflow: auto;
+}
+
+/* Conversation card in the right panel */
+.wf-convo-card {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--theme-surface-background, #1c1c1e) 60%, transparent);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  overflow: hidden;
+}
+.wf-convo-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.wf-convo-head h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+.wf-convo-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px;
+}
+
+/* Right-half floating window */
+.wf-convo-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal, 80);
+  display: flex;
+  justify-content: flex-end;
+  background: rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(2px);
+}
+.wf-convo-float {
+  width: 50vw;
+  max-width: 50vw;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--theme-main-background, #141416);
+  border-left: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: var(--shadow, 0 12px 40px rgba(0, 0, 0, 0.5));
+}
+.wf-convo-float-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.wf-convo-float-head h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+}
+.wf-convo-float-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px;
 }
 .wf-right-info-head {
   display: flex;
