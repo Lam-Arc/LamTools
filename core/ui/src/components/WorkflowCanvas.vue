@@ -64,6 +64,19 @@
       <button class="menu-item danger" type="button" role="menuitem" @click="deleteNode(nodeMenu.id)">删除</button>
     </div>
 
+    <!-- edge context menu -->
+    <div
+      v-if="edgeMenu"
+      class="wf-context-menu"
+      role="menu"
+      :style="{ left: edgeMenu.x + 'px', top: edgeMenu.y + 'px' }"
+      @pointerdown.stop
+      @click.stop
+      @keydown.escape.prevent="closeMenus"
+    >
+      <button class="menu-item danger" type="button" role="menuitem" @click="deleteEdge(edgeMenu.id)">删除连线</button>
+    </div>
+
     <NodeEditCard
       v-if="editNode"
       :node="editNode"
@@ -159,6 +172,7 @@ watch(vfEdges, (edges) => {
 type MenuPos = { x: number; y: number }
 const paneMenu = ref<MenuPos | null>(null)
 const nodeMenu = ref<MenuPos & { id: string } | null>(null)
+const edgeMenu = ref<MenuPos & { id: string } | null>(null)
 const editNode = ref<WorkflowNodeData | null>(null)
 const editAnchor = ref<MenuPos>({ x: 0, y: 0 })
 const clipboard = ref<WorkflowNodeData | null>(null)
@@ -173,24 +187,33 @@ function onContextMenu(evt: MouseEvent) {
   const y = evt.clientY
   let el = evt.target as HTMLElement | null
   let nodeId = ''
+  let edgeId = ''
   while (el && el !== evt.currentTarget) {
     if (el.classList?.contains('vue-flow__node')) {
       nodeId = el.getAttribute('data-id') || ''
       break
     }
+    if (el.classList?.contains('vue-flow__edge')) {
+      edgeId = el.getAttribute('data-id') || ''
+      break
+    }
     el = el.parentElement
   }
-  if (nodeId && props.definition.nodes.some((n) => n.id === nodeId)) {
-    paneMenu.value = null
+  paneMenu.value = null
+  nodeMenu.value = null
+  edgeMenu.value = null
+  if (edgeId && props.definition.edges.some((e) => e.id === edgeId)) {
+    edgeMenu.value = { x, y, id: edgeId }
+  } else if (nodeId && props.definition.nodes.some((n) => n.id === nodeId)) {
     nodeMenu.value = { x, y, id: nodeId }
   } else {
-    nodeMenu.value = null
     paneMenu.value = { x, y }
   }
 }
 function closeMenus() {
   paneMenu.value = null
   nodeMenu.value = null
+  edgeMenu.value = null
 }
 
 // ---- node click → select + config ----
@@ -271,6 +294,13 @@ function deleteNode(id: string) {
     ...props.definition,
     nodes: props.definition.nodes.filter((n) => n.id !== id),
     edges: props.definition.edges.filter((e) => e.source !== id && e.target !== id),
+  })
+  closeMenus()
+}
+function deleteEdge(id: string) {
+  emit('update:definition', {
+    ...props.definition,
+    edges: props.definition.edges.filter((e) => e.id !== id),
   })
   closeMenus()
 }
