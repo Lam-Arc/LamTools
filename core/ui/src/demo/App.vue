@@ -1989,7 +1989,7 @@ onUnmounted(() => {
   max-width: calc(100vw - 32px);
   padding: 16px;
   border-radius: 14px;
-  background: var(--theme-surface-background);
+  background: var(--theme-main-background);
   border: 1px solid var(--theme-main-border);
   box-shadow: var(--shadow);
   display: grid;
@@ -2288,7 +2288,7 @@ onUnmounted(() => {
   height: 100%;
   min-height: 0;
   border-radius: 12px;
-  background: color-mix(in srgb, var(--theme-surface-background) 60%, transparent);
+  background: var(--theme-main-background);
   border: 1px solid var(--theme-main-border);
   overflow: hidden;
 }
@@ -2328,7 +2328,6 @@ onUnmounted(() => {
   border: 1px solid var(--theme-main-border);
   border-radius: 16px;
   box-shadow: var(--shadow);
-  opacity: 0.8;
   pointer-events: auto;
 }
 .wf-convo-float-head {
