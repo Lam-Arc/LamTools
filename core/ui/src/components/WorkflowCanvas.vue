@@ -1,5 +1,5 @@
 <template>
-  <div class="wf-canvas" @contextmenu.prevent>
+  <div class="wf-canvas" @contextmenu.prevent="onContextMenu">
     <VueFlow
       v-model:nodes="vfNodes"
       v-model:edges="vfEdges"
@@ -8,8 +8,6 @@
       :selection-on-drag="false"
       :default-viewport="{ zoom: 1 }"
       fit-view-on-init
-      @pane-context-menu="onPaneContextMenu"
-      @node-context-menu="onNodeContextMenu"
       @node-click="onNodeClick"
     >
       <Background :gap="22" :size="1" pattern-color="rgba(130,130,140,0.22)" />
@@ -76,6 +74,11 @@ import { markRaw, ref, watch } from 'vue'
 import { VueFlow, useVueFlow, type Node, type Edge } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
+// Vue Flow styles must load as global CSS (not inside <style scoped> @import,
+// which Vite scopes and breaks internal class selectors + load order).
+import '@vue-flow/core/dist/style.css'
+import '@vue-flow/core/dist/theme-default.css'
+import '@vue-flow/controls/dist/style.css'
 import WorkflowNodeComp from './WorkflowNode.vue'
 import NodeEditCard from './NodeEditCard.vue'
 import type { WorkflowDef, WorkflowNodeKind, WorkflowNodeData, NodeStateStatus } from '../workflow/types'
@@ -150,16 +153,30 @@ const editNode = ref<WorkflowNodeData | null>(null)
 const editAnchor = ref<MenuPos>({ x: 0, y: 0 })
 const clipboard = ref<WorkflowNodeData | null>(null)
 
-function onPaneContextMenu(evt: any) {
-  const x = evt?.clientX ?? 0
-  const y = evt?.clientY ?? 0
-  nodeMenu.value = null
-  paneMenu.value = { x, y }
-}
-function onNodeContextMenu(params: any) {
-  const ev = params?.event
-  paneMenu.value = null
-  nodeMenu.value = { x: ev?.clientX ?? 0, y: ev?.clientY ?? 0, id: params?.node?.id ?? '' }
+// Single native contextmenu handler on the canvas root. Detects whether the
+// right-click hit a Vue Flow node (DOM traversal to .vue-flow__node[data-id])
+// and shows the node menu, otherwise the pane menu. This avoids relying on
+// Vue Flow's pane/node context-menu events, which are unreliable with
+// panOnDrag={[2]} (right-button drag is interpreted as panning).
+function onContextMenu(evt: MouseEvent) {
+  const x = evt.clientX
+  const y = evt.clientY
+  let el = evt.target as HTMLElement | null
+  let nodeId = ''
+  while (el && el !== evt.currentTarget) {
+    if (el.classList?.contains('vue-flow__node')) {
+      nodeId = el.getAttribute('data-id') || ''
+      break
+    }
+    el = el.parentElement
+  }
+  if (nodeId && props.definition.nodes.some((n) => n.id === nodeId)) {
+    paneMenu.value = null
+    nodeMenu.value = { x, y, id: nodeId }
+  } else {
+    nodeMenu.value = null
+    paneMenu.value = { x, y }
+  }
 }
 function closeMenus() {
   paneMenu.value = null
@@ -258,9 +275,6 @@ if (typeof document !== 'undefined') {
 </script>
 
 <style scoped>
-@import '@vue-flow/core/dist/style.css';
-@import '@vue-flow/core/dist/theme-default.css';
-@import '@vue-flow/controls/dist/style.css';
 
 .wf-canvas {
   /* Fill the entire workspace-main (ignore its padding) so the whole main
