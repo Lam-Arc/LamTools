@@ -32,7 +32,7 @@ from typing import Any, Literal
 from lamtools_core.event.run_item import RunItemEvent, RunItemStatus
 
 
-WorkflowNodeKind = Literal["llm", "agent", "action", "input", "output"]
+WorkflowNodeKind = Literal["llm", "agent", "action"]
 ActionKind = Literal["shell", "script", "http", "file-data"]
 PortDirection = Literal["in", "out"]
 NodeStateStatus = Literal["idle", "running", "done", "error", "skipped", "cancelled"]
@@ -455,9 +455,10 @@ class WorkflowRunner:
             order = order[idx:]
 
         values: dict[str, Any] = dict(prior_values or {})
-        # Bind workflow inputs under the __input__ namespace. Input names come
-        # from the system Input node's output ports (preferred) plus the legacy
-        # input_params array (backward compatible).
+        # Bind workflow inputs under the __input__ namespace. An input is any
+        # node input port that no edge feeds (an "orphaned" in-port); it is
+        # exposed as a workflow input named "{nodeId}.{portName}". The legacy
+        # input_params array is merged in for backward compatibility.
         input_names = _workflow_input_names(workflow)
         for name in input_names:
             key = f"__input__.{name}"
@@ -564,11 +565,6 @@ class WorkflowRunner:
         state: WorkflowNodeState,
         values: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        # System Input/Output nodes don't retry — they just route data.
-        if node.kind == "input":
-            return self._execute_input(node, values or {})
-        if node.kind == "output":
-            return self._execute_output(node, bound_inputs)
         retries = _as_int(node.config.get("retries"), default=0)
         last_exc: Exception | None = None
         for attempt in range(retries + 1):
@@ -586,23 +582,6 @@ class WorkflowRunner:
                 if attempt < retries:
                     await asyncio.sleep(0.1 * (attempt + 1))
         raise last_exc if last_exc is not None else RuntimeError("node execution failed")
-
-    def _execute_input(self, node: WorkflowNode, values: dict[str, Any]) -> dict[str, Any]:
-        """Input node: expose workflow inputs on its output ports.
-
-        Each output port name is a workflow input name; its value is read from
-        the ``__input__.<name>`` slot bound by the runner (which applies
-        defaults when the raw input was absent).
-        """
-        outputs: dict[str, Any] = {}
-        for port in node.output_ports():
-            outputs[port.name] = values.get(f"__input__.{port.name}")
-        return outputs
-
-    def _execute_output(self, node: WorkflowNode, bound_inputs: dict[str, Any]) -> dict[str, Any]:
-        """Output node: pass through its bound input as the node output."""
-        value = next(iter(bound_inputs.values())) if bound_inputs else None
-        return {"__out__": value}
 
     async def _execute_llm(
         self, node: WorkflowNode, bound_inputs: dict[str, Any], work_root: str
@@ -975,15 +954,15 @@ def _bind_inputs(node: WorkflowNode, workflow: WorkflowDef, values: dict[str, An
 def _input_value_key(node: WorkflowNode, port_name: str, workflow: WorkflowDef) -> str | None:
     """Resolve the value-table key feeding a node's input port.
 
-    Edge-bound ports read ``{source}.{source_port}``; unbound ports fall back to
-    a workflow input of the same name (``__input__.{name}``).
+    Edge-bound ports read ``{source}.{source_port}``; an orphaned port (no
+    edge feeds it) is a workflow input named ``{nodeId}.{portName}``, read
+    from the ``__input__.{nodeId}.{portName}`` slot bound by the runner.
     """
     for edge in workflow.edges:
         if edge.target == node.id and edge.target_port == port_name:
             return f"{edge.source}.{edge.source_port}"
-    if port_name in _workflow_input_names(workflow):
-        return f"__input__.{port_name}"
-    return None
+    # Orphaned input port → workflow input.
+    return f"__input__.{node.id}.{port_name}"
 
 
 def _default_output_port(node: WorkflowNode) -> str:
@@ -994,14 +973,23 @@ def _default_output_port(node: WorkflowNode) -> str:
 
 
 def _resolve_output(workflow: WorkflowDef, values: dict[str, Any]) -> Any:
-    # Preferred: the Output system node's pass-through value.
+    """Workflow output = the values on terminal output ports (out-ports with no
+    outgoing edge). One terminal port → its value; several → a dict keyed by
+    ``{nodeId}.{portName}``. Falls back to the legacy ``output_port`` spec."""
+    outgoing = {f"{e.source}.{e.source_port}" for e in workflow.edges}
+    terminal: dict[str, Any] = {}
     for node in workflow.nodes:
-        if node.kind == "output":
-            return values.get(f"{node.id}.__out__")
-    # Legacy: the output_port spec ("nodeId" or "nodeId.portName").
+        for port in node.output_ports():
+            key = f"{node.id}.{port.name}"
+            if key not in outgoing:
+                terminal[key] = values.get(key)
+    if terminal:
+        if len(terminal) == 1:
+            return next(iter(terminal.values()))
+        return terminal
+    # Legacy output_port spec ("nodeId" or "nodeId.portName").
     spec = workflow.output_port.strip()
     if not spec:
-        # Default: the last node's default output.
         if not workflow.nodes:
             return None
         last = workflow.nodes[-1]
@@ -1017,16 +1005,23 @@ def _resolve_output(workflow: WorkflowDef, values: dict[str, Any]) -> Any:
 
 
 def _workflow_input_names(workflow: WorkflowDef) -> list[str]:
-    """Workflow input names: the Output ports of any Input system node, plus the
-    legacy ``input_params`` array (backward compatible)."""
+    """Workflow input names: each node input port that no edge feeds (an
+    orphaned in-port), named ``{nodeId}.{portName}``, plus the legacy
+    ``input_params`` array (backward compatible)."""
+    fed: set[tuple[str, str]] = {(e.target, e.target_port) for e in workflow.edges}
     names: list[str] = []
+    seen: set[str] = set()
     for node in workflow.nodes:
-        if node.kind == "input":
-            for port in node.output_ports():
-                if port.name and port.name not in names:
-                    names.append(port.name)
+        for port in node.input_ports():
+            if (node.id, port.name) in fed:
+                continue
+            name = f"{node.id}.{port.name}"
+            if name not in seen:
+                seen.add(name)
+                names.append(name)
     for param in workflow.input_params:
-        if param.name and param.name not in names:
+        if param.name and param.name not in seen:
+            seen.add(param.name)
             names.append(param.name)
     return names
 

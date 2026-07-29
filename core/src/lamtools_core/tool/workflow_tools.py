@@ -47,8 +47,8 @@ def workflow_tool_specs(enrolled: list[WorkflowDef]) -> list[ToolSpec]:
         tool_name = wf.effective_tool_name()
         properties: dict[str, Any] = {}
         required: list[str] = []
-        # Input params come from the Input system node's output ports
-        # (preferred), falling back to the legacy input_params array.
+        # Workflow inputs come from each node's orphaned input ports
+        # (in-ports no edge feeds), named "{nodeId}.{portName}".
         input_ports = _workflow_input_ports(wf)
         for name, ptype, desc in input_ports:
             entry: dict[str, Any] = {}
@@ -78,16 +78,23 @@ def workflow_tool_specs(enrolled: list[WorkflowDef]) -> list[ToolSpec]:
 
 
 def _workflow_input_ports(wf: WorkflowDef) -> list[tuple[str, str, str]]:
-    """Return (name, type, description) for workflow inputs, sourced from Input
-    nodes' output ports (plus legacy input_params)."""
+    """Return (name, type, description) for workflow inputs.
+
+    An input is any node input port that no edge feeds (an orphaned in-port),
+    named ``{nodeId}.{portName}``. The legacy ``input_params`` array is merged
+    in for backward compatibility.
+    """
+    fed: set[tuple[str, str]] = {(e.target, e.target_port) for e in wf.edges}
     seen: set[str] = set()
     result: list[tuple[str, str, str]] = []
     for node in wf.nodes:
-        if node.kind == "input":
-            for port in node.output_ports():
-                if port.name and port.name not in seen:
-                    seen.add(port.name)
-                    result.append((port.name, port.type, port.description))
+        for port in node.input_ports():
+            if (node.id, port.name) in fed:
+                continue
+            name = f"{node.id}.{port.name}"
+            if name not in seen:
+                seen.add(name)
+                result.append((name, port.type, port.description))
     for param in wf.input_params:
         if param.name and param.name not in seen:
             seen.add(param.name)

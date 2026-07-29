@@ -43,8 +43,6 @@ const state = computed<NodeStateStatus>(() => props.data.state ?? 'idle')
 const icon = computed(() => {
   if (kind.value === 'llm') return '◇'
   if (kind.value === 'agent') return '◈'
-  if (kind.value === 'input') return '⤓'
-  if (kind.value === 'output') return '⤒'
   return '◆'
 })
 
@@ -66,12 +64,6 @@ const stateDot = computed(() => {
 
 const summary = computed(() => {
   const cfg = node.value.config
-  if (kind.value === 'input') {
-    return '入参: ' + node.value.ports.filter((p) => p.direction === 'out').map((p) => p.name).join(', ')
-  }
-  if (kind.value === 'output') {
-    return '输出'
-  }
   if (kind.value === 'llm') {
     const mode = cfg.mode || 'single'
     const tools = Array.isArray(cfg.allowed_tools) ? cfg.allowed_tools.length : 0

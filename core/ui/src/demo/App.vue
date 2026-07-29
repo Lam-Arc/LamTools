@@ -1650,10 +1650,7 @@ async function createWorkflowFromCard() {
     ...emptyWorkflow,
     name,
     work_root: workRoot,
-    nodes: [
-      { id: 'input-1', kind: 'input', title: 'Input', config: {}, ports: [{ name: 'value', type: 'text', direction: 'out' }], position: { x: 80, y: 160 } },
-      { id: 'output-1', kind: 'output', title: 'Output', config: {}, ports: [{ name: 'value', type: 'text', direction: 'in' }], position: { x: 480, y: 160 } },
-    ],
+    nodes: [],
     edges: [],
   }
   workflowCreateLoading.value = true

@@ -29,8 +29,6 @@
         <button class="menu-item" type="button" role="menuitem" @click="addNodeAt('llm', paneMenu)">LLM</button>
         <button class="menu-item" type="button" role="menuitem" @click="addNodeAt('agent', paneMenu)">Agent</button>
         <button class="menu-item" type="button" role="menuitem" @click="addNodeAt('action', paneMenu)">Action</button>
-        <button class="menu-item" type="button" role="menuitem" @click="addNodeAt('input', paneMenu)">Input</button>
-        <button class="menu-item" type="button" role="menuitem" @click="addNodeAt('output', paneMenu)">Output</button>
       </div>
       <span class="wf-menu-sep" />
       <button class="menu-item" type="button" role="menuitem" :disabled="!clipboard" @click="pasteAt(paneMenu)">粘贴</button>
@@ -218,13 +216,15 @@ function addNodeAt(kind: WorkflowNodeKind, pos: MenuPos) {
 }
 
 function defaultTitle(kind: WorkflowNodeKind): string {
-  return kind === 'llm' ? 'LLM' : kind === 'agent' ? 'Agent' : kind === 'input' ? 'Input' : kind === 'output' ? 'Output' : 'Action'
+  return kind === 'llm' ? 'LLM' : kind === 'agent' ? 'Agent' : 'Action'
 }
-function defaultPorts(kind: WorkflowNodeKind) {
-  if (kind === 'input') return [{ name: 'value', type: 'text', direction: 'out' as const }]
-  if (kind === 'output') return [{ name: 'value', type: 'text', direction: 'in' as const }]
-  if (kind === 'action' || kind === 'llm') return [{ name: 'out', type: 'text', direction: 'out' as const }]
-  return [{ name: 'out', type: 'text', direction: 'out' as const }]
+// Every node carries both an input and an output port — ports (not separate
+// Input/Output nodes) are how data flows in and out of a node.
+function defaultPorts(_kind: WorkflowNodeKind) {
+  return [
+    { name: 'in', type: 'text', direction: 'in' as const },
+    { name: 'out', type: 'text', direction: 'out' as const },
+  ]
 }
 
 function onUpdateNode(updated: WorkflowNodeData) {
