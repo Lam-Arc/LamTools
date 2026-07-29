@@ -333,8 +333,65 @@
     </template>
 
     <template #right-panel>
+      <template v-if="workflowMode">
+        <div class="wf-right-panel">
+          <!-- Upper half: node list -->
+          <section class="wf-right-nodes">
+            <h3>节点</h3>
+            <ul v-if="workflowDefinition?.nodes.length" class="wf-node-list">
+              <li
+                v-for="n in workflowDefinition.nodes"
+                :key="n.id"
+                class="wf-node-list-item"
+                :class="{ active: n.id === selectedNodeId }"
+                @click="onSelectNode(n.id)"
+              >
+                <span class="wf-node-list-kind" aria-hidden="true">{{ nodeKindIcon(n.kind) }}</span>
+                <span class="wf-node-list-title" :title="n.title || n.id">{{ n.title || n.id }}</span>
+              </li>
+            </ul>
+            <p v-else class="wf-right-empty">暂无节点</p>
+          </section>
+          <!-- Lower half: global NL edit conversation or selected-node info -->
+          <section class="wf-right-info">
+            <template v-if="selectedNodeId">
+              <div class="wf-right-info-head">
+                <h3>{{ selectedNode?.title || selectedNodeId }}</h3>
+                <button type="button" class="text-btn" title="返回对话" @click="onSelectNode(null)">✕</button>
+              </div>
+              <div v-if="selectedNode" class="wf-node-info-body">
+                <p class="wf-node-info-row"><span>类型</span><strong>{{ selectedNode.kind }}</strong></p>
+                <p v-if="selectedNode.config.instruction" class="wf-node-info-block">
+                  <span>指令</span><pre>{{ String(selectedNode.config.instruction) }}</pre>
+                </p>
+                <p v-if="selectedNode.config.command" class="wf-node-info-block">
+                  <span>命令</span><code>{{ String(selectedNode.config.command) }}</code>
+                </p>
+                <p v-if="selectedNode.config.model_id" class="wf-node-info-row"><span>模型</span><strong>{{ String(selectedNode.config.model_id) }}</strong></p>
+                <p v-if="selectedNode.config.mode" class="wf-node-info-row"><span>模式</span><strong>{{ String(selectedNode.config.mode) }}</strong></p>
+                <p class="wf-node-info-row"><span>端口</span><strong>{{ selectedNode.ports.map((p) => p.name).join(', ') || '—' }}</strong></p>
+              </div>
+            </template>
+            <template v-else>
+              <h3>对话编辑</h3>
+              <div class="wf-edit-thread">
+                <p v-if="!workflowEditMessages.length" class="wf-right-empty">在下方输入框用自然语言编辑工作流图</p>
+                <div
+                  v-for="(m, i) in workflowEditMessages"
+                  :key="i"
+                  class="wf-edit-msg"
+                  :class="`role-${m.role}`"
+                >
+                  <span class="wf-edit-role">{{ m.role === 'user' ? '你' : '助手' }}</span>
+                  <span class="wf-edit-content">{{ m.content }}</span>
+                </div>
+              </div>
+            </template>
+          </section>
+        </div>
+      </template>
       <FileTreePanel
-        v-if="stageOpen && activeProjectId"
+        v-else-if="stageOpen && activeProjectId"
         :project-id="activeProjectId"
         :client="projectClient"
         @open-file="openFileInStage"
@@ -776,6 +833,16 @@ const workflowProjectGroups = computed(() => {
 const activeSessionTitle = computed(() => (
   sessions.value.find((session) => session.id === activeSessionId.value)?.title || 'Session'
 ))
+const selectedNode = computed(() => (
+  workflowDefinition.value?.nodes.find((n) => n.id === selectedNodeId.value) || null
+))
+function nodeKindIcon(kind: string): string {
+  if (kind === 'llm') return '◇'
+  if (kind === 'agent') return '◈'
+  if (kind === 'input') return '⤓'
+  if (kind === 'output') return '⤒'
+  return '◆'
+}
 const selectedProject = computed(() => (
   projects.value.find((project) => project.id === selectedProjectId.value) || null
 ))
@@ -1513,6 +1580,8 @@ function toggleWorkflowMode() {
   workflowMode.value = !workflowMode.value
   if (workflowMode.value) {
     void refreshWorkflows()
+    // Open the right panel so the node list + NL conversation are visible.
+    if (!rightPinned.value) toggleRightPinned()
   }
 }
 
@@ -2114,6 +2183,148 @@ onUnmounted(() => {
 .sidebar-action.is-active {
   background: color-mix(in srgb, var(--theme-main-text, #fff) 12%, transparent);
   color: var(--text);
+}
+
+/* ---- Workflow right panel (Phase 5E) ---- */
+.wf-right-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.wf-right-panel > section {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.wf-right-panel > section > h3 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 50%, transparent);
+}
+.wf-right-nodes {
+  flex: 0 0 auto;
+  max-height: 45%;
+  padding: 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  overflow: auto;
+}
+.wf-node-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+}
+.wf-node-list-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--theme-main-text, #f2efeb);
+  transition: background 0.12s;
+}
+.wf-node-list-item:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+.wf-node-list-item.active {
+  background: color-mix(in srgb, var(--blue, #79bcff) 22%, transparent);
+}
+.wf-node-list-kind {
+  opacity: 0.7;
+  font-size: 12px;
+}
+.wf-node-list-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wf-right-info {
+  flex: 1 1 auto;
+  padding: 12px;
+  overflow: auto;
+}
+.wf-right-info-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.wf-right-info-head h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+.wf-right-empty {
+  margin: 0;
+  font-size: 12px;
+  color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 40%, transparent);
+}
+.wf-node-info-body {
+  display: grid;
+  gap: 8px;
+  font-size: 12px;
+}
+.wf-node-info-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0;
+}
+.wf-node-info-row > span {
+  color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 50%, transparent);
+}
+.wf-node-info-block {
+  margin: 0;
+  display: grid;
+  gap: 4px;
+}
+.wf-node-info-block > span {
+  color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 50%, transparent);
+}
+.wf-node-info-block pre {
+  margin: 0;
+  padding: 8px;
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.28);
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 160px;
+  overflow: auto;
+}
+.wf-node-info-block code {
+  font-size: 11px;
+  word-break: break-all;
+}
+.wf-edit-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.wf-edit-msg {
+  display: grid;
+  gap: 2px;
+  font-size: 12px;
+}
+.wf-edit-msg.role-assistant {
+  padding: 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+}
+.wf-edit-role {
+  font-size: 11px;
+  color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 45%, transparent);
+}
+.wf-edit-content {
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 </style>
