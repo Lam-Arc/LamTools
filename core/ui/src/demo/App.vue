@@ -75,25 +75,30 @@
           @submit="createProject"
           @cancel="closeProjectCreate"
         />
-        <div v-if="showWorkflowCreate" class="wf-create-card" role="dialog" aria-modal="false" aria-label="新建工作流">
-          <input
-            v-model="workflowNameDraft"
-            class="wf-create-input"
-            type="text"
-            placeholder="工作流名称"
-            autocomplete="off"
-            :disabled="workflowCreateLoading"
-            @keydown.enter.prevent="createWorkflowFromCard"
-            @keydown.esc.prevent="closeWorkflowCreate"
-          />
-          <p v-if="workflowCreateError" class="wf-create-error">{{ workflowCreateError }}</p>
-          <div class="wf-create-actions">
-            <button type="button" class="text-btn" :disabled="workflowCreateLoading" @click="closeWorkflowCreate">取消</button>
-            <button type="button" class="primary-btn" :disabled="workflowCreateLoading || !workflowNameDraft.trim()" @click="createWorkflowFromCard">
-              {{ workflowCreateLoading ? '创建中' : '创建' }}
-            </button>
+        <Teleport v-if="showWorkflowCreate" defer to=".workspace-shell">
+          <div class="wf-create-backdrop" @mousedown.self="closeWorkflowCreate">
+            <div class="wf-create-card" role="dialog" aria-modal="true" aria-label="新建工作流">
+              <header class="wf-create-head"><h2>新建工作流</h2></header>
+              <input
+                v-model="workflowNameDraft"
+                class="wf-create-input"
+                type="text"
+                placeholder="工作流名称"
+                autocomplete="off"
+                :disabled="workflowCreateLoading"
+                @keydown.enter.prevent="createWorkflowFromCard"
+                @keydown.esc.prevent="closeWorkflowCreate"
+              />
+              <p v-if="workflowCreateError" class="wf-create-error">{{ workflowCreateError }}</p>
+              <div class="wf-create-actions">
+                <button type="button" class="text-btn" :disabled="workflowCreateLoading" @click="closeWorkflowCreate">取消</button>
+                <button type="button" class="primary-btn" :disabled="workflowCreateLoading || !workflowNameDraft.trim()" @click="createWorkflowFromCard">
+                  {{ workflowCreateLoading ? '创建中' : '创建' }}
+                </button>
+              </div>
+            </div>
           </div>
-        </div>
+        </Teleport>
       </div>
     </template>
 
@@ -1973,20 +1978,34 @@ onUnmounted(() => {
   position: relative;
 }
 
+.wf-create-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal, 80);
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.34);
+  backdrop-filter: blur(2px);
+}
 .wf-create-card {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  z-index: var(--z-popover, 60);
-  margin-top: 6px;
-  width: 220px;
-  padding: 8px;
-  border-radius: 10px;
+  width: 320px;
+  max-width: calc(100vw - 32px);
+  padding: 16px;
+  border-radius: 14px;
   background: var(--theme-surface-background, #1c1c1e);
   border: 1px solid rgba(255, 255, 255, 0.1);
-  box-shadow: var(--shadow, 0 8px 24px rgba(0, 0, 0, 0.4));
+  box-shadow: var(--shadow, 0 12px 40px rgba(0, 0, 0, 0.5));
   display: grid;
-  gap: 6px;
+  gap: 10px;
+}
+.wf-create-head {
+  margin: 0;
+}
+.wf-create-head h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--theme-main-text, #f2efeb);
 }
 .wf-create-input {
   width: 100%;
@@ -2187,19 +2206,16 @@ onUnmounted(() => {
 }
 
 /* Workflow mode: the whole main area is the canvas; the thin title floats
-   over it instead of taking vertical space. */
+   over it transparently (no card chrome) instead of taking vertical space. */
 .wf-floating-header {
   position: absolute;
-  top: 12px;
-  left: 18px;
-  right: 18px;
+  top: 10px;
+  left: 16px;
+  right: 16px;
   z-index: var(--z-popover, 60);
-  padding: 6px 12px;
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--theme-surface-background, #1c1c1e) 72%, transparent);
-  backdrop-filter: blur(8px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
   pointer-events: auto;
+  background: transparent;
+  border: 0;
 }
 
 /* ---- Workflow right panel (Phase 5E) ---- */
