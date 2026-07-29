@@ -27,6 +27,14 @@ export function listWorkflows(workRoot?: string): Promise<WorkflowDef[]> {
   )
 }
 
+export function listGroupedWorkflows(workRoots: string[]): Promise<Record<string, WorkflowDef[]>> {
+  const params: Record<string, unknown> = { work_roots: workRoots }
+  return appServerOperation<{ groups?: Record<string, WorkflowDef[]> }>(
+    'workflow.list_grouped',
+    params,
+  ).then((r) => r.groups ?? {})
+}
+
 export function getWorkflow(name: string, workRoot?: string): Promise<WorkflowDef> {
   const params: Record<string, unknown> = { name }
   if (workRoot) params.work_root = workRoot

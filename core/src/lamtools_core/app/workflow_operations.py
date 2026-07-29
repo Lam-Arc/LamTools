@@ -62,6 +62,20 @@ def register_workflow_operations(
             payload={"workflows": [d.to_dict() for d in defs]},
         )
 
+    async def workflow_list_grouped(request: OperationRequest) -> OperationResult:
+        raw = request.payload.get("work_roots") or request.payload.get("workRoots") or []
+        work_roots = [str(r) for r in raw if str(r)] if isinstance(raw, (list, tuple)) else []
+        grouped = await workflow_manager.list_grouped(work_roots=work_roots)
+        return OperationResult(
+            name=request.name,
+            payload={
+                "groups": {
+                    key: [d.to_dict() for d in defs]
+                    for key, defs in grouped.items()
+                },
+            },
+        )
+
     async def workflow_update(request: OperationRequest) -> OperationResult:
         payload = request.payload
         name = _name(payload)
@@ -201,6 +215,7 @@ def register_workflow_operations(
         "workflow.create": workflow_create,
         "workflow.get": workflow_get,
         "workflow.list": workflow_list,
+        "workflow.list_grouped": workflow_list_grouped,
         "workflow.update": workflow_update,
         "workflow.delete": workflow_delete,
         "workflow.run": workflow_run,

@@ -67,7 +67,8 @@
   >
     <template #sidebar-header-action>
       <div class="core-project-header-action">
-        <button class="icon-btn" type="button" title="新建项目" aria-label="新建项目" @click="openProjectCreate">+</button>
+        <button v-if="!workflowMode" class="icon-btn" type="button" title="新建项目" aria-label="新建项目" @click="openProjectCreate">+</button>
+        <button v-else class="icon-btn" type="button" title="新建工作流" aria-label="新建工作流" @click="openWorkflowCreate">+</button>
         <CoreProjectCreate
           v-if="showProjectCreate"
           :loading="projectCreateLoading"
@@ -75,6 +76,25 @@
           @submit="createProject"
           @cancel="closeProjectCreate"
         />
+        <div v-if="showWorkflowCreate" class="wf-create-card" role="dialog" aria-modal="false" aria-label="新建工作流">
+          <input
+            v-model="workflowNameDraft"
+            class="wf-create-input"
+            type="text"
+            placeholder="工作流名称"
+            autocomplete="off"
+            :disabled="workflowCreateLoading"
+            @keydown.enter.prevent="createWorkflowFromCard"
+            @keydown.esc.prevent="closeWorkflowCreate"
+          />
+          <p v-if="workflowCreateError" class="wf-create-error">{{ workflowCreateError }}</p>
+          <div class="wf-create-actions">
+            <button type="button" class="text-btn" :disabled="workflowCreateLoading" @click="closeWorkflowCreate">取消</button>
+            <button type="button" class="primary-btn" :disabled="workflowCreateLoading || !workflowNameDraft.trim()" @click="createWorkflowFromCard">
+              {{ workflowCreateLoading ? '创建中' : '创建' }}
+            </button>
+          </div>
+        </div>
       </div>
     </template>
 
@@ -83,15 +103,15 @@
         :project-groups="projectGroups"
         :project-session-limit="8"
         pin-storage-key="lamtools-core.sidebar.pinned-projects"
-        :active-session-id="activeSessionId || undefined"
+        :active-session-id="workflowMode ? (activeWorkflowName || undefined) : (activeSessionId || undefined)"
         :busy-project-ids="busyProjectIds"
-        :allow-project-delete="true"
+        :allow-project-delete="!workflowMode"
         :allow-project-click="true"
-        :allow-project-context-menu="true"
-        :allow-session-delete="true"
-        @select-session="selectSession"
-        @select-project="openProjectActions"
-        @new-session="createProjectSession"
+        :allow-project-context-menu="!workflowMode"
+        :allow-session-delete="!workflowMode"
+        @select-session="workflowMode ? selectWorkflow($event) : selectSession($event)"
+        @select-project="workflowMode ? selectWorkflowProject($event) : openProjectActions($event)"
+        @new-session="workflowMode ? openWorkflowCreate() : createProjectSession($event)"
         @delete-project="deleteProject"
         @project-context-menu="openProjectActions"
         @delete-session="deleteSession"
@@ -165,7 +185,7 @@
     </template>
 
     <template #modals>
-      <div v-if="selectedProject" class="core-project-overlay" @click.self="selectedProjectId = null">
+      <div v-if="selectedProject && !workflowMode" class="core-project-overlay" @click.self="selectedProjectId = null">
         <div class="core-project-card">
           <header>
             <div>
@@ -385,6 +405,7 @@ import { buildCurrentTurnChecklistGroups } from '../runtime/checklist'
 import { listArrangeJobs, updateArrangeJob } from '../durable/api'
 import {
   listWorkflows,
+  listGroupedWorkflows,
   getWorkflow,
   createWorkflow,
   updateWorkflow,
@@ -515,6 +536,7 @@ const showSettings = ref(false)
 const showArrange = ref(false)
 const workflowMode = ref(false)
 const workflows = ref<WorkflowDef[]>([])
+const workflowGroups = ref<Record<string, WorkflowDef[]>>({})
 const activeWorkflowName = ref<string>('')
 const workflowDefinition = ref<WorkflowDef | null>(null)
 const workflowNodeStates = ref<Record<string, NodeStateStatus>>({})
@@ -523,6 +545,10 @@ const workflowStatusText = ref('')
 const selectedNodeId = ref<string | null>(null)
 const settingsWorkflowList = ref<WorkflowDef[]>([])
 const settingsWorkflowLoading = ref(false)
+const showWorkflowCreate = ref(false)
+const workflowCreateLoading = ref(false)
+const workflowCreateError = ref('')
+const workflowNameDraft = ref('')
 let autosaveTimer: ReturnType<typeof setTimeout> | null = null
 
 const emptyWorkflow: WorkflowDef = {
@@ -681,7 +707,63 @@ const latestStatus = computed(() => snapshot.value ? selectLatestTurnStatus(snap
 const activeTurnId = computed(() => snapshot.value ? selectLatestActiveTurnId(snapshot.value) : '')
 const rollbackActiveTurn = computed(() => ['running', 'waiting'].includes(latestStatus.value))
 
-const projectGroups = computed(() => buildCoreProjectGroups(projects.value, sessions.value))
+const projectGroups = computed(() =>
+  workflowMode.value ? workflowProjectGroups.value : buildCoreProjectGroups(projects.value, sessions.value),
+)
+// In workflow mode the sidebar shows Project → Workflows (no sessions).
+const workflowProjectGroups = computed(() => {
+  type WfSessionItem = {
+    id: string
+    title: string
+    status?: string
+    meta?: string
+    createdAt?: string
+    updatedAt?: string
+  }
+  type WfGroup = {
+    id: string
+    name: string
+    workRoot?: string
+    sessions: WfSessionItem[]
+    canManage?: boolean
+  }
+  const groups: WfGroup[] = []
+  for (const project of projects.value) {
+    const defs = workflowGroups.value[project.workRoot] || []
+    groups.push({
+      id: project.id,
+      name: project.name,
+      workRoot: project.workRoot,
+      canManage: true,
+      sessions: defs.map((w) => ({
+        id: w.name,
+        title: w.name,
+        status: w.exposed ? 'completed' : 'idle',
+        meta: w.exposed ? '已暴露' : '',
+        updatedAt: w.updated_at || undefined,
+        createdAt: w.created_at || undefined,
+      })),
+    })
+  }
+  // Personal/global workflows land in a synthetic "个人" group.
+  const globalDefs = workflowGroups.value['global'] || []
+  if (globalDefs.length) {
+    groups.push({
+      id: 'global',
+      name: '个人',
+      canManage: false,
+      sessions: globalDefs.map((w) => ({
+        id: w.name,
+        title: w.name,
+        status: w.exposed ? 'completed' : 'idle',
+        meta: w.exposed ? '已暴露' : '',
+        updatedAt: w.updated_at || undefined,
+        createdAt: w.created_at || undefined,
+      })),
+    })
+  }
+  return groups
+})
 const activeSessionTitle = computed(() => (
   sessions.value.find((session) => session.id === activeSessionId.value)?.title || 'Session'
 ))
@@ -1348,6 +1430,12 @@ async function requestConfigOperation(method: string, params: Record<string, unk
 }
 
 function currentWorkRoot(): string {
+  if (workflowMode.value) {
+    // Workflow mode has no sessions — derive work_root from the selected project.
+    const project = selectedProject.value
+    if (project?.workRoot) return project.workRoot
+    return ''
+  }
   const session = sessions.value.find((item) => item.id === activeSessionId.value)
   const workRoot = session?.metadata?.work_root
   return typeof workRoot === 'string' ? workRoot : ''
@@ -1359,9 +1447,15 @@ function currentWorkRoot(): string {
 
 async function refreshWorkflows() {
   try {
-    workflows.value = await listWorkflows(currentWorkRoot() || undefined)
+    const projectRoots = projects.value.map((p) => p.workRoot).filter(Boolean) as string[]
+    workflowGroups.value = await listGroupedWorkflows(projectRoots)
+    // Flattened list (global + selected project) for backward-compat selectors.
+    const flat: WorkflowDef[] = []
+    for (const defs of Object.values(workflowGroups.value)) flat.push(...defs)
+    workflows.value = flat
   } catch (err) {
     console.error('[workflow] list failed', err)
+    workflowGroups.value = {}
     workflows.value = []
   }
 }
@@ -1395,10 +1489,63 @@ async function selectWorkflow(name: string) {
 }
 
 function newWorkflow() {
-  const draft = { ...emptyWorkflow, name: `workflow-${Math.random().toString(36).slice(2, 6)}` }
-  workflowDefinition.value = draft
-  activeWorkflowName.value = ''
-  workflowNodeStates.value = {}
+  // 5C: the sidebar header "+" opens a create card instead of a random name.
+  openWorkflowCreate()
+}
+
+function openWorkflowCreate() {
+  workflowNameDraft.value = ''
+  workflowCreateError.value = ''
+  showWorkflowCreate.value = true
+}
+
+function selectWorkflowProject(projectId: string) {
+  // In workflow mode, selecting a project just sets the active work_root
+  // (no session-style action overlay). Workflows for that project are already
+  // in workflowGroups; the sidebar re-renders from the computed.
+  const project = projects.value.find((p) => p.id === projectId)
+  if (!project) return
+  selectedProjectId.value = project.id
+}
+
+function closeWorkflowCreate() {
+  showWorkflowCreate.value = false
+  workflowCreateError.value = ''
+}
+
+async function createWorkflowFromCard() {
+  const name = workflowNameDraft.value.trim()
+  if (!name) return
+  const workRoot = currentWorkRoot() || ''
+  if (!workRoot && workflowGroups.value['global'] === undefined) {
+    // No project selected and no global bucket — fall back to empty work_root.
+  }
+  const draft: WorkflowDef = {
+    ...emptyWorkflow,
+    name,
+    work_root: workRoot,
+    nodes: [
+      { id: 'input-1', kind: 'input', title: 'Input', config: {}, ports: [{ name: 'value', type: 'text', direction: 'out' }], position: { x: 80, y: 160 } },
+      { id: 'output-1', kind: 'output', title: 'Output', config: {}, ports: [{ name: 'value', type: 'text', direction: 'in' }], position: { x: 480, y: 160 } },
+    ],
+    edges: [],
+  }
+  workflowCreateLoading.value = true
+  workflowCreateError.value = ''
+  try {
+    const saved = await createWorkflow({ ...draft, work_root: workRoot })
+    workflowDefinition.value = saved
+    activeWorkflowName.value = saved.name
+    selectedNodeId.value = null
+    workflowNodeStates.value = {}
+    await refreshWorkflows()
+    closeWorkflowCreate()
+    setRuntimeStatus(`已创建：${saved.name}`, 2500)
+  } catch (err) {
+    workflowCreateError.value = `创建失败：${(err as Error).message}`
+  } finally {
+    workflowCreateLoading.value = false
+  }
 }
 
 function onWorkflowUpdate(def: WorkflowDef) {
@@ -1703,6 +1850,70 @@ onUnmounted(() => {
 
 .core-project-header-action {
   position: relative;
+}
+
+.wf-create-card {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: var(--z-popover, 60);
+  margin-top: 6px;
+  width: 220px;
+  padding: 8px;
+  border-radius: 10px;
+  background: var(--theme-surface-background, #1c1c1e);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: var(--shadow, 0 8px 24px rgba(0, 0, 0, 0.4));
+  display: grid;
+  gap: 6px;
+}
+.wf-create-input {
+  width: 100%;
+  height: 30px;
+  box-sizing: border-box;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.24);
+  color: var(--theme-main-text, #f2efeb);
+  padding: 0 8px;
+  font: inherit;
+  font-size: 13px;
+  outline: 0;
+}
+.wf-create-input:focus {
+  border-color: color-mix(in srgb, var(--blue, #79bcff) 60%, transparent);
+}
+.wf-create-error {
+  margin: 0;
+  font-size: 11px;
+  color: var(--red, #ff8a80);
+}
+.wf-create-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.wf-create-actions .text-btn,
+.wf-create-actions .primary-btn {
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 7px;
+  border: 0;
+  font-size: 12px;
+  cursor: pointer;
+}
+.wf-create-actions .text-btn {
+  background: transparent;
+  color: var(--muted, #888);
+}
+.wf-create-actions .primary-btn {
+  background: color-mix(in srgb, var(--blue, #79bcff) 80%, transparent);
+  color: #0b0b0c;
+  font-weight: 600;
+}
+.wf-create-actions .primary-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .stage-toggle-btn {

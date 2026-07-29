@@ -95,6 +95,64 @@ class WorkflowStore:
     def list_exposed_sync(self, *, work_root: str | None = None) -> list[WorkflowDef]:
         return [w for w in self.list_sync(work_root=work_root) if w.exposed]
 
+    def list_grouped_sync(self, *, work_roots: list[str]) -> dict[str, list[WorkflowDef]]:
+        """List workflows separated by source.
+
+        Returns ``{"global": [...], "<work_root>": [...]}`` keyed by source.
+        Workflows under ``~/.lam`` (and explicit roots) fall under ``"global"``;
+        project workflows are bucketed under their ``work_root``.
+        """
+        grouped: dict[str, list[WorkflowDef]] = {"global": []}
+        for wr in work_roots:
+            if wr and wr not in grouped:
+                grouped[wr] = []
+        home_lam = (Path.home() / ".lam").resolve()
+        explicit = {p.resolve() for p in self._explicit_roots}
+        seen_names: set[str] = set()
+        # Collect candidates from global + every project work_root.
+        candidates: list[Path] = []
+        for p in self._candidate_files(None):
+            candidates.append(p)
+        for wr in work_roots:
+            if not wr:
+                continue
+            for p in self._candidate_files(wr):
+                if p not in candidates:
+                    candidates.append(p)
+        for path in candidates:
+            definition = self._read_sync(path)
+            if definition is None:
+                continue
+            key = "global"
+            try:
+                resolved = path.resolve()
+            except OSError:
+                resolved = path
+            if home_lam in resolved.parents or resolved in explicit:
+                key = "global"
+            else:
+                for wr in work_roots:
+                    if not wr:
+                        continue
+                    try:
+                        lam_dir = (Path(wr) / ".lam").resolve()
+                    except OSError:
+                        continue
+                    if lam_dir in resolved.parents:
+                        key = wr
+                        break
+            if definition.name in seen_names:
+                continue
+            seen_names.add(definition.name)
+            grouped.setdefault(key, []).append(definition)
+        for bucket in grouped.values():
+            bucket.sort(key=lambda item: item.name)
+        return grouped
+
+    async def list_grouped(self, *, work_roots: list[str]) -> dict[str, list[WorkflowDef]]:
+        return await asyncio.to_thread(self.list_grouped_sync, work_roots=work_roots)
+
+
     async def get(self, name: str, *, work_root: str | None = None) -> WorkflowDef | None:
         target = name.strip()
         if not target:

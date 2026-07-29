@@ -331,6 +331,13 @@ class WorkflowManager:
     async def list(self, *, work_root: str | None = None) -> list[WorkflowDef]:
         return await self.store.list(work_root=work_root)
 
+    async def list_grouped(self, *, work_roots: list[str]) -> dict[str, list[WorkflowDef]]:
+        """Return workflows bucketed by source: ``"global"`` + per ``work_root``."""
+        grouped = getattr(self.store, "list_grouped", None)
+        if grouped is None:
+            return {"global": await self.store.list(work_root=None)}
+        return await grouped(work_roots=work_roots)
+
     async def update_fields(
         self,
         name: str,
