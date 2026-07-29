@@ -56,7 +56,7 @@
         <button class="menu-item" type="button" role="menuitem" @click="runNode(nodeMenu.id)">运行此节点</button>
       </div>
       <span class="wf-menu-sep" />
-      <button class="menu-item" type="button" role="menuitem" @click="configNode(nodeMenu.id, nodeMenu.x, nodeMenu.y)">配置</button>
+      <button class="menu-item" type="button" role="menuitem" @click="configNode(nodeMenu.id)">配置</button>
       <button class="menu-item" type="button" role="menuitem" @click="copyNode(nodeMenu.id)">复制</button>
       <button class="menu-item" type="button" role="menuitem" @click="cutNode(nodeMenu.id)">剪切</button>
       <span class="wf-menu-sep" />
@@ -193,18 +193,19 @@ function closeMenus() {
 }
 
 // ---- node click → select + config ----
-// Left-click and right-click "配置" share this path so both select the node
-// and open the edit card identically.
+// Left-click and right-click "配置" share this path: select the node and
+// open the edit card. The card uses a centered, screen-safe position (not
+// the mouse coords) so it never overflows the viewport regardless of where
+// the click landed.
 function onNodeClick(params: any) {
   const id = params?.node?.id
   if (!id) return
-  const ev = params?.event
-  configNode(id, ev?.clientX ?? window.innerWidth / 2, ev?.clientY ?? 120)
+  configNode(id)
 }
-function configNode(id: string, x?: number, y?: number) {
+function configNode(id: string) {
   if (!props.definition.nodes.some((n) => n.id === id)) return
   emit('select-node', id)
-  openEdit(id, x, y)
+  openEdit(id)
 }
 function openEdit(id: string, x?: number, y?: number) {
   const n = props.definition.nodes.find((node) => node.id === id)

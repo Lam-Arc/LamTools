@@ -150,10 +150,14 @@ const emit = defineEmits<{
   update: [node: WorkflowNode]
 }>()
 
-const cardStyle = computed(() => ({
-  left: `${Math.min(props.anchor.x, window.innerWidth - 340)}px`,
-  top: `${Math.min(props.anchor.y, window.innerHeight - 420)}px`,
-}))
+const cardStyle = computed(() => {
+  const cardW = 320
+  const cardH = 420
+  // anchor is treated as the desired center; clamp so the card stays on-screen.
+  const left = Math.max(12, Math.min(props.anchor.x - cardW / 2, window.innerWidth - cardW - 12))
+  const top = Math.max(12, Math.min(props.anchor.y, window.innerHeight - cardH - 12))
+  return { left: `${left}px`, top: `${top}px` }
+})
 
 const kindOptions: SelectOption[] = [
   { value: 'llm', label: 'LLM' },
