@@ -1,0 +1,44 @@
+{
+  "name": "haiku-forge",
+  "description": "用关键词让 LLM 写一首俳句 — Action 准备关键词 → LLM 创作",
+  "nodes": [
+    {
+      "id": "seed",
+      "kind": "action",
+      "title": "关键词种子",
+      "config": {
+        "action_type": "shell",
+        "command": "echo \"月光 山风 竹林\""
+      },
+      "ports": [
+        {"name": "in", "type": "text", "direction": "in"},
+        {"name": "out", "type": "text", "direction": "out"}
+      ],
+      "position": {"x": 80, "y": 160}
+    },
+    {
+      "id": "poet",
+      "kind": "llm",
+      "title": "俳句诗人",
+      "config": {
+        "instruction": "你是一位俳句诗人。根据给定的关键词，写一首中文俳句（三行，每行5/7/5字左右），并在末尾给这首俳句起一个两字标题。只输出标题和三行诗，不要解释。",
+        "mode": "single",
+        "model_id": "auto"
+      },
+      "ports": [
+        {"name": "in", "type": "text", "direction": "in"},
+        {"name": "out", "type": "text", "direction": "out"}
+      ],
+      "position": {"x": 380, "y": 160}
+    }
+  ],
+  "edges": [
+    {
+      "id": "e1",
+      "source": "seed",
+      "source_port": "out",
+      "target": "poet",
+      "target_port": "in"
+    }
+  ]
+}

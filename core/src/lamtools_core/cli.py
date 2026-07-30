@@ -10,7 +10,7 @@ import sqlite3
 import sys
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -51,11 +51,33 @@ from lamtools_core.llm.profiles import (
     normalize_stream_chunk_with_profile,
     resolve_adapter_profile_from_profiles,
 )
+from lamtools_core.llm.model_capabilities import resolve_capability
+from lamtools_core.config.migrate_models import migrate_models_from_db
+from lamtools_core.config.model_store import ModelConfig, ModelStore
 from lamtools_core.runtime import RuntimeTurnInput
 from lamtools_core.tool.default_toolbox import ApprovalPolicy, build_core_toolbox
 
 SQLITE_CONFIG_READ_TIMEOUT_SECONDS = 0.2
 SQLITE_CONFIG_LOCK_RETRY_DELAYS = (0.05, 0.15)
+
+# Process-level model-store context. The HTTP app (create_core_agent_http_app)
+# configures the shared work_root so load_llm_config can resolve project-scoped
+# model jsonc files. Falls back to global-only when unset.
+_default_model_store: ModelStore | None = None
+_model_store_work_root: str | None = None
+_model_migration_done: set[Path] = set()
+
+
+def configure_model_store_context(*, work_root: str | None, store: ModelStore | None = None) -> None:
+    """Register the shared ModelStore + work_root for the running process."""
+    global _default_model_store, _model_store_work_root
+    _model_store_work_root = work_root
+    if store is not None:
+        _default_model_store = store
+
+
+def _get_model_store() -> ModelStore:
+    return _default_model_store if _default_model_store is not None else ModelStore()
 
 
 @dataclass(frozen=True)
@@ -116,6 +138,7 @@ class LLMConfig:
     temperature: float = 0.2
     thinking_supported: bool = False
     thinking_budget: int = 10000
+    capability: str = ""  # "text" | "multimodal" | "" (resolved at request time)
     provider_extra: dict[str, Any] = field(default_factory=dict)
     model_extra: dict[str, Any] = field(default_factory=dict)
 
@@ -147,6 +170,7 @@ class CoreHttpLLMClient:
             thinking_enabled=self.thinking_enabled,
             thinking_budget=self.thinking_budget,
             reasoning_effort=self.reasoning_effort,
+            capability=self.config.capability,
         )
         async with httpx.AsyncClient(timeout=httpx.Timeout(360.0, connect=30.0)) as client:
             response = await client.post(
@@ -174,6 +198,7 @@ class CoreHttpLLMClient:
             thinking_enabled=self.thinking_enabled,
             thinking_budget=self.thinking_budget,
             reasoning_effort=self.reasoning_effort,
+            capability=self.config.capability,
         )
         async with httpx.AsyncClient(timeout=httpx.Timeout(360.0, connect=30.0)) as client:
             async with client.stream(
@@ -419,6 +444,16 @@ def load_llm_config(config_db: Path, *, model_ref: str = "") -> LLMConfig:
     if not config_db.exists():
         raise FileNotFoundError(f"LLM config database not found: {config_db}")
 
+    # Lazy one-time migration: if the ModelStore has no files yet but the DB
+    # llm_models table has rows, export them to jsonc so the file path wins.
+    _maybe_migrate_from_db(config_db)
+
+    # Try the file-backed (jsonc) path first. Falls back to the legacy DB path
+    # when no jsonc model is resolvable, preserving backward compatibility.
+    file_config = _load_llm_config_from_files(config_db, model_ref=model_ref)
+    if file_config is not None:
+        return file_config
+
     locked_error: sqlite3.OperationalError | None = None
     for attempt in range(len(SQLITE_CONFIG_LOCK_RETRY_DELAYS) + 1):
         try:
@@ -446,7 +481,136 @@ def load_llm_config(config_db: Path, *, model_ref: str = "") -> LLMConfig:
         raise
 
 
+def _maybe_migrate_from_db(config_db: Path) -> None:
+    """Export DB models to jsonc once per process when the ModelStore is empty."""
+    global _model_migration_done
+    config_db = config_db.resolve()
+    if config_db in _model_migration_done:
+        return
+    _model_migration_done.add(config_db)
+    try:
+        store = _get_model_store()
+        # Only migrate when nothing is loaded yet (avoid clobbering user files).
+        if store.list_sync(work_root=_model_store_work_root):
+            return
+        migrate_models_from_db(config_db, model_store=store, work_root=_model_store_work_root, scope="global")
+    except Exception:
+        # Migration is best-effort; never block config loading on it.
+        import logging
+
+        logging.getLogger(__name__).debug("model migration skipped", exc_info=True)
+
+
+def _load_llm_config_from_files(config_db: Path, *, model_ref: str) -> LLMConfig | None:
+    """Resolve a model from jsonc files + provider connection from the DB.
+
+    Returns ``None`` when the model_ref cannot be resolved from files (caller
+    falls back to the legacy DB-join path).
+    """
+    store = _get_model_store()
+    ref = model_ref.strip()
+    if not ref:
+        ref = store.default_model_id_sync(work_root=_model_store_work_root)
+    if not ref:
+        return None
+    model = store.get_sync(ref, work_root=_model_store_work_root)
+    if model is None:
+        return None
+    # Resolve the provider connection from the DB by name or provider_id.
+    con = _connect_config_db(config_db, nolock=True)
+    try:
+        provider_row = _read_provider_row(con, model)
+    finally:
+        con.close()
+    if provider_row is None:
+        return None
+    capability = model.resolved_capability
+    return LLMConfig(
+        provider_name=str(provider_row.get("name") or model.provider or ""),
+        provider_api_type=str(provider_row.get("api_type") or "openai"),
+        base_url=str(provider_row.get("base_url") or "").rstrip("/"),
+        api_key=str(provider_row.get("api_key") or ""),
+        model_record_id=model.model_id,
+        model_id=model.model_id,
+        display_name=model.display_name or model.model_id,
+        context_window=model.context_window,
+        max_output_tokens=model.max_output_tokens,
+        temperature=model.temperature,
+        thinking_supported=model.thinking_supported,
+        thinking_budget=model.thinking_budget,
+        capability=capability,
+        provider_extra=_json_dict(provider_row.get("extra")),
+        model_extra=model.to_extra(),
+    )
+
+
+def _read_provider_row(con: sqlite3.Connection, model: ModelConfig) -> dict[str, Any] | None:
+    """Look up a provider by the model's provider_id then by name."""
+    try:
+        if model.provider_id:
+            row = con.execute(
+                "select name, api_type, base_url, api_key, extra from llm_providers where id=? limit 1",
+                (model.provider_id,),
+            ).fetchone()
+            if row is not None:
+                return dict(row)
+        if model.provider:
+            row = con.execute(
+                "select name, api_type, base_url, api_key, extra from llm_providers where name=? limit 1",
+                (model.provider,),
+            ).fetchone()
+            if row is not None:
+                return dict(row)
+        # Last resort: the single configured provider (works for single-provider setups).
+        row = con.execute(
+            "select name, api_type, base_url, api_key, extra from llm_providers order by is_default desc, created_at asc limit 1"
+        ).fetchone()
+        return dict(row) if row is not None else None
+    except sqlite3.OperationalError:
+        return None
+
+
 def list_llm_model_configs(config_db: Path) -> list[dict[str, Any]]:
+    # Prefer file-backed (jsonc) model definitions when available; fall back to
+    # the legacy DB list when no jsonc models are configured yet.
+    store = _get_model_store()
+    models = store.list_sync(work_root=_model_store_work_root)
+    if models:
+        # Join each model with its provider's api_type from the DB for display.
+        provider_api_type = "openai"
+        con = None
+        try:
+            con = _connect_config_db(config_db, nolock=True)
+            row = con.execute(
+                "select api_type from llm_providers order by is_default desc, created_at asc limit 1"
+            ).fetchone()
+            if row is not None:
+                provider_api_type = str(row["api_type"] or "openai")
+        except (sqlite3.OperationalError, FileNotFoundError):
+            pass
+        finally:
+            if con is not None:
+                con.close()
+        return [
+            {
+                "id": m.model_id,
+                "provider_id": m.provider_id,
+                "provider_name": m.provider,
+                "provider_api_type": provider_api_type,
+                "model_id": m.model_id,
+                "display_name": m.display_name,
+                "context_window": m.context_window,
+                "max_output_tokens": m.max_output_tokens,
+                "thinking_supported": m.thinking_supported,
+                "thinking_budget": m.thinking_budget,
+                "temperature": m.temperature,
+                "capability": m.resolved_capability,
+                "is_default": m.is_default,
+                "adapter_profile_id": m.adapter_profile_id,
+            }
+            for m in models
+        ]
+
     if not config_db.exists():
         raise FileNotFoundError(f"LLM config database not found: {config_db}")
 
@@ -503,21 +667,30 @@ def _load_llm_config_from_connection(con: sqlite3.Connection, *, model_ref: str 
     if row is None:
         raise ValueError(f"model not found: {model_ref}")
     data = dict(row)
+    model_id = str(data.get("model_id") or "")
+    model_extra = _json_dict(data.get("model_extra"))
+    # Capability: prefer the DB extra field, else resolve via the builtin table.
+    capability = ""
+    if isinstance(model_extra.get("capability"), str):
+        capability = str(model_extra["capability"]).strip().lower()
+    if capability not in ("text", "multimodal"):
+        capability = resolve_capability(model_id, capability)
     return LLMConfig(
         provider_name=str(data.get("provider_name") or ""),
         provider_api_type=str(data.get("provider_api_type") or "openai"),
         base_url=str(data.get("base_url") or "").rstrip("/"),
         api_key=str(data.get("api_key") or ""),
         model_record_id=str(data.get("id") or ""),
-        model_id=str(data.get("model_id") or ""),
+        model_id=model_id,
         display_name=str(data.get("display_name") or ""),
         context_window=int(data.get("context_window") or 0),
         max_output_tokens=int(data.get("max_output_tokens") or 4096),
         temperature=float(data.get("temperature") or 0.2),
         thinking_supported=bool(data.get("thinking_supported")),
         thinking_budget=int(data.get("thinking_budget") or 10000),
+        capability=capability,
         provider_extra=_json_dict(data.get("provider_extra")),
-        model_extra=_json_dict(data.get("model_extra")),
+        model_extra=model_extra,
     )
 
 
@@ -913,6 +1086,8 @@ def build_parser() -> argparse.ArgumentParser:
     wf_run.add_argument("--work-root", default="", help="Project work root")
     wf_run.add_argument("--input", action="append", default=[], metavar="KEY=VALUE", help="Workflow input (repeatable; VALUE parsed as JSON if possible)")
     wf_run.add_argument("--max-steps", type=int, default=None, help="Run at most N nodes (single-step debugging)")
+    wf_run.add_argument("--start-node", default=None, help="Start running from this node (sub-graph; nodes before it are skipped)")
+    wf_run.add_argument("--single-node", default=None, help="Run exactly this one node in isolation")
     wf_run.add_argument("--base-url", default=os.environ.get("LAMTOOLS_CORE_API_URL", "http://127.0.0.1:5172"))
     wf_run.add_argument("--ws-path", default=os.environ.get("LAMTOOLS_CORE_WS_PATH", "/api/core/app-server"))
     wf_run.add_argument("--token", default=os.environ.get("LAMTOOLS_CORE_TOKEN", ""))
@@ -931,6 +1106,52 @@ def build_parser() -> argparse.ArgumentParser:
     wf_unexpose.add_argument("--ws-path", default=os.environ.get("LAMTOOLS_CORE_WS_PATH", "/api/core/app-server"))
     wf_unexpose.add_argument("--token", default=os.environ.get("LAMTOOLS_CORE_TOKEN", ""))
     wf_unexpose.set_defaults(func=cmd_workflow_unexpose, raw=False)
+
+    subagent = sub.add_parser("subagent", help="Manage sub-agent delegation guide")
+    subagent_sub = subagent.add_subparsers(dest="subagent_command", required=True)
+    sa_guide = subagent_sub.add_parser("guide", help="Show or edit the sub-agent delegation guide")
+    sa_guide_sub = sa_guide.add_subparsers(dest="subagent_guide_command", required=True)
+    sa_guide_show = sa_guide_sub.add_parser("show", help="Print the effective sub-agent guide")
+    sa_guide_show.add_argument("--work-root", default="", help="Project work root")
+    sa_guide_show.add_argument("--scope", choices=("project", "global"), default="", help="Show only a specific scope")
+    sa_guide_show.set_defaults(func=cmd_subagent_guide_show)
+    sa_guide_set = sa_guide_sub.add_parser("set", help="Write the guide from a UTF-8 file or stdin")
+    sa_guide_set.add_argument("source_file", help="Path to a markdown file, or '-' for stdin")
+    sa_guide_set.add_argument("--scope", choices=("project", "global"), default="global", help="Write scope")
+    sa_guide_set.add_argument("--work-root", default="", help="Project work root (required for --scope project)")
+    sa_guide_set.set_defaults(func=cmd_subagent_guide_set)
+    sa_guide_edit = sa_guide_sub.add_parser("edit", help="Open the guide in $EDITOR")
+    sa_guide_edit.add_argument("--scope", choices=("project", "global"), default="global", help="Edit scope")
+    sa_guide_edit.add_argument("--work-root", default="", help="Project work root (required for --scope project)")
+    sa_guide_edit.set_defaults(func=cmd_subagent_guide_edit)
+
+    models = sub.add_parser("models", help="Manage model definitions (jsonc-backed)")
+    models_sub = models.add_subparsers(dest="models_command", required=True)
+    models_list = models_sub.add_parser("list", help="List configured models")
+    models_list.add_argument("--work-root", default="")
+    models_list.set_defaults(func=cmd_models_list)
+    models_show = models_sub.add_parser("show", help="Show a model definition")
+    models_show.add_argument("model_id")
+    models_show.add_argument("--work-root", default="")
+    models_show.set_defaults(func=cmd_models_show)
+    models_set = models_sub.add_parser("set", help="Update a model field (e.g. capability)")
+    models_set.add_argument("model_id")
+    models_set.add_argument("--field", required=True, help="Field to set: capability|is_default|adapter_profile_id|context_window|max_output_tokens|temperature")
+    models_set.add_argument("--value", required=True)
+    models_set.add_argument("--scope", choices=("project", "global"), default="global")
+    models_set.add_argument("--work-root", default="")
+    models_set.set_defaults(func=cmd_models_set)
+    models_default = models_sub.add_parser("default", help="Set the default model")
+    models_default.add_argument("model_id")
+    models_default.add_argument("--scope", choices=("project", "global"), default="global")
+    models_default.add_argument("--work-root", default="")
+    models_default.set_defaults(func=cmd_models_default)
+    models_import = models_sub.add_parser("import-from-db", help="Export DB llm_models rows to jsonc")
+    models_import.add_argument("--config-db", required=True)
+    models_import.add_argument("--scope", choices=("project", "global"), default="global")
+    models_import.add_argument("--work-root", default="")
+    models_import.add_argument("--force", action="store_true")
+    models_import.set_defaults(func=cmd_models_import_from_db)
     return parser
 
 
@@ -1741,6 +1962,10 @@ async def cmd_workflow_run(args: argparse.Namespace) -> int:
         payload["work_root"] = args.work_root
     if args.max_steps is not None:
         payload["max_steps"] = args.max_steps
+    if getattr(args, "start_node", None):
+        payload["start_node"] = args.start_node
+    if getattr(args, "single_node", None):
+        payload["single_node"] = args.single_node
     inputs = _parse_workflow_inputs(args.input)
     if inputs:
         payload["inputs"] = inputs
@@ -1787,6 +2012,181 @@ async def cmd_workflow_unexpose(args: argparse.Namespace) -> int:
     result = await _invoke_live(args, op)
     wf = result.get("workflow", {}) if isinstance(result, dict) else {}
     print(f"[workflow] {wf.get('name', args.name)} unexposed")
+    return 0
+
+
+async def cmd_subagent_guide_show(args: argparse.Namespace) -> int:
+    from lamtools_core.config.subagent_prompt import (
+        DEFAULT_SUBAGENT_GUIDE,
+        load_subagent_guide,
+        resolve_subagent_guide_path,
+    )
+
+    work_root = args.work_root or None
+    if args.scope == "project" and not work_root:
+        print("error: --work-root is required for --scope project", file=sys.stderr)
+        return 1
+    if args.scope:
+        from lamtools_core.config.subagent_prompt import subagent_guide_dirs
+
+        dirs = subagent_guide_dirs(work_root)
+        path = dirs[0] / "guide.md" if args.scope == "project" and dirs else (dirs[-1] / "guide.md" if dirs else None)
+        if path is None or not path.is_file():
+            print(f"[subagent] no {args.scope} guide configured; builtin shown below:")
+            print(DEFAULT_SUBAGENT_GUIDE)
+            return 0
+        print(path.read_text(encoding="utf-8"))
+        return 0
+    resolved = resolve_subagent_guide_path(work_root)
+    content = load_subagent_guide(work_root)
+    if resolved is None:
+        print("[subagent] no project/global guide configured; builtin shown below:")
+    else:
+        print(f"[subagent] guide from {resolved}")
+    print(content)
+    return 0
+
+
+async def cmd_subagent_guide_set(args: argparse.Namespace) -> int:
+    from lamtools_core.config.subagent_prompt import write_subagent_guide
+
+    if args.scope == "project" and not args.work_root:
+        print("error: --work-root is required for --scope project", file=sys.stderr)
+        return 1
+    if args.source_file == "-":
+        content = sys.stdin.read()
+    else:
+        content = Path(args.source_file).read_text(encoding="utf-8")
+    path = write_subagent_guide(content, scope=args.scope, work_root=args.work_root or None)
+    print(f"[subagent] guide written to {path} (scope={args.scope})")
+    return 0
+
+
+async def cmd_subagent_guide_edit(args: argparse.Namespace) -> int:
+    from lamtools_core.config.subagent_prompt import guide_path_for_scope
+
+    if args.scope == "project" and not args.work_root:
+        print("error: --work-root is required for --scope project", file=sys.stderr)
+        return 1
+    path = guide_path_for_scope(args.scope, args.work_root or None)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        from lamtools_core.config.subagent_prompt import DEFAULT_SUBAGENT_GUIDE
+
+        path.write_text(DEFAULT_SUBAGENT_GUIDE, encoding="utf-8")
+    editor = os.environ.get("EDITOR") or os.environ.get("VISUAL")
+    if not editor:
+        print("error: $EDITOR (or $VISUAL) is not set", file=sys.stderr)
+        return 1
+    import shutil
+    import subprocess
+
+    exe = shutil.which(editor) or editor
+    subprocess.run([exe, str(path)], check=False)
+    print(f"[subagent] edited {path} (scope={args.scope})")
+    return 0
+
+
+async def cmd_models_list(args: argparse.Namespace) -> int:
+    from lamtools_core.cli import _get_model_store
+
+    store = _get_model_store()
+    models = store.list_sync(work_root=args.work_root or None)
+    if not models:
+        print("[models] no model definitions configured (run 'core models import-from-db' to migrate)")
+        return 0
+    default_id = store.default_model_id_sync(work_root=args.work_root or None)
+    print(f"[models] {len(models)} configured (default: {default_id or 'none'})")
+    for model in models:
+        star = "★ " if model.is_default else "  "
+        print(f"{star}{model.model_id}  {model.display_name}  [{model.resolved_capability}]  provider={model.provider or '?'}  ctx={model.context_window}")
+    return 0
+
+
+async def cmd_models_show(args: argparse.Namespace) -> int:
+    from lamtools_core.cli import _get_model_store
+
+    store = _get_model_store()
+    model = store.get_sync(args.model_id, work_root=args.work_root or None)
+    if model is None:
+        print(f"[models] not found: {args.model_id}", file=sys.stderr)
+        return 1
+    print(f"model_id:        {model.model_id}")
+    print(f"display_name:    {model.display_name}")
+    print(f"provider:        {model.provider or model.provider_id or '?'}")
+    print(f"capability:      {model.capability or '(builtin)'} -> {model.resolved_capability}")
+    print(f"context_window:  {model.context_window}")
+    print(f"max_output:      {model.max_output_tokens}")
+    print(f"temperature:     {model.temperature}")
+    print(f"thinking:        supported={model.thinking_supported} budget={model.thinking_budget}")
+    print(f"adapter_profile: {model.adapter_profile_id or '(none)'}")
+    print(f"is_default:      {model.is_default}")
+    print(f"source:          {model.source_path or '(none)'}")
+    return 0
+
+
+async def cmd_models_set(args: argparse.Namespace) -> int:
+    from lamtools_core.cli import _get_model_store
+
+    store = _get_model_store()
+    model = store.get_sync(args.model_id, work_root=args.work_root or None)
+    if model is None:
+        print(f"[models] not found: {args.model_id}", file=sys.stderr)
+        return 1
+    field = args.field
+    value = args.value
+    if field == "capability":
+        if value not in ("text", "multimodal", ""):
+            print(f"[models] capability must be 'text', 'multimodal', or ''", file=sys.stderr)
+            return 1
+        model = replace(model, capability=value)
+    elif field == "is_default":
+        model = replace(model, is_default=value.lower() in ("1", "true", "yes"))
+    elif field == "adapter_profile_id":
+        model = replace(model, adapter_profile_id=value)
+    elif field == "context_window":
+        model = replace(model, context_window=int(value))
+    elif field == "max_output_tokens":
+        model = replace(model, max_output_tokens=int(value))
+    elif field == "temperature":
+        model = replace(model, temperature=float(value))
+    else:
+        print(f"[models] unsupported field: {field}", file=sys.stderr)
+        return 1
+    path = store.write(model, scope=args.scope, work_root=args.work_root or None)
+    print(f"[models] set {field}={value} for {model.model_id} -> {path}")
+    return 0
+
+
+async def cmd_models_default(args: argparse.Namespace) -> int:
+    from lamtools_core.cli import _get_model_store
+
+    store = _get_model_store()
+    model = store.get_sync(args.model_id, work_root=args.work_root or None)
+    if model is None:
+        print(f"[models] not found: {args.model_id}", file=sys.stderr)
+        return 1
+    # Clear other defaults first.
+    for existing in store.list_sync(work_root=args.work_root or None):
+        if existing.model_id != model.model_id and existing.is_default:
+            store.write(replace(existing, is_default=False), scope=args.scope, work_root=args.work_root or None)
+    path = store.write(replace(model, is_default=True), scope=args.scope, work_root=args.work_root or None)
+    print(f"[models] default set to {model.model_id} -> {path}")
+    return 0
+
+
+async def cmd_models_import_from_db(args: argparse.Namespace) -> int:
+    from lamtools_core.config.migrate_models import migrate_models_from_db
+
+    count, paths = migrate_models_from_db(
+        Path(args.config_db),
+        work_root=args.work_root or None,
+        scope=args.scope,
+        force=args.force,
+    )
+    print(f"[models] exported {count} models to {args.scope} scope")
+    for path in paths:
+        print(f"  {path}")
     return 0
 
 
