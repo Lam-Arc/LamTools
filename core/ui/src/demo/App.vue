@@ -1963,23 +1963,25 @@ watch([activeSessionId, messages, latestStatus], ([threadId]) => {
   void refreshGoal(threadId)
 })
 
-// When a workflow-mode turn finishes (status leaves running/waiting), the
-// agent may have edited the graph via the build tools — reload the definition
-// so the canvas reflects the new nodes/edges.
-let prevStatus = latestStatus.value
-watch(latestStatus, (status) => {
-  const wasActive = prevStatus === 'running' || prevStatus === 'waiting'
-  prevStatus = status
-  if (workflowMode.value && activeWorkflowName.value && wasActive && status !== 'running' && status !== 'waiting') {
+// Workflow mode: the agent edits the graph via build tools (workflow_add_node
+// etc.) during a turn. Each tool result lands in the message stream, so when
+// messages change we debounce-reload the workflow definition — the canvas
+// updates in near-realtime as the agent edits, not just at turn end.
+let graphReloadTimer: ReturnType<typeof setTimeout> | null = null
+watch(() => messages.value.length, () => {
+  if (!workflowMode.value || !activeWorkflowName.value) return
+  if (latestStatus.value !== 'running' && latestStatus.value !== 'waiting') return
+  if (graphReloadTimer) clearTimeout(graphReloadTimer)
+  graphReloadTimer = setTimeout(() => {
     void (async () => {
       try {
         const fresh = await getWorkflow(activeWorkflowName.value, currentWorkRoot() || undefined)
         workflowDefinition.value = fresh
       } catch (err) {
-        console.error('[workflow] auto-refresh after turn failed', err)
+        console.error('[workflow] live graph reload failed', err)
       }
     })()
-  }
+  }, 400)
 })
 
 // Sync pin state from WorkspaceShell when it mounts
