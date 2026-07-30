@@ -14,7 +14,9 @@ export interface SubmitCoreComposerTaskOptions {
   executeCommand?: (command: string) => Promise<boolean>
   steerTurn?: (threadId: string, turnId: string, inputItems: CoreInputItem[]) => Promise<void>
   queueInput: (threadId: string, inputItems: CoreInputItem[]) => Promise<void>
-  startTurn: (threadId: string, inputItems: CoreInputItem[]) => Promise<boolean>
+  startTurn: (threadId: string, inputItems: CoreInputItem[], workRoot?: string, turnOptions?: Record<string, unknown>) => Promise<boolean>
+  workRoot?: string
+  turnOptions?: Record<string, unknown>
   forceGuide?: boolean
 }
 
@@ -98,7 +100,7 @@ export async function submitCoreComposerTask(
   }
 
   const inputItems = buildCoreComposerInputItems(cleaned, attachments, commandCatalog)
-  const ok = await options.startTurn(options.threadId, inputItems)
+  const ok = await options.startTurn(options.threadId, inputItems, options.workRoot, options.turnOptions)
   return { status: 'started', inputItems, ok }
 }
 

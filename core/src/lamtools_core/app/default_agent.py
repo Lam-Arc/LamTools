@@ -99,6 +99,7 @@ class CoreAgentRuntimeOptions:
     temperature: float = 0.2
     compact_trigger_tokens: int | None = None
     compact_limit_tokens: int | None = None
+    capability: str = ""
 
 
 def create_goal_gate(
@@ -327,6 +328,8 @@ def create_core_agent_operations(
             active_mode = request.payload.get("active_mode")
             if not isinstance(active_mode, str) or not active_mode.strip():
                 active_mode = None
+            # Optional per-turn instructions override (e.g. workflow-mode context).
+            turn_instructions = str(request.payload.get("instructions") or "").strip() or None
             allow_agent_install_skill = bool(request.payload.get("allow_agent_install_skill"))
             allow_agent_create_hooks = bool(request.payload.get("allow_agent_create_hooks"))
             plugin_assembly = assemble_core_agent_plugins(
@@ -353,7 +356,7 @@ def create_core_agent_operations(
                 approval_policy=approval_policy,
                 llm_client=runtime_model_provider,
                 model_id=runtime_options.model_id,
-                instructions=spec.instructions,
+                instructions=turn_instructions or spec.instructions,
                 context_window_tokens=runtime_options.context_window_tokens,
                 thinking_enabled=runtime_options.thinking_enabled,
                 thinking_budget=runtime_options.thinking_budget,
@@ -383,7 +386,7 @@ def create_core_agent_operations(
                             agent_id=spec.id,
                             model_id=runtime_options.model_id,
                             model_display_name=_model_display(runtime_options.model_id),
-                            instructions=spec.instructions,
+                            instructions=turn_instructions or spec.instructions,
                             thinking_enabled=runtime_options.thinking_enabled,
                             thinking_budget=runtime_options.thinking_budget,
                             reasoning_effort=runtime_options.reasoning_effort,
@@ -391,6 +394,7 @@ def create_core_agent_operations(
                             max_tokens=runtime_options.max_tokens,
                             approval_policy=approval_policy,  # type: ignore[arg-type]
                             active_mode=active_mode,
+                            capability=runtime_options.capability,
                             allow_agent_install_skill=allow_agent_install_skill,
                             allow_agent_create_hooks=allow_agent_create_hooks,
                         ),
@@ -721,7 +725,7 @@ def create_core_agent_operations(
                         approval_policy="require",
                         llm_client=runtime_model_provider,
                         model_id=runtime_options.model_id,
-                        instructions=spec.instructions,
+                        instructions=turn_instructions or spec.instructions,
                         context_window_tokens=runtime_options.context_window_tokens,
                         thinking_enabled=runtime_options.thinking_enabled,
                         thinking_budget=runtime_options.thinking_budget,
@@ -750,6 +754,8 @@ def create_core_agent_operations(
                             or state.metadata.get("turn_id")
                             or state.run_id
                         ),
+                        model=str(delegated_session.get("model") or ""),
+                        mode=str(delegated_session.get("mode") or ""),
                     )
                     if child_result.decision == "wait" and child_result.pending_approval:
                         await _close_mcp_registry(mcp_registry)
@@ -829,12 +835,13 @@ def create_core_agent_operations(
                                 agent_id=spec.id,
                                 model_id=runtime_options.model_id,
                                 model_display_name=_model_display(runtime_options.model_id),
-                                instructions=spec.instructions,
+                                instructions=turn_instructions or spec.instructions,
                                 thinking_enabled=runtime_options.thinking_enabled,
                                 thinking_budget=runtime_options.thinking_budget,
                                 reasoning_effort=runtime_options.reasoning_effort,
                                 temperature=runtime_options.temperature,
                                 max_tokens=runtime_options.max_tokens,
+                                capability=runtime_options.capability,
                             ),
                             toolbox=toolbox,
                             verification_policy=kit.verification_policy(),
@@ -970,7 +977,7 @@ def create_core_agent_operations(
                         approval_policy="auto_approve",
                         llm_client=runtime_model_provider,
                         model_id=runtime_options.model_id,
-                        instructions=spec.instructions,
+                        instructions=turn_instructions or spec.instructions,
                         context_window_tokens=runtime_options.context_window_tokens,
                         thinking_enabled=runtime_options.thinking_enabled,
                         thinking_budget=runtime_options.thinking_budget,
@@ -1089,7 +1096,7 @@ def create_core_agent_operations(
                     approval_policy="require",
                     llm_client=runtime_model_provider,
                     model_id=runtime_options.model_id,
-                    instructions=spec.instructions,
+                    instructions=turn_instructions or spec.instructions,
                     context_window_tokens=runtime_options.context_window_tokens,
                     thinking_enabled=runtime_options.thinking_enabled,
                     thinking_budget=runtime_options.thinking_budget,
@@ -1110,11 +1117,12 @@ def create_core_agent_operations(
                             agent_id=spec.id,
                             model_id=runtime_options.model_id,
                             model_display_name=_model_display(runtime_options.model_id),
-                            instructions=spec.instructions,
+                            instructions=turn_instructions or spec.instructions,
                             thinking_enabled=runtime_options.thinking_enabled,
                             thinking_budget=runtime_options.thinking_budget,
                             temperature=runtime_options.temperature,
                             max_tokens=runtime_options.max_tokens,
+                            capability=runtime_options.capability,
                         ),
                         toolbox=toolbox,
                         verification_policy=kit.verification_policy(),
@@ -1454,6 +1462,7 @@ def _runtime_options_from_request(spec: CoreAgentSpec, request: OperationRequest
         temperature=0.2 if temperature is None else temperature,
         compact_trigger_tokens=compact_trigger_tokens,
         compact_limit_tokens=compact_limit_tokens,
+        capability=str(spec.metadata.get("capability") or ""),
     )
 
 
@@ -1480,6 +1489,7 @@ def _runtime_options_from_state(spec: CoreAgentSpec, state: Any) -> CoreAgentRun
         temperature=0.2 if temperature is None else temperature,
         compact_trigger_tokens=_optional_int(metadata.get("compact_trigger_tokens")),
         compact_limit_tokens=_optional_int(metadata.get("compact_limit_tokens")),
+        capability=str(metadata.get("capability") or spec.metadata.get("capability") or ""),
     )
 
 
@@ -1704,6 +1714,7 @@ async def _build_core_runtime_toolbox(
             parent_event_sink=sub_agent_event_sink,
             checkpoint_coordinator=checkpoint_coordinator,
             activated_mcp_servers=activated_mcp_servers,
+            load_tools=load_tools,
         )
     async def execute_operation(name: str, payload: dict[str, Any], metadata: dict[str, Any]) -> Any:
         if operation_catalog is None:
@@ -1727,6 +1738,7 @@ async def _build_core_runtime_toolbox(
         operation_executor=execute_operation if operation_catalog is not None else None,
         enable_goal_tool=enable_goal_tool,
         enable_arrange_tool=enable_arrange_tool,
+        workflow_build=enable_workflow_tool,
         active_tier=active_tier,
         tier_tools=tier_tools,
         load_tools=load_tools,

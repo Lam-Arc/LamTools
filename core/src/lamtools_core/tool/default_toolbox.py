@@ -31,6 +31,10 @@ from lamtools_core.tool.web_tools import (
     make_web_fetch_handler,
     make_web_search_handler,
 )
+from lamtools_core.tool.workflow_build_tools import (
+    workflow_build_tool_handlers,
+    workflow_build_tool_specs,
+)
 from lamtools_core.tool.workspace_files import (
     DEFAULT_MAX_LIST_ITEMS,
     DEFAULT_MAX_SEARCH_RESULTS,
@@ -58,6 +62,8 @@ class SubAgentRunner(Protocol):
         *,
         task: str,
         agent: str = "",
+        model: str = "",
+        mode: str = "",
         parent_call_id: str = "",
         parent_run_id: str = "",
         parent_turn_id: str = "",
@@ -697,6 +703,7 @@ class CoreToolbox:
         operation_executor: OperationExecutor | None = None,
         enable_goal_tool: bool = False,
         enable_arrange_tool: bool = False,
+        workflow_build: bool = False,
         active_tier: "PermissionMode | None" = None,
         tier_tools: "TierTools | None" = None,
         load_tools: LoadTools | None = None,
@@ -727,6 +734,9 @@ class CoreToolbox:
         )
         for spec in durable_specs:
             self.tool_permissions[spec.name] = spec.permission  # type: ignore[assignment]
+        workflow_build_specs = workflow_build_tool_specs() if (workflow_build and operation_executor is not None) else []
+        for spec in workflow_build_specs:
+            self.tool_permissions[spec.name] = spec.permission  # type: ignore[assignment]
         for name in self.disabled_tools:
             self.tool_permissions[name] = HARD_BLOCK
         self.approval_gate = ApprovalGate(
@@ -736,7 +746,7 @@ class CoreToolbox:
             active_tier=active_tier,
             tier_tools=tier_tools,
         )
-        self._specs = [*default_core_tool_specs(), *list(mcp_tool_specs or []), *durable_specs]
+        self._specs = [*default_core_tool_specs(), *list(mcp_tool_specs or []), *durable_specs, *workflow_build_specs]
         self._handlers = self._build_handlers(
             command_timeout=command_timeout,
             max_list_items=max_list_items,
@@ -744,6 +754,7 @@ class CoreToolbox:
             max_search_results=max_search_results,
             core_event_callback=core_event_callback,
             operation_executor=operation_executor,
+            workflow_build=workflow_build,
         )
 
     def _workflow_specs(self) -> list[ToolSpec]:
@@ -780,8 +791,16 @@ class CoreToolbox:
         if active_mode and self.load_tools:
             allowed = mode_tool_set(self.load_tools, active_mode)
             if allowed is not None:
+                all_specs = self.tool_specs()
+                all_names = {spec.name for spec in all_specs}
+                # In workflow mode, also allow dynamic workflow tools by category
+                # (exposed-workflow run tools whose names aren't in the static whitelist).
+                if active_mode == "workflow":
+                    allowed = set(allowed) | {
+                        spec.name for spec in all_specs
+                        if str(spec.metadata.get("category")) == "workflow"
+                    }
                 # Build exclude set = all tool names NOT in allowed set
-                all_names = {spec.name for spec in self.tool_specs()}
                 effective_exclude |= (all_names - allowed)
         # Filter out MCP tools from non-activated servers
         # Activated servers have their full mcp__{server}__* tools exposed;
@@ -863,6 +882,7 @@ class CoreToolbox:
         max_search_results: int,
         core_event_callback: Callable[[CoreEvent], Awaitable[None]] | None,
         operation_executor: OperationExecutor | None,
+        workflow_build: bool = False,
     ) -> dict[str, ToolHandler]:
         read_tools = WorkspaceReadOnlyTools(
             self.work_root,
@@ -957,6 +977,8 @@ class CoreToolbox:
             if not task:
                 return ToolResult(call_id=call.id, name=call.name, status="failed", error="sub_agent requires 'task'")
             agent = str(args.get("agent") or "").strip()
+            model = str(args.get("model") or "").strip()
+            mode = str(args.get("mode") or "").strip()
             failure_key = (agent.lower(), task)
             previous_failure = self._failed_sub_agent_calls.get(failure_key)
             if previous_failure is not None:
@@ -972,6 +994,8 @@ class CoreToolbox:
             outcome = await self.sub_agent_runner.run(
                 task=task,
                 agent=agent,
+                model=model,
+                mode=mode,
                 parent_call_id=call.id,
                 parent_run_id=str(call.metadata.get("parent_run_id") or ""),
                 parent_turn_id=str(call.metadata.get("parent_turn_id") or ""),
@@ -979,6 +1003,8 @@ class CoreToolbox:
             if isinstance(outcome, SubAgentRunResult):
                 metadata = {
                     "agent": agent,
+                    "model": model,
+                    "mode": mode,
                     "sub_session_id": outcome.session_id,
                     "sub_run_id": outcome.run_id,
                     "decision": outcome.decision,
@@ -997,6 +1023,8 @@ class CoreToolbox:
                             "session_id": outcome.session_id,
                             "agent": agent,
                             "task": task,
+                            "model": model,
+                            "mode": mode,
                             "parent_call_id": call.id,
                             "parent_run_id": str(call.metadata.get("parent_run_id") or ""),
                             "parent_turn_id": str(call.metadata.get("parent_turn_id") or ""),
@@ -1076,6 +1104,8 @@ class CoreToolbox:
         }
         if operation_executor is not None:
             handlers.update(durable_tool_handlers(operation_executor, work_root=self.work_root))
+            if workflow_build:
+                handlers.update(workflow_build_tool_handlers(operation_executor, work_root=self.work_root))
         return handlers
 
 

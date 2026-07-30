@@ -124,6 +124,16 @@ def default_load_tools() -> LoadTools:
             description="执行模式：可使用全部工具进行完整的代码操作",
             tools=[],
         ),
+        "workflow": LoadToolMode(
+            description="工作流模式：操作工作流图与查阅资料，不直接改项目文件",
+            tools=[
+                "read_file", "list_dir", "search_files", "search_content",
+                "web_fetch", "browser_check", "load_skill", "sub_agent",
+                "goal", "arrange",
+                "workflow_graph", "workflow_add_node", "workflow_connect",
+                "workflow_delete_node", "workflow_update_node",
+            ],
+        ),
     })
 
 

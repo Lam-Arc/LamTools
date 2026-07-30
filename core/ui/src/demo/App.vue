@@ -863,11 +863,26 @@ const activeSessionTitle = computed(() => (
 const selectedNode = computed(() => (
   workflowDefinition.value?.nodes.find((n) => n.id === selectedNodeId.value) || null
 ))
+// System-instruction override for workflow-mode turns: tells the agent it is
+// operating on a LamTools workflow graph (not GitHub Actions etc.) and which
+// tools it has for editing the graph.
+const workflowModeInstructions = computed(() => {
+  const name = activeWorkflowName.value || ''
+  return [
+    '你是 LamTools 工作流模式的助手。用户说的"workflow/工作流/建工作流"一律指画布上的工作流节点图（WorkflowDef），不是 GitHub Actions、CI 或其它外部工作流。',
+    '节点类型只有三种：llm、agent、action。每个节点自带一个 in 端口和一个 out 端口；节点之间通过端口连线（某节点的 out 端口连到另一节点的 in 端口）。',
+    '你可用以下工具操作当前工作流图：',
+    '- workflow_graph：查看当前图的完整 JSON（含节点 id、端口、连线）。',
+    '- workflow_add_node：加节点（kind/title/config/ports/position）。',
+    '- workflow_connect：连线（source/source_port/target/target_port）。',
+    '- workflow_delete_node：按 node_id 删节点（连带删相关连线）。',
+    '- workflow_update_node：按 node_id 改节点的 title/config/ports/position。',
+    '改图前先 workflow_graph 看现状，确认节点 id 和端口名后再加/连/删，避免引用不存在的 id。当前工作流名：' + (name || '（未选中）'),
+  ].join('\n')
+})
 function nodeKindIcon(kind: string): string {
   if (kind === 'llm') return '◇'
   if (kind === 'agent') return '◈'
-  if (kind === 'input') return '⤓'
-  if (kind === 'output') return '⤒'
   return '◆'
 }
 const selectedProject = computed(() => (
@@ -926,6 +941,10 @@ const liveComposerController = useCoreLiveComposerController({
   canExecuteCommand: () => latestStatus.value !== 'running' && latestStatus.value !== 'waiting',
   turnOptions: () => ({
     ...executionControls.turnOptions(),
+    ...(workflowMode.value ? {
+      active_mode: 'workflow',
+      instructions: workflowModeInstructions.value,
+    } : {}),
   }),
   clearComposer: clearComposerAfterPersisted,
   clearAttachments,
