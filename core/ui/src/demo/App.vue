@@ -368,12 +368,12 @@
               </div>
               <div v-if="selectedNode" class="wf-node-info-body">
                 <p class="wf-node-info-row"><span>类型</span><strong>{{ selectedNode.kind }}</strong></p>
-                <p v-if="selectedNode.config.instruction" class="wf-node-info-block">
+                <div v-if="selectedNode.config.instruction" class="wf-node-info-block">
                   <span>指令</span><pre>{{ String(selectedNode.config.instruction) }}</pre>
-                </p>
-                <p v-if="selectedNode.config.command" class="wf-node-info-block">
+                </div>
+                <div v-if="selectedNode.config.command" class="wf-node-info-block">
                   <span>命令</span><code>{{ String(selectedNode.config.command) }}</code>
-                </p>
+                </div>
                 <p v-if="selectedNode.config.model_id" class="wf-node-info-row"><span>模型</span><strong>{{ String(selectedNode.config.model_id) }}</strong></p>
                 <p v-if="selectedNode.config.mode" class="wf-node-info-row"><span>模式</span><strong>{{ String(selectedNode.config.mode) }}</strong></p>
                 <p class="wf-node-info-row"><span>端口</span><strong>{{ selectedNode.ports.map((p) => p.name).join(', ') || '—' }}</strong></p>
@@ -1961,6 +1961,25 @@ watch(messages, async (newVal, oldVal) => {
 
 watch([activeSessionId, messages, latestStatus], ([threadId]) => {
   void refreshGoal(threadId)
+})
+
+// When a workflow-mode turn finishes (status leaves running/waiting), the
+// agent may have edited the graph via the build tools — reload the definition
+// so the canvas reflects the new nodes/edges.
+let prevStatus = latestStatus.value
+watch(latestStatus, (status) => {
+  const wasActive = prevStatus === 'running' || prevStatus === 'waiting'
+  prevStatus = status
+  if (workflowMode.value && activeWorkflowName.value && wasActive && status !== 'running' && status !== 'waiting') {
+    void (async () => {
+      try {
+        const fresh = await getWorkflow(activeWorkflowName.value, currentWorkRoot() || undefined)
+        workflowDefinition.value = fresh
+      } catch (err) {
+        console.error('[workflow] auto-refresh after turn failed', err)
+      }
+    })()
+  }
 })
 
 // Sync pin state from WorkspaceShell when it mounts
