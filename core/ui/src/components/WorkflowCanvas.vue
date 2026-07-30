@@ -1,12 +1,5 @@
 <template>
   <div class="wf-canvas" @contextmenu.prevent="onContextMenu">
-    <button
-      type="button"
-      class="wf-lock-btn"
-      :class="{ locked }"
-      :title="locked ? '已锁定（拖拽/缩放不可用）' : '锁定画布'"
-      @click="toggleLock"
-    >{{ locked ? '🔒' : '🔓' }}</button>
     <VueFlow
       v-model:nodes="vfNodes"
       v-model:edges="vfEdges"
@@ -31,12 +24,13 @@
       @click.stop
       @keydown.escape.prevent="closeMenus"
     >
-      <div class="wf-menu-group">
-        <div class="wf-menu-label">新建节点</div>
-        <button class="menu-item" type="button" role="menuitem" @click="addNodeAt('llm', paneMenu)">LLM</button>
-        <button class="menu-item" type="button" role="menuitem" @click="addNodeAt('agent', paneMenu)">Agent</button>
-        <button class="menu-item" type="button" role="menuitem" @click="addNodeAt('action', paneMenu)">Action</button>
-      </div>
+        <div class="wf-menu-group">
+          <div class="wf-menu-label">新建节点</div>
+          <button class="menu-item" type="button" role="menuitem" @click="addNodeAt('ai', paneMenu)">AI</button>
+          <button class="menu-item" type="button" role="menuitem" @click="addNodeAt('action', paneMenu)">Action</button>
+          <button class="menu-item" type="button" role="menuitem" @click="addNodeAt('content', paneMenu)">Content</button>
+          <button class="menu-item" type="button" role="menuitem" @click="addNodeAt('subgraph', paneMenu)">Subgraph</button>
+        </div>
       <span class="wf-menu-sep" />
       <button class="menu-item" type="button" role="menuitem" :disabled="!clipboard" @click="pasteAt(paneMenu)">粘贴</button>
     </div>
@@ -61,6 +55,9 @@
       <button class="menu-item" type="button" role="menuitem" @click="copyNode(nodeMenu.id)">复制</button>
       <button class="menu-item" type="button" role="menuitem" @click="cutNode(nodeMenu.id)">剪切</button>
       <span class="wf-menu-sep" />
+      <button class="menu-item" type="button" role="menuitem" @click="addPort(nodeMenu.id, 'in')">+ 输入端口</button>
+      <button class="menu-item" type="button" role="menuitem" @click="addPort(nodeMenu.id, 'out')">+ 输出端口</button>
+      <span class="wf-menu-sep" />
       <button class="menu-item danger" type="button" role="menuitem" @click="deleteNode(nodeMenu.id)">删除</button>
     </div>
 
@@ -74,6 +71,17 @@
       @click.stop
       @keydown.escape.prevent="closeMenus"
     >
+      <div class="wf-menu-group">
+        <div class="wf-menu-label">连线条件</div>
+        <input
+          class="wf-edge-cond-input"
+          type="text"
+          placeholder="Python 表达式（空=无条件）"
+          :value="edgeCondition(edgeMenu.id)"
+          @input="setEdgeCondition(edgeMenu.id, ($event.target as HTMLInputElement).value)"
+        />
+      </div>
+      <span class="wf-menu-sep" />
       <button class="menu-item danger" type="button" role="menuitem" @click="deleteEdge(edgeMenu.id)">删除连线</button>
     </div>
 
@@ -89,7 +97,7 @@
 </template>
 
 <script setup lang="ts">
-import { markRaw, ref, watch } from 'vue'
+import { markRaw, provide, ref, watch } from 'vue'
 import { VueFlow, useVueFlow, type Node, type Edge } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 // Vue Flow styles must load as global CSS (not inside <style scoped> @import,
@@ -105,6 +113,8 @@ const props = defineProps<{
   nodeStates: Record<string, NodeStateStatus>
   selectedNodeId?: string
   availableTools?: Array<{ name: string; description: string }>
+  availableModels?: Array<{ id: string; display_name?: string; model_id?: string }>
+  locked?: boolean
 }>()
 const emit = defineEmits<{
   'update:definition': [def: WorkflowDef]
@@ -115,11 +125,17 @@ const emit = defineEmits<{
 
 const { screenToFlowCoordinate, setInteractive } = useVueFlow()
 const nodeTypes = { workflow: markRaw(WorkflowNodeComp) as any }
-const locked = ref(false)
-function toggleLock() {
-  locked.value = !locked.value
-  setInteractive(!locked.value)
-}
+watch(() => props.locked, (val) => { setInteractive(!val) }, { immediate: true })
+
+// Provide an update callback so WorkflowNode components can edit fields inline.
+provide('wf-update-node', (nodeId: string, patch: Partial<WorkflowNodeData>) => {
+  const nodes = props.definition.nodes.map((n) =>
+    n.id === nodeId ? { ...n, ...patch, config: { ...n.config, ...(patch.config || {}) } } : n
+  )
+  emit('update:definition', { ...props.definition, nodes })
+})
+// Provide available models so WorkflowNode can render a model dropdown.
+provide('wf-models', () => props.availableModels ?? [])
 
 // ---- WorkflowDef <-> VueFlow mapping ----
 const vfNodes = ref<Node[]>([])
@@ -135,7 +151,10 @@ let syncing = false
 let lastSignature = ''
 function _nodeSignature(n: WorkflowNodeData): string {
   // position intentionally excluded — it's owned by the canvas during drag.
-  return [n.id, n.kind, n.title, JSON.stringify(n.config), n.ports.map((p) => `${p.name}:${p.direction}`).join(',')].join('::')
+  // Config keys are sorted so a server round-trip that reorders them doesn't
+  // trigger a spurious re-sync (which would reset dragged positions).
+  const sortedConfig = JSON.stringify(n.config, Object.keys(n.config).sort())
+  return [n.id, n.kind, n.title, sortedConfig, n.ports.map((p) => `${p.name}:${p.direction}:${p.type}`).join(',')].join('::')
 }
 function syncFromDefinition() {
   const sig = props.definition.nodes.map(_nodeSignature).join('||') + '##' + props.definition.edges.map((e) => e.id).join('|')
@@ -188,9 +207,34 @@ watch(vfEdges, (edges) => {
   if (syncing) return
   emit('update:definition', {
     ...props.definition,
-    edges: edges.map((e) => ({ id: e.id, source: e.source, source_port: e.sourceHandle ?? '', target: e.target, target_port: e.targetHandle ?? '' })),
+    edges: edges.map((e) => {
+      const existing = props.definition.edges.find((de) => de.id === e.id)
+      return {
+        id: e.id,
+        source: e.source,
+        source_port: e.sourceHandle ?? '',
+        target: e.target,
+        target_port: e.targetHandle ?? '',
+        transform: existing?.transform ?? '',
+        condition: existing?.condition ?? '',
+      }
+    }),
   })
 }, { deep: true })
+
+// ---- edge condition helpers ----
+function edgeCondition(edgeId: string): string {
+  const e = props.definition.edges.find((ed) => ed.id === edgeId)
+  return e?.condition ?? ''
+}
+function setEdgeCondition(edgeId: string, value: string) {
+  emit('update:definition', {
+    ...props.definition,
+    edges: props.definition.edges.map((e) =>
+      e.id === edgeId ? { ...e, condition: value } : e
+    ),
+  })
+}
 
 // ---- context menus ----
 type MenuPos = { x: number; y: number }
@@ -248,7 +292,7 @@ function closeMenus() {
 function onNodeClick(params: any) {
   const id = params?.node?.id
   if (!id) return
-  configNode(id)
+  emit('select-node', id)
 }
 function configNode(id: string) {
   if (!props.definition.nodes.some((n) => n.id === id)) return
@@ -270,6 +314,14 @@ function openEdit(id: string, x?: number, y?: number) {
 function onConnect(params: { source: string; target: string; sourceHandle?: string | null; targetHandle?: string | null }) {
   const id = `e-${params.source}-${params.sourceHandle ?? ''}-${params.target}-${params.targetHandle ?? ''}`
   if (vfEdges.value.some((e) => e.id === id)) return
+  // Type validation: look up source output port and target input port types.
+  const srcNode = props.definition.nodes.find((n) => n.id === params.source)
+  const tgtNode = props.definition.nodes.find((n) => n.id === params.target)
+  if (srcNode && tgtNode) {
+    const srcPort = srcNode.ports.find((p) => p.name === params.sourceHandle && p.direction === 'out')
+    const tgtPort = tgtNode.ports.find((p) => p.name === params.targetHandle && p.direction === 'in')
+    if (srcPort && tgtPort && !_typesCompatible(srcPort.type, tgtPort.type)) return
+  }
   const edge = {
     id,
     source: params.source,
@@ -284,11 +336,18 @@ function onConnect(params: { source: string; target: string; sourceHandle?: stri
 function addNodeAt(kind: WorkflowNodeKind, pos: MenuPos) {
   const flowPos = safeScreenToFlow(pos)
   const id = `${kind}-${Math.random().toString(36).slice(2, 6)}`
+  const config: Record<string, unknown> = kind === 'action'
+    ? { action_type: 'shell', command: '' }
+    : kind === 'ai'
+      ? { instruction: '', mode: 'single' }
+      : kind === 'subgraph'
+        ? { workflow_name: '', iterate: 'none' }
+        : {}
   const node: WorkflowNodeData = {
     id,
     kind,
     title: defaultTitle(kind),
-    config: kind === 'action' ? { action_type: 'shell', command: '' } : kind === 'llm' ? { instruction: '', mode: 'single' } : {},
+    config,
     ports: defaultPorts(kind),
     position: flowPos,
   }
@@ -297,20 +356,57 @@ function addNodeAt(kind: WorkflowNodeKind, pos: MenuPos) {
 }
 
 function defaultTitle(kind: WorkflowNodeKind): string {
-  return kind === 'llm' ? 'LLM' : kind === 'agent' ? 'Agent' : 'Action'
+  const count = props.definition.nodes.filter((n) => n.kind === kind).length + 1
+  return `${kind}.${count}`
 }
-// Every node carries both an input and an output port — ports (not separate
-// Input/Output nodes) are how data flows in and out of a node.
-function defaultPorts(_kind: WorkflowNodeKind) {
+// Default ports per kind — content has output-only; subgraph has in/result;
+// ai/action get a generic in/out pair.
+function defaultPorts(kind: WorkflowNodeKind) {
+  if (kind === 'content') {
+    return [{ name: 'out', type: 'string', direction: 'out' as const, value: '' }]
+  }
+  if (kind === 'subgraph') {
+    return [
+      { name: 'in', type: 'any', direction: 'in' as const },
+      { name: 'result', type: 'any', direction: 'out' as const },
+    ]
+  }
   return [
-    { name: 'in', type: 'text', direction: 'in' as const },
-    { name: 'out', type: 'text', direction: 'out' as const },
+    { name: 'in', type: 'string', direction: 'in' as const },
+    { name: 'out', type: 'string', direction: 'out' as const },
   ]
+}
+
+// Type compatibility check mirroring the backend _types_compatible.
+function _typesCompatible(src: string, dst: string): boolean {
+  const norm = (t: string) => {
+    const aliases: Record<string, string> = { text: 'string', str: 'string', int: 'number', integer: 'number', float: 'number', bool: 'boolean', dict: 'object', list: 'array' }
+    const lower = (t || 'any').toLowerCase().trim()
+    return aliases[lower] ?? (['string', 'number', 'boolean', 'object', 'array', 'any'].includes(lower) ? lower : 'any')
+  }
+  const s = norm(src), d = norm(dst)
+  if (s === 'any' || d === 'any' || s === d) return true
+  if ((s === 'number' || s === 'boolean') && d === 'string') return true
+  return false
 }
 
 function onUpdateNode(updated: WorkflowNodeData) {
   emit('update:definition', { ...props.definition, nodes: props.definition.nodes.map((n) => (n.id === updated.id ? updated : n)) })
   editNode.value = null
+}
+
+function addPort(id: string, direction: 'in' | 'out') {
+  const node = props.definition.nodes.find((n) => n.id === id)
+  if (!node) return
+  const existing = node.ports.filter((p) => p.direction === direction)
+  const newPort = { name: `${direction}${existing.length + 1}`, type: 'any', direction }
+  emit('update:definition', {
+    ...props.definition,
+    nodes: props.definition.nodes.map((n) =>
+      n.id === id ? { ...n, ports: [...n.ports, newPort] } : n
+    ),
+  })
+  closeMenus()
 }
 
 function deleteNode(id: string) {
@@ -364,26 +460,6 @@ if (typeof document !== 'undefined') {
 
 <style scoped>
 
-.wf-lock-btn {
-  position: absolute;
-  top: 10px;
-  left: 12px;
-  z-index: var(--z-popover, 60);
-  width: 30px;
-  height: 30px;
-  display: grid;
-  place-items: center;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  font-size: 15px;
-  cursor: pointer;
-  opacity: 0.55;
-  transition: opacity 0.15s, background 0.15s;
-}
-.wf-lock-btn:hover { opacity: 1; background: var(--theme-main-soft-background); }
-.wf-lock-btn.locked { opacity: 0.9; }
-
 .wf-canvas {
   /* Fill the entire workspace-main (ignore its padding) so the whole main
      area is the canvas, not a small sub-region. Background is transparent so
@@ -418,6 +494,17 @@ if (typeof document !== 'undefined') {
 .wf-menu-group { display: flex; flex-direction: column; }
 .wf-menu-label { font-size: 10px; opacity: 0.4; padding: 4px 8px 2px; text-transform: uppercase; letter-spacing: 0.04em; }
 .wf-menu-sep { display: block; height: 1px; margin: 4px 6px; background: var(--theme-main-border); }
+.wf-edge-cond-input {
+  width: 100%;
+  background: var(--theme-main-subtle-background, transparent);
+  border: 1px solid var(--theme-main-border);
+  border-radius: 5px;
+  color: inherit;
+  padding: 5px 8px;
+  font-size: 11px;
+  font-family: var(--font-mono, monospace);
+  box-sizing: border-box;
+}
 .menu-item {
   border: 0; background: transparent; color: inherit; text-align: left;
   padding: 6px 10px; border-radius: 6px; font-size: 12px; cursor: pointer;

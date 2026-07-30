@@ -14,16 +14,36 @@
         <UiSelect :model-value="node.kind" :options="kindOptions" :hide-arrow="true" @update:model-value="onKind" />
       </label>
 
-      <!-- LLM -->
-      <template v-if="node.kind === 'llm'">
-        <label class="field field-wide">
-          <span class="field-label">指令 / 系统提示词</span>
-          <textarea v-model="instruction" rows="4" placeholder="系统提示词…"></textarea>
-        </label>
-        <label class="field field-wide">
-          <span class="field-label">输出格式（文本说明）</span>
-          <textarea v-model="outputFormatText" rows="2" placeholder="可选：自然语言格式说明"></textarea>
-        </label>
+      <!-- Port editor (common to all kinds) -->
+      <div class="port-editor">
+        <div class="port-section">
+          <span class="field-label">输入端口</span>
+          <div v-for="(p, i) in inputPorts" :key="'in'+i" class="port-row">
+            <input v-model="p.name" type="text" placeholder="名称" class="port-name" />
+            <select v-model="p.type" class="port-type">
+              <option v-for="t in typeOptions" :key="t" :value="t">{{ t }}</option>
+            </select>
+            <button class="port-del" type="button" @click="inputPorts.splice(i, 1)">✕</button>
+          </div>
+          <button class="port-add" type="button" @click="inputPorts.push({ name: '', type: 'string' })">+ 添加输入</button>
+        </div>
+        <div class="port-section">
+          <span class="field-label">输出端口</span>
+          <div v-for="(p, i) in outputPorts" :key="'out'+i" class="port-row">
+            <input v-model="p.name" type="text" placeholder="名称" class="port-name" />
+            <select v-model="p.type" class="port-type">
+              <option v-for="t in typeOptions" :key="t" :value="t">{{ t }}</option>
+            </select>
+            <input v-if="node.kind === 'content'" v-model="p.value" type="text" placeholder="常量值" class="port-value" />
+            <button class="port-del" type="button" @click="outputPorts.splice(i, 1)">✕</button>
+          </div>
+          <button class="port-add" type="button" @click="outputPorts.push({ name: '', type: 'string', value: '' })">+ 添加输出</button>
+        </div>
+      </div>
+
+      <!-- AI (merges llm + agent, mode selects strategy) -->
+      <template v-if="node.kind === 'ai'">
+        <p v-if="outputPorts.length" class="hint">输出端口 = JSON 字段（强制 JSON 输出）</p>
         <label class="field">
           <span class="field-label">模式</span>
           <UiSelect :model-value="mode" :options="modeOptions" @update:model-value="mode = $event" />
@@ -32,19 +52,19 @@
           <span class="field-label">最大迭代</span>
           <input v-model.number="loopMax" type="number" min="1" />
         </label>
-        <label class="toggle-line">
-          <input v-model="allowTools" type="checkbox" />
-          <span>允许工具调用</span>
+        <label class="field field-wide">
+          <span class="field-label">指令（支持 {{ interpHint }} 插值）</span>
+          <textarea v-model="instruction" rows="4" :placeholder="mode === 'agent' ? '让 agent 完成的目标…' : '系统提示词…'"></textarea>
         </label>
-        <label v-if="allowTools" class="field field-wide">
-          <span class="field-label">允许的工具</span>
+        <label class="field field-wide">
+          <span class="field-label">输出格式（文本说明，可选）</span>
+          <textarea v-model="outputFormatText" rows="2" placeholder="可选：自然语言格式说明"></textarea>
+        </label>
+        <label v-if="mode === 'agent'" class="field field-wide">
+          <span class="field-label">工具集</span>
           <div class="wf-tool-checklist">
             <label v-for="t in toolList" :key="t.name" class="wf-tool-check">
-              <input
-                type="checkbox"
-                :checked="selectedTools.includes(t.name)"
-                @change="toggleTool(t.name)"
-              />
+              <input type="checkbox" :checked="selectedTools.includes(t.name)" @change="toggleTool(t.name)" />
               <span class="wf-tool-name" :title="t.description">{{ t.name }}</span>
             </label>
             <p v-if="!toolList.length" class="wf-tool-empty">暂无可用工具</p>
@@ -63,40 +83,9 @@
         </details>
       </template>
 
-      <!-- Agent -->
-      <template v-else-if="node.kind === 'agent'">
-        <label class="field field-wide">
-          <span class="field-label">目标 / 指令</span>
-          <textarea v-model="instruction" rows="4" placeholder="让 agent 完成的目标…"></textarea>
-        </label>
-        <label class="field field-wide">
-          <span class="field-label">工具集</span>
-          <div class="wf-tool-checklist">
-            <label v-for="t in toolList" :key="t.name" class="wf-tool-check">
-              <input
-                type="checkbox"
-                :checked="selectedTools.includes(t.name)"
-                @change="toggleTool(t.name)"
-              />
-              <span class="wf-tool-name" :title="t.description">{{ t.name }}</span>
-            </label>
-            <p v-if="!toolList.length" class="wf-tool-empty">暂无可用工具</p>
-          </div>
-        </label>
-        <details class="settings-advanced">
-          <summary>高级设置</summary>
-          <label class="field"><span class="field-label">模型</span><input v-model="modelId" type="text" /></label>
-          <label class="field"><span class="field-label">思考等级</span>
-            <UiSelect :model-value="reasoningEffort" :options="effortOptions" @update:model-value="reasoningEffort = $event" />
-          </label>
-          <label class="field"><span class="field-label">温度</span><input v-model.number="temperature" type="number" step="0.1" /></label>
-          <label class="field"><span class="field-label">最大轮次</span><input v-model.number="maxTokens" type="number" /></label>
-          <label class="field"><span class="field-label">重试次数</span><input v-model.number="retries" type="number" min="0" /></label>
-        </details>
-      </template>
-
       <!-- Action -->
-      <template v-else>
+      <template v-else-if="node.kind === 'action'">
+        <p v-if="outputPorts.length" class="hint">输出端口 = JSON 键名（stdout 是 JSON 时自动拆分）</p>
         <label class="field">
           <span class="field-label">动作类型</span>
           <UiSelect :model-value="actionType" :options="actionOptions" @update:model-value="onActionType" />
@@ -123,6 +112,42 @@
           <label class="field"><span class="field-label">重试次数</span><input v-model.number="retries" type="number" min="0" /></label>
         </details>
       </template>
+
+      <!-- Subgraph (merges loop + map + subworkflow, iterate selects mode) -->
+      <template v-else-if="node.kind === 'subgraph'">
+        <p class="hint">引用外部工作流，iterate 控制执行模式</p>
+        <label class="field">
+          <span class="field-label">工作流名称</span>
+          <input v-model="subworkflowName" type="text" placeholder="my_sub_workflow" />
+        </label>
+        <label class="field">
+          <span class="field-label">迭代模式</span>
+          <UiSelect :model-value="subIterate" :options="iterateOptions" @update:model-value="subIterate = $event" />
+        </label>
+        <template v-if="subIterate === 'loop'">
+          <label class="field"><span class="field-label">最大迭代</span><input v-model.number="loopMaxIter" type="number" min="1" /></label>
+          <label class="field field-wide">
+            <span class="field-label">退出条件（Python 表达式）</span>
+            <input v-model="subLoopCondition" type="text" placeholder="quality >= 0.8" />
+          </label>
+        </template>
+        <label class="field"><span class="field-label">重试次数</span><input v-model.number="retries" type="number" min="0" /></label>
+      </template>
+
+      <!-- Error handling (common, collapsible) -->
+      <details v-if="['ai','action','subgraph'].includes(node.kind)" class="settings-advanced">
+        <summary>错误处理</summary>
+        <label class="field">
+          <span class="field-label">策略</span>
+          <UiSelect :model-value="onErrorStrategy" :options="onErrorOptions" @update:model-value="onErrorStrategy = $event" />
+        </label>
+        <template v-if="onErrorStrategy === 'fallback'">
+          <label class="field"><span class="field-label">降级输出端口</span><input v-model="onErrorFallbackPort" type="text" placeholder="out" /></label>
+          <label class="field"><span class="field-label">降级默认值</span><input v-model="onErrorValue" type="text" placeholder="默认值（空=哨兵跳过）" /></label>
+        </template>
+      </details>
+
+      <!-- Content: no extra config needed — values are in the port editor -->
     </div>
     <footer class="wf-edit-foot">
       <button class="small-btn primary" type="button" @click="apply">应用</button>
@@ -133,7 +158,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import UiSelect from './UiSelect.vue'
-import type { WorkflowNode, WorkflowNodeKind, ActionKind } from '../workflow/types'
+import type { WorkflowNode, WorkflowNodeKind, ActionKind, WorkflowPort } from '../workflow/types'
 
 interface SelectOption {
   value: string
@@ -152,21 +177,22 @@ const emit = defineEmits<{
 
 const cardStyle = computed(() => {
   const cardW = 320
-  const cardH = 420
-  // anchor is treated as the desired center; clamp so the card stays on-screen.
+  const cardH = 520
   const left = Math.max(12, Math.min(props.anchor.x - cardW / 2, window.innerWidth - cardW - 12))
   const top = Math.max(12, Math.min(props.anchor.y, window.innerHeight - cardH - 12))
   return { left: `${left}px`, top: `${top}px` }
 })
 
 const kindOptions: SelectOption[] = [
-  { value: 'llm', label: 'LLM' },
-  { value: 'agent', label: 'Agent' },
+  { value: 'ai', label: 'AI' },
   { value: 'action', label: 'Action' },
+  { value: 'content', label: 'Content' },
+  { value: 'subgraph', label: 'Subgraph' },
 ]
 const modeOptions: SelectOption[] = [
-  { value: 'single', label: '单次' },
-  { value: 'loop', label: 'loop' },
+  { value: 'single', label: '单次 (single)' },
+  { value: 'loop', label: '自迭代 (loop)' },
+  { value: 'agent', label: '子代理 (agent)' },
 ]
 const effortOptions: SelectOption[] = [
   { value: '', label: '默认' },
@@ -191,15 +217,39 @@ const methodOptions: SelectOption[] = [
   { value: 'PUT', label: 'PUT' },
   { value: 'DELETE', label: 'DELETE' },
 ]
+const typeOptions = ['string', 'number', 'boolean', 'object', 'array', 'any']
+const opOptions = ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'contains', 'regex', 'exists']
+const onErrorOptions: SelectOption[] = [
+  { value: 'abort', label: '中止（默认）' },
+  { value: 'fallback', label: '降级输出' },
+  { value: 'skip', label: '跳过' },
+]
+const iterateOptions: SelectOption[] = [
+  { value: 'none', label: '调用一次 (none)' },
+  { value: 'loop', label: '循环 (loop)' },
+  { value: 'map', label: '遍历数组 (map)' },
+]
+// Plain string shown in hints (kept in script to avoid Vue template {{ }} conflicts).
+const interpHint = '{{端口名}}'
 
-// local editable copies
+// ---- local editable copies ----
 const title = ref(props.node.title)
+
+// Port editor: split into inputs/outputs refs for easy add/remove.
+interface PortEdit { name: string; type: string; value?: unknown }
+const inputPorts = ref<PortEdit[]>(
+  props.node.ports.filter((p) => p.direction === 'in').map((p) => ({ name: p.name, type: p.type })),
+)
+const outputPorts = ref<PortEdit[]>(
+  props.node.ports.filter((p) => p.direction === 'out').map((p) => ({ name: p.name, type: p.type, value: p.value ?? '' })),
+)
+
+// LLM / Agent
 const instruction = ref(String(props.node.config.instruction ?? props.node.config.system_prompt ?? ''))
 const outputFormatText = ref(String(props.node.config.output_format_text ?? ''))
 const mode = ref(String(props.node.config.mode ?? 'single'))
 const loopMax = ref(Number(props.node.config.loop_max_iterations ?? 3))
 const allowTools = ref(!!props.node.config.allow_tools)
-// Selected tool names (checkbox list, not free text).
 const selectedTools = ref<string[]>(
   Array.isArray(props.node.config.allowed_tools)
     ? [...(props.node.config.allowed_tools as string[])]
@@ -219,16 +269,31 @@ const reasoningEffort = ref(String(props.node.config.reasoning_effort ?? ''))
 const maxTokens = ref<number | ''>(props.node.config.max_tokens === undefined ? '' : Number(props.node.config.max_tokens))
 const topP = ref<number | ''>(props.node.config.top_p === undefined ? '' : Number(props.node.config.top_p))
 const retries = ref(Number(props.node.config.retries ?? 0))
+
+// Action
 const actionType = ref(String(props.node.config.action_type ?? 'shell') as ActionKind)
 const language = ref(String(props.node.config.language ?? 'python'))
 const command = ref(String(props.node.config.command ?? props.node.config.script ?? props.node.config.url ?? ''))
 const cwd = ref(String(props.node.config.cwd ?? ''))
 
+// Branch
+// Subgraph
+const subworkflowName = ref(String(props.node.config.workflow_name ?? ''))
+const subIterate = ref(String(props.node.config.iterate ?? 'none'))
+const loopMaxIter = ref(Number(props.node.config.max_iterations ?? 5))
+const subLoopCondition = ref(String(props.node.config.condition ?? ''))
+
+// Error handling (common to all kinds with execution)
+const onErrorStrategy = ref(String((props.node.config.on_error as Record<string, unknown> | undefined)?.strategy ?? 'abort'))
+const onErrorFallbackPort = ref(String((props.node.config.on_error as Record<string, unknown> | undefined)?.fallback_port ?? ''))
+const onErrorValue = ref(String((props.node.config.on_error as Record<string, unknown> | undefined)?.error_value ?? ''))
+
 watch(
   () => props.node.id,
   () => {
-    // reset on node switch
     title.value = props.node.title
+    inputPorts.value = props.node.ports.filter((p) => p.direction === 'in').map((p) => ({ name: p.name, type: p.type }))
+    outputPorts.value = props.node.ports.filter((p) => p.direction === 'out').map((p) => ({ name: p.name, type: p.type, value: p.value ?? '' }))
     instruction.value = String(props.node.config.instruction ?? props.node.config.system_prompt ?? '')
     command.value = String(props.node.config.command ?? props.node.config.script ?? props.node.config.url ?? '')
     actionType.value = String(props.node.config.action_type ?? 'shell') as ActionKind
@@ -243,28 +308,36 @@ function onActionType(v: string) {
 }
 
 function apply() {
+  // Rebuild ports from the editor refs.
+  const ports: WorkflowPort[] = [
+    ...inputPorts.value.filter((p) => p.name).map((p) => ({ name: p.name, type: p.type, direction: 'in' as const })),
+    ...outputPorts.value.filter((p) => p.name).map((p) => ({
+      name: p.name,
+      type: p.type,
+      direction: 'out' as const,
+      ...(props.node.kind === 'content' && p.value !== undefined ? { value: p.value } : {}),
+    })),
+  ]
+
   const cfg: Record<string, unknown> = { ...props.node.config }
-  if (props.node.kind === 'llm') {
+  if (props.node.kind === 'ai') {
     cfg.instruction = instruction.value
     cfg.output_format_text = outputFormatText.value
     cfg.mode = mode.value
     if (mode.value === 'loop') cfg.loop_max_iterations = loopMax.value
-    cfg.allow_tools = allowTools.value
-    if (allowTools.value) cfg.allowed_tools = [...selectedTools.value]
+    if (mode.value === 'agent') {
+      cfg.tools = [...selectedTools.value]
+    } else {
+      cfg.allow_tools = allowTools.value
+      if (allowTools.value) cfg.allowed_tools = [...selectedTools.value]
+    }
     cfg.model_id = modelId.value
     if (temperature.value !== '') cfg.temperature = temperature.value
     cfg.reasoning_effort = reasoningEffort.value
     if (maxTokens.value !== '') cfg.max_tokens = maxTokens.value
     if (topP.value !== '') cfg.top_p = topP.value
     cfg.retries = retries.value
-  } else if (props.node.kind === 'agent') {
-    cfg.instruction = instruction.value
-    cfg.tools = [...selectedTools.value]
-    cfg.model_id = modelId.value
-    cfg.reasoning_effort = reasoningEffort.value
-    if (temperature.value !== '') cfg.temperature = temperature.value
-    cfg.retries = retries.value
-  } else {
+  } else if (props.node.kind === 'action') {
     cfg.action_type = actionType.value
     if (actionType.value === 'shell') {
       cfg.command = command.value
@@ -277,8 +350,27 @@ function apply() {
       cfg.method = language.value
     }
     cfg.retries = retries.value
+  } else if (props.node.kind === 'subgraph') {
+    cfg.workflow_name = subworkflowName.value
+    cfg.iterate = subIterate.value
+    if (subIterate.value === 'loop') {
+      cfg.max_iterations = loopMaxIter.value
+      cfg.condition = subLoopCondition.value
+    }
+    cfg.retries = retries.value
   }
-  emit('update', { ...props.node, title: title.value, config: cfg })
+  // Error handling config (common to executable kinds).
+  if (['ai','action','subgraph'].includes(props.node.kind) && onErrorStrategy.value !== 'abort') {
+    const onErr: Record<string, unknown> = { strategy: onErrorStrategy.value }
+    if (onErrorStrategy.value === 'fallback') {
+      onErr.fallback_port = onErrorFallbackPort.value
+      onErr.error_value = onErrorValue.value
+    }
+    cfg.on_error = onErr
+  }
+  // content: no config needed — values are in ports.
+
+  emit('update', { ...props.node, title: title.value, config: cfg, ports })
   emit('close')
 }
 </script>
@@ -288,7 +380,7 @@ function apply() {
   position: fixed;
   z-index: var(--z-popover, 60);
   width: 320px;
-  max-height: 460px;
+  max-height: 520px;
   display: flex;
   flex-direction: column;
   border-radius: var(--radius-lg, 18px);
@@ -337,6 +429,37 @@ function apply() {
 .wf-edit-card :deep(.settings-advanced) { border-top: 1px solid var(--theme-main-border); padding-top: 8px; }
 .wf-edit-card :deep(.settings-advanced summary) { font-size: 11px; opacity: 0.65; cursor: pointer; }
 
+.hint { margin: 0; font-size: 10px; opacity: 0.5; line-height: 1.3; }
+
+.port-editor { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--theme-main-border); border-bottom: 1px solid var(--theme-main-border); padding: 8px 0; }
+.port-section { display: flex; flex-direction: column; gap: 4px; }
+.port-row { display: flex; align-items: center; gap: 4px; }
+.port-name { flex: 1 1 auto; min-width: 0; }
+.port-type {
+  width: auto; min-width: 64px;
+  background: var(--theme-main-subtle-background);
+  border: 1px solid var(--theme-main-border);
+  border-radius: var(--radius-sm, 6px);
+  color: inherit; padding: 4px 6px; font-size: 11px;
+}
+.port-value { flex: 1 1 auto; min-width: 0; background: var(--theme-main-subtle-background); border: 1px solid var(--theme-main-border); border-radius: var(--radius-sm, 6px); color: inherit; padding: 4px 6px; font-size: 11px; }
+.port-del {
+  flex: 0 0 auto; border: none; background: transparent;
+  color: var(--red, #f87171); cursor: pointer; font-size: 13px; padding: 2px 4px;
+  border-radius: 4px;
+}
+.port-del:hover { background: var(--theme-main-soft-background); }
+.port-add {
+  align-self: flex-start; border: 1px dashed var(--theme-main-border);
+  background: transparent; color: var(--theme-main-text); opacity: 0.6;
+  font-size: 11px; padding: 3px 8px; border-radius: 5px; cursor: pointer;
+}
+.port-add:hover { opacity: 1; }
+
+.branch-row { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.branch-field { flex: 1 1 80px; min-width: 0; background: var(--theme-main-subtle-background); border: 1px solid var(--theme-main-border); border-radius: var(--radius-sm, 6px); color: inherit; padding: 4px 6px; font-size: 11px; }
+.branch-value { flex: 1 1 60px; min-width: 0; background: var(--theme-main-subtle-background); border: 1px solid var(--theme-main-border); border-radius: var(--radius-sm, 6px); color: inherit; padding: 4px 6px; font-size: 11px; }
+
 .wf-tool-checklist {
   max-height: 168px;
   overflow: auto;
@@ -358,7 +481,6 @@ function apply() {
   line-height: 1.3;
 }
 .wf-tool-check:hover { background: var(--theme-main-soft-background); }
-/* Small, restrained checkbox — the tool name is the focus, not the box. */
 .wf-tool-check input[type="checkbox"] {
   appearance: none;
   -webkit-appearance: none;

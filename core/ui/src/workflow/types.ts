@@ -1,6 +1,6 @@
 /** Workflow mode — shared types mirroring the backend runtime/workflow.py model. */
 
-export type WorkflowNodeKind = 'llm' | 'agent' | 'action'
+export type WorkflowNodeKind = 'ai' | 'action' | 'content' | 'subgraph'
 export type ActionKind = 'shell' | 'script' | 'http' | 'file-data'
 export type PortDirection = 'in' | 'out'
 export type NodeStateStatus = 'idle' | 'running' | 'done' | 'error' | 'skipped' | 'cancelled'
@@ -10,6 +10,8 @@ export interface WorkflowPort {
   type: string
   direction: PortDirection
   description?: string
+  /** Constant value for ``content`` node output ports (each port carries its own). */
+  value?: unknown
 }
 
 export interface WorkflowNode {
@@ -30,6 +32,10 @@ export interface WorkflowEdge {
   source_port: string
   target: string
   target_port: string
+  /** Optional JSONPath-style field path applied to the upstream value (e.g. ``$.field``). */
+  transform?: string
+  /** Optional Python expression; when False the edge transmits the skip sentinel (cascade). */
+  condition?: string
 }
 
 export interface WorkflowInputParam {
@@ -50,6 +56,8 @@ export interface WorkflowDef {
   exposed: boolean
   tool_name: string
   work_root: string
+  /** Mermaid-style edge text (source of truth for connections in the folder layout). */
+  map: string
   created_at: string
   updated_at: string
 }

@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -32,10 +33,28 @@ from typing import Any, Literal
 from lamtools_core.event.run_item import RunItemEvent, RunItemStatus
 
 
-WorkflowNodeKind = Literal["llm", "agent", "action"]
+WorkflowNodeKind = Literal["ai", "action", "content", "subgraph"]
 ActionKind = Literal["shell", "script", "http", "file-data"]
 PortDirection = Literal["in", "out"]
 NodeStateStatus = Literal["idle", "running", "done", "error", "skipped", "cancelled"]
+
+# Sentinel emitted when a node's condition is not met. Downstream nodes whose
+# every input is this sentinel are skipped (cascade); mixed inputs run with
+# sentinels coerced to None.
+SKIP_SENTINEL = "__workflow_skip__"
+
+# Recognised workflow port types. ``"any"`` matches anything.
+_WORKFLOW_TYPES = {"string", "number", "boolean", "object", "array", "any"}
+
+# Safe builtins available inside condition expressions (Python ``eval``).
+# bound_inputs are passed as locals so conditions like ``len(text) > 100``
+# or ``quality >= 0.8 and source in ['A','B']`` work naturally.
+_CONDITION_BUILTINS = {
+    "len": len, "str": str, "int": int, "float": float, "bool": bool,
+    "any": any, "all": all, "min": min, "max": max, "sum": sum,
+    "abs": abs, "round": round, "isinstance": isinstance, "True": True,
+    "False": False, "None": None,
+}
 
 
 def _utcnow() -> datetime:
@@ -53,20 +72,28 @@ def _new_id(prefix: str) -> str:
 
 @dataclass
 class WorkflowPort:
-    """A typed, named port on a node. Data flows out -> in along edges."""
+    """A typed, named port on a node. Data flows out -> in along edges.
+
+    ``value`` holds a constant for ``content`` node output ports (each port
+    carries its own value); it is unused for other kinds.
+    """
 
     name: str
     type: str = "any"  # free-form type name; "any" matches anything
     direction: PortDirection = "in"
     description: str = ""
+    value: Any = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        data: dict[str, Any] = {
             "name": self.name,
             "type": self.type,
             "direction": self.direction,
             "description": self.description,
         }
+        if self.value is not None:
+            data["value"] = self.value
+        return data
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "WorkflowPort":
@@ -75,6 +102,7 @@ class WorkflowPort:
             type=str(value.get("type") or "any"),
             direction="out" if str(value.get("direction") or "in") == "out" else "in",
             description=str(value.get("description") or ""),
+            value=value.get("value"),
         )
 
 
@@ -101,7 +129,10 @@ class WorkflowNode:
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "WorkflowNode":
-        ports_raw = value.get("ports") or []
+        ports_raw = value.get("ports")
+        if ports_raw is None:
+            # Folder layout stores inputs[]/outputs[] separately — accept both.
+            ports_raw = _io_to_port_dicts(value.get("inputs"), value.get("outputs"))
         return cls(
             id=str(value.get("id") or ""),
             kind=str(value.get("kind") or "action"),  # type: ignore[arg-type]
@@ -120,22 +151,37 @@ class WorkflowNode:
 
 @dataclass
 class WorkflowEdge:
-    """A connection from a source output port to a target input port."""
+    """A connection from a source output port to a target input port.
+
+    ``transform`` is an optional JSONPath-style field path (``$.field`` or
+    ``$.a.b``) applied to the upstream value before it reaches the target.
+    ``condition`` is an optional Python expression evaluated against the
+    upstream node's bound inputs (port names as locals); when it evaluates
+    False the edge transmits ``SKIP_SENTINEL`` so downstream nodes on that
+    path are skipped (cascade). Both default to empty (pass-through / always).
+    """
 
     id: str
     source: str  # node id
     source_port: str
     target: str  # node id
     target_port: str
+    transform: str = ""
+    condition: str = ""
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        data: dict[str, Any] = {
             "id": self.id,
             "source": self.source,
             "source_port": self.source_port,
             "target": self.target,
             "target_port": self.target_port,
         }
+        if self.transform:
+            data["transform"] = self.transform
+        if self.condition:
+            data["condition"] = self.condition
+        return data
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "WorkflowEdge":
@@ -145,6 +191,8 @@ class WorkflowEdge:
             source_port=str(value.get("source_port") or ""),
             target=str(value.get("target") or ""),
             target_port=str(value.get("target_port") or ""),
+            transform=str(value.get("transform") or ""),
+            condition=str(value.get("condition") or ""),
         )
 
 
@@ -191,6 +239,9 @@ class WorkflowDef:
     exposed: bool = False
     tool_name: str = ""
     work_root: str = ""
+    # Mermaid-style edge text (``a.port.type -> b.port.type``). The runtime
+    # uses ``edges`` directly; the store layer translates edges <-> map.
+    map: str = ""
     created_at: datetime = field(default_factory=_utcnow)
     updated_at: datetime = field(default_factory=_utcnow)
 
@@ -205,6 +256,7 @@ class WorkflowDef:
             "exposed": self.exposed,
             "tool_name": self.tool_name,
             "work_root": self.work_root,
+            "map": self.map,
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
         }
@@ -221,6 +273,7 @@ class WorkflowDef:
             exposed=bool(value.get("exposed", False)),
             tool_name=str(value.get("tool_name") or value.get("toolName") or ""),
             work_root=str(value.get("work_root") or value.get("workRoot") or ""),
+            map=str(value.get("map") or ""),
             created_at=_parse_dt(value.get("created_at")) or _utcnow(),
             updated_at=_parse_dt(value.get("updated_at")) or _utcnow(),
         )
@@ -405,12 +458,16 @@ class WorkflowRunner:
         sub_agent_runner: Any = None,
         emit: WorkflowEventCallback | None = None,
         runtime_task_registry: Any = None,
+        workflow_store: Any = None,
         clock: Callable[[], datetime] = _utcnow,
     ) -> None:
         self.llm_client = llm_client
         self.sub_agent_runner = sub_agent_runner
         self.emit = emit
         self.runtime_task_registry = runtime_task_registry
+        # ``workflow_store`` enables subworkflow nodes to resolve and run other
+        # workflow definitions by name.
+        self.workflow_store = workflow_store
         self.clock = clock
 
     async def run(
@@ -503,12 +560,26 @@ class WorkflowRunner:
                 )
 
             bound_inputs = _bind_inputs(node, workflow, values)
+
+            # Skip cascade: when every bound input is the sentinel, this node
+            # sits on a skipped path — skip it and propagate the sentinel.
+            if bound_inputs and all(v == SKIP_SENTINEL for v in bound_inputs.values()):
+                state.status = "skipped"
+                state.finished_at = self.clock()
+                for port in node.output_ports():
+                    values[f"{node.id}.{port.name}"] = SKIP_SENTINEL
+                await self._emit_state(node, "skipped", thread_id, run_id)
+                continue
+
             await self._emit_state(node, "running", thread_id, run_id)
             state.status = "running"
             state.started_at = self.clock()
 
             try:
-                outputs = await self._execute_with_retries(node, bound_inputs, work_root, state, values)
+                outputs = await self._execute_with_retries(
+                    node, bound_inputs, work_root, state, values,
+                    thread_id=thread_id, run_id=run_id,
+                )
             except asyncio.CancelledError:
                 state.status = "cancelled"
                 state.finished_at = self.clock()
@@ -521,15 +592,42 @@ class WorkflowRunner:
                     steps_remaining=len(order) - steps_taken - 1,
                 )
             except Exception as exc:  # retries exhausted
+                error_msg = str(exc) or type(exc).__name__
+                on_error = node.config.get("on_error") or {}
+                strategy = str(on_error.get("strategy") or "abort") if isinstance(on_error, dict) else "abort"
+                if strategy == "fallback":
+                    # Emit a value on the fallback port so downstream can proceed.
+                    fb_port = str(on_error.get("fallback_port") or _default_output_port(node) or "error")
+                    fb_value = on_error.get("error_value")
+                    if fb_value is None:
+                        fb_value = SKIP_SENTINEL
+                    outputs = {fb_port: fb_value}
+                    state.status = "done"
+                    state.error = error_msg
+                    state.finished_at = self.clock()
+                    await self._emit_state(node, "completed", thread_id, run_id, error=error_msg)
+                    for port_name, value in outputs.items():
+                        values[f"{node.id}.{port_name}"] = value
+                    steps_taken += 1
+                    continue
+                if strategy == "skip":
+                    state.status = "skipped"
+                    state.error = error_msg
+                    state.finished_at = self.clock()
+                    for port in node.output_ports():
+                        values[f"{node.id}.{port.name}"] = SKIP_SENTINEL
+                    await self._emit_state(node, "skipped", thread_id, run_id, error=error_msg)
+                    continue
+                # Default: abort the whole run.
                 state.status = "error"
-                state.error = str(exc) or type(exc).__name__
+                state.error = error_msg
                 state.finished_at = self.clock()
-                await self._emit_state(node, "failed", thread_id, run_id, error=state.error)
+                await self._emit_state(node, "failed", thread_id, run_id, error=error_msg)
                 return WorkflowRunResult(
                     status="failed",
                     node_states=node_states,
                     values=values,
-                    error=f"Node '{node.title or node.id}' failed: {state.error}",
+                    error=f"Node '{node.title or node.id}' failed: {error_msg}",
                     run_id=run_id,
                     steps_remaining=len(order) - steps_taken - 1,
                 )
@@ -564,16 +662,21 @@ class WorkflowRunner:
         work_root: str,
         state: WorkflowNodeState,
         values: dict[str, Any] | None = None,
+        *,
+        thread_id: str = "",
+        run_id: str = "",
     ) -> dict[str, Any]:
         retries = _as_int(node.config.get("retries"), default=0)
         last_exc: Exception | None = None
         for attempt in range(retries + 1):
             state.attempts = attempt + 1
             try:
-                if node.kind == "llm":
-                    return await self._execute_llm(node, bound_inputs, work_root)
-                if node.kind == "agent":
-                    return await self._execute_agent(node, bound_inputs, work_root)
+                if node.kind == "ai":
+                    return await self._execute_ai(node, bound_inputs, work_root)
+                if node.kind == "content":
+                    return await self._execute_content(node, bound_inputs, work_root)
+                if node.kind == "subgraph":
+                    return await self._execute_subgraph(node, bound_inputs, work_root, thread_id, run_id)
                 return await self._execute_action(node, bound_inputs, work_root)
             except asyncio.CancelledError:
                 raise
@@ -583,16 +686,28 @@ class WorkflowRunner:
                     await asyncio.sleep(0.1 * (attempt + 1))
         raise last_exc if last_exc is not None else RuntimeError("node execution failed")
 
-    async def _execute_llm(
+    async def _execute_ai(
         self, node: WorkflowNode, bound_inputs: dict[str, Any], work_root: str
+    ) -> dict[str, Any]:
+        """Unified AI node. ``config.mode`` selects the execution strategy:
+
+        * ``single`` (default) — one LLM completion call.
+        * ``loop`` — self-judging loop: the model prefixes its final answer
+          with ``[DONE]``; iterate up to ``loop_max_iterations``.
+        * ``agent`` — full sub-agent with tools and multi-turn decision.
+        """
+        cfg = node.config
+        mode = str(cfg.get("mode") or "single")
+        if mode == "agent":
+            return await self._execute_ai_agent(node, bound_inputs, work_root)
+        return await self._execute_ai_llm(node, bound_inputs, work_root, mode == "loop")
+
+    async def _execute_ai_llm(
+        self, node: WorkflowNode, bound_inputs: dict[str, Any], work_root: str, is_loop: bool
     ) -> dict[str, Any]:
         cfg = node.config
         instruction = str(cfg.get("instruction") or cfg.get("system_prompt") or "")
         output_format_text = str(cfg.get("output_format_text") or "")
-        output_format_schema = cfg.get("output_format_schema")
-        mode = str(cfg.get("mode") or "single")
-        allow_tools = bool(cfg.get("allow_tools", False))
-        allowed_tools = cfg.get("allowed_tools") or []
         model_id = str(cfg.get("model_id") or "")
         temperature = cfg.get("temperature")
         reasoning_effort = str(cfg.get("reasoning_effort") or "")
@@ -600,77 +715,55 @@ class WorkflowRunner:
         top_p = cfg.get("top_p")
 
         if self.llm_client is None:
-            raise RuntimeError("LLM node requires an LLM client (none configured)")
+            raise RuntimeError("AI node requires an LLM client (none configured)")
         from lamtools_core.llm import ChatMessage, LLMRequest
 
-        system_parts: list[str] = [instruction]
+        out_ports = node.output_ports()
+        structured = bool(out_ports)
+
+        def _interpolate(text: str) -> str:
+            def _repl(m: re.Match) -> str:
+                key = m.group(1).strip()
+                val = bound_inputs.get(key)
+                if val is None or val == SKIP_SENTINEL:
+                    return ""
+                return _summarize(val) if not isinstance(val, str) else val
+            return re.sub(r"\{\{(\w+)\}\}", _repl, text)
+
+        instruction_rendered = _interpolate(instruction)
+        has_tokens = "{{" in instruction and instruction_rendered != instruction
+        system_parts: list[str] = [instruction_rendered]
         if output_format_text:
             system_parts.append(f"Output format:\n{output_format_text}")
+        if structured:
+            field_desc = ", ".join(
+                f"{p.name}({_normalise_type(p.type)})"
+                + (f": {p.description}" if p.description else "")
+                for p in out_ports
+            )
+            system_parts.append(
+                f"You MUST respond with a single JSON object containing these fields: {field_desc}. "
+                "Do not wrap it in markdown fences. Output only the JSON."
+            )
         system_prompt = "\n\n".join(p for p in system_parts if p).strip()
 
-        # Turn bound inputs + prior values into a user message describing context.
-        context_lines = [f"- {k}: {_summarize(v)}" for k, v in bound_inputs.items() if v is not None]
-        user_content = "\n".join(context_lines) if context_lines else "(no additional input)"
+        if has_tokens:
+            user_content = "(rendered from template — see system prompt)" if not bound_inputs else "(inputs embedded in instruction)"
+        else:
+            context_lines = [f"- {k}: {_summarize(v)}" for k, v in bound_inputs.items() if v is not None and v != SKIP_SENTINEL]
+            user_content = "\n".join(context_lines) if context_lines else "(no additional input)"
 
         messages: list[ChatMessage] = []
         if system_prompt:
             messages.append(ChatMessage(role="system", content=system_prompt))
         messages.append(ChatMessage(role="user", content=user_content))
 
-        response_format = output_format_schema if isinstance(output_format_schema, dict) and output_format_schema else None
+        response_format: dict[str, Any] | None = {"type": "json_object"} if structured else None
+        max_iter = max(1, _as_int(cfg.get("loop_max_iterations"), default=3)) if is_loop else 1
 
-        if mode == "loop":
-            max_iter = max(1, _as_int(cfg.get("loop_max_iterations"), default=3))
-            return await self._run_llm_loop(
-                messages=messages,
-                model_id=model_id,
-                temperature=temperature,
-                reasoning_effort=reasoning_effort,
-                max_tokens=max_tokens,
-                top_p=top_p,
-                response_format=response_format,
-                max_iter=max_iter,
-                node=node,
-                allow_tools=allow_tools,
-                allowed_tools=allowed_tools,
-            )
-
-        request = LLMRequest(
-            messages=messages,
-            model=model_id,
-            temperature=float(temperature) if temperature is not None else None,
-            max_tokens=int(max_tokens) if max_tokens is not None else None,
-            top_p=float(top_p) if top_p is not None else None,
-            response_format=response_format,
-            metadata={"reasoning_effort": reasoning_effort} if reasoning_effort else {},
-        )
-        response = await self.llm_client.complete(request)
-        out_port = _default_output_port(node) or "output"
-        return {out_port: response.content}
-
-    async def _run_llm_loop(
-        self,
-        *,
-        messages: list[Any],
-        model_id: str,
-        temperature: Any,
-        reasoning_effort: str,
-        max_tokens: Any,
-        top_p: Any,
-        response_format: dict[str, Any] | None,
-        max_iter: int,
-        node: WorkflowNode,
-        allow_tools: bool,
-        allowed_tools: list[Any],
-    ) -> dict[str, Any]:
-        from lamtools_core.llm import ChatMessage, LLMRequest
-
-        # Simple self-judging loop: each iteration the model decides whether to
-        # continue. We ask it to prefix the final answer with "[DONE]". This is
-        # the LLM-node loop (distinct from the Agent node's full sub-agent loop).
         transcript = list(messages)
         last_content = ""
-        for _ in range(max_iter):
+        for i in range(max_iter):
             request = LLMRequest(
                 messages=transcript,
                 model=model_id,
@@ -682,46 +775,217 @@ class WorkflowRunner:
             )
             response = await self.llm_client.complete(request)
             last_content = response.content or ""
-            if "[DONE]" in last_content:
+            if is_loop and "[DONE]" in last_content:
                 last_content = last_content.replace("[DONE]", "").strip()
                 break
-            transcript.append(ChatMessage(role="assistant", content=last_content))
-            transcript.append(
-                ChatMessage(role="user", content="If the result is final, prefix your next message with [DONE]. Otherwise continue refining.")
-            )
-        out_port = _default_output_port(node) or "output"
-        return {out_port: last_content}
+            if is_loop:
+                transcript.append(ChatMessage(role="assistant", content=last_content))
+                transcript.append(
+                    ChatMessage(role="user", content="If the result is final, prefix your next message with [DONE]. Otherwise continue refining.")
+                )
+        return self._split_or_fallback(node, last_content)
 
-    async def _execute_agent(
+    async def _execute_ai_agent(
         self, node: WorkflowNode, bound_inputs: dict[str, Any], work_root: str
     ) -> dict[str, Any]:
         cfg = node.config
         goal = str(cfg.get("instruction") or cfg.get("goal") or "")
-        context_lines = [f"- {k}: {_summarize(v)}" for k, v in bound_inputs.items() if v is not None]
-        task = goal + ("\n\nContext:\n" + "\n".join(context_lines) if context_lines else "")
+        out_ports = node.output_ports()
+        structured = bool(out_ports)
+
+        def _interpolate(text: str) -> str:
+            def _repl(m: re.Match) -> str:
+                val = bound_inputs.get(m.group(1).strip())
+                if val is None or val == SKIP_SENTINEL:
+                    return ""
+                return _summarize(val) if not isinstance(val, str) else val
+            return re.sub(r"\{\{(\w+)\}\}", _repl, text)
+
+        goal_rendered = _interpolate(goal)
+        context_lines = [f"- {k}: {_summarize(v)}" for k, v in bound_inputs.items() if v is not None and v != SKIP_SENTINEL and f"{{{{{k}}}}}" not in goal]
+        task = goal_rendered + ("\n\nContext:\n" + "\n".join(context_lines) if context_lines else "")
+        if structured:
+            field_desc = ", ".join(f"{p.name}({_normalise_type(p.type)})" for p in out_ports)
+            task += (
+                f"\n\nYou MUST finish with a single JSON object containing these fields: {field_desc}. "
+                "Output only the JSON."
+            )
         if self.sub_agent_runner is None:
-            raise RuntimeError("Agent node requires a sub_agent_runner (none configured)")
-        result = await self.sub_agent_runner.run(task=task)
-        out_port = _default_output_port(node) or "output"
-        # SubAgentRunResult exposes .content / .final_message
-        content = getattr(result, "content", None) or getattr(result, "final_message", None) or ""
-        return {out_port: content}
+            raise RuntimeError("AI agent mode requires a sub_agent_runner (none configured)")
+        result = await self.sub_agent_runner.run(
+            task=task,
+            agent=str(cfg.get("agent") or ""),
+            model=str(cfg.get("model_id") or ""),
+            mode=str(cfg.get("mode") or ""),
+        )
+        content = getattr(result, "message", None) or ""
+        return self._split_or_fallback(node, content)
 
     async def _execute_action(
         self, node: WorkflowNode, bound_inputs: dict[str, Any], work_root: str
     ) -> dict[str, Any]:
         cfg = node.config
         action_type = str(cfg.get("action_type") or "shell")
-        out_port = _default_output_port(node) or "output"
         if action_type == "shell":
-            return {out_port: await self._action_shell(cfg, bound_inputs, work_root)}
-        if action_type == "script":
-            return {out_port: await self._action_script(cfg, bound_inputs, work_root)}
-        if action_type == "http":
-            return {out_port: await self._action_http(cfg, bound_inputs)}
-        if action_type == "file-data":
-            return {out_port: await self._action_file_data(cfg, bound_inputs, work_root)}
-        raise ValueError(f"unsupported action_type: {action_type}")
+            raw = await self._action_shell(cfg, bound_inputs, work_root)
+        elif action_type == "script":
+            raw = await self._action_script(cfg, bound_inputs, work_root)
+        elif action_type == "http":
+            raw = await self._action_http(cfg, bound_inputs)
+        elif action_type == "file-data":
+            raw = await self._action_file_data(cfg, bound_inputs, work_root)
+        else:
+            raise ValueError(f"unsupported action_type: {action_type}")
+        # If stdout parses as a JSON object, split each key to its namesake
+        # output port; otherwise the whole stdout goes to the default port.
+        return self._split_or_fallback(node, raw)
+
+    def _split_or_fallback(self, node: WorkflowNode, raw: str) -> dict[str, Any]:
+        """Distribute structured JSON output across named ports, else fall back.
+
+        When the node has named output ports and ``raw`` parses to a JSON object,
+        each key matching a port name flows to that port (missing keys default to
+        None). When there are no named ports, or parsing fails, the entire value
+        goes to the default output port as a string.
+        """
+        out_ports = node.output_ports()
+        default_port = _default_output_port(node) or "output"
+        if not out_ports:
+            return {default_port: raw}
+        parsed = _json_object(raw)
+        if parsed is None:
+            # Fallback: whole value to the first output port.
+            return {out_ports[0].name: raw}
+        result: dict[str, Any] = {}
+        for port in out_ports:
+            if port.name in parsed:
+                result[port.name] = _coerce_value(parsed[port.name], port.type)
+            else:
+                result[port.name] = None
+        return result
+
+    async def _execute_content(
+        self, node: WorkflowNode, bound_inputs: dict[str, Any], work_root: str
+    ) -> dict[str, Any]:
+        """Content nodes emit each output port's configured constant value."""
+        result: dict[str, Any] = {}
+        for port in node.output_ports():
+            result[port.name] = port.value
+        return result
+
+    async def _execute_subgraph(
+        self,
+        node: WorkflowNode,
+        bound_inputs: dict[str, Any],
+        work_root: str,
+        thread_id: str,
+        run_id: str,
+    ) -> dict[str, Any]:
+        """Execute a referenced workflow with an optional iteration mode.
+
+        ``config.workflow_name`` selects the target workflow definition.
+        ``config.iterate`` selects how the sub-workflow is run:
+
+        * ``none`` (default) — run once; bound inputs feed the sub-workflow's
+          orphaned in-ports.
+        * ``loop`` — run repeatedly; the sub-workflow's output feeds back into
+          the next iteration's inputs; exits when ``config.condition`` (a Python
+          expression evaluated against the last output) is true, or
+          ``config.max_iterations`` is reached.
+        * ``map`` — the first bound input value (expected to be a list) provides
+          the elements; the sub-workflow runs once per element; results are
+          collected into an array.
+        """
+        cfg = node.config
+        target_name = str(cfg.get("workflow_name") or "")
+        if not target_name:
+            raise ValueError("subgraph node requires config.workflow_name")
+        if self.workflow_store is None:
+            raise RuntimeError("subgraph node requires a workflow_store (none configured)")
+        sub_def = await self.workflow_store.get(target_name, work_root=work_root or None)
+        if sub_def is None:
+            raise ValueError(f"subgraph target workflow '{target_name}' not found")
+
+        iterate = str(cfg.get("iterate") or "none")
+        out_port = _default_output_port(node) or "result"
+
+        if iterate == "map":
+            # Collect the iterable from the first non-sentinel bound input.
+            items: list[Any] = []
+            for v in bound_inputs.values():
+                if v is not None and v != SKIP_SENTINEL:
+                    items = v if isinstance(v, list) else [v]
+                    break
+            results: list[Any] = []
+            for i, item in enumerate(items):
+                sub_inputs = self._map_entry_inputs(sub_def, {"__item__": item})
+                sub = await self.run(sub_def, inputs=sub_inputs, work_root=work_root,
+                                      thread_id=f"{thread_id}.map{i}", run_id=f"{run_id}.map{i}")
+                results.append(sub.output)
+            return {out_port: results}
+
+        if iterate == "loop":
+            max_iter = max(1, _as_int(cfg.get("max_iterations"), default=5))
+            condition_expr = str(cfg.get("condition") or "")
+            # Seed entry inputs from bound_inputs.
+            sub_inputs = self._map_entry_inputs(sub_def, bound_inputs)
+            output: Any = None
+            for i in range(max_iter):
+                sub = await self.run(sub_def, inputs=sub_inputs, work_root=work_root,
+                                      thread_id=f"{thread_id}.loop{i}", run_id=f"{run_id}.loop{i}")
+                output = sub.output
+                if sub.status != "completed":
+                    break
+                # Exit condition: evaluate against the output wrapped as locals.
+                if condition_expr:
+                    cond_locals = output if isinstance(output, dict) else {"value": output}
+                    if _eval_condition(condition_expr, cond_locals):
+                        break
+                # Feed output back for next iteration.
+                if isinstance(output, dict):
+                    sub_inputs = {**self._map_entry_inputs(sub_def, bound_inputs), **output}
+                else:
+                    sub_inputs = self._map_entry_inputs(sub_def, {**bound_inputs, "__value__": output})
+            return {out_port: output}
+
+        # iterate == "none": run once.
+        sub_inputs = self._map_entry_inputs(sub_def, bound_inputs)
+        result = await self.run(sub_def, inputs=sub_inputs, work_root=work_root,
+                                thread_id=f"{thread_id}.sub", run_id=f"{run_id}.sub")
+        output = result.output
+        out_ports = node.output_ports()
+        if out_ports and isinstance(output, dict):
+            return {p.name: output.get(p.name) for p in out_ports}
+        return {out_port: output}
+
+    @staticmethod
+    def _map_entry_inputs(sub_def: WorkflowDef, bound_inputs: dict[str, Any]) -> dict[str, Any]:
+        """Map bound inputs to a sub-workflow's orphaned in-port names.
+
+        If the sub-workflow has exactly one orphaned input, all bound values
+        are flattened into it (first non-sentinel). Otherwise, bound input port
+        names are matched directly to sub-workflow input names.
+        """
+        from lamtools_core.runtime.workflow import _workflow_input_names  # local import; defined later
+        input_names = _workflow_input_names(sub_def)
+        # Flatten: pick first non-sentinel value for single-input sub-workflows.
+        first_val: Any = None
+        for v in bound_inputs.values():
+            if v is not None and v != SKIP_SENTINEL:
+                first_val = v
+                break
+        if len(input_names) <= 1 and input_names:
+            return {input_names[0]: first_val}
+        # Multi-input: match by name.
+        result: dict[str, Any] = {}
+        for name in input_names:
+            # name is "{nodeId}.{portName}" — try matching port name.
+            port_key = name.split(".", 1)[-1] if "." in name else name
+            if port_key in bound_inputs:
+                result[name] = bound_inputs[port_key]
+            elif first_val is not None and name not in result:
+                result[name] = first_val
+        return result
 
     async def _action_shell(
         self, cfg: dict[str, Any], bound_inputs: dict[str, Any], work_root: str
@@ -934,34 +1198,111 @@ def _topological_order(workflow: WorkflowDef) -> list[str] | None:
     return order
 
 
+def _feeding_edges(node: WorkflowNode, port_name: str, workflow: WorkflowDef) -> list[WorkflowEdge]:
+    """All edges feeding a node's input port."""
+    return [e for e in workflow.edges if e.target == node.id and e.target_port == port_name]
+
+
 def _inputs_ready(node: WorkflowNode, workflow: WorkflowDef, values: dict[str, Any]) -> bool:
+    """A port is ready when every edge feeding it has its source value in the
+    table (multiple edges → all must be present). Orphaned ports are always
+    ready (workflow input slot, seeded by the runner)."""
     for port in node.input_ports():
-        key = _input_value_key(node, port.name, workflow)
-        if key is None or key not in values:
-            return False
+        edges = _feeding_edges(node, port.name, workflow)
+        if not edges:
+            continue  # orphaned → seeded by runner
+        for edge in edges:
+            key = f"{edge.source}.{edge.source_port}"
+            if key not in values:
+                return False
     return True
 
 
 def _bind_inputs(node: WorkflowNode, workflow: WorkflowDef, values: dict[str, Any]) -> dict[str, Any]:
+    """Bind input values from the value table.
+
+    For each edge: if the edge has a ``condition`` (Python expression), it is
+    evaluated against the *source node's* bound inputs (port names as locals).
+    When False, the edge transmits ``SKIP_SENTINEL`` instead of the value, so
+    downstream nodes on that path are skipped (cascade). ``transform`` and type
+    coercion are applied as before. Multiple edges → values aggregated into a
+    list. Orphaned ports read the ``__input__.{nodeId}.{portName}`` slot.
+    """
+    # Pre-compute each source node's bound inputs for edge condition evaluation.
+    source_bound: dict[str, dict[str, Any]] = {}
+
+    def _get_source_bound(src_id: str) -> dict[str, Any]:
+        if src_id not in source_bound:
+            src_node = workflow.node(src_id)
+            source_bound[src_id] = _bind_inputs(src_node, workflow, values) if src_node else {}
+        return source_bound[src_id]
+
     bound: dict[str, Any] = {}
     for port in node.input_ports():
-        key = _input_value_key(node, port.name, workflow)
-        if key is not None and key in values:
-            bound[port.name] = values[key]
+        edges = _feeding_edges(node, port.name, workflow)
+        if not edges:
+            # Orphaned input port → workflow input slot.
+            key = f"__input__.{node.id}.{port.name}"
+            if key in values:
+                bound[port.name] = _coerce_value(values[key], port.type)
+        elif len(edges) == 1:
+            edge = edges[0]
+            key = f"{edge.source}.{edge.source_port}"
+            if key in values:
+                raw = values[key]
+                # Edge condition: evaluate against source node's bound inputs.
+                if edge.condition and not _eval_condition(edge.condition, _get_source_bound(edge.source)):
+                    bound[port.name] = SKIP_SENTINEL
+                else:
+                    val = _apply_transform(raw, edge.transform)
+                    bound[port.name] = _coerce_value(val, port.type)
+        else:
+            # Multiple edges → aggregate into a list (sentinels filtered).
+            vals: list[Any] = []
+            for edge in edges:
+                key = f"{edge.source}.{edge.source_port}"
+                if key in values:
+                    raw = values[key]
+                    if edge.condition and not _eval_condition(edge.condition, _get_source_bound(edge.source)):
+                        continue  # edge blocked → skip this value
+                    if raw is not None and raw != SKIP_SENTINEL:
+                        vals.append(_coerce_value(_apply_transform(raw, edge.transform), port.type))
+            bound[port.name] = vals
     return bound
 
 
+def _apply_transform(value: Any, transform: str) -> Any:
+    """Apply a JSONPath-style field path (``$.field`` or ``$.a.b``) to extract
+    a sub-value. Empty or non-``$.`` transforms pass through unchanged."""
+    if not transform or not transform.startswith("$."):
+        return value
+    path = transform[2:]
+    if not path:
+        return value
+    for part in path.split("."):
+        if isinstance(value, dict):
+            value = value.get(part)
+        elif isinstance(value, list) and part.lstrip("-").isdigit():
+            idx = int(part)
+            value = value[idx] if -len(value) <= idx < len(value) else None
+        else:
+            return None
+    return value
+
+
 def _input_value_key(node: WorkflowNode, port_name: str, workflow: WorkflowDef) -> str | None:
-    """Resolve the value-table key feeding a node's input port.
+    """Resolve the value-table key feeding a node's input port (first edge).
 
     Edge-bound ports read ``{source}.{source_port}``; an orphaned port (no
     edge feeds it) is a workflow input named ``{nodeId}.{portName}``, read
     from the ``__input__.{nodeId}.{portName}`` slot bound by the runner.
+
+    .. deprecated:: retained for backward compat with single-edge lookups;
+       prefer ``_feeding_edges`` + ``_bind_inputs`` for multi-edge support.
     """
     for edge in workflow.edges:
         if edge.target == node.id and edge.target_port == port_name:
             return f"{edge.source}.{edge.source_port}"
-    # Orphaned input port → workflow input.
     return f"__input__.{node.id}.{port_name}"
 
 
@@ -1002,6 +1343,59 @@ def _resolve_output(workflow: WorkflowDef, values: dict[str, Any]) -> Any:
         return values.get(spec)
     port = _default_output_port(node)
     return values.get(f"{spec}.{port}" if port else spec)
+
+
+# Mermaid-style map text. Each non-comment line is ``src.src_port[.type] ->
+# tgt.tgt_port[.type]``; the optional type tokens are documentation only and
+# ignored when reconstructing edges. Malformed lines are skipped so a single
+# bad line never breaks the whole graph (folder-isolation design goal).
+_MAP_LINE_RE = re.compile(
+    r"^(\S+?)\.([^.>\s]+)(?:\.[^.>\s]+)?\s*->\s*(\S+?)\.([^.>\s]+)(?:\.[^.>\s]+)?\s*$"
+)
+
+
+def _parse_map(text: str) -> list[WorkflowEdge]:
+    """Parse Mermaid-style edge text into a list of WorkflowEdge."""
+    edges: list[WorkflowEdge] = []
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        m = _MAP_LINE_RE.match(line)
+        if not m:
+            continue
+        src, sp, tgt, tp = m.groups()
+        edges.append(
+            WorkflowEdge(
+                id=f"e-{src}-{sp}-{tgt}-{tp}",
+                source=src,
+                source_port=sp,
+                target=tgt,
+                target_port=tp,
+            )
+        )
+    return edges
+
+
+def _port_type(nodes_by_id: dict[str, WorkflowNode], node_id: str, port_name: str, direction: str) -> str:
+    node = nodes_by_id.get(node_id)
+    if node is None:
+        return "any"
+    for port in node.ports:
+        if port.name == port_name and port.direction == direction:
+            return port.type or "any"
+    return "any"
+
+
+def _serialize_map(edges: list[WorkflowEdge], nodes: list[WorkflowNode]) -> str:
+    """Render edges as Mermaid-style ``src.port.type -> tgt.port.type`` text."""
+    nodes_by_id: dict[str, WorkflowNode] = {n.id: n for n in nodes}
+    lines: list[str] = []
+    for e in edges:
+        src_type = _port_type(nodes_by_id, e.source, e.source_port, "out")
+        tgt_type = _port_type(nodes_by_id, e.target, e.target_port, "in")
+        lines.append(f"{e.source}.{e.source_port}.{src_type} -> {e.target}.{e.target_port}.{tgt_type}")
+    return "\n".join(lines)
 
 
 def _workflow_input_names(workflow: WorkflowDef) -> list[str]:
@@ -1087,10 +1481,134 @@ def _substitute_env_vars(command: str, substitutions: dict[str, str]) -> str:
     return result
 
 
+# ---------------------------------------------------------------------------
+# Type system + shared helpers (LLM/Agent/Action executors, branch/loop)
+# ---------------------------------------------------------------------------
+
+
+def _io_to_port_dicts(inputs: Any, outputs: Any) -> list[dict[str, Any]]:
+    """Merge separate ``inputs[]``/``outputs[]`` arrays into ``ports[]`` dicts.
+
+    Folder-layout node JSON stores inputs/outputs apart; the runtime model uses
+    a single ``ports`` list tagged with ``direction``. Each entry keeps its
+    ``value`` (content node constants) when present.
+    """
+    ports: list[dict[str, Any]] = []
+    if isinstance(inputs, list):
+        for item in inputs:
+            if isinstance(item, dict):
+                ports.append({**item, "direction": "in"})
+    if isinstance(outputs, list):
+        for item in outputs:
+            if isinstance(item, dict):
+                ports.append({**item, "direction": "out"})
+    return ports
+
+
+def _ports_to_io(node: WorkflowNode) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Split a node's ports into ``inputs[]``/``outputs[]`` dicts for storage."""
+    inputs: list[dict[str, Any]] = []
+    for p in node.input_ports():
+        inputs.append({"name": p.name, "type": p.type, "description": p.description})
+    outputs: list[dict[str, Any]] = []
+    for p in node.output_ports():
+        entry: dict[str, Any] = {"name": p.name, "type": p.type, "description": p.description}
+        if p.value is not None:
+            entry["value"] = p.value
+        outputs.append(entry)
+    return inputs, outputs
+
+
+def _normalise_type(type_name: str) -> str:
+    t = (type_name or "any").strip().lower()
+    aliases = {"text": "string", "str": "string", "int": "number", "integer": "number", "float": "number", "bool": "boolean", "dict": "object", "list": "array"}
+    return aliases.get(t, t) if t in aliases or t in _WORKFLOW_TYPES else "any"
+
+
+def _types_compatible(src: str, dst: str) -> bool:
+    """True when a value of type ``src`` may flow into a port of type ``dst``.
+
+    Same type, either side ``any``, or number/boolean -> string are accepted.
+    """
+    s = _normalise_type(src)
+    d = _normalise_type(dst)
+    if s == "any" or d == "any" or s == d:
+        return True
+    if s in {"number", "boolean"} and d == "string":
+        return True
+    return False
+
+
+def _coerce_value(value: Any, target_type: str) -> Any:
+    """Best-effort coercion of a value to ``target_type``; failures keep the
+    original value (runtime never aborts on coercion). Sentinels pass through."""
+    if value is None or value == SKIP_SENTINEL:
+        return value
+    t = _normalise_type(target_type)
+    if t == "any":
+        return value
+    try:
+        if t == "string":
+            return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
+        if t == "number":
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                return value
+            return float(value)
+        if t == "boolean":
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, str):
+                low = value.strip().lower()
+                if low in {"true", "1", "yes", "y"}:
+                    return True
+                if low in {"false", "0", "no", "n", ""}:
+                    return False
+            return bool(value)
+        if t in {"object", "array"}:
+            if isinstance(value, (dict, list)):
+                return value
+            return json.loads(value)
+    except (TypeError, ValueError):
+        return value
+    return value
+
+
+def _json_object(content: str) -> dict[str, Any] | None:
+    """Parse a JSON object from model/shell output, tolerating ```json fences."""
+    candidate = (content or "").strip()
+    fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", candidate, flags=re.DOTALL | re.IGNORECASE)
+    if fenced:
+        candidate = fenced.group(1)
+    try:
+        value = json.loads(candidate)
+    except (TypeError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _eval_condition(expr: str, bound_inputs: dict[str, Any]) -> bool:
+    """Evaluate a Python expression condition.
+
+    ``bound_inputs`` (port name → value) are injected as local variables so
+    expressions like ``len(text) > 100`` or ``quality >= 0.8 and source in
+    ['A','B']`` work naturally. A restricted set of builtins (``len``, ``str``,
+    ``int``, ``float``, ``bool``, ``any``, ``all``, ``min``, ``max``, ``sum``,
+    ``abs``, ``round``, ``isinstance``) is available. Empty/missing condition →
+    always True (execute). Evaluation errors → False (skip).
+    """
+    if not expr or not str(expr).strip():
+        return True
+    try:
+        return bool(eval(str(expr).strip(), {"__builtins__": _CONDITION_BUILTINS}, dict(bound_inputs)))  # noqa: S307 — trusted user-authored workflow condition
+    except Exception:
+        return False
+
+
 __all__ = [
     "ActionKind",
     "NodeStateStatus",
     "PortDirection",
+    "SKIP_SENTINEL",
     "WorkflowDef",
     "WorkflowEdge",
     "WorkflowInputParam",

@@ -139,6 +139,16 @@
           :session-id="workflowDefinition?.name || ''"
           :rename="renameWorkflow"
         />
+        <button
+          type="button"
+          class="stage-toggle-btn"
+          :class="{ active: canvasLocked }"
+          :title="canvasLocked ? '解锁画布' : '锁定画布'"
+          @click="canvasLocked = !canvasLocked"
+        >
+          <svg v-if="canvasLocked" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+          <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.5-2"/></svg>
+        </button>
       </div>
       <div v-else-if="activeSessionId" class="thread-header">
         <CoreSessionTitleEditor
@@ -163,6 +173,8 @@
         :node-states="workflowNodeStates"
         :selected-node-id="selectedNodeId || undefined"
         :available-tools="availableTools"
+        :available-models="availableModels"
+        :locked="canvasLocked"
         @update:definition="onWorkflowUpdate"
         @select-node="onSelectNode"
         @run-from="runFromNode"
@@ -624,6 +636,7 @@ const settingsStorageKey = 'lamtools.core.ui'
 const showSettings = ref(false)
 const showArrange = ref(false)
 const workflowMode = ref(false)
+const canvasLocked = ref(false)
 const workflows = ref<WorkflowDef[]>([])
 const workflowGroups = ref<Record<string, WorkflowDef[]>>({})
 const activeWorkflowName = ref<string>('')
@@ -643,6 +656,10 @@ const availableTools = ref<Array<{ name: string; description: string }>>([])
 // Conversation card expanded into a right-half floating window.
 const conversationExpanded = ref(false)
 let autosaveTimer: ReturnType<typeof setTimeout> | null = null
+// Timestamp of the last save we initiated — used to suppress the file-watcher
+// "workflow/changed" refetch that our own save triggers (avoids a feedback
+// loop that resets dragged node positions during interaction).
+let lastSelfSaveAt = 0
 
 const emptyWorkflow: WorkflowDef = {
   name: '',
@@ -654,6 +671,7 @@ const emptyWorkflow: WorkflowDef = {
   exposed: false,
   tool_name: '',
   work_root: '',
+  map: '',
   created_at: '',
   updated_at: '',
 }
@@ -870,7 +888,13 @@ const workflowModeInstructions = computed(() => {
   const name = activeWorkflowName.value || ''
   return [
     '你是 LamTools 工作流模式的助手。用户说的"workflow/工作流/建工作流"一律指画布上的工作流节点图（WorkflowDef），不是 GitHub Actions、CI 或其它外部工作流。',
-    '节点类型只有三种：llm、agent、action。每个节点自带一个 in 端口和一个 out 端口；节点之间通过端口连线（某节点的 out 端口连到另一节点的 in 端口）。',
+    '节点类型有四种：ai、action、content、subgraph。',
+    '- ai：AI 处理。config.mode 区分 single（单次生成）/ loop（自判断反复迭代）/ agent（多轮自主+工具）。有命名输出端口→强制 JSON 输出，端口名=字段名。指令支持 {{端口名}} 插值。',
+    '- action：执行 shell/script/http/file-data。stdout 是 JSON 则按 key 拆分到同名输出端口，否则整段放默认端口。',
+    '- content：仅有输出端口，每个配常量值，不执行任何操作。用来注入常量。',
+    '- subgraph：引用外部工作流。config.iterate 区分 none（调用一次）/ loop（循环到 condition 满足）/ map（遍历数组）。config.workflow_name 指定目标工作流。',
+    '修饰符：condition（边级 Python 表达式，不满足该边传哨兵→下游跳过）/ transform（边上 $.field 提取子值）/ on_error（节点级 abort/fallback/skip）。',
+    '每个节点有输入/输出端口，节点间通过 out→in 端口连线。一个输入端口可接多条边→聚合成数组。端口类型校验：同类型/any 通配/number→string 兼容。',
     '你可用以下工具操作当前工作流图：',
     '- workflow_graph：查看当前图的完整 JSON（含节点 id、端口、连线）。',
     '- workflow_add_node：加节点（kind/title/config/ports/position）。',
@@ -881,8 +905,9 @@ const workflowModeInstructions = computed(() => {
   ].join('\n')
 })
 function nodeKindIcon(kind: string): string {
-  if (kind === 'llm') return '◇'
-  if (kind === 'agent') return '◈'
+  if (kind === 'ai') return '◇'
+  if (kind === 'content') return '□'
+  if (kind === 'subgraph') return '⬡'
   return '◆'
 }
 const selectedProject = computed(() => (
@@ -910,7 +935,25 @@ const runtimeController = createCoreAppServerRuntimeController(runtime, {
     createClient: ({ apiBase: frontendBase, onEvent, onSnapshot, onConnectionState }) => new CoreAppServerClient({
       url: appServerUrl(frontendBase, { path: '/api/core/app-server' }),
       clientInfo: { name: 'lamtools_core_frontend', title: 'LamTools Core Frontend', version: '0.1.0' },
-      onEvent,
+      onEvent: (event) => {
+        // Intercept workflow/changed broadcasts from the file watcher —
+        // refetch the active workflow definition so the canvas auto-updates.
+        // Skip the refetch for ~3s after our own save to avoid a feedback
+        // loop that resets dragged node positions during interaction.
+        if (event.method === 'workflow/changed') {
+          if (Date.now() - lastSelfSaveAt < 3000) return
+          if (workflowMode.value && activeWorkflowName.value) {
+            const wr = (event.payload as Record<string, unknown> | undefined)?.work_root
+            if (!wr || wr === (currentWorkRoot() || '')) {
+              getWorkflow(activeWorkflowName.value, currentWorkRoot() || undefined)
+                .then((fresh) => { workflowDefinition.value = fresh })
+                .catch(() => {})
+            }
+          }
+          return
+        }
+        onEvent(event)
+      },
       onSnapshot,
       onConnectionState: (state) => {
         onConnectionState(state)
@@ -1697,7 +1740,7 @@ function onWorkflowUpdate(def: WorkflowDef) {
 
 function scheduleAutosave() {
   if (autosaveTimer) clearTimeout(autosaveTimer)
-  autosaveTimer = setTimeout(() => { void saveWorkflow(true) }, 800)
+  autosaveTimer = setTimeout(() => { lastSelfSaveAt = Date.now(); void saveWorkflow(true) }, 800)
 }
 
 async function renameWorkflow(title: string): Promise<void> {
@@ -2248,7 +2291,7 @@ onUnmounted(() => {
   position: absolute;
   top: 10px;
   left: 16px;
-  right: 16px;
+  right: calc(var(--right-panel-width, 320px) + 16px);
   z-index: var(--z-popover, 60);
   pointer-events: auto;
   background: transparent;

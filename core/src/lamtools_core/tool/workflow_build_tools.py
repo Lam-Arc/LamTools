@@ -269,9 +269,17 @@ def workflow_build_tool_handlers(
 # ---- helpers -------------------------------------------------------------
 
 def _default_ports(kind: str) -> list[dict[str, Any]]:
+    """Sensible default ports per node kind for newly created nodes."""
+    if kind == "content":
+        return [{"name": "out", "type": "string", "direction": "out", "value": ""}]
+    if kind == "subgraph":
+        return [
+            {"name": "in", "type": "any", "direction": "in"},
+            {"name": "result", "type": "any", "direction": "out"},
+        ]
     return [
-        {"name": "in", "type": "text", "direction": "in"},
-        {"name": "out", "type": "text", "direction": "out"},
+        {"name": "in", "type": "string", "direction": "in"},
+        {"name": "out", "type": "string", "direction": "out"},
     ]
 
 

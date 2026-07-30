@@ -440,11 +440,25 @@ def create_core_agent_http_app(
             except Exception:  # noqa: BLE001 — streaming must never break a run
                 pass
 
+        # Build a sub-agent runner for workflow Agent nodes. Lightweight: the
+        # runner spins up a per-call CoreLoopKernel with the same LLM client and
+        # work_root; Agent node configs may override model/mode per call.
+        from lamtools_core.tool.sub_agent_runner import KernelSubAgentRunner
+
+        workflow_sub_agent_runner = KernelSubAgentRunner(
+            work_root=str(resolved_work_root),
+            llm_client=llm_client,
+            model_id=config.model_id,
+            approval_policy="require",
+            session_prefix="workflow-sub-agent",
+        )
+
         workflow_runner = WorkflowRunner(
             llm_client=llm_client,
-            sub_agent_runner=None,  # wired with the agent's runner in a later phase
+            sub_agent_runner=workflow_sub_agent_runner,
             emit=_emit_workflow_event,
             runtime_task_registry=runtime_task_registry,
+            workflow_store=workflow_store,
         )
 
         def _list_tool_specs() -> list[Any]:
@@ -466,7 +480,23 @@ def create_core_agent_http_app(
         app_state["workflow_manager"] = workflow_manager
         app_state["workflow_runner"] = workflow_runner
 
+        # File watcher: poll the workflow store mtime signature and broadcast
+        # workflow/changed events so canvases refresh on external edits.
+        from lamtools_core.runtime.workflow_watcher import WorkflowFileWatcher
+
+        workflow_watcher = WorkflowFileWatcher(
+            workflow_store,
+            live_hub,
+            poll_interval=2.0,
+            work_roots=[str(resolved_work_root)],
+        )
+        await workflow_watcher.start()
+        app_state["workflow_watcher"] = workflow_watcher
+
     async def shutdown_core_agent() -> None:
+        workflow_watcher = app_state.get("workflow_watcher")
+        if workflow_watcher is not None:
+            await workflow_watcher.stop()
         observer_supervisor = app_state.get("observer_supervisor")
         if observer_supervisor is not None:
             await observer_supervisor.stop()

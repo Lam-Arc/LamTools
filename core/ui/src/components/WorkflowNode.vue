@@ -1,37 +1,69 @@
 <template>
   <div class="wf-node" :class="[`kind-${kind}`, `state-${state}`]">
-    <Handle
-      v-for="p in inputPorts"
-      :key="`in-${p.name}`"
-      type="target"
-      :position="Position.Left"
-      :id="p.name"
-      class="wf-handle wf-handle-in"
-    />
-    <header class="wf-node-head">
-      <span class="wf-node-icon" aria-hidden="true">{{ icon }}</span>
-      <span class="wf-node-title" :title="node.title || node.id">{{ node.title || node.id }}</span>
-      <span class="wf-node-state" :title="state">{{ stateDot }}</span>
-    </header>
-    <p class="wf-node-summary">{{ summary }}</p>
-    <Handle
-      v-for="p in outputPorts"
-      :key="`out-${p.name}`"
-      type="source"
-      :position="Position.Right"
-      :id="p.name"
-      class="wf-handle wf-handle-out"
-    />
+    <!-- Input ports (left side) -->
+    <div v-if="inputPorts.length" class="wf-ports wf-ports-in">
+      <div v-for="p in inputPorts" :key="`in-${p.name}`" class="wf-port-row">
+        <Handle type="target" :position="Position.Left" :id="p.name" class="wf-handle" />
+        <span class="wf-port-label" :title="p.type">{{ p.name }}</span>
+      </div>
+    </div>
+
+    <!-- Center body: always in edit mode -->
+    <div class="wf-node-body" @pointerdown.stop>
+      <header class="wf-node-head">
+        <input v-model="localTitle" class="wf-title-input" type="text" placeholder="标题" @blur="pushTitle" />
+        <span class="wf-node-state">{{ stateDot }}</span>
+      </header>
+
+      <!-- AI -->
+      <template v-if="kind === 'ai'">
+        <WfSelect :model-value="localConfig.mode" :options="modeOptions" @update:model-value="localConfig.mode = $event; pushConfig()" />
+        <textarea v-model="localConfig.instruction" class="wf-field-text" rows="3" placeholder="指令…" @blur="pushConfig"></textarea>
+        <WfSelect :model-value="localConfig.model_id" :options="modelOptions" @update:model-value="localConfig.model_id = $event; pushConfig()" />
+      </template>
+
+      <!-- Action -->
+      <template v-else-if="kind === 'action'">
+        <WfSelect :model-value="localConfig.action_type" :options="actionTypeOptions" @update:model-value="localConfig.action_type = $event; pushConfig()" />
+        <textarea v-if="localConfig.action_type === 'shell'" v-model="localConfig.command" class="wf-field-text" rows="3" placeholder="command…" @blur="pushConfig"></textarea>
+        <textarea v-else-if="localConfig.action_type === 'script'" v-model="localConfig.script" class="wf-field-text" rows="3" placeholder="script…" @blur="pushConfig"></textarea>
+        <input v-else-if="localConfig.action_type === 'http'" v-model="localConfig.url" class="wf-field" type="text" placeholder="url" @blur="pushConfig" />
+      </template>
+
+      <!-- Content: each output port value -->
+      <template v-else-if="kind === 'content'">
+        <div v-for="(p, i) in outputPorts" :key="`cv-${i}`" class="wf-port-edit">
+          <span class="wf-field-label">{{ p.name }}</span>
+          <input v-model="localPorts[i].value" class="wf-field" type="text" placeholder="值" @blur="pushPorts" />
+        </div>
+      </template>
+
+      <!-- Subgraph -->
+      <template v-else-if="kind === 'subgraph'">
+        <input v-model="localConfig.workflow_name" class="wf-field" type="text" placeholder="工作流名称" @blur="pushConfig" />
+        <WfSelect :model-value="localConfig.iterate" :options="iterateOptions" @update:model-value="localConfig.iterate = $event; pushConfig()" />
+        <input v-if="localConfig.iterate === 'loop'" v-model="localConfig.condition" class="wf-field" type="text" placeholder="退出条件" @blur="pushConfig" />
+      </template>
+    </div>
+
+    <!-- Output ports (right side) -->
+    <div v-if="outputPorts.length" class="wf-ports wf-ports-out">
+      <div v-for="p in outputPorts" :key="`out-${p.name}`" class="wf-port-row">
+        <span class="wf-port-label" :title="p.type">{{ p.name }}</span>
+        <Handle type="source" :position="Position.Right" :id="p.name" class="wf-handle" />
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, inject, ref, watch } from 'vue'
 import { Handle, Position } from '@vue-flow/core'
-import type { WorkflowNode, WorkflowNodeKind, NodeStateStatus } from '../workflow/types'
+import WfSelect from './WfSelect.vue'
+import type { WorkflowNode, WorkflowNodeKind, NodeStateStatus, WorkflowPort } from '../workflow/types'
 
 const props = defineProps<{
-  data: { node: WorkflowNode; state?: NodeStateStatus }
+  data: { node: WorkflowNode; state?: NodeStateStatus; onToggle?: () => void }
 }>()
 
 const node = computed(() => props.data.node)
@@ -40,93 +72,120 @@ const inputPorts = computed(() => node.value.ports.filter((p) => p.direction ===
 const outputPorts = computed(() => node.value.ports.filter((p) => p.direction === 'out'))
 const state = computed<NodeStateStatus>(() => props.data.state ?? 'idle')
 
-const icon = computed(() => {
-  if (kind.value === 'llm') return '◇'
-  if (kind.value === 'agent') return '◈'
-  return '◆'
-})
-
 const stateDot = computed(() => {
   switch (state.value) {
-    case 'running':
-      return '◐'
-    case 'done':
-      return '●'
-    case 'error':
-      return '✕'
-    case 'skipped':
-    case 'cancelled':
-      return '○'
-    default:
-      return '○'
+    case 'running': return '◐'
+    case 'done': return '●'
+    case 'error': return '✕'
+    default: return '○'
   }
 })
 
-const summary = computed(() => {
-  const cfg = node.value.config
-  if (kind.value === 'llm') {
-    const mode = cfg.mode || 'single'
-    const tools = Array.isArray(cfg.allowed_tools) ? cfg.allowed_tools.length : 0
-    return `${mode}${tools ? ` · ${tools}工具` : ''}`
-  }
-  if (kind.value === 'agent') {
-    const tools = Array.isArray(cfg.tools) ? cfg.tools.length : 0
-    return `agent${tools ? ` · ${tools}工具` : ''}`
-  }
-  const at = cfg.action_type || 'shell'
-  return String(at)
-})
+const updateNode = inject<(id: string, patch: Record<string, unknown>) => void>('wf-update-node', () => {})
+const _modelsFn = inject<() => Array<{ id: string; display_name?: string; model_id?: string }>>('wf-models', () => [])
+const models = computed(() => _modelsFn())
+
+const localTitle = ref(node.value.title)
+const localConfig = ref<Record<string, any>>({ ...node.value.config })
+const localPorts = ref<WorkflowPort[]>(node.value.ports.map((p) => ({ ...p })))
+
+const modeOptions = [
+  { value: 'single', label: 'single' },
+  { value: 'loop', label: 'loop' },
+  { value: 'agent', label: 'agent' },
+]
+const actionTypeOptions = [
+  { value: 'shell', label: 'shell' },
+  { value: 'script', label: 'script' },
+  { value: 'http', label: 'http' },
+  { value: 'file-data', label: 'file-data' },
+]
+const iterateOptions = [
+  { value: 'none', label: 'none' },
+  { value: 'loop', label: 'loop' },
+  { value: 'map', label: 'map' },
+]
+const modelOptions = computed(() => [
+  { value: '', label: '（默认模型）' },
+  ...models.value.map((m) => ({ value: m.id, label: m.display_name || m.model_id || m.id })),
+])
+
+watch(() => props.data.node, (n) => {
+  localTitle.value = n.title
+  localConfig.value = { ...n.config }
+  localPorts.value = n.ports.map((p) => ({ ...p }))
+}, { deep: true })
+
+function pushTitle() { if (localTitle.value !== node.value.title) updateNode(node.value.id, { title: localTitle.value }) }
+function pushConfig() { updateNode(node.value.id, { config: localConfig.value }) }
+function pushPorts() { updateNode(node.value.id, { ports: localPorts.value }) }
 </script>
 
 <style scoped>
 .wf-node {
-  min-width: 168px;
-  max-width: 220px;
+  display: flex;
+  align-items: stretch;
   border-radius: var(--radius, 12px);
   border: 1px solid var(--theme-main-border);
   background: var(--theme-main-background);
   color: var(--theme-main-text);
-  padding: 8px 10px;
   font-size: 12px;
   box-shadow: var(--shadow);
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  overflow: visible;
 }
-.wf-node.kind-llm { border-left: 3px solid var(--purple); }
-.wf-node.kind-agent { border-left: 3px solid var(--green); }
-.wf-node.kind-action { border-left: 3px solid var(--orange); }
+.wf-node.kind-ai { background: color-mix(in srgb, var(--purple) 8%, var(--theme-main-background)); border-color: color-mix(in srgb, var(--purple) 30%, var(--theme-main-border)); }
+.wf-node.kind-action { background: color-mix(in srgb, var(--orange) 8%, var(--theme-main-background)); border-color: color-mix(in srgb, var(--orange) 30%, var(--theme-main-border)); }
+.wf-node.kind-content { background: color-mix(in srgb, var(--blue) 8%, var(--theme-main-background)); border-color: color-mix(in srgb, var(--blue) 30%, var(--theme-main-border)); }
+.wf-node.kind-subgraph { background: color-mix(in srgb, var(--green) 8%, var(--theme-main-background)); border-color: color-mix(in srgb, var(--green) 30%, var(--theme-main-border)); }
 .wf-node.state-running { box-shadow: 0 0 0 2px color-mix(in srgb, var(--blue) 60%, transparent), var(--shadow); }
 .wf-node.state-error { box-shadow: 0 0 0 2px color-mix(in srgb, var(--red) 60%, transparent), var(--shadow); }
-.wf-node-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
+
+/* Port rows */
+.wf-ports { display: flex; flex-direction: column; justify-content: center; gap: 6px; padding: 8px 0; }
+.wf-port-row { display: flex; align-items: center; gap: 6px; position: relative; height: 16px; }
+.wf-ports-in .wf-port-row { justify-content: flex-start; padding-left: 14px; }
+.wf-ports-out .wf-port-row { justify-content: flex-end; padding-right: 14px; }
+.wf-port-label { font-size: 10px; opacity: 0.6; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 80px; }
+
+/* Center body */
+.wf-node-body { flex: 1 1 auto; padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.wf-node-head { display: flex; align-items: center; gap: 6px; }
+.wf-node-icon { font-size: 13px; opacity: 0.9; flex-shrink: 0; }
+.wf-title-input {
+  flex: 1; min-width: 0; border: 1px solid transparent; border-radius: 4px;
+  background: transparent; color: inherit; padding: 2px 4px;
+  font-size: 12px; font-weight: 650;
 }
-.wf-node-icon { font-size: 13px; opacity: 0.9; }
-.wf-node-title {
-  flex: 1;
-  font-weight: 650;
-  letter-spacing: -0.01em;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.wf-node-state { font-size: 11px; opacity: 0.85; }
+.wf-title-input:focus { border-color: var(--theme-main-border); background: var(--theme-main-subtle-background, transparent); }
+.wf-node-state { font-size: 11px; opacity: 0.85; flex-shrink: 0; }
 .wf-node.state-running .wf-node-state { color: var(--blue); }
 .wf-node.state-done .wf-node-state { color: var(--green); }
 .wf-node.state-error .wf-node-state { color: var(--red); }
-.wf-node-summary {
-  margin: 4px 0 0;
-  opacity: 0.6;
-  font-size: 11px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+
+/* Inline fields */
+.wf-field {
+  width: 100%; box-sizing: border-box; border: 1px solid var(--theme-main-border); border-radius: 4px;
+  background: var(--theme-main-subtle-background, transparent); color: inherit;
+  padding: 3px 6px; font-size: 11px;
 }
+.wf-field-text {
+  width: 100%; box-sizing: border-box; border: 1px solid var(--theme-main-border); border-radius: 4px;
+  background: var(--theme-main-subtle-background, transparent); color: inherit;
+  padding: 4px 6px; font-size: 11px; font-family: var(--font-mono, monospace); resize: vertical;
+}
+.wf-port-edit { display: flex; align-items: center; gap: 6px; }
+.wf-field-label { font-size: 10px; opacity: 0.6; min-width: 32px; flex-shrink: 0; }
+.wf-port-edit .wf-field { flex: 1; }
+
+/* Handles */
 .wf-handle {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: color-mix(in srgb, var(--theme-main-text) 50%, transparent);
+  width: 8px; height: 8px; border-radius: 50%;
+  background: color-mix(in srgb, var(--theme-main-text) 45%, transparent);
   border: 2px solid var(--theme-main-background);
+  position: absolute; top: 50%; transform: translateY(-50%);
 }
+.wf-ports-in .wf-handle { left: -5px; }
+.wf-ports-out .wf-handle { right: -5px; }
+.wf-handle:hover { background: var(--blue); transform: translateY(-50%) scale(1.3); }
 </style>
