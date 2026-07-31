@@ -195,7 +195,7 @@ class WorkflowStore:
         if not target:
             return None
         for definition in await self.list(work_root=work_root):
-            if definition.name == target:
+            if _name_matches(definition.name, target):
                 return definition
         return None
 
@@ -204,7 +204,7 @@ class WorkflowStore:
         if not target:
             return None
         for definition in self.list_sync(work_root=work_root):
-            if definition.name == target:
+            if _name_matches(definition.name, target):
                 return definition
         return None
 
@@ -231,7 +231,7 @@ class WorkflowStore:
         removed = False
         for path in self._workflow_entries(work_root):
             definition = await self._read_entry_async(path)
-            if definition is not None and definition.name == target:
+            if definition is not None and _name_matches(definition.name, target):
                 if path.is_dir():
                     await asyncio.to_thread(shutil.rmtree, path, True)
                     removed = True
@@ -378,6 +378,30 @@ def _write_text(path: Path, text: str) -> None:
 def _safe_filename(name: str) -> str:
     safe = "".join(c if c.isalnum() or c in {"-", "_"} else "_" for c in name).strip("_")
     return safe or "workflow"
+
+
+def _ascii_slug(name: str) -> str:
+    """ASCII-only slug mirroring the frontend thread-id derivation.
+
+    The frontend builds the agent session id as ``wf_<slug>`` where slug replaces
+    every non ``[a-zA-Z0-9_-]`` char with ``_`` (so Chinese/unicode chars collapse).
+    The build tools strip the ``wf_`` prefix and look the workflow up by the
+    remaining slug. Since stored workflow names keep their original unicode
+    (e.g. ``lam的小实验``) while the thread id became ``wf_lam____``, an exact-name
+    match misses. This function lets ``get``/``delete`` fall back to a slug
+    comparison so both sides meet in the middle.
+    """
+    import re
+
+    safe = re.sub(r"[^a-zA-Z0-9_-]", "_", name or "").strip("_")
+    return safe or "workflow"
+
+
+def _name_matches(definition_name: str, target: str) -> bool:
+    """Exact name match, then ASCII-slug fallback (handles unicode display names)."""
+    if definition_name == target:
+        return True
+    return _ascii_slug(definition_name) == _ascii_slug(target)
 
 
 def _now():

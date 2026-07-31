@@ -27,7 +27,8 @@
         <div class="wf-menu-group">
           <div class="wf-menu-label">新建节点</div>
           <button class="menu-item" type="button" role="menuitem" @click="addNodeAt('ai', paneMenu)">AI</button>
-          <button class="menu-item" type="button" role="menuitem" @click="addNodeAt('action', paneMenu)">Action</button>
+          <button class="menu-item" type="button" role="menuitem" @click="addNodeAt('command', paneMenu)">Command</button>
+          <button class="menu-item" type="button" role="menuitem" @click="addNodeAt('script', paneMenu)">Script</button>
           <button class="menu-item" type="button" role="menuitem" @click="addNodeAt('content', paneMenu)">Content</button>
           <button class="menu-item" type="button" role="menuitem" @click="addNodeAt('subgraph', paneMenu)">Subgraph</button>
         </div>
@@ -106,7 +107,7 @@ import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
 import WorkflowNodeComp from './WorkflowNode.vue'
 import NodeEditCard from './NodeEditCard.vue'
-import type { WorkflowDef, WorkflowNodeKind, WorkflowNodeData, NodeStateStatus } from '../workflow/types'
+import type { WorkflowDef, WorkflowNodeKind, WorkflowNodeData, NodeStateStatus, WorkflowPort } from '../workflow/types'
 
 const props = defineProps<{
   definition: WorkflowDef
@@ -336,13 +337,15 @@ function onConnect(params: { source: string; target: string; sourceHandle?: stri
 function addNodeAt(kind: WorkflowNodeKind, pos: MenuPos) {
   const flowPos = safeScreenToFlow(pos)
   const id = `${kind}-${Math.random().toString(36).slice(2, 6)}`
-  const config: Record<string, unknown> = kind === 'action'
-    ? { action_type: 'shell', command: '' }
-    : kind === 'ai'
-      ? { instruction: '', mode: 'single' }
-      : kind === 'subgraph'
-        ? { workflow_name: '', iterate: 'none' }
-        : {}
+  const config: Record<string, unknown> = kind === 'command'
+    ? { command: '' }
+    : kind === 'script'
+      ? { script: scaffoldScript(defaultTitle(kind), defaultPorts(kind)) }
+      : kind === 'ai'
+        ? { instruction: '', mode: 'single' }
+        : kind === 'subgraph'
+          ? { workflow_name: '', iterate: 'none' }
+          : {}
   const node: WorkflowNodeData = {
     id,
     kind,
@@ -360,7 +363,7 @@ function defaultTitle(kind: WorkflowNodeKind): string {
   return `${kind}.${count}`
 }
 // Default ports per kind — content has output-only; subgraph has in/result;
-// ai/action get a generic in/out pair.
+// ai/command/script get a generic in/out pair.
 function defaultPorts(kind: WorkflowNodeKind) {
   if (kind === 'content') {
     return [{ name: 'out', type: 'string', direction: 'out' as const, value: '' }]
@@ -375,6 +378,33 @@ function defaultPorts(kind: WorkflowNodeKind) {
     { name: 'in', type: 'string', direction: 'in' as const },
     { name: 'out', type: 'string', direction: 'out' as const },
   ]
+}
+
+// Starter Python scaffold for a new script node: lists input port names
+// (available as variables) and output port names (assign to produce output)
+// as comments + a TODO placeholder per output. Mirrors the backend scaffold
+// in workflow_build_tools._scaffold_script.
+function scaffoldScript(title: string, ports: WorkflowPort[]): string {
+  const inPorts = ports.filter((p) => p.direction === 'in')
+  const outPorts = ports.filter((p) => p.direction === 'out')
+  const safeId = (n: string) => (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(n || '') ? (n || 'value') : (n || 'value').replace(/[^a-zA-Z0-9_]/g, '_') || 'value')
+  const lines = [`# ${title || 'script'}.py — script 节点脚手架`, '#']
+  if (inPorts.length) {
+    lines.push('# 输入端口（运行时已绑定为变量，直接用，勿重新赋值）：')
+    for (const p of inPorts) lines.push(`#   ${safeId(p.name)} : ${p.type || 'any'}`)
+  } else {
+    lines.push('# 输入端口：（无）')
+  }
+  if (outPorts.length) {
+    lines.push('# 输出端口（给这些变量赋值即作为该端口输出）：')
+    for (const p of outPorts) lines.push(`#   ${safeId(p.name)} : ${p.type || 'any'}`)
+  } else {
+    lines.push('# 输出端口：（无）')
+  }
+  lines.push('#', '# 不要 print（会被忽略）、不要解析 stdin。直接写逻辑。', '')
+  for (const p of outPorts) lines.push(`${safeId(p.name)} = None  # TODO: 计算 ${safeId(p.name)}`)
+  if (!outPorts.length) lines.push('# TODO: 声明输出端口并在此赋值')
+  return lines.join('\n') + '\n'
 }
 
 // Type compatibility check mirroring the backend _types_compatible.

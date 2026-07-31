@@ -50,7 +50,6 @@ export type { CoreGoal, CoreArrangeJob } from './durable/types';
 
 export type {
   WorkflowNodeKind,
-  ActionKind,
   PortDirection,
   NodeStateStatus,
   WorkflowPort,

@@ -21,8 +21,6 @@ import re
 import subprocess
 import sys
 import tempfile
-import urllib.error
-import urllib.request
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -33,8 +31,7 @@ from typing import Any, Literal
 from lamtools_core.event.run_item import RunItemEvent, RunItemStatus
 
 
-WorkflowNodeKind = Literal["ai", "action", "content", "subgraph"]
-ActionKind = Literal["shell", "script", "http", "file-data"]
+WorkflowNodeKind = Literal["ai", "command", "script", "content", "subgraph"]
 PortDirection = Literal["in", "out"]
 NodeStateStatus = Literal["idle", "running", "done", "error", "skipped", "cancelled"]
 
@@ -133,9 +130,14 @@ class WorkflowNode:
         if ports_raw is None:
             # Folder layout stores inputs[]/outputs[] separately — accept both.
             ports_raw = _io_to_port_dicts(value.get("inputs"), value.get("outputs"))
+        raw_kind = str(value.get("kind") or "command")
+        # Migrate legacy "action" kind → command/script by action_type.
+        if raw_kind == "action":
+            cfg = value.get("config") if isinstance(value.get("config"), dict) else {}
+            raw_kind = "script" if str(cfg.get("action_type") or "").lower() == "script" else "command"
         return cls(
             id=str(value.get("id") or ""),
-            kind=str(value.get("kind") or "action"),  # type: ignore[arg-type]
+            kind=raw_kind,  # type: ignore[arg-type]
             title=str(value.get("title") or ""),
             config=dict(value.get("config") or {}),
             ports=[WorkflowPort.from_dict(p) for p in ports_raw if isinstance(p, dict)],
@@ -677,7 +679,11 @@ class WorkflowRunner:
                     return await self._execute_content(node, bound_inputs, work_root)
                 if node.kind == "subgraph":
                     return await self._execute_subgraph(node, bound_inputs, work_root, thread_id, run_id)
-                return await self._execute_action(node, bound_inputs, work_root)
+                if node.kind == "command":
+                    return await self._execute_command(node, bound_inputs, work_root)
+                if node.kind == "script":
+                    return await self._execute_script(node, bound_inputs, work_root)
+                raise ValueError(f"unsupported node kind: {node.kind}")
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 — retry boundary
@@ -820,25 +826,6 @@ class WorkflowRunner:
         )
         content = getattr(result, "message", None) or ""
         return self._split_or_fallback(node, content)
-
-    async def _execute_action(
-        self, node: WorkflowNode, bound_inputs: dict[str, Any], work_root: str
-    ) -> dict[str, Any]:
-        cfg = node.config
-        action_type = str(cfg.get("action_type") or "shell")
-        if action_type == "shell":
-            raw = await self._action_shell(cfg, bound_inputs, work_root)
-        elif action_type == "script":
-            raw = await self._action_script(cfg, bound_inputs, work_root)
-        elif action_type == "http":
-            raw = await self._action_http(cfg, bound_inputs)
-        elif action_type == "file-data":
-            raw = await self._action_file_data(cfg, bound_inputs, work_root)
-        else:
-            raise ValueError(f"unsupported action_type: {action_type}")
-        # If stdout parses as a JSON object, split each key to its namesake
-        # output port; otherwise the whole stdout goes to the default port.
-        return self._split_or_fallback(node, raw)
 
     def _split_or_fallback(self, node: WorkflowNode, raw: str) -> dict[str, Any]:
         """Distribute structured JSON output across named ports, else fall back.
@@ -987,12 +974,24 @@ class WorkflowRunner:
                 result[name] = first_val
         return result
 
-    async def _action_shell(
+    async def _execute_command(
+        self, node: WorkflowNode, bound_inputs: dict[str, Any], work_root: str
+    ) -> dict[str, Any]:
+        """command node: run a shell command (invoke CLI tools).
+
+        Uses the same shell resolution as run_command (Git Bash on Windows),
+        feeds bound inputs as stdin JSON + INPUT_<PORT> env vars, and splits
+        JSON stdout to same-named output ports (else whole stdout to default).
+        """
+        raw = await self._run_command(node.config, bound_inputs, work_root)
+        return self._split_or_fallback(node, raw)
+
+    async def _run_command(
         self, cfg: dict[str, Any], bound_inputs: dict[str, Any], work_root: str
     ) -> str:
         command = str(cfg.get("command") or "")
         if not command:
-            raise ValueError("shell action requires a command")
+            raise ValueError("command node requires config.command")
         cwd = str(cfg.get("cwd") or work_root or ".")
         env = dict(os.environ)
         extra_env = cfg.get("env") or {}
@@ -1010,15 +1009,41 @@ class WorkflowRunner:
             substitutions[env_name] = str(value)
         command = _substitute_env_vars(command, substitutions)
         timeout = _as_float(cfg.get("timeout"), default=60.0)
-        proc = await asyncio.create_subprocess_shell(
-            command,
+        # Feed bound inputs as a JSON object on stdin ({port:val}) so a command
+        # that wants structured input can read it; INPUT_<PORT> env vars + ${VAR}
+        # substitution are a convenience for shells that prefer them.
+        stdin_payload = json.dumps({"inputs": bound_inputs}, ensure_ascii=False, default=str).encode("utf-8")
+        # Run the command through the SAME shell run_command uses
+        # (resolve_command_shell → Git Bash on Windows), so command nodes behave
+        # identically to the rest of the product. create_subprocess_shell would
+        # otherwise fall back to COMSPEC (cmd.exe) on Windows, breaking bash
+        # syntax (single quotes, pipes) the model may write.
+        argv: list[str]
+        if sys.platform == "win32":
+            from lamtools_core.tool.command_runner import resolve_command_shell
+
+            shell = resolve_command_shell()
+            argv = shell.argv(command)
+            # On a python.org install of Windows, `python3` resolves to the
+            # Microsoft Store redirect stub (exits non-zero / opens Store).
+            # Prepend a shim directory mapping python3 → the real interpreter
+            # so model-written `python3 ...` commands actually run. This is a
+            # platform-defect workaround, not behaviour fabrication.
+            shim_dir = _python3_shim_dir()
+            if shim_dir is not None:
+                env["PATH"] = str(shim_dir) + os.pathsep + env.get("PATH", "")
+        else:
+            argv = ["sh", "-lc", command]
+        proc = await asyncio.create_subprocess_exec(
+            *argv,
             cwd=cwd,
             env=env,
+            stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
         try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            stdout, stderr = await asyncio.wait_for(proc.communicate(stdin_payload), timeout=timeout)
         except asyncio.TimeoutError:
             proc.kill()
             await proc.communicate()
@@ -1031,106 +1056,91 @@ class WorkflowRunner:
             )
         return text_out.strip()
 
-    async def _action_script(
-        self, cfg: dict[str, Any], bound_inputs: dict[str, Any], work_root: str
+    async def _execute_script(
+        self, node: WorkflowNode, bound_inputs: dict[str, Any], work_root: str
+    ) -> dict[str, Any]:
+        """script node: Python binder. Runs the script via a generated runner
+        that binds input-port names as locals and reads output-port names back;
+        stdout JSON flows through _split_or_fallback to the output ports.
+        """
+        raw = await self._run_script(node, node.config, bound_inputs, work_root)
+        return self._split_or_fallback(node, raw)
+
+    async def _run_script(
+        self, node: WorkflowNode, cfg: dict[str, Any], bound_inputs: dict[str, Any], work_root: str
     ) -> str:
-        language = str(cfg.get("language") or "python").lower()
+        """Python binder: input/output PORT NAMES are program variables.
+
+        The user's ``config.script`` is plain Python. Input-port names are
+        available as variables (node ``IN x`` → ``x`` in code); assigning to an
+        output-port name produces that output (``OUT y`` → ``y = ...``). No
+        stdin parsing, no print, no JSON, no shell, no quoting — the model just
+        writes ``y = x * 2``.
+
+        Implementation: persist the user source to a real file under
+        ``work_root/.lam/workflow_scripts/<nodeId>.py`` (config.script is the
+        source of truth; rewritten only when its content hash changes), then
+        run a generated ``<nodeId>.runner.py`` via ``sys.executable`` as an
+        isolated subprocess. The runner binds inputs as locals, execs the user
+        file (redirecting stray prints so they don't corrupt the output JSON),
+        then prints a JSON object mapping each output-port name to its bound
+        value. That stdout flows through ``_split_or_fallback`` unchanged.
+        """
+        import hashlib
+
         script = str(cfg.get("script") or "")
         if not script:
-            raise ValueError("script action requires script content")
-        runner = {"python": sys.executable, "python3": sys.executable, "js": "node", "node": "node", "javascript": "node"}.get(language)
-        if runner is None:
-            raise ValueError(f"unsupported script language: {language}")
-        suffix = ".py" if language in {"python", "python3"} else ".js"
-        stdin_payload = json.dumps({"inputs": bound_inputs}, ensure_ascii=False, default=str)
-        with tempfile.NamedTemporaryFile("w", suffix=suffix, delete=False, encoding="utf-8") as fh:
-            fh.write(script)
-            script_path = fh.name
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                runner,
-                script_path,
-                cwd=str(cfg.get("cwd") or work_root or "."),
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            timeout = _as_float(cfg.get("timeout"), default=60.0)
+            raise ValueError("script node requires config.script")
+
+        scripts_dir = Path(work_root or ".") / ".lam" / "workflow_scripts"
+        scripts_dir.mkdir(parents=True, exist_ok=True)
+        safe_id = "".join(c if c.isalnum() or c in {"-", "_"} else "_" for c in (node.id or "node")).strip("_") or "node"
+        src_path = scripts_dir / f"{safe_id}.py"
+        runner_path = scripts_dir / f"{safe_id}.runner.py"
+
+        # Persist user source (rewrite only on content change).
+        content_hash = hashlib.sha256(script.encode("utf-8")).hexdigest()[:16]
+        hash_path = scripts_dir / f"{safe_id}.hash"
+        if not (src_path.exists() and hash_path.exists() and _read_hash(hash_path) == content_hash):
+            src_path.write_text(script, encoding="utf-8")
             try:
-                stdout, stderr = await asyncio.wait_for(proc.communicate(stdin_payload.encode("utf-8")), timeout=timeout)
-            except asyncio.TimeoutError:
-                proc.kill()
-                await proc.communicate()
-                raise RuntimeError(f"script timed out after {timeout}s")
-            text_out = stdout.decode("utf-8", errors="replace") if stdout else ""
-            text_err = stderr.decode("utf-8", errors="replace") if stderr else ""
-            if proc.returncode != 0:
-                raise RuntimeError(f"script exited with code {proc.returncode}\nstderr:\n{text_err}")
-            return text_out.strip()
-        finally:
-            try:
-                os.unlink(script_path)
+                hash_path.write_text(content_hash, encoding="utf-8")
             except OSError:
                 pass
 
-    async def _action_http(self, cfg: dict[str, Any], bound_inputs: dict[str, Any]) -> str:
-        url = str(cfg.get("url") or "")
-        if not url:
-            raise ValueError("http action requires a url")
-        method = str(cfg.get("method") or "GET").upper()
-        headers = dict(cfg.get("headers") or {})
-        body = cfg.get("body")
-        if body is None and bound_inputs:
-            body = json.dumps(bound_inputs, ensure_ascii=False, default=str)
-            headers.setdefault("Content-Type", "application/json")
-        timeout = _as_float(cfg.get("timeout"), default=30.0)
-        data = body.encode("utf-8") if isinstance(body, str) else (json.dumps(body).encode("utf-8") if body is not None else None)
-        req = urllib.request.Request(url, data=data, headers=headers, method=method)
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 — user-authored URL
-                return resp.read().decode("utf-8", errors="replace")
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace") if exc.fp else ""
-            raise RuntimeError(f"HTTP {exc.code} {exc.reason}\n{detail}") from exc
+        # Output port names drive the emitted JSON keys.
+        out_port_names = [p.name for p in node.output_ports()]
+        _write_runner(runner_path, src_path, out_port_names)
 
-    async def _action_file_data(
-        self, cfg: dict[str, Any], bound_inputs: dict[str, Any], work_root: str
-    ) -> Any:
-        op = str(cfg.get("operation") or cfg.get("op") or "read").lower()
-        path = cfg.get("path") or ""
-        base = Path(work_root or ".")
-        target = Path(str(path)) if path else None
-        if target is not None and not target.is_absolute():
-            target = base / target
-        if op == "read":
-            if target is None:
-                raise ValueError("file-data read requires a path")
-            return target.read_text(encoding="utf-8", errors="replace")
-        if op == "write":
-            if target is None:
-                raise ValueError("file-data write requires a path")
-            content = cfg.get("content")
-            if content is None and bound_inputs:
-                content = next(iter(bound_inputs.values()))
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(str(content), encoding="utf-8")
-            return f"wrote {len(str(content))} bytes to {target}"
-        if op in {"json_get", "json_set", "transform"}:
-            # Minimal JSON transform: read a JSON file, optionally set a key.
-            if target is None:
-                raise ValueError("file-data transform requires a path")
-            data = json.loads(target.read_text(encoding="utf-8", errors="replace") or "null")
-            if op == "json_set":
-                key = str(cfg.get("key") or "")
-                value = cfg.get("value")
-                if value is None and bound_inputs:
-                    value = next(iter(bound_inputs.values()))
-                if key:
-                    data[key] = value
-                target.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-                return data
-            return data
-        raise ValueError(f"unsupported file-data operation: {op}")
+        cwd = str(cfg.get("cwd") or work_root or ".")
+        timeout = _as_float(cfg.get("timeout"), default=60.0)
+        # Inputs reach the user code as locals (via the runner reading stdin);
+        # INPUT_<PORT> env vars are also set as a convenience.
+        env = dict(os.environ)
+        for name, value in bound_inputs.items():
+            if value is None:
+                continue
+            env[f"INPUT_{name.upper()}"] = str(value)
+        stdin_payload = json.dumps(bound_inputs, ensure_ascii=False, default=str).encode("utf-8")
+
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, str(runner_path),
+            cwd=cwd, env=env,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(stdin_payload), timeout=timeout)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.communicate()
+            raise RuntimeError(f"script timed out after {timeout}s")
+        text_out = stdout.decode("utf-8", errors="replace") if stdout else ""
+        text_err = stderr.decode("utf-8", errors="replace") if stderr else ""
+        if proc.returncode != 0:
+            raise RuntimeError(f"script exited with code {proc.returncode}\nstderr:\n{text_err}")
+        return text_out.strip()
 
     # -- streaming + cancel helpers ---------------------------------------
 
@@ -1481,9 +1491,90 @@ def _substitute_env_vars(command: str, substitutions: dict[str, str]) -> str:
     return result
 
 
+_PYTHON3_SHIM_DIR: str | None = None
+
+
+def _python3_shim_dir() -> str | None:
+    """Return a PATH dir mapping ``python3`` → the real interpreter on Windows.
+
+    On a python.org install, ``python3`` is the Microsoft Store redirect stub
+    (exits non-zero / pops the Store). We drop two tiny wrappers (``python3``
+    and ``python3.exe``) into a temp dir and let callers prepend it to PATH so
+    model-written ``python3 ...`` commands run. The wrappers exec
+    ``sys.executable`` (the host's own interpreter), preserving argv. No-op on
+    POSIX, where ``python3`` is the correct native name. Cached per process.
+    """
+    global _PYTHON3_SHIM_DIR
+    if sys.platform != "win32":
+        return None
+    if _PYTHON3_SHIM_DIR is not None:
+        return _PYTHON3_SHIM_DIR
+    interpreter = sys.executable
+    if not interpreter:
+        return None
+    # Bare wrapper (no extension) for sh/git-bash; .exe wrapper for cmd-style
+    # resolution. Both exec the real interpreter, passing argv through.
+    wrapper = (
+        "#!/bin/sh\n"
+        f'exec "{interpreter}" "$@"\n'
+    )
+    try:
+        d = tempfile.mkdtemp(prefix="lamtools_py3shim_")
+        Path(d, "python3").write_text(wrapper, encoding="utf-8")
+        # Git Bash needs the bare script executable; mark it on POSIX.
+        try:
+            os.chmod(Path(d, "python3").as_posix(), 0o755)
+        except OSError:
+            pass
+        # .exe not strictly required under bash (it finds the bare script),
+        # but write a Windows-batch echo-through so direct .exe lookups resolve.
+        Path(d, "python3.bat").write_text(
+            f'@"{interpreter}" %*\r\n', encoding="utf-8"
+        )
+        _PYTHON3_SHIM_DIR = d
+        return d
+    except OSError:
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Type system + shared helpers (LLM/Agent/Action executors, branch/loop)
 # ---------------------------------------------------------------------------
+
+
+def _read_hash(path: Path) -> str | None:
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+
+
+def _write_runner(runner_path: Path, user_file: Path, out_port_names: list[str]) -> None:
+    """Write the binder runner that turns port-names-as-variables into JSON.
+
+    Binds stdin inputs as locals, execs the user file (stray stdout captured so
+    it can't corrupt the emitted JSON), then prints a JSON object mapping each
+    output-port name to the value bound to that name in the user's namespace.
+    Overwritten each run so out_port_names stay current with the node config.
+    """
+    import json as _json
+
+    src_repr = repr(str(user_file))
+    names_repr = repr(out_port_names)
+    runner = (
+        "import json, sys, io\n"
+        "_IN = json.load(sys.stdin) if not sys.stdin.isatty() else {}\n"
+        "_NS = dict(_IN); _NS.setdefault('__name__', '__main__')\n"
+        "_buf = io.StringIO(); _real = sys.stdout; sys.stdout = _buf\n"
+        "try:\n"
+        f"    with open({src_repr}, 'r', encoding='utf-8') as _f:\n"
+        f"        exec(compile(_f.read(), {src_repr}, 'exec'), _NS)\n"
+        "finally:\n"
+        "    sys.stdout = _real\n"
+        f"_OUT = {{p: _NS.get(p) for p in {names_repr}}}\n"
+        "print(json.dumps(_OUT, default=str))\n"
+    )
+    runner_path.write_text(runner, encoding="utf-8")
 
 
 def _io_to_port_dicts(inputs: Any, outputs: Any) -> list[dict[str, Any]]:
@@ -1605,7 +1696,6 @@ def _eval_condition(expr: str, bound_inputs: dict[str, Any]) -> bool:
 
 
 __all__ = [
-    "ActionKind",
     "NodeStateStatus",
     "PortDirection",
     "SKIP_SENTINEL",

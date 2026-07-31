@@ -102,6 +102,15 @@ class CoreCliRunOptions:
     approval_policy: ApprovalPolicy = "require"
     raw: bool = False
     verbose: bool = False
+    # --- Workflow mode (mirrors the frontend "工作流模式" path) ---
+    # When set, the build tools (workflow_graph/add_node/connect/...) become
+    # available and loadtools "workflow" whitelist is applied — identical to the
+    # HTTP app's active_mode="workflow". An operation_catalog may be supplied
+    # directly; otherwise one is assembled from workflow_store + the runner.
+    active_mode: str = ""
+    instructions: str = ""
+    workflow_store: Any = None
+    operation_catalog: Any = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "work_root", Path(self.work_root))
@@ -335,7 +344,10 @@ async def run_core_cli_task(
         ],
     )
     core_instructions = "You are LamTools Core Agent, a standalone general-purpose agent runtime."
+    if options.instructions:
+        core_instructions = options.instructions
     context_window_tokens = int(getattr(llm_client, "context_window", 0) or 0) or context_window_tokens
+
     sub_agent_runner = KernelSubAgentRunner(
         work_root=work_root,
         llm_client=llm_client,
@@ -354,6 +366,53 @@ async def run_core_cli_task(
         session_prefix=thread_id,
         parent_event_sink=sink,
     )
+
+    # --- Workflow mode assembly (mirrors http_agent_app's active_mode="workflow") ---
+    # When a workflow_store is supplied, register the workflow.* operations and
+    # expose the 5 graph-editing build tools so the agent can build a workflow
+    # from natural language — identical to the frontend "工作流模式" path.
+    workflow_store = options.workflow_store
+    operation_catalog = options.operation_catalog
+    load_tools_obj = None
+    active_mode = options.active_mode or None
+    if workflow_store is not None:
+        from lamtools_core.tool.loadtools import default_load_tools
+
+        from lamtools_core.runtime.workflow import WorkflowManager, WorkflowRunner
+        from lamtools_core.app.workflow_operations import register_workflow_operations
+        from lamtools_core.app.operation_catalog import OperationCatalog
+
+        load_tools_obj = default_load_tools()
+        if operation_catalog is None:
+            operation_catalog = OperationCatalog()
+        workflow_manager = WorkflowManager(workflow_store)
+        if not operation_catalog.has("workflow.run"):
+            workflow_runner = WorkflowRunner(
+                llm_client=llm_client,
+                sub_agent_runner=sub_agent_runner,
+                workflow_store=workflow_store,
+            )
+            register_workflow_operations(
+                operation_catalog,
+                workflow_manager=workflow_manager,
+                runner=workflow_runner,
+                runtime_task_registry=None,
+                list_tool_specs=lambda: [],
+            )
+        if active_mode is None:
+            active_mode = "workflow"
+
+    async def execute_operation(name: str, payload: dict[str, Any], metadata: dict[str, Any]) -> Any:
+        if operation_catalog is None:
+            raise RuntimeError("operation catalog is not configured")
+        return await operation_catalog.execute(name, payload, metadata=metadata)
+
+    workflow_provider = None
+    if workflow_store is not None and operation_catalog is not None:
+        from lamtools_core.tool.workflow_tools import workflow_tool_provider
+
+        workflow_provider = workflow_tool_provider(workflow_store, execute_operation, work_root=work_root)
+
     toolbox = build_core_toolbox(
         work_root=work_root,
         approval_policy=options.approval_policy,
@@ -361,6 +420,10 @@ async def run_core_cli_task(
         mcp_caller=mcp_registry if mcp_tool_specs else None,
         mcp_tool_specs=mcp_tool_specs,
         sub_agent_runner=sub_agent_runner,
+        operation_executor=execute_operation if operation_catalog is not None else None,
+        workflow_build=workflow_store is not None,
+        workflow_tool_provider=workflow_provider,
+        load_tools=load_tools_obj,
     )
     kit = CoreBaseAgentKit(
         work_root=work_root,
@@ -372,6 +435,7 @@ async def run_core_cli_task(
             thinking_enabled=options.thinking_enabled,
             thinking_budget=options.thinking_budget,
             approval_policy=options.approval_policy,
+            active_mode=active_mode,
         ),
         toolbox=toolbox,
     )

@@ -22,12 +22,14 @@
         <WfSelect :model-value="localConfig.model_id" :options="modelOptions" @update:model-value="localConfig.model_id = $event; pushConfig()" />
       </template>
 
-      <!-- Action -->
-      <template v-else-if="kind === 'action'">
-        <WfSelect :model-value="localConfig.action_type" :options="actionTypeOptions" @update:model-value="localConfig.action_type = $event; pushConfig()" />
-        <textarea v-if="localConfig.action_type === 'shell'" v-model="localConfig.command" class="wf-field-text" rows="3" placeholder="command…" @blur="pushConfig"></textarea>
-        <textarea v-else-if="localConfig.action_type === 'script'" v-model="localConfig.script" class="wf-field-text" rows="3" placeholder="script…" @blur="pushConfig"></textarea>
-        <input v-else-if="localConfig.action_type === 'http'" v-model="localConfig.url" class="wf-field" type="text" placeholder="url" @blur="pushConfig" />
+      <!-- Command: shell command -->
+      <template v-else-if="kind === 'command'">
+        <textarea v-model="localConfig.command" class="wf-field-text" rows="3" placeholder="command…（curl/git/ffmpeg 等）" @blur="pushConfig"></textarea>
+      </template>
+
+      <!-- Script: Python (binder: ports-as-variables) -->
+      <template v-else-if="kind === 'script'">
+        <textarea v-model="localConfig.script" class="wf-field-text" rows="3" placeholder="y = x * 2（输入端口名当变量，给输出端口名赋值）" @blur="pushConfig"></textarea>
       </template>
 
       <!-- Content: each output port value -->
@@ -94,12 +96,6 @@ const modeOptions = [
   { value: 'loop', label: 'loop' },
   { value: 'agent', label: 'agent' },
 ]
-const actionTypeOptions = [
-  { value: 'shell', label: 'shell' },
-  { value: 'script', label: 'script' },
-  { value: 'http', label: 'http' },
-  { value: 'file-data', label: 'file-data' },
-]
 const iterateOptions = [
   { value: 'none', label: 'none' },
   { value: 'loop', label: 'loop' },
@@ -135,7 +131,8 @@ function pushPorts() { updateNode(node.value.id, { ports: localPorts.value }) }
   overflow: visible;
 }
 .wf-node.kind-ai { background: color-mix(in srgb, var(--purple) 8%, var(--theme-main-background)); border-color: color-mix(in srgb, var(--purple) 30%, var(--theme-main-border)); }
-.wf-node.kind-action { background: color-mix(in srgb, var(--orange) 8%, var(--theme-main-background)); border-color: color-mix(in srgb, var(--orange) 30%, var(--theme-main-border)); }
+.wf-node.kind-command { background: color-mix(in srgb, var(--orange) 8%, var(--theme-main-background)); border-color: color-mix(in srgb, var(--orange) 30%, var(--theme-main-border)); }
+.wf-node.kind-script { background: color-mix(in srgb, var(--blue) 8%, var(--theme-main-background)); border-color: color-mix(in srgb, var(--blue) 30%, var(--theme-main-border)); }
 .wf-node.kind-content { background: color-mix(in srgb, var(--blue) 8%, var(--theme-main-background)); border-color: color-mix(in srgb, var(--blue) 30%, var(--theme-main-border)); }
 .wf-node.kind-subgraph { background: color-mix(in srgb, var(--green) 8%, var(--theme-main-background)); border-color: color-mix(in srgb, var(--green) 30%, var(--theme-main-border)); }
 .wf-node.state-running { box-shadow: 0 0 0 2px color-mix(in srgb, var(--blue) 60%, transparent), var(--shadow); }

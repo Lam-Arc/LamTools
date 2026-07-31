@@ -83,29 +83,23 @@
         </details>
       </template>
 
-      <!-- Action -->
-      <template v-else-if="node.kind === 'action'">
+      <!-- Command: shell -->
+      <template v-else-if="node.kind === 'command'">
         <p v-if="outputPorts.length" class="hint">输出端口 = JSON 键名（stdout 是 JSON 时自动拆分）</p>
-        <label class="field">
-          <span class="field-label">动作类型</span>
-          <UiSelect :model-value="actionType" :options="actionOptions" @update:model-value="onActionType" />
-        </label>
-        <template v-if="actionType === 'shell'">
-          <label class="field field-wide"><span class="field-label">命令</span><textarea v-model="command" rows="3" placeholder='echo "hi"'></textarea></label>
-          <label class="field"><span class="field-label">工作目录</span><input v-model="cwd" type="text" placeholder="（默认 work_root）" /></label>
-        </template>
-        <template v-else-if="actionType === 'script'">
-          <label class="field"><span class="field-label">语言</span>
-            <UiSelect :model-value="language" :options="langOptions" @update:model-value="language = $event" />
-          </label>
-          <label class="field field-wide"><span class="field-label">脚本</span><textarea v-model="command" rows="5" placeholder="print('hi')"></textarea></label>
-        </template>
-        <template v-else-if="actionType === 'http'">
-          <label class="field field-wide"><span class="field-label">URL</span><input v-model="command" type="text" placeholder="https://…" /></label>
-          <label class="field"><span class="field-label">方法</span>
-            <UiSelect :model-value="language" :options="methodOptions" @update:model-value="language = $event" />
-          </label>
-        </template>
+        <label class="field field-wide"><span class="field-label">命令</span><textarea v-model="command" rows="3" placeholder='curl -s https://… | jq …'></textarea></label>
+        <label class="field"><span class="field-label">工作目录</span><input v-model="cwd" type="text" placeholder="（默认 work_root）" /></label>
+        <details class="settings-advanced">
+          <summary>高级设置</summary>
+          <label class="field"><span class="field-label">超时（秒）</span><input v-model.number="temperature" type="number" /></label>
+          <label class="field"><span class="field-label">重试次数</span><input v-model.number="retries" type="number" min="0" /></label>
+        </details>
+      </template>
+
+      <!-- Script: Python binder -->
+      <template v-else-if="node.kind === 'script'">
+        <p v-if="outputPorts.length" class="hint">输出端口 = 给同名变量赋值</p>
+        <label class="field field-wide"><span class="field-label">Python 脚本</span><textarea v-model="command" rows="5" placeholder="y = x * 2"></textarea></label>
+        <p class="field-hint">{{ scriptContractHint }}</p>
         <details class="settings-advanced">
           <summary>高级设置</summary>
           <label class="field"><span class="field-label">超时（秒）</span><input v-model.number="temperature" type="number" /></label>
@@ -135,7 +129,7 @@
       </template>
 
       <!-- Error handling (common, collapsible) -->
-      <details v-if="['ai','action','subgraph'].includes(node.kind)" class="settings-advanced">
+      <details v-if="['ai','command','script','subgraph'].includes(node.kind)" class="settings-advanced">
         <summary>错误处理</summary>
         <label class="field">
           <span class="field-label">策略</span>
@@ -158,7 +152,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import UiSelect from './UiSelect.vue'
-import type { WorkflowNode, WorkflowNodeKind, ActionKind, WorkflowPort } from '../workflow/types'
+import type { WorkflowNode, WorkflowNodeKind, WorkflowPort } from '../workflow/types'
 
 interface SelectOption {
   value: string
@@ -185,7 +179,8 @@ const cardStyle = computed(() => {
 
 const kindOptions: SelectOption[] = [
   { value: 'ai', label: 'AI' },
-  { value: 'action', label: 'Action' },
+  { value: 'command', label: 'Command' },
+  { value: 'script', label: 'Script' },
   { value: 'content', label: 'Content' },
   { value: 'subgraph', label: 'Subgraph' },
 ]
@@ -201,22 +196,8 @@ const effortOptions: SelectOption[] = [
   { value: 'medium', label: 'medium' },
   { value: 'high', label: 'high' },
 ]
-const actionOptions: SelectOption[] = [
-  { value: 'shell', label: 'Shell / 程序命令' },
-  { value: 'script', label: '脚本执行' },
-  { value: 'http', label: 'HTTP / 网络请求' },
-  { value: 'file-data', label: '文件 / 数据变换' },
-]
-const langOptions: SelectOption[] = [
-  { value: 'python', label: 'Python' },
-  { value: 'javascript', label: 'JavaScript' },
-]
-const methodOptions: SelectOption[] = [
-  { value: 'GET', label: 'GET' },
-  { value: 'POST', label: 'POST' },
-  { value: 'PUT', label: 'PUT' },
-  { value: 'DELETE', label: 'DELETE' },
-]
+
+// ---- local editable copies ----
 const typeOptions = ['string', 'number', 'boolean', 'object', 'array', 'any']
 const opOptions = ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'contains', 'regex', 'exists']
 const onErrorOptions: SelectOption[] = [
@@ -231,6 +212,7 @@ const iterateOptions: SelectOption[] = [
 ]
 // Plain string shown in hints (kept in script to avoid Vue template {{ }} conflicts).
 const interpHint = '{{端口名}}'
+const scriptContractHint = '输入端口名直接当变量用（节点 IN a → 代码里用 a）；给输出端口名赋值即输出（OUT y → 代码里 y=...）。不要 print、不要解析 stdin。用 sys.executable 隔离子进程执行，脚本落盘于 .lam/workflow_scripts/<nodeId>.py。新建节点会自动生成带端口变量注释的脚手架。'
 
 // ---- local editable copies ----
 const title = ref(props.node.title)
@@ -271,9 +253,7 @@ const topP = ref<number | ''>(props.node.config.top_p === undefined ? '' : Numbe
 const retries = ref(Number(props.node.config.retries ?? 0))
 
 // Action
-const actionType = ref(String(props.node.config.action_type ?? 'shell') as ActionKind)
-const language = ref(String(props.node.config.language ?? 'python'))
-const command = ref(String(props.node.config.command ?? props.node.config.script ?? props.node.config.url ?? ''))
+const command = ref(String(props.node.config.command ?? props.node.config.script ?? ''))
 const cwd = ref(String(props.node.config.cwd ?? ''))
 
 // Branch
@@ -295,16 +275,12 @@ watch(
     inputPorts.value = props.node.ports.filter((p) => p.direction === 'in').map((p) => ({ name: p.name, type: p.type }))
     outputPorts.value = props.node.ports.filter((p) => p.direction === 'out').map((p) => ({ name: p.name, type: p.type, value: p.value ?? '' }))
     instruction.value = String(props.node.config.instruction ?? props.node.config.system_prompt ?? '')
-    command.value = String(props.node.config.command ?? props.node.config.script ?? props.node.config.url ?? '')
-    actionType.value = String(props.node.config.action_type ?? 'shell') as ActionKind
+    command.value = String(props.node.config.command ?? props.node.config.script ?? '')
   },
 )
 
 function onKind(v: string) {
   emit('update', { ...props.node, kind: v as WorkflowNodeKind })
-}
-function onActionType(v: string) {
-  actionType.value = v as ActionKind
 }
 
 function apply() {
@@ -337,18 +313,12 @@ function apply() {
     if (maxTokens.value !== '') cfg.max_tokens = maxTokens.value
     if (topP.value !== '') cfg.top_p = topP.value
     cfg.retries = retries.value
-  } else if (props.node.kind === 'action') {
-    cfg.action_type = actionType.value
-    if (actionType.value === 'shell') {
-      cfg.command = command.value
-      if (cwd.value) cfg.cwd = cwd.value
-    } else if (actionType.value === 'script') {
-      cfg.language = language.value
-      cfg.script = command.value
-    } else if (actionType.value === 'http') {
-      cfg.url = command.value
-      cfg.method = language.value
-    }
+  } else if (props.node.kind === 'command') {
+    cfg.command = command.value
+    if (cwd.value) cfg.cwd = cwd.value
+    cfg.retries = retries.value
+  } else if (props.node.kind === 'script') {
+    cfg.script = command.value
     cfg.retries = retries.value
   } else if (props.node.kind === 'subgraph') {
     cfg.workflow_name = subworkflowName.value
@@ -360,7 +330,7 @@ function apply() {
     cfg.retries = retries.value
   }
   // Error handling config (common to executable kinds).
-  if (['ai','action','subgraph'].includes(props.node.kind) && onErrorStrategy.value !== 'abort') {
+  if (['ai','command','script','subgraph'].includes(props.node.kind) && onErrorStrategy.value !== 'abort') {
     const onErr: Record<string, unknown> = { strategy: onErrorStrategy.value }
     if (onErrorStrategy.value === 'fallback') {
       onErr.fallback_port = onErrorFallbackPort.value
@@ -414,6 +384,7 @@ function apply() {
 .wf-edit-card :deep(.field) { display: flex; flex-direction: column; gap: 4px; }
 .wf-edit-card :deep(.field-wide) { grid-column: 1 / -1; }
 .wf-edit-card :deep(.field-label) { font-size: 11px; opacity: 0.65; }
+.wf-edit-card :deep(.field-hint) { font-size: 10.5px; opacity: 0.5; line-height: 1.4; margin: 0; }
 .wf-edit-card :deep(.field input),
 .wf-edit-card :deep(.field textarea) {
   width: 100%;

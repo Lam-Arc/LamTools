@@ -1,7 +1,6 @@
 /** Workflow mode — shared types mirroring the backend runtime/workflow.py model. */
 
-export type WorkflowNodeKind = 'ai' | 'action' | 'content' | 'subgraph'
-export type ActionKind = 'shell' | 'script' | 'http' | 'file-data'
+export type WorkflowNodeKind = 'ai' | 'command' | 'script' | 'content' | 'subgraph'
 export type PortDirection = 'in' | 'out'
 export type NodeStateStatus = 'idle' | 'running' | 'done' | 'error' | 'skipped' | 'cancelled'
 

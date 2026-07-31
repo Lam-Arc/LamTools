@@ -21,8 +21,13 @@ OperationExecutor = Callable[[str, dict[str, Any], dict[str, Any]], Awaitable[An
 
 
 def workflow_build_tool_specs() -> list[ToolSpec]:
-    """Tool specs for fine-grained workflow-graph editing."""
-    node_kind = {"type": "string", "enum": ["llm", "agent", "action"]}
+    """Tool specs for fine-grained workflow-graph editing.
+
+    Node kinds mirror the runtime model (``WorkflowNodeKind``): ai / command /
+    script / content / subgraph. Keep this in sync with the frontend workflow-mode
+    instructions so the model sees one consistent vocabulary.
+    """
+    node_kind = {"type": "string", "enum": ["ai", "command", "script", "content", "subgraph"]}
     port_schema = {
         "type": "object",
         "properties": {
@@ -30,6 +35,7 @@ def workflow_build_tool_specs() -> list[ToolSpec]:
             "type": {"type": "string"},
             "direction": {"type": "string", "enum": ["in", "out"]},
             "description": {"type": "string"},
+            "value": {"description": "Constant value for a content node's output port."},
         },
         "required": ["name", "direction"],
     }
@@ -37,8 +43,10 @@ def workflow_build_tool_specs() -> list[ToolSpec]:
         ToolSpec(
             name="workflow_graph",
             description=(
-                "Read the current workflow graph (nodes + edges) as JSON. Use this "
-                "before editing to see the existing nodes, ids, ports, and connections."
+                "Read the current workflow graph (nodes + edges) as JSON. Always call "
+                "this before editing to see existing node ids, ports, and connections. "
+                "Returns an empty graph {name,nodes:[],edges:[]} when the workflow does "
+                "not exist yet — you can then add the first node."
             ),
             input_schema=_schema({}, required=[]),
             permission=AUTO_ALLOW,
@@ -47,10 +55,31 @@ def workflow_build_tool_specs() -> list[ToolSpec]:
         ToolSpec(
             name="workflow_add_node",
             description=(
-                "Add a node to the current workflow. kind is 'llm' | 'agent' | 'action'. "
-                "Each node carries in/out ports; a new node usually gets one 'in' and "
-                "one 'out' port. config is kind-specific (action: action_type/command; "
-                "llm: instruction/mode/allowed_tools; agent: tools). position is canvas {x,y}."
+                "Add a node to the current workflow. If the workflow does not exist yet "
+                "it is created empty first (lazy bootstrap). kind is one of:\n"
+                "- ai: AI processing. config.mode = single | loop | agent. Named output "
+                "ports force structured JSON output (port name = field). Instruction "
+                "supports {{port_name}} interpolation.\n"
+                "- command: invoke a CLI tool via shell (curl/git/ffmpeg/...). config.command "
+                "is the shell command, run in the same shell run_command uses (Git Bash on "
+                "Windows). stdin receives {\"inputs\":{port:val}} JSON and INPUT_<PORT> env "
+                "vars are set. stdout that is a JSON object is split by key to same-named "
+                "output ports, else the whole stdout goes to the default out port. Command "
+                "(shell) is Turing-complete — use it for http (curl) and file/data ops too.\n"
+                "- script: write Python. config.script is plain Python where INPUT PORT NAMES "
+                "are directly usable variables (node IN a, IN b → use a, b in code) and assigning "
+                "to an OUTPUT PORT NAME produces that output (OUT y → y = ...). Do NOT print, do "
+                "NOT parse stdin — the runtime binds inputs as locals and reads outputs as locals. "
+                "A new script node is auto-scaffolded with its port names + comments as a starter.\n"
+                "- content: only output ports, each carrying a constant value (port.value). "
+                "Injects constants, runs nothing.\n"
+                "- subgraph: references an external workflow by config.workflow_name; "
+                "config.iterate = none | loop | map (call once / loop until condition / "
+                "fan-out over an array).\n"
+                "Edge modifiers: condition (per-edge Python expr; false → skip that path), "
+                "transform (per-edge $.field extraction), on_error (node-level "
+                "abort/fallback/skip). Each node has in/out ports; one in-port fed by "
+                "multiple edges aggregates into an array. position is canvas {x,y}."
             ),
             input_schema=_schema({
                 "kind": node_kind,
@@ -121,10 +150,40 @@ def workflow_build_tool_handlers(
             payload["work_root"] = str(work_root)
         result = await execute_operation("workflow.get", payload, {})
         status = str(getattr(result, "status", "error") or "error")
-        if status != "ok":
+        if status == "ok":
+            wf = (getattr(result, "payload", {}) or {}).get("workflow")
+            return wf if isinstance(wf, dict) else None
+        # "Workflow not found" is expected when bootstrapping from an empty
+        # session; surface it as None so callers can lazy-create / return an
+        # empty graph. Any other error is a real failure — raise so the caller
+        # reports it rather than silently treating it as missing.
+        err = str((getattr(result, "payload", {}) or {}).get("error") or "")
+        if "not found" in err.lower():
             return None
+        raise RuntimeError(err or "workflow.get failed")
+
+    async def _ensure_graph(name: str) -> dict[str, Any]:
+        """Return the named graph, lazy-creating an empty one if it is missing.
+
+        Used by every write tool (add_node/connect/delete/update) so the agent
+        can build a workflow from zero with its natural graph→add→connect flow —
+        no separate "create" step or tool required.
+        """
+        wf = await _get_graph(name)
+        if wf is not None:
+            return wf
+        # Bootstrap: create an empty workflow, then re-read it (workflow.create
+        # returns the created definition, but re-reading keeps one code path).
+        create_payload: dict[str, Any] = {"name": name}
+        if work_root:
+            create_payload["work_root"] = str(work_root)
+        result = await execute_operation("workflow.create", create_payload, {})
+        status = str(getattr(result, "status", "error") or "error")
+        if status != "ok":
+            err = str((getattr(result, "payload", {}) or {}).get("error") or "create failed")
+            raise RuntimeError(f"could not bootstrap workflow {name!r}: {err}")
         wf = (getattr(result, "payload", {}) or {}).get("workflow")
-        return wf if isinstance(wf, dict) else None
+        return wf if isinstance(wf, dict) else {"name": name, "nodes": [], "edges": []}
 
     async def _save_graph(name: str, wf: dict[str, Any]) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -158,30 +217,43 @@ def workflow_build_tool_handlers(
         name = _resolve_name(call)
         if not name:
             return _failed(call, "no active workflow (session id missing)")
-        wf = await _get_graph(name)
+        try:
+            wf = await _get_graph(name)
+        except RuntimeError as exc:
+            return _failed(call, str(exc))
         if wf is None:
-            return _failed(call, f"workflow not found: {name}")
+            # Empty graph so the agent can immediately add the first node —
+            # the very first edit (add_node) bootstraps the workflow.
+            wf = {"name": name, "nodes": [], "edges": []}
         return _ok(call, wf)
 
     async def workflow_add_node(call: ToolCall) -> ToolResult:
         args = _args(call)
         name = _resolve_name(call)
-        wf = await _get_graph(name)
-        if wf is None:
-            return _failed(call, f"workflow not found: {name}")
+        try:
+            wf = await _ensure_graph(name)
+        except RuntimeError as exc:
+            return _failed(call, str(exc))
         nodes = list(wf.get("nodes") or [])
-        kind = str(args.get("kind") or "action")
+        kind = str(args.get("kind") or "command")
         import secrets
 
         node_id = str(args.get("node_id") or "").strip() or f"{kind}-{secrets.token_hex(2)}"
         if any(str(n.get("id")) == node_id for n in nodes if isinstance(n, dict)):
             return _failed(call, f"node id already exists: {node_id}")
+        ports = args.get("ports") if isinstance(args.get("ports"), list) else _default_ports(kind)
+        config = args.get("config") if isinstance(args.get("config"), dict) else {}
+        # Auto-scaffold a starter script from the port names + comments, so the
+        # model opens a ready-to-fill file with the right variable names.
+        if kind == "script" and not str(config.get("script") or "").strip():
+            config = dict(config)
+            config["script"] = _scaffold_script(str(args.get("title") or kind.capitalize()), ports)
         node: dict[str, Any] = {
             "id": node_id,
             "kind": kind,
             "title": str(args.get("title") or kind.capitalize()),
-            "config": args.get("config") if isinstance(args.get("config"), dict) else {},
-            "ports": args.get("ports") if isinstance(args.get("ports"), list) else _default_ports(kind),
+            "config": config,
+            "ports": ports,
             "position": args.get("position") if isinstance(args.get("position"), dict) else {"x": 120, "y": 120},
         }
         nodes.append(node)
@@ -192,9 +264,10 @@ def workflow_build_tool_handlers(
     async def workflow_connect(call: ToolCall) -> ToolResult:
         args = _args(call)
         name = _resolve_name(call)
-        wf = await _get_graph(name)
-        if wf is None:
-            return _failed(call, f"workflow not found: {name}")
+        try:
+            wf = await _ensure_graph(name)
+        except RuntimeError as exc:
+            return _failed(call, str(exc))
         source = str(args.get("source") or "")
         source_port = str(args.get("source_port") or "")
         target = str(args.get("target") or "")
@@ -221,9 +294,10 @@ def workflow_build_tool_handlers(
     async def workflow_delete_node(call: ToolCall) -> ToolResult:
         args = _args(call)
         name = _resolve_name(call)
-        wf = await _get_graph(name)
-        if wf is None:
-            return _failed(call, f"workflow not found: {name}")
+        try:
+            wf = await _ensure_graph(name)
+        except RuntimeError as exc:
+            return _failed(call, str(exc))
         node_id = str(args.get("node_id") or "")
         wf["nodes"] = [n for n in (wf.get("nodes") or []) if isinstance(n, dict) and str(n.get("id")) != node_id]
         wf["edges"] = [e for e in (wf.get("edges") or []) if isinstance(e, dict) and str(e.get("source")) != node_id and str(e.get("target")) != node_id]
@@ -233,9 +307,10 @@ def workflow_build_tool_handlers(
     async def workflow_update_node(call: ToolCall) -> ToolResult:
         args = _args(call)
         name = _resolve_name(call)
-        wf = await _get_graph(name)
-        if wf is None:
-            return _failed(call, f"workflow not found: {name}")
+        try:
+            wf = await _ensure_graph(name)
+        except RuntimeError as exc:
+            return _failed(call, str(exc))
         node_id = str(args.get("node_id") or "")
         nodes = wf.get("nodes") or []
         found = False
@@ -281,6 +356,51 @@ def _default_ports(kind: str) -> list[dict[str, Any]]:
         {"name": "in", "type": "string", "direction": "in"},
         {"name": "out", "type": "string", "direction": "out"},
     ]
+
+
+def _scaffold_script(title: str, ports: list[Any]) -> str:
+    """Starter Python for a freshly created script node.
+
+    Lists the input port names (available as variables) and the output port
+    names (assign to produce output) as comments, plus a TODO placeholder per
+    output. The runtime binds inputs as locals — so inputs are only commented
+    (never re-declared, which would clobber the bound value). The model/user
+    fills the body between the bound inputs and the output assignments.
+    """
+    in_ports = [p for p in ports if isinstance(p, dict) and p.get("direction") == "in"]
+    out_ports = [p for p in ports if isinstance(p, dict) and p.get("direction") == "out"]
+    lines = [f"# {title or 'script'}.py — script 节点脚手架", "#"]
+    if in_ports:
+        lines.append("# 输入端口（运行时已绑定为变量，直接用，勿重新赋值）：")
+        for p in in_ports:
+            lines.append(f"#   {_id(p.get('name'))} : {p.get('type') or 'any'}")
+    else:
+        lines.append("# 输入端口：（无）")
+    if out_ports:
+        lines.append("# 输出端口（给这些变量赋值即作为该端口输出）：")
+        for p in out_ports:
+            lines.append(f"#   {_id(p.get('name'))} : {p.get('type') or 'any'}")
+    else:
+        lines.append("# 输出端口：（无）")
+    lines.extend([
+        "#",
+        "# 不要 print（会被忽略）、不要解析 stdin。直接写逻辑。",
+        "",
+    ])
+    for p in out_ports:
+        lines.append(f"{_id(p.get('name'))} = None  # TODO: 计算 {_id(p.get('name'))}")
+    if not out_ports:
+        lines.append("# TODO: 声明输出端口并在此赋值")
+    return "\n".join(lines) + "\n"
+
+
+def _id(name: Any) -> str:
+    """A safe Python identifier fallback for a port name."""
+    s = str(name or "value").strip()
+    if s.isidentifier():
+        return s
+    cleaned = "".join(c if c.isalnum() or c == "_" else "_" for c in s) or "value"
+    return cleaned if cleaned.isidentifier() else "value"
 
 
 def _args(call: ToolCall) -> dict[str, Any]:

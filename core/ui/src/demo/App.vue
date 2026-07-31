@@ -888,9 +888,10 @@ const workflowModeInstructions = computed(() => {
   const name = activeWorkflowName.value || ''
   return [
     '你是 LamTools 工作流模式的助手。用户说的"workflow/工作流/建工作流"一律指画布上的工作流节点图（WorkflowDef），不是 GitHub Actions、CI 或其它外部工作流。',
-    '节点类型有四种：ai、action、content、subgraph。',
+    '节点类型有五种：ai、command、script、content、subgraph。',
     '- ai：AI 处理。config.mode 区分 single（单次生成）/ loop（自判断反复迭代）/ agent（多轮自主+工具）。有命名输出端口→强制 JSON 输出，端口名=字段名。指令支持 {{端口名}} 插值。',
-    '- action：执行 shell/script/http/file-data。stdout 是 JSON 则按 key 拆分到同名输出端口，否则整段放默认端口。',
+    '- command：跑 shell 命令调用 CLI 工具（curl/git/ffmpeg 等）。config.command 是 shell 命令，用与 run_command 相同的 shell（Windows 下 Git Bash）。stdin 收 {\"inputs\":{端口名:值}} JSON，同时设 INPUT_<端口名> 环境变量。stdout 是 JSON 对象则按 key 拆到同名输出端口，否则整段放默认端口。command 图灵完备，http/file-data 一律用 command（curl/cat/jq）。',
+    '- script：写 Python 代码。config.script 是纯 Python，输入端口名直接当变量用（节点 IN a、IN b → 代码里用 a、b），给输出端口名赋值即输出（OUT y → 代码里 y=...）。不要 print、不要解析 stdin（运行时把输入绑成局部变量、从局部变量读输出）。新建 script 节点会自动生成带端口变量注释的脚手架。',
     '- content：仅有输出端口，每个配常量值，不执行任何操作。用来注入常量。',
     '- subgraph：引用外部工作流。config.iterate 区分 none（调用一次）/ loop（循环到 condition 满足）/ map（遍历数组）。config.workflow_name 指定目标工作流。',
     '修饰符：condition（边级 Python 表达式，不满足该边传哨兵→下游跳过）/ transform（边上 $.field 提取子值）/ on_error（节点级 abort/fallback/skip）。',
@@ -906,6 +907,8 @@ const workflowModeInstructions = computed(() => {
 })
 function nodeKindIcon(kind: string): string {
   if (kind === 'ai') return '◇'
+  if (kind === 'command') return '◆'
+  if (kind === 'script') return '◳'
   if (kind === 'content') return '□'
   if (kind === 'subgraph') return '⬡'
   return '◆'
@@ -2009,11 +2012,14 @@ watch([activeSessionId, messages, latestStatus], ([threadId]) => {
 // Workflow mode: the agent edits the graph via build tools (workflow_add_node
 // etc.) during a turn. Each tool result lands in the message stream, so when
 // messages change we debounce-reload the workflow definition — the canvas
-// updates in near-realtime as the agent edits, not just at turn end.
+// updates in near-realtime as the agent edits. We also reload when the turn
+// finishes (status leaves running/waiting): the agent's last batch of edits
+// often lands right as the turn ends, and without this final reload the canvas
+// would stay frozen on the pre-turn graph ("暂无节点" after a build turn).
 let graphReloadTimer: ReturnType<typeof setTimeout> | null = null
-watch(() => messages.value.length, () => {
+let prevStatus = ''
+function reloadWorkflowGraph() {
   if (!workflowMode.value || !activeWorkflowName.value) return
-  if (latestStatus.value !== 'running' && latestStatus.value !== 'waiting') return
   if (graphReloadTimer) clearTimeout(graphReloadTimer)
   graphReloadTimer = setTimeout(() => {
     void (async () => {
@@ -2025,6 +2031,22 @@ watch(() => messages.value.length, () => {
       }
     })()
   }, 400)
+}
+watch(() => messages.value.length, () => {
+  // Reload on each new message while a turn is active (live edit streaming).
+  if (latestStatus.value === 'running' || latestStatus.value === 'waiting') {
+    reloadWorkflowGraph()
+  }
+})
+// Final reload when the turn transitions out of running/waiting — catches the
+// last edits that arrived as the turn ended (the message-stream watcher above
+// would have skipped them because status already flipped to done/idle).
+watch(latestStatus, (status, prev) => {
+  if (!workflowMode.value || !activeWorkflowName.value) return
+  if (prev && (prev === 'running' || prev === 'waiting') && prev !== status) {
+    reloadWorkflowGraph()
+  }
+  prevStatus = status
 })
 
 // Sync pin state from WorkspaceShell when it mounts
