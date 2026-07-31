@@ -24,6 +24,7 @@ from lamtools_core.cli import (
 from lamtools_core.http import create_core_router
 from lamtools_core.llm import LLMRequest
 from lamtools_core.config import build_shared_config_operation_catalog
+from lamtools_core.config.root import ensure_projects_root
 from lamtools_core.attachment import CoreAttachmentStore
 from lamtools_core.runtime import RuntimeTaskRegistry
 from lamtools_core.runtime.arrange import ArrangeManager, ArrangeRunner, arranged_operation_payload
@@ -171,7 +172,11 @@ def create_core_agent_http_app(
     )
 
     core_db_path = _resolve_core_db(core_db)
-    resolved_work_root = Path(work_root or os.environ.get("LAMTOOLS_CORE_WORK_ROOT") or Path.cwd()).resolve()
+    resolved_work_root = Path(
+        work_root
+        or os.environ.get("LAMTOOLS_CORE_WORK_ROOT")
+        or (ensure_projects_root() / "default")
+    ).resolve()
     resolved_data_dir = Path(data_dir or os.environ.get("LAMTOOLS_CORE_DATA_DIR") or core_db_path.parent / "core-agent").resolve()
     resolved_work_root.mkdir(parents=True, exist_ok=True)
     resolved_data_dir.mkdir(parents=True, exist_ok=True)

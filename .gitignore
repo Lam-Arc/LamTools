@@ -26,6 +26,9 @@ ENV/
 *.sqlite
 *.sqlite3
 
+# Default project workspaces
+lam_projects/
+
 # IDE
 .idea/
 .vscode/

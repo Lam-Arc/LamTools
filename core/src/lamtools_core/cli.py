@@ -54,6 +54,7 @@ from lamtools_core.llm.profiles import (
 from lamtools_core.llm.model_capabilities import resolve_capability
 from lamtools_core.config.migrate_models import migrate_models_from_db
 from lamtools_core.config.model_store import ModelConfig, ModelStore
+from lamtools_core.config.root import ensure_projects_root
 from lamtools_core.runtime import RuntimeTurnInput
 from lamtools_core.tool.default_toolbox import ApprovalPolicy, build_core_toolbox
 
@@ -746,6 +747,17 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--reload", action="store_true", help="Enable auto-reload on code changes")
     serve.set_defaults(func=cmd_serve)
 
+    setup = sub.add_parser("setup", help="Initialize the lam_projects directory for default project workspaces")
+    setup.set_defaults(func=cmd_setup)
+
+    migrate = sub.add_parser(
+        "migrate-projects",
+        help="Migrate existing project workspaces into lam_projects/",
+    )
+    migrate.add_argument("--core-db", default="", help="Core-owned SQLite runtime database")
+    migrate.add_argument("--apply", action="store_true", help="Apply the migration (default is a dry-run preview)")
+    migrate.set_defaults(func=cmd_migrate_projects)
+
     run = sub.add_parser("run", help="Start a Core Agent task")
     run.add_argument("message", nargs="+")
     run.add_argument("--model-id", default="", help="Model record id, provider model id, or display name")
@@ -1205,6 +1217,26 @@ async def cmd_serve(args: argparse.Namespace) -> int:
     _print_live_result(args, {"url": url}, f"serving {url}")
     server = uvicorn.Server(uvicorn.Config(app, host=args.host, port=args.port, reload=bool(args.reload)))
     await server.serve()
+    return 0
+
+
+async def cmd_setup(args: argparse.Namespace) -> int:
+    del args
+    root = ensure_projects_root()
+    print(json.dumps({"lam_projects": str(root), "created": True}, ensure_ascii=False), flush=True)
+    return 0
+
+
+async def cmd_migrate_projects(args: argparse.Namespace) -> int:
+    from lamtools_core.config.migrate_projects import migrate_projects
+
+    db = await open_core_app_db(_resolve_core_db(args.core_db or None))
+    try:
+        report = await migrate_projects(db, apply=bool(args.apply))
+    finally:
+        await db.close()
+    label = "migrated" if report.applied else "dry-run"
+    print(json.dumps({"status": label, **report.to_dict()}, ensure_ascii=False, sort_keys=True), flush=True)
     return 0
 
 
@@ -2416,7 +2448,7 @@ def _default_run_dir() -> Path:
 
 
 def _default_work_root() -> Path:
-    return _repo_root()
+    return ensure_projects_root() / "default"
 
 
 def _safe_relative_path(value: str) -> Path:
