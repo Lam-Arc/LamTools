@@ -361,36 +361,22 @@ def _default_ports(kind: str) -> list[dict[str, Any]]:
 def _scaffold_script(title: str, ports: list[Any]) -> str:
     """Starter Python for a freshly created script node.
 
-    Lists the input port names (available as variables) and the output port
-    names (assign to produce output) as comments, plus a TODO placeholder per
-    output. The runtime binds inputs as locals — so inputs are only commented
-    (never re-declared, which would clobber the bound value). The model/user
-    fills the body between the bound inputs and the output assignments.
+    Lists input port names (available as variables) and output port names
+    (assign to produce output) on two comment lines, plus a `name = None`
+    placeholder per output. The runtime binds inputs as locals — inputs are
+    only commented (never re-declared, which would clobber the bound value).
     """
     in_ports = [p for p in ports if isinstance(p, dict) and p.get("direction") == "in"]
     out_ports = [p for p in ports if isinstance(p, dict) and p.get("direction") == "out"]
-    lines = [f"# {title or 'script'}.py — script 节点脚手架", "#"]
-    if in_ports:
-        lines.append("# 输入端口（运行时已绑定为变量，直接用，勿重新赋值）：")
-        for p in in_ports:
-            lines.append(f"#   {_id(p.get('name'))} : {p.get('type') or 'any'}")
-    else:
-        lines.append("# 输入端口：（无）")
-    if out_ports:
-        lines.append("# 输出端口（给这些变量赋值即作为该端口输出）：")
-        for p in out_ports:
-            lines.append(f"#   {_id(p.get('name'))} : {p.get('type') or 'any'}")
-    else:
-        lines.append("# 输出端口：（无）")
-    lines.extend([
-        "#",
-        "# 不要 print（会被忽略）、不要解析 stdin。直接写逻辑。",
+    in_names = [_id(p.get("name")) for p in in_ports]
+    out_names = [_id(p.get("name")) for p in out_ports]
+    lines = [
+        f"# 输入：{', '.join(in_names) if in_names else '（无）'}",
+        f"# 输出：{', '.join(out_names) if out_names else '（无）'}",
         "",
-    ])
-    for p in out_ports:
-        lines.append(f"{_id(p.get('name'))} = None  # TODO: 计算 {_id(p.get('name'))}")
-    if not out_ports:
-        lines.append("# TODO: 声明输出端口并在此赋值")
+    ]
+    for name in out_names:
+        lines.append(f"{name} = None")
     return "\n".join(lines) + "\n"
 
 

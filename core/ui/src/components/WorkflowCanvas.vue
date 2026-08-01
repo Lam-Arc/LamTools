@@ -74,12 +74,12 @@
     >
       <div class="wf-menu-group">
         <div class="wf-menu-label">连线条件</div>
-        <input
-          class="wf-edge-cond-input"
-          type="text"
+        <AutoTextarea
+          :min-rows="2"
+          :max-rows="4"
           placeholder="Python 表达式（空=无条件）"
-          :value="edgeCondition(edgeMenu.id)"
-          @input="setEdgeCondition(edgeMenu.id, ($event.target as HTMLInputElement).value)"
+          :model-value="edgeCondition(edgeMenu.id)"
+          @update:model-value="setEdgeCondition(edgeMenu.id, $event)"
         />
       </div>
       <span class="wf-menu-sep" />
@@ -107,6 +107,7 @@ import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
 import WorkflowNodeComp from './WorkflowNode.vue'
 import NodeEditCard from './NodeEditCard.vue'
+import AutoTextarea from './AutoTextarea.vue'
 import type { WorkflowDef, WorkflowNodeKind, WorkflowNodeData, NodeStateStatus, WorkflowPort } from '../workflow/types'
 
 const props = defineProps<{
@@ -384,26 +385,18 @@ function defaultPorts(kind: WorkflowNodeKind) {
 // (available as variables) and output port names (assign to produce output)
 // as comments + a TODO placeholder per output. Mirrors the backend scaffold
 // in workflow_build_tools._scaffold_script.
-function scaffoldScript(title: string, ports: WorkflowPort[]): string {
+function scaffoldScript(_title: string, ports: WorkflowPort[]): string {
   const inPorts = ports.filter((p) => p.direction === 'in')
   const outPorts = ports.filter((p) => p.direction === 'out')
   const safeId = (n: string) => (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(n || '') ? (n || 'value') : (n || 'value').replace(/[^a-zA-Z0-9_]/g, '_') || 'value')
-  const lines = [`# ${title || 'script'}.py — script 节点脚手架`, '#']
-  if (inPorts.length) {
-    lines.push('# 输入端口（运行时已绑定为变量，直接用，勿重新赋值）：')
-    for (const p of inPorts) lines.push(`#   ${safeId(p.name)} : ${p.type || 'any'}`)
-  } else {
-    lines.push('# 输入端口：（无）')
-  }
-  if (outPorts.length) {
-    lines.push('# 输出端口（给这些变量赋值即作为该端口输出）：')
-    for (const p of outPorts) lines.push(`#   ${safeId(p.name)} : ${p.type || 'any'}`)
-  } else {
-    lines.push('# 输出端口：（无）')
-  }
-  lines.push('#', '# 不要 print（会被忽略）、不要解析 stdin。直接写逻辑。', '')
-  for (const p of outPorts) lines.push(`${safeId(p.name)} = None  # TODO: 计算 ${safeId(p.name)}`)
-  if (!outPorts.length) lines.push('# TODO: 声明输出端口并在此赋值')
+  const inNames = inPorts.map((p) => safeId(p.name))
+  const outNames = outPorts.map((p) => safeId(p.name))
+  const lines = [
+    `# 输入：${inNames.length ? inNames.join(', ') : '（无）'}`,
+    `# 输出：${outNames.length ? outNames.join(', ') : '（无）'}`,
+    '',
+  ]
+  for (const name of outNames) lines.push(`${name} = None`)
   return lines.join('\n') + '\n'
 }
 

@@ -2,8 +2,10 @@
   <TitleBar
     :left-pinned="leftPinned"
     :right-pinned="rightPinned"
+    :workflow-mode="workflowMode"
     @toggle-left-pinned="toggleLeftPinned"
     @toggle-right-pinned="toggleRightPinned"
+    @toggle-workflow-mode="toggleWorkflowMode"
   />
   <CoreSettings
     v-if="showSettings"
@@ -124,9 +126,6 @@
     </template>
 
     <template #sidebar-footer>
-      <button class="sidebar-action" type="button" :class="{ 'is-active': workflowMode }" @click="toggleWorkflowMode">
-        <span aria-hidden="true">&#x25C6;</span><span>工作流</span>
-      </button>
       <button class="sidebar-action" type="button" @click="showArrange = true">
         <span aria-hidden="true">&#x25F7;</span><span>长期安排</span>
       </button>
@@ -809,10 +808,12 @@ const {
   selectMode,
 } = executionControls
 
-const modeOptions = [
-  { value: 'consider', label: 'consider' },
-  { value: 'execute', label: 'execute' },
-]
+const modeOptions = computed(() =>
+  workflowMode.value ? [] : [
+    { value: 'consider', label: 'consider' },
+    { value: 'execute', label: 'execute' },
+  ]
+)
 
 const latestStatus = computed(() => snapshot.value ? selectLatestTurnStatus(snapshot.value) : 'idle')
 const activeTurnId = computed(() => snapshot.value ? selectLatestActiveTurnId(snapshot.value) : '')
@@ -1151,7 +1152,11 @@ async function refreshProjects() {
 async function refreshSessions() {
   const loaded = (await requestJson<RawSession[]>('/sessions')).map(toSession)
   const currentId = activeSessionId.value
-  sessions.value = loaded.map((session) => (
+  // Workflow mode reuses Core sessions (thread id = wf_<name>) for its
+  // conversation, but those shouldn't clutter the normal agent session list.
+  // Filter them out unless we're actively in workflow mode.
+  const visible = workflowMode.value ? loaded : loaded.filter((s) => !s.id.startsWith('wf_'))
+  sessions.value = visible.map((session) => (
     session.id === currentId ? { ...session, status: latestStatus.value } : session
   ))
 }
@@ -1503,20 +1508,20 @@ async function deleteProvider(providerId: string) {
 }
 
 async function createModel(payload: CoreSettingsModelPayload) {
-  await mutateConfig('config.model.create', payload, '模型已添加')
+  await mutateConfig('config.models.upsert', { scope: 'global', ...payload }, '模型已添加')
 }
 
 async function updateModel(payload: CoreSettingsModelPayload) {
-  await mutateConfig('config.model.update', payload, '模型已更新')
+  await mutateConfig('config.models.upsert', { scope: 'global', ...payload }, '模型已更新')
 }
 
 async function deleteModel(modelRecordId: string) {
   if (!window.confirm('删除此模型配置，是否继续？')) return
-  await mutateConfig('config.model.delete', { model_record_id: modelRecordId }, '模型已删除')
+  await mutateConfig('config.models.delete', { scope: 'global', model_id: modelRecordId }, '模型已删除')
 }
 
 async function setDefaultModel(modelId: string) {
-  await mutateConfig('config.model.update', { model_record_id: modelId, is_default: true }, '已设为默认模型')
+  await mutateConfig('config.models.set_default', { scope: 'global', model_id: modelId }, '已设为默认模型')
 }
 
 async function importEnvironmentConfig() {
@@ -1636,6 +1641,14 @@ function toggleWorkflowMode() {
     void loadAvailableTools()
     // Open the right panel so the node list + NL conversation are visible.
     if (!rightPinned.value) toggleRightPinned()
+  } else {
+    // Leaving workflow mode: drop the bound wf_* session so the agent-mode
+    // sidebar (which filters wf_* out) isn't left pointing at a hidden thread.
+    activeWorkflowName.value = ''
+    workflowDefinition.value = null
+    if (activeSessionId.value && activeSessionId.value.startsWith('wf_')) {
+      activeSessionId.value = null
+    }
   }
 }
 
@@ -2302,22 +2315,23 @@ onUnmounted(() => {
 .thread-header:has(.wf-mode-label) {
   gap: 8px;
 }
-.sidebar-action.is-active {
-  background: color-mix(in srgb, var(--theme-main-text, #fff) 12%, transparent);
-  color: var(--text);
-}
 
 /* Workflow mode: the whole main area is the canvas; the thin title floats
    over it transparently (no card chrome) instead of taking vertical space. */
 .wf-floating-header {
   position: absolute;
-  top: 10px;
-  left: 16px;
-  right: calc(var(--right-panel-width, 320px) + 16px);
+  top: 0;
+  left: 0;
+  right: 0;
   z-index: var(--z-popover, 60);
   pointer-events: auto;
   background: transparent;
   border: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 16px;
 }
 
 /* ---- Workflow right panel (Phase 5E) ---- */

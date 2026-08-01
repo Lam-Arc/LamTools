@@ -34,7 +34,7 @@
             <select v-model="p.type" class="port-type">
               <option v-for="t in typeOptions" :key="t" :value="t">{{ t }}</option>
             </select>
-            <input v-if="node.kind === 'content'" v-model="p.value" type="text" placeholder="常量值" class="port-value" />
+            <AutoTextarea v-if="node.kind === 'content'" v-model="p.value" :min-rows="2" :max-rows="4" placeholder="常量值" />
             <button class="port-del" type="button" @click="outputPorts.splice(i, 1)">✕</button>
           </div>
           <button class="port-add" type="button" @click="outputPorts.push({ name: '', type: 'string', value: '' })">+ 添加输出</button>
@@ -54,11 +54,11 @@
         </label>
         <label class="field field-wide">
           <span class="field-label">指令（支持 {{ interpHint }} 插值）</span>
-          <textarea v-model="instruction" rows="4" :placeholder="mode === 'agent' ? '让 agent 完成的目标…' : '系统提示词…'"></textarea>
+          <AutoTextarea v-model="instruction" :min-rows="2" :max-rows="4" :placeholder="mode === 'agent' ? '让 agent 完成的目标…' : '系统提示词…'" />
         </label>
         <label class="field field-wide">
           <span class="field-label">输出格式（文本说明，可选）</span>
-          <textarea v-model="outputFormatText" rows="2" placeholder="可选：自然语言格式说明"></textarea>
+          <AutoTextarea v-model="outputFormatText" :min-rows="2" :max-rows="4" placeholder="可选：自然语言格式说明" />
         </label>
         <label v-if="mode === 'agent'" class="field field-wide">
           <span class="field-label">工具集</span>
@@ -72,7 +72,7 @@
         </label>
         <details class="settings-advanced">
           <summary>高级设置</summary>
-          <label class="field"><span class="field-label">模型</span><input v-model="modelId" type="text" placeholder="provider/model" /></label>
+          <label class="field"><span class="field-label">模型</span><AutoTextarea v-model="modelId" :min-rows="1" :max-rows="4" placeholder="provider/model" /></label>
           <label class="field"><span class="field-label">温度</span><input v-model.number="temperature" type="number" step="0.1" /></label>
           <label class="field"><span class="field-label">思考等级</span>
             <UiSelect :model-value="reasoningEffort" :options="effortOptions" @update:model-value="reasoningEffort = $event" />
@@ -86,8 +86,8 @@
       <!-- Command: shell -->
       <template v-else-if="node.kind === 'command'">
         <p v-if="outputPorts.length" class="hint">输出端口 = JSON 键名（stdout 是 JSON 时自动拆分）</p>
-        <label class="field field-wide"><span class="field-label">命令</span><textarea v-model="command" rows="3" placeholder='curl -s https://… | jq …'></textarea></label>
-        <label class="field"><span class="field-label">工作目录</span><input v-model="cwd" type="text" placeholder="（默认 work_root）" /></label>
+        <label class="field field-wide"><span class="field-label">命令</span><AutoTextarea v-model="command" :min-rows="2" :max-rows="4" placeholder='curl -s https://… | jq …' /></label>
+        <label class="field"><span class="field-label">工作目录</span><AutoTextarea v-model="cwd" :min-rows="1" :max-rows="4" placeholder="（默认 work_root）" /></label>
         <details class="settings-advanced">
           <summary>高级设置</summary>
           <label class="field"><span class="field-label">超时（秒）</span><input v-model.number="temperature" type="number" /></label>
@@ -98,7 +98,7 @@
       <!-- Script: Python binder -->
       <template v-else-if="node.kind === 'script'">
         <p v-if="outputPorts.length" class="hint">输出端口 = 给同名变量赋值</p>
-        <label class="field field-wide"><span class="field-label">Python 脚本</span><textarea v-model="command" rows="5" placeholder="y = x * 2"></textarea></label>
+        <label class="field field-wide"><span class="field-label">Python 脚本</span><AutoTextarea v-model="command" :min-rows="2" :max-rows="4" placeholder="y = x * 2" /></label>
         <p class="field-hint">{{ scriptContractHint }}</p>
         <details class="settings-advanced">
           <summary>高级设置</summary>
@@ -112,7 +112,7 @@
         <p class="hint">引用外部工作流，iterate 控制执行模式</p>
         <label class="field">
           <span class="field-label">工作流名称</span>
-          <input v-model="subworkflowName" type="text" placeholder="my_sub_workflow" />
+          <AutoTextarea v-model="subworkflowName" :min-rows="1" :max-rows="4" placeholder="my_sub_workflow" />
         </label>
         <label class="field">
           <span class="field-label">迭代模式</span>
@@ -122,7 +122,7 @@
           <label class="field"><span class="field-label">最大迭代</span><input v-model.number="loopMaxIter" type="number" min="1" /></label>
           <label class="field field-wide">
             <span class="field-label">退出条件（Python 表达式）</span>
-            <input v-model="subLoopCondition" type="text" placeholder="quality >= 0.8" />
+            <AutoTextarea v-model="subLoopCondition" :min-rows="1" :max-rows="4" placeholder="quality >= 0.8" />
           </label>
         </template>
         <label class="field"><span class="field-label">重试次数</span><input v-model.number="retries" type="number" min="0" /></label>
@@ -136,8 +136,8 @@
           <UiSelect :model-value="onErrorStrategy" :options="onErrorOptions" @update:model-value="onErrorStrategy = $event" />
         </label>
         <template v-if="onErrorStrategy === 'fallback'">
-          <label class="field"><span class="field-label">降级输出端口</span><input v-model="onErrorFallbackPort" type="text" placeholder="out" /></label>
-          <label class="field"><span class="field-label">降级默认值</span><input v-model="onErrorValue" type="text" placeholder="默认值（空=哨兵跳过）" /></label>
+          <label class="field"><span class="field-label">降级输出端口</span><AutoTextarea v-model="onErrorFallbackPort" :min-rows="1" :max-rows="4" placeholder="out" /></label>
+          <label class="field"><span class="field-label">降级默认值</span><AutoTextarea v-model="onErrorValue" :min-rows="2" :max-rows="4" placeholder="默认值（空=哨兵跳过）" /></label>
         </template>
       </details>
 
@@ -152,6 +152,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import UiSelect from './UiSelect.vue'
+import AutoTextarea from './AutoTextarea.vue'
 import type { WorkflowNode, WorkflowNodeKind, WorkflowPort } from '../workflow/types'
 
 interface SelectOption {
@@ -318,7 +319,27 @@ function apply() {
     if (cwd.value) cfg.cwd = cwd.value
     cfg.retries = retries.value
   } else if (props.node.kind === 'script') {
-    cfg.script = command.value
+    // Auto-extend the scaffold when ports were added/renamed: for each output
+    // port whose assignment line (`name =`) is missing from the script, append
+    // a `name = None  # TODO` placeholder; for each input port whose name
+    // doesn't appear anywhere, append a comment line. Never removes or
+    // overwrites existing lines — purely additive.
+    let script = command.value
+    const outNames = outputPorts.value.map((p) => p.name).filter(Boolean)
+    const inNames = inputPorts.value.map((p) => p.name).filter(Boolean)
+    const lines = script.split('\n')
+    const appended: string[] = []
+    for (const n of inNames) {
+      if (!script.includes(n)) appended.push(`# 输入：${n}`)
+    }
+    for (const n of outNames) {
+      if (!lines.some((l) => l.trim().startsWith(`${n} =`))) appended.push(`${n} = None`)
+    }
+    if (appended.length) {
+      script = script.trimEnd() + '\n' + appended.join('\n') + '\n'
+    }
+    cfg.script = script
+    command.value = script
     cfg.retries = retries.value
   } else if (props.node.kind === 'subgraph') {
     cfg.workflow_name = subworkflowName.value

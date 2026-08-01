@@ -18,33 +18,33 @@
       <!-- AI -->
       <template v-if="kind === 'ai'">
         <WfSelect :model-value="localConfig.mode" :options="modeOptions" @update:model-value="localConfig.mode = $event; pushConfig()" />
-        <textarea v-model="localConfig.instruction" class="wf-field-text" rows="3" placeholder="指令…" @blur="pushConfig"></textarea>
+        <AutoTextarea v-model="localConfig.instruction" :min-rows="2" :max-rows="4" placeholder="指令…" @blur="pushConfig" />
         <WfSelect :model-value="localConfig.model_id" :options="modelOptions" @update:model-value="localConfig.model_id = $event; pushConfig()" />
       </template>
 
       <!-- Command: shell command -->
       <template v-else-if="kind === 'command'">
-        <textarea v-model="localConfig.command" class="wf-field-text" rows="3" placeholder="command…（curl/git/ffmpeg 等）" @blur="pushConfig"></textarea>
+        <AutoTextarea v-model="localConfig.command" :min-rows="2" :max-rows="4" placeholder="command…（curl/git/ffmpeg 等）" @blur="pushConfig" />
       </template>
 
       <!-- Script: Python (binder: ports-as-variables) -->
       <template v-else-if="kind === 'script'">
-        <textarea v-model="localConfig.script" class="wf-field-text" rows="3" placeholder="y = x * 2（输入端口名当变量，给输出端口名赋值）" @blur="pushConfig"></textarea>
+        <AutoTextarea v-model="localConfig.script" :min-rows="2" :max-rows="4" placeholder="y = x * 2（输入端口名当变量，给输出端口名赋值）" @blur="pushConfig" />
       </template>
 
       <!-- Content: each output port value -->
       <template v-else-if="kind === 'content'">
         <div v-for="(p, i) in outputPorts" :key="`cv-${i}`" class="wf-port-edit">
           <span class="wf-field-label">{{ p.name }}</span>
-          <input v-model="localPorts[i].value" class="wf-field" type="text" placeholder="值" @blur="pushPorts" />
+          <AutoTextarea v-model="localPorts[i].value" :min-rows="2" :max-rows="4" placeholder="值" @blur="pushPorts" />
         </div>
       </template>
 
       <!-- Subgraph -->
       <template v-else-if="kind === 'subgraph'">
-        <input v-model="localConfig.workflow_name" class="wf-field" type="text" placeholder="工作流名称" @blur="pushConfig" />
+        <AutoTextarea v-model="localConfig.workflow_name" :min-rows="2" :max-rows="4" placeholder="工作流名称" @blur="pushConfig" />
         <WfSelect :model-value="localConfig.iterate" :options="iterateOptions" @update:model-value="localConfig.iterate = $event; pushConfig()" />
-        <input v-if="localConfig.iterate === 'loop'" v-model="localConfig.condition" class="wf-field" type="text" placeholder="退出条件" @blur="pushConfig" />
+        <AutoTextarea v-if="localConfig.iterate === 'loop'" v-model="localConfig.condition" :min-rows="2" :max-rows="4" placeholder="退出条件" @blur="pushConfig" />
       </template>
     </div>
 
@@ -62,6 +62,7 @@
 import { computed, inject, ref, watch } from 'vue'
 import { Handle, Position } from '@vue-flow/core'
 import WfSelect from './WfSelect.vue'
+import AutoTextarea from './AutoTextarea.vue'
 import type { WorkflowNode, WorkflowNodeKind, NodeStateStatus, WorkflowPort } from '../workflow/types'
 
 const props = defineProps<{
