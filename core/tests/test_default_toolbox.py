@@ -25,6 +25,9 @@ class FakeSubAgentRunner:
         *,
         task,
         agent="",
+        model="",
+        mode="",
+        attachments=None,
         parent_call_id="",
         parent_run_id="",
         parent_turn_id="",
@@ -33,6 +36,9 @@ class FakeSubAgentRunner:
             {
                 "task": task,
                 "agent": agent,
+                "model": model,
+                "mode": mode,
+                "attachments": attachments,
                 "parent_call_id": parent_call_id,
                 "parent_run_id": parent_run_id,
                 "parent_turn_id": parent_turn_id,
@@ -50,6 +56,9 @@ class FailingSubAgentRunner:
         *,
         task,
         agent="",
+        model="",
+        mode="",
+        attachments=None,
         parent_call_id="",
         parent_run_id="",
         parent_turn_id="",
@@ -219,6 +228,69 @@ async def test_core_toolbox_executes_injected_sub_agent_runner(tmp_path):
     assert result.status == "ok"
     assert result.content == "sub:inspect"
     assert runner.calls[0]["agent"] == "reader"
+
+
+@pytest.mark.asyncio
+async def test_core_toolbox_forwards_sub_agent_model_and_mode(tmp_path):
+    runner = FakeSubAgentRunner()
+    toolbox = build_core_toolbox(work_root=tmp_path, sub_agent_runner=runner)
+
+    result = await toolbox.execute(
+        ToolCall(
+            id="sub-model-mode",
+            name="sub_agent",
+            arguments={
+                "task": "inspect",
+                "agent": "reader",
+                "model": "strong-model",
+                "mode": "consider",
+            },
+        )
+    )
+
+    assert result.status == "ok"
+    assert runner.calls[0]["model"] == "strong-model"
+    assert runner.calls[0]["mode"] == "consider"
+
+
+@pytest.mark.asyncio
+async def test_core_toolbox_defaults_sub_agent_model_and_mode_to_empty(tmp_path):
+    runner = FakeSubAgentRunner()
+    toolbox = build_core_toolbox(work_root=tmp_path, sub_agent_runner=runner)
+
+    await toolbox.execute(
+        ToolCall(
+            id="sub-defaults",
+            name="sub_agent",
+            arguments={"task": "inspect", "agent": "reader"},
+        )
+    )
+
+    # When omitted, model/mode are empty so the sub-agent follows the main model and full access.
+    assert runner.calls[0]["model"] == ""
+    assert runner.calls[0]["mode"] == ""
+
+
+@pytest.mark.asyncio
+async def test_core_toolbox_forwards_sub_agent_attachments(tmp_path):
+    runner = FakeSubAgentRunner()
+    toolbox = build_core_toolbox(work_root=tmp_path, sub_agent_runner=runner)
+
+    await toolbox.execute(
+        ToolCall(
+            id="sub-att",
+            name="sub_agent",
+            arguments={
+                "task": "describe the image",
+                "agent": "viewer",
+                "model": "xopkimik26",
+                "attachments": ["att-1", "att-2"],
+            },
+        )
+    )
+
+    assert runner.calls[0]["attachments"] == ["att-1", "att-2"]
+    assert runner.calls[0]["model"] == "xopkimik26"
 
 
 @pytest.mark.asyncio

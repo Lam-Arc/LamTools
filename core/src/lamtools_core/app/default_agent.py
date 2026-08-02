@@ -16,6 +16,7 @@ _logger = logging.getLogger(__name__)
 
 from lamtools_core.event import CollectingEventSink, EventSink
 from lamtools_core.llm import ChatMessage
+from lamtools_core.llm.model_capabilities import resolve_capability
 from lamtools_core.composer_commands import (
     build_composer_command_catalog,
     default_core_resource_roots,
@@ -254,6 +255,39 @@ def create_core_agent_operations(
             ]
         )
 
+    async def _build_attachment_user_content(
+        *, message: str, attachment_ids: list[str], attachment_service: Any, capability: str
+    ) -> tuple[list[dict[str, Any]] | None, list[str]]:
+        """Build capability-aware user_content from attachments.
+
+        Returns ``(user_content, deferred_attachment_ids)``. When there are
+        no attachments or the attachment service is unavailable, returns
+        ``(None, [])`` so the kernel falls back to the plain string message.
+        """
+        if not attachment_ids or attachment_service is None:
+            return None, []
+        from lamtools_core.attachment.service import build_capability_aware_attachment_input
+
+        records = []
+        for att_id in attachment_ids:
+            try:
+                record = await attachment_service.get(att_id)
+            except Exception:
+                continue
+            if record is not None:
+                records.append(record)
+        if not records:
+            return None, []
+        index_text, content_blocks, deferred = build_capability_aware_attachment_input(
+            records, attachment_ids, capability
+        )
+        if not content_blocks and not deferred:
+            return None, []
+        # Build a multimodal user_content: the message + index text, then matching content blocks.
+        parts: list[dict[str, Any]] = [{"type": "text", "text": message + index_text}]
+        parts.extend(content_blocks)
+        return parts, deferred
+
     async def turn_start(request: OperationRequest) -> OperationResult:
         thread_id = str(request.payload.get("thread_id") or request.payload.get("session_id") or "").strip()
         message = str(request.payload.get("message") or request.payload.get("user_message") or "").strip()
@@ -375,6 +409,7 @@ def create_core_agent_operations(
                 tier_tools=tier_tools,
                 active_mode=active_mode,
                 activated_mcp_servers=activated_mcp_servers,
+                attachment_service=attachment_service,
             )
             _mcp_count = len(mcp_registry._tools_by_name) if mcp_registry is not None else 0
             _logger.info("[default:turn_start] toolbox built thread_id=%s mcp_tools=%d", thread_id, _mcp_count)
@@ -423,9 +458,19 @@ def create_core_agent_operations(
                 _logger.info("[default:turn_start] kernel created, starting run thread_id=%s model=%s",
                               thread_id, runtime_options.model_id)
                 _kernel_start_ts = time_module.time()
+                # Capability-aware attachment split: matching attachments become
+                # content blocks (user_content); non-matching ones are deferred
+                # as IDs the main agent can delegate to a multimodal sub_agent.
+                user_content, deferred_attachments = await _build_attachment_user_content(
+                    message=message,
+                    attachment_ids=list(request.payload.get("attachment_ids") or []),
+                    attachment_service=attachment_service,
+                    capability=runtime_options.capability,
+                )
                 kernel_result = await kernel.run(
                     RuntimeTurnInput(
                         user_message=message,
+                        user_content=user_content,
                         run_id=requested_run_id,
                         turn_id=effective_turn_id,
                         guidance_source=runtime_task_registry.guidance_source(
@@ -444,6 +489,8 @@ def create_core_agent_operations(
                             "data_dir": str(paths.data_dir),
                             "work_root": str(runtime_work_root),
                             "model_id": runtime_options.model_id,
+                            "capability": runtime_options.capability,
+                            "deferred_attachments": deferred_attachments,
                             "max_tokens": runtime_options.max_tokens,
                             "temperature": runtime_options.temperature,
                             **(
@@ -535,6 +582,10 @@ def create_core_agent_operations(
         )
 
     async def approval_respond(request: OperationRequest) -> OperationResult:
+        # turn_instructions is referenced when rebuilding the agent kit below;
+        # it is defined in turn_start but not in this scope, so re-resolve it
+        # from the request payload (same source as turn_start line ~332).
+        turn_instructions = str(request.payload.get("instructions") or "").strip() or None
         if _is_llm_client(model_provider):
             from lamtools_core.event import CoreEvent
             from lamtools_core.tool import ToolCall
@@ -756,6 +807,7 @@ def create_core_agent_operations(
                         ),
                         model=str(delegated_session.get("model") or ""),
                         mode=str(delegated_session.get("mode") or ""),
+                        attachments=list(delegated_session.get("attachments") or []) or None,
                     )
                     if child_result.decision == "wait" and child_result.pending_approval:
                         await _close_mcp_registry(mcp_registry)
@@ -1462,7 +1514,7 @@ def _runtime_options_from_request(spec: CoreAgentSpec, request: OperationRequest
         temperature=0.2 if temperature is None else temperature,
         compact_trigger_tokens=compact_trigger_tokens,
         compact_limit_tokens=compact_limit_tokens,
-        capability=str(spec.metadata.get("capability") or ""),
+        capability=resolve_capability(model_id),
     )
 
 
@@ -1489,7 +1541,7 @@ def _runtime_options_from_state(spec: CoreAgentSpec, state: Any) -> CoreAgentRun
         temperature=0.2 if temperature is None else temperature,
         compact_trigger_tokens=_optional_int(metadata.get("compact_trigger_tokens")),
         compact_limit_tokens=_optional_int(metadata.get("compact_limit_tokens")),
-        capability=str(metadata.get("capability") or spec.metadata.get("capability") or ""),
+        capability=resolve_capability(model_id),
     )
 
 
@@ -1654,6 +1706,7 @@ async def _build_core_runtime_toolbox(
     activated_mcp_servers: set[str] | None = None,
     workflow_store: Any = None,
     enable_workflow_tool: bool = False,
+    attachment_service: Any = None,
 ):
     from lamtools_core.mcp import MCPToolRegistry
     from lamtools_core.tool.sub_agent_runner import KernelSubAgentRunner
@@ -1715,6 +1768,7 @@ async def _build_core_runtime_toolbox(
             checkpoint_coordinator=checkpoint_coordinator,
             activated_mcp_servers=activated_mcp_servers,
             load_tools=load_tools,
+            attachment_service=attachment_service,
         )
     async def execute_operation(name: str, payload: dict[str, Any], metadata: dict[str, Any]) -> Any:
         if operation_catalog is None:

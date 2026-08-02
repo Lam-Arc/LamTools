@@ -36,9 +36,32 @@ def preview_type(filename: str, mime_type: str) -> str:
         return "text"
     if mime_type.startswith("image/"):
         return "image"
+    if mime_type.startswith("audio/"):
+        return "audio"
+    if mime_type.startswith("video/"):
+        return "video"
     if mime_type == "application/pdf":
         return "pdf"
     return "external"
+
+
+def attachment_modality(mime_type: str, preview_type: str) -> str:
+    """Return the input modality an attachment provides, aligned with model capabilities.
+
+    Maps an attachment's MIME/preview type to one of: ``text``, ``image``,
+    ``audio``, ``video``, ``file`` (PDF/binaries/unknown — not directly
+    consumable as a model content block). This is the attachment's "own
+    attribute" used to match against a model's declared capability.
+    """
+    if preview_type == "text" or mime_type.startswith("text/"):
+        return "text"
+    if mime_type.startswith("image/") or preview_type == "image":
+        return "image"
+    if mime_type.startswith("audio/") or preview_type == "audio":
+        return "audio"
+    if mime_type.startswith("video/") or preview_type == "video":
+        return "video"
+    return "file"
 
 
 def read_text_preview(path: Path, limit: int = 200_000) -> str:
@@ -63,4 +86,4 @@ def open_with_default_app(path: Path) -> None:
         subprocess.Popen(["xdg-open", str(path)])
 
 
-__all__ = ["detect_mime", "open_with_default_app", "preview_type", "read_text_preview", "safe_filename", "unique_path"]
+__all__ = ["attachment_modality", "detect_mime", "open_with_default_app", "preview_type", "read_text_preview", "safe_filename", "unique_path"]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import uuid
 from dataclasses import dataclass
@@ -40,6 +41,9 @@ from lamtools_core.tool.command_runner import command_shell_prompt
 from lamtools_core.tool.loadtools import mode_prompt_line
 from lamtools_core.tool.workspace import line_count
 from lamtools_core.app.project_context import ProjectContextLoader
+from lamtools_core.config.subagent_prompt import load_subagent_guide
+
+_logger = logging.getLogger(__name__)
 
 
 _MODEL_TOOL_EVIDENCE_LIMIT = 12_000
@@ -111,6 +115,7 @@ class CoreBaseAgentConfig:
     approval_policy: ApprovalPolicy = "require"
     runtime_controls: dict[str, dict[str, bool]] | None = None
     active_mode: str | None = None  # loadtools.jsonc mode name (e.g. "consider", "execute")
+    capability: str = ""  # model input modality: "text" | "multimodal" | "" (unknown)
     # Advanced: override the default project context file list.
     # None (default) → uses DEFAULT_PROJECT_CONTEXT_FILES.
     # Prefer load_context.jsonc in the workspace for per-project
@@ -167,11 +172,48 @@ class CoreBaseAgentKit:
         )
         self.verification_policy = verification_policy or VerificationPolicy()
         self._runtime_controls = self.config.runtime_controls or {}
+        self._subagent_guide_cache: str | None = None
+
+    def _cached_subagent_guide(self) -> str:
+        if self._subagent_guide_cache is None:
+            self._subagent_guide_cache = load_subagent_guide(self.work_root)
+        return self._subagent_guide_cache
+
+    def _capability_prompt_line(self, deferred_attachments: list[str] | None = None) -> str:
+        """Build a system-prompt line describing the model's input modality."""
+        cap = (self.config.capability or "").strip().lower()
+        if cap == "text":
+            # Resolve the default multimodal model from sub-agent settings.
+            from lamtools_core.config.subagent_prompt import load_subagent_settings
+            settings = load_subagent_settings(self.work_root)
+            mm_model = str(settings.get("default_multimodal_model") or "").strip()
+            if mm_model:
+                model_hint = f'（指定 model 为 "{mm_model}"）'
+                delegate_model = mm_model
+            else:
+                model_hint = "（指定 model 为支持图片的模型，如 Kimi-K2.6、Qwen3.5-397B-A17B、MiniMax-M2.5 等）"
+                delegate_model = "Kimi-K2.6"
+            base = (
+                "当前模型能力: 文本模型（不支持图片/视频/音频输入；这类附件内容不会发送给你，你无法看到图片）。"
+                "当用户附带图片且任务需要理解图片内容时，用 sub_agent 委派一个多模态模型"
+                f"{model_hint}去查看图片并返回文字描述，再据此继续。"
+            )
+            if deferred_attachments:
+                ids = ", ".join(f'"{i}"' for i in deferred_attachments)
+                base += (
+                    f"\n当前有以下附件你无法直接查看（id: {ids}）。"
+                    f"如需理解其内容，立即用 sub_agent(task=\"查看并描述附件内容\", "
+                    f"attachments=[{ids}], model=\"{delegate_model}\") 委派查看并返回文字描述。"
+                )
+            return base
+        if cap == "multimodal":
+            return "当前模型能力: 多模态模型（支持图片输入）。"
+        return ""
 
     async def on_run_start(self, state: RuntimeState, turn_input: RuntimeTurnInput) -> None:
         state.metadata["agent_id"] = self.config.agent_id
         state.metadata["work_root"] = str(self.work_root)
-        for key in ("model_id", "thinking_enabled", "thinking_budget", "shallow_thinking_enabled"):
+        for key in ("model_id", "thinking_enabled", "thinking_budget", "shallow_thinking_enabled", "capability", "deferred_attachments"):
             if key in turn_input.metadata:
                 state.metadata[key] = turn_input.metadata[key]
         state.metadata.setdefault("allow_agent_install_skill", self.config.allow_agent_install_skill)
@@ -209,7 +251,6 @@ class CoreBaseAgentKit:
             f"当前项目: {state.metadata.get('work_root', '')}, 当前会话: {state.session_id}, 当前模型: {self.config.model_display_name or self.config.model_id}",
             command_shell_prompt(),
             "在有助于完成用户请求时使用可用工具。",
-            "互不依赖的任务应委派 sub-agent 并行执行。其 prompt 至少明确：工作范围、任务目标、输出格式。",
             "创建或修改文件时使用 write_file 或 edit_file。",
             "工作过程中不要破坏项目目录的结构性与整洁度。",
             "当可用技能与任务匹配时使用 load_skill。",
@@ -218,6 +259,17 @@ class CoreBaseAgentKit:
             "经过多个纯工具步骤后，简要汇报已确认事实、仍存疑点及下一步，再继续调用工具。保持进度摘要简洁，不重复已有证据。",
             "任务完成后向用户回复简要摘要，最终回复应总结结果并提及重要的保存路径，包括但不限于工作完成情况、范围、产物位置、需用户确认项。",
         ]
+        # Model capability line: tells the agent its input modalities so it
+        # does not assume image support that the model lacks.
+        deferred = list(state.metadata.get("deferred_attachments") or [])
+        cap_line = self._capability_prompt_line(deferred)
+        if cap_line:
+            system_lines.insert(1, cap_line)  # right after the instructions
+        # Sub-agent delegation guide (project > global > built-in). Cached on the
+        # kit so the markdown file is read at most once per kit lifetime.
+        guide = self._cached_subagent_guide()
+        if guide:
+            system_lines.insert(2, guide)  # inject right after the "当前项目" line
         mode_line = mode_prompt_line(self.toolbox.load_tools, self.config.active_mode)
         if mode_line:
             system_lines.insert(2, mode_line)  # inject right after "当前项目" line

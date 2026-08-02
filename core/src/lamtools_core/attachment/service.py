@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
-from .files import detect_mime, open_with_default_app, preview_type, read_text_preview, safe_filename, unique_path
+from .files import attachment_modality, detect_mime, open_with_default_app, preview_type, read_text_preview, safe_filename, unique_path
 
 
 @dataclass(frozen=True)
@@ -189,6 +189,80 @@ def build_attachment_runtime_input(
     return ("\n".join(lines) if records else ""), content_blocks
 
 
+#: Modalities a multimodal model can consume as direct content blocks.
+#: (audio/video have no standard OpenAI inline block yet, so they are deferred.)
+_MULTIMODAL_DIRECT_MODALTIES = {"image"}
+
+
+def build_capability_aware_attachment_input(
+    records: list[AttachmentRecord],
+    current_attachment_ids: list[str],
+    capability: str,
+) -> tuple[str, list[dict[str, Any]], list[str]]:
+    """Split attachments by model capability — the core of the attachment dispatch.
+
+    Each attachment's own modality (text/image/audio/video/file, derived from
+    its MIME type) is matched against the model's declared ``capability``:
+    matching attachments become content blocks sent directly to the model;
+    non-matching ones are deferred as IDs (for the main agent to delegate to a
+    sub-agent via ``sub_agent(attachments=[ids], model=...)``).
+
+    Returns ``(index_text, content_blocks, deferred_attachment_ids)``:
+    - ``content_blocks``: model-consumable blocks (e.g. ``image_url`` for a
+      multimodal model receiving an image).
+    - ``deferred_attachment_ids``: IDs of attachments the model cannot process;
+      listed in ``index_text`` with a delegation hint.
+    - ``index_text``: a textual index of ALL attachments (current + historical),
+      with deferred ones annotated ``[需委派 sub_agent 查看]``.
+    """
+    current = set(current_attachment_ids)
+    cap = (capability or "").strip().lower()
+    lines: list[str] = ["", "当前会话附件索引（本地存储路径不会提供给模型）："]
+    content_blocks: list[dict[str, Any]] = []
+    deferred: list[str] = []
+    for record in records:
+        marker = "本条消息附件" if record.id in current else "历史附件"
+        path = Path(record.storage_path)
+        modality = attachment_modality(record.mime_type, record.preview_type)
+        is_current = record.id in current
+        # Decide whether this attachment can be sent directly to the model.
+        can_send = (
+            is_current
+            and modality == "text"
+            and (cap in ("", "text", "multimodal"))
+        ) or (
+            is_current
+            and modality in _MULTIMODAL_DIRECT_MODALTIES
+            and cap == "multimodal"
+        )
+        if can_send and modality == "image" and path.exists():
+            encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+            content_blocks.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{record.mime_type};base64,{encoded}", "detail": "auto"},
+                }
+            )
+            lines.append(f"- [{marker}] {record.filename} | {record.mime_type} | {record.size} bytes | 已作为图片输入提供")
+            continue
+        if can_send and modality == "text" and path.exists():
+            lines.append(
+                f"- [{marker}] {record.filename} | {record.mime_type} | {record.size} bytes | 文本内容如下：\n"
+                f"{read_text_preview(path)}"
+            )
+            continue
+        # Deferred: the model cannot process this attachment's modality.
+        if is_current:
+            deferred.append(record.id)
+            lines.append(
+                f"- [{marker}] {record.filename} | {record.mime_type} | {modality} | id={record.id} | "
+                f"主模型无法直接处理，需委派 sub_agent(attachments=[\"{record.id}\"], model=<多模态模型>) 查看"
+            )
+        else:
+            lines.append(f"- [{marker}] {record.filename} | {record.mime_type} | {record.size} bytes | {modality}")
+    return ("\n".join(lines) if records else ""), content_blocks, deferred
+
+
 def _existing_path(record: AttachmentRecord) -> Path:
     path = Path(record.storage_path)
     if not path.exists():
@@ -203,4 +277,5 @@ __all__ = [
     "AttachmentSession",
     "attachment_to_dict",
     "build_attachment_runtime_input",
+    "build_capability_aware_attachment_input",
 ]

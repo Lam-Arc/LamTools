@@ -641,16 +641,22 @@ def list_llm_model_configs(config_db: Path) -> list[dict[str, Any]]:
     store = _get_model_store()
     models = store.list_sync(work_root=_model_store_work_root)
     if models:
-        # Join each model with its provider's api_type from the DB for display.
-        provider_api_type = "openai"
+        # Resolve each model's provider_id (DB uuid) from the DB by matching
+        # the provider name recorded in the jsonc file. jsonc model files store
+        # ``provider`` (a name) rather than ``provider_id`` (a DB id), so we
+        # build a name → (id, api_type) map here. Also resolves the per-model
+        # api_type instead of falling back to the first provider.
+        provider_map: dict[str, tuple[str, str]] = {}
         con = None
         try:
             con = _connect_config_db(config_db, nolock=True)
-            row = con.execute(
-                "select api_type from llm_providers order by is_default desc, created_at asc limit 1"
-            ).fetchone()
-            if row is not None:
-                provider_api_type = str(row["api_type"] or "openai")
+            prow_rows = con.execute(
+                "select id,name,api_type from llm_providers order by created_at asc"
+            ).fetchall()
+            for prow in prow_rows:
+                name = str(prow["name"] or "").strip()
+                if name:
+                    provider_map[name] = (str(prow["id"] or ""), str(prow["api_type"] or "openai"))
         except (sqlite3.OperationalError, FileNotFoundError):
             pass
         finally:
@@ -659,9 +665,12 @@ def list_llm_model_configs(config_db: Path) -> list[dict[str, Any]]:
         return [
             {
                 "id": m.model_id,
-                "provider_id": m.provider_id,
+                "provider_id": (
+                    m.provider_id
+                    or provider_map.get(m.provider, ("", ""))[0]
+                ),
                 "provider_name": m.provider,
-                "provider_api_type": provider_api_type,
+                "provider_api_type": provider_map.get(m.provider, ("", "openai"))[1],
                 "model_id": m.model_id,
                 "display_name": m.display_name,
                 "context_window": m.context_window,
@@ -670,6 +679,7 @@ def list_llm_model_configs(config_db: Path) -> list[dict[str, Any]]:
                 "thinking_budget": m.thinking_budget,
                 "temperature": m.temperature,
                 "capability": m.resolved_capability,
+                "notes": m.notes,
                 "is_default": m.is_default,
                 "adapter_profile_id": m.adapter_profile_id,
             }

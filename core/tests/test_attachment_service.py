@@ -7,6 +7,7 @@ from lamtools_core.attachment import (
     AttachmentService,
     AttachmentSession,
     build_attachment_runtime_input,
+    build_capability_aware_attachment_input,
 )
 
 
@@ -44,3 +45,87 @@ async def test_core_attachment_service_owns_upload_preview_and_runtime_input(tmp
     assert "本条消息附件" in context
     assert "附件正文" in context
     assert blocks == []
+
+
+# --- Capability-aware attachment splitting ----------------------------------
+
+
+def _image_record(tmp_path: Path, att_id: str = "img-1") -> AttachmentRecord:
+    png = tmp_path / f"{att_id}.png"
+    png.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16)
+    return AttachmentRecord(
+        id=att_id, session_id="s", filename=f"{att_id}.png", mime_type="image/png",
+        size=png.stat().st_size, storage_path=str(png), preview_type="image",
+    )
+
+
+def _text_record(tmp_path: Path, att_id: str = "txt-1") -> AttachmentRecord:
+    txt = tmp_path / f"{att_id}.txt"
+    txt.write_text("hello world", encoding="utf-8")
+    return AttachmentRecord(
+        id=att_id, session_id="s", filename=f"{att_id}.txt", mime_type="text/plain",
+        size=txt.stat().st_size, storage_path=str(txt), preview_type="text",
+    )
+
+
+def _video_record(att_id: str = "vid-1") -> AttachmentRecord:
+    return AttachmentRecord(
+        id=att_id, session_id="s", filename=f"{att_id}.mp4", mime_type="video/mp4",
+        size=1024, storage_path=f"/tmp/{att_id}.mp4", preview_type="video",
+    )
+
+
+def test_capability_split_multimodal_receives_image_text_defers_video(tmp_path):
+    img = _image_record(tmp_path, "img-1")
+    txt = _text_record(tmp_path, "txt-1")
+    vid = _video_record("vid-1")
+    records = [img, txt, vid]
+    current = ["img-1", "txt-1", "vid-1"]
+
+    index_text, blocks, deferred = build_capability_aware_attachment_input(records, current, "multimodal")
+
+    # Image → content block; text → inlined in index; video → deferred (no inline block).
+    assert any(b.get("type") == "image_url" for b in blocks)
+    assert "hello world" in index_text
+    assert "vid-1" in deferred
+    assert "需委派" in index_text and "vid-1" in index_text
+
+
+def test_capability_split_text_model_defers_image_and_video(tmp_path):
+    img = _image_record(tmp_path, "img-1")
+    vid = _video_record("vid-1")
+    records = [img, vid]
+    current = ["img-1", "vid-1"]
+
+    index_text, blocks, deferred = build_capability_aware_attachment_input(records, current, "text")
+
+    # Text model cannot process images or videos — all deferred, no content blocks.
+    assert blocks == []
+    assert "img-1" in deferred
+    assert "vid-1" in deferred
+    assert "需委派" in index_text
+    assert "img-1" in index_text
+
+
+def test_capability_split_text_model_still_inlines_text(tmp_path):
+    txt = _text_record(tmp_path, "txt-1")
+    records = [txt]
+    current = ["txt-1"]
+
+    index_text, _blocks, deferred = build_capability_aware_attachment_input(records, current, "text")
+
+    # Text attachments are always inlined regardless of model capability.
+    assert "hello world" in index_text
+    assert deferred == []
+
+
+def test_capability_split_empty_when_no_current_attachments(tmp_path):
+    img = _image_record(tmp_path, "img-1")
+    records = [img]
+    current: list[str] = []  # historical only
+
+    index_text, blocks, deferred = build_capability_aware_attachment_input(records, current, "multimodal")
+
+    # Historical attachments are never sent as content blocks.
+    assert blocks == []
+    assert deferred == []

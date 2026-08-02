@@ -64,6 +64,7 @@ class SubAgentRunner(Protocol):
         agent: str = "",
         model: str = "",
         mode: str = "",
+        attachments: list[str] | None = None,
         parent_call_id: str = "",
         parent_run_id: str = "",
         parent_turn_id: str = "",
@@ -979,6 +980,8 @@ class CoreToolbox:
             agent = str(args.get("agent") or "").strip()
             model = str(args.get("model") or "").strip()
             mode = str(args.get("mode") or "").strip()
+            raw_attachments = args.get("attachments")
+            attachments = [str(a) for a in raw_attachments if isinstance(a, (str, int)) and str(a).strip()] if isinstance(raw_attachments, list) else []
             failure_key = (agent.lower(), task)
             previous_failure = self._failed_sub_agent_calls.get(failure_key)
             if previous_failure is not None:
@@ -996,6 +999,7 @@ class CoreToolbox:
                 agent=agent,
                 model=model,
                 mode=mode,
+                attachments=attachments,
                 parent_call_id=call.id,
                 parent_run_id=str(call.metadata.get("parent_run_id") or ""),
                 parent_turn_id=str(call.metadata.get("parent_turn_id") or ""),
@@ -1005,6 +1009,7 @@ class CoreToolbox:
                     "agent": agent,
                     "model": model,
                     "mode": mode,
+                    "attachments": attachments,
                     "sub_session_id": outcome.session_id,
                     "sub_run_id": outcome.run_id,
                     "decision": outcome.decision,
@@ -1025,6 +1030,7 @@ class CoreToolbox:
                             "task": task,
                             "model": model,
                             "mode": mode,
+                            "attachments": attachments,
                             "parent_call_id": call.id,
                             "parent_run_id": str(call.metadata.get("parent_run_id") or ""),
                             "parent_turn_id": str(call.metadata.get("parent_turn_id") or ""),

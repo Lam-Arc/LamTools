@@ -278,6 +278,7 @@ def create_core_agent_http_app(
             workflow_store=workflow_store,
             enable_turn_checkpoints=True,
             model_display_resolver=_resolve_model_display,
+            attachment_service=app_state.get("attachment_store"),
         )
         _register_core_project_operations(agent_operations, project_store=core_db_handle.project_store)
         _register_core_session_operations(agent_operations, session_store=session_store)
@@ -799,29 +800,57 @@ def _register_core_config_operations(
             catalog.register(name, handler)
 
     _register_subagent_guide_operations(catalog, work_root=work_root)
-    _register_model_operations(catalog, work_root=work_root)
+    _register_model_operations(catalog, work_root=work_root, config_db_path=config_db_path)
 
 
 def _register_model_operations(
     catalog: OperationCatalog,
     *,
     work_root: Path | str | None = None,
+    config_db_path: Path | None = None,
 ) -> None:
     from lamtools_core.config.model_store import ModelConfig, ModelStore
+    from dataclasses import replace
 
     def _store() -> ModelStore:
         from lamtools_core.cli import _get_model_store
 
         return _get_model_store()
 
+    def _resolve_provider_name(provider_id: str, fallback: str) -> str:
+        """Resolve a provider display name from the DB by provider_id."""
+        if fallback or not provider_id or config_db_path is None:
+            return fallback
+        import sqlite3
+
+        try:
+            con = sqlite3.connect(f"file:{config_db_path}?mode=ro", uri=True)
+            try:
+                row = con.execute(
+                    "select name from llm_providers where id=? limit 1", (provider_id,)
+                ).fetchone()
+                return str(row[0]) if row else fallback
+            finally:
+                con.close()
+        except sqlite3.OperationalError:
+            return fallback
+
     def _payload_model_config(model_id: str, payload: dict[str, Any]) -> ModelConfig:
         thinking = payload.get("thinking") if isinstance(payload.get("thinking"), dict) else {}
         request_body = payload.get("request_body") if isinstance(payload.get("request_body"), dict) else {}
+        provider_id = str(payload.get("provider_id") or "")
+        # Prefer resolving the provider name from the DB by provider_id so the
+        # jsonc file always carries the correct name even if the UI's cached
+        # provider_name was stale. Fall back to the payload-provided name.
+        if provider_id and config_db_path is not None:
+            provider_name = _resolve_provider_name(provider_id, str(payload.get("provider") or payload.get("provider_name") or ""))
+        else:
+            provider_name = str(payload.get("provider") or payload.get("provider_name") or "")
         return ModelConfig(
             model_id=str(payload.get("model_id") or model_id),
             display_name=str(payload.get("display_name") or ""),
-            provider=str(payload.get("provider") or payload.get("provider_name") or ""),
-            provider_id=str(payload.get("provider_id") or ""),
+            provider=provider_name,
+            provider_id=provider_id,
             context_window=int(payload.get("context_window") or 0),
             max_output_tokens=int(payload.get("max_output_tokens") or 4096),
             temperature=float(payload.get("temperature") or 0.2),
@@ -831,6 +860,7 @@ def _register_model_operations(
             adapter_profile_id=str(payload.get("adapter_profile_id") or ""),
             request_body=request_body,
             capability=str(payload.get("capability") or "").strip().lower(),
+            notes=str(payload.get("notes") or "").strip(),
             is_default=bool(payload.get("is_default") or False),
         )
 
@@ -890,9 +920,32 @@ def _register_model_operations(
         )
         return OperationResult(name=request.name, payload={"exported": count, "paths": [str(p) for p in paths]})
 
+    async def models_set_default(request: OperationRequest) -> OperationResult:
+        payload = request.payload if isinstance(request.payload, dict) else {}
+        model_id = str(payload.get("model_id") or payload.get("model_record_id") or "").strip()
+        if not model_id:
+            return OperationResult(name=request.name, status="error", payload={"error": "model_id is required"})
+        scope = str(payload.get("scope") or "global").strip()
+        if scope not in ("project", "global"):
+            return OperationResult(name=request.name, status="error", payload={"error": "scope must be 'project' or 'global'"})
+        root = str(payload.get("work_root") or payload.get("workRoot") or "").strip() or work_root
+        if scope == "project" and not root:
+            return OperationResult(name=request.name, status="error", payload={"error": "work_root is required for project scope"})
+        store = _store()
+        model = store.get_sync(model_id, work_root=root)
+        if model is None:
+            return OperationResult(name=request.name, status="error", payload={"error": f"model not found: {model_id}"})
+        # Clear other defaults, then mark this one.
+        for existing in store.list_sync(work_root=root):
+            if existing.model_id != model.model_id and existing.is_default:
+                store.write(replace(existing, is_default=False), scope=scope, work_root=root)
+        path = store.write(replace(model, is_default=True), scope=scope, work_root=root)
+        return OperationResult(name=request.name, payload={"path": str(path), "model_id": model.model_id, "scope": scope})
+
     for name, handler in {
         "config.models.upsert": models_upsert,
         "config.models.delete": models_delete,
+        "config.models.set_default": models_set_default,
         "config.models.import_from_db": models_import_from_db,
     }.items():
         if not catalog.has(name):
@@ -916,13 +969,44 @@ def _register_subagent_guide_operations(
         # Payload may override the work root the server was started with.
         root = str(request.payload.get("work_root") or request.payload.get("workRoot") or "").strip()
         effective_root = root or work_root
+        requested_scope = str(request.payload.get("scope") or "").strip().lower()
+
+        # When a specific scope is requested, read only that level's file
+        # (used by the global Settings UI which must not touch project scope).
+        if requested_scope in ("project", "global"):
+            path = guide_path_for_scope(requested_scope, effective_root)
+            if path.is_file():
+                try:
+                    content = path.read_text(encoding="utf-8")
+                except OSError:
+                    content = ""
+                return OperationResult(
+                    name=request.name,
+                    payload={
+                        "content": content,
+                        "scope": requested_scope,
+                        "resolved_path": str(path),
+                        "is_builtin": False,
+                    },
+                )
+            return OperationResult(
+                name=request.name,
+                payload={
+                    "content": DEFAULT_SUBAGENT_GUIDE,
+                    "scope": "builtin",
+                    "resolved_path": "",
+                    "is_builtin": True,
+                },
+            )
+
+        # Default: merged read (project > global > builtin) for CLI / project settings.
         from lamtools_core.config.subagent_prompt import subagent_guide_dirs
 
         dirs = subagent_guide_dirs(effective_root)
         resolved = resolve_subagent_guide_path(effective_root)
         if resolved is None:
             scope = "builtin"
-        elif resolved == (dirs[0] / "guide.md") if dirs else False:
+        elif dirs and resolved == (dirs[0] / "guide.md"):
             scope = "project"
         else:
             scope = "global"
@@ -964,9 +1048,110 @@ def _register_subagent_guide_operations(
             payload={"path": str(path), "scope": scope},
         )
 
+    async def subagent_settings_get(request: OperationRequest) -> OperationResult:
+        from lamtools_core.config.subagent_prompt import (
+            DEFAULT_SUBAGENT_SETTINGS,
+            load_subagent_settings,
+            resolve_subagent_settings_path,
+            settings_path_for_scope,
+        )
+
+        root = str(request.payload.get("work_root") or request.payload.get("workRoot") or "").strip()
+        effective_root = root or work_root
+        requested_scope = str(request.payload.get("scope") or "").strip().lower()
+
+        # When a specific scope is requested, read only that level's file
+        if requested_scope in ("project", "global"):
+            path = settings_path_for_scope(requested_scope, effective_root)
+            if path.is_file():
+                try:
+                    import json as _json
+                    data = _json.loads(path.read_text(encoding="utf-8"))
+                    settings = dict(DEFAULT_SUBAGENT_SETTINGS)
+                    if isinstance(data, dict):
+                        settings.update(data)
+                except (OSError, ValueError):
+                    settings = dict(DEFAULT_SUBAGENT_SETTINGS)
+                return OperationResult(
+                    name=request.name,
+                    payload={
+                        "settings": settings,
+                        "scope": requested_scope,
+                        "resolved_path": str(path),
+                        "is_builtin": False,
+                    },
+                )
+            return OperationResult(
+                name=request.name,
+                payload={
+                    "settings": dict(DEFAULT_SUBAGENT_SETTINGS),
+                    "scope": "builtin",
+                    "resolved_path": "",
+                    "is_builtin": True,
+                },
+            )
+
+        # Default: merged read (project > global > builtin)
+        resolved = resolve_subagent_settings_path(effective_root)
+        settings = load_subagent_settings(effective_root)
+        from lamtools_core.config.subagent_prompt import subagent_guide_dirs
+
+        dirs = subagent_guide_dirs(effective_root)
+        if resolved is None:
+            scope = "builtin"
+        elif dirs and resolved == (dirs[0] / "settings.json"):
+            scope = "project"
+        else:
+            scope = "global"
+        return OperationResult(
+            name=request.name,
+            payload={
+                "settings": settings,
+                "scope": scope,
+                "resolved_path": str(resolved) if resolved is not None else "",
+                "is_builtin": resolved is None,
+            },
+        )
+
+    async def subagent_settings_set(request: OperationRequest) -> OperationResult:
+        from lamtools_core.config.subagent_prompt import write_subagent_settings
+
+        updates = request.payload.get("settings") if isinstance(request.payload.get("settings"), dict) else {}
+        # Also accept top-level keys for convenience (e.g. {default_multimodal_model: "..."})
+        for key in ("default_multimodal_model",):
+            val = request.payload.get(key)
+            if val is not None:
+                updates[key] = str(val).strip()
+        scope = str(request.payload.get("scope") or "global").strip()
+        if scope not in ("project", "global"):
+            return OperationResult(
+                name=request.name, status="error",
+                payload={"error": "scope must be 'project' or 'global'"},
+            )
+        root = str(request.payload.get("work_root") or request.payload.get("workRoot") or "").strip()
+        effective_root = root or work_root
+        if scope == "project" and not effective_root:
+            return OperationResult(
+                name=request.name, status="error",
+                payload={"error": "work_root is required to save a project-scoped setting"},
+            )
+        try:
+            path = write_subagent_settings(updates, scope=scope, work_root=effective_root)
+        except OSError as exc:
+            return OperationResult(
+                name=request.name, status="error",
+                payload={"error": f"failed to write settings: {exc}"},
+            )
+        return OperationResult(
+            name=request.name,
+            payload={"path": str(path), "scope": scope},
+        )
+
     for name, handler in {
         "config.subagent.guide.get": subagent_guide_get,
         "config.subagent.guide.set": subagent_guide_set,
+        "config.subagent.settings.get": subagent_settings_get,
+        "config.subagent.settings.set": subagent_settings_set,
     }.items():
         if not catalog.has(name):
             catalog.register(name, handler)
@@ -994,7 +1179,7 @@ def _list_llm_provider_configs(config_db_path: Path) -> list[dict[str, Any]]:
     try:
         rows = con.execute(
             """
-            select id,name,api_type,base_url
+            select id,name,api_type,base_url,api_key
             from llm_providers
             order by created_at asc
             """
@@ -1007,6 +1192,8 @@ def _list_llm_provider_configs(config_db_path: Path) -> list[dict[str, Any]]:
             "name": str(row["name"] or ""),
             "api_type": str(row["api_type"] or ""),
             "base_url": str(row["base_url"] or ""),
+            "api_key": "********" if (row["api_key"] or "") else "",
+            "has_api_key": bool(row["api_key"] or ""),
         }
         for row in rows
     ]

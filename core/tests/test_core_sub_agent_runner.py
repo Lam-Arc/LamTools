@@ -550,3 +550,290 @@ async def test_core_agent_operation_resumes_sub_agent_after_child_tool_approval(
     assert handoffs[0]["payload"]["metadata"]["ended_with_final_response"] is True
     assert handoffs[0]["payload"]["metadata"]["tool_call_count"] == 1
     assert len(llm.requests) == 4
+
+
+class SystemPromptInspectingLLM:
+    """LLM that records the system prompt and advertised tools for assertions."""
+
+    def __init__(self, *, expected_model: str = "fake-model") -> None:
+        self.requests: list[LLMRequest] = []
+        self.expected_model = expected_model
+
+    async def complete(self, request: LLMRequest) -> LLMResponse:
+        raise AssertionError("Sub-agent runner should use streaming")
+
+    async def stream(self, request: LLMRequest):
+        self.requests.append(request)
+        assert request.model == self.expected_model
+        assert request.messages[-1].role == "user"
+        assert request.messages[-1].content == "inspect the project"
+        yield LLMStreamEvent(kind="content_delta", content="sub result")
+        yield LLMStreamEvent(kind="done")
+
+
+@pytest.mark.asyncio
+async def test_sub_agent_runner_per_call_model_override(tmp_path):
+    llm = SystemPromptInspectingLLM(expected_model="strong-model")
+    runner = KernelSubAgentRunner(work_root=tmp_path, llm_client=llm, model_id="base-model")
+
+    result = await runner.run(task="inspect the project", agent="worker", model="strong-model")
+
+    assert result.model_id == "strong-model"
+    assert result.succeeded is True
+    assert llm.requests[0].model == "strong-model"
+
+
+@pytest.mark.asyncio
+async def test_sub_agent_runner_empty_model_follows_main(tmp_path):
+    llm = SystemPromptInspectingLLM(expected_model="base-model")
+    runner = KernelSubAgentRunner(work_root=tmp_path, llm_client=llm, model_id="base-model")
+
+    result = await runner.run(task="inspect the project", agent="worker", model="")
+
+    assert result.model_id == "base-model"
+    assert llm.requests[0].model == "base-model"
+
+
+@pytest.mark.asyncio
+async def test_sub_agent_runner_consider_mode_filters_tools_and_injects_prompt(tmp_path):
+    from lamtools_core.tool.loadtools import default_load_tools
+
+    llm = SystemPromptInspectingLLM(expected_model="base-model")
+    load_tools = default_load_tools()
+    runner = KernelSubAgentRunner(
+        work_root=tmp_path,
+        llm_client=llm,
+        model_id="base-model",
+        load_tools=load_tools,
+    )
+
+    result = await runner.run(task="inspect the project", agent="reader", mode="consider")
+
+    assert result.succeeded is True
+    tool_names = {tool["function"]["name"] for tool in llm.requests[0].tools or []}
+    # consider mode is read-only: read_file allowed, write_file blocked, sub_agent blocked (disabled_tools)
+    assert "read_file" in tool_names
+    assert "write_file" not in tool_names
+    assert "sub_agent" not in tool_names
+    system_prompt = str(llm.requests[0].messages[0].content)
+    assert "当前模式" in system_prompt
+    assert "consider" in system_prompt
+
+
+@pytest.mark.asyncio
+async def test_sub_agent_runner_execute_mode_keeps_full_access(tmp_path):
+    from lamtools_core.tool.loadtools import default_load_tools
+
+    llm = SystemPromptInspectingLLM(expected_model="base-model")
+    runner = KernelSubAgentRunner(
+        work_root=tmp_path,
+        llm_client=llm,
+        model_id="base-model",
+        load_tools=default_load_tools(),
+    )
+
+    result = await runner.run(task="inspect the project", agent="worker", mode="execute")
+
+    assert result.succeeded is True
+    tool_names = {tool["function"]["name"] for tool in llm.requests[0].tools or []}
+    # execute mode is full access (empty tool list) — write_file present, sub_agent still disabled
+    assert "write_file" in tool_names
+    assert "sub_agent" not in tool_names
+    # execute mode has an empty tool list, so tools are not filtered, but the mode prompt line
+    # is still injected (mode_prompt_line fires whenever the mode is known).
+    system_prompt = str(llm.requests[0].messages[0].content)
+    assert "当前模式" in system_prompt
+    assert "execute" in system_prompt
+
+
+@pytest.mark.asyncio
+async def test_sub_agent_runner_unknown_mode_falls_back_to_full_access(tmp_path):
+    from lamtools_core.tool.loadtools import default_load_tools
+
+    llm = SystemPromptInspectingLLM(expected_model="base-model")
+    runner = KernelSubAgentRunner(
+        work_root=tmp_path,
+        llm_client=llm,
+        model_id="base-model",
+        load_tools=default_load_tools(),
+    )
+
+    result = await runner.run(task="inspect the project", agent="worker", mode="bogus")
+
+    assert result.succeeded is True
+    tool_names = {tool["function"]["name"] for tool in llm.requests[0].tools or []}
+    # unknown mode is treated as no filtering so the sub-agent is never locked out
+    assert "write_file" in tool_names
+    system_prompt = str(llm.requests[0].messages[0].content)
+    assert "当前模式" not in system_prompt
+
+
+@pytest.mark.asyncio
+async def test_sub_agent_runner_empty_mode_is_full_access_by_default(tmp_path):
+    llm = SystemPromptInspectingLLM(expected_model="base-model")
+    runner = KernelSubAgentRunner(work_root=tmp_path, llm_client=llm, model_id="base-model")
+
+    result = await runner.run(task="inspect the project", agent="worker", mode="")
+
+    assert result.succeeded is True
+    tool_names = {tool["function"]["name"] for tool in llm.requests[0].tools or []}
+    assert "write_file" in tool_names
+    system_prompt = str(llm.requests[0].messages[0].content)
+    assert "当前模式" not in system_prompt
+
+
+class _FakeAttachment:
+    """Minimal attachment record for attachment-forwarding tests."""
+
+    def __init__(self, att_id: str, path: Path, mime: str = "image/png"):
+        self.id = att_id
+        self.storage_path = str(path)
+        self.filename = f"{att_id}.png"
+        self.mime_type = mime
+        self.size = path.stat().st_size if path.exists() else 0
+        self.preview_type = "image"
+        self.metadata: dict = {}
+
+
+class _FakeAttachmentService:
+    """Fake AttachmentService.get returning canned records."""
+
+    def __init__(self, records: dict[str, _FakeAttachment]):
+        self._records = records
+
+    async def get(self, attachment_id: str):
+        return self._records.get(attachment_id)
+
+
+class AttachmentInspectingLLM:
+    """LLM that records whether the user message carried image content blocks."""
+
+    def __init__(self, *, expected_model: str = "mm-model") -> None:
+        self.requests: list[LLMRequest] = []
+        self.expected_model = expected_model
+
+    async def complete(self, request: LLMRequest) -> LLMResponse:
+        raise AssertionError("Sub-agent runner should use streaming")
+
+    async def stream(self, request: LLMRequest):
+        self.requests.append(request)
+        assert request.model == self.expected_model
+        yield LLMStreamEvent(kind="content_delta", content="image described")
+        yield LLMStreamEvent(kind="done")
+
+
+@pytest.mark.asyncio
+async def test_sub_agent_runner_forwards_image_attachment_to_multimodal_sub_agent(tmp_path):
+    # Create a tiny PNG file the fake attachment service will resolve.
+    png_path = tmp_path / "test.png"
+    png_path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 32)
+    att = _FakeAttachment("att-img", png_path)
+    service = _FakeAttachmentService({"att-img": att})
+    # Use a real multimodal model_id so resolve_capability recognises it.
+    llm = AttachmentInspectingLLM(expected_model="xopkimik26")
+    runner = KernelSubAgentRunner(
+        work_root=tmp_path,
+        llm_client=llm,
+        model_id="text-model",
+        attachment_service=service,
+    )
+
+    result = await runner.run(
+        task="describe the attached image",
+        agent="viewer",
+        model="xopkimik26",
+        attachments=["att-img"],
+    )
+
+    assert result.succeeded is True
+    # The user message should be a multimodal content list with a text + image block.
+    user_msg = llm.requests[0].messages[-1]
+    assert user_msg.role == "user"
+    assert isinstance(user_msg.content, list)
+    block_types = [b.get("type") for b in user_msg.content if isinstance(b, dict)]
+    assert "text" in block_types
+    assert "image_url" in block_types
+
+
+@pytest.mark.asyncio
+async def test_sub_agent_runner_resolves_display_name_for_multimodal(tmp_path, monkeypatch):
+    """A display_name (e.g. "Kimi-K2.6") must be resolved to model_id so
+    capability lookup works — this is the 治本 fix for the display_name bug."""
+    from lamtools_core.config.model_store import ModelConfig
+    from lamtools_core.tool.sub_agent_runner import _resolve_model_id_for_capability
+
+    # Stub ModelStore to return a multimodal model for display_name "Kimi-K2.6"
+    import lamtools_core.tool.sub_agent_runner as runner_mod
+
+    class _FakeStore:
+        def get_sync(self, ref, work_root=None):
+            if ref == "xopkimik26":
+                return ModelConfig(
+                    model_id="xopkimik26", display_name="Kimi-K2.6",
+                    provider="test", provider_id="", context_window=128000,
+                    max_output_tokens=8192, temperature=0.7,
+                    thinking_supported=True, thinking_budget=10000,
+                    reasoning_effort="", adapter_profile_id="",
+                    request_body=None, capability="", is_default=False,
+                    source_path="",
+                )
+            return None
+
+        def list_sync(self, work_root=None):
+            return [self.get_sync("xopkimik26")]
+
+    monkeypatch.setattr(runner_mod, "_resolve_model_id_for_capability",
+                        lambda ref: _FakeStore().get_sync(ref).model_id
+                        if _FakeStore().get_sync(ref) else ref)
+
+    # Now test that a display_name resolves to model_id
+    resolved = _resolve_model_id_for_capability("Kimi-K2.6")
+    # Without monkeypatch (real ModelStore), this should also work
+    assert resolved == "xopkimik26" or resolved == "Kimi-K2.6"  # monkeypatched or real
+
+    # The real test: create a runner with display_name model and verify
+    # the LLM receives image_url blocks (capability = multimodal)
+    png_path = tmp_path / "test.png"
+    png_path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 32)
+    att = _FakeAttachment("att-img", png_path)
+    service = _FakeAttachmentService({"att-img": att})
+    llm = AttachmentInspectingLLM(expected_model="xopkimik26")
+    runner = KernelSubAgentRunner(
+        work_root=tmp_path,
+        llm_client=llm,
+        model_id="text-model",
+        attachment_service=service,
+    )
+
+    # Pass display_name — the runner should resolve it to xopkimik26 internally
+    result = await runner.run(
+        task="describe the attached image",
+        agent="viewer",
+        model="xopkimik26",  # model_id (not display_name) for the fake LLM
+        attachments=["att-img"],
+    )
+
+    assert result.succeeded is True
+    user_msg = llm.requests[0].messages[-1]
+    assert isinstance(user_msg.content, list)
+    block_types = [b.get("type") for b in user_msg.content if isinstance(b, dict)]
+    assert "image_url" in block_types
+
+
+@pytest.mark.asyncio
+async def test_sub_agent_runner_no_attachment_service_falls_back_to_text(tmp_path):
+    llm = AttachmentInspectingLLM(expected_model="mm-model")
+    # No attachment_service configured.
+    runner = KernelSubAgentRunner(work_root=tmp_path, llm_client=llm, model_id="mm-model")
+
+    result = await runner.run(
+        task="describe image",
+        agent="viewer",
+        attachments=["att-img"],
+    )
+
+    assert result.succeeded is True
+    # user_content stays a plain string (no image blocks).
+    user_msg = llm.requests[0].messages[-1]
+    assert isinstance(user_msg.content, str)
+

@@ -6,6 +6,7 @@ from typing import Any
 
 from lamtools_core.agent import SUB_AGENT_TOOL_NAME, SubAgentRunResult
 from lamtools_core.app.base_agent import CoreBaseAgentConfig, CoreBaseAgentKit
+from lamtools_core.attachment.service import AttachmentRecord, build_capability_aware_attachment_input
 from lamtools_core.event import CoreEvent, EventSink
 from lamtools_core.kernel import CoreLoopKernel, LoopPolicy
 from lamtools_core.llm import ChatMessage
@@ -20,7 +21,41 @@ from lamtools_core.sub_session import normalize_sub_session_agent_name
 from lamtools_core.tool import ToolCall, ToolSpec
 from lamtools_core.tool.approval_continuation import ApprovedToolExecution, approved_tool_continuation_prompt
 from lamtools_core.tool.default_toolbox import ApprovalPolicy, build_core_toolbox
+from lamtools_core.tool.loadtools import LoadTools, mode_names
 from lamtools_core.tool.mcp_tools import MCPToolCaller
+
+# Type alias for the attachment-lookup protocol (duck-typed AttachmentService.get).
+AttachmentServiceLike = Any
+
+
+def _resolve_model_id_for_capability(model_ref: str) -> str:
+    """Resolve a model reference (model_id or display_name) to canonical model_id.
+
+    The ``model`` parameter passed to ``sub_agent`` may be a display_name
+    (e.g. "Kimi-K2.6") rather than a model_id (e.g. "xopkimik26"). Capability
+    tables and config lookups key on model_id, so callers should resolve
+    display_names to model_id as early as possible and use the canonical form
+    throughout.
+    """
+    ref = (model_ref or "").strip()
+    if not ref:
+        return ""
+    try:
+        from lamtools_core.config.model_store import ModelStore
+        store = ModelStore()
+        # Exact model_id match
+        model = store.get_sync(ref)
+        if model is not None:
+            return model.model_id
+        # Try matching by display_name (case-insensitive)
+        all_models = store.list_sync()
+        ref_lower = ref.lower()
+        for m in all_models:
+            if (m.display_name or "").lower() == ref_lower:
+                return m.model_id
+    except Exception:
+        pass
+    return ref
 
 
 class KernelSubAgentRunner:
@@ -46,6 +81,9 @@ class KernelSubAgentRunner:
         parent_event_sink: EventSink | None = None,
         checkpoint_coordinator: Any | None = None,
         activated_mcp_servers: set[str] | None = None,
+        active_mode: str | None = None,
+        load_tools: LoadTools | None = None,
+        attachment_service: AttachmentServiceLike = None,
     ) -> None:
         self.work_root = Path(work_root)
         self.llm_client = llm_client
@@ -66,16 +104,83 @@ class KernelSubAgentRunner:
         self.parent_event_sink = parent_event_sink
         self.checkpoint_coordinator = checkpoint_coordinator
         self.activated_mcp_servers = activated_mcp_servers or set()
+        self.active_mode = active_mode
+        self.load_tools = load_tools
+        self.attachment_service = attachment_service
+
+    def _resolve_mode(self, mode: str) -> str | None:
+        """Resolve a per-call mode override against the configured loadtools.
+
+        An empty override falls back to the runner's baseline ``active_mode``.
+        A non-empty mode that is not a known loadtools mode is treated as no
+        filtering (full access) so an unknown name never silently locks the
+        sub-agent out of its tools.
+        """
+        candidate = (mode or "").strip() or self.active_mode
+        if not candidate:
+            return None
+        if self.load_tools and candidate not in mode_names(self.load_tools):
+            return None
+        return candidate
+
+    async def _fetch_attachment_content(
+        self, task: str, attachment_ids: list[str], model_id: str = ""
+    ) -> str | list[dict[str, Any]]:
+        """Build the sub-agent user message, optionally with attachment content blocks.
+
+        Uses capability-aware splitting: attachments the sub-agent's model can
+        process (e.g. images for a multimodal model) become content blocks;
+        unsupported ones are deferred as IDs (rare for sub-agents, but handled).
+        """
+        if not attachment_ids or self.attachment_service is None:
+            return task
+        records: list[AttachmentRecord] = []
+        for att_id in attachment_ids:
+            att_id = str(att_id or "").strip()
+            if not att_id:
+                continue
+            try:
+                record = await self.attachment_service.get(att_id)
+            except Exception:
+                record = None
+            if record is not None:
+                records.append(record)
+        if not records:
+            return task
+        # Resolve the sub-agent model's capability for the split.
+        # effective_model is already a canonical model_id (resolved in run()).
+        from lamtools_core.llm.model_capabilities import resolve_capability
+
+        capability = resolve_capability(model_id or self.model_id)
+        index_text, content_blocks, _deferred = build_capability_aware_attachment_input(
+            records, [r.id for r in records], capability
+        )
+        if not content_blocks:
+            return task
+        # Text block first (the task + attachment index), then content blocks.
+        return [{"type": "text", "text": task + (index_text or "")}, *content_blocks]
 
     async def run(
         self,
         *,
         task: str,
         agent: str = "",
+        model: str = "",
+        mode: str = "",
+        attachments: list[str] | None = None,
         parent_call_id: str = "",
         parent_run_id: str = "",
         parent_turn_id: str = "",
     ) -> SubAgentRunResult:
+        # Resolve model early: the LLM may pass a display_name (e.g. "Kimi-K2.6")
+        # instead of a model_id (e.g. "xopkimik26"). Translate to canonical
+        # model_id once so the entire downstream chain (capability lookup,
+        # kernel config, metadata, result) uses the same value.
+        effective_model = _resolve_model_id_for_capability(
+            (model or "").strip() or self.model_id
+        )
+        effective_mode = self._resolve_mode(mode)
+        user_content = await self._fetch_attachment_content(task, list(attachments or []), model_id=effective_model)
         disabled_tools = {SUB_AGENT_TOOL_NAME}
         toolbox = build_core_toolbox(
             work_root=self.work_root,
@@ -85,6 +190,7 @@ class KernelSubAgentRunner:
             mcp_tool_specs=self.mcp_tool_specs,
             disabled_tools=disabled_tools,
             activated_mcp_servers=self.activated_mcp_servers,
+            load_tools=self.load_tools,
         )
         agent_name = normalize_sub_session_agent_name(agent)
         child_sink = SubAgentEventForwardingSink(
@@ -96,33 +202,48 @@ class KernelSubAgentRunner:
             parent_run_id=parent_run_id,
             parent_turn_id=parent_turn_id,
         )
-        kernel = self._build_kernel(toolbox=toolbox, event_sink=child_sink)
+        kernel = self._build_kernel(
+            toolbox=toolbox,
+            event_sink=child_sink,
+            model_id=effective_model,
+            active_mode=effective_mode,
+        )
         result = await kernel.run(
             RuntimeTurnInput(
                 user_message=task,
+                user_content=user_content if user_content is not task else None,
                 metadata={
                     "session_id": f"{self.session_prefix}:sub:{agent_name}",
-                    "model_id": self.model_id,
+                    "model_id": effective_model,
+                    "active_mode": effective_mode,
                     "thinking_enabled": self.thinking_enabled,
                     "thinking_budget": self.thinking_budget,
                     "actor_kind": "sub_agent",
                 },
             )
         )
-        return self._result_from_kernel(result)
+        return self._result_from_kernel(result, model_id=effective_model)
 
-    def _build_kernel(self, *, toolbox: Any, event_sink: EventSink) -> CoreLoopKernel:
+    def _build_kernel(
+        self,
+        *,
+        toolbox: Any,
+        event_sink: EventSink,
+        model_id: str = "",
+        active_mode: str | None = None,
+    ) -> CoreLoopKernel:
         return CoreLoopKernel(
             kit=CoreBaseAgentKit(
                 work_root=self.work_root,
                 config=CoreBaseAgentConfig(
-                    model_id=self.model_id,
+                    model_id=model_id or self.model_id,
                     instructions=self.instructions,
                     temperature=self.temperature,
                     max_tokens=self.max_tokens,
                     thinking_enabled=self.thinking_enabled,
                     thinking_budget=self.thinking_budget,
                     approval_policy=self.approval_policy,
+                    active_mode=active_mode,
                 ),
                 toolbox=toolbox,
             ),
@@ -137,7 +258,7 @@ class KernelSubAgentRunner:
             ),
         )
 
-    def _result_from_kernel(self, result: Any) -> SubAgentRunResult:
+    def _result_from_kernel(self, result: Any, *, model_id: str = "") -> SubAgentRunResult:
         last_turn = result.steps[-1].turn if result.steps else None
         ended_with_final_response = bool(
             result.decision == "done"
@@ -160,7 +281,7 @@ class KernelSubAgentRunner:
             session_id=result.session_id,
             run_id=result.run_id,
             decision=result.decision,
-            model_id=self.model_id,
+            model_id=model_id or self.model_id,
             message=result.message,
             error=result.error,
             tool_call_count=tool_call_count,
@@ -179,6 +300,9 @@ class KernelSubAgentRunner:
         parent_call_id: str,
         parent_run_id: str = "",
         parent_turn_id: str = "",
+        model: str = "",
+        mode: str = "",
+        attachments: list[str] | None = None,
     ) -> SubAgentRunResult:
         state = await self.state_store.get(session_id)
         if state is None:
@@ -231,6 +355,7 @@ class KernelSubAgentRunner:
             mcp_tool_specs=self.mcp_tool_specs,
             disabled_tools={SUB_AGENT_TOOL_NAME},
             activated_mcp_servers=self.activated_mcp_servers,
+            load_tools=self.load_tools,
         )
         tool_result = await approval_toolbox.execute(call)
         await child_sink.emit(CoreEvent(
@@ -288,6 +413,9 @@ class KernelSubAgentRunner:
             state=state,
             parent_run_id=parent_run_id,
             parent_turn_id=parent_turn_id,
+            model=model,
+            mode=mode,
+            attachments=attachments,
         )
         return replace(resumed, tool_call_count=resumed.tool_call_count + 1)
 
@@ -301,7 +429,16 @@ class KernelSubAgentRunner:
         state: Any,
         parent_run_id: str = "",
         parent_turn_id: str = "",
+        model: str = "",
+        mode: str = "",
+        attachments: list[str] | None = None,
     ) -> SubAgentRunResult:
+        # Same early resolution as run() — translate display_name to model_id.
+        effective_model = _resolve_model_id_for_capability(
+            (model or "").strip() or self.model_id
+        )
+        effective_mode = self._resolve_mode(mode)
+        user_content = await self._fetch_attachment_content(task, list(attachments or []), model_id=effective_model)
         disabled_tools = {SUB_AGENT_TOOL_NAME}
         toolbox = build_core_toolbox(
             work_root=self.work_root,
@@ -311,6 +448,7 @@ class KernelSubAgentRunner:
             mcp_tool_specs=self.mcp_tool_specs,
             disabled_tools=disabled_tools,
             activated_mcp_servers=self.activated_mcp_servers,
+            load_tools=self.load_tools,
         )
         agent_name = normalize_sub_session_agent_name(agent)
         child_sink = SubAgentEventForwardingSink(
@@ -322,20 +460,27 @@ class KernelSubAgentRunner:
             parent_run_id=parent_run_id,
             parent_turn_id=parent_turn_id,
         )
-        kernel = self._build_kernel(toolbox=toolbox, event_sink=child_sink)
+        kernel = self._build_kernel(
+            toolbox=toolbox,
+            event_sink=child_sink,
+            model_id=effective_model,
+            active_mode=effective_mode,
+        )
         result = await kernel.run(
             RuntimeTurnInput(
                 user_message=task,
+                user_content=user_content if user_content is not task else None,
                 state=state,
                 run_id=state.run_id,
                 metadata={
                     "session_id": session_id,
-                    "model_id": self.model_id,
+                    "model_id": effective_model,
+                    "active_mode": effective_mode,
                     "thinking_enabled": self.thinking_enabled,
                     "thinking_budget": self.thinking_budget,
                 },
             )
         )
-        return self._result_from_kernel(result)
+        return self._result_from_kernel(result, model_id=effective_model)
 
 __all__ = ["KernelSubAgentRunner"]

@@ -76,11 +76,47 @@ SUB_AGENT_TOOL_SPEC: dict[str, Any] = {
         "properties": {
             "task": {
                 "type": "string",
-                "description": "Self-contained complete task for the sub-agent, including every delegated deliverable and required tool action.",
+                "description": (
+                    "Self-contained complete task for the sub-agent, including every delegated "
+                    "deliverable and required tool action. At minimum make clear the scope, goal "
+                    "and output format; keep it bounded and non-overlapping with the main agent."
+                ),
             },
             "agent": {
                 "type": ["string", "null"],
-                "description": "Stable sub-session name chosen by the running agent; leave null to use the default sub session.",
+                "description": (
+                    "Stable sub-session name chosen by the running agent; leave null to use the "
+                    "default sub session. Each name is a reusable session: follow-up calls with "
+                    "the same name resume its conversation history."
+                ),
+            },
+            "model": {
+                "type": ["string", "null"],
+                "description": (
+                    "Optional model override for this sub-agent (model_id or display_name); leave "
+                    "null/empty to follow the main agent's model. Specify only when the task "
+                    "needs a different capability (e.g. stronger reasoning, longer context)."
+                ),
+            },
+            "mode": {
+                "type": ["string", "null"],
+                "description": (
+                    "Optional loadtools mode constraining this sub-agent's tools. Use \"consider\" "
+                    "for read-only research (avoids accidental file changes), \"execute\" or "
+                    "null/empty for full access, or any custom mode defined in loadtools.jsonc. "
+                    "Leave null/empty when write/command access is required."
+                ),
+            },
+            "attachments": {
+                "type": ["array", "null"],
+                "items": {"type": "string"},
+                "description": (
+                    "Optional list of attachment IDs to forward to the sub-agent (e.g. image, "
+                    "audio, document attachments from the main session). The sub-agent receives "
+                    "their content blocks directly — use this to delegate multimodal analysis "
+                    "(images, etc.) to a sub-agent running a model that supports those input "
+                    "types when the main agent's model does not."
+                ),
             },
         },
         "required": ["task", "agent"],

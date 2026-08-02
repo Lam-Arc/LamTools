@@ -94,15 +94,24 @@ class DefaultCoreLiveMemberHooks:
 
     async def prepare_turn_input(self, *, thread_id, params, input_items):
         del thread_id
-        from .queue_state import input_items_text
+        from .queue_state import input_item_attachment_ids, input_items_text
 
         text = input_items_text(input_items)
+        attachment_ids = input_item_attachment_ids(input_items)
+        runtime_extras: dict[str, Any] = {}
+        if attachment_ids:
+            # Attachment content-block building (capability-aware) happens later
+            # in turn_start where the attachment_service is available. Here we
+            # just forward the IDs so the main agent can see them and (if the
+            # model cannot process them) delegate to a sub_agent.
+            runtime_extras["attachment_ids"] = attachment_ids
         return PreparedLiveInput(
             visible_input=input_items,
             runtime_input=input_items,
             visible_text=text,
             runtime_text=text,
             work_root=str(params.get("work_root") or params.get("workRoot") or ""),
+            runtime_extras=runtime_extras,
         )
 
     async def materialize_turn(

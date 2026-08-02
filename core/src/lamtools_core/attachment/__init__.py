@@ -1,4 +1,4 @@
-from .files import detect_mime, open_with_default_app, preview_type, read_text_preview, safe_filename, unique_path
+from .files import attachment_modality, detect_mime, open_with_default_app, preview_type, read_text_preview, safe_filename, unique_path
 from .store import CoreAttachmentStore
 from .service import (
     AttachmentRecord,
@@ -7,11 +7,14 @@ from .service import (
     AttachmentSession,
     attachment_to_dict,
     build_attachment_runtime_input,
+    build_capability_aware_attachment_input,
 )
 from .http import create_attachment_router
 
 __all__ = [
     "AttachmentRecord", "AttachmentRepository", "AttachmentService", "AttachmentSession",
-    "CoreAttachmentStore", "attachment_to_dict", "build_attachment_runtime_input", "detect_mime",
-    "create_attachment_router", "open_with_default_app", "preview_type", "read_text_preview", "safe_filename", "unique_path",
+    "CoreAttachmentStore", "attachment_to_dict", "attachment_modality",
+    "build_attachment_runtime_input", "build_capability_aware_attachment_input",
+    "create_attachment_router", "detect_mime",
+    "open_with_default_app", "preview_type", "read_text_preview", "safe_filename", "unique_path",
 ]

@@ -848,7 +848,10 @@ def test_core_http_websocket_rejects_steer_after_kernel_seal_before_task_done(tm
         registry.clear()
 
 
-def test_core_agent_http_app_exposes_shared_model_catalog_without_secrets(tmp_path: Path) -> None:
+def test_core_agent_http_app_exposes_shared_model_catalog_without_secrets(tmp_path: Path, monkeypatch) -> None:
+    # Isolate from the developer's real ~/.lam/config/models jsonc files so the
+    # DB-backed fallback path (rather than the jsonc path) is exercised.
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
     config_db = tmp_path / "lamtools-config.db"
     _write_config_db(config_db)
     app = create_core_agent_http_app(
@@ -882,7 +885,9 @@ def test_core_agent_http_app_exposes_shared_model_catalog_without_secrets(tmp_pa
     assert "secret" not in response.text
 
 
-def test_core_agent_http_app_exposes_config_catalog_over_live_operations(tmp_path: Path) -> None:
+def test_core_agent_http_app_exposes_config_catalog_over_live_operations(tmp_path: Path, monkeypatch) -> None:
+    # Isolate from the developer's real ~/.lam/config/models jsonc files.
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
     config_db = tmp_path / "lamtools-config.db"
     _write_config_db(config_db)
     app = create_core_agent_http_app(
@@ -921,6 +926,8 @@ def test_core_agent_http_app_exposes_config_catalog_over_live_operations(tmp_pat
             "name": "Provider",
             "api_type": "openai",
             "base_url": "https://example.test/v1",
+            "api_key": "********",
+            "has_api_key": True,
         }
     ]
     assert "secret" not in str(providers)

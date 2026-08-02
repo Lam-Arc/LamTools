@@ -157,6 +157,33 @@ def resolve_adapter_profile_from_profiles(
     return profile
 
 
+def strip_unsupported_content(messages: Any, capability: str) -> None:
+    """Remove content blocks the model cannot process, in place.
+
+    For text-only models (``capability == "text"``) this drops ``image_url`` /
+    ``input_image`` parts from each message's content list, keeping text parts.
+    A message whose content becomes empty is replaced with an empty string so
+    the payload remains valid for providers that reject empty ``content`` lists.
+    Multimodal models are left untouched.
+    """
+    cap = (capability or "").strip().lower()
+    if cap != "text" or not isinstance(messages, list):
+        return
+    image_part_types = {"image_url", "input_image"}
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        kept = [part for part in content if not (
+            isinstance(part, dict) and part.get("type") in image_part_types
+        )]
+        if len(kept) == len(content):
+            continue
+        message["content"] = kept if kept else ""
+
+
 def apply_thinking_payload(
     payload: dict[str, Any],
     *,
@@ -192,9 +219,12 @@ def build_profiled_openai_request(
     thinking_enabled: bool = False,
     thinking_budget: int = 0,
     reasoning_effort: str = "",
+    capability: str = "",
     endpoint_fallback: str = "/chat/completions",
 ) -> dict[str, Any]:
     payload = build_openai_payload(request, stream=stream)
+    if capability.strip().lower() == "text":
+        strip_unsupported_content(payload.get("messages"), capability)
     variables = {"thinking_budget": thinking_budget}
     apply_request_payload(payload, profile=profile, variables=variables)
     if thinking_enabled:
@@ -216,6 +246,7 @@ def build_profiled_anthropic_request(
     temperature: float,
     thinking_enabled: bool = False,
     thinking_budget: int = 0,
+    capability: str = "",
     endpoint_fallback: str = "/anthropic/v1/messages",
 ) -> dict[str, Any]:
     system_content = ""
@@ -225,6 +256,9 @@ def build_profiled_anthropic_request(
             system_content += str(message.get("content") or "") + "\n"
         else:
             chat_messages.append(_anthropic_message_from_openai_message(message))
+
+    if capability.strip().lower() == "text":
+        strip_unsupported_content(chat_messages, capability)
 
     payload: dict[str, Any] = {
         "model": model,
@@ -456,4 +490,5 @@ __all__ = [
     "response_path",
     "set_payload_fields",
     "strip_jsonc",
+    "strip_unsupported_content",
 ]
