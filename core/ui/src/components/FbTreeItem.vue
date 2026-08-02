@@ -139,20 +139,20 @@ function onChildNavigate(path: string) {
   background: transparent;
   color: inherit;
   font: inherit;
-  font-size: var(--fb-font-size, 13px);
+  font-size: 13px;
   text-align: left;
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   transition: background 100ms ease;
 }
 
 .fb-tree-row:hover {
-  background: var(--fb-hover-bg, color-mix(in srgb, currentColor 6%, transparent));
+  background: color-mix(in srgb, currentColor var(--alpha-hover), transparent);
 }
 
 .fb-tree-row.selected {
-  background: var(--fb-selected-bg, color-mix(in srgb, currentColor 10%, transparent));
-  color: var(--fb-accent, var(--blue));
+  background: color-mix(in srgb, currentColor var(--alpha-active), transparent);
+  color: var(--blue);
 }
 
 .fb-tree-icon {
@@ -174,6 +174,6 @@ function onChildNavigate(path: string) {
 .fb-tree-item-loading {
   padding: 2px 8px;
   font-size: 12px;
-  color: var(--fb-muted, color-mix(in srgb, currentColor 40%, transparent));
+  color: color-mix(in srgb, currentColor 40%, transparent);
 }
 </style>

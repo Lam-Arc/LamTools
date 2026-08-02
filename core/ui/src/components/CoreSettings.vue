@@ -4,7 +4,7 @@
       class="settings-overlay"
       @click.self="$emit('close')"
     >
-      <div class="settings-card">
+      <div ref="overlayTarget" class="settings-card">
         <SettingsShell
           :sections="sections"
           title="Core 设置"
@@ -19,104 +19,6 @@
         </header>
 
         <div v-if="noticeText" class="settings-notice">{{ noticeText }}</div>
-
-        <section v-if="providerEditor" class="settings-editor" aria-label="供应商配置">
-          <div class="subhead">
-            <h3>{{ providerEditor.mode === 'create' ? '新增供应商' : '编辑供应商' }}</h3>
-          </div>
-          <form :data-provider-form="providerEditor.mode" class="config-form" @submit.prevent="submitProvider">
-            <label v-if="providerEditor.mode === 'create'" class="field">官方模板
-              <select v-model="providerEditor.preset_id" @change="applyProviderPreset">
-                <option value="">自定义</option>
-                <option v-for="preset in providerPresets" :key="preset.id" :value="preset.id">{{ preset.label }}</option>
-              </select>
-            </label>
-            <div v-if="providerEditor.preset_id" class="preset-summary field-wide">
-              <strong>{{ providerEditor.name }}</strong>
-              <span>{{ providerEditor.base_url }} · 将自动添加模板内模型</span>
-            </div>
-            <label v-if="providerEditor.mode === 'update' || !providerEditor.preset_id" class="field">名称
-              <input v-model.trim="providerEditor.name" data-provider-name required />
-            </label>
-            <label v-if="providerEditor.mode === 'update' || !providerEditor.preset_id" class="field">服务地址
-              <input v-model.trim="providerEditor.base_url" data-provider-base-url type="url" required />
-            </label>
-            <label class="field">API Key
-              <input
-                v-model="providerEditor.api_key"
-                data-provider-api-key
-                type="password"
-                autocomplete="new-password"
-                :required="providerEditor.mode === 'create'"
-                :placeholder="providerEditor.mode === 'update' ? '留空以保留现有密钥' : ''"
-              />
-            </label>
-            <details class="settings-advanced field-wide">
-              <summary>高级设置</summary>
-              <div class="advanced-fields">
-                <label class="field">接口类型
-                  <select v-model="providerEditor.api_type" data-provider-api-type>
-                    <option value="openai">OpenAI compatible</option>
-                    <option value="anthropic">Anthropic</option>
-                  </select>
-                </label>
-                <label class="field field-wide">高级适配 JSON
-                  <textarea v-model="providerEditor.extra_json" rows="5" spellcheck="false" placeholder="{}"></textarea>
-                </label>
-              </div>
-            </details>
-            <div class="editor-actions field-wide">
-              <button type="button" class="small-btn quiet" @click="providerEditor = null">取消</button>
-              <button class="small-btn primary" type="submit">{{ providerEditor.mode === 'create' ? '添加供应商' : '保存供应商' }}</button>
-            </div>
-          </form>
-        </section>
-
-        <section v-if="modelEditor" class="settings-editor" aria-label="模型配置">
-          <div class="subhead">
-            <h3>{{ modelEditor.mode === 'create' ? '新增模型' : '编辑模型' }}</h3>
-          </div>
-          <form :data-model-form="modelEditor.mode" class="config-form" @submit.prevent="submitModel">
-            <label class="field">供应商
-              <select v-model="modelEditor.provider_id" data-model-provider-id required>
-                <option v-for="provider in providers" :key="provider.id" :value="provider.id">{{ provider.name || provider.id }}</option>
-              </select>
-            </label>
-            <label class="field">模型标识
-              <input v-model.trim="modelEditor.model_id" data-model-id required />
-            </label>
-            <label class="field">显示名称
-              <input v-model.trim="modelEditor.display_name" data-model-display-name placeholder="选填" />
-            </label>
-            <details class="settings-advanced field-wide">
-              <summary>高级参数</summary>
-              <div class="advanced-fields model-advanced-fields">
-                <label class="field">上下文窗口
-                  <input v-model.number="modelEditor.context_window" type="number" min="1" />
-                </label>
-                <label class="field">最大输出
-                  <input v-model.number="modelEditor.max_output_tokens" type="number" min="1" />
-                </label>
-                <label class="field">推理预算
-                  <input v-model.number="modelEditor.thinking_budget" type="number" min="0" />
-                </label>
-                <label class="field">Temperature
-                  <input v-model.number="modelEditor.temperature" type="number" min="0" max="2" step="0.1" />
-                </label>
-                <label class="field checkbox-field">
-                  <input v-model="modelEditor.thinking_supported" type="checkbox" /> 支持推理
-                </label>
-                <label class="field field-wide">高级适配 JSON
-                  <textarea v-model="modelEditor.extra_json" rows="5" spellcheck="false" placeholder="{}"></textarea>
-                </label>
-              </div>
-            </details>
-            <div class="editor-actions field-wide">
-              <button type="button" class="small-btn quiet" @click="modelEditor = null">取消</button>
-              <button class="small-btn primary" type="submit">{{ modelEditor.mode === 'create' ? '添加模型' : '保存模型' }}</button>
-            </div>
-          </form>
-        </section>
 
         <div class="provider-actions">
           <button class="small-btn primary" type="button" data-provider-create @click="startProviderCreate">新增供应商</button>
@@ -140,7 +42,10 @@
                 <div v-for="model in modelsForProvider(provider.id)" :key="model.id" class="model-row">
                   <div class="model-identity">
                     <strong>{{ model.display_name || model.model_id || model.id }}</strong>
-                    <span>{{ model.model_id || model.id }}{{ model.thinking_supported ? ' · 支持推理' : '' }}</span>
+                    <span>
+                      {{ model.model_id || model.id }}{{ model.thinking_supported ? ' · 支持推理' : '' }}
+                      <span v-if="model.capability" class="capability-badge" :class="model.capability">{{ model.capability === 'multimodal' ? '多模态' : '文本' }}</span>
+                    </span>
                   </div>
                   <div class="row-actions">
                     <button class="text-btn" :class="{ active: model.is_default }" type="button" :data-model-default="model.id" @click="$emit('set-default-model', model.id)">{{ model.is_default ? '★ 默认' : '☆ 默认' }}</button>
@@ -290,14 +195,128 @@
           </div>
           <p v-else class="model-empty">暂无工作流。在侧栏点击「工作流」进入画布模式创建。</p>
         </article>
-        <article class="setting-card">
-          <h3>说明</h3>
-          <p class="hook-meta">Workflow 定义以 JSON 文件存储（项目级 <code>{work_root}/.lam/workflows/</code> 或全局 <code>~/.lam/workflows/</code>）。「暴露」会将对应 Workflow 注册为 Agent 可调用工具，文件内 <code>exposed</code> 标志为单一真相源。</p>
-          <p class="hook-meta">CLI：<code>core workflow new/ls/describe/run/expose/unexpose</code></p>
-        </article>
+      </section>
+
+      <section v-else-if="activeSection === 'subagent'" class="settings-panel">
+        <CoreSubAgentEditor :request-rpc="requestRpc || defaultRequestRpc" :models="models" />
       </section>
     </template>
   </SettingsShell>
+
+      <!-- Floating editor overlay for provider/model edit forms -->
+      <Teleport :to="overlayTarget" :disabled="!overlayTarget">
+        <div v-if="providerEditor || modelEditor" class="editor-overlay" @click.self="closeEditors">
+          <div class="editor-popover">
+            <!-- Provider editor -->
+            <form v-if="providerEditor" :data-provider-form="providerEditor.mode" class="config-form" @submit.prevent="submitProvider">
+              <div class="editor-popover-head">
+                <h3>{{ providerEditor.mode === 'create' ? '新增供应商' : '编辑供应商' }}</h3>
+                <button type="button" class="editor-popover-close" @click="providerEditor = null">×</button>
+              </div>
+              <label v-if="providerEditor.mode === 'create'" class="field">官方模板
+                <select v-model="providerEditor.preset_id" @change="applyProviderPreset">
+                  <option value="">自定义</option>
+                  <option v-for="preset in providerPresets" :key="preset.id" :value="preset.id">{{ preset.label }}</option>
+                </select>
+              </label>
+              <div v-if="providerEditor.preset_id" class="preset-summary field-wide">
+                <strong>{{ providerEditor.name }}</strong>
+                <span>{{ providerEditor.base_url }} · 将自动添加模板内模型</span>
+              </div>
+              <label v-if="providerEditor.mode === 'update' || !providerEditor.preset_id" class="field">名称
+                <input v-model.trim="providerEditor.name" data-provider-name required />
+              </label>
+              <label v-if="providerEditor.mode === 'update' || !providerEditor.preset_id" class="field">服务地址
+                <input v-model.trim="providerEditor.base_url" data-provider-base-url type="url" required />
+              </label>
+              <label class="field">API Key
+                <input
+                  v-model="providerEditor.api_key"
+                  data-provider-api-key
+                  type="password"
+                  autocomplete="new-password"
+                  :required="providerEditor.mode === 'create'"
+                  :placeholder="providerEditor.mode === 'update' ? '留空以保留现有密钥' : ''"
+                />
+              </label>
+              <details class="settings-advanced field-wide">
+                <summary>高级设置</summary>
+                <div class="advanced-fields">
+                  <label class="field">接口类型
+                    <select v-model="providerEditor.api_type" data-provider-api-type>
+                      <option value="openai">OpenAI compatible</option>
+                      <option value="anthropic">Anthropic</option>
+                    </select>
+                  </label>
+                  <label class="field field-wide">高级适配 JSON
+                    <textarea v-model="providerEditor.extra_json" rows="5" spellcheck="false" placeholder="{}"></textarea>
+                  </label>
+                </div>
+              </details>
+              <div class="editor-actions field-wide">
+                <button type="button" class="small-btn quiet" @click="providerEditor = null">取消</button>
+                <button class="small-btn primary" type="submit">{{ providerEditor.mode === 'create' ? '添加供应商' : '保存供应商' }}</button>
+              </div>
+            </form>
+
+            <!-- Model editor -->
+            <form v-if="modelEditor" :data-model-form="modelEditor.mode" class="config-form" @submit.prevent="submitModel">
+              <div class="editor-popover-head">
+                <h3>{{ modelEditor.mode === 'create' ? '新增模型' : '编辑模型' }}</h3>
+                <button type="button" class="editor-popover-close" @click="modelEditor = null">×</button>
+              </div>
+              <label class="field">供应商
+                <select v-model="modelEditor.provider_id" data-model-provider-id required>
+                  <option v-for="p in providers" :key="p.id" :value="p.id">{{ p.name || p.id }}</option>
+                </select>
+              </label>
+              <label class="field">模型标识
+                <input v-model.trim="modelEditor.model_id" data-model-id required />
+              </label>
+              <label class="field">显示名称
+                <input v-model.trim="modelEditor.display_name" data-model-display-name placeholder="选填" />
+              </label>
+              <label class="field field-wide">备注
+                <textarea v-model.trim="modelEditor.notes" rows="2" spellcheck="false" placeholder="选填，如限速、用途、注意事项等"></textarea>
+              </label>
+              <details class="settings-advanced field-wide">
+                <summary>高级参数</summary>
+                <div class="advanced-fields model-advanced-fields">
+                  <label class="field">上下文窗口
+                    <input v-model.number="modelEditor.context_window" type="number" min="1" />
+                  </label>
+                  <label class="field">最大输出
+                    <input v-model.number="modelEditor.max_output_tokens" type="number" min="1" />
+                  </label>
+                  <label class="field">推理预算
+                    <input v-model.number="modelEditor.thinking_budget" type="number" min="0" />
+                  </label>
+                  <label class="field">Temperature
+                    <input v-model.number="modelEditor.temperature" type="number" min="0" max="2" step="0.1" />
+                  </label>
+                  <label class="field checkbox-field">
+                    <input v-model="modelEditor.thinking_supported" type="checkbox" /> 支持推理
+                  </label>
+                  <label class="field">能力分类
+                    <select v-model="modelEditor.capability">
+                      <option value="">自动（内置声明）</option>
+                      <option value="text">文本（不支持图片）</option>
+                      <option value="multimodal">多模态（支持图片）</option>
+                    </select>
+                  </label>
+                  <label class="field field-wide">高级适配 JSON
+                    <textarea v-model="modelEditor.extra_json" rows="5" spellcheck="false" placeholder="{}"></textarea>
+                  </label>
+                </div>
+              </details>
+              <div class="editor-actions field-wide">
+                <button type="button" class="small-btn quiet" @click="modelEditor = null">取消</button>
+                <button class="small-btn primary" type="submit">{{ modelEditor.mode === 'create' ? '添加模型' : '保存模型' }}</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </Teleport>
       </div>
     </div>
   </Teleport>
@@ -319,12 +338,14 @@ import SettingsShell, { type SettingsSection } from './SettingsShell.vue'
 import ThemeEditor from './ThemeEditor.vue'
 import CoreSkillsEditor from './CoreSkillsEditor.vue'
 import CoreHooksEditor from './CoreHooksEditor.vue'
+import CoreSubAgentEditor from './CoreSubAgentEditor.vue'
 
 export type CoreSettingsDensity = 'compact' | 'standard' | 'loose'
 
 export interface CoreSettingsModel {
   id: string
   provider_id?: string
+  provider_name?: string
   model_id?: string
   display_name?: string
   context_window?: number
@@ -333,6 +354,8 @@ export interface CoreSettingsModel {
   thinking_budget?: number
   temperature?: number
   is_default?: boolean
+  capability?: string
+  notes?: string
   extra?: Record<string, unknown> | null
 }
 
@@ -359,6 +382,7 @@ export interface CoreSettingsProviderPayload {
 export interface CoreSettingsModelPayload {
   model_record_id?: string
   provider_id: string
+  provider_name?: string
   model_id: string
   display_name: string
   context_window: number
@@ -366,6 +390,8 @@ export interface CoreSettingsModelPayload {
   thinking_supported: boolean
   thinking_budget: number
   temperature: number
+  capability?: string
+  notes?: string
   extra?: Record<string, unknown>
 }
 
@@ -429,6 +455,7 @@ const sections: SettingsSection[] = [
   { id: 'hooks', label: 'Hooks', icon: '⌘' },
   { id: 'permissions', label: '权限', icon: '◇' },
   { id: 'workflow', label: '工作流', icon: '◆' },
+  { id: 'subagent', label: 'Sub agent', icon: '✷' },
 ]
 
 const densityOptions: Array<{ value: CoreSettingsDensity; label: string }> = [
@@ -450,6 +477,14 @@ const providerEditor = ref<ProviderEditor | null>(null)
 const modelEditor = ref<ModelEditor | null>(null)
 const noticeText = ref('')
 const expandedTier = ref<string | null>(null)
+
+// Editor overlay: teleport into the settings card so the popover layers above content.
+const overlayTarget = ref<HTMLElement | null>(null)
+function closeEditors() {
+  providerEditor.value = null
+  modelEditor.value = null
+}
+
 const defaultRequestRpc = async (_method: string, _params?: Record<string, unknown>) => {
   throw new Error('requestRpc not provided — connect CoreSettings to a CoreAppServerClient')
 }
@@ -598,9 +633,11 @@ function applyProviderPreset() {
 }
 
 function startModelCreate() {
+  const provider = props.providers[0]
   modelEditor.value = {
     mode: 'create',
-    provider_id: props.providers[0]?.id || '',
+    provider_id: provider?.id || '',
+    provider_name: provider?.name || '',
     model_id: '',
     display_name: '',
     context_window: 128000,
@@ -608,6 +645,8 @@ function startModelCreate() {
     thinking_supported: false,
     thinking_budget: 10000,
     temperature: 0.7,
+    capability: '',
+    notes: '',
     extra: {},
     extra_json: '{}',
   }
@@ -618,6 +657,7 @@ function startModelUpdate(model: CoreSettingsModel) {
     mode: 'update',
     model_record_id: model.id,
     provider_id: model.provider_id || '',
+    provider_name: model.provider_name || '',
     model_id: model.model_id || '',
     display_name: model.display_name || '',
     context_window: model.context_window || 128000,
@@ -625,6 +665,8 @@ function startModelUpdate(model: CoreSettingsModel) {
     thinking_supported: model.thinking_supported === true,
     thinking_budget: model.thinking_budget || 10000,
     temperature: model.temperature ?? 0.7,
+    capability: model.capability || '',
+    notes: model.notes || '',
     extra: model.extra || {},
     extra_json: JSON.stringify(model.extra || {}, null, 2),
   }
@@ -707,10 +749,59 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
   border: 1px solid color-mix(in srgb, var(--theme-main-text, #f2efeb) 12%, transparent);
   border-radius: 16px;
   background: var(--bg, #111111);
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-lg);
   overflow: hidden;
   display: flex;
   flex-direction: column;
+}
+
+/* ── Floating editor popover ── */
+.editor-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-popover);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  padding: 24px;
+}
+.editor-popover {
+  width: min(560px, 100%);
+  max-height: calc(100% - 48px);
+  overflow-y: auto;
+  border-radius: 12px;
+  background: var(--bg, #1a1a1a);
+  border: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 14%, transparent);
+  box-shadow: var(--shadow-md);
+  padding: 18px 20px;
+}
+.editor-popover-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+.editor-popover-head h3 {
+  margin: 0;
+  font-size: 15px;
+}
+.editor-popover-close {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+.editor-popover-close:hover {
+  background: color-mix(in srgb, var(--settings-main-text, #fff) 10%, transparent);
 }
 
 /* ── Responsive: full-screen on narrow viewports ── */
@@ -796,7 +887,7 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
 .density-options button {
   min-width: 64px;
   min-height: 32px;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--settings-card-text, var(--text));
   font-size: 13px;
@@ -969,5 +1060,23 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
 .config-form .checkbox-field input {
   min-width: auto;
   min-height: auto;
+}
+
+.capability-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--settings-main-text, #fff) 10%, transparent);
+  color: var(--muted);
+}
+.capability-badge.multimodal {
+  background: color-mix(in srgb, var(--blue, #4a90d9) 18%, transparent);
+  color: color-mix(in srgb, var(--blue, #4a90d9) 80%, var(--text));
+}
+.capability-badge.text {
+  background: color-mix(in srgb, var(--muted) 18%, transparent);
 }
 </style>

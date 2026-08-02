@@ -25,6 +25,28 @@
   --font-mono: "JetBrains Mono", "Monaspace Neon", "Monaspace Argon", "Cascadia Code", "Cascadia Mono", "Fira Code", "SFMono-Regular", "Noto Sans Mono CJK SC", "Source Han Mono SC", "Sarasa Mono SC", Consolas, ui-monospace, monospace;
   --font: var(--font-sans);
   --shadow: 0 28px 90px rgba(0,0,0,.46);
+
+  /* —— 间距标尺（4px 基，密集工作台）—— */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  /* —— 阴影分级（替代各组件 bespoke 阴影；--shadow 旧别名指向 --shadow-lg 向后兼容）—— */
+  --shadow-sm: 0 2px 8px rgba(0,0,0,.12);
+  --shadow-md: 0 8px 32px rgba(0,0,0,.28);
+  --shadow-lg: 0 28px 90px rgba(0,0,0,.46);
+
+  /* —— 交互态 alpha（替代 4%–18% 的随机取值；hover→active 恒 +4pp）—— */
+  --alpha-hover: 8%;
+  --alpha-active: 12%;
+  --alpha-press: 16%;
+
+  /* —— 行式高亮渐隐宽度（选项行左右两侧渐隐，约为行宽 20%）—— */
+  --row-fade: 20%;
+
   --sidebar-width: 300px;
   --right-panel-width: 320px;
 }

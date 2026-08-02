@@ -42,7 +42,7 @@
   display: grid;
   align-content: space-between;
   gap: 12px;
-  box-shadow: 0 4px 12px rgba(0,0,0,.08);
+  box-shadow: var(--shadow-sm);
 }
 
 .theme-preview strong {
@@ -130,12 +130,12 @@
   position: absolute;
   display: block;
   border: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 16%, transparent);
-  box-shadow: 0 2px 8px rgba(0,0,0,.10);
+  box-shadow: var(--shadow-sm);
 }
 
 .preset-swatch i {
   inset: 7px 7px 16px 22px;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
 }
 
 .preset-swatch b {

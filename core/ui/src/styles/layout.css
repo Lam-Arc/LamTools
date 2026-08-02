@@ -299,9 +299,7 @@
   color: var(--theme-main-text);
   display: flex;
   flex-direction: column;
-  box-shadow:
-    0 1px 2px rgba(0,0,0,.035),
-    inset 0 1px 0 color-mix(in srgb, var(--theme-main-text) 5%, transparent);
+  box-shadow: var(--shadow-sm);
   transition:
     left .5s cubic-bezier(.2,.8,.2,1),
     right .5s cubic-bezier(.2,.8,.2,1),
@@ -365,10 +363,7 @@
   border-radius: 20px;
   background: var(--theme-composer-background);
   color: var(--theme-composer-text);
-  box-shadow:
-    0 4px 12px rgba(0,0,0,.08),
-    0 1px 2px rgba(0,0,0,.04),
-    inset 0 1px 0 var(--theme-composer-soft-background);
+  box-shadow: var(--shadow-sm);
   overflow: hidden;
   transition:
     left .5s cubic-bezier(.2,.8,.2,1),
@@ -502,7 +497,7 @@
   height: 30px;
   flex: 0 0 54px;
   border: 1px solid color-mix(in srgb, var(--theme-control-text) 12%, transparent);
-  border-radius: 9px;
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--theme-control-background) 70%, transparent);
   color: color-mix(in srgb, var(--theme-control-text) 72%, transparent);
   font-size: 12px;
@@ -522,7 +517,7 @@
 .composer-pill {
   height: 34px;
   border: 0;
-  border-radius: 9px;
+  border-radius: var(--radius-sm);
   background: var(--theme-control-background);
   color: var(--theme-control-text);
   padding: 0 10px;
@@ -545,7 +540,7 @@
   border-radius: 12px;
   background: var(--theme-composer-background);
   color: var(--theme-composer-text);
-  box-shadow: 0 10px 26px rgba(0,0,0,.14);
+  box-shadow: var(--shadow-md);
   padding: 6px;
   display: grid;
 }
@@ -571,8 +566,8 @@
 }
 .composer-menu-item.model-option { justify-content: start; padding-left: 10px; }
 .composer-menu-item strong { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.composer-menu-item:hover { background: color-mix(in srgb, var(--theme-composer-text) 8%, transparent); }
-.composer-menu-item.active { background: color-mix(in srgb, var(--theme-composer-text) 12%, transparent); color: var(--theme-composer-text); }
+.composer-menu-item:hover { background: color-mix(in srgb, var(--theme-composer-text) var(--alpha-active), transparent); }
+.composer-menu-item.active { background: color-mix(in srgb, var(--theme-composer-text) var(--alpha-active), transparent); color: var(--theme-composer-text); }
 .composer-menu-item span { color: var(--muted); font-size: 12px; }
 
 .drop-hint {
@@ -640,7 +635,7 @@
 }
 .settings-nav button {
   min-height: 38px;
-  border-radius: 9px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: inherit;
   opacity: .74;
@@ -653,7 +648,7 @@
   font-size: 14px;
 }
 .settings-nav button.active,
-.settings-nav button:hover { background: color-mix(in srgb, var(--settings-backdrop-text, #fff) 9%, transparent); opacity: 1; }
+.settings-nav button:hover { background: color-mix(in srgb, var(--settings-backdrop-text, #fff) var(--alpha-active), transparent); opacity: 1; }
 
 .settings-sidebar-footer {
   flex: 0 0 auto;
@@ -795,12 +790,12 @@
 .text-btn {
   min-height: 32px;
   padding: 0 7px;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
   font-size: 12px;
 }
-.text-btn:hover { background: color-mix(in srgb, var(--settings-main-text, #fff) 7%, transparent); color: var(--settings-main-text, var(--text)); }
+.text-btn:hover { background: color-mix(in srgb, var(--settings-main-text, #fff) var(--alpha-hover), transparent); color: var(--settings-main-text, var(--text)); }
 .text-btn.danger:hover { color: color-mix(in srgb, var(--red) 58%, var(--settings-main-text, var(--theme-main-text, #fff))); }
 
 .small-btn {
@@ -817,7 +812,7 @@
 .add-row {
   min-height: 44px;
   border: 1px dashed color-mix(in srgb, var(--settings-main-text, #fff) 18%, transparent);
-  border-radius: 14px;
+  border-radius: var(--radius);
   background: transparent;
   color: var(--muted);
   display: grid;
@@ -960,7 +955,7 @@
 .route-purpose-row {
   min-height: 54px;
   border: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 10%, transparent);
-  border-radius: 14px;
+  border-radius: var(--radius);
   background: color-mix(in srgb, var(--settings-main-text, #fff) 6%, transparent);
   padding: 10px 12px;
   display: grid;
@@ -980,7 +975,7 @@
 .route-purpose-row select {
   min-height: 34px;
   border: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 8%, transparent);
-  border-radius: 11px;
+  border-radius: var(--radius-sm);
   background-color: var(--settings-card-background, #111111);
   color: var(--text);
   padding: 7px 9px;
@@ -1054,18 +1049,17 @@
 .field input,
 .agent-config-row input {
   min-height: 34px;
-border: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 8%, transparent);
-	  border-radius: var(--radius-sm);
-	  background: var(--settings-control-background, color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 5.5%, transparent));
-	  color: var(--settings-control-text, var(--text));
-	  padding: 7px 9px;
-  outline: 0;
+  border: 1px solid color-mix(in srgb, var(--settings-control-text, var(--theme-control-text)) 12%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--settings-control-background, var(--theme-control-background)) 70%, transparent);
+  color: var(--settings-control-text, var(--theme-control-text));
+  padding: var(--space-2);
+  outline: none;
 }
 .field input:focus,
 .agent-config-row input:focus,
 .route-purpose-row select:focus {
-  border-color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 18%, transparent);
-  filter: brightness(1.08);
+  outline: none;
 }
 .field input[type="number"],
 .agent-config-row input[type="number"] {
@@ -1078,22 +1072,21 @@ border: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-
   min-height: 110px;
   max-height: 240px;
   width: 100%;
-  resize: vertical;
+  resize: none;
   overflow: auto;
-border: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 8%, transparent);
-	  border-radius: var(--radius-sm);
-	  background: var(--settings-control-background, color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 5.5%, transparent));
-	  color: var(--settings-control-text, var(--text));
-	  padding: 9px;
-  outline: 0;
+  border: 1px solid color-mix(in srgb, var(--settings-control-text, var(--theme-control-text)) 12%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--settings-control-background, var(--theme-control-background)) 70%, transparent);
+  color: var(--settings-control-text, var(--theme-control-text));
+  padding: var(--space-2);
+  outline: none;
   font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.5;
   white-space: pre;
 }
 .field-textarea:focus {
-  border-color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 18%, transparent);
-  filter: brightness(1.08);
+  outline: none;
 }
 
 .agent-manager {
@@ -1276,7 +1269,7 @@ border: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-
   grid-template-columns: 1fr 1fr;
   min-width: 190px;
   padding: 3px;
-  border-radius: 10px;
+  border-radius: var(--radius-sm);
   border: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 10%, transparent);
   background: color-mix(in srgb, var(--settings-main-text, #fff) 5%, transparent);
 }
@@ -1350,7 +1343,7 @@ border: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-
 }
 .project-block {
   position: relative;
-  border-radius: 10px;
+  border-radius: var(--radius-sm);
   padding: 8px 6px 7px;
   margin-bottom: 5px;
   background: transparent;
@@ -1409,7 +1402,7 @@ border: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-
 
 .project-action {
   width: 24px; height: 24px;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: color-mix(in srgb, var(--theme-backdrop-text) 58%, transparent);
   display: grid;
@@ -1439,15 +1432,15 @@ border: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-
   width: 154px;
   padding: 5px;
   border: 1px solid color-mix(in srgb, var(--theme-backdrop-text) 12%, transparent);
-  border-radius: 10px;
+  border-radius: var(--radius);
   background: var(--theme-backdrop-background);
-  box-shadow: 0 6px 8px rgba(0,0,0,.18);
+  box-shadow: var(--shadow-md);
 }
 .project-menu button {
   width: 100%;
   min-height: 31px;
   padding: 0 9px;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--theme-backdrop-text);
   font-size: 12px;
@@ -1478,7 +1471,7 @@ border: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-
 .conversation {
   width: 100%; min-width: 0;
   border: 0;
-  border-radius: 10px;
+  border-radius: var(--radius-sm);
   background: transparent;
   padding: 3px 8px;
   display: grid;
@@ -1505,18 +1498,18 @@ border: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-
   cursor: pointer;
 }
 .conversation-select:focus-visible { outline: none; }
-.conversation:hover { background: color-mix(in srgb, var(--theme-backdrop-text) 7%, transparent); }
+.conversation:hover { background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-hover), transparent); }
 .conversation:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--blue) 75%, transparent);
   outline-offset: 2px;
 }
-.conversation.active { background: color-mix(in srgb, var(--theme-backdrop-text) 10%, transparent); }
+.conversation.active { background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-active), transparent); }
 .conversation-main {
   min-width: 0;
 }
 .conversation-dot {
   width: 12px; height: 12px;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   color: color-mix(in srgb, var(--theme-backdrop-text) 58%, transparent);
   display: grid;
   place-items: center;
@@ -1603,7 +1596,7 @@ border: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-
   color: var(--red);
 }
 
-/* Session status indicators */
+/* Session status indicators — 点色以 backdrop area 文字为底，靠动画/混合区分状态 */
 .conversation .status {
   width: 7px;
   height: 7px;
@@ -1612,25 +1605,33 @@ border: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-
   box-shadow: none;
   justify-self: end;
 }
+/* 运行中：spinner 转圈（border 圆环 + stream-spin），点色=backdrop-text */
 .conversation .status.running {
-  background: var(--green);
+  width: 9px; height: 9px;
+  border: 2px solid color-mix(in srgb, var(--theme-backdrop-text) 14%, transparent);
+  border-top-color: var(--theme-backdrop-text);
+  background: transparent;
+  border-radius: 50%;
   box-shadow: none;
-  animation: status-breathe 1.45s ease-in-out infinite;
+  animation: stream-spin .9s linear infinite;
 }
 .conversation .status.completed {
-  background: var(--green);
+  background: var(--theme-backdrop-text);
   box-shadow: none;
 }
 .conversation .status.failed {
-  background: var(--red);
+  background: color-mix(in srgb, var(--theme-backdrop-text) 30%, var(--red) 70%);
   box-shadow: none;
 }
 .conversation .status.waiting {
-  background: var(--orange);
+  background: color-mix(in srgb, var(--theme-backdrop-text) 30%, var(--orange) 70%);
   box-shadow: none;
 }
 .conversation .status.idle {
   background: color-mix(in srgb, var(--theme-backdrop-text) 54%, transparent);
+}
+@keyframes stream-spin {
+  to { transform: rotate(360deg); }
 }
 @keyframes status-breathe {
   0%, 100% {
@@ -1691,18 +1692,18 @@ border: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-
   width: 100%;
   height: 38px;
   min-width: 0;
-  border: 1px solid color-mix(in srgb, var(--theme-backdrop-text) 14%, transparent);
-  border-radius: 9px;
-  background: color-mix(in srgb, var(--theme-backdrop-text) 6%, transparent);
-  color: var(--theme-backdrop-text);
-  padding: 0 11px;
+  border: 1px solid color-mix(in srgb, var(--theme-control-text) 12%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--theme-control-background) 70%, transparent);
+  color: var(--theme-control-text);
+  padding: 0 var(--space-3);
   font-size: 13px;
 }
 .field-input::placeholder {
-  color: color-mix(in srgb, var(--theme-backdrop-text) 48%, transparent);
+  color: color-mix(in srgb, var(--theme-control-text) 52%, transparent);
 }
 .field-input:focus {
-  border-color: color-mix(in srgb, var(--theme-backdrop-text) 28%, var(--blue));
+  outline: none;
 }
 .popover-actions,
 .modal-actions,
@@ -1725,8 +1726,8 @@ border: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-
 .btn-primary,
 .btn-primary-sm {
   border: 0;
-  background: var(--blue);
-  color: var(--bg);
+  background: var(--theme-control-background);
+  color: var(--theme-control-text);
   font-weight: 650;
 }
 .btn-primary {
@@ -1787,14 +1788,14 @@ border: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-
 .agents-editor {
   width: 100%;
   min-height: 320px;
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--theme-control-text) 12%, transparent);
   border-radius: var(--radius-sm);
-  background: var(--panel-2);
-  color: var(--text);
-  padding: 12px;
+  background: color-mix(in srgb, var(--theme-control-background) 70%, transparent);
+  color: var(--theme-control-text);
+  padding: var(--space-3);
   font-family: var(--font-mono);
   font-size: 13px;
-  resize: vertical;
+  resize: none;
 }
 .modal-overlay {
   position: fixed;
@@ -1919,7 +1920,7 @@ border: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-
 .review-actions button {
   height: 28px;
   border: 1px solid color-mix(in srgb, var(--theme-backdrop-text) 12%, transparent);
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--theme-backdrop-text) 5%, transparent);
   color: var(--theme-backdrop-text);
   padding: 0 10px;
@@ -1990,11 +1991,11 @@ border: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-
 .commit-message-field input,
 .commit-feedback-box textarea {
   width: 100%;
-  border: 1px solid color-mix(in srgb, var(--theme-backdrop-text) 12%, transparent);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--theme-backdrop-text) 5%, transparent);
-  color: var(--theme-backdrop-text);
-  padding: 8px 9px;
+  border: 1px solid color-mix(in srgb, var(--theme-control-text) 12%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--theme-control-background) 70%, transparent);
+  color: var(--theme-control-text);
+  padding: var(--space-2);
   font: inherit;
   font-size: 12px;
   line-height: 1.45;
@@ -2012,7 +2013,7 @@ border: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-
 .checkpoint-row button {
   height: 26px;
   border: 1px solid color-mix(in srgb, var(--theme-backdrop-text) 12%, transparent);
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--theme-backdrop-text) 5%, transparent);
   color: var(--theme-backdrop-text);
   padding: 0 9px;
@@ -2042,7 +2043,7 @@ border: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
   align-items: center;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   padding: 0 4px 0 0;
 }
 .review-file-row:hover,
@@ -2487,7 +2488,7 @@ border: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-
 }
 .message-attachment-kind {
   flex: 0 0 auto;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--theme-main-text, #fff) 10%, transparent);
   padding: 1px 5px;
   font-size: 10px;
@@ -2862,14 +2863,14 @@ border: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-
   flex: 0 0 auto;
 }
 .process-toggle-icon.part-dot--running {
-  background: var(--orange);
+  background: var(--theme-main-text, #fff);
   animation: part-pulse 1s ease-in-out infinite;
 }
 .process-toggle-icon.part-dot--completed {
-  background: var(--green);
+  background: var(--theme-main-text, #fff);
 }
 .process-toggle-icon.part-dot--error {
-  background: var(--red);
+  background: color-mix(in srgb, var(--theme-main-text, #fff) 30%, var(--red) 70%);
 }
 .process-toggle-text {
   min-width: 0;
@@ -2904,10 +2905,18 @@ border: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-
 .part-inline--info {
   color: inherit;
 }
-.part-dot--pending { background: var(--muted); }
-.part-dot--running { background: var(--orange); }
-.part-dot--completed { background: var(--green); }
-.part-dot--error { background: var(--red); }
+/* part-dot 状态点 — 以 main area 文字为底，靠动画/混合区分 */
+.part-dot--pending { background: color-mix(in srgb, var(--theme-main-text, #fff) 40%, transparent); }
+.part-dot--running {
+  width: 9px; height: 9px;
+  border: 2px solid color-mix(in srgb, var(--theme-main-text, #fff) 14%, transparent);
+  border-top-color: var(--theme-main-text, #fff);
+  background: transparent;
+  border-radius: 50%;
+  animation: stream-spin .9s linear infinite;
+}
+.part-dot--completed { background: var(--theme-main-text, #fff); }
+.part-dot--error { background: color-mix(in srgb, var(--theme-main-text, #fff) 30%, var(--red) 70%); }
 
 .global-stats-bar {
   margin: 12px auto 0;

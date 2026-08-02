@@ -458,7 +458,7 @@ function applyAppEvent(snapshot: CoreAppSnapshot, event: CoreAppEvent): CoreAppS
     turns[turnId] = {
       ...turn,
       turn_id: turnId,
-      status: payload.status || 'running',
+      status: typeof payload.status === 'string' ? payload.status : 'running',
       input: input ?? turn.input,
       work_root: payload.work_root || payload.workRoot || turn.work_root || '',
     }
@@ -474,8 +474,8 @@ function applyAppEvent(snapshot: CoreAppSnapshot, event: CoreAppEvent): CoreAppS
       item_id: itemId,
       turn_id: turnId || item.turn_id || null,
       parent_item_id: event.parent_item_id ?? item.parent_item_id ?? null,
-      type: payload.type ?? item.type ?? 'item',
-      status: payload.status ?? item.status ?? 'running',
+      type: typeof payload.type === 'string' ? payload.type : item.type ?? 'item',
+      status: typeof payload.status === 'string' ? payload.status : item.status ?? 'running',
       content: payload.content ?? item.content ?? '',
     }
     const itemOrder = [...(snapshot.item_order ?? [])]

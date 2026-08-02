@@ -223,7 +223,7 @@ function kindIcon(kind: StageResource['kind']): string {
   border-bottom: 2px solid transparent;
   transition: background 0.15s, color 0.15s;
 }
-.stage-tab:hover { background: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 4%, transparent); color: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 80%, transparent); }
+.stage-tab:hover { background: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) var(--alpha-hover), transparent); color: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) var(--alpha-press), transparent); }
 .stage-tab.active {
   background: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 6%, transparent);
   color: var(--theme-backdrop-text, #f2efeb);
@@ -249,7 +249,7 @@ function kindIcon(kind: StageResource['kind']): string {
   place-items: center;
   opacity: 0.5;
 }
-.stage-tab-close:hover { opacity: 1; background: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 12%, transparent); }
+.stage-tab-close:hover { opacity: 1; background: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) var(--alpha-active), transparent); }
 .stage-content {
   flex: 1;
   min-height: 0;

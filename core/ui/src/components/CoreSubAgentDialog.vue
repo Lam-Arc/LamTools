@@ -272,7 +272,7 @@ onBeforeUnmount(() => {
   grid-template-rows: auto minmax(0, 1fr) auto;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--theme-main-text, #f2efeb) 14%, transparent);
-  border-radius: 14px;
+  border-radius: var(--radius);
   background: var(--theme-main-background, #111);
   color: var(--theme-main-text, #f2efeb);
   padding: 0;
@@ -335,7 +335,7 @@ onBeforeUnmount(() => {
   width: 2rem;
   height: 2rem;
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: color-mix(in srgb, var(--theme-main-text, currentColor) 64%, transparent);
   font: inherit;

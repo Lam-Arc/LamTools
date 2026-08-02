@@ -158,15 +158,15 @@ onUnmounted(() => {
   position: absolute;
   left: 0;
   top: calc(100% + 6px);
-  z-index: 180;
+  z-index: var(--z-popover);
   width: max(280px, 100%);
   max-height: 320px;
   overflow: auto;
   border: 1px solid color-mix(in srgb, currentColor 10%, transparent);
-  border-radius: 8px;
+  border-radius: var(--radius);
   background: var(--settings-card-background, var(--theme-composer-background, #242424));
   color: var(--settings-card-text, var(--theme-composer-text, #f4f1ec));
-  box-shadow: 0 8px 18px rgba(0, 0, 0, .18);
+  box-shadow: var(--shadow-md);
   padding: 6px;
   display: grid;
   gap: 4px;
@@ -202,7 +202,7 @@ onUnmounted(() => {
 .ui-select-option {
   min-height: 30px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: inherit;
   padding: 5px 9px;
@@ -216,11 +216,11 @@ onUnmounted(() => {
 }
 
 .ui-select-option:hover {
-  background: color-mix(in srgb, currentColor 6%, transparent);
+  background: color-mix(in srgb, currentColor var(--alpha-hover), transparent);
 }
 
 .ui-select-option.active {
-  background: color-mix(in srgb, currentColor 9%, transparent);
+  background: color-mix(in srgb, currentColor var(--alpha-active), transparent);
 }
 
 .ui-select-option.active.active-accent {

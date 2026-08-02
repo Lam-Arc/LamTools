@@ -206,7 +206,7 @@ code {
   font-family: var(--font-mono);
   font-size: 12px;
   padding: 1px 5px;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--settings-main-text, #fff) 8%, transparent);
 }
 </style>

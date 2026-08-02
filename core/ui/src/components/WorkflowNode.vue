@@ -151,11 +151,11 @@ function pushPorts() { updateNode(node.value.id, { ports: localPorts.value }) }
 .wf-node-head { display: flex; align-items: center; gap: 6px; }
 .wf-node-icon { font-size: 13px; opacity: 0.9; flex-shrink: 0; }
 .wf-title-input {
-  flex: 1; min-width: 0; border: 1px solid transparent; border-radius: 4px;
+  flex: 1; min-width: 0; border: 0; outline: 0; border-radius: 0;
   background: transparent; color: inherit; padding: 2px 4px;
   font-size: 12px; font-weight: 650;
 }
-.wf-title-input:focus { border-color: var(--theme-main-border); background: var(--theme-main-subtle-background, transparent); }
+.wf-title-input:focus { background: transparent; }
 .wf-node-state { font-size: 11px; opacity: 0.85; flex-shrink: 0; }
 .wf-node.state-running .wf-node-state { color: var(--blue); }
 .wf-node.state-done .wf-node-state { color: var(--green); }

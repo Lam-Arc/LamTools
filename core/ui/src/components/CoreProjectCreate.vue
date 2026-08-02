@@ -141,7 +141,7 @@ function onDirectorySelected(path: string) {
   border-radius: 12px;
   background: color-mix(in srgb, var(--theme-main-background, #fff) 97%, var(--theme-main-text, #171717) 3%);
   color: var(--theme-main-text, #171717);
-  box-shadow: 0 8px 24px rgb(0 0 0 / 16%);
+  box-shadow: var(--shadow-md);
 }
 
 .core-project-dialog-header {
@@ -202,15 +202,15 @@ function onDirectorySelected(path: string) {
   min-width: 0;
   height: 46px;
   box-sizing: border-box;
-  border: 1px solid color-mix(in srgb, var(--theme-main-text, #171717) 18%, transparent);
-  border-radius: 8px;
-  outline: 0;
-  background: transparent;
-  color: var(--theme-main-text, #171717);
-  padding: 0 13px;
+  border: 1px solid color-mix(in srgb, var(--theme-control-text) 12%, transparent);
+  border-radius: var(--radius-sm);
+  outline: none;
+  background: color-mix(in srgb, var(--theme-control-background) 70%, transparent);
+  color: var(--theme-control-text);
+  padding: 0 var(--space-3);
   font: inherit;
   font-weight: 520;
-  transition: border-color 160ms ease, box-shadow 160ms ease;
+  transition: border-color 160ms ease;
 }
 
 .core-project-root-field .core-project-input {
@@ -218,12 +218,11 @@ function onDirectorySelected(path: string) {
 }
 
 .core-project-input::placeholder {
-  color: color-mix(in srgb, var(--theme-main-text, #171717) 44%, transparent);
+  color: color-mix(in srgb, var(--theme-control-text) 52%, transparent);
 }
 
 .core-project-input:focus {
-  border-color: color-mix(in srgb, var(--theme-main-text, #171717) 58%, transparent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--theme-main-text, #171717) 8%, transparent);
+  outline: none;
 }
 
 .core-project-browse {
@@ -279,7 +278,7 @@ function onDirectorySelected(path: string) {
 .core-project-submit {
   min-width: 84px;
   height: 38px;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   padding: 0 16px;
   font: inherit;
   font-size: 13px;
@@ -320,7 +319,7 @@ function onDirectorySelected(path: string) {
 
   .core-project-dialog {
     max-height: calc(100dvh - 24px);
-    border-radius: 10px;
+    border-radius: var(--radius);
   }
 
   .core-project-dialog-header {

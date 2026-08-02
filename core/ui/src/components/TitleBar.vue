@@ -1,6 +1,19 @@
 <template>
   <div v-if="isTauri" class="titlebar" data-tauri-drag-region>
-    <span class="brand">Core</span>
+    <div class="titlebar-left">
+      <span class="brand">Core</span>
+
+      <!-- mode toggle: shows the *current* mode, click to switch -->
+      <button
+        class="mode-toggle"
+        :class="{ 'is-workflow': workflowMode }"
+        :title="workflowMode ? '切换到 Agent 模式' : '切换到工作流模式'"
+        @click="$emit('toggleWorkflowMode')"
+      >
+      <span class="mode-word mode-agent" :class="{ 'is-on': !workflowMode }">Agent</span>
+      <span class="mode-word mode-workflow" :class="{ 'is-on': workflowMode }">Workflow</span>
+      </button>
+    </div>
 
     <div class="titlebar-right">
       <!-- sidebar pin buttons -->
@@ -49,11 +62,13 @@ import { ref, onMounted, onUnmounted } from 'vue'
 defineProps<{
   leftPinned?: boolean
   rightPinned?: boolean
+  workflowMode?: boolean
 }>()
 
 defineEmits<{
   toggleLeftPinned: []
   toggleRightPinned: []
+  toggleWorkflowMode: []
 }>()
 
 const isTauri = ref(false)
@@ -82,7 +97,7 @@ onUnmounted(() => {
 .titlebar {
   position: fixed;
   inset: 0 0 auto 0;
-  z-index: 1000;
+  z-index: var(--z-toast);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -93,12 +108,76 @@ onUnmounted(() => {
 }
 
 .brand {
-  font-size: 12px;
+  font-size: 15px;
   font-weight: 600;
   color: #a1a1aa;
   letter-spacing: 0.3px;
   padding-left: 4px;
+  line-height: 22px;   /* match .mode-toggle height → shared vertical center */
 }
+
+.titlebar-left {
+  display: flex;
+  align-items: center;
+  gap: 0;   /* spacing lives in .mode-toggle's left padding → ~one space */
+}
+
+/* ── Mode toggle (agent ⇄ workflow) ── */
+/* inline-grid so both words share one cell (overlap → cross-fade) and the
+   button auto-sizes to the longer word. justify-items: start left-aligns both
+   → the first letter stays put, the longer word just extends right. Same font
+   family/size/color as .brand so it reads as a uniform "Core Agent" label. */
+.mode-toggle {
+  display: inline-grid;
+  align-items: center;
+  justify-items: start;
+  padding: 0 2px;
+  height: 22px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+  font-family: inherit;
+  font-size: 15px;
+  color: #a1a1aa;
+}
+
+.mode-toggle:focus-visible {
+  outline: 2px solid var(--blue, #3b82f6);
+  outline-offset: 1px;
+}
+
+.mode-word {
+  grid-area: 1 / 1;
+  white-space: nowrap;
+  line-height: 22px;        /* match .brand → shared baseline */
+  font-weight: 700;         /* 加粗 */
+  opacity: 0;
+  transform: scale(0.94);
+  transform-origin: left center;  /* scales from the first letter */
+  transition:
+    opacity 0.28s ease,
+    transform 0.28s ease,
+    color 0.12s ease;
+}
+
+.mode-word.is-on {
+  opacity: 1;
+  transform: scale(1);
+}
+
+/* per-mode tint on the text itself (no background). Desaturated so the tint
+   reads as a subtle wash rather than a bright color. */
+.mode-agent { color: color-mix(in srgb, #93c5fd 62%, #a1a1aa); }    /* 淡蓝,降饱和 */
+.mode-workflow { color: color-mix(in srgb, #fde68a 62%, #a1a1aa); } /* 淡黄,降饱和 */
+
+/* hover brightens the visible word toward its lighter shade */
+.mode-toggle:hover .mode-agent.is-on { color: color-mix(in srgb, #bfdbfe 70%, #d4d4d8); }
+.mode-toggle:hover .mode-workflow.is-on { color: color-mix(in srgb, #fef9c3 70%, #d4d4d8); }
+
+
+
 
 .titlebar-right {
   display: flex;

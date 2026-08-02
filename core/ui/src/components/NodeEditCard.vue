@@ -444,7 +444,7 @@ function apply() {
 .port-add {
   align-self: flex-start; border: 1px dashed var(--theme-main-border);
   background: transparent; color: var(--theme-main-text); opacity: 0.6;
-  font-size: 11px; padding: 3px 8px; border-radius: 5px; cursor: pointer;
+  font-size: 11px; padding: 3px 8px; border-radius: var(--radius-sm); cursor: pointer;
 }
 .port-add:hover { opacity: 1; }
 
@@ -459,7 +459,7 @@ function apply() {
   flex-direction: column;
   gap: 1px;
   padding: 3px;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: var(--theme-main-subtle-background);
 }
 .wf-tool-check {
@@ -467,7 +467,7 @@ function apply() {
   align-items: center;
   gap: 7px;
   padding: 4px 7px;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   font-size: 12px;
   cursor: pointer;
   line-height: 1.3;

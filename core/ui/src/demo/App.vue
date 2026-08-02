@@ -2211,7 +2211,7 @@ onUnmounted(() => {
   border: 1px solid color-mix(in srgb, var(--theme-main-text) 12%, transparent);
   border-radius: 16px;
   background: var(--theme-main-background, var(--bg, #111111));
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-lg);
 }
 
 .core-project-card header {
@@ -2249,7 +2249,7 @@ onUnmounted(() => {
   border: 1px solid color-mix(in srgb, var(--theme-main-text) 12%, transparent);
   border-radius: 16px;
   background: var(--theme-main-background, var(--bg, #111111));
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-lg);
 }
 
 .core-agents-card .core-agents-editor {

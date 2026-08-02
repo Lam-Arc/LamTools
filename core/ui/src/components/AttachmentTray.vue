@@ -124,7 +124,7 @@ function formatSize(size: number): string {
 .attachment-kind {
   flex: 0 0 auto;
   min-width: 34px;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, currentColor 10%, transparent);
   padding: 2px 5px;
   font-size: 10px;
@@ -178,6 +178,6 @@ function formatSize(size: number): string {
 
 .attachment-action:hover,
 .attachment-remove:hover {
-  background: color-mix(in srgb, currentColor 11%, transparent);
+  background: color-mix(in srgb, currentColor var(--alpha-hover), transparent);
 }
 </style>

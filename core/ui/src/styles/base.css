@@ -34,20 +34,17 @@ body {
 button, input, select, textarea { font: inherit; color: inherit; }
 button { border: 0; cursor: pointer; background: transparent; }
 input, select, textarea {
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--theme-control-text, var(--text)) 12%, transparent);
   border-radius: var(--radius-sm);
-  background: var(--panel-2);
-  color: var(--text);
-  padding: 8px 12px;
+  background: color-mix(in srgb, var(--theme-control-background, var(--panel-2)) 70%, transparent);
+  color: var(--theme-control-text, var(--text));
+  padding: var(--space-2);
   outline: none;
 }
-input:focus, select:focus, textarea:focus {
-  border-color: var(--blue);
-}
+/* 输入框不做聚焦态：光标闪动即聚焦指示 */
+input:focus, select:focus, textarea:focus { outline: none; }
+input:focus-visible, select:focus-visible, textarea:focus-visible { outline: none; }
 button:focus-visible,
-input:focus-visible,
-select:focus-visible,
-textarea:focus-visible,
 [role="button"]:focus-visible,
 a:focus-visible {
   outline: 2px solid var(--blue);

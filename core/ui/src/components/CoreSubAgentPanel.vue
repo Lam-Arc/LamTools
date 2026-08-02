@@ -218,7 +218,7 @@ onBeforeUnmount(() => {
 .core-sub-agent-panel__notice button {
   min-height: 2rem;
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--theme-backdrop-text, currentColor) 8%, transparent);
   color: inherit;
   padding: 0 .625rem;
@@ -239,7 +239,7 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: .5rem;
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: inherit;
   padding: 0 .5rem;
@@ -306,7 +306,7 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: .5rem;
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: color-mix(in srgb, var(--theme-backdrop-text, currentColor) 62%, transparent);
   padding: 0 .5rem;
@@ -342,10 +342,10 @@ onBeforeUnmount(() => {
   max-height: 9rem;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--sub-agent-tooltip-text) 13%, transparent);
-  border-radius: 10px;
+  border-radius: var(--radius);
   background: var(--sub-agent-tooltip-bg);
   color: var(--sub-agent-tooltip-text);
-  box-shadow: 0 4px 8px rgb(0 0 0 / 18%);
+  box-shadow: var(--shadow-sm);
   padding: .75rem .875rem;
   pointer-events: none;
 }

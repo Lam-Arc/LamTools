@@ -187,14 +187,14 @@ function isSubmitting(itemId: string): boolean {
   height: 28px;
   width: 28px;
   overflow: hidden;
-  border-radius: 14px;
+  border-radius: var(--radius);
   transition: width 250ms cubic-bezier(0.4, 0, 0.2, 1),
               border-radius 200ms ease 50ms;
 }
 
 .core-queued-input-actions:hover {
   width: 92px;
-  border-radius: 14px;
+  border-radius: var(--radius);
   transition: width 250ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 

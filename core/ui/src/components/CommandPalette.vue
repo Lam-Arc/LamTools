@@ -56,7 +56,7 @@ function commandLabel(command: CoreCommandCatalogItem): string {
   border: 1px solid color-mix(in srgb, var(--theme-composer-text, currentColor) 16%, transparent);
   border-radius: 8px;
   background: var(--theme-composer-background, #111);
-  box-shadow: 0 6px 12px rgba(0, 0, 0, 0.14);
+  box-shadow: var(--shadow-md);
   z-index: 20;
 }
 
@@ -71,7 +71,7 @@ function commandLabel(command: CoreCommandCatalogItem): string {
   display: block;
   align-items: center;
   border: 0;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   min-height: 42px;
   padding: 7px 9px;
   background: transparent;

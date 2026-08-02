@@ -660,10 +660,10 @@ function errorMessage(cause: unknown): string {
   width: min(244px, calc(100vw - 24px));
   margin: 0;
   border: 1px solid color-mix(in srgb, var(--theme-backdrop-text, currentColor) 14%, transparent);
-  border-radius: 10px;
+  border-radius: var(--radius);
   padding: 6px;
   background: var(--theme-backdrop-background, #171717);
-  box-shadow: 0 6px 8px rgba(0, 0, 0, .22);
+  box-shadow: var(--shadow-md);
   color: var(--theme-backdrop-text, currentColor);
   overflow: hidden;
 }
@@ -691,7 +691,7 @@ function errorMessage(cause: unknown): string {
 }
 .scope-action strong { overflow: hidden; font-size: 12px; font-weight: 620; text-overflow: ellipsis; white-space: nowrap; }
 .scope-action span { overflow: hidden; color: color-mix(in srgb, var(--theme-backdrop-text, currentColor) 50%, transparent); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
-.scope-action:hover:not(:disabled) { background: color-mix(in srgb, var(--theme-backdrop-text, currentColor) 7%, transparent); }
+.scope-action:hover:not(:disabled) { background: color-mix(in srgb, var(--theme-backdrop-text, currentColor) var(--alpha-hover), transparent); }
 .fork-action {
   width: calc(100% - 4px);
   min-height: 34px;
@@ -720,8 +720,8 @@ function errorMessage(cause: unknown): string {
   border-top: 1px solid color-mix(in srgb, var(--theme-backdrop-text, currentColor) 7%, transparent);
 }
 .rollback-row:first-child { border-top: 0; }
-.rollback-row--selected { background: color-mix(in srgb, var(--theme-backdrop-text, currentColor) 5%, transparent); }
-.rollback-row--selected .rollback-node-dot { box-shadow: 0 0 0 3px color-mix(in srgb, var(--theme-backdrop-text, currentColor) 10%, transparent); }
+.rollback-row--selected { background: color-mix(in srgb, var(--theme-backdrop-text, currentColor) var(--alpha-hover), transparent); }
+.rollback-row--selected .rollback-node-dot { box-shadow: 0 0 0 3px color-mix(in srgb, var(--theme-backdrop-text, currentColor) var(--alpha-active), transparent); }
 .rollback-node-dot {
   position: absolute;
   top: 18px;
@@ -780,7 +780,7 @@ function errorMessage(cause: unknown): string {
 }
 .quiet-action { border: 1px solid color-mix(in srgb, var(--theme-backdrop-text, currentColor) 15%, transparent); padding: 0 7px; background: transparent; color: color-mix(in srgb, var(--theme-backdrop-text, currentColor) 84%, transparent); }
 .icon-action { width: 26px; border: 0; padding: 0; background: transparent; color: color-mix(in srgb, var(--theme-backdrop-text, currentColor) 72%, transparent); font-size: 15px; }
-.quiet-action:hover:not(:disabled), .icon-action:hover:not(:disabled) { background: color-mix(in srgb, var(--theme-backdrop-text, currentColor) 7%, transparent); color: var(--theme-backdrop-text, currentColor); }
+.quiet-action:hover:not(:disabled), .icon-action:hover:not(:disabled) { background: color-mix(in srgb, var(--theme-backdrop-text, currentColor) var(--alpha-hover), transparent); color: var(--theme-backdrop-text, currentColor); }
 .quiet-action:focus-visible, .icon-action:focus-visible, .scope-action:focus-visible,
 .fork-action:focus-visible, .rollback-node-button:focus-visible { outline: 2px solid var(--blue, #6c8ed4); outline-offset: 2px; }
 .quiet-action:disabled, .icon-action:disabled, .scope-action:disabled,

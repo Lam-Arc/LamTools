@@ -194,28 +194,21 @@ function confirm() {
 
 <style scoped>
 /* ================================================================
-   CSS Custom Properties (all overridable)
+   主题关联：挂 main area，本地重映射 --text 后用 color-mix 派生。
+   设计 token 见 core/ui/src/styles/variables.css。
    ================================================================ */
 .fb-dialog-backdrop {
-  --fb-bg: var(--theme-main-background, #111);
-  --fb-text: var(--theme-main-text, #f2efeb);
-  --fb-muted: color-mix(in srgb, var(--fb-text) 60%, transparent);
-  --fb-border: color-mix(in srgb, var(--fb-text) 12%, transparent);
-  --fb-hover-bg: color-mix(in srgb, var(--fb-text) 7%, transparent);
-  --fb-selected-bg: color-mix(in srgb, var(--fb-text) 10%, transparent);
-  --fb-accent: var(--blue, #79bcff);
-  --fb-accent-text: #111;
-  --fb-width: 640px;
-  --fb-height: 460px;
-  --fb-radius: 14px;
-  --fb-font-size: 13px;
-  --fb-indent: 18px;
+  --text: var(--theme-main-text, #f2efeb);
+  --dialog-width: 640px;
+  --dialog-height: 460px;
+  --dialog-font-size: 13px;
+  --dialog-indent: 18px;
 }
 
 .fb-dialog-backdrop {
   position: fixed;
   inset: 0;
-  z-index: calc(var(--z-modal-backdrop, 80) + 3);
+  z-index: var(--z-modal);
   display: grid;
   place-items: center;
   padding: 24px;
@@ -223,15 +216,15 @@ function confirm() {
 }
 
 .fb-dialog {
-  width: min(var(--fb-width), 100%);
+  width: min(var(--dialog-width), 100%);
   max-height: calc(100dvh - 48px);
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--fb-border);
-  border-radius: var(--fb-radius);
-  background: var(--fb-bg);
-  color: var(--fb-text);
-  box-shadow: 0 8px 32px rgb(0 0 0 / 24%);
+  border: 1px solid var(--theme-main-border);
+  border-radius: var(--radius);
+  background: var(--theme-main-background);
+  color: var(--text);
+  box-shadow: var(--shadow-md);
   overflow: hidden;
 }
 
@@ -253,17 +246,17 @@ function confirm() {
   width: 30px;
   height: 30px;
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--fb-muted);
+  color: color-mix(in srgb, var(--text) 60%, transparent);
   display: grid;
   place-items: center;
   cursor: pointer;
 }
 
 .fb-dialog-close:hover {
-  background: var(--fb-hover-bg);
-  color: var(--fb-text);
+  background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent);
+  color: var(--text);
 }
 
 .fb-dialog-close svg {
@@ -289,8 +282,8 @@ function confirm() {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--fb-border);
-  border-radius: 10px;
+  border: 1px solid var(--theme-main-border);
+  border-radius: var(--radius);
   overflow: hidden;
 }
 
@@ -300,8 +293,8 @@ function confirm() {
   align-items: center;
   gap: 8px;
   padding: 8px 10px;
-  border-bottom: 1px solid var(--fb-border);
-  background: color-mix(in srgb, var(--fb-text) 3%, transparent);
+  border-bottom: 1px solid var(--theme-main-border);
+  background: color-mix(in srgb, var(--text) 3%, transparent);
 }
 
 .fb-current-path {
@@ -309,7 +302,7 @@ function confirm() {
   min-width: 0;
   font-size: 12px;
   font-family: var(--font-mono, monospace);
-  color: var(--fb-muted);
+  color: color-mix(in srgb, var(--text) 60%, transparent);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -319,9 +312,9 @@ function confirm() {
   width: 24px;
   height: 24px;
   border: 0;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--fb-muted);
+  color: color-mix(in srgb, var(--text) 60%, transparent);
   font-size: 14px;
   display: grid;
   place-items: center;
@@ -330,8 +323,8 @@ function confirm() {
 }
 
 .fb-tree-up:hover {
-  background: var(--fb-hover-bg);
-  color: var(--fb-text);
+  background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent);
+  color: var(--text);
 }
 
 .fb-tree-list {
@@ -340,14 +333,14 @@ function confirm() {
   overflow: auto;
   padding: 4px 0;
   scrollbar-width: thin;
-  scrollbar-color: color-mix(in srgb, var(--fb-text) 18%, transparent) transparent;
+  scrollbar-color: color-mix(in srgb, var(--text) 18%, transparent) transparent;
 }
 
 .fb-tree-loading,
 .fb-tree-error {
   padding: 12px 14px;
   font-size: 12px;
-  color: var(--fb-muted);
+  color: color-mix(in srgb, var(--text) 60%, transparent);
 }
 
 .fb-tree-error {
@@ -361,14 +354,14 @@ function confirm() {
   justify-content: flex-end;
   gap: 8px;
   padding: 14px 20px;
-  border-top: 1px solid var(--fb-border);
+  border-top: 1px solid var(--theme-main-border);
 }
 
 .fb-btn-cancel,
 .fb-btn-select {
   min-width: 80px;
   height: 36px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   padding: 0 16px;
   font: inherit;
   font-size: 13px;
@@ -379,18 +372,18 @@ function confirm() {
 .fb-btn-cancel {
   border: 0;
   background: transparent;
-  color: var(--fb-muted);
+  color: color-mix(in srgb, var(--text) 60%, transparent);
 }
 
 .fb-btn-cancel:hover {
-  background: var(--fb-hover-bg);
-  color: var(--fb-text);
+  background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent);
+  color: var(--text);
 }
 
 .fb-btn-select {
-  border: 1px solid var(--fb-accent);
-  background: var(--fb-accent);
-  color: var(--fb-accent-text);
+  border: 1px solid var(--blue);
+  background: var(--blue);
+  color: var(--bg);
 }
 
 .fb-btn-select:hover:not(:disabled) {

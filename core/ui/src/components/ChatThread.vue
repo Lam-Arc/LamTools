@@ -3634,21 +3634,21 @@ function formatContextSummary(c: ContextCounts): string {
   animation-delay: .3s;
 }
 
-/* ── Process step color coding ── */
+/* ── Process step color coding — 以 main area 文字为底 ── */
 .process-step--completed .process-step-marker {
-  background: var(--green);
-  box-shadow: 0 0 6px color-mix(in srgb, var(--green) 50%, transparent);
+  background: var(--theme-main-text, #fff);
+  box-shadow: none;
 }
 .process-step--error .process-step-marker {
-  background: var(--red);
-  box-shadow: 0 0 6px color-mix(in srgb, var(--red) 50%, transparent);
+  background: color-mix(in srgb, var(--theme-main-text, #fff) 30%, var(--red) 70%);
+  box-shadow: none;
 }
 .process-step--running .process-step-marker {
-  background: var(--blue);
+  background: var(--theme-main-text, #fff);
   animation: process-pulse 1.4s ease-in-out infinite;
 }
 .process-step--pending .process-step-marker {
-  background: var(--muted);
+  background: color-mix(in srgb, var(--theme-main-text, #fff) 40%, transparent);
 }
 @keyframes process-pulse {
   0%, 100% { opacity: 1; }
@@ -3665,10 +3665,10 @@ function formatContextSummary(c: ContextCounts): string {
   }
 }
 
-/* ── Part dot status colors ── */
-.part-dot--completed { color: var(--green); }
-.part-dot--error { color: var(--red); }
-.part-dot--running { color: var(--blue); }
+/* ── Part dot status colors — 以 main area 文字为底 ── */
+.part-dot--completed { color: var(--theme-main-text, #fff); }
+.part-dot--error { color: color-mix(in srgb, var(--theme-main-text, #fff) 30%, var(--red) 70%); }
+.part-dot--running { color: var(--theme-main-text, #fff); }
 
 /* ── Expandable tool cards ── */
 .process-stream--history {
@@ -4070,7 +4070,7 @@ function formatContextSummary(c: ContextCounts): string {
   min-width: 0;
   padding: 2px 7px;
   border: 1px solid var(--theme-main-border, color-mix(in srgb, var(--theme-main-text, #fff) 10%, transparent));
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   background: var(--theme-main-subtle-background, color-mix(in srgb, var(--theme-main-text, #fff) 4%, transparent));
   white-space: normal;
   overflow-wrap: anywhere;
@@ -4122,7 +4122,7 @@ function formatContextSummary(c: ContextCounts): string {
   display: grid;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--theme-main-text, #fff) 18%, transparent);
-  border-radius: 10px;
+  border-radius: var(--radius);
   background: #050806;
   color: #6ee36b;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
@@ -4422,26 +4422,24 @@ function formatContextSummary(c: ContextCounts): string {
 .decision-guide-input {
   min-width: 0;
   width: 100%;
-  resize: vertical;
-  border: 1px solid color-mix(in srgb, var(--theme-main-text, #fff) 10%, transparent);
-  border-radius: 7px;
-  background: color-mix(in srgb, var(--theme-main-text, #fff) 5%, transparent);
-  color: var(--theme-main-text, var(--text));
-  padding: 7px 8px;
+  resize: none;
+  border: 1px solid color-mix(in srgb, var(--theme-control-text) 12%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--theme-control-background) 70%, transparent);
+  color: var(--theme-control-text);
+  padding: var(--space-2);
   font: inherit;
   font-size: 12px;
   line-height: 1.45;
 }
 
 .decision-guide-input:focus {
-  outline: 2px solid color-mix(in srgb, var(--blue) 68%, transparent);
-  outline-offset: 1px;
-  border-color: color-mix(in srgb, var(--blue) 46%, transparent);
+  outline: none;
 }
 
 .decision-guide-submit {
   border: 1px solid color-mix(in srgb, var(--blue) 38%, transparent);
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--blue) 12%, transparent);
   color: var(--theme-main-text, var(--text));
   padding: 7px 9px;
@@ -4588,7 +4586,7 @@ function formatContextSummary(c: ContextCounts): string {
 
 .sub-line-block .user-bubble {
   max-width: min(76%, 520px);
-  border-radius: 14px;
+  border-radius: var(--radius);
   border-bottom-right-radius: 6px;
   padding: 7px 10px;
   font-size: 12px;

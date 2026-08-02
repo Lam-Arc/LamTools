@@ -101,7 +101,7 @@ const dragOver = ref(false)
   max-width: none;
   transform: none;
   z-index: auto;
-  border-radius: 14px;
+  border-radius: var(--radius);
   box-shadow: none;
   transition: border-color 160ms cubic-bezier(.25, 1, .5, 1);
 }

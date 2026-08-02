@@ -5,7 +5,7 @@ import { listArrangeJobs, createArrangeJob, updateArrangeJob, renameArrangeJob, 
 import { CoreAppServerClient, appServerUrl } from '../appServer'
 
 const props = defineProps<{ workRoot?: string }>()
-defineEmits<{ back: [] }>()
+const emit = defineEmits<{ back: [] }>()
 
 const jobs = ref<CoreArrangeJob[]>([])
 const loading = ref(false)
@@ -141,21 +141,21 @@ function openEditForm(job: CoreArrangeJob) {
   if (trigger.type === 'calendar') {
     if (trigger.frequency === 'daily') {
       formScheduleType.value = 'daily'
-      formTime.value = trigger.time || '09:00'
+      formTime.value = typeof trigger.time === 'string' ? trigger.time : '09:00'
     } else {
       formScheduleType.value = 'monthly'
-      formDay.value = trigger.day || 1
-      formTime.value = trigger.time || '09:00'
+      formDay.value = typeof trigger.day === 'number' ? trigger.day : 1
+      formTime.value = typeof trigger.time === 'string' ? trigger.time : '09:00'
     }
-    formTimezone.value = trigger.timezone || 'Asia/Shanghai'
+    formTimezone.value = typeof trigger.timezone === 'string' ? trigger.timezone : 'Asia/Shanghai'
   } else if (trigger.type === 'once') {
     formScheduleType.value = 'once'
   } else if (trigger.type === 'interval') {
     formScheduleType.value = 'interval'
-    formEverySeconds.value = trigger.every_seconds || 3600
+    formEverySeconds.value = typeof trigger.every_seconds === 'number' ? trigger.every_seconds : 3600
   } else if (trigger.type === 'event') {
     formScheduleType.value = 'event'
-    formEventType.value = trigger.event_type || ''
+    formEventType.value = typeof trigger.event_type === 'string' ? trigger.event_type : ''
   } else {
     formScheduleType.value = 'once'
   }
@@ -389,11 +389,12 @@ function statusLabel(status: CoreArrangeJob['status']) {
   return ({ scheduled: '已安排', waiting: '等待事件', running: '运行中', paused: '已暂停', completed: '已完成', failed: '失败', cancelled: '已取消' } as Record<string, string>)[status] || status
 }
 function statusDot(status: CoreArrangeJob['status']) {
-  if (status === 'running') return 'var(--green)'
-  if (status === 'failed') return 'var(--red)'
-  if (status === 'paused' || status === 'waiting') return 'var(--orange)'
-  if (status === 'completed') return 'var(--green)'
-  return 'var(--muted)'
+  const t = 'var(--theme-main-text, #fff)'
+  if (status === 'running') return t
+  if (status === 'failed') return `color-mix(in srgb, ${t} 30%, var(--red) 70%)`
+  if (status === 'paused' || status === 'waiting') return `color-mix(in srgb, ${t} 30%, var(--orange) 70%)`
+  if (status === 'completed') return t
+  return `color-mix(in srgb, ${t} 40%, transparent)`
 }
 function scheduleLabel(type: string) {
   return ({ once: '单次', daily: '每天', monthly: '每月', interval: '间隔', event: '事件' } as Record<string, string>)[type] || type
@@ -757,7 +758,7 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
   border: 1px solid color-mix(in srgb, var(--theme-main-text, #f2efeb) 12%, transparent);
   border-radius: 16px;
   background: var(--theme-main-background, var(--bg, #111111));
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-lg);
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -846,25 +847,25 @@ button { font: inherit; } .text-button, .quiet-button { border: 0; background: t
 .title-row { justify-content: space-between; }
 .title-area { min-width: 0; flex: 1; }
 .card-title { font-size: 15px; font-weight: 600; cursor: pointer; border-radius: 4px; padding: 1px 4px; margin: -1px -4px; }
-.card-title:hover { background: color-mix(in srgb, var(--theme-main-text, var(--text)) 6%, transparent); }
+.card-title:hover { background: color-mix(in srgb, var(--theme-main-text, var(--text)) var(--alpha-hover), transparent); }
 .card-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .title-actions { display: flex; gap: 4px; flex-shrink: 0; }
 .action-btn { padding: 4px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; font-size: 13px; }
-.action-btn:hover { background: color-mix(in srgb, var(--theme-main-text, var(--text)) 7%, transparent); color: var(--theme-main-text, var(--text)); }
+.action-btn:hover { background: color-mix(in srgb, var(--theme-main-text, var(--text)) var(--alpha-hover), transparent); color: var(--theme-main-text, var(--text)); }
 .action-btn:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .action-btn.danger { color: var(--red); }
 
 /* row 2: instruction */
 .instruction-row { flex-wrap: wrap; }
 .card-instruction { color: var(--muted); font-size: 13px; cursor: pointer; border-radius: 4px; padding: 2px 4px; margin: -2px -4px; white-space: pre-wrap; }
-.card-instruction:hover { background: color-mix(in srgb, var(--theme-main-text, var(--text)) 5%, transparent); color: var(--theme-main-text, var(--text)); }
+.card-instruction:hover { background: color-mix(in srgb, var(--theme-main-text, var(--text)) var(--alpha-hover), transparent); color: var(--theme-main-text, var(--text)); }
 .card-instruction:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 
 /* row 3+4: meta */
 .meta-row, .trigger-row { color: var(--muted); font-size: 13px; }
 .meta-item { display: inline-flex; align-items: center; gap: 4px; }
 .meta-item.clickable { cursor: pointer; border-radius: 4px; padding: 1px 4px; margin: -1px -4px; }
-.meta-item.clickable:hover { background: color-mix(in srgb, var(--theme-main-text, var(--text)) 5%, transparent); color: var(--theme-main-text, var(--text)); }
+.meta-item.clickable:hover { background: color-mix(in srgb, var(--theme-main-text, var(--text)) var(--alpha-hover), transparent); color: var(--theme-main-text, var(--text)); }
 .meta-item.clickable:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .meta-item code { font-size: 12px; color: var(--muted); background: color-mix(in srgb, var(--theme-main-text, var(--text)) 6%, transparent); border-radius: 4px; padding: 1px 5px; }
 .meta-divider { color: var(--faint); }
@@ -881,7 +882,7 @@ button { font: inherit; } .text-button, .quiet-button { border: 0; background: t
 .title-edit { font-size: 15px; font-weight: 600; }
 .instruction-edit { resize: vertical; min-height: 48px; font-size: 13px; }
 .edit-hint { display: flex; gap: 4px; margin-top: 4px; }
-.mini-btn { padding: 3px 8px; border: 0; border-radius: 5px; background: var(--theme-control-background, var(--blue)); color: var(--theme-control-text, #fff); cursor: pointer; font-size: 12px; }
+.mini-btn { padding: 3px 8px; border: 0; border-radius: var(--radius-sm); background: var(--theme-control-background, var(--blue)); color: var(--theme-control-text, #fff); cursor: pointer; font-size: 12px; }
 .mini-btn:last-child { background: transparent; color: var(--muted); }
 .mini-btn:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 

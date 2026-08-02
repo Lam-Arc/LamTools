@@ -508,7 +508,7 @@ if (typeof document !== 'undefined') {
   z-index: var(--z-popover, 60);
   min-width: 150px;
   padding: 4px;
-  border-radius: 10px;
+  border-radius: var(--radius);
   border: 1px solid var(--theme-main-border);
   background: var(--theme-main-background);
   color: var(--theme-main-text);
@@ -521,7 +521,7 @@ if (typeof document !== 'undefined') {
   width: 100%;
   background: var(--theme-main-subtle-background, transparent);
   border: 1px solid var(--theme-main-border);
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   color: inherit;
   padding: 5px 8px;
   font-size: 11px;

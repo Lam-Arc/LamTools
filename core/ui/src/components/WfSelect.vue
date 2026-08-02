@@ -63,19 +63,19 @@ onUnmounted(() => document.removeEventListener('pointerdown', onOutside))
   position: absolute;
   top: calc(100% + 2px);
   left: 0; right: 0;
-  z-index: 100;
+  z-index: var(--z-popover);
   display: flex; flex-direction: column;
   max-height: 130px;
   overflow-y: auto;
-  border: 1px solid var(--theme-main-border); border-radius: 5px;
+  border: 1px solid var(--theme-main-border); border-radius: var(--radius-sm);
   background: var(--theme-main-background);
-  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  box-shadow: var(--shadow-md);
 }
 .wf-select-option {
   width: 100%; text-align: left;
   border: none; background: transparent; color: inherit;
   padding: 5px 10px; font-size: 11px; cursor: pointer;
 }
-.wf-select-option:hover { background: var(--theme-main-soft-background, color-mix(in srgb, var(--theme-main-text) 8%, transparent)); }
+.wf-select-option:hover { background: color-mix(in srgb, var(--theme-main-text) var(--alpha-hover), transparent); }
 .wf-select-option.active { color: var(--blue); font-weight: 600; }
 </style>

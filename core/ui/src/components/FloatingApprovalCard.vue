@@ -251,13 +251,13 @@ function compactDetail(value: string, limit = 140): string {
   position: fixed;
   bottom: 24px;
   right: 24px;
-  z-index: 200;
+  z-index: var(--z-modal);
   width: min(380px, calc(100vw - 48px));
   padding: 16px 18px;
   border: 1px solid color-mix(in srgb, var(--orange) 38%, transparent);
   border-radius: var(--radius-lg, 18px);
   background: color-mix(in srgb, var(--bg, #111111) 96%, var(--orange) 4%);
-  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 145, 66, 0.12);
+  box-shadow: var(--shadow-md);
   display: grid;
   gap: 10px;
   font-family: var(--font-sans, sans-serif);
