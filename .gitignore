@@ -73,6 +73,9 @@ data/
 .playwright-mcp/
 .zcode/plans/
 
+# Workflow runtime output (generated scripts, hash files, runners)
+**/.lam/workflow_scripts/
+
 # Root-level runtime/debug artifacts (not project code)
 /test-blog-project/
 /test-mod-site/
