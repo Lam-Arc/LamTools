@@ -23,6 +23,8 @@ export interface CoreLiveComposerMessages {
   sendFailed?: string
   stopping?: string
   stopFailed?: string
+  forceResetting?: string
+  forceResetFailed?: string
 }
 
 export interface UseCoreLiveComposerControllerOptions {
@@ -37,6 +39,7 @@ export interface UseCoreLiveComposerControllerOptions {
   connect(threadId: string): Promise<void>
   startTurn(threadId: string, input: CoreInputItem[], workRoot?: string, options?: Record<string, unknown>): Promise<void>
   interruptTurn(threadId: string, turnId?: string): Promise<void>
+  forceResetTurn(threadId: string, turnId?: string): Promise<void>
   steerTurn?(threadId: string, turnId: string, input: CoreInputItem[]): Promise<void>
   queueInput(threadId: string, input: CoreInputItem[]): Promise<void>
   listCommands(workRoot?: string): Promise<unknown[]>
@@ -64,6 +67,14 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
   const commandRunning = ref(false)
   let commandCatalogGeneration = 0
   let stopPending = false
+  let stopGraceTimer: ReturnType<typeof setTimeout> | null = null
+
+  function clearStopGraceTimer(): void {
+    if (stopGraceTimer !== null) {
+      clearTimeout(stopGraceTimer)
+      stopGraceTimer = null
+    }
+  }
   const liveTurnController = useCoreLiveTurnController<CoreInputItem[]>({
     activeThreadId: options.activeThreadId,
     activeTurnId: options.activeTurnId,
@@ -72,6 +83,7 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
     connect: options.connect,
     startTurn: options.startTurn,
     interruptTurn: options.interruptTurn,
+    forceResetTurn: options.forceResetTurn,
   })
   const commandPalette = useComposerCommandPalette({
     text: options.text,
@@ -95,6 +107,7 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
   watch(options.status, (status) => {
     if (!stopPending || isCoreActiveTurnStatus(status)) return
     stopPending = false
+    clearStopGraceTimer()
     options.setStatusText?.('')
   })
 
@@ -136,6 +149,7 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
     dismissedText.value = ''
     commandPalette.reset()
     stopPending = false
+    clearStopGraceTimer()
   }
 
   function replaceActiveSlash(command: CoreCommandCatalogItem, replacement?: string): void {
@@ -197,13 +211,37 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
 
   async function stop(): Promise<boolean> {
     stopPending = true
+    clearStopGraceTimer()
     options.setStatusText?.(options.messages?.stopping || 'Stopping')
     const ok = await liveTurnController.interruptActiveTurn()
     if (!ok) {
       stopPending = false
       reportError(liveTurnController.lastError.value || options.messages?.stopFailed || 'Unable to stop turn')
+      return ok
     }
+    // Grace-timeout escalation: if the turn is still active after a short
+    // window, cancel was a no-op (the stuck-state where turn.cancel returns
+    // idle because recovery already marked the turn terminal but trailing
+    // running events keep the UI believing it is active). Escalate to a
+    // force reset, which bypasses the active-turn guards and closes
+    // dangling items.
+    stopGraceTimer = setTimeout(() => {
+      stopGraceTimer = null
+      if (!stopPending || !isCoreActiveTurnStatus(options.status.value)) return
+      void escalateForceReset()
+    }, 3000)
     return ok
+  }
+
+  async function escalateForceReset(): Promise<void> {
+    options.setStatusText?.(options.messages?.forceResetting || 'Force resetting…')
+    const ok = await liveTurnController.forceResetActiveTurn()
+    if (!ok) {
+      stopPending = false
+      reportError(liveTurnController.lastError.value || options.messages?.forceResetFailed || 'Unable to force reset turn')
+    }
+    // On success applyResponse snaps the local snapshot to the post-reset
+    // reality; the status watcher will clear stopPending + status text.
   }
 
   async function submit(submissionOptions: { clearComposer?: boolean; forceGuide?: boolean } = {}): Promise<SubmitCoreComposerTaskResult | null> {

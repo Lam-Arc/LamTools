@@ -66,6 +66,7 @@ from .live_operations import (
     handle_thread_resume_operation,
     handle_thread_start_operation,
     handle_turn_cancel_operation,
+    handle_turn_force_reset_operation,
     handle_turn_start_operation,
     handle_turn_steer_operation,
 )
@@ -181,6 +182,7 @@ __all__ = [
     "handle_thread_resume_operation",
     "handle_thread_start_operation",
     "handle_turn_cancel_operation",
+    "handle_turn_force_reset_operation",
     "handle_turn_start_operation",
     "handle_turn_steer_operation",
     "input_item_attachment_ids",

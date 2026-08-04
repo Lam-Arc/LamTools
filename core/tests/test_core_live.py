@@ -31,9 +31,11 @@ from lamtools_core.app.live_operations import (
     handle_thread_resume_operation,
     handle_thread_start_operation,
     handle_turn_cancel_operation,
+    handle_turn_force_reset_operation,
     handle_turn_start_operation,
     handle_turn_steer_operation,
     handle_command_execute_operation,
+    recover_stale_active_turns,
 )
 from lamtools_core.app.live_member import DefaultCoreLiveMemberHooks
 from lamtools_core.event import RunItemEvent
@@ -1992,4 +1994,152 @@ async def test_core_live_queue_guidance_does_not_consume_when_the_runtime_task_i
         release.set()
         if task is not None:
             await task
+        await engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# recover_stale_active_turns: close dangling tool_call items on restart
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_recover_closes_non_terminal_tool_call_items(tmp_path):
+    """On restart, recover must append a cancelled tool_result event for every
+    non-terminal tool_call left by an unexpected shutdown, so the event stream
+    is self-consistent (no orphaned ``running`` items)."""
+    engine, context = await _context(tmp_path)
+    try:
+        thread_id = "thread-recover"
+        turn_id = f"{thread_id}:turn:abc123"
+        tool_item_id = f"{thread_id}:{turn_id}:call_halfbaked:tool"
+        # Build a running turn + a running tool_call directly (simulating a
+        # crash mid-stream, with no live runtime task to clean up).
+        async def write_running(db):
+            return await context.persistence.append_batch(
+                db,
+                run_item_events=[
+                    RunItemEvent(
+                        kind="status",
+                        thread_id=thread_id,
+                        event_id=f"{turn_id}:running",
+                        run_id=turn_id,
+                        turn_id=turn_id,
+                        item_id=f"{turn_id}:running",
+                        status="running",
+                        payload={"type": "turn", "status": "running"},
+                    ),
+                    RunItemEvent(
+                        kind="tool_call",
+                        thread_id=thread_id,
+                        event_id="tool-halfbaked",
+                        run_id=turn_id,
+                        turn_id=turn_id,
+                        item_id=tool_item_id,
+                        status="running",
+                        payload={"type": "dynamicToolCall", "tool_name": "run_command", "arguments": {}},
+                    ),
+                ],
+            )
+        await context.persistence.write(write_running)
+
+        recovered = await recover_stale_active_turns(context=context)
+        assert recovered >= 1
+
+        async with context.session_factory() as db:
+            snapshot = await context.persistence.load(db, thread_id)
+            events = await context.persistence.list_thread(db, thread_id=thread_id)
+
+        # The turn is now cancelled.
+        assert snapshot["core"]["turns"][turn_id]["status"] == "cancelled"
+        # The dangling tool_call item is now cancelled in the snapshot.
+        tool_item = snapshot["core"]["items"].get(tool_item_id)
+        assert tool_item is not None
+        assert tool_item["status"] == "cancelled"
+        # A per-item cancelled tool_result event was appended to the event log.
+        # The envelope payload is RunItemEvent.to_dict(): top-level "status" +
+        # nested "payload" dict holding raw_end_reason.
+        tool_events = [e for e in events if e.item_id == tool_item_id]
+        assert any(
+            e.payload.get("status") == "cancelled"
+            and e.payload.get("payload", {}).get("raw_end_reason") == "unexpected_shutdown"
+            for e in tool_events
+        ), "expected a per-item cancelled tool_result event in the event log"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_force_reset_closes_dangling_items_on_already_cancelled_turn(tmp_path):
+    """turn.force_reset must reach a turn even after recovery marked it
+    cancelled (where turn.cancel returns idle), closing any remaining
+    dangling items and returning the refreshed snapshot."""
+    engine, context = await _context(tmp_path)
+    try:
+        thread_id = "thread-reset"
+        turn_id = f"{thread_id}:turn:def456"
+        tool_item_id = f"{thread_id}:{turn_id}:call_orphan:tool"
+        async def write_running(db):
+            return await context.persistence.append_batch(
+                db,
+                run_item_events=[
+                    RunItemEvent(
+                        kind="status",
+                        thread_id=thread_id,
+                        event_id=f"{turn_id}:running",
+                        run_id=turn_id,
+                        turn_id=turn_id,
+                        item_id=f"{turn_id}:running",
+                        status="running",
+                        payload={"type": "turn", "status": "running"},
+                    ),
+                    RunItemEvent(
+                        kind="tool_call",
+                        thread_id=thread_id,
+                        event_id="tool-orphan",
+                        run_id=turn_id,
+                        turn_id=turn_id,
+                        item_id=tool_item_id,
+                        status="running",
+                        payload={"type": "dynamicToolCall", "tool_name": "run_command", "arguments": {}},
+                    ),
+                ],
+            )
+        await context.persistence.write(write_running)
+        # Recover first (marks the turn cancelled + closes the orphan).
+        await recover_stale_active_turns(context=context)
+
+        # turn.cancel should now return idle (the stuck-state).
+        cancel_outcome = await handle_turn_cancel_operation(
+            request_id=2,
+            params={"thread_id": thread_id, "turn_id": turn_id},
+            context=context,
+        )
+        assert cancel_outcome.response["result"]["status"] == "idle"
+
+        # force_reset bypasses the active guard and resets.
+        reset_outcome = await handle_turn_force_reset_operation(
+            request_id=3,
+            params={"thread_id": thread_id, "turn_id": turn_id},
+            context=context,
+        )
+        result = reset_outcome.response["result"]
+        assert result["status"] == "reset"
+        assert result["snapshot"]["core"]["turns"][turn_id]["status"] == "cancelled"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_force_reset_on_idle_thread_returns_reset_with_no_events(tmp_path):
+    """force_reset on a thread with no turns at all should not crash."""
+    engine, context = await _context(tmp_path)
+    try:
+        outcome = await handle_turn_force_reset_operation(
+            request_id=1,
+            params={"thread_id": "thread-empty"},
+            context=context,
+        )
+        result = outcome.response["result"]
+        assert result["status"] == "reset"
+        assert result["events"] == []
+    finally:
         await engine.dispose()

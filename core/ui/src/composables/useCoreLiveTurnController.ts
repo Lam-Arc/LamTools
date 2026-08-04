@@ -10,6 +10,7 @@ export interface UseCoreLiveTurnControllerOptions<Input> {
   connect(threadId: string): Promise<void>
   startTurn(threadId: string, input: Input, workRoot?: string, options?: Record<string, unknown>): Promise<void>
   interruptTurn(threadId: string, turnId?: string): Promise<void>
+  forceResetTurn(threadId: string, turnId?: string): Promise<void>
 }
 
 export function useCoreLiveTurnController<Input>(options: UseCoreLiveTurnControllerOptions<Input>) {
@@ -75,12 +76,26 @@ export function useCoreLiveTurnController<Input>(options: UseCoreLiveTurnControl
     }
   }
 
+  async function forceResetActiveTurn(): Promise<boolean> {
+    const threadId = options.activeThreadId.value || ''
+    if (!await ensureConnected(threadId)) return false
+    try {
+      await options.forceResetTurn(threadId, options.activeTurnId?.value || undefined)
+      lastError.value = ''
+      return true
+    } catch (error) {
+      lastError.value = error instanceof Error ? error.message : String(error)
+      return false
+    }
+  }
+
   function isThreadConnected(threadId: string): boolean {
     return options.connectedThreadId.value === threadId && options.connectionState.value === 'open'
   }
 
   return {
     ensureConnected,
+    forceResetActiveTurn,
     interruptActiveTurn,
     isActiveThreadConnected,
     lastError,

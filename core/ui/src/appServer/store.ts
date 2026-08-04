@@ -46,6 +46,7 @@ export interface CoreAppServerRuntimeControllerOptions<
   reconnectMaxMs?: number
   scheduleFrame?: (callback: () => void) => unknown
   onSessionCreated?: () => void
+  onSessionUpdated?: (session: { title?: string }) => void
 }
 
 export function createCoreAppServerRuntimeState<
@@ -160,6 +161,11 @@ export function createCoreAppServerRuntimeController<
   function enqueueEvent(event: CoreAppEvent) {
     if (event.method === 'session/created') {
       options.onSessionCreated?.()
+      return
+    }
+    if (event.method === 'session/updated') {
+      const session = (event.payload as { session?: { title?: string } } | null)?.session || {}
+      options.onSessionUpdated?.(session)
       return
     }
     if (event.method === 'core/runItem') {
@@ -305,6 +311,16 @@ export function createCoreAppServerRuntimeController<
     applyResponse(response)
   }
 
+  async function forceResetTurn(threadId: string, turnId?: string) {
+    await ensureClient()
+    const response = await runtime.client!.request('turn/force_reset', {
+      thread_id: threadId,
+      ...(turnId ? { turn_id: turnId } : {}),
+      include_snapshot: true,
+    })
+    applyResponse(response)
+  }
+
   async function respondApproval(requestId: string, decision: string, guidance?: string) {
     await ensureClient()
     const response = await runtime.client!.request('approval/respond', {
@@ -332,6 +348,7 @@ export function createCoreAppServerRuntimeController<
     deleteQueueInput,
     disconnect,
     executeCommand,
+    forceResetTurn,
     guideQueueInput,
     hydrate,
     interruptTurn,
