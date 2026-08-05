@@ -3,6 +3,8 @@
 Date: 2026-07-04
 Status: Approved Core-first design; updated with `@` resource-reference and `/` command input rules; pending implementation plan
 
+> 维护标注（2026-08-03）：Member 产品已归档至 `archive/members/`。本文中 `members/{member}/command` 等路径描述为设计时的架构约定，归档后不再有活跃 member 实现；Core 侧的通用命令、附件、skill 协议设计仍然有效。
+
 维护标注：本设计最初从 Writer 附件上传入口提出。经架构确认后，附件上传不按 Writer 私有能力实现，而按 Core 的通用 Agent 基础能力实现；Writer 只是第一处产品落地入口。
 
 维护标注（2026-07-04）：后续讨论把“附件上传入口”上移为通用 `@资源引用` 输入能力。附件上传按钮仍可存在，但语义应变成“在当前光标处插入一个已解析的 `@附件引用`”。手写 `@本地文件路径` 时，系统实时检测并高亮；检测不到真实资源时按普通文本处理，不报错、不阻断。

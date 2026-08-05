@@ -39,8 +39,8 @@ LamTools 的成员差异通过两个协议承载：
 
 ### 现有实现
 - NullHookSet：空实现，无差异
-- WriterHookSet：`members/writer/backend/app/core/writer/hooks.py`
-- ArtistHookSet：`members/artist/backend/app/core/artist/hooks.py`
+- WriterHookSet：`archive/members/writer/backend/app/core/writer/hooks.py`（已归档）
+- ArtistHookSet：`archive/members/artist/backend/app/core/artist/hooks.py`（已归档）
 
 ## MemberSlotSet 协议
 

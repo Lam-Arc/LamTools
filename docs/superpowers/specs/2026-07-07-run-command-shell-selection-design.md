@@ -85,8 +85,8 @@ Run the smallest affected tests first, then the broader command-related Writer t
 
 ```powershell
 py -3.14 -m pytest core/tests/test_command_tools.py -q
-py -3.14 -m pytest members/writer/backend/tests/test_writer_core_kernel_adapter.py -q -k "run_command or run_tests or background"
-py -3.14 -m pytest members/writer/backend/tests/test_tool_contracts.py -q -k "run_command or run_tests"
+py -3.14 -m pytest archive/members/writer/backend/tests/test_writer_core_kernel_adapter.py -q -k "run_command or run_tests or background"
+py -3.14 -m pytest archive/members/writer/backend/tests/test_tool_contracts.py -q -k "run_command or run_tests"
 ```
 
 ## Acceptance

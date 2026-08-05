@@ -5,7 +5,7 @@ build/
 release/
 .pytest_cache/
 test/
-members/writer/frontend/.vite/
+archive/members/writer/frontend/.vite/
 
 # Python
 __pycache__/
@@ -60,9 +60,9 @@ _experiments/
 
 # Desktop build outputs
 LamWriter-*.zip
-members/writer/frontend/src-tauri/target/
-members/writer/frontend/src-tauri/gen/
-members/writer/frontend/.electron-app-stage/
+archive/members/writer/frontend/src-tauri/target/
+archive/members/writer/frontend/src-tauri/gen/
+archive/members/writer/frontend/.electron-app-stage/
 .acceptance/
 core/desktop/src-tauri/target/
 core/desktop/src-tauri/lamcore-backend/

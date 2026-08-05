@@ -108,7 +108,7 @@ version: 0.1.0
 - `FolderBrowserDialog.vue` 的 `--fb-*` 本地命名空间（平行主题层）+ `z-index: calc(var(--z-modal-backdrop,80)+3)`
 - `UiSelect.vue` 与 `WfSelect.vue` 双下拉原语（须收敛为单一配方）
 - `FloatingApprovalCard.vue` 的 bespoke shadow + `z-index:200`（忽略 z 标尺）
-- `members/writer/frontend/src/styles/components.css` 孤儿文件（引用不存在的子目录，且未被 import）
+- `archive/members/writer/frontend/src/styles/components.css` 孤儿文件（引用不存在的子目录，且未被 import；member 已归档，此项不再需要收敛）
 
 ### 值→token 映射（收敛时参考）
 - `6px` → `var(--radius-sm)` · `12px` → `var(--radius)` · `18px` → `var(--radius-lg)` · `22px` → `var(--radius-xl)`
