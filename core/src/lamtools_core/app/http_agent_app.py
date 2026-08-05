@@ -196,13 +196,13 @@ def create_core_agent_http_app(
             config_db_path,
         )
         config = LLMConfig(
-            provider_name="Default Provider",
+            provider_name="",
             provider_api_type="openai",
             base_url="",
             api_key="",
             model_record_id=str(model_id or ""),
             model_id=str(model_id or ""),
-            display_name=str(model_id or "default-model"),
+            display_name=str(model_id or ""),
         )
     llm_client = CoreConfigRoutingLLMClient(
         config_db_path=config_db_path,
@@ -1283,7 +1283,9 @@ def _list_llm_provider_configs(config_db_path: Path) -> list[dict[str, Any]]:
 
 
 def create_default_core_agent_http_app() -> FastAPI:
-    model_id = os.environ.get("LAMTOOLS_CORE_MODEL_ID") or "default-model"
+    # No built-in "default-model" anymore: empty model_id means "unconfigured",
+    # and the app boots with a placeholder until the user sets up a model.
+    model_id = os.environ.get("LAMTOOLS_CORE_MODEL_ID") or ""
     config_db = os.environ.get("LAMTOOLS_LLM_CONFIG_DB") or None
     core_db = os.environ.get("LAMTOOLS_CORE_DB") or None
     data_dir = os.environ.get("LAMTOOLS_CORE_DATA_DIR") or None
