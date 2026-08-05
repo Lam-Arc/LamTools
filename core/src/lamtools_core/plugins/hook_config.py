@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 
@@ -82,7 +83,12 @@ class HookRegistry:
     ) -> list[HookDefinition]:
         if not path.exists():
             return []
-        raw = json.loads(path.read_text(encoding="utf-8-sig"))
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError):
+            # A corrupt or empty hooks file must never take the whole app down.
+            logging.getLogger(__name__).warning("Skipping unreadable hooks file: %s", path)
+            return []
         hooks_section = raw.get("hooks", {}) if isinstance(raw, dict) else {}
         if not isinstance(hooks_section, dict):
             raise ValueError(f"hooks must be an object: {path}")

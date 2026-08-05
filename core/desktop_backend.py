@@ -79,6 +79,19 @@ def _ensure_config_db(config_db: Path) -> None:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    try:
+        _run()
+    except BaseException:
+        # A fatal startup/request error must land in the log file (not only in
+        # the PyInstaller fatal-error dialog) so it can be diagnosed remotely.
+        try:
+            logging.getLogger().exception("Fatal error in LamCore backend")
+        except BaseException:
+            pass
+        raise
+
+
+def _run() -> None:
     import sys
 
     # PyInstaller windows mode: sys.stdout/stderr may be None — redirect to devnull

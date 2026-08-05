@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 from pathlib import Path
 from typing import Any
 
 from .schemas import MCPServerConfig
+
+_log = logging.getLogger(__name__)
 
 
 def load_mcp_server_configs(
@@ -24,7 +27,12 @@ def load_mcp_server_configs(
     for path in _config_paths(work_root, config_files=config_files, env_var=env_var, default_paths=default_paths):
         if not path.exists():
             continue
-        data = json.loads(path.read_text(encoding="utf-8-sig"))
+        try:
+            data = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError):
+            # A corrupt or empty mcp.json must never take the whole app down.
+            _log.warning("Skipping unreadable MCP config: %s", path)
+            continue
         raw_servers = data.get("mcpServers", data.get("servers", data)) if isinstance(data, dict) else {}
         if isinstance(raw_servers, dict):
             servers.update(raw_servers)
