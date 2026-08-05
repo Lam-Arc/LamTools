@@ -182,8 +182,19 @@ fn prod_backend_command(
         .ok_or("cannot locate backend directory")?
         .to_path_buf();
 
+    // Green/portable mode: keep every user data file (config.db, core.db,
+    // workspace, logs, ~/.lam configs) beside the app under {app}/.lam so
+    // nothing is written outside the install root (no %APPDATA%, no ~).
+    let app_dir = env::current_exe()?
+        .parent()
+        .ok_or("cannot locate app directory")?
+        .to_path_buf();
+    let lam_home = app_dir.join(".lam");
+
     let mut cmd = Command::new(&backend_exe);
     cmd.env("LAMCORE_PORT", port.to_string())
+        .env("LAMTOOLS_HOME", &lam_home)
+        .env("LAMTOOLS_PROJECTS_ROOT", app_dir.join("lam_projects"))
         .current_dir(&backend_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::null())

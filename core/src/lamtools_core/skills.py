@@ -134,8 +134,8 @@ class SkillRegistry:
         # Global:  ~/.lam/skills/*/SKILL.md (one level deep)
         # Project: {work_root}/.lam/**/SKILL.md (recursive)
         global_roots: list[Path] = []
-        home = Path.home()
-        home_lam = home / ".lam"
+        from lamtools_core.config.root import lam_home
+        home_lam = lam_home()
         if home_lam.is_dir():
             global_roots.append(home_lam)
         global_roots.extend(self._explicit_roots)

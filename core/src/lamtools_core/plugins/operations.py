@@ -30,7 +30,8 @@ def _skill_source(location: Path, work_root: str | Path | None) -> str:
             pass
         else:
             return "project"
-    home_lam = Path.home() / ".lam"
+    from lamtools_core.config.root import lam_home
+    home_lam = lam_home()
     try:
         loc.relative_to(home_lam)
     except ValueError:

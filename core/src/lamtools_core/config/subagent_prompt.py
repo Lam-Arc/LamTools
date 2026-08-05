@@ -8,7 +8,7 @@ Resolution is a first-existing-wins fallback chain (same shape as the
 loadtools/access_tools loaders):
 
   1. Project:  ``{work_root}/.lam/config/subagent/guide.md``
-  2. Global:    ``~/.lam/config/subagent/guide.md``
+  2. Global:    ``{lam_home}/config/subagent/guide.md`` (``~/.lam`` by default; beside the app when ``LAMTOOLS_HOME`` is set)
   3. Built-in:  :data:`DEFAULT_SUBAGENT_GUIDE` (module constant)
 
 Members inherit this loader automatically because it lives in
@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+
+from lamtools_core.config.root import lam_home
 
 GUIDE_FILENAME = "guide.md"
 SETTINGS_FILENAME = "settings.json"
@@ -46,7 +48,7 @@ def subagent_guide_dirs(work_root: str | Path | None) -> list[Path]:
     dirs: list[Path] = []
     if work_root:
         dirs.append(Path(work_root).resolve() / ".lam" / "config" / SUBAGENT_DIR)
-    dirs.append(Path.home() / ".lam" / "config" / SUBAGENT_DIR)
+    dirs.append(lam_home() / "config" / SUBAGENT_DIR)
     return dirs
 
 
@@ -80,7 +82,7 @@ def guide_path_for_scope(scope: str, work_root: str | Path | None) -> Path:
     """Return the writable guide path for ``scope`` ("project" or "global")."""
     if scope == "project" and work_root:
         return Path(work_root).resolve() / ".lam" / "config" / SUBAGENT_DIR / GUIDE_FILENAME
-    return Path.home() / ".lam" / "config" / SUBAGENT_DIR / GUIDE_FILENAME
+    return lam_home() / "config" / SUBAGENT_DIR / GUIDE_FILENAME
 
 
 def write_subagent_guide(content: str, *, scope: str, work_root: str | Path | None) -> Path:
@@ -124,7 +126,7 @@ def settings_path_for_scope(scope: str, work_root: str | Path | None) -> Path:
     """Return the writable settings path for ``scope`` ("project" or "global")."""
     if scope == "project" and work_root:
         return Path(work_root).resolve() / ".lam" / "config" / SUBAGENT_DIR / SETTINGS_FILENAME
-    return Path.home() / ".lam" / "config" / SUBAGENT_DIR / SETTINGS_FILENAME
+    return lam_home() / "config" / SUBAGENT_DIR / SETTINGS_FILENAME
 
 
 def write_subagent_settings(updates: dict[str, object], *, scope: str, work_root: str | Path | None) -> Path:

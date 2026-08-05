@@ -26,6 +26,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
+from lamtools_core.config.root import lam_home
 from lamtools_core.runtime.workflow import (
     WorkflowDef,
     WorkflowNode,
@@ -51,7 +52,7 @@ class WorkflowStore:
         """Return paths to each workflow: folders (with config.json) or legacy
         single-JSON files (migrated on read)."""
         roots: list[Path] = []
-        home_lam = Path.home() / ".lam"
+        home_lam = lam_home()
         if home_lam.is_dir():
             roots.append(home_lam)
         roots.extend(self._explicit_roots)
@@ -145,7 +146,7 @@ class WorkflowStore:
         for wr in work_roots:
             if wr and wr not in grouped:
                 grouped[wr] = []
-        home_lam = (Path.home() / ".lam").resolve()
+        home_lam = lam_home().resolve()
         explicit = {p.resolve() for p in self._explicit_roots}
         seen_names: set[str] = set()
         candidates: list[Path] = []
@@ -252,7 +253,7 @@ class WorkflowStore:
         if work_root:
             return Path(work_root).resolve() / ".lam" / "workflows"
         # Otherwise the global personal dir.
-        return Path.home() / ".lam" / "workflows"
+        return lam_home() / "workflows"
 
     async def _read_entry_async(self, path: Path) -> WorkflowDef | None:
         return await asyncio.to_thread(self._read_entry, path)

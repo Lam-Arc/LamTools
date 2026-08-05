@@ -9,6 +9,10 @@ from .models import PluginManifest
 
 
 def _appdata_root() -> Path:
+    # Green/portable mode: everything lives beside the app.
+    home = os.environ.get("LAMTOOLS_HOME")
+    if home:
+        return Path(home)
     raw = os.environ.get("APPDATA")
     if raw:
         return Path(raw)
@@ -16,6 +20,10 @@ def _appdata_root() -> Path:
 
 
 def default_user_plugin_root() -> Path:
+    # Green/portable mode: beside the app (no LamTools nesting).
+    if os.environ.get("LAMTOOLS_HOME"):
+        from lamtools_core.config.root import lam_home
+        return lam_home() / "plugins"
     return _appdata_root() / "LamTools" / "plugins"
 
 

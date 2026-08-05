@@ -1,10 +1,12 @@
 """Global AGENTS.md instruction file.
 
 A user-level instruction file that applies to *every* project, stored at
-``~/.lam/config/AGENTS.md``. Unlike the project-level ``{work_root}/AGENTS.md``
-(which is loaded by :class:`ProjectContextLoader` from the work root), the
-global file is injected *additively* — the global AGENTS.md is loaded first,
-then the project AGENTS.md, so both layers contribute to the system prompt.
+``{lam_home}/config/AGENTS.md`` (``~/.lam/config/AGENTS.md`` by default, or
+beside the app when ``LAMTOOLS_HOME`` is set for green/portable mode).
+Unlike the project-level ``{work_root}/AGENTS.md`` (which is loaded by
+:class:`ProjectContextLoader` from the work root), the global file is injected
+*additively* — the global AGENTS.md is loaded first, then the project AGENTS.md,
+so both layers contribute to the system prompt.
 
 The project-level read/write primitives live in ``app/project_store.py`` and
 operate on ``{work_root}/AGENTS.md``; this module covers only the global tier.
@@ -14,16 +16,20 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from lamtools_core.config.root import lam_home
+
 #: Filename for the global instruction file.
 AGENTS_MD_FILENAME = "AGENTS.md"
 
-#: Sub-directory under ``~/.lam/config/`` that holds the global instruction file.
-GLOBAL_CONFIG_DIR = Path.home() / ".lam" / "config"
+
+def global_config_dir() -> Path:
+    """Sub-directory under the LamTools home that holds the global AGENTS.md."""
+    return lam_home() / "config"
 
 
 def global_agents_md_path() -> Path:
     """Return the path to the global ``~/.lam/config/AGENTS.md`` file."""
-    return GLOBAL_CONFIG_DIR / AGENTS_MD_FILENAME
+    return global_config_dir() / AGENTS_MD_FILENAME
 
 
 def read_global_agents_md() -> dict[str, object]:

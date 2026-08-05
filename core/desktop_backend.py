@@ -6,9 +6,11 @@ The Tauri shell handles all of that.
 
 Environment variables (set by the Tauri shell):
     LAMCORE_PORT              – port to listen on (default 5172)
+    LAMTOOLS_HOME             – portable user-home (app dir's .lam/) — keeps
+                                every data file beside the app (green mode)
     LAMTOOLS_LLM_CONFIG_DB    – path to config.db
     LAMTOOLS_CORE_DB          – path to core.db
-    LAMTOOLS_CORE_DATA_DIR    – user data directory
+    LAMTOOLS_CORE_DATA_DIR    – user data directory (exact override)
     LAMTOOLS_CORE_WORK_ROOT   – workspace root
     LAMTOOLS_FRONTEND_DIR     – optional: serve built SPA from here
 """
@@ -89,11 +91,18 @@ def main() -> None:
     host = os.environ.get("LAMCORE_HOST", "127.0.0.1")
 
     # --- data directory & DB seeding ----------------------------------------
-    data_dir = Path(
-        os.environ.get("LAMTOOLS_CORE_DATA_DIR")
-        or os.environ.get("APPDATA", "")
-        or Path.home()
-    ).joinpath("LamCore")
+    # Green/portable mode: LAMTOOLS_HOME (set by the Tauri shell to the app
+    # directory's .lam/) keeps config.db/core.db/workspace/logs beside the app,
+    # so nothing is written outside the install root. LAMTOOLS_CORE_DATA_DIR is
+    # an exact override; otherwise fall back to %APPDATA%\LamCore.
+    data_dir_env = os.environ.get("LAMTOOLS_CORE_DATA_DIR")
+    lam_home_env = os.environ.get("LAMTOOLS_HOME")
+    if data_dir_env:
+        data_dir = Path(data_dir_env)
+    elif lam_home_env:
+        data_dir = Path(lam_home_env)
+    else:
+        data_dir = Path(os.environ.get("APPDATA", "") or Path.home()) / "LamCore"
     data_dir.mkdir(parents=True, exist_ok=True)
 
     config_db = Path(

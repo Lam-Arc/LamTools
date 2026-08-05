@@ -13,6 +13,10 @@ SUPPORTED_HANDLER_TYPES = {"command", "http", "mcp", "prompt"}
 
 
 def default_user_hooks_path() -> Path:
+    # Green/portable mode: everything lives beside the app.
+    home = os.environ.get("LAMTOOLS_HOME")
+    if home:
+        return Path(home) / "hooks.json"
     appdata = os.environ.get("APPDATA")
     root = Path(appdata) if appdata else Path.home() / "AppData" / "Roaming"
     return root / "LamTools" / "hooks.json"

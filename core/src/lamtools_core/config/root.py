@@ -12,11 +12,30 @@ import sys
 from pathlib import Path
 
 
+def lam_home() -> Path:
+    """Return the LamTools user-home directory.
+
+    Green/portable mode: when ``LAMTOOLS_HOME`` is set (the desktop shell sets
+    it to the app directory's ``.lam/``), every user-level file lives beside
+    the app so nothing is written outside the install root. Otherwise fall
+    back to ``~/.lam`` for CLI/dev usage.
+    """
+    env = os.environ.get("LAMTOOLS_HOME")
+    if env:
+        return Path(env)
+    return Path.home() / ".lam"
+
+
 def core_config_root() -> Path:
     """Return the .lam/core/ directory for user-facing config files."""
     env = os.environ.get("LAMTOOLS_CORE_CONFIG_ROOT")
     if env:
         return Path(env)
+
+    # Green/portable mode: unified under the app-side .lam/.
+    lam = os.environ.get("LAMTOOLS_HOME")
+    if lam:
+        return (Path(lam) / "core").resolve()
 
     exe_dir = _exe_dir()
     return (exe_dir / ".lam" / "core").resolve()

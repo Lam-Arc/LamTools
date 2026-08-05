@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 from lamtools_core.llm.model_capabilities import Capability, resolve_capability
+from lamtools_core.config.root import lam_home
 from lamtools_core.llm.profiles import load_jsonc
 
 MODELS_SUBDIR = "models"
@@ -103,7 +104,7 @@ class ModelStore:
         builtin = _repo_resource_models_dir()
         if builtin.is_dir():
             dirs.append(builtin)
-        home_lam = Path.home() / ".lam"
+        home_lam = lam_home()
         if home_lam.is_dir():
             dirs.append(home_lam / "config" / MODELS_SUBDIR)
         for root in self._explicit_roots:
@@ -242,7 +243,7 @@ class ModelStore:
     def write_path(model_id: str, *, scope: str, work_root: str | None) -> Path:
         if scope == "project" and work_root:
             return Path(work_root).resolve() / ".lam" / "config" / MODELS_SUBDIR / f"{model_id}{MODEL_FILENAME_SUFFIX}"
-        return Path.home() / ".lam" / "config" / MODELS_SUBDIR / f"{model_id}{MODEL_FILENAME_SUFFIX}"
+        return lam_home() / "config" / MODELS_SUBDIR / f"{model_id}{MODEL_FILENAME_SUFFIX}"
 
     def write(self, model: ModelConfig, *, scope: str, work_root: str | None) -> Path:
         path = self.write_path(model.model_id, scope=scope, work_root=work_root)
