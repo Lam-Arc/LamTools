@@ -21,6 +21,10 @@ _PROJECT_ROOT = Path(".").resolve()
 _datas: list[tuple[str, str]] = [
     # Frontend SPA (built by Vite) — optional, for SPA fallback
     ("core/desktop/dist", "frontend"),
+    # Runtime data files resolved via _MEIPASS in frozen mode:
+    # LLM adapter profiles (e.g. xfyun-coding-plan) + default tool-config fallbacks.
+    ("core/config/llm_adapters", "config/llm_adapters"),
+    ("core/config/resources", "config/resources"),
 ]
 
 # ---------------------------------------------------------------------------

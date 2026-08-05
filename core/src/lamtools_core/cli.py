@@ -2421,8 +2421,13 @@ def _resolve_adapter_profile(config: LLMConfig, adapter_dirs: tuple[Path | str, 
 
 
 def _default_adapter_dirs() -> list[Path]:
-    root = _repo_root()
-    dirs = [root / "core" / "config" / "llm_adapters"]
+    dirs: list[Path] = []
+    if getattr(sys, "frozen", False):
+        # PyInstaller: adapter profiles are bundled under _MEIPASS/config/.
+        meipass = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+        dirs.append(meipass / "config" / "llm_adapters")
+    else:
+        dirs.append(_repo_root() / "core" / "config" / "llm_adapters")
     env_dir = os.environ.get("LAMTOOLS_LLM_ADAPTER_DIR")
     if env_dir:
         dirs.append(Path(env_dir))

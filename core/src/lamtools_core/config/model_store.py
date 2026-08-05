@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import sys
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -81,9 +82,12 @@ class ModelConfig:
 def _repo_resource_models_dir() -> Path:
     """Built-in shipped models dir: <repo>/core/config/resources/models.
 
-    Resolved relative to this file so it works in dev and when packaged
-    alongside the package tree.
+    Resolved relative to this file in dev; from ``_MEIPASS/config/resources``
+    when frozen (PyInstaller).
     """
+    if getattr(sys, "frozen", False):
+        meipass = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+        return meipass / "config" / "resources" / MODELS_SUBDIR
     return Path(__file__).resolve().parent.parent.parent.parent / "config" / "resources" / MODELS_SUBDIR
 
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 import time as time_module
 import uuid
 from collections.abc import Callable
@@ -740,6 +741,18 @@ async def _resolve_turn_approval_policy(*, context: "CoreLiveContext", params: d
     }
 
 
+def _bundled_config_resources_dir() -> Path:
+    """Directory of bundled tool-config resources (access_tools.jsonc, ...).
+
+    Resolved relative to this file in dev; from ``_MEIPASS/config/resources``
+    when frozen (PyInstaller).
+    """
+    if getattr(sys, "frozen", False):
+        meipass = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+        return meipass / "config" / "resources"
+    return Path(__file__).resolve().parent.parent.parent.parent / "config" / "resources"
+
+
 def _load_tier_tools(context: "CoreLiveContext") -> TierTools | None:
     """Load access_tools.jsonc — prefer .lam/core/config/, then data_dir, then bundled."""
     from lamtools_core.config.root import core_config_file
@@ -750,9 +763,7 @@ def _load_tier_tools(context: "CoreLiveContext") -> TierTools | None:
     if data_dir_raw is not None:
         data_dir = Path(str(data_dir_raw))
         candidates.append(data_dir / "access_tools.jsonc")
-    candidates.append(
-        Path(__file__).resolve().parent.parent.parent.parent / "config" / "resources" / "access_tools.jsonc"
-    )
+    candidates.append(_bundled_config_resources_dir() / "access_tools.jsonc")
     for candidate in candidates:
         try:
             if candidate.exists():
