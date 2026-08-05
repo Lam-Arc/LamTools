@@ -1,0 +1,4 @@
+interface:
+  display_name: "Observe Events"
+  short_description: "Create durable event observers with restart catch-up"
+  default_prompt: "Use $observe-events to create and register a reliable observer for this event-following request."
