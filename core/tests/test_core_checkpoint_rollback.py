@@ -56,6 +56,19 @@ def _init_mixed_workspace(work_root: Path) -> None:
     _write(work_root / "ignored.txt", "ignored-before\n")
 
 
+async def _backup_workspace_files(coordinator: Any, session_id: str, work_root: Path) -> None:
+    """Simulate agent tool writes: back each existing file up before mutating.
+
+    With lazy capture only files passed through backup_file() are restored on
+    rollback — files created (or renamed) after the checkpoint are not backed
+    up and are intentionally left alone.
+    """
+    for name in ("tracked.txt", "deleted.txt", "rename-old.txt", "untracked.txt", "ignored.txt"):
+        path = work_root / name
+        if path.is_file():
+            await coordinator.backup_file(session_id=session_id, path=path)
+
+
 def _mutate_workspace_after_checkpoint(work_root: Path) -> None:
     _write(work_root / "tracked.txt", "tracked-after\n")
     (work_root / "deleted.txt").unlink()
@@ -66,15 +79,19 @@ def _mutate_workspace_after_checkpoint(work_root: Path) -> None:
     _write(work_root / "created-ignored.txt", "created-ignored-after\n")
 
 
-def _assert_workspace_before_turn(work_root: Path) -> None:
+def _assert_workspace_restored_lazy(work_root: Path) -> None:
+    """Lazy-capture restore: backed-up files come back, files created/renamed
+    after the checkpoint are not touched."""
     assert (work_root / "tracked.txt").read_text(encoding="utf-8") == "tracked-before\n"
     assert (work_root / "deleted.txt").read_text(encoding="utf-8") == "deleted-before\n"
     assert (work_root / "rename-old.txt").read_text(encoding="utf-8") == "rename-before\n"
-    assert not (work_root / "rename-new.txt").exists()
+    # rename-new.txt was never backed up -> it stays (renamed file not rolled back)
+    assert (work_root / "rename-new.txt").read_text(encoding="utf-8") == "rename-before\n"
     assert (work_root / "untracked.txt").read_text(encoding="utf-8") == "untracked-before\n"
-    assert not (work_root / "created.txt").exists()
+    # created.txt / created-ignored.txt were never backed up -> they stay
+    assert (work_root / "created.txt").read_text(encoding="utf-8") == "created-after\n"
     assert (work_root / "ignored.txt").read_text(encoding="utf-8") == "ignored-before\n"
-    assert not (work_root / "created-ignored.txt").exists()
+    assert (work_root / "created-ignored.txt").read_text(encoding="utf-8") == "created-ignored-after\n"
 
 
 def _assert_workspace_after_turn(work_root: Path) -> None:
@@ -199,6 +216,8 @@ async def test_checkpoint_restores_conversation_and_all_workspace_file_classes_a
             actor_kind="main",
         )
 
+        # simulate agent tool writes (back up before mutating)
+        await _backup_workspace_files(coordinator, "session-rollback", work_root)
         _mutate_workspace_after_checkpoint(work_root)
         await sessions.add_message(MessageRecord(
             id="message-after",
@@ -224,7 +243,7 @@ async def test_checkpoint_restores_conversation_and_all_workspace_file_classes_a
         assert await db.runtime_state_store.get_history("session-rollback") == [
             {"role": "user", "content": "first turn"}
         ]
-        _assert_workspace_before_turn(work_root)
+        _assert_workspace_restored_lazy(work_root)
 
         undone = await coordinator.undo(restored.operation_id)
 
@@ -237,7 +256,10 @@ async def test_checkpoint_restores_conversation_and_all_workspace_file_classes_a
             {"role": "user", "content": "first turn"},
             {"role": "assistant", "content": "second turn"},
         ]
-        _assert_workspace_after_turn(work_root)
+        # Lazy capture: undo restores the conversation but has no "after"
+        # workspace snapshot to go back to, so the workspace stays as restore
+        # left it.
+        _assert_workspace_restored_lazy(work_root)
     finally:
         await db.close()
 

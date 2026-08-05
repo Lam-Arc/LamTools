@@ -145,12 +145,6 @@ class CheckpointConversationBackend(Protocol):
 _WORKSPACE_LOCKS: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
 _SKIPPED_DIRECTORIES = {".git", ".hg", ".svn", "node_modules", "__pycache__"}
 
-# Workspace-capture caps: a huge work_root (e.g. a game save directory) must
-# not stall the app — files beyond these limits are skipped from the capture.
-_MAX_CAPTURE_FILES = 2000
-_MAX_CAPTURE_TOTAL_BYTES = 64 * 1024 * 1024  # 64 MB total
-_MAX_CAPTURE_SINGLE_FILE_BYTES = 8 * 1024 * 1024  # 8 MB per file
-
 _logger = logging.getLogger(__name__)
 CHECKPOINT_OPERATION_NAMES = (
     "session.checkpoints.create",
@@ -538,7 +532,14 @@ class CoreCheckpointCoordinator:
         edge_kind: str,
         parent_checkpoint_id: str | None = None,
     ) -> CheckpointRef:
-        manifest_hash, entries, blobs = await asyncio.to_thread(self._capture_workspace)
+        # Lazy workspace capture only: files are snapshotted individually by
+        # backup_file() right before a tool modifies them. There is no full
+        # workspace scan anywhere — a huge work_root (e.g. a game-save
+        # directory) can never stall the app. See _apply_manifest for rollback
+        # semantics (only tool-backed files are restored).
+        manifest_hash = ""
+        entries: dict[str, Any] = {}
+        blobs: list[tuple[str, int, str]] = []
         root_session_id = _root_session_id(session_id)
         conversation = await self.conversation_backend.capture(session_id, exclude_turn_id=turn_id)
         checkpoint_id = uuid.uuid4().hex
@@ -611,101 +612,6 @@ class CoreCheckpointCoordinator:
             )).scalar_one_or_none()
         return parent
 
-    def _capture_workspace(self) -> tuple[str, dict[str, Any], list[tuple[str, int, str]]]:
-        entries: dict[str, Any] = {}
-        blobs: list[tuple[str, int, str]] = []
-        blob_root = self.storage_root / "blobs"
-        blob_root.mkdir(parents=True, exist_ok=True)
-        if not self.work_root.exists():
-            raise FileNotFoundError(f"Workspace does not exist: {self.work_root}")
-
-        # Cap the capture so a huge workspace (e.g. a game save directory with
-        # tens of thousands of files) cannot stall the app. Files beyond the
-        # limits are skipped — the checkpoint still records what it captured.
-        captured_files = 0
-        captured_bytes = 0
-        skipped_files = 0
-        for path in self._workspace_files():
-            relative = path.relative_to(self.work_root).as_posix()
-            try:
-                size = path.stat().st_size
-            except OSError:
-                continue
-            if (
-                size > _MAX_CAPTURE_SINGLE_FILE_BYTES
-                or captured_files >= _MAX_CAPTURE_FILES
-                or captured_bytes + size > _MAX_CAPTURE_TOTAL_BYTES
-            ):
-                skipped_files += 1
-                continue
-            data = path.read_bytes()
-            digest = hashlib.sha256(data).hexdigest()
-            blob_path = blob_root / digest[:2] / digest
-            if not blob_path.exists():
-                blob_path.parent.mkdir(parents=True, exist_ok=True)
-                fd, temp_name = tempfile.mkstemp(prefix=f"{digest}.", dir=blob_path.parent)
-                try:
-                    with os.fdopen(fd, "wb") as handle:
-                        handle.write(data)
-                        handle.flush()
-                        os.fsync(handle.fileno())
-                    try:
-                        os.replace(temp_name, blob_path)
-                    except FileExistsError:
-                        os.unlink(temp_name)
-                except BaseException:
-                    try:
-                        os.unlink(temp_name)
-                    except OSError:
-                        pass
-                    raise
-            mode = stat.S_IMODE(path.stat().st_mode)
-            entries[relative] = {"hash": digest, "size": len(data), "mode": mode}
-            blobs.append((digest, len(data), str(blob_path)))
-            captured_files += 1
-            captured_bytes += size
-
-        if skipped_files:
-            _logger.warning(
-                "workspace capture skipped %d file(s) (limit: files<=%d, total<=%dMB, single<=%dMB)",
-                skipped_files,
-                _MAX_CAPTURE_FILES,
-                _MAX_CAPTURE_TOTAL_BYTES // (1024 * 1024),
-                _MAX_CAPTURE_SINGLE_FILE_BYTES // (1024 * 1024),
-            )
-
-        manifest_bytes = json.dumps(entries, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        return hashlib.sha256(manifest_bytes).hexdigest(), entries, blobs
-
-    def _workspace_files(self) -> list[Path]:
-        files: list[Path] = []
-        for root, directories, names in os.walk(self.work_root, topdown=True, followlinks=False):
-            root_path = Path(root)
-            directories[:] = [
-                name for name in directories
-                if name not in _SKIPPED_DIRECTORIES
-                and not self._is_internal_path((root_path / name).resolve())
-            ]
-            for name in names:
-                path = root_path / name
-                if path.is_file() and not path.is_symlink() and not self._is_internal_path(path.resolve()):
-                    files.append(path)
-        files.sort(key=lambda item: os.path.normcase(item.relative_to(self.work_root).as_posix()))
-        return files
-
-    def _is_internal_path(self, path: Path) -> bool:
-        if _is_within(path, self.storage_root):
-            return True
-        if self.database_path is None:
-            return False
-        database_names = {
-            self.database_path.name,
-            f"{self.database_path.name}-wal",
-            f"{self.database_path.name}-shm",
-            f"{self.database_path.name}-journal",
-        }
-        return path.parent == self.database_path.parent and path.name in database_names
-
     async def _checkpoint(self, checkpoint_id: str) -> CoreCheckpoint:
         async with self.session_factory() as db:
             row = await db.get(CoreCheckpoint, checkpoint_id)
@@ -727,24 +633,17 @@ class CoreCheckpointCoordinator:
         if not manifest_hash:
             return []  # lazy checkpoint — no files to restore
         target = await self._manifest(manifest_hash)
-        current_hash, current, _ = await asyncio.to_thread(self._capture_workspace)
-        if current_hash == manifest_hash:
-            return []
-        changed = sorted(set(target) | set(current))
+        # Lazy manifests only contain tool-backed files; restore just those —
+        # never scan the workspace and never delete anything else.
+        changed = sorted(target)
         stage_root = Path(tempfile.mkdtemp(prefix="restore-", dir=self.storage_root))
         applied: list[str] = []
         try:
             for relative in changed:
                 target_entry = target.get(relative)
-                current_entry = current.get(relative)
-                if target_entry == current_entry:
-                    continue
-                destination = _safe_workspace_path(self.work_root, relative)
                 if target_entry is None:
-                    if destination.exists() and destination.is_file():
-                        destination.unlink()
-                        applied.append(relative)
-                    continue
+                    continue  # lazy manifest — nothing to delete
+                destination = _safe_workspace_path(self.work_root, relative)
                 blob_hash = str(target_entry.get("hash") or "")
                 source = await self._blob_path(blob_hash)
                 if not source.is_file():

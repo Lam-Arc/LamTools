@@ -52,6 +52,8 @@ async def test_restore_creates_a_new_graph_branch_without_deleting_later_nodes(t
             label="first",
         )
 
+        # simulate a tool write: back the file up before modifying it (lazy capture)
+        await coordinator.backup_file(session_id="session-graph", path=work_root / "state.txt")
         (work_root / "state.txt").write_text("two", encoding="utf-8")
         await _runtime(db, "session-graph", history=[{"role": "user", "content": "two"}])
         second = await coordinator.save(
@@ -118,6 +120,8 @@ async def test_restore_and_undo_apply_only_the_requested_scope(
             turn_id="turn-before",
             reason="manual",
         )
+        # simulate a tool write: back the file up before modifying it (lazy capture)
+        await coordinator.backup_file(session_id="session-scope", path=state_file)
         state_file.write_text("after", encoding="utf-8")
         await _runtime(db, "session-scope", history=[{"role": "user", "content": "after"}])
 
@@ -140,7 +144,9 @@ async def test_restore_and_undo_apply_only_the_requested_scope(
         assert await db.runtime_state_store.get_history("session-scope") == [
             {"role": "user", "content": "after"}
         ]
-        assert state_file.read_text(encoding="utf-8") == "after"
+        # Lazy capture: undo restores the conversation, but the workspace keeps
+        # whatever restore left (no "after" snapshot exists to go back to).
+        assert state_file.read_text(encoding="utf-8") == expected_file
     finally:
         await db.close()
 
@@ -165,6 +171,8 @@ async def test_workspace_only_restore_is_allowed_during_an_active_turn(tmp_path:
             turn_id="turn-before",
             reason="manual",
         )
+        # simulate a tool write: back the file up before modifying it (lazy capture)
+        await coordinator.backup_file(session_id="session-active", path=state_file)
         state_file.write_text("after", encoding="utf-8")
         await _runtime(
             db,
@@ -217,6 +225,8 @@ async def test_sub_agent_checkpoint_branches_from_main_and_restores_only_child_c
             reason="before_user_prompt",
         )
 
+        # simulate a tool write: back the file up before modifying it (lazy capture)
+        await coordinator.backup_file(session_id=child_id, path=work_root / "state.txt")
         (work_root / "state.txt").write_text("after-child", encoding="utf-8")
         await _runtime(db, "session-parent", history=[{"role": "user", "content": "main-after"}])
         await _runtime(db, child_id, history=[{"role": "user", "content": "child-after"}])
@@ -412,7 +422,9 @@ async def test_checkpoint_tools_share_the_coordinator_for_save_load_and_graph(tm
         assert loaded.status == "ok"
         assert loaded.payload.get("scope") in {"workspace", "all", "conversation"}
         assert loaded.payload.get("derived_checkpoint_id")
-        assert state_file.read_text(encoding="utf-8") == "before"
+        # Lazy capture: the file was edited without backup_file(), so the
+        # workspace is intentionally NOT rolled back (only tool-backed edits are).
+        assert state_file.read_text(encoding="utf-8") == "after"
         assert await db.runtime_state_store.get_history("session-tools") == [
             {"role": "user", "content": "after"}
         ]

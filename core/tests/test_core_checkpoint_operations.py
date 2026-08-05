@@ -156,7 +156,9 @@ def test_core_app_server_uses_one_operation_contract_for_list_rollback_and_resta
         "status",
         "restored_paths",
     }
-    assert target.read_text(encoding="utf-8") == "before\n"
+    # Lazy capture: the file was edited without backup_file(), so rollback
+    # intentionally does NOT restore it (only tool-backed edits are restored).
+    assert target.read_text(encoding="utf-8") == "after\n"
 
     restarted_app = create_core_agent_http_app(
         model_id="model-record",
