@@ -8,11 +8,12 @@ import { hydrateSnapshot } from './snapshot.ts'
 import { appServerUrl, WriterAppServerClient } from './client.ts'
 import type { WriterAppSnapshot, WriterCommandCatalogItem, WriterInputItem } from './protocol.ts'
 
-function createWriterRuntimeController(runtime: ReturnType<typeof createCoreAppServerRuntimeState<WriterAppSnapshot, CoreAppServerRuntimeClient>>) {
+function createWriterRuntimeController(runtime: ReturnType<typeof createCoreAppServerRuntimeState<WriterAppSnapshot, CoreAppServerRuntimeClient>>, hooks: { onSessionUpdated?: (session: { title?: string }) => void } = {}) {
   return createCoreAppServerRuntimeController<WriterAppSnapshot, WriterInputItem, WriterCommandCatalogItem, CoreAppServerRuntimeClient>(
     runtime,
     {
       hydrateSnapshot,
+      onSessionUpdated: hooks.onSessionUpdated,
       async createClient({ apiBase, onSnapshot, onConnectionState }) {
         return new WriterAppServerClient({
           url: appServerUrl(apiBase),
@@ -28,6 +29,7 @@ function createWriterRuntimeController(runtime: ReturnType<typeof createCoreAppS
 export const useWriterAppServerStore = defineStore('writerAppServer', {
   state: () => ({
     runtime: createCoreAppServerRuntimeState<WriterAppSnapshot, CoreAppServerRuntimeClient>(),
+    sessionUpdatedHandler: null as ((session: { title?: string }) => void) | null,
   }),
   getters: {
     state: (store) => store.runtime.state,
@@ -42,11 +44,14 @@ export const useWriterAppServerStore = defineStore('writerAppServer', {
     lastSeenSeq: (store) => store.runtime.state?.snapshot_seq ?? 0,
   },
   actions: {
+    setSessionUpdatedHandler(handler: ((session: { title?: string }) => void) | null) {
+      this.sessionUpdatedHandler = handler
+    },
     async connect(apiBase: string, threadId?: string) {
-      await createWriterRuntimeController(this.runtime).connect(apiBase, threadId)
+      await createWriterRuntimeController(this.runtime, { onSessionUpdated: this.sessionUpdatedHandler ?? undefined }).connect(apiBase, threadId)
     },
     async openClient(apiBase: string, threadId?: string) {
-      await createWriterRuntimeController(this.runtime).openClient(apiBase, threadId)
+      await createWriterRuntimeController(this.runtime, { onSessionUpdated: this.sessionUpdatedHandler ?? undefined }).openClient(apiBase, threadId)
     },
     disconnect() {
       createWriterRuntimeController(this.runtime).disconnect()
@@ -58,7 +63,7 @@ export const useWriterAppServerStore = defineStore('writerAppServer', {
       createWriterRuntimeController(this.runtime).scheduleReconnect()
     },
     async reconnectActiveThread() {
-      await createWriterRuntimeController(this.runtime).reconnectActiveThread()
+      await createWriterRuntimeController(this.runtime, { onSessionUpdated: this.sessionUpdatedHandler ?? undefined }).reconnectActiveThread()
     },
     hydrate(snapshot: WriterAppSnapshot) {
       createWriterRuntimeController(this.runtime).hydrate(snapshot)
@@ -67,7 +72,7 @@ export const useWriterAppServerStore = defineStore('writerAppServer', {
       createWriterRuntimeController(this.runtime).applyResponse(response)
     },
     async startThread(threadId: string) {
-      await createWriterRuntimeController(this.runtime).startThread(threadId)
+      await createWriterRuntimeController(this.runtime, { onSessionUpdated: this.sessionUpdatedHandler ?? undefined }).startThread(threadId)
     },
     async startTurn(
       threadId: string,

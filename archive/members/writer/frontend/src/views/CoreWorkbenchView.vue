@@ -804,12 +804,14 @@ watch([activeSessionId, activeSessionStatus], ([threadId]) => {
 onMounted(() => {
   void refreshThreadResizeObserver()
   void threadScroll.scrollToBottom(true)
+  appServerStore.setSessionUpdatedHandler(() => { void sessionStore.fetchSessions() })
 })
 
 onBeforeUnmount(() => {
   threadResizeObserver?.disconnect()
   threadResizeObserver = null
   stopSubAgentRefresh()
+  appServerStore.setSessionUpdatedHandler(null)
 })
 
 function buildSystemMessages(): CoreMessage[] {

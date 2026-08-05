@@ -58,6 +58,7 @@ const composerDisabled = computed(() => (
 
 const runtimeController = createCoreAppServerRuntimeController(runtime, {
   hydrateSnapshot,
+  onSessionUpdated: () => { void refreshSessions() },
   createClient: ({ apiBase, onEvent, onSnapshot, onConnectionState }) => new CoreAppServerClient({
     url: appServerUrl(apiBase, { path: '/api/core/app-server' }),
     clientInfo: { name: 'sage_frontend', title: 'Sage', version: '0.1.0' },
@@ -144,6 +145,14 @@ async function loadInitialData() {
     loadError.value = error instanceof Error ? error.message : String(error)
   } finally {
     sessionLoading.value = false
+  }
+}
+
+async function refreshSessions() {
+  try {
+    sessions.value = await listCoreSessions()
+  } catch {
+    // best-effort refresh; ignore transient errors
   }
 }
 
