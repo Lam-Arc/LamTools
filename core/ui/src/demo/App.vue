@@ -74,6 +74,7 @@
           v-if="showProjectCreate"
           :loading="projectCreateLoading"
           :error="projectCreateError"
+          :api-base="apiBase"
           @submit="createProject"
           @cancel="closeProjectCreate"
         />
@@ -202,41 +203,28 @@
     </template>
 
     <template #modals>
-      <div v-if="selectedProject && !workflowMode" class="core-project-overlay" @click.self="selectedProjectId = null">
-        <div class="core-project-card">
-          <header>
-            <div>
-              <h2>{{ selectedProject.name }}</h2>
-              <span class="work-root">{{ selectedProject.workRoot }}</span>
-            </div>
-            <button class="close-btn" @click="selectedProjectId = null" aria-label="关闭">&times;</button>
-          </header>
-          <form @submit.prevent="renameProject" class="core-project-rename">
-            <label>
-              <span>项目名称</span>
-              <input v-model="projectNameDraft" class="field-input" :disabled="projectActionLoading" />
-            </label>
-            <div class="core-project-management-actions">
-              <button type="button" class="btn-cancel" :disabled="projectActionLoading || agentsLoading" @click="openAgentsEditor">AGENTS.md</button>
-              <button type="submit" class="btn-primary-sm" :disabled="projectActionLoading || !projectNameDraft.trim()">
-                {{ projectActionLoading ? '保存中' : '重命名' }}
-              </button>
-            </div>
-          </form>
-          <p v-if="projectActionError" class="core-project-management-error" role="alert">{{ projectActionError }}</p>
-        </div>
-      </div>
-      <div v-if="agentsProjectId" class="core-project-overlay" @click.self="closeAgentsEditor">
-        <div class="core-agents-card">
-          <CoreAgentsEditor
-            :content="agentsContent"
-            :loading="agentsLoading"
-            :error="agentsError"
-            @save="saveAgents"
-            @close="closeAgentsEditor"
-          />
-        </div>
-      </div>
+      <CoreProjectSettings
+        v-if="showProjectSettings && selectedProject && !workflowMode"
+        :project="{ id: selectedProject.id, name: selectedProject.name, workRoot: selectedProject.workRoot }"
+        :theme="theme"
+        :request-rpc="requestConfigOperation"
+        :models="availableModels"
+        :workflows="settingsWorkflowList"
+        :workflow-list-loading="settingsWorkflowLoading"
+        :project-name-draft="projectNameDraft"
+        :agents-content="agentsContent"
+        :agents-loading="agentsLoading"
+        :agents-saving="agentsSaving"
+        :agents-error="agentsError"
+        :project-action-loading="projectActionLoading"
+        :project-action-error="projectActionError"
+        @close="closeProjectSettings"
+        @rename-project="renameProject"
+        @save-agents="saveAgents"
+        @refresh-agents="refreshAgentsContent"
+        @refresh-workflows="reloadProjectSettingsWorkflows"
+        @toggle-workflow-exposed="(name, exposed) => onToggleWorkflowExposed(name, exposed, selectedProject?.workRoot)"
+      />
     </template>
 
     <template #composer-preamble>
@@ -452,11 +440,6 @@
       </template>
     </template>
   </WorkspaceShell>
-
-  <FloatingApprovalCard
-    :pending-decisions="pendingDecisions"
-    @decision-select="approvalController.handleDecision"
-  />
 </template>
 
 <script setup lang="ts">
@@ -524,12 +507,10 @@ import AttachmentTray from '../components/AttachmentTray.vue'
 import ChatThread from '../components/ChatThread.vue'
 import WorkflowCanvas from '../components/WorkflowCanvas.vue'
 import UiSelect from '../components/UiSelect.vue'
-import FloatingApprovalCard, { type PendingDecision } from '../components/FloatingApprovalCard.vue'
 import CommandPalette from '../components/CommandPalette.vue'
 import CoreExecutionControls from '../components/CoreExecutionControls.vue'
 import CoreResourceStats from '../components/CoreResourceStats.vue'
 import CoreQueuedInputTray from '../components/CoreQueuedInputTray.vue'
-import CoreAgentsEditor from '../components/CoreAgentsEditor.vue'
 import CoreArrangeManager from '../components/CoreArrangeManager.vue'
 import CoreGoalStrip from '../components/CoreGoalStrip.vue'
 import StagePane from '../components/StagePane.vue'
@@ -541,7 +522,9 @@ import CoreSessionRollback from '../components/CoreSessionRollback.vue'
 import CoreSettings, {
   type CoreSettingsModelPayload,
   type CoreSettingsProviderPayload,
+  type WorkflowListItem,
 } from '../components/CoreSettings.vue'
+import CoreProjectSettings from '../components/CoreProjectSettings.vue'
 import RuntimePanel from '../components/RuntimePanel.vue'
 import SessionSidebar from '../components/SessionSidebar.vue'
 import WorkspaceShell from '../components/WorkspaceShell.vue'
@@ -608,9 +591,11 @@ const selectedProjectId = ref<string | null>(null)
 const projectNameDraft = ref('')
 const projectActionLoading = ref(false)
 const projectActionError = ref('')
+const showProjectSettings = ref(false)
 const agentsProjectId = ref<string | null>(null)
 const agentsContent = ref('')
 const agentsLoading = ref(false)
+const agentsSaving = ref(false)
 const agentsError = ref('')
 const shellRef = ref<InstanceType<typeof WorkspaceShell> | null>(null)
 const leftPinned = ref(true)
@@ -936,6 +921,7 @@ const busyProjectIds = projectWorkspace.busyProjectIds
 const runtimeController = createCoreAppServerRuntimeController(runtime, {
     hydrateSnapshot,
     onSessionCreated: refreshSessions,
+    onSessionUpdated: refreshSessions,
     createClient: ({ apiBase: frontendBase, onEvent, onSnapshot, onConnectionState }) => new CoreAppServerClient({
       url: appServerUrl(frontendBase, { path: '/api/core/app-server' }),
       clientInfo: { name: 'lamtools_core_frontend', title: 'LamTools Core Frontend', version: '0.1.0' },
@@ -977,6 +963,7 @@ const liveComposerController = useCoreLiveComposerController({
   connect: connectLive,
   startTurn: (threadId, input, workRoot, options) => runtimeController.startTurn(threadId, input, workRoot, options),
   interruptTurn: (threadId, turnId) => runtimeController.interruptTurn(threadId, turnId),
+  forceResetTurn: (threadId, turnId) => runtimeController.forceResetTurn(threadId, turnId),
   steerTurn: (threadId, turnId, input) => runtimeController.steerTurn(threadId, turnId, input),
   queueInput: (threadId, input) => runtimeController.queueInput(threadId, input),
   listCommands: (workRoot) => runtimeController.listCommands(workRoot),
@@ -1003,6 +990,9 @@ const liveComposerController = useCoreLiveComposerController({
     composerErrorText.value = text
   },
   onTurnStarted: refreshSessions,
+  onSubmitStart: () => {
+    pendingPlaceholder.value = { id: `placeholder-${Date.now()}`, content: '…' }
+  },
   messages: {
     commandCatalogLoadFailed: (error) => `命令列表加载失败：${error}`,
     noActiveThread: '请先选择会话',
@@ -1040,18 +1030,6 @@ const projectionController = useCoreWorkbenchProjectionController({
 })
 const { messages, processExpandedIds, toggleProcess } = projectionController
 
-const pendingDecisions = computed<PendingDecision[]>(() => {
-  const result: PendingDecision[] = []
-  for (const msg of messages.value) {
-    if (!msg.parts) continue
-    for (const part of msg.parts) {
-      if (part.partType === 'decision' && part.status === 'pending') {
-        result.push({ messageId: msg.id, part })
-      }
-    }
-  }
-  return result
-})
 const typingMessageIds = ref(new Set<string>())
 const pendingPlaceholder = ref<{ id: string; content: string } | null>(null)
 const stepGroups = computed(() => buildCurrentTurnChecklistGroups(messages.value))
@@ -1200,10 +1178,42 @@ function openProjectActions(projectId: string) {
   selectedProjectId.value = project.id
   projectNameDraft.value = project.name
   projectActionError.value = ''
+  showProjectSettings.value = true
+  // Load AGENTS.md content for the in-place editor inside project settings.
+  void loadAgentsForProject(project.id)
+  // Load project-scoped workflows for the 工作流 section.
+  void loadProjectSettingsWorkflows(project.workRoot)
 }
 
-async function renameProject() {
+async function loadAgentsForProject(projectId: string) {
+  agentsLoading.value = true
+  agentsError.value = ''
+  try {
+    const agents = await projectWorkspace.readAgents(projectId)
+    agentsProjectId.value = projectId
+    agentsContent.value = agents.content
+  } catch (error) {
+    agentsError.value = messageFromError(error)
+  } finally {
+    agentsLoading.value = false
+  }
+}
+
+async function loadProjectSettingsWorkflows(workRoot?: string) {
+  settingsWorkflowLoading.value = true
+  try {
+    settingsWorkflowList.value = await listWorkflows(workRoot)
+  } catch (err) {
+    console.error('[project-settings] list workflows failed', err)
+    settingsWorkflowList.value = []
+  } finally {
+    settingsWorkflowLoading.value = false
+  }
+}
+
+async function renameProject(nameFromEditor?: string) {
   const project = selectedProject.value
+  if (nameFromEditor !== undefined) projectNameDraft.value = nameFromEditor
   const name = projectNameDraft.value.trim()
   if (!project || !name) return
   projectActionLoading.value = true
@@ -1227,7 +1237,8 @@ async function deleteProject(projectId: string) {
     const deleted = await projectWorkspace.deleteProject(project.id)
     if (!deleted) return
     if (selectedProjectId.value === project.id) selectedProjectId.value = null
-    if (agentsProjectId.value === project.id) closeAgentsEditor()
+    if (agentsProjectId.value === project.id) { agentsProjectId.value = null; agentsContent.value = '' }
+    if (showProjectSettings.value) closeProjectSettings()
     if (deleted.wasActive) {
       runtimeController.disconnect()
       liveComposerController.resetForThreadChange()
@@ -1241,46 +1252,34 @@ async function deleteProject(projectId: string) {
   }
 }
 
-async function openAgentsEditor() {
-  const project = selectedProject.value
-  if (!project) return
-  projectActionLoading.value = true
-  agentsLoading.value = true
-  agentsError.value = ''
-  try {
-    const agents = await projectWorkspace.readAgents(project.id)
-    agentsProjectId.value = project.id
-    agentsContent.value = agents.content
-  } catch (error) {
-    projectActionError.value = messageFromError(error)
-  } finally {
-    agentsLoading.value = false
-    projectActionLoading.value = false
-  }
+function closeProjectSettings() {
+  showProjectSettings.value = false
 }
 
-function closeAgentsEditor() {
-  if (agentsLoading.value) return
-  agentsProjectId.value = null
-  agentsContent.value = ''
-  agentsError.value = ''
+async function refreshAgentsContent() {
+  const projectId = agentsProjectId.value || selectedProjectId.value
+  if (!projectId) return
+  await loadAgentsForProject(projectId)
+}
+
+async function reloadProjectSettingsWorkflows() {
+  const workRoot = selectedProject.value?.workRoot
+  await loadProjectSettingsWorkflows(workRoot)
 }
 
 async function saveAgents(content: string) {
   const projectId = agentsProjectId.value
   if (!projectId) return
-  agentsLoading.value = true
+  agentsSaving.value = true
   agentsError.value = ''
   try {
     const agents = await projectWorkspace.writeAgents(projectId, content)
     agentsContent.value = agents.content
     setRuntimeStatus('AGENTS.md 已保存')
-    agentsProjectId.value = null
-    agentsContent.value = ''
   } catch (error) {
     agentsError.value = messageFromError(error)
   } finally {
-    agentsLoading.value = false
+    agentsSaving.value = false
   }
 }
 
@@ -1339,55 +1338,26 @@ async function connectLive(threadId: string) {
 
 async function submitComposer() {
   composerErrorText.value = ''
+  // 停止模式：composer 必为空，须在空文本守卫之前处理，否则 stop 请求永远发不出去
+  if (composerActionMode.value === 'stop') {
+    try {
+      await liveComposerController.submit({ clearComposer: false })
+    } catch {
+      // error handled by controller
+    }
+    return
+  }
   const text = composerText.value.trim()
   if (!text) return
 
   sendingDisabled.value = true
 
-  // Show placeholder bubble while sending
-  pendingPlaceholder.value = { id: `placeholder-${Date.now()}`, content: '…' }
-
-  // Start typing-back animation (delete chars from the end)
-  const rawText = composerText.value
-  const intervalMs = Math.max(16, Math.min(50, 1000 / Math.max(1, rawText.length)))
-  let timer: ReturnType<typeof setInterval> | null = null
-  let timerDone = false
-
-  function finishSending() {
-    if (!timerDone) {
-      timerDone = true
-      sendingDisabled.value = false
-    }
-  }
-
-  timer = setInterval(() => {
-    if (composerText.value.length > 0) {
-      composerText.value = composerText.value.slice(0, -1)
-    } else {
-      clearInterval(timer!)
-      timer = null
-      finishSending()
-    }
-  }, intervalMs)
-
-  const startTime = Date.now()
   try {
-    await liveComposerController.submit({ clearComposer: false })
+    await liveComposerController.submit({ clearComposer: true })
   } catch {
     // error handled by controller
-  }
-  const elapsed = Date.now() - startTime
-
-  if (timer) {
-    if (elapsed <= 200) {
-      // Fast round-trip — clear remaining text immediately
-      clearInterval(timer)
-      timer = null
-      composerText.value = ''
-      void nextTick(resizeComposerTextarea)
-      finishSending()
-    }
-    // Otherwise let the interval finish the wipe naturally (max ~1s)
+  } finally {
+    sendingDisabled.value = false
   }
 }
 
@@ -1905,10 +1875,15 @@ async function loadSettingsWorkflows() {
   }
 }
 
-async function onToggleWorkflowExposed(name: string, exposed: boolean) {
+async function onToggleWorkflowExposed(name: string, exposed: boolean, workRootOverride?: string) {
   try {
-    await setWorkflowExposed(name, exposed, currentWorkRoot() || undefined)
-    await loadSettingsWorkflows()
+    const workRoot = workRootOverride ?? (currentWorkRoot() || undefined)
+    await setWorkflowExposed(name, exposed, workRoot)
+    if (workRootOverride !== undefined) {
+      await loadProjectSettingsWorkflows(workRootOverride)
+    } else {
+      await loadSettingsWorkflows()
+    }
   } catch (err) {
     console.error('[workflow] settings toggle expose failed', err)
   }
@@ -2192,115 +2167,6 @@ onUnmounted(() => {
 .stage-toggle-btn.active {
   background: rgba(255,255,255,0.08);
   color: var(--text, #f2efeb);
-}
-
-.core-project-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 100;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.4);
-  backdrop-filter: blur(2px);
-}
-
-.core-project-card {
-  width: min(480px, calc(100vw - 48px));
-  padding: 24px;
-  border: 1px solid color-mix(in srgb, var(--theme-main-text) 12%, transparent);
-  border-radius: 16px;
-  background: var(--theme-main-background, var(--bg, #111111));
-  box-shadow: var(--shadow-lg);
-}
-
-.core-project-card header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  margin-bottom: 16px;
-}
-
-.core-project-card header h2 {
-  margin: 0 0 4px;
-  font-size: 18px;
-  font-weight: 650;
-}
-
-.core-project-card header .work-root {
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.close-btn {
-  border: 0;
-  padding: 4px 10px;
-  background: transparent;
-  color: var(--muted);
-  font-size: 22px;
-  cursor: pointer;
-  line-height: 1;
-}
-.close-btn:hover { color: var(--text); }
-
-.core-agents-card {
-  width: min(520px, calc(100vw - 48px));
-  padding: 20px;
-  border: 1px solid color-mix(in srgb, var(--theme-main-text) 12%, transparent);
-  border-radius: 16px;
-  background: var(--theme-main-background, var(--bg, #111111));
-  box-shadow: var(--shadow-lg);
-}
-
-.core-agents-card .core-agents-editor {
-  margin-top: 0;
-  padding: 0;
-  border-top: none;
-}
-
-.core-agents-card .core-agents-editor textarea {
-  min-height: 220px;
-}
-
-.core-project-rename {
-  display: grid;
-  gap: 6px;
-}
-
-.core-project-rename label {
-  color: color-mix(in srgb, var(--theme-main-text) 72%, transparent);
-  font-size: 12px;
-}
-
-.core-project-management {
-  margin-top: 10px;
-  padding: 10px;
-  border-top: 1px solid color-mix(in srgb, var(--theme-backdrop-text) 14%, transparent);
-}
-
-.core-project-management form,
-.core-project-management label {
-  display: grid;
-  gap: 6px;
-}
-
-.core-project-management label {
-  color: color-mix(in srgb, var(--theme-backdrop-text) 72%, transparent);
-  font-size: 12px;
-}
-
-.core-project-management-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 8px;
-}
-
-.core-project-management-error {
-  margin: 8px 0 0;
-  color: var(--red);
-  font-size: 12px;
-  line-height: 1.35;
 }
 
 /* Workflow mode */

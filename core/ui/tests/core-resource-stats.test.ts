@@ -52,4 +52,35 @@ describe('CoreResourceStats', () => {
     expect(wrapper.text()).toContain('2%')
     expect(wrapper.text()).toContain('已压缩')
   })
+
+  it('renders cache hit rate from backend cache_hit_rate when present', () => {
+    const cachedMessages = [{ metadata: { processMetrics: {
+      llm_calls: 1,
+      input_tokens: 10_000,
+      output_tokens: 500,
+      cached_tokens: 9_900,
+      cache_hit_rate: 0.99,
+    } } }]
+    const wrapper = mount(CoreResourceStats, { props: { messages: cachedMessages } })
+    expect(wrapper.text()).toContain('99%')
+  })
+
+  it('derives cache hit rate from cached_tokens / input_tokens when rate is absent', () => {
+    const cachedMessages = [{ metadata: { processMetrics: {
+      llm_calls: 1,
+      input_tokens: 10_000,
+      output_tokens: 500,
+      cached_tokens: 8_000,
+    } } }]
+    const wrapper = mount(CoreResourceStats, { props: { messages: cachedMessages } })
+    expect(wrapper.text()).toContain('80%')
+  })
+
+  it('shows -- for cache hit rate when no cache data is present', () => {
+    const wrapper = mount(CoreResourceStats, { props: { messages } })
+    const stats = wrapper.findAll('.core-resource-stats > div')
+    expect(stats.length).toBe(4)
+    expect(stats[3].text()).toContain('缓存')
+    expect(stats[3].text()).toContain('--')
+  })
 })

@@ -63,17 +63,29 @@ export function buildCoreResourceSummary(
   let calls = 0
   let inputTokens = 0
   let outputTokens = 0
+  let cachedTokens = 0
   let hasCalls = false
   let hasInput = false
   let hasOutput = false
+  let hasCache = false
   for (const metrics of records) {
     const callCount = firstNumber(metrics.llm_calls, metrics.llmCalls, metrics.model_calls, metrics.modelCalls)
     const input = firstNumber(metrics.input_tokens, metrics.inputTokens, metrics.prompt_tokens, metrics.promptTokens)
     const output = firstNumber(metrics.output_tokens, metrics.outputTokens, metrics.completion_tokens, metrics.completionTokens)
+    const cached = firstNumber(metrics.cached_tokens, metrics.cachedTokens)
     if (callCount >= 0) { calls += callCount; hasCalls = true }
     if (input >= 0) { inputTokens += input; hasInput = true }
     if (output >= 0) { outputTokens += output; hasOutput = true }
+    if (cached >= 0) { cachedTokens += cached; hasCache = true }
   }
+  // Prefer the backend-computed rate when present; otherwise derive from totals.
+  const directRate = latestNumber(-1,
+    ...records.map(r => firstNumber(r.cache_hit_rate, r.cacheHitRate)))
+  const cacheHitRate = directRate >= 0
+    ? directRate
+    : hasCache && inputTokens > 0
+      ? cachedTokens / inputTokens
+      : -1
   if (!hasContext && !hasCalls && !hasInput && !hasOutput) return null
 
   return {
@@ -89,6 +101,7 @@ export function buildCoreResourceSummary(
       { label: '调用', value: hasCalls ? String(calls) : '--' },
       { label: '输入', value: hasInput ? formatCompactNumber(inputTokens) : '--' },
       { label: '输出', value: hasOutput ? formatCompactNumber(outputTokens) : '--' },
+      { label: '缓存', value: cacheHitRate >= 0 ? formatPercent(cacheHitRate) : '--' },
     ],
   }
 }
@@ -136,4 +149,9 @@ function formatCompactNumber(value: number): string {
     return `${rounded}k`
   }
   return new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 }).format(value)
+}
+
+function formatPercent(rate: number): string {
+  const pct = Math.round(rate * 100)
+  return `${pct}%`
 }

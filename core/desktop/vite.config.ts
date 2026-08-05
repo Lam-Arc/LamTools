@@ -18,7 +18,7 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:61459',
+        target: `http://127.0.0.1:${process.env.CORE_BACKEND_PORT || '5172'}`,
         changeOrigin: true,
         ws: true,
       },

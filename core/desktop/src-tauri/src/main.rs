@@ -62,6 +62,14 @@ fn ping() -> String {
     "pong".to_string()
 }
 
+#[tauri::command]
+fn pick_directory() -> Option<String> {
+    rfd::FileDialog::new()
+        .set_title("选择目录")
+        .pick_folder()
+        .map(|p| p.to_string_lossy().into_owned())
+}
+
 // ---------------------------------------------------------------------------
 // App entry point
 // ---------------------------------------------------------------------------
@@ -100,7 +108,7 @@ fn main() {
                 }
             }
         })
-        .invoke_handler(tauri::generate_handler![get_api_base, minimize_window, toggle_maximize_window, close_window, ping])
+        .invoke_handler(tauri::generate_handler![get_api_base, minimize_window, toggle_maximize_window, close_window, ping, pick_directory])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {
                 let state = window.state::<BackendState>();

@@ -91,7 +91,7 @@
                 </div>
                 <template
                   v-for="group in compactGroups(groupParts(timelineParts(msg)))"
-                  :key="group.kind === 'context-group' ? `live-tl-ctx-${group.items.map((item) => item.id).join('-')}` : group.kind === 'process-group' ? `live-tl-pg-${processGroupId(group)}` : group.part.id"
+                  :key="group.kind === 'process-group' ? `live-tl-pg-${processGroupId(group)}` : group.part.id"
                 >
                   <template v-if="group.kind === 'process'">
                     <template v-for="part in [group.part]" :key="part.id">
@@ -426,41 +426,9 @@
                 <div v-if="isProcessExpanded(msg)" class="process-stream process-stream--history">
                   <template
                     v-for="group in compactGroups(groupParts(processParts(msg)))"
-                    :key="group.kind === 'context-group' ? `context-${group.items.map((item) => item.id).join('-')}` : group.kind === 'process-group' ? processGroupId(group) : group.part.id"
+                    :key="group.kind === 'process-group' ? processGroupId(group) : group.part.id"
                   >
-                    <div v-if="group.kind === 'context-group'" class="process-step process-step--context" :class="'process-step--' + (group.status || 'pending')">
-                      <button
-                        type="button"
-                        class="context-group-header"
-                        @click="toggleToolExpand(contextGroupId(group))"
-                      >
-                        <span class="process-step-marker" />
-                        <span class="process-step-title">{{ group.label }}</span>
-                        <span class="process-step-detail">{{ group.detail }}</span>
-                        <span class="tool-expand-chevron">{{ isToolExpanded(contextGroupId(group)) ? '▾' : '▸' }}</span>
-                      </button>
-                      <div v-if="isToolExpanded(contextGroupId(group))" class="context-tool-list">
-                        <div
-                          v-for="item in group.items"
-                          :key="item.id"
-                          class="context-tool-row"
-                        >
-                          <div class="context-tool-head">
-                            <span class="tool-row-name">{{ toolTypeLabel(item) }}</span>
-                            <span class="process-step-title tool-row-summary">{{ readableProcessTitle(item) }}</span>
-                            <span v-if="shouldShowToolArgsPreview(item)" class="tool-args-preview tool-row-args">{{ toolArgsPreview(item.toolArgs || {}) }}</span>
-                          </div>
-                          <div v-if="hasToolDisplay(item)" class="tool-output context-tool-output">
-                            <div v-if="toolMetaItems(item).length > 0" class="tool-output-meta">
-                              <span v-for="meta in toolMetaItems(item)" :key="meta">{{ meta }}</span>
-                            </div>
-                            <pre class="tool-output-content">{{ toolOutputContent(item) }}</pre>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    <template v-else-if="group.kind === 'process-group'">
+                    <template v-if="group.kind === 'process-group'">
                       <div class="process-group">
                         <button
                           type="button"
@@ -706,6 +674,7 @@
                       <div
                         v-else-if="isSubLinePart(group.part)"
                         class="sub-line-block"
+                        :class="'sub-line--' + group.part.status"
                       >
                         <button
                           type="button"
@@ -874,7 +843,7 @@
               <!-- Live parts inline with streaming -->
               <template
                 v-for="group in compactGroups(groupParts(processParts(msg)))"
-                :key="group.kind === 'context-group' ? `live-ctx-${group.items.map((item) => item.id).join('-')}` : group.kind === 'process-group' ? `live-pg-${processGroupId(group)}` : `live-${group.part.id}`"
+                :key="group.kind === 'process-group' ? `live-pg-${processGroupId(group)}` : `live-${group.part.id}`"
               >
                 <!-- model_text: stream inline -->
                 <div v-if="group.kind === 'process' && group.part.partType === 'model_text' && group.part.content">
@@ -895,7 +864,7 @@
                     <span class="process-step-title">思考</span>
                     <span class="tool-expand-chevron">{{ isPartExpanded(group.part, true) ? '▾' : '▸' }}</span>
                   </button>
-                  <div :class="['reasoning-body', { 'reasoning-body--closed': !isPartExpanded(group.part, true) }]">
+                  <div v-if="isPartExpanded(group.part, true)" class="reasoning-body">
                     <slot name="reasoning-content" :content="group.part.content" :live="true">
                       <MarkdownRenderer class="process-step-detail" :content="group.part.content" />
                     </slot>
@@ -919,7 +888,7 @@
                     <span class="tool-row-status" :class="{ 'tool-row-status--retry': toolRetryLabel(group.part) }">{{ toolRetryLabel(group.part) || toolStatusLabel(group.part) }}</span>
                     <span v-if="hasToolDisplay(group.part)" class="tool-expand-chevron">{{ shouldShowToolBody(group.part, true) ? '▾' : '▸' }}</span>
                   </button>
-                  <div :class="['tool-card-body', 'tool-card-body--row', { 'tool-card-body--closed': !shouldShowToolBody(group.part, true) }]">
+                  <div v-if="shouldShowToolBody(group.part, true)" class="tool-card-body" :class="{ 'tool-card-body--row': !isCommandTool(group.part) }">
                     <pre v-if="displayToolError(group.part)" class="tool-output tool-output--error">{{ displayToolError(group.part) }}</pre>
                     <pre v-else-if="displayToolResult(group.part)" class="tool-output-content">{{ displayToolResult(group.part) }}</pre>
                   </div>
@@ -945,7 +914,7 @@
                             <span class="process-step-title">思考</span>
                             <span class="tool-expand-chevron">{{ isPartExpanded(part, true) ? '▾' : '▸' }}</span>
                           </button>
-                          <div :class="['reasoning-body', { 'reasoning-body--closed': !isPartExpanded(part, true) }]">
+                          <div v-if="isPartExpanded(part, true)" class="reasoning-body">
                             <slot name="reasoning-content" :content="part.content" :live="true">
                               <MarkdownRenderer class="process-step-detail" :content="part.content" />
                             </slot>
@@ -967,7 +936,7 @@
                             <span class="tool-row-status" :class="{ 'tool-row-status--retry': toolRetryLabel(part) }">{{ toolRetryLabel(part) || toolStatusLabel(part) }}</span>
                             <span v-if="hasToolDisplay(part)" class="tool-expand-chevron">{{ shouldShowToolBody(part, true) ? '▾' : '▸' }}</span>
                           </button>
-                          <div :class="['tool-card-body', 'tool-card-body--row', { 'tool-card-body--closed': !shouldShowToolBody(part, true) }]">
+                          <div v-if="shouldShowToolBody(part, true)" class="tool-card-body" :class="{ 'tool-card-body--row': !isCommandTool(part) }">
                             <pre v-if="displayToolError(part)" class="tool-output tool-output--error">{{ displayToolError(part) }}</pre>
                             <pre v-else-if="displayToolResult(part)" class="tool-output-content">{{ displayToolResult(part) }}</pre>
                           </div>
@@ -998,41 +967,9 @@
             <div v-if="!isTimelineMessage(msg) && !isLiveMessage(msg)" class="process-stream process-stream--history">
               <template
                 v-for="group in compactGroups(groupParts(processParts(msg)))"
-                :key="group.kind === 'context-group' ? `context-${group.items.map((item) => item.id).join('-')}` : group.kind === 'process-group' ? processGroupId(group) : group.part.id"
+                :key="group.kind === 'process-group' ? processGroupId(group) : group.part.id"
               >
-                <div v-if="group.kind === 'context-group'" class="process-step process-step--context" :class="'process-step--' + (group.status || 'pending')">
-                  <button
-                    type="button"
-                    class="context-group-header"
-                    @click="toggleToolExpand(contextGroupId(group))"
-                  >
-                    <span class="process-step-marker" />
-                    <span class="process-step-title">{{ group.label }}</span>
-                    <span class="process-step-detail">{{ group.detail }}</span>
-                    <span class="tool-expand-chevron">{{ isToolExpanded(contextGroupId(group)) ? '▾' : '▸' }}</span>
-                  </button>
-                  <div v-if="isToolExpanded(contextGroupId(group))" class="context-tool-list">
-                    <div
-                      v-for="item in group.items"
-                      :key="item.id"
-                      class="context-tool-row"
-                    >
-                      <div class="context-tool-head">
-                        <span class="tool-row-name">{{ toolTypeLabel(item) }}</span>
-                        <span class="process-step-title tool-row-summary">{{ readableProcessTitle(item) }}</span>
-                        <span v-if="shouldShowToolArgsPreview(item)" class="tool-args-preview tool-row-args">{{ toolArgsPreview(item.toolArgs || {}) }}</span>
-                      </div>
-                      <div v-if="hasToolDisplay(item)" class="tool-output context-tool-output">
-                        <div v-if="toolMetaItems(item).length > 0" class="tool-output-meta">
-                          <span v-for="meta in toolMetaItems(item)" :key="meta">{{ meta }}</span>
-                        </div>
-                        <pre class="tool-output-content">{{ toolOutputContent(item) }}</pre>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <template v-else-if="group.kind === 'process-group'">
+                <template v-if="group.kind === 'process-group'">
                   <div class="process-group">
                     <button
                       type="button"
@@ -1052,7 +989,7 @@
                             <span v-if="reasoningDuration(part)" class="reasoning-duration">{{ reasoningDuration(part) }}</span>
                             <span class="tool-expand-chevron">{{ isPartExpanded(part, false) ? '▾' : '▸' }}</span>
                           </button>
-                          <div :class="['reasoning-body', { 'reasoning-body--closed': !isPartExpanded(part, false) }]">
+                          <div v-if="isPartExpanded(part, false)" class="reasoning-body">
                             <slot name="reasoning-content" :content="part.content" :live="false">
                               <MarkdownRenderer class="process-step-detail" :content="part.content" />
                             </slot>
@@ -1125,7 +1062,7 @@
                       <span v-if="reasoningDuration(group.part)" class="reasoning-duration">{{ reasoningDuration(group.part) }}</span>
                       <span class="tool-expand-chevron">{{ isPartExpanded(group.part, false) ? '▾' : '▸' }}</span>
                     </button>
-                    <div :class="['reasoning-body', { 'reasoning-body--closed': !isPartExpanded(group.part, false) }]">
+                    <div v-if="isPartExpanded(group.part, false)" class="reasoning-body">
                       <slot name="reasoning-content" :content="group.part.content" :live="false">
                         <MarkdownRenderer class="process-step-detail" :content="group.part.content" />
                       </slot>
@@ -1163,7 +1100,9 @@
                     </button>
                     <span v-if="!hasToolDisplay(group.part) && !group.part.toolArgs && readableProcessDetail(group.part)" class="process-step-detail">{{ readableProcessDetail(group.part) }}</span>
                     <div
-                      :class="['tool-card-body', { 'tool-card-body--row': !isCommandTool(group.part), 'tool-card-body--closed': !shouldShowToolBody(group.part, false) }]"
+                      v-if="shouldShowToolBody(group.part, false)"
+                      class="tool-card-body"
+                      :class="{ 'tool-card-body--row': !isCommandTool(group.part) }"
                     >
                       <pre v-if="displayToolError(group.part)" class="tool-output tool-output--error">{{ displayToolError(group.part) }}</pre>
                       <!-- File tools: diff-style block with line numbers -->
@@ -1332,6 +1271,7 @@
                       <div
                         v-else-if="isSubLinePart(group.part)"
                         class="sub-line-block"
+                        :class="'sub-line--' + group.part.status"
                       >
                         <button
                           type="button"
@@ -1787,10 +1727,6 @@ function shouldShowToolBody(part: MessagePart, live = false): boolean {
   return isPartExpanded(part, live)
 }
 
-function contextGroupId(group: PartGroupContext): string {
-  return `context-${group.items.map(item => item.id).join('-')}`
-}
-
 function reasoningDuration(part: MessagePart, live = false): string {
   if (!part.startedAt) return ''
   if (!part.completedAt && (!live || part.status !== 'running')) return ''
@@ -2079,7 +2015,7 @@ function isCompactionOnlyMessage(msg: CoreMessage): boolean {
 
 function isControlTool(part: MessagePart): boolean {
   const name = (part.toolName || part.label || '').toLowerCase()
-  return /decision_point|write_checklist|update_checklist|verify_design|ask_clarification|chat_only|self_critique/.test(name)
+  return /decision_point|write_checklist|update_checklist|verify_design|ask_clarification|chat_only|self_critique|question/.test(name)
 }
 
 // ── Body/process projection: newest model text owns the body; replaced text becomes process ──
@@ -2089,21 +2025,13 @@ interface PartGroupProcess {
   part: MessagePart
 }
 
-interface PartGroupContext {
-  kind: 'context-group'
-  status: MessagePartStatus
-  label: string
-  detail: string
-  items: MessagePart[]
-}
-
 interface PartGroupProcessGroup {
   kind: 'process-group'
   parts: MessagePart[]
   summary: string
 }
 
-type PartGroup = PartGroupProcess | PartGroupContext | PartGroupProcessGroup
+type PartGroup = PartGroupProcess | PartGroupProcessGroup
 
 interface TextGroup {
   content: string
@@ -2166,24 +2094,13 @@ function liveProcessItems(msg: CoreMessage): LiveProcessItem[] {
   }
 
   const groups = groupParts(parts)
-  const items = groups.map((group): LiveProcessItem => {
-    if (group.kind === 'context-group') {
-      return {
-        id: `context-${group.items.map((item) => item.id).join('-')}`,
-        title: group.label,
-        detail: group.detail,
-        status: group.status,
-        compact: group.status === 'completed',
-      }
-    }
-    return {
-      id: group.part.id,
-      title: livePartTitle(group.part),
-      detail: livePartDetail(group.part),
-      status: group.part.status,
-      compact: group.part.status === 'completed',
-    }
-  })
+  const items = groups.map((group): LiveProcessItem => ({
+    id: group.part.id,
+    title: livePartTitle(group.part),
+    detail: livePartDetail(group.part),
+    status: group.part.status,
+    compact: group.part.status === 'completed',
+  }))
   return items.slice(-8)
 }
 
@@ -3228,36 +3145,15 @@ function textGroups(parts: MessagePart[]): TextGroup[] {
 
 const CONTEXT_TOOLS = new Set(['read_file', 'list_dir', 'glob', 'grep', 'search_content', 'search_files', 'read', 'list'])
 
-function groupParts(parts: MessagePart[]): (PartGroupProcess | PartGroupContext)[] {
-  const groups: (PartGroupProcess | PartGroupContext)[] = []
-  let contextBatch: MessagePart[] = []
-
-  function flushContext() {
-    if (contextBatch.length === 0) return
-    const allDone = contextBatch.every(p => p.status === 'completed' || p.status === 'error')
-    const counts = countContextTools(contextBatch)
-    groups.push({
-      kind: 'context-group',
-      status: allDone ? 'completed' : 'running',
-      label: 'Context',
-      detail: formatContextSummary(counts),
-      items: [...contextBatch],
-    })
-    contextBatch = []
-  }
-
+function groupParts(parts: MessagePart[]): PartGroupProcess[] {
+  const groups: PartGroupProcess[] = []
   for (const part of parts) {
-    const name = part.toolName || ''
-    if (CONTEXT_TOOLS.has(name)) {
-      contextBatch.push(part)
-    } else if (part.partType === 'text' || !part.partType) {
+    if (part.partType === 'text' || !part.partType) {
       // Text parts are rendered from msg.content — skip here
     } else {
-      flushContext()
       groups.push({ kind: 'process', part })
     }
   }
-  flushContext()
   return groups
 }
 
@@ -3267,6 +3163,9 @@ function computeProcessGroupSummary(parts: MessagePart[]): string {
   let reasoningSeconds = 0
   let reasoningCount = 0
   let toolCount = 0
+  let contextRead = 0
+  let contextSearch = 0
+  let contextList = 0
   let hasRunning = false
   for (const part of parts) {
     if (part.status === 'running') hasRunning = true
@@ -3280,31 +3179,38 @@ function computeProcessGroupSummary(parts: MessagePart[]): string {
         }
       }
     } else if (part.partType === 'tool_call' || part.partType === 'tool_result') {
-      toolCount++
+      if (isControlTool(part)) continue
+      const name = part.toolName || ''
+      if (name === 'read_file' || name === 'read') contextRead++
+      else if (name === 'search_content' || name === 'search_files' || name === 'grep' || name === 'glob') contextSearch++
+      else if (name === 'list_dir' || name === 'list') contextList++
+      else toolCount++
     }
   }
-  if (hasRunning) {
-    if (reasoningCount > 0 && toolCount > 0) {
-      return `思考中…，已调用${toolCount}个工具`
+
+  function buildParts(running: boolean): string[] {
+    const parts: string[] = []
+    if (running) {
+      if (reasoningCount > 0) parts.push('思考中…')
+      if (contextRead > 0) parts.push(`读取了${contextRead}个文件…`)
+      if (contextSearch > 0) parts.push(`搜索了${contextSearch}次…`)
+      if (contextList > 0) parts.push(`浏览了${contextList}个目录…`)
+      if (toolCount > 0) parts.push(`已调用${toolCount}个工具…`)
+    } else {
+      if (reasoningCount > 0) parts.push(reasoningSeconds > 0 ? `思考了${reasoningSeconds}s` : '思考了一会')
+      if (contextRead > 0) parts.push(`读取了${contextRead}个文件`)
+      if (contextSearch > 0) parts.push(`搜索了${contextSearch}次`)
+      if (contextList > 0) parts.push(`浏览了${contextList}个目录`)
+      if (toolCount > 0) parts.push(`调用了${toolCount}个工具`)
     }
-    if (toolCount > 0) {
-      return `已调用${toolCount}个工具…`
-    }
-    if (reasoningCount > 0) {
-      return `思考中…`
-    }
-    return '处理中…'
+    return parts
   }
-  if (reasoningCount > 0 && toolCount > 0) {
-    return `思考了${reasoningSeconds}s，调用了${toolCount}个工具`
+
+  const summaryParts = buildParts(hasRunning)
+  if (summaryParts.length > 0) {
+    return summaryParts.join('，')
   }
-  if (toolCount > 0) {
-    return `连续调用了${toolCount}个工具`
-  }
-  if (reasoningCount > 0) {
-    return `思考了${reasoningSeconds}s`
-  }
-  return ''
+  return hasRunning ? '处理中…' : ''
 }
 
 function compactGroups(groups: PartGroup[]): PartGroup[] {
@@ -3322,13 +3228,15 @@ function compactGroups(groups: PartGroup[]): PartGroup[] {
   }
 
   for (const g of groups) {
-    if (g.kind === 'context-group') {
-      flush()
-      result.push(g)
-    } else if (g.kind === 'process') {
+    if (g.kind === 'process') {
       const pt = g.part.partType
       if (pt === 'reasoning' || pt === 'tool_call' || pt === 'tool_result') {
-        batch.push(g.part)
+        if ((pt === 'tool_call' || pt === 'tool_result') && isControlTool(g.part)) {
+          flush()
+          result.push(g)
+        } else {
+          batch.push(g.part)
+        }
       } else {
         flush()
         result.push(g)
@@ -3634,7 +3542,7 @@ function formatContextSummary(c: ContextCounts): string {
   animation-delay: .3s;
 }
 
-/* ── Process step color coding — 以 main area 文字为底 ── */
+/* ── Process step color coding — 以 main area 文字为底，与 conversation status 同规范 ── */
 .process-step--completed .process-step-marker {
   background: var(--theme-main-text, #fff);
   box-shadow: none;
@@ -3644,12 +3552,20 @@ function formatContextSummary(c: ContextCounts): string {
   box-shadow: none;
 }
 .process-step--running .process-step-marker {
-  background: var(--theme-main-text, #fff);
-  animation: process-pulse 1.4s ease-in-out infinite;
+  width: 9px; height: 9px;
+  margin: 4px auto 0;
+  border: 2px solid color-mix(in srgb, var(--theme-main-text, #fff) 14%, transparent);
+  border-top-color: var(--theme-main-text, #fff);
+  background: transparent;
+  border-radius: 50%;
+  box-shadow: none;
+  animation: stream-spin .9s linear infinite;
 }
 .process-step--pending .process-step-marker {
   background: color-mix(in srgb, var(--theme-main-text, #fff) 40%, transparent);
+  box-shadow: none;
 }
+@keyframes stream-spin { to { transform: rotate(360deg); } }
 @keyframes process-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: .4; }
@@ -3763,7 +3679,14 @@ function formatContextSummary(c: ContextCounts): string {
   border-radius: 0;
   background: transparent;
   padding: 4px 6px;
-  transition: background-color 160ms ease-out, color 160ms ease-out;
+  position: relative;
+  transition: color 160ms ease-out;
+}
+.process-tool-row::before {
+  content: ""; position: absolute; inset: 0;
+  border-radius: 0; background: transparent; pointer-events: none;
+  -webkit-mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
+  mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
 }
 .tool-row-name {
   flex: 0 0 auto;
@@ -3779,8 +3702,8 @@ function formatContextSummary(c: ContextCounts): string {
 .process-tool-row .process-step-title {
   flex: 0 1 auto;
 }
-.process-tool-row.has-detail:hover {
-  background: color-mix(in srgb, var(--theme-main-text, #fff) 4%, transparent);
+.process-tool-row.has-detail:hover::before {
+  background: color-mix(in srgb, var(--theme-main-text, #fff) var(--alpha-hover), transparent);
 }
 .process-tool-row:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--blue) 72%, transparent);
@@ -4332,10 +4255,19 @@ function formatContextSummary(c: ContextCounts): string {
   cursor: pointer;
   text-align: left;
   transition: color 160ms ease;
+  position: relative;
+}
+.decision-option::before {
+  content: ""; position: absolute; inset: 0;
+  border-radius: 0; background: transparent; pointer-events: none;
+  -webkit-mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
+  mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
 }
 
+.decision-option:hover::before {
+  background: color-mix(in srgb, var(--theme-main-text, #fff) var(--alpha-hover), transparent);
+}
 .decision-option:hover {
-  background: transparent;
   color: color-mix(in srgb, var(--theme-main-text, #fff) 78%, var(--decision-attention) 22%);
 }
 
@@ -4350,8 +4282,10 @@ function formatContextSummary(c: ContextCounts): string {
   color: color-mix(in srgb, var(--green) 82%, var(--theme-main-text, #fff) 18%);
 }
 
+.decision-option--approve:hover::before {
+  background: color-mix(in srgb, var(--green) var(--alpha-hover), transparent);
+}
 .decision-option--approve:hover {
-  background: transparent;
   color: color-mix(in srgb, var(--green) 94%, var(--theme-main-text, #fff) 6%);
 }
 
@@ -4360,8 +4294,10 @@ function formatContextSummary(c: ContextCounts): string {
   color: color-mix(in srgb, var(--red) 82%, var(--theme-main-text, #fff) 18%);
 }
 
+.decision-option--deny:hover::before {
+  background: color-mix(in srgb, var(--red) var(--alpha-hover), transparent);
+}
 .decision-option--deny:hover {
-  background: transparent;
   color: color-mix(in srgb, var(--red) 94%, var(--theme-main-text, #fff) 6%);
 }
 
@@ -4474,6 +4410,33 @@ function formatContextSummary(c: ContextCounts): string {
   background: color-mix(in srgb, var(--theme-main-text, #fff) 16%, transparent);
 }
 
+/* subagent 运行态：标题行上从左到右扫过的流光 */
+.sub-line--running .sub-line-heading {
+  position: relative;
+  overflow: hidden;
+}
+.sub-line--running .sub-line-heading::after {
+  content: "";
+  position: absolute;
+  top: 0; bottom: 0; left: -40%;
+  width: 40%;
+  background: linear-gradient(
+    to right,
+    transparent,
+    color-mix(in srgb, var(--theme-main-text, #fff) 14%, transparent),
+    transparent
+  );
+  pointer-events: none;
+  animation: sub-line-sweep 1.8s ease-in-out infinite;
+}
+@keyframes sub-line-sweep {
+  0% { left: -40%; }
+  100% { left: 100%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sub-line--running .sub-line-heading::after { animation: none; }
+}
+
 /* ── Compact process group summary ── */
 .process-group-summary {
   display: grid;
@@ -4488,13 +4451,21 @@ function formatContextSummary(c: ContextCounts): string {
   font: inherit;
   text-align: inherit;
   cursor: pointer;
-  border-radius: 4px;
-  transition: background 0.15s ease;
+  border-radius: 0;
   opacity: 0.8;
+  position: relative;
+}
+.process-group-summary::before {
+  content: ""; position: absolute; inset: 0;
+  border-radius: 0; background: transparent; pointer-events: none;
+  -webkit-mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
+  mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
 }
 .process-group-summary:hover {
-  background: color-mix(in srgb, var(--theme-main-text, #fff) 4%, transparent);
   opacity: 1;
+}
+.process-group-summary:hover::before {
+  background: color-mix(in srgb, var(--theme-main-text, #fff) var(--alpha-hover), transparent);
 }
 .process-group-text {
   min-width: 0;
@@ -4529,11 +4500,17 @@ function formatContextSummary(c: ContextCounts): string {
   font: inherit;
   text-align: inherit;
   cursor: pointer;
-  border-radius: 4px;
-  transition: background 0.15s ease;
+  border-radius: 0;
+  position: relative;
 }
-.sub-line-heading:hover {
-  background: color-mix(in srgb, var(--theme-main-text, #fff) 4%, transparent);
+.sub-line-heading::before {
+  content: ""; position: absolute; inset: 0;
+  border-radius: 0; background: transparent; pointer-events: none;
+  -webkit-mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
+  mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
+}
+.sub-line-heading:hover::before {
+  background: color-mix(in srgb, var(--theme-main-text, #fff) var(--alpha-hover), transparent);
 }
 
 .sub-line-chevron {
@@ -4840,17 +4817,26 @@ function formatContextSummary(c: ContextCounts): string {
   gap: 8px;
   background: transparent;
   border: none;
-  border-radius: 6px;
+  border-radius: 0;
   padding: 2px 6px 2px 0;
   cursor: pointer;
   color: color-mix(in srgb, var(--theme-main-text, #fff) 74%, transparent);
   font: inherit;
   text-align: left;
-  transition: background .14s ease, color .14s ease;
+  transition: color .14s ease;
+  position: relative;
+}
+.reasoning-toggle::before {
+  content: ""; position: absolute; inset: 0;
+  border-radius: 0; background: transparent; pointer-events: none;
+  -webkit-mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
+  mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
 }
 .reasoning-toggle:hover {
-  background: color-mix(in srgb, var(--theme-main-text, #fff) 4%, transparent);
   color: color-mix(in srgb, var(--theme-main-text, #fff) 88%, transparent);
+}
+.reasoning-toggle:hover::before {
+  background: color-mix(in srgb, var(--theme-main-text, #fff) var(--alpha-hover), transparent);
 }
 .process-step--reasoning .process-step-marker {
   display: none;
@@ -4928,6 +4914,13 @@ function formatContextSummary(c: ContextCounts): string {
   color: inherit;
   font: inherit;
   text-align: left;
+  position: relative;
+}
+.compaction-toggle::before {
+  content: ""; position: absolute; inset: 0;
+  border-radius: 0; background: transparent; pointer-events: none;
+  -webkit-mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
+  mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
 }
 .compaction-toggle:disabled {
   cursor: default;
@@ -4948,24 +4941,33 @@ function formatContextSummary(c: ContextCounts): string {
 .compaction-toggle .tool-expand-chevron {
   justify-self: end;
 }
+.compaction-toggle:hover::before {
+  background: color-mix(in srgb, var(--theme-main-text, #fff) var(--alpha-hover), transparent);
+}
 .compaction-toggle:hover .process-step-title {
   color: var(--accent, #79bcff);
 }
 .compaction-toggle:disabled:hover .process-step-title {
   color: inherit;
 }
+/* compaction-step marker — 与 conversation status 同规范 */
 .compaction-step--running .process-step-marker {
-  background: var(--orange);
-  animation: part-pulse 1s ease-in-out infinite;
+  width: 9px; height: 9px;
+  margin: 4px auto 0;
+  border: 2px solid color-mix(in srgb, var(--theme-main-text, #fff) 14%, transparent);
+  border-top-color: var(--theme-main-text, #fff);
+  background: transparent;
+  border-radius: 50%;
+  animation: stream-spin .9s linear infinite;
 }
 .compaction-step--compacted .process-step-marker {
-  background: var(--green);
+  background: var(--theme-main-text, #fff);
 }
 .compaction-step--not_needed .process-step-marker {
   background: color-mix(in srgb, var(--theme-main-text, #fff) 34%, transparent);
 }
 .compaction-step--failed .process-step-marker {
-  background: var(--red);
+  background: color-mix(in srgb, var(--theme-main-text, #fff) 30%, var(--red) 70%);
 }
 .compaction-summary {
   box-sizing: border-box;

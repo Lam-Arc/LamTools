@@ -28,7 +28,7 @@
         >{{ m.display_name || m.model_id || m.id }}</option>
       </select>
       <p class="hook-meta">
-        当主模型为文本模型且需要理解图片/视频等附件时，能力提示词会引导主 Agent 用此模型委派 sub_agent 查看。仅显示已声明 <strong>多模态</strong> 能力的模型。保存到 <code>~/.lam/config/subagent/settings.json</code>。
+        当主模型为文本模型且需要理解图片/视频等附件时，能力提示词会引导主 Agent 用此模型委派 sub_agent 查看。仅显示已声明 <strong>多模态</strong> 能力的模型。保存到 <code>{{ settingsTargetPath }}</code>。
       </p>
     </article>
 
@@ -51,7 +51,7 @@
         placeholder="# Sub-agent 委派指南&#10;在此编写自然语言指令，将注入到主 Agent 系统提示词中…"
       />
       <p class="hook-meta">
-        保存到全局配置 <code>~/.lam/config/subagent/guide.md</code>。项目级配置请在项目设置内编辑。留空保存则恢复为内置默认。CLI：<code>core subagent guide show/set/edit --scope global</code>
+        {{ guideDescription }}
       </p>
     </article>
   </section>
@@ -61,10 +61,18 @@
 import { computed, onMounted, ref } from 'vue'
 import type { CoreSettingsModel } from './CoreSettings.vue'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   requestRpc: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>
   models?: CoreSettingsModel[]
-}>()
+  /** Config scope this editor reads/writes. 'global' (default) edits ~/.lam/config;
+   *  'project' edits {workRoot}/.lam/config and falls back to global/builtin on read. */
+  scope?: 'global' | 'project'
+  /** Required when scope === 'project'. */
+  workRoot?: string
+}>(), {
+  scope: 'global',
+  workRoot: '',
+})
 
 // ── Guide state ──
 const draft = ref('')
@@ -73,16 +81,40 @@ const saving = ref(false)
 const error = ref('')
 const isBuiltin = ref(true)
 
+/** Merge scope + work_root into an RPC params object so the backend reads/writes
+ *  the correct tier (global → ~/.lam/config, project → {workRoot}/.lam/config). */
+function withScope<T extends Record<string, unknown>>(extra: T): T {
+  return { scope: props.scope, ...(props.workRoot ? { work_root: props.workRoot } : {}), ...extra } as T
+}
+
 const statusLabel = computed(() => {
   if (saving.value) return '保存中…'
+  if (props.scope === 'project') {
+    return isBuiltin.value
+      ? '当前来源：继承全局 / 内置默认（未配置项目级 guide）'
+      : '当前来源：项目配置'
+  }
   return isBuiltin.value ? '当前来源：内置默认（未配置全局 guide）' : '当前来源：全局配置'
+})
+
+const settingsTargetPath = computed(() =>
+  props.scope === 'project'
+    ? `${props.workRoot || '(项目根)'}/.lam/config/subagent/settings.json`
+    : '~/.lam/config/subagent/settings.json',
+)
+
+const guideDescription = computed(() => {
+  if (props.scope === 'project') {
+    return `保存到项目配置 ${props.workRoot || '(项目根)'}/.lam/config/subagent/guide.md。留空保存则移除项目级配置，回退到继承的全局 / 内置默认。CLI：core subagent guide show/set/edit --scope project --work-root <root>`
+  }
+  return '保存到全局配置 ~/.lam/config/subagent/guide.md。项目级配置请在项目设置内编辑。留空保存则恢复为内置默认。CLI：core subagent guide show/set/edit --scope global'
 })
 
 async function fetchGuide() {
   loading.value = true
   error.value = ''
   try {
-    const result = await props.requestRpc('config.subagent.guide.get', { scope: 'global' })
+    const result = await props.requestRpc('config.subagent.guide.get', withScope({}))
     draft.value = String(result.content ?? '')
     isBuiltin.value = result.is_builtin !== false
   } catch (e) {
@@ -96,10 +128,9 @@ async function saveGuide() {
   saving.value = true
   error.value = ''
   try {
-    await props.requestRpc('config.subagent.guide.set', {
-      scope: 'global',
+    await props.requestRpc('config.subagent.guide.set', withScope({
       content: draft.value,
-    })
+    }))
     await fetchGuide()
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
@@ -121,7 +152,7 @@ async function fetchSettings() {
   settingsLoading.value = true
   error.value = ''
   try {
-    const result = await props.requestRpc('config.subagent.settings.get', { scope: 'global' })
+    const result = await props.requestRpc('config.subagent.settings.get', withScope({}))
     const settings = result.settings as Record<string, unknown> | undefined
     defaultMmModel.value = String(settings?.default_multimodal_model ?? '')
   } catch (e) {
@@ -135,10 +166,9 @@ async function saveSettings() {
   settingsSaving.value = true
   error.value = ''
   try {
-    await props.requestRpc('config.subagent.settings.set', {
-      scope: 'global',
+    await props.requestRpc('config.subagent.settings.set', withScope({
       settings: { default_multimodal_model: defaultMmModel.value },
-    })
+    }))
     await fetchSettings()
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)

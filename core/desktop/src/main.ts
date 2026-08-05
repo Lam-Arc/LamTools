@@ -14,6 +14,11 @@ async function init() {
   (window as any).__LAMTOOLS_TOGGLE_MAXIMIZE = () => invoke('toggle_maximize_window');
   (window as any).__LAMTOOLS_CLOSE = () => invoke('close_window');
 
+  // Native directory picker: returns selected path or null (cancelled)
+  ;(window as any).__LAMTOOLS_PICK_DIRECTORY = async (): Promise<string | null> => {
+    return await invoke<string | null>('pick_directory')
+  }
+
   // Diagnostic: verify custom commands are registered
   try {
     const pong = await invoke<string>('ping');

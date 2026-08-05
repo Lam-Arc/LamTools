@@ -75,7 +75,14 @@ onUnmounted(() => document.removeEventListener('pointerdown', onOutside))
   width: 100%; text-align: left;
   border: none; background: transparent; color: inherit;
   padding: 5px 10px; font-size: 11px; cursor: pointer;
+  position: relative;
 }
-.wf-select-option:hover { background: color-mix(in srgb, var(--theme-main-text) var(--alpha-hover), transparent); }
+.wf-select-option::before {
+  content: ""; position: absolute; inset: 0;
+  border-radius: 0; background: transparent; pointer-events: none;
+  -webkit-mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
+  mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
+}
+.wf-select-option:hover::before { background: color-mix(in srgb, var(--theme-main-text) var(--alpha-hover), transparent); }
 .wf-select-option.active { color: var(--blue); font-weight: 600; }
 </style>

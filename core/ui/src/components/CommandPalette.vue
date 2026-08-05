@@ -71,18 +71,25 @@ function commandLabel(command: CoreCommandCatalogItem): string {
   display: block;
   align-items: center;
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: 0;
   min-height: 42px;
   padding: 7px 9px;
   background: transparent;
   color: var(--theme-composer-text, currentColor);
   text-align: left;
   cursor: default;
+  position: relative;
+}
+.command-item::before {
+  content: ""; position: absolute; inset: 0;
+  border-radius: 0; background: transparent; pointer-events: none;
+  -webkit-mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
+  mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
 }
 
-.command-item.active,
-.command-item:hover {
-  background: color-mix(in srgb, var(--theme-composer-text, currentColor) 7%, transparent);
+.command-item.active::before,
+.command-item:hover::before {
+  background: color-mix(in srgb, var(--theme-composer-text, currentColor) var(--alpha-hover), transparent);
 }
 
 .command-copy {

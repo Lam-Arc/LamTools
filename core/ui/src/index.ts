@@ -113,6 +113,8 @@ export { default as SettingsShell } from './components/SettingsShell.vue';
 export { default as ThemeEditor } from './components/ThemeEditor.vue';
 export { default as ThemeAreaEditor } from './components/ThemeAreaEditor.vue';
 export { default as CoreSettings } from './components/CoreSettings.vue';
+export { default as CoreProjectSettings } from './components/CoreProjectSettings.vue';
+export type { CoreProjectSettingsProject } from './components/CoreProjectSettings.vue';
 export { default as CoreProjectCreate } from './components/CoreProjectCreate.vue';
 export { default as CoreSessionTitleEditor } from './components/CoreSessionTitleEditor.vue';
 export { default as CoreSessionRollback } from './components/CoreSessionRollback.vue';

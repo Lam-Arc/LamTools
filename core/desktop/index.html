@@ -10,11 +10,9 @@
     body { background: #202020; color: #e0e0e0; font-family: system-ui, sans-serif; }
   </style>
   <script>
-    // Desktop: point all API calls at the local backend.
-    // In dev mode Vite proxy handles this; in production the backend is on fixed port 5172.
-    if (!window.__LAMTOOLS_API_BASE__) {
-      window.__LAMTOOLS_API_BASE__ = 'http://127.0.0.1:5172';
-    }
+    // Desktop: the backend port is chosen dynamically by Tauri (random free port).
+    // main.ts fetches it via invoke('get_api_base') and sets __LAMTOOLS_API_BASE__.
+    // Do NOT hardcode a port here — it would shadow the correct dynamic value.
   </script>
 </head>
 <body>

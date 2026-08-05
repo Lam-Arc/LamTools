@@ -70,6 +70,7 @@
     <FolderBrowserDialog
       v-model="showBrowser"
       :initial-path="workRoot"
+      :api-base="apiBase"
       @selected="onDirectorySelected"
     />
   </div>
@@ -83,9 +84,11 @@ import FolderBrowserDialog from './FolderBrowserDialog.vue'
 const props = withDefaults(defineProps<{
   loading?: boolean
   error?: string
+  apiBase?: string
 }>(), {
   loading: false,
   error: '',
+  apiBase: '/api/core',
 })
 
 const emit = defineEmits<{
@@ -110,8 +113,18 @@ function cancel() {
   if (!props.loading) emit('cancel')
 }
 
-function openBrowser() {
+async function openBrowser() {
   if (props.loading) return
+  // Prefer the native OS directory picker when available (Tauri desktop).
+  const nativePick = (window as any).__LAMTOOLS_PICK_DIRECTORY as
+    | (() => Promise<string | null>)
+    | undefined
+  if (nativePick) {
+    const picked = await nativePick()
+    if (picked) workRoot.value = picked
+    return
+  }
+  // Fallback: in-browser tree dialog (non-Tauri / demo mode).
   showBrowser.value = true
 }
 

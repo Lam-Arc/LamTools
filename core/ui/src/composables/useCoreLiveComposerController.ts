@@ -55,6 +55,7 @@ export interface UseCoreLiveComposerControllerOptions {
   onError?(text: string): void
   onTurnStarted?(): void | Promise<void>
   onTurnStartedError?(error: unknown): void
+  onSubmitStart?: () => void
   messages?: CoreLiveComposerMessages
 }
 
@@ -65,6 +66,7 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
   const dismissedText = ref('')
   const lastEnterHandledAt = ref(0)
   const commandRunning = ref(false)
+  const submitting = ref(false)
   let commandCatalogGeneration = 0
   let stopPending = false
   let stopGraceTimer: ReturnType<typeof setTimeout> | null = null
@@ -249,14 +251,29 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
       await stop()
       return null
     }
+    // In-flight guard: a submit() call spans an async turn/start (or queue)
+    // round-trip. Without this guard, a rapid double-Enter (e.g. IME
+    // composition confirm + real Enter, or event.repeat) can overlap two
+    // turn/start calls — the second hits "active turn already exists".
+    if (submitting.value) return null
+    submitting.value = true
     const threadId = options.activeThreadId.value || ''
     if (!threadId) {
+      submitting.value = false
       reportError(options.messages?.noActiveThread || 'An active thread is required')
       return null
     }
     const submittedText = options.text.value.trim()
     const workRoot = options.getWorkRoot()
     const turnOptions = options.turnOptions?.() || {}
+    // Show a placeholder bubble before the async round-trip so the user sees
+    // immediate feedback even when turn/start takes hundreds of ms. Only
+    // fire when there is actual content to send — an empty submit would
+    // return { status: 'ignored' } and the placeholder would never be
+    // cleared by an incoming user message.
+    if (submittedText || (options.attachments.value || []).length > 0) {
+      options.onSubmitStart?.()
+    }
     try {
       const result = await submitCoreComposerTask({
         threadId,
@@ -289,6 +306,8 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
     } catch (error) {
       reportError(errorMessage(error) || options.messages?.sendFailed || 'Unable to send message')
       return null
+    } finally {
+      submitting.value = false
     }
   }
 
@@ -311,7 +330,7 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
         return true
       }
     }
-    if (event.key === 'Enter' && (!event.shiftKey || paletteVisible.value)) {
+    if (event.key === 'Enter' && !event.isComposing && !event.repeat && (!event.shiftKey || paletteVisible.value)) {
       event.preventDefault()
       lastEnterHandledAt.value = Date.now()
       const forceGuide = event.ctrlKey || event.metaKey

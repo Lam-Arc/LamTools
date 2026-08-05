@@ -110,7 +110,7 @@ function onChildOpenFile(entry: { path: string; name: string; ext: string }) {
   width: 100%;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1);
   padding: 3px 8px 3px 4px;
   border: 0;
   background: transparent;
@@ -119,10 +119,17 @@ function onChildOpenFile(entry: { path: string; name: string; ext: string }) {
   font-size: 13px;
   text-align: left;
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: 0;
+  position: relative;
 }
-.file-tree-row:hover {
-  background: rgba(255,255,255,0.06);
+.file-tree-row::before {
+  content: ""; position: absolute; inset: 0;
+  border-radius: 0; background: transparent; pointer-events: none;
+  -webkit-mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
+  mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
+}
+.file-tree-row:hover::before {
+  background: color-mix(in srgb, currentColor var(--alpha-hover), transparent);
 }
 .file-tree-icon {
   flex: 0 0 auto;
@@ -141,6 +148,6 @@ function onChildOpenFile(entry: { path: string; name: string; ext: string }) {
 .file-tree-loading {
   padding: 2px 8px;
   font-size: 12px;
-  color: rgba(255,255,255,0.4);
+  color: color-mix(in srgb, currentColor 55%, transparent);
 }
 </style>

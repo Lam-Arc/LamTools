@@ -121,11 +121,11 @@ onUnmounted(() => {
 .ui-select-trigger {
   width: 100%;
   min-height: 32px;
-  border: 1px solid color-mix(in srgb, currentColor 16%, transparent);
-  border-radius: 8px;
-  background: color-mix(in srgb, currentColor 8%, transparent);
+  border: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, currentColor var(--alpha-hover), transparent);
   color: inherit;
-  padding: 0 30px 0 10px;
+  padding: 0 var(--space-3) 0 var(--space-2);
   display: inline-flex;
   align-items: center;
   text-align: left;
@@ -202,7 +202,7 @@ onUnmounted(() => {
 .ui-select-option {
   min-height: 30px;
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: 0;
   background: transparent;
   color: inherit;
   padding: 5px 9px;
@@ -213,13 +213,18 @@ onUnmounted(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  position: relative;
 }
-
-.ui-select-option:hover {
+.ui-select-option::before {
+  content: ""; position: absolute; inset: 0;
+  border-radius: 0; background: transparent; pointer-events: none;
+  -webkit-mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
+  mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
+}
+.ui-select-option:hover::before {
   background: color-mix(in srgb, currentColor var(--alpha-hover), transparent);
 }
-
-.ui-select-option.active {
+.ui-select-option.active::before {
   background: color-mix(in srgb, currentColor var(--alpha-active), transparent);
 }
 
@@ -233,7 +238,7 @@ onUnmounted(() => {
   margin-top: 7px;
 }
 
-.ui-select-option.separator-before::before {
+.ui-select-option.separator-before::after {
   content: '';
   position: absolute;
   left: 9px;

@@ -10,15 +10,27 @@
       class="sidebar-section"
       :data-sidebar-section="section.id"
     >
-      <h2 class="sidebar-section-title">{{ section.label }}</h2>
+      <h2 v-if="section.label" class="sidebar-section-title">{{ section.label }}</h2>
       <article
         v-for="group in section.groups"
         :key="group.id"
         class="project-block"
         :class="{ active: isGroupActive(group) }"
+        :data-collapsed="isCollapsed(group.id) || undefined"
       >
       <div class="project-top">
         <div class="project-btns">
+          <button
+            class="project-action project-fold"
+            type="button"
+            :title="isCollapsed(group.id) ? '展开会话' : '收起会话'"
+            :aria-label="isCollapsed(group.id) ? `展开 ${group.name} 会话` : `收起 ${group.name} 会话`"
+            :aria-expanded="!isCollapsed(group.id)"
+            :data-project-fold="group.id"
+            @click.stop="toggleProjectCollapse(group.id)"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
+          </button>
           <button
             class="project-action menu-trigger"
             type="button"
@@ -46,7 +58,7 @@
         </button>
       </div>
 
-      <div class="conversation-list">
+      <div class="conversation-list" v-show="!isCollapsed(group.id)">
         <div
           v-for="s in visibleSessions(group)"
           :key="s.id"
@@ -58,10 +70,9 @@
             class="conversation-select"
             type="button"
             :data-session-select="s.id"
-            :aria-label="`打开会话 ${s.title || s.id.slice(0, 8)}，第 ${sessionOrdinal(group, s)} 个`"
+            :aria-label="`打开会话 ${s.title || s.id.slice(0, 8)}`"
             @click="emit('select-session', s.id)"
           >
-            <span class="conversation-dot">{{ sessionOrdinal(group, s) }}</span>
             <span class="conversation-main">
               <strong>{{ s.title || `Session ${s.id.slice(0, 8)}` }}</strong>
               <span v-if="s.meta">{{ s.meta }}</span>
@@ -231,39 +242,19 @@ const emit = defineEmits<{
 // Group expand/collapse
 // ---------------------------------------------------------------------------
 const groupExpanded = reactive<Record<string, boolean>>({})
+const groupCollapsed = reactive<Record<string, boolean>>(loadCollapsedProjectIds())
 const pinnedProjectIds = ref<string[]>(loadPinnedProjectIds())
 const pinnedSessionIds = ref<string[]>(loadPinnedSessionIds())
 const openProjectMenuId = ref<string | null>(null)
-const RECENT_WINDOW_MS = 30 * 24 * 60 * 60 * 1000
 
 const projectSections = computed(() => {
-  const sorted = [...props.projectGroups].sort(compareProjectActivityDesc)
-  const pinned = sorted.filter((group) => isPinned(group.id))
-  const unpinned = sorted.filter((group) => !isPinned(group.id))
-  const recentThreshold = Date.now() - RECENT_WINDOW_MS
-  const recent = unpinned.filter((group) => projectActivityTime(group) >= recentThreshold)
-  const earlier = unpinned.filter((group) => projectActivityTime(group) < recentThreshold)
-
+  const pinned = props.projectGroups.filter((group) => isPinned(group.id))
+  const others = props.projectGroups.filter((group) => !isPinned(group.id))
   return [
     { id: 'pinned', label: 'PINNED', groups: pinned },
-    { id: 'recent', label: 'RECENT', groups: recent },
-    { id: 'earlier', label: 'EARLIER', groups: earlier },
+    { id: 'default', label: '', groups: others },
   ].filter((section) => section.groups.length > 0)
 })
-
-function projectActivityTime(group: ProjectGroup): number {
-  return group.sessions.reduce((latest, session) => {
-    const updated = Date.parse(session.updatedAt || '')
-    const created = Date.parse(session.createdAt || '')
-    const timestamp = Number.isFinite(updated) ? updated : Number.isFinite(created) ? created : 0
-    return Math.max(latest, timestamp)
-  }, 0)
-}
-
-function compareProjectActivityDesc(a: ProjectGroup, b: ProjectGroup): number {
-  const activityDifference = projectActivityTime(b) - projectActivityTime(a)
-  return activityDifference || a.name.localeCompare(b.name)
-}
 
 function loadPinnedProjectIds(): string[] {
   if (!props.pinStorageKey || typeof localStorage === 'undefined') return []
@@ -288,6 +279,40 @@ function toggleProjectPin(groupId: string) {
     localStorage.setItem(props.pinStorageKey, JSON.stringify(pinnedProjectIds.value))
   } catch {
     // Pinning still works for this session when browser storage is unavailable.
+  }
+}
+
+function loadCollapsedProjectIds(): Record<string, boolean> {
+  if (!props.pinStorageKey || typeof localStorage === 'undefined') return {}
+  try {
+    const stored = JSON.parse(localStorage.getItem(`${props.pinStorageKey}.collapsed`) || '[]')
+    if (!Array.isArray(stored)) return {}
+    const map: Record<string, boolean> = {}
+    for (const id of stored) {
+      if (typeof id === 'string') map[id] = true
+    }
+    return map
+  } catch {
+    return {}
+  }
+}
+
+function isCollapsed(groupId: string): boolean {
+  return !!groupCollapsed[groupId]
+}
+
+function toggleProjectCollapse(groupId: string) {
+  if (groupCollapsed[groupId]) {
+    delete groupCollapsed[groupId]
+  } else {
+    groupCollapsed[groupId] = true
+  }
+  if (!props.pinStorageKey || typeof localStorage === 'undefined') return
+  try {
+    const ids = Object.keys(groupCollapsed)
+    localStorage.setItem(`${props.pinStorageKey}.collapsed`, JSON.stringify(ids))
+  } catch {
+    // Collapse still works for this session when browser storage is unavailable.
   }
 }
 
@@ -365,27 +390,22 @@ function selectProject(projectId: string, canManage: boolean) {
 }
 
 function visibleSessions(group: ProjectGroup): SessionItem[] {
-  const ordered = [...group.sessions].sort((a, b) => Number(isSessionPinned(b.id)) - Number(isSessionPinned(a.id)))
+  const ordered = [...group.sessions].sort((a, b) => {
+    const pa = isSessionPinned(a.id) ? 1 : 0
+    const pb = isSessionPinned(b.id) ? 1 : 0
+    if (pa !== pb) return pb - pa
+    return sessionActivityTime(b) - sessionActivityTime(a)
+  })
   if (props.projectSessionLimit <= 0 || groupExpanded[group.id]) return ordered
   return ordered.slice(0, props.projectSessionLimit)
 }
 
-function sessionOrdinal(group: ProjectGroup, session: SessionItem): number {
-  const ordered = [...group.sessions].sort(compareSessionCreatedAsc)
-  const index = ordered.findIndex((item) => item.id === session.id)
-  return index >= 0 ? index + 1 : 0
-}
-
-function compareSessionCreatedAsc(a: SessionItem, b: SessionItem): number {
-  const at = sessionCreatedTime(a)
-  const bt = sessionCreatedTime(b)
-  if (at !== bt) return at - bt
-  return a.id.localeCompare(b.id)
-}
-
-function sessionCreatedTime(session: SessionItem): number {
-  const timestamp = Date.parse(session.createdAt || '')
-  return Number.isFinite(timestamp) ? timestamp : Number.MAX_SAFE_INTEGER
+function sessionActivityTime(session: SessionItem): number {
+  const updated = Date.parse(session.updatedAt || '')
+  const created = Date.parse(session.createdAt || '')
+  if (Number.isFinite(updated)) return updated
+  if (Number.isFinite(created)) return created
+  return 0
 }
 
 function hiddenCount(group: ProjectGroup): number {

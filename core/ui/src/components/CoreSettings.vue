@@ -155,6 +155,35 @@
         </article>
       </section>
 
+      <section v-else-if="activeSection === 'agents'" class="settings-panel">
+        <header class="settings-title">
+          <h1>项目规则</h1>
+          <p>全局约束，对所有项目生效。注入顺序：先全局约束，再项目约束（{workRoot}/AGENTS.md），两者相加。</p>
+        </header>
+        <article class="setting-card">
+          <div class="subhead">
+            <span class="muted subhead-title">
+              全局约束
+              <span class="subhead-sub">AGENTS.md · ~/.lam/config/</span>
+            </span>
+            <div class="subhead-actions">
+              <button class="text-btn" type="button" :disabled="agentsLoading" @click="fetchGlobalAgentsMd">刷新</button>
+              <button class="text-btn" type="button" :disabled="agentsLoading || agentsSaving" @click="saveGlobalAgentsMd">保存</button>
+            </div>
+          </div>
+          <textarea
+            v-model="agentsDraft"
+            class="guide-editor"
+            rows="16"
+            spellcheck="false"
+            :placeholder="agentsLoading ? '加载中…' : '# 全局约束\n对所有项目生效的指令。项目级 AGENTS.md 会在此基础上叠加…'"
+            :disabled="agentsLoading"
+          />
+          <p v-if="agentsError" class="skill-error" role="alert">{{ agentsError }}</p>
+          <p class="hook-meta">保存到 <code>~/.lam/config/AGENTS.md</code>。项目级规则请在「项目设置 → 项目规则」内编辑，两者会相加注入系统提示词。</p>
+        </article>
+      </section>
+
       <section v-else-if="activeSection === 'workflow'" class="settings-panel">
         <header class="settings-title">
           <h1>工作流</h1>
@@ -454,6 +483,7 @@ const sections: SettingsSection[] = [
   { id: 'skills', label: 'Skills', icon: '✦' },
   { id: 'hooks', label: 'Hooks', icon: '⌘' },
   { id: 'permissions', label: '权限', icon: '◇' },
+  { id: 'agents', label: '项目规则', icon: '▣' },
   { id: 'workflow', label: '工作流', icon: '◆' },
   { id: 'subagent', label: 'Sub agent', icon: '✷' },
 ]
@@ -477,6 +507,41 @@ const providerEditor = ref<ProviderEditor | null>(null)
 const modelEditor = ref<ModelEditor | null>(null)
 const noticeText = ref('')
 const expandedTier = ref<string | null>(null)
+
+// ── Global AGENTS.md (项目规则) editor state ──
+const agentsDraft = ref('')
+const agentsLoading = ref(false)
+const agentsSaving = ref(false)
+const agentsError = ref('')
+
+async function fetchGlobalAgentsMd() {
+  const rpc = props.requestRpc || defaultRequestRpc
+  agentsLoading.value = true
+  agentsError.value = ''
+  try {
+    const result = await rpc('config.agents_md.get')
+    const agentsMd = result.agents_md as { content?: string; exists?: boolean } | undefined
+    agentsDraft.value = agentsMd?.content ?? ''
+  } catch (e) {
+    agentsError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    agentsLoading.value = false
+  }
+}
+
+async function saveGlobalAgentsMd() {
+  const rpc = props.requestRpc || defaultRequestRpc
+  agentsSaving.value = true
+  agentsError.value = ''
+  try {
+    await rpc('config.agents_md.set', { content: agentsDraft.value })
+    await fetchGlobalAgentsMd()
+  } catch (e) {
+    agentsError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    agentsSaving.value = false
+  }
+}
 
 // Editor overlay: teleport into the settings card so the popover layers above content.
 const overlayTarget = ref<HTMLElement | null>(null)
@@ -724,7 +789,10 @@ function onKeydown(e: KeyboardEvent) {
   }
 }
 
-onMounted(() => document.addEventListener('keydown', onKeydown))
+onMounted(() => {
+  document.addEventListener('keydown', onKeydown)
+  void fetchGlobalAgentsMd()
+})
 onUnmounted(() => document.removeEventListener('keydown', onKeydown))
 </script>
 
@@ -1078,5 +1146,52 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
 }
 .capability-badge.text {
   background: color-mix(in srgb, var(--muted) 18%, transparent);
+}
+
+/* ── Global AGENTS.md editor ── */
+.guide-editor {
+  width: 100%;
+  min-height: 320px;
+  margin-top: 10px;
+  border: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 18%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--settings-main-text, #fff) 6%, transparent);
+  color: inherit;
+  padding: 9px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  resize: vertical;
+}
+
+.subhead-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.subhead-title {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.subhead-sub {
+  font-size: 11px;
+  color: color-mix(in srgb, var(--muted) 70%, transparent);
+  font-family: var(--font-mono);
+  letter-spacing: 0.02em;
+}
+
+.hook-meta {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.skill-error {
+  margin: 8px 0 0;
+  color: var(--red);
+  font-size: 12px;
+  line-height: 1.35;
 }
 </style>
