@@ -35,7 +35,13 @@ _log = logging.getLogger("lamcore.backend")
 # ---------------------------------------------------------------------------
 
 def _ensure_config_db(config_db: Path) -> None:
-    """Create the shared config DB and seed a default provider/model if empty."""
+    """Create the shared config DB and always ensure a default provider/model.
+
+    ``INSERT OR IGNORE`` never touches user-configured rows, but it does repair
+    a pre-existing/legacy config.db that lacks the default rows — without them
+    ``load_llm_config`` fails on the provider×model join at startup
+    ("model not found: default-model") and the packaged app cannot boot.
+    """
     from lamtools_core.config.shared_database import SharedConfigBase
     from sqlalchemy import create_engine, text
 
@@ -43,34 +49,33 @@ def _ensure_config_db(config_db: Path) -> None:
     SharedConfigBase.metadata.create_all(engine)
 
     with engine.connect() as conn:
-        provider_count = conn.execute(
-            text("SELECT COUNT(*) FROM llm_providers")
-        ).scalar()
-        model_count = conn.execute(
-            text("SELECT COUNT(*) FROM llm_models WHERE id='default-model' OR model_id='default-model'")
-        ).scalar()
-        need_seed = not provider_count or not model_count
-        if need_seed:
-            if not provider_count:
-                conn.execute(
-                    text(
-                    "INSERT INTO llm_providers "
-                    "(id, name, api_type, base_url, api_key, is_default, created_at, updated_at) "
-                    "VALUES ('default', 'Default Provider', 'openai', '', '', 1, "
-                    "datetime('now'), datetime('now'))"
-                )
+        conn.execute(
+            text(
+                "INSERT OR IGNORE INTO llm_providers "
+                "(id, name, api_type, base_url, api_key, is_default, created_at, updated_at) "
+                "VALUES ('default', 'Default Provider', 'openai', '', '', 1, "
+                "datetime('now'), datetime('now'))"
             )
-            conn.execute(
-                text(
-                    "INSERT OR IGNORE INTO llm_models "
-                    "(id, provider_id, model_id, display_name, "
-                    "context_window, max_output_tokens, thinking_supported, thinking_budget, "
-                    "temperature, is_default, created_at, updated_at) "
-                    "VALUES ('default-model', 'default', '', 'Default Model', "
-                    "128000, 16384, 1, 10000, 0.7, 1, datetime('now'), datetime('now'))"
-                )
+        )
+        conn.execute(
+            text(
+                "INSERT OR IGNORE INTO llm_models "
+                "(id, provider_id, model_id, display_name, "
+                "context_window, max_output_tokens, thinking_supported, thinking_budget, "
+                "temperature, is_default, created_at, updated_at) "
+                "VALUES ('default-model', 'default', '', 'Default Model', "
+                "128000, 16384, 1, 10000, 0.7, 1, datetime('now'), datetime('now'))"
             )
-            conn.commit()
+        )
+        # Repair legacy DBs: any model pointing at a missing provider would make
+        # the startup join fail — repoint it at the ensured default provider.
+        conn.execute(
+            text(
+                "UPDATE llm_models SET provider_id='default' "
+                "WHERE provider_id NOT IN (SELECT id FROM llm_providers)"
+            )
+        )
+        conn.commit()
     engine.dispose()
 
 

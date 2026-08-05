@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from lamtools_core.cli import (
     CoreHttpLLMClient,
+    LLMConfig,
     _resolve_adapter_profile,
     _resolve_config_db,
     _resolve_core_db,
@@ -183,7 +184,26 @@ def create_core_agent_http_app(
     frontend_dir: Path | str | None = None,
 ) -> FastAPI:
     config_db_path = _resolve_config_db(config_db)
-    config = load_llm_config(config_db_path, model_ref=model_id)
+    try:
+        config = load_llm_config(config_db_path, model_ref=model_id)
+    except ValueError:
+        # No usable model configured yet (e.g. legacy/empty config.db). Boot
+        # with an unconfigured placeholder instead of crashing — the UI can
+        # set up a real provider/model afterwards.
+        _logger.warning(
+            "Model %r not found in %s; booting with an unconfigured placeholder",
+            model_id,
+            config_db_path,
+        )
+        config = LLMConfig(
+            provider_name="Default Provider",
+            provider_api_type="openai",
+            base_url="",
+            api_key="",
+            model_record_id=str(model_id or ""),
+            model_id=str(model_id or ""),
+            display_name=str(model_id or "default-model"),
+        )
     llm_client = CoreConfigRoutingLLMClient(
         config_db_path=config_db_path,
         default_model_ref=model_id or config.model_record_id or config.model_id,
