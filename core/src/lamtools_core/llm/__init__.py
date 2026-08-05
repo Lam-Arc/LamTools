@@ -58,17 +58,24 @@ class LLMUsage:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
+    cached_tokens: int = 0
+    cache_creation_tokens: int = 0
 
     def __post_init__(self) -> None:
         if not self.total_tokens and (self.prompt_tokens or self.completion_tokens):
             self.total_tokens = self.prompt_tokens + self.completion_tokens
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        d: dict[str, Any] = {
             "prompt_tokens": self.prompt_tokens,
             "completion_tokens": self.completion_tokens,
             "total_tokens": self.total_tokens,
         }
+        if self.cached_tokens:
+            d["cached_tokens"] = self.cached_tokens
+        if self.cache_creation_tokens:
+            d["cache_creation_tokens"] = self.cache_creation_tokens
+        return d
 
 
 @dataclass
@@ -211,6 +218,8 @@ def sum_usage(usages: list[LLMUsage]) -> LLMUsage:
         prompt_tokens=sum(u.prompt_tokens for u in usages),
         completion_tokens=sum(u.completion_tokens for u in usages),
         total_tokens=sum(u.total_tokens or (u.prompt_tokens + u.completion_tokens) for u in usages),
+        cached_tokens=sum(u.cached_tokens for u in usages),
+        cache_creation_tokens=sum(u.cache_creation_tokens for u in usages),
     )
 
 

@@ -107,6 +107,10 @@ def normalize_usage(raw: Any) -> LLMUsage | None:
 
     Accepts dict-like OpenAI fields, input/output token aliases, existing
     ``LLMUsage`` instances, and simple objects with token attributes.
+
+    Extracts cached-token counts from both OpenAI-style nested detail dicts
+    (``prompt_tokens_details.cached_tokens``) and Anthropic-style top-level
+    fields (``cache_read_input_tokens`` / ``cache_creation_input_tokens``).
     """
     if raw is None:
         return None
@@ -118,10 +122,14 @@ def normalize_usage(raw: Any) -> LLMUsage | None:
     prompt_tokens = _usage_int(raw, "prompt_tokens", "input_tokens")
     completion_tokens = _usage_int(raw, "completion_tokens", "output_tokens")
     total_tokens = _usage_int(raw, "total_tokens")
+    cached_tokens = _cached_tokens_from_usage(raw)
+    cache_creation_tokens = _cache_creation_tokens_from_usage(raw)
     return LLMUsage(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
         total_tokens=total_tokens,
+        cached_tokens=cached_tokens,
+        cache_creation_tokens=cache_creation_tokens,
     )
 
 
@@ -135,6 +143,25 @@ def _usage_int(raw: Any, *keys: str) -> int:
         except (TypeError, ValueError):
             return 0
     return 0
+
+
+def _cached_tokens_from_usage(raw: Any) -> int:
+    """Extract cache-read token count across provider shapes."""
+    # Anthropic / OpenAI-compatible top-level aliases
+    direct = _usage_int(raw, "cache_read_input_tokens", "cached_tokens")
+    if direct:
+        return direct
+    # OpenAI nested detail dicts
+    if isinstance(raw, dict):
+        details = raw.get("prompt_tokens_details") or raw.get("input_tokens_details")
+        if isinstance(details, dict):
+            return _usage_int(details, "cached_tokens", "cache_read_input_tokens")
+    return 0
+
+
+def _cache_creation_tokens_from_usage(raw: Any) -> int:
+    """Extract cache-creation token count (Anthropic / compatible)."""
+    return _usage_int(raw, "cache_creation_input_tokens")
 
 
 # -- thinking content extraction --------------------------------------------

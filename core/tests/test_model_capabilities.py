@@ -47,12 +47,13 @@ def test_is_text_model_helper():
 
 
 def test_builtin_table_covers_all_known_xunfei_models():
-    # The 18 known Xunfei model_ids should all be present or prefix-resolvable.
+    # The 19 known Xunfei model_ids should all be present or prefix-resolvable.
     known = [
         "xsparkx2", "xsparkx2agent", "xsparkx2flash", "auto",
         "xopglm5", "xopglm51", "xopglm52", "xopglmv47flash",
         "xopkimik26", "xopkimik25", "xminimaxm25",
         "xopdeepseekv32", "xopdeepseekv4pro", "xopdeepseekv4flash",
+        "xopdeepseekv4flash0731",
         "xopqwen36v35b", "xopqwen35v35b", "xop3qwencodernext", "xopqwen35397b",
     ]
     multimodal = {"xopkimik26", "xopkimik25", "xminimaxm25",

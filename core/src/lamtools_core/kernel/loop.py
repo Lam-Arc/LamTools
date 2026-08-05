@@ -219,6 +219,7 @@ class CoreLoopKernel:
     hook_engine: Any | None = None
     checkpoint_coordinator: Any | None = None
     completion_gate: CompletionGate | None = None
+    memory_store: Any | None = None  # MemoryStoreProtocol; Any to avoid import cycle
     _cancel_event: asyncio.Event = field(default_factory=asyncio.Event, init=False, repr=False)
     _base_event_sink: EventSink = field(init=False, repr=False)
 
@@ -291,7 +292,22 @@ class CoreLoopKernel:
                 state = RuntimeState(session_id=session_id or _new_run_id())
             _logger.info("[kernel:_run] state loaded sid=%s existing=%s", state.session_id, loaded is not None)
 
-        history = await self._load_history(state.session_id)
+        # Apply persisted compaction boundary: load only messages after the
+        # compaction boundary and prepend the summary so build_model_request
+        # sees [summary, *recent_messages] without touching the original history.
+        compaction_meta = state.metadata.get("context_compaction") if isinstance(state.metadata, dict) else None
+        if isinstance(compaction_meta, dict) and compaction_meta.get("summary_seq", 0) > 0:
+            boundary = int(compaction_meta["summary_seq"])
+            history = await self._load_history(state.session_id, after_seq=boundary)
+            summary_text = str(compaction_meta.get("summary") or "")
+            if summary_text:
+                history.insert(0, ChatMessage(
+                    role="system",
+                    content=summary_text,
+                    metadata={"key": "context_compaction_summary"},
+                ))
+        else:
+            history = await self._load_history(state.session_id)
         _logger.info("[kernel:_run] history loaded sid=%s len=%d", state.session_id, len(history))
 
         # Each user turn is a new run inside the same session. Persisted state
@@ -354,9 +370,12 @@ class CoreLoopKernel:
             if turn_input.user_content is not None
             else turn_input.user_message
         )
+        new_messages: list[ChatMessage] = []
         if current_user_content:
-            history.append(ChatMessage(role="user", content=current_user_content))
-        await self._save_checkpoint(state, history, full=True)
+            user_msg = ChatMessage(role="user", content=current_user_content)
+            history.append(user_msg)
+            new_messages.append(user_msg)
+        await self._append_history_checkpoint(state, new_messages)
         _logger.info("[kernel:_run] checkpoint saved sid=%s", state.session_id)
 
         # 4b. UserPromptSubmit hook
@@ -415,7 +434,7 @@ class CoreLoopKernel:
                     if cut > 0:
                         trimmed = len(history) - cut
                         del history[:cut]
-                        await self._save_checkpoint(state, history, full=True)
+                        await self._replace_history_checkpoint(state, history)
                         await self._emit_history_compacted(state, trimmed, len(history))
 
                 context = await self.kit.build_context(state, turn_input, history, index)
@@ -577,6 +596,21 @@ class CoreLoopKernel:
                     )
                     if payload is not None:
                         payload_matches[call.id] = (payload, prior_payload)
+                    # Block calls whose substantive payload matches a prior
+                    # call that was already challenged — the model was told
+                    # to reconsider but sent the same large payload again.
+                    if (
+                        prior_payload is not None
+                        and bool(prior_payload.get("challenged"))
+                        and call.id not in blocked_results
+                    ):
+                        blocked_results[call.id] = ToolResult(
+                            call_id=call.id,
+                            name=call.name,
+                            status="blocked",
+                            content="Skipped: substantive payload duplicates a previously challenged call.",
+                            metadata={"duplicate_substantive_payload": True},
+                        )
                     if call.id not in blocked_results:
                         blocked = await self._apply_pre_tool_hook(state, call)
                         if blocked is not None:
@@ -589,6 +623,15 @@ class CoreLoopKernel:
                     input_error_warnings.append(
                         f"- {call.name}: {prior_input_error.error}"
                     )
+                    if call.id not in blocked_results:
+                        blocked_results[call.id] = ToolResult(
+                            call_id=call.id,
+                            name=call.name,
+                            status="blocked",
+                            content="Skipped: identical to a previous input error.",
+                            error=prior_input_error.error,
+                            metadata={"duplicate_input_error": True},
+                        )
                 if input_error_warnings:
                     history.append(ChatMessage(
                         role="system",
@@ -1061,7 +1104,7 @@ class CoreLoopKernel:
         if error_msg == "cancelled":
             state.status = "cancelled"
         state.loop_state = final_decision
-        await self._save_checkpoint(state, history, full=True)
+        await self._replace_history_checkpoint(state, history)
 
         # Build result
         result = KernelResult(
@@ -1283,10 +1326,10 @@ class CoreLoopKernel:
                 observation["audit"] = audit
         return observation
 
-    async def _load_history(self, session_id: str) -> list[ChatMessage]:
+    async def _load_history(self, session_id: str, *, after_seq: int = 0) -> list[ChatMessage]:
         if not isinstance(self.state_store, RuntimeCheckpointStore):
             return []
-        raw_history = await self.state_store.get_history(session_id)
+        raw_history = await self.state_store.get_history(session_id, after_seq=after_seq)
         messages = [message for item in raw_history if (message := _chat_message_from_dict(item)) is not None]
         return _repair_incomplete_tool_history(messages)
 
@@ -1306,6 +1349,39 @@ class CoreLoopKernel:
                 )
             else:
                 await self.state_store.save(state)
+            return
+        await self.state_store.save(state)
+
+    async def _append_history_checkpoint(
+        self, state: RuntimeState, messages: list[ChatMessage]
+    ) -> None:
+        """Append new messages to incremental history storage and save state.
+
+        Used after appending a user message — only the new messages are
+        written, avoiding a full history rewrite.
+        """
+        if isinstance(self.state_store, RuntimeCheckpointStore):
+            if messages:
+                await self.state_store.append_history(
+                    state.session_id, [m.to_dict() for m in messages]
+                )
+            await self.state_store.save(state)
+            return
+        await self.state_store.save(state)
+
+    async def _replace_history_checkpoint(
+        self, state: RuntimeState, history: list[ChatMessage]
+    ) -> None:
+        """Replace the entire persisted history (after compaction / truncation).
+
+        Falls back to ``save_checkpoint`` for stores that don't support
+        incremental operations.
+        """
+        if isinstance(self.state_store, RuntimeCheckpointStore):
+            await self.state_store.replace_history(
+                state.session_id, [m.to_dict() for m in history]
+            )
+            await self.state_store.save(state)
             return
         await self.state_store.save(state)
 
@@ -1665,6 +1741,13 @@ class CoreLoopKernel:
         tool_args = self._summarize_tool_arguments(raw_arguments)
         label = f"准备调用 {tool_name}" if tool_name else "准备工具调用"
         detail = self._tool_call_detail(tool_args=tool_args, raw_arguments=raw_arguments)
+        # Transient: this placeholder fires the moment the tool name resolves,
+        # before arguments finish streaming. It must NOT be persisted — a crash
+        # mid-stream would otherwise leave an orphaned running tool_call event
+        # with empty arguments (the exact corruption seen in 2b34c636…). The
+        # authoritative, persisted "tool running" event is emitted by
+        # _emit_tool_started once arguments are complete and the tool is
+        # actually dispatched for execution.
         await self._emit_stream_part(
             state,
             part_id=f"{state.run_id}:response-{response_index}:tool-call-{tool_index}",
@@ -1678,6 +1761,7 @@ class CoreLoopKernel:
             tool_name=tool_name,
             call_id=call_id,
             tool_args=tool_args,
+            transient=True,
         )
 
     async def _emit_stream_tool_input_delta_part(
@@ -2133,11 +2217,77 @@ class CoreLoopKernel:
         if decision.status_message:
             await self._emit_hook_status(state, "", decision.status_message)
 
+    async def _dream_if_needed(self, state: RuntimeState, result: Any) -> None:
+        """Consolidate session memory after a run (LamTools "dreaming").
+
+        Fires only when ``policy.dreaming_enabled`` is True and the turn
+        produced something worth dreaming (a compaction summary or tool use).
+        The entire body is wrapped in try/except so a dreaming failure can
+        never kill the run — it is best-effort background consolidation.
+        """
+        if self.memory_store is None:
+            return
+        if not getattr(self.policy, "dreaming_enabled", False):
+            return
+        try:
+            from lamtools_core.mem.dreaming import dream_session, should_dream, record_dream_turn
+
+            metadata = state.metadata if isinstance(state.metadata, dict) else {}
+            compaction = metadata.get("context_compaction")
+            had_compaction = isinstance(compaction, dict) and bool(compaction.get("summary"))
+            # A run that executed at least one tool step is "worth dreaming".
+            had_tool_use = len(getattr(result, "steps", [])) > 0
+            if not should_dream(
+                state, policy=self.policy, had_compaction=had_compaction, had_tool_use=had_tool_use
+            ):
+                return
+
+            # Reload history from the store — at this point history is already
+            # persisted (``_replace_history_checkpoint`` ran before the stop
+            # hook). Use the same loader the kernel uses elsewhere.
+            history: list[ChatMessage] = []
+            if isinstance(self.state_store, RuntimeCheckpointStore):
+                raw = await self.state_store.get_history(state.session_id)
+                history = [
+                    msg for item in raw if (msg := _chat_message_from_dict(item)) is not None
+                ]
+
+            compaction_summary: str | None = None
+            if isinstance(compaction, dict):
+                raw_summary = compaction.get("summary")
+                if isinstance(raw_summary, str) and raw_summary.strip():
+                    compaction_summary = raw_summary
+
+            work_root = str(metadata.get("work_root") or "")
+            active_model = str(metadata.get("model_id") or "")
+
+            await dream_session(
+                session_id=state.session_id,
+                work_root=work_root,
+                history=history,
+                compaction_summary=compaction_summary,
+                memory_store=self.memory_store,
+                llm_client=self.llm_client,
+                model=active_model,
+                policy=self.policy,
+            )
+            record_dream_turn(state)
+            # Persist the updated last_dream_turn marker.
+            if isinstance(self.state_store, RuntimeCheckpointStore):
+                await self.state_store.save(state)
+        except Exception:  # noqa: BLE001 - dreaming must never kill the run
+            # Swallow: dreaming is best-effort. The run has already succeeded;
+            # a memory-consolidation failure should not surface to the user.
+            pass
+
     async def _apply_session_stop_hook(
         self,
         state: RuntimeState,
         result: KernelResult,
     ) -> None:
+        # Dreaming runs before external Stop hooks so the consolidated memory
+        # is available to any downstream process observing the run's end.
+        await self._dream_if_needed(state, result)
         if self.hook_engine is None:
             return
         cwd = str(result.metadata.get("cwd") or "")
@@ -2430,6 +2580,16 @@ class CoreLoopKernel:
             "context_compacted": False,
             "model_id": current_model,
         }
+        # Clear stale compaction stats from a prior run so that
+        # context_compacted=False is not paired with old before/after values.
+        stale = state.metadata["runtime_context_metrics"]
+        for stale_key in (
+            "context_tokens_before_compaction",
+            "context_tokens_after_compaction",
+            "context_messages_before_compaction",
+            "context_messages_after_compaction",
+        ):
+            stale.pop(stale_key, None)
         await self._persist_runtime_context_metrics(state, history=history)
         if before_tokens < trigger_tokens:
             return
@@ -2557,6 +2717,22 @@ class CoreLoopKernel:
             return
 
         request.messages[:] = result.replacement_messages
+        # Do NOT overwrite persisted history.  Store the compaction summary +
+        # boundary seq in state.metadata so the next _run can load only the
+        # messages after the boundary and prepend the summary.
+        compaction_boundary = 0
+        if isinstance(self.state_store, RuntimeCheckpointStore):
+            compaction_boundary = await self.state_store.history_max_seq(state.session_id)
+        state.metadata["context_compaction"] = {
+            "summary": result.summary,
+            "summary_seq": compaction_boundary,
+            "compacted_count": result.compacted_count,
+            "retained_count": result.retained_count,
+            "before_tokens": result.before_tokens,
+            "after_tokens": result.after_tokens,
+        }
+        # Mutate the in-memory history list so the rest of this run sees the
+        # compacted view, but do NOT persist the replacement over the original.
         if history is not None:
             history_message_ids = {id(message) for message in history}
             if any(id(message) in history_message_ids for message in request_messages_before_compaction):
@@ -2570,7 +2746,6 @@ class CoreLoopKernel:
                     for message in result.replacement_messages
                     if id(message) not in request_only_ids
                 ]
-                await self._save_checkpoint(state, history, full=True)
         request.metadata["estimated_prompt_tokens"] = result.after_tokens
 
         request.metadata["context_compacted"] = True
@@ -2596,7 +2771,7 @@ class CoreLoopKernel:
             "context_compaction_execution_model": execution_model,
             "model_id": current_model,
         }
-        await self._persist_runtime_context_metrics(state, history=history)
+        await self._persist_runtime_context_metrics(state, history=None)
         await self._emit_context_compacted(
             state,
             removed=result.compacted_count,
@@ -2892,6 +3067,7 @@ class CoreLoopKernel:
     ) -> None:
         """Emit an approval request event before executing a tool that
         requires approval (OpenAI Codex-style ExecApprovalRequest)."""
+        options, message = self._approval_request_options_and_message(call)
         event = CoreEvent(
             name="runtime.approval_request",
             category="decision",
@@ -2902,22 +3078,9 @@ class CoreLoopKernel:
                 "arguments": call.arguments,
                 "reason": call.reason,
                 "request_kind": "permission",
-                "message": self._approval_request_message(call),
+                "message": message,
                 "metadata": dict(call.metadata) if isinstance(call.metadata, dict) else {},
-                "options": [
-                    {
-                        "id": "approve",
-                        "label": "批准执行",
-                        "description": "允许后端继续执行这个工具调用。",
-                        "response": "approve",
-                    },
-                    {
-                        "id": "deny",
-                        "label": "拒绝执行",
-                        "description": "不执行这个工具调用，本轮停在等待点。",
-                        "response": "deny",
-                    },
-                ],
+                "options": options,
                 **({"response_index": response_index} if response_index is not None else {}),
             },
             session_id=state.session_id,
@@ -2925,6 +3088,50 @@ class CoreLoopKernel:
             tags=["approval"],
         )
         await self.event_sink.emit(event)
+
+    def _approval_request_options_and_message(self, call: ToolCall) -> tuple[list[dict[str, Any]], str]:
+        """Build the options list and message for an approval request.
+
+        For the ``question`` tool the options and message come from the tool
+        arguments (the model-supplied question text and selectable choices).
+        All other tools use the standard approve/deny pair.
+        """
+        if call.name == "question":
+            args = call.arguments if isinstance(call.arguments, dict) else {}
+            message = str(args.get("question") or "等待用户确认")
+            raw_options = args.get("options")
+            if isinstance(raw_options, list) and raw_options:
+                options = [
+                    {
+                        "id": str(opt.get("label") or opt.get("id") or f"option-{i + 1}"),
+                        "label": str(opt.get("label") or f"选项 {i + 1}"),
+                        "description": str(opt.get("description") or ""),
+                        "response": str(opt.get("label") or ""),
+                    }
+                    for i, opt in enumerate(raw_options)
+                    if isinstance(opt, dict)
+                ]
+            else:
+                options = [
+                    {"id": "confirm", "label": "确认", "description": "确认继续", "response": "confirm"},
+                    {"id": "cancel", "label": "取消", "description": "取消当前操作", "response": "cancel"},
+                ]
+            return options, message
+        options = [
+            {
+                "id": "approve",
+                "label": "批准执行",
+                "description": "允许后端继续执行这个工具调用。",
+                "response": "approve",
+            },
+            {
+                "id": "deny",
+                "label": "拒绝执行",
+                "description": "不执行这个工具调用，本轮停在等待点。",
+                "response": "deny",
+            },
+        ]
+        return options, self._approval_request_message(call)
 
     @staticmethod
     def _approval_request_message(call: ToolCall) -> str:

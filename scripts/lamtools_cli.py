@@ -10,7 +10,6 @@ import urllib.request
 import webbrowser
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -72,23 +71,18 @@ def _frontend_url(target: str) -> str | None:
     ports = _load_ports()
     if target == "core":
         return f"http://127.0.0.1:{ports['core']['frontend_dev']}"
-    if target == "writer":
-        return f"http://127.0.0.1:{ports[target]['frontend_dev']}"
-    if target == "sage":
-        return f"http://127.0.0.1:{ports[target]['frontend_dev']}"
     return None
 
 
 def _backend_health_url(target: str) -> str | None:
-    ports = _load_ports()
-    if target in {"writer", "sage"}:
-        return f"http://127.0.0.1:{ports[target]['backend']}/api/health"
+    # Core's backend health is served under the app-server path, not a plain
+    # /api/health endpoint, so there is no member-style health probe for Core.
     return None
 
 
 def _targets(value: str) -> list[str]:
     if value == "all":
-        return ["core", "writer", "sage"]
+        return ["core"]
     return [value]
 
 
@@ -175,20 +169,13 @@ def _doctor_static_checks(targets: list[str]) -> list[Check]:
     for target in targets:
         if target == "core":
             checks.append(Check("core.ui", "ok" if (ROOT / "core" / "ui").exists() else "error", "core/ui"))
-            continue
-        member_dir = ROOT / "members" / target
-        checks.append(Check(f"{target}.dir", "ok" if member_dir.exists() else "error", str(member_dir)))
-        checks.append(Check(f"{target}.cmd", "ok" if (ROOT / f"{target}.cmd").exists() else "warn", f"{target}.cmd"))
-
-    if "writer" in targets:
-        data_dir = Path(os.environ.get("LAMWRITER_DATA_DIR", ROOT / "members" / "writer" / "data"))
-        db_path = data_dir / "lamwriter.db"
-        if db_path.exists():
-            checks.append(Check("writer.db", "ok", str(db_path)))
-        elif _path_writable(db_path):
-            checks.append(Check("writer.db", "warn", "database not created yet", str(db_path)))
-        else:
-            checks.append(Check("writer.db", "error", "database directory is not writable", str(db_path)))
+            core_db = Path(os.environ.get("LAMTOOLS_CORE_DB", ROOT / "data" / "core.db"))
+            if core_db.exists():
+                checks.append(Check("core.db", "ok", str(core_db)))
+            elif _path_writable(core_db):
+                checks.append(Check("core.db", "warn", "database not created yet", str(core_db)))
+            else:
+                checks.append(Check("core.db", "error", "database directory is not writable", str(core_db)))
 
     return checks
 
@@ -222,91 +209,32 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     return 0 if ok else 1
 
 
-def _member_rows() -> list[dict[str, Any]]:
-    ports = _load_ports()
-    rows: list[dict[str, Any]] = []
-    members_dir = ROOT / "members"
-    for member_dir in sorted(path for path in members_dir.iterdir() if path.is_dir()):
-        member_id = member_dir.name
-        rows.append(
-            {
-                "id": member_id,
-                "path": str(member_dir.relative_to(ROOT)),
-                "ports": ports.get(member_id, {}),
-                "cli": str((ROOT / f"{member_id}.cmd").relative_to(ROOT))
-                if (ROOT / f"{member_id}.cmd").exists()
-                else None,
-            }
-        )
-    return rows
-
-
-def cmd_members_list(args: argparse.Namespace) -> int:
-    rows = _member_rows()
-    if args.json:
-        print(json.dumps({"ok": True, "members": rows}, ensure_ascii=False, indent=2))
-        return 0
-    for row in rows:
-        ports = row["ports"]
-        backend = ports.get("backend", "-")
-        frontend = ports.get("frontend_dev", "-")
-        print(f"{row['id']}\tbackend={backend}\tfrontend={frontend}\tcli={row['cli'] or '-'}")
-    return 0
-
-
-def cmd_scaffold_member(args: argparse.Namespace) -> int:
-    ps_args = ["-Id", args.id, "-Name", args.name]
-    if args.display_name:
-        ps_args += ["-DisplayName", args.display_name]
-    if args.capability:
-        ps_args += ["-Capabilities", ",".join(args.capability)]
-    if args.dry_run:
-        ps_args.append("-DryRun")
-    return _run_ps("scaffold-member.ps1", ps_args)
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="lamtools", description="LamTools repository maintenance CLI")
     sub = parser.add_subparsers(dest="command", required=True)
 
     dev = sub.add_parser("dev", help="Start development services")
-    dev.add_argument("component", nargs="?", default="all", choices=["core", "writer", "sage", "all"])
+    dev.add_argument("component", nargs="?", default="all", choices=["core", "all"])
     dev.add_argument("layer", nargs="?", default="all", choices=["backend", "frontend", "all"])
     dev.add_argument("--open", action="store_true", help="Open frontend URL after starting")
     dev.set_defaults(func=cmd_dev)
 
     build = sub.add_parser("build", help="Build frontend packages")
-    build.add_argument("component", nargs="?", default="all", choices=["core", "writer", "sage", "all"])
+    build.add_argument("component", nargs="?", default="all", choices=["core", "all"])
     build.set_defaults(func=cmd_build)
 
     test = sub.add_parser("test", help="Run test suites")
-    test.add_argument("component", nargs="?", default="all", choices=["core", "writer", "sage", "all"])
+    test.add_argument("component", nargs="?", default="all", choices=["core", "all"])
     test.set_defaults(func=cmd_test)
 
     open_cmd = sub.add_parser("open", help="Open a running frontend")
-    open_cmd.add_argument("target", choices=["core", "writer", "sage", "all"])
+    open_cmd.add_argument("target", choices=["core", "all"])
     open_cmd.set_defaults(func=cmd_open)
 
     doctor = sub.add_parser("doctor", help="Check local runtime health")
-    doctor.add_argument("target", nargs="?", default="all", choices=["core", "writer", "sage", "all"])
+    doctor.add_argument("target", nargs="?", default="all", choices=["core", "all"])
     doctor.add_argument("--json", action="store_true", help="Print machine-readable output")
     doctor.set_defaults(func=cmd_doctor)
-
-    members = sub.add_parser("members", help="Inspect members")
-    members_sub = members.add_subparsers(dest="members_command", required=True)
-    members_list = members_sub.add_parser("list", help="List registered member directories")
-    members_list.add_argument("--json", action="store_true")
-    members_list.set_defaults(func=cmd_members_list)
-
-    scaffold = sub.add_parser("scaffold", help="Scaffold repository artifacts")
-    scaffold_sub = scaffold.add_subparsers(dest="scaffold_command", required=True)
-    scaffold_member = scaffold_sub.add_parser("member", help="Scaffold a new member")
-    scaffold_member.add_argument("id")
-    scaffold_member.add_argument("--name", required=True)
-    scaffold_member.add_argument("--display-name")
-    scaffold_member.add_argument("--capability", action="append", default=[])
-    scaffold_member.add_argument("--dry-run", action="store_true")
-    scaffold_member.set_defaults(func=cmd_scaffold_member)
 
     return parser
 

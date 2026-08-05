@@ -17,7 +17,7 @@ def default_core_resource_roots() -> list[Path]:
     if packaged_root.is_dir():
         return [packaged_root]
 
-    source_root = module_root.parents[2]
+    source_root = module_root.parents[1]
     if (source_root / "config" / "command").is_dir() or (source_root / "skills").is_dir():
         return [source_root]
     return []

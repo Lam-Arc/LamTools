@@ -529,10 +529,7 @@ class CoreCheckpointCoordinator:
         edge_kind: str,
         parent_checkpoint_id: str | None = None,
     ) -> CheckpointRef:
-        # Lazy: workspace capture is deferred to per-file backup_file() calls.
-        manifest_hash = ""
-        entries: dict[str, Any] = {}
-        blobs: list[tuple[str, int, str]] = []
+        manifest_hash, entries, blobs = self._capture_workspace()
         root_session_id = _root_session_id(session_id)
         conversation = await self.conversation_backend.capture(session_id, exclude_turn_id=turn_id)
         checkpoint_id = uuid.uuid4().hex

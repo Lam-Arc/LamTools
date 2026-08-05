@@ -60,6 +60,12 @@ class _SnapshotStore:
         self.calls.append(("apply", event.event_id))
         return {"thread_id": event.thread_id, "snapshot_seq": event.seq}
 
+    async def apply_many(self, db, events: list[AppEventEnvelope]) -> dict | None:
+        self.calls.append(("apply_many", [event.event_id for event in events]))
+        if not events:
+            return None
+        return {"thread_id": events[0].thread_id, "snapshot_seq": events[-1].seq}
+
     async def load(self, db, thread_id: str) -> dict:
         self.calls.append(("load", thread_id))
         return {"thread_id": thread_id, "snapshot_seq": 2}
@@ -131,6 +137,11 @@ class _FailingProjector(CoreAppSnapshotProjector):
             raise RuntimeError("projection failed")
         return super().apply(state, event)
 
+    def apply_in_place(self, state: dict, event: AppEventEnvelope) -> dict:
+        if event.event_id == self.failed_event_id:
+            raise RuntimeError("projection failed")
+        return super().apply_in_place(state, event)
+
 
 @pytest.mark.asyncio
 async def test_append_persists_then_projects_and_returns_event_without_committing():
@@ -174,10 +185,54 @@ async def test_append_many_preserves_append_apply_order():
     assert [event.event_id for event in events] == ["event-1", "event-2"]
     assert calls == [
         ("append", "event-1"),
-        ("apply", "event-1"),
         ("append", "event-2"),
-        ("apply", "event-2"),
+        ("apply_many", ["event-1", "event-2"]),
     ]
+
+
+@pytest.mark.asyncio
+async def test_append_batch_projects_once_for_mixed_app_and_run_item_events():
+    calls: list[object] = []
+    host = AppPersistenceHost(_EventStore(calls), _SnapshotStore(calls))
+
+    events = await host.append_batch(
+        _NestedDb(),
+        app_events=[
+            AppEventInput(event_id="accepted", thread_id="thread-1", method="turn/accepted"),
+            AppEventInput(event_id="user", thread_id="thread-1", method="item/started"),
+        ],
+        run_item_events=[
+            RunItemEvent(
+                kind="status",
+                thread_id="thread-1",
+                event_id="running",
+                run_id="turn-1",
+                turn_id="turn-1",
+                item_id="turn-1:running",
+                status="running",
+                payload={"type": "turn", "status": "running"},
+            ),
+        ],
+    )
+
+    assert [event.event_id for event in events] == ["accepted", "user", "running"]
+    # All events appended first, then a single apply_many call.
+    assert calls == [
+        ("append", "accepted"),
+        ("append", "user"),
+        ("append_run_item", "running"),
+        ("apply_many", ["accepted", "user", "running"]),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_append_batch_returns_empty_for_no_events():
+    calls: list[object] = []
+    host = AppPersistenceHost(_EventStore(calls), _SnapshotStore(calls))
+
+    events = await host.append_batch(_NestedDb())
+    assert events == []
+    assert calls == []
 
 
 @pytest.mark.asyncio

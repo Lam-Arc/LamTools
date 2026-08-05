@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 import uuid
 
-from sqlalchemy import DateTime, Integer, JSON, String, UniqueConstraint, select, text, update
+from sqlalchemy import DateTime, Float, Integer, JSON, String, UniqueConstraint, delete, func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -78,6 +78,27 @@ class CoreRuntimeSession(CoreDbBase):
     pending_approval_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     last_event_seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+
+
+class CoreHistoryEntry(CoreDbBase):
+    """Incremental conversation history — one row per message (append-only).
+
+    Replaces the monolithic ``history_json`` blob on ``CoreRuntimeSession``.
+    Old sessions are migrated lazily: ``get_history`` falls back to the blob
+    when no rows exist yet, and ``append_history`` migrates the blob on first
+    append.
+    """
+
+    __tablename__ = "core_history_entries"
+    __table_args__ = (
+        UniqueConstraint("thread_id", "seq", name="uq_core_history_thread_seq"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    thread_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    message_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
 
 
 class CoreGoal(CoreDbBase):
@@ -233,6 +254,34 @@ class CoreAttachment(CoreDbBase):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
 
 
+class CoreMemory(CoreDbBase):
+    """Short-term memory entries produced by dreaming.
+
+    Mirrors :class:`lamtools_core.mem.MemoryEntry`. ``work_root`` is indexed so
+    memories can be scoped per project (same isolation pattern as
+    ``core_arrange_jobs``). Long-term memory lives in ``MEMORY.md``; this table
+    holds the structured, searchable, decayable layer used for de-duplication
+    during dreaming.
+    """
+
+    __tablename__ = "core_memories"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    thread_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False, default="")
+    work_root: Mapped[str] = mapped_column(String(2048), index=True, nullable=False, default="")
+    kind: Mapped[str] = mapped_column(String(64), nullable=False, default="fact")
+    content: Mapped[str] = mapped_column(String, nullable=False, default="")
+    domain: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    source: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    layer: Mapped[str] = mapped_column(String(16), nullable=False, default="warm")
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    metadata_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+    accessed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+    access_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
 class SqlAlchemyRuntimeStateStore:
     def __init__(self, session_factory: async_sessionmaker, write_coordinator: SQLiteWriteCoordinator) -> None:
         self.session_factory = session_factory
@@ -255,8 +304,19 @@ class SqlAlchemyRuntimeStateStore:
     async def save(self, state: RuntimeState) -> None:
         await self._save(state, history=None)
 
-    async def get_history(self, session_id: str) -> list[dict[str, Any]]:
+    async def get_history(self, session_id: str, *, after_seq: int = 0) -> list[dict[str, Any]]:
         async with self.session_factory() as db:
+            stmt = (
+                select(CoreHistoryEntry)
+                .where(CoreHistoryEntry.thread_id == session_id)
+                .order_by(CoreHistoryEntry.seq.asc())
+            )
+            if after_seq > 0:
+                stmt = stmt.where(CoreHistoryEntry.seq > after_seq)
+            rows = (await db.execute(stmt)).scalars().all()
+            if rows:
+                return [dict(row.message_json) for row in rows]
+            # Fallback: old monolithic blob (pre-migration)
             row = await db.get(CoreRuntimeSession, session_id)
         if row is None or not isinstance(row.history_json, list):
             return []
@@ -264,6 +324,85 @@ class SqlAlchemyRuntimeStateStore:
 
     async def save_checkpoint(self, state: RuntimeState, history: list[dict[str, Any]]) -> None:
         await self._save(state, history=history)
+
+    async def history_max_seq(self, session_id: str) -> int:
+        async with self.session_factory() as db:
+            result = await db.execute(
+                select(func.coalesce(func.max(CoreHistoryEntry.seq), 0)).where(
+                    CoreHistoryEntry.thread_id == session_id
+                )
+            )
+            return int(result.scalar_one())
+
+    async def append_history(self, session_id: str, messages: list[dict[str, Any]]) -> None:
+        """Append messages incrementally to the ``core_history_entries`` table.
+
+        On first call for a session that still has data in the legacy
+        ``history_json`` blob, the blob is migrated to rows first (lazy
+        migration), then the new messages are appended.
+        """
+        if not messages:
+            return
+        async with self.session_factory() as db:
+            max_seq = int(
+                (
+                    await db.execute(
+                        select(func.coalesce(func.max(CoreHistoryEntry.seq), 0)).where(
+                            CoreHistoryEntry.thread_id == session_id
+                        )
+                    )
+                ).scalar_one()
+            )
+            # Lazy migration: if incremental table is empty but blob has data,
+            # migrate the blob first.
+            if max_seq == 0:
+                row = await db.get(CoreRuntimeSession, session_id)
+                if row is not None and isinstance(row.history_json, list) and row.history_json:
+                    for i, msg in enumerate(row.history_json, 1):
+                        db.add(
+                            CoreHistoryEntry(
+                                thread_id=session_id,
+                                seq=i,
+                                message_json=_json_safe(msg),
+                            )
+                        )
+                    max_seq = len(row.history_json)
+            for msg in messages:
+                max_seq += 1
+                db.add(
+                    CoreHistoryEntry(
+                        thread_id=session_id,
+                        seq=max_seq,
+                        message_json=_json_safe(msg),
+                    )
+                )
+            await db.commit()
+
+    async def replace_history(self, session_id: str, messages: list[dict[str, Any]]) -> None:
+        """Replace the entire history (used after compaction / truncation).
+
+        Deletes all existing rows for the session and re-inserts the given
+        messages with fresh sequential numbering. Also clears the legacy
+        ``history_json`` blob so subsequent ``get_history`` calls read only
+        from the incremental table.
+        """
+        async with self.session_factory() as db:
+            await db.execute(
+                delete(CoreHistoryEntry).where(CoreHistoryEntry.thread_id == session_id)
+            )
+            for i, msg in enumerate(messages, 1):
+                db.add(
+                    CoreHistoryEntry(
+                        thread_id=session_id,
+                        seq=i,
+                        message_json=_json_safe(msg),
+                    )
+                )
+            # Clear legacy blob to avoid stale fallback reads.
+            row = await db.get(CoreRuntimeSession, session_id)
+            if row is not None:
+                row.history_json = []
+            await db.commit()
 
     async def find_pending_approval(self, request_id: str) -> RuntimeState | None:
         async with self.session_factory() as db:
@@ -883,6 +1022,8 @@ class CoreAppDb:
     arrange_store: ArrangeStore
     project_store: CoreProjectStore
     persistence: AppPersistenceHost
+    memory_store: Any = None  # MemoryStoreProtocol; typed as Any to avoid import cycle
+    member_defaults: dict = field(default_factory=dict)
 
     async def close(self) -> None:
         await self.engine.dispose()
@@ -903,6 +1044,7 @@ async def open_core_app_db(path: Path | str, *, member_defaults: dict | None = N
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     write_coordinator = SQLiteWriteCoordinator(session_factory)
     from .project_store import CoreProjectStore
+    from lamtools_core.mem.store import SqlAlchemyMemoryStore
 
     event_store = SqlAlchemyAppEventStore(CoreAppEvent)
     snapshot_store = SqlAlchemyThreadSnapshotStore(CoreThreadSnapshot, projector=CoreAppSnapshotProjector())
@@ -923,6 +1065,8 @@ async def open_core_app_db(path: Path | str, *, member_defaults: dict | None = N
         arrange_store=SqlAlchemyArrangeStore(session_factory, write_coordinator),
         project_store=CoreProjectStore(session_factory, write_coordinator),
         persistence=persistence,
+        memory_store=SqlAlchemyMemoryStore(session_factory, write_coordinator),
+        member_defaults=dict(member_defaults or {}),
     )
 
 

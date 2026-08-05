@@ -21,7 +21,7 @@ from lamtools_core.composer_commands import (
     default_core_resource_roots,
     normalize_command_name,
 )
-from lamtools_core.runtime import RuntimeStateStore, default_runtime_task_registry
+from lamtools_core.runtime import RuntimeStateConflictError, RuntimeStateStore, default_runtime_task_registry
 from lamtools_core.tool.approval import load_access_tools, normalize_command_policies
 from lamtools_core.tool.approval import PermissionMode, TierTools
 from lamtools_core.tool.loadtools import LoadTools, default_load_tools, load_loadtools, mode_names
@@ -82,13 +82,17 @@ async def handle_command_execute_operation(
                 message="thread_id and command are required",
             )
         )
+    actions = context.host.member_hooks.command_action_handlers()
     catalog = {str(item.get("name") or ""): item for item in await _live_command_catalog(context=context, params=params)}
     definition = catalog.get(command)
-    if definition is None:
+    # Allow commands registered as actions even if the catalog (which may
+    # go through operations) doesn't list them — e.g. "compact" registered
+    # via member_hooks.command_action_handlers() or command.execute operation.
+    if definition is None and command not in actions and not context.operations.has("command.execute"):
         return CoreLiveOperationOutcome(
             response=rpc_error(request_id, code=INVALID_REQUEST, message=f"Command not available: {command}")
         )
-    if definition.get("action") != "run_action":
+    if definition is not None and definition.get("action") != "run_action":
         return CoreLiveOperationOutcome(
             response=rpc_error(
                 request_id,
@@ -96,8 +100,6 @@ async def handle_command_execute_operation(
                 message=f"Command is not executable as an action: {command}",
             )
         )
-
-    actions = context.host.member_hooks.command_action_handlers()
     work_root = str(params.get("work_root") or params.get("workRoot") or "")
     try:
         if command == "compact":
@@ -1090,9 +1092,16 @@ async def handle_approval_respond_operation(
         thread_id = ""
         run_id = ""
         try:
+            resolved = await _resolve_turn_approval_policy(context=context, params={})
+            approval_params = {
+                **params,
+                "approval_policy": resolved["approval_policy"],
+                "active_tier": resolved["active_tier"],
+                "tier_tools": resolved["tier_tools"],
+            }
             result = await context.operations.execute(
                 "approval.respond",
-                params,
+                approval_params,
                 metadata={
                     "source": "core_live",
                     "approval_decision_durable": decision_durable,
@@ -1609,12 +1618,21 @@ async def _fail_runtime_start(
         snapshot = await context.persistence.load(db, thread_id)
         if _turn_is_terminal(snapshot, turn_id):
             terminal_events = await context.persistence.list_after(db, thread_id=thread_id, after_seq=0)
+            # Use a default to avoid StopIteration → PEP 479 RuntimeError
+            # when no matching terminal event is found (can happen if the
+            # snapshot is terminal but the event log has no CORE_RUN_ITEM
+            # entry for this turn — e.g. after a revision conflict).
             event = next(
-                event
-                for event in reversed(terminal_events)
-                if event.turn_id == turn_id and event.method == CORE_RUN_ITEM_METHOD
+                (
+                    event
+                    for event in reversed(terminal_events)
+                    if event.turn_id == turn_id and event.method == CORE_RUN_ITEM_METHOD
+                ),
+                None,
             )
-            return event, snapshot
+            if event is not None:
+                return event, snapshot
+            # Fall through to the normal failed-event write below.
         core = snapshot.get("core") if isinstance(snapshot.get("core"), dict) else {}
         requests = core.get("requests") if isinstance(core, dict) else {}
         denied_request = any(
@@ -1626,8 +1644,13 @@ async def _fail_runtime_start(
         )
         if denied_request:
             prior_events = await context.persistence.list_after(db, thread_id=thread_id, after_seq=0)
-            prior = next(event for event in reversed(prior_events) if event.turn_id == turn_id)
-            return prior, snapshot
+            prior = next(
+                (event for event in reversed(prior_events) if event.turn_id == turn_id),
+                None,
+            )
+            if prior is not None:
+                return prior, snapshot
+            # Fall through to the normal failed-event write below.
         event = await _append_run_item(
             db,
             context=context,
@@ -1679,6 +1702,14 @@ async def _run_core_turn(*, context: CoreLiveContext, runtime_start: dict[str, A
         result = await context.host.member_hooks.start_runtime(
             runtime_start=payload,
         )
+        # Release the registry claim as soon as start_runtime returns — the
+        # runtime has finished (terminal events are already persisted live)
+        # and trailing cleanup (_persist_operation_result,
+        # _ensure_turn_terminal, _dispatch_next_queue_item) must not keep the
+        # active-turn guard blocking a subsequent turn.start from the client.
+        # These steps do DB I/O that can yield the event loop, letting an SSE
+        # round-trip race ahead and unblock the UI before release_run.
+        context.host.runtime_task_registry.release_run(thread_id, run_id=turn_id)
         if isinstance(result, OperationResult):
             _elapsed = time_module.time() - _start_ts
             _logger.info("[live:_run_core_turn] turn completed thread_id=%s turn_id=%s status=%s elapsed=%.2fs",
@@ -1691,7 +1722,6 @@ async def _run_core_turn(*, context: CoreLiveContext, runtime_start: dict[str, A
             work_root=str(runtime_start.get("work_root") or ""),
             completed_turn_id=turn_id,
         )
-        context.host.runtime_task_registry.release_run(thread_id, run_id=turn_id)
     except BaseException as exc:
         _elapsed = time_module.time() - _start_ts
         _logger.exception("[live:_run_core_turn] turn failed thread_id=%s turn_id=%s elapsed=%.2fs",
@@ -1955,19 +1985,48 @@ async def _persist_cancelled_terminal(
     return event
 
 
+async def _save_runtime_state_with_retry(
+    store: RuntimeStateStore,
+    thread_id: str,
+    *,
+    mutate: "Callable[[RuntimeState], None]",
+    max_attempts: int = 5,
+) -> None:
+    """Load-mutate-save a RuntimeState with optimistic-retry on revision conflict.
+
+    When recover/cancel paths and the main turn loop write the same session
+    concurrently, the revision can change between ``get`` and ``save``.
+    Instead of crashing, reload the latest state and retry.
+    """
+    for _ in range(max_attempts):
+        state = await store.get(thread_id)
+        if state is None:
+            return
+        mutate(state)
+        try:
+            await store.save(state)
+            return
+        except RuntimeStateConflictError:
+            continue
+    _logger.warning("[live] runtime state save exhausted %d retries thread_id=%s", max_attempts, thread_id)
+
+
 async def _persist_cancelled_runtime_state(
     *, context: CoreLiveContext, thread_id: str, turn_id: str
 ) -> None:
     store = context.runtime_state_store
     if store is None:
         return
-    state = await store.get(thread_id)
-    if state is None or state.run_id != turn_id:
-        return
-    state.status = "cancelled"
-    state.loop_state = "failed"
-    state.metadata.pop("pending_approval", None)
-    await store.save(state)
+
+    def _mark_cancelled(state: Any) -> None:
+        if state.run_id != turn_id:
+            return
+        state.status = "cancelled"
+        state.loop_state = "failed"
+        state.metadata.pop("pending_approval", None)
+        state.metadata.pop("pending_waiting_request", None)
+
+    await _save_runtime_state_with_retry(store, thread_id, mutate=_mark_cancelled)
 
 
 async def _reconcile_cancelled_runtime_state(
@@ -1980,13 +2039,16 @@ async def _reconcile_cancelled_runtime_state(
     store = context.runtime_state_store
     if store is None:
         return
-    state = await store.get(thread_id)
-    if state is None or state.status == "cancelled":
-        return
-    state.status = "cancelled"
-    state.loop_state = "failed"
-    state.metadata.pop("pending_approval", None)
-    await store.save(state)
+
+    def _mark_cancelled(state: Any) -> None:
+        if state.status == "cancelled":
+            return
+        state.status = "cancelled"
+        state.loop_state = "failed"
+        state.metadata.pop("pending_approval", None)
+        state.metadata.pop("pending_waiting_request", None)
+
+    await _save_runtime_state_with_retry(store, thread_id, mutate=_mark_cancelled)
 
 
 async def recover_stale_active_turns(*, context: "CoreLiveContext") -> int:

@@ -64,6 +64,13 @@ class LoopPolicy:
     # This enables post-run audit and debugging. Full resume/fork requires
     # Kit to also persist history (Kernel does not auto-persist history).
     persist_steps: bool = True
+    # Dreaming (memory consolidation): after a run ends, the Kernel may distil
+    # the session into long-term memory (MEMORY.md + short-term store). This
+    # is LamTools' analogue of Claude's "dreaming" step. Disabled by default
+    # to preserve current behaviour until explicitly opted in.
+    dreaming_enabled: bool = False
+    # Minimum turns since the last dream before auto-dreaming fires again.
+    dream_min_turns: int = 3
     metadata: dict[str, Any] = field(default_factory=dict)
 
 

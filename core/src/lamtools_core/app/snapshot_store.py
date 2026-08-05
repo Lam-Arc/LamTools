@@ -105,6 +105,13 @@ class CoreAppSnapshotProjector:
     def _apply_thread_started(self, state: dict[str, Any], event: AppEventEnvelope) -> None:
         payload = dict(event.payload or {})
         state["status"] = str(payload.get("status") or state.get("status") or "idle")
+        session = state.setdefault("session", {})
+        if not isinstance(session, dict):
+            session = {}
+            state["session"] = session
+        for key in ("member_id", "title"):
+            if key in payload:
+                session[key] = payload[key]
 
     def _apply_turn_accepted(self, state: dict[str, Any], event: AppEventEnvelope) -> None:
         payload = dict(event.payload or {})
@@ -127,6 +134,13 @@ class CoreAppSnapshotProjector:
         turn.setdefault("items", [])
         turns[turn_id] = turn
         state["status"] = "running"
+        session = state.setdefault("session", {})
+        if not isinstance(session, dict):
+            session = {}
+            state["session"] = session
+        for key in ("member_id", "title"):
+            if key in payload and key not in session:
+                session[key] = payload[key]
 
     def _apply_turn_started(self, state: dict[str, Any], event: AppEventEnvelope) -> None:
         payload = dict(event.payload or {})

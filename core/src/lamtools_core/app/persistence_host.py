@@ -73,8 +73,42 @@ class AppPersistenceHost:
         db: AsyncSession,
         events: Iterable[AppEventInput],
     ) -> list[AppEventEnvelope]:
+        app_events = list(events)
+        if not app_events:
+            return []
+        return await self.append_batch(db, app_events=app_events)
+
+    async def append_batch(
+        self,
+        db: AsyncSession,
+        *,
+        app_events: Iterable[AppEventInput] = (),
+        run_item_events: Iterable[RunItemEvent] = (),
+    ) -> list[AppEventEnvelope]:
+        """Append multiple events in one savepoint with a single batch projection.
+
+        Events are persisted individually (to allocate seq numbers) but the
+        snapshot is projected once per thread via ``apply_many``, avoiding the
+        per-event ``deepcopy`` that ``append``/``append_run_item`` incur.
+        """
+        app_event_list = list(app_events)
+        run_item_list = list(run_item_events)
+        if not app_event_list and not run_item_list:
+            return []
         async with db.begin_nested():
-            return [await self._append(db, event) for event in events]
+            envelopes: list[AppEventEnvelope] = []
+            for event in app_event_list:
+                envelope = await self.event_store.append(db, event)
+                envelopes.append(envelope)
+            for item in run_item_list:
+                envelope = await self.event_store.append_run_item_event(db, item)
+                envelopes.append(envelope)
+            by_thread: dict[str, list[AppEventEnvelope]] = {}
+            for envelope in envelopes:
+                by_thread.setdefault(envelope.thread_id, []).append(envelope)
+            for group in by_thread.values():
+                await self.snapshot_store.apply_many(db, group)
+            return envelopes
 
     async def _append(self, db: AsyncSession, event: AppEventInput) -> AppEventEnvelope:
         envelope = await self.event_store.append(db, event)

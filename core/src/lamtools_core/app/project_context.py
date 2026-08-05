@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from lamtools_core.config.agents_md import global_agents_md_path
 from lamtools_core.prompt import PromptPart, PromptPartKind
 
 
@@ -95,13 +96,30 @@ class ProjectContextLoader:
         return specs
 
     def load(self, work_root: str | Path | None) -> list[ProjectContextFile]:
+        results: list[ProjectContextFile] = []
+        # Global AGENTS.md is injected additively *before* project context files
+        # so both layers contribute to the system prompt (global first, then
+        # project-specific). It uses a distinct key to avoid colliding with the
+        # project-level AGENTS.md prompt part.
+        global_path = global_agents_md_path()
+        if global_path.is_file():
+            content = self._read(global_path, self._max_chars_per_file)
+            if content:
+                results.append(
+                    ProjectContextFile(
+                        name="GLOBAL_AGENTS.md",
+                        path=global_path,
+                        content=content,
+                        priority=5,
+                        kind="system",
+                    )
+                )
         if not work_root:
-            return []
+            return results
         root = Path(work_root).resolve()
         if not root.exists():
-            return []
+            return results
         specs = self._resolve_specs(root)
-        results: list[ProjectContextFile] = []
         for name, priority, kind in specs:
             path = root / name
             if not path.is_file():

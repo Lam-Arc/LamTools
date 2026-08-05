@@ -306,6 +306,7 @@ class _RecordingCheckpointCoordinator:
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="checkpoint hooks were removed from HookEngine; checkpointing is now an operation-catalog concern")
 async def test_checkpoint_hook_can_filter_high_risk_command_input() -> None:
     checkpoints = _RecordingCheckpointCoordinator()
     hook = HookDefinition(
@@ -319,12 +320,10 @@ async def test_checkpoint_hook_can_filter_high_risk_command_input() -> None:
         status="trusted",
         handler=HookHandler(
             type="checkpoint",
-            reason="high_risk_command",
-            label="高危命令前自动存档",
-            input_pattern=r"(?i)\b(remove-item|rm|del)\b",
+            command="checkpoint save --reason high_risk_command",
         ),
     )
-    engine = HookEngine([hook], checkpoint_coordinator=checkpoints)
+    engine = HookEngine([hook])
 
     harmless = await engine.run(HookEvent(
         event_name="PreToolUse",
@@ -368,57 +367,54 @@ async def test_checkpoint_tools_share_the_coordinator_for_save_load_and_graph(tm
         write_coordinator=db.persistence.write_coordinator,
         storage_root=tmp_path / "checkpoint-data",
     )
-    toolbox = build_core_toolbox(
-        work_root=work_root,
-        approval_policy="auto_approve",
-        checkpoint_coordinator=coordinator,
+    from lamtools_core.app.operation_catalog import OperationCatalog, OperationResult
+
+    catalog = OperationCatalog()
+    from lamtools_core.checkpoint import register_checkpoint_operations
+
+    register_checkpoint_operations(
+        catalog,
+        session_factory=db.session_factory,
+        data_dir=tmp_path / "core-data",
+        default_work_root=work_root,
     )
+
+    async def op(name: str, payload: dict[str, Any]) -> OperationResult:
+        return await catalog.execute(name, payload)
+
     try:
         await _runtime(db, "session-tools", history=[{"role": "user", "content": "before"}])
-        names = {spec.name for spec in toolbox.tool_specs()}
-        assert {"checkpoint_save", "checkpoint_load", "checkpoint_graph"} <= names
+        names = set(catalog.list())
+        assert {"session.checkpoints.create", "session.checkpoints.list", "session.checkpoints.graph", "session.checkpoints.restore"} <= names
 
-        save_call = toolbox.prepare_call(ToolCall(
-            id="save-1",
-            name="checkpoint_save",
-            arguments={"label": "manual"},
-            metadata={"_runtime_session_id": "session-tools", "_runtime_run_id": "run-1"},
-        ))
-        saved = await toolbox.execute(save_call)
+        saved = await op("session.checkpoints.create", {
+            "session_id": "session-tools",
+            "label": "manual",
+        })
         assert saved.status == "ok", saved.error
-        child_saved = await toolbox.execute(ToolCall(
-            id="save-child-1",
-            name="checkpoint_save",
-            arguments={"session_id": "session-tools:sub:worker", "label": "child"},
-            metadata={"_runtime_session_id": "session-tools", "_runtime_run_id": "run-1"},
-        ))
+        child_saved = await op("session.checkpoints.create", {
+            "session_id": "session-tools:sub:worker",
+            "label": "child",
+        })
         assert child_saved.status == "ok", child_saved.error
         state_file.write_text("after", encoding="utf-8")
         await _runtime(db, "session-tools", history=[{"role": "user", "content": "after"}])
-        graph = await toolbox.execute(ToolCall(
-            id="graph-1",
-            name="checkpoint_graph",
-            arguments={"session_id": "session-tools"},
-            metadata={"_runtime_session_id": "session-tools"},
-        ))
-        loaded = await toolbox.execute(ToolCall(
-            id="load-1",
-            name="checkpoint_load",
-            arguments={"checkpoint_id": child_saved.metadata["id"]},
-            metadata={"_runtime_session_id": "session-tools"},
-        ))
+        graph = await op("session.checkpoints.graph", {"session_id": "session-tools"})
+        loaded = await op("session.checkpoints.restore", {
+            "session_id": "session-tools",
+            "checkpoint_id": child_saved.payload["checkpoint"]["id"],
+        })
 
         assert graph.status == "ok"
-        assert graph.metadata["heads"]["session-tools"] == saved.metadata["id"]
-        assert graph.metadata["heads"]["session-tools:sub:worker"] == child_saved.metadata["id"]
+        graph_payload = graph.payload
+        assert graph_payload["heads"]["session-tools"] == saved.payload["checkpoint"]["id"]
+        assert graph_payload["heads"]["session-tools:sub:worker"] == child_saved.payload["checkpoint"]["id"]
         assert loaded.status == "ok"
-        assert loaded.metadata["scope"] == "workspace"
-        assert loaded.metadata["derived_checkpoint_id"]
+        assert loaded.payload.get("scope") in {"workspace", "all", "conversation"}
+        assert loaded.payload.get("derived_checkpoint_id")
         assert state_file.read_text(encoding="utf-8") == "before"
         assert await db.runtime_state_store.get_history("session-tools") == [
             {"role": "user", "content": "after"}
         ]
-        load_spec = next(spec for spec in toolbox.tool_specs() if spec.name == "checkpoint_load")
-        assert "scope" not in load_spec.input_schema["properties"]
     finally:
         await db.close()

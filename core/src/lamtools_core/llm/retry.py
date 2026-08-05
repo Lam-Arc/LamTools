@@ -37,6 +37,14 @@ SleepFn = Callable[[float], Awaitable[None]]
 
 
 def classify_model_error(exc: Exception) -> str:
+    """Classify an LLM error for retry decisions.
+
+    Returns one of:
+      - ``"fatal"``       — config/programming error, never retry (e.g. unknown model)
+      - ``"token_overflow"`` — context window exceeded, never retry
+      - ``"rate_limit"``  — transient, retry with backoff + retry-after
+      - ``"retryable"``   — unknown transient, retry with backoff
+    """
     name = type(exc).__name__
     if name == "TokenOverflowError":
         return "token_overflow"
@@ -57,6 +65,9 @@ def classify_model_error(exc: Exception) -> str:
         return "token_overflow"
     if any(marker in msg for marker in ("rate limit", "rate_limit", "429", "too many requests")):
         return "rate_limit"
+    # Configuration errors — retrying is pointless and causes retry storms
+    if any(marker in msg for marker in ("model not found", "unknown model", "model not available", "provider unavailable", "provider not available")):
+        return "fatal"
     return "retryable"
 
 
@@ -163,7 +174,7 @@ async def stream_with_retry(
                 raise
             last_error = exc
             kind = classify_model_error(exc)
-            if kind == "token_overflow":
+            if kind in ("token_overflow", "fatal"):
                 raise
             if attempt >= attempts - 1:
                 break
@@ -209,7 +220,7 @@ async def run_with_model_retry(
         except Exception as exc:
             last_error = exc
             kind = classify_model_error(exc)
-            if kind == "token_overflow":
+            if kind in ("token_overflow", "fatal"):
                 raise
             if attempt >= attempts - 1:
                 break

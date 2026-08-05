@@ -229,6 +229,10 @@ def build_profiled_openai_request(
     apply_request_payload(payload, profile=profile, variables=variables)
     if thinking_enabled:
         apply_thinking_payload(payload, profile=profile, thinking_budget=thinking_budget)
+        # 讯飞 GLM 系列在携带 tools + 低 temperature 时会概率性静默禁用思考
+        # (enable_thinking / reasoning_content 失效)。thinking 开启时不传
+        # temperature，让模型按自身默认温度思考，显著提升 reasoning 命中率。
+        payload.pop("temperature", None)
     if reasoning_effort:
         payload["reasoning_effort"] = reasoning_effort
     return {
@@ -355,14 +359,11 @@ def normalize_stream_chunk_with_profile(
     if usage and not get_path(chunk, "choices.0.delta") and not finish_reason:
         return LLMStreamEvent(kind="usage", usage=_usage_from_raw(usage), raw=chunk)
 
-    if finish_reason:
-        return LLMStreamEvent(
-            kind="done",
-            usage=_usage_from_raw(usage) if usage else None,
-            raw=chunk,
-            metadata={"finish_reason": finish_reason},
-        )
-
+    # Delta extraction must happen BEFORE the finish_reason check: some
+    # providers send the final tool_call arguments fragment in the same
+    # chunk that carries finish_reason.  If we check finish_reason first,
+    # that last fragment is silently dropped and the tool-call JSON ends up
+    # truncated (→ arguments_parse_error).
     tool_calls_delta = get_path(chunk, response_path(profile, "stream_response", "tool_calls_delta", "choices.0.delta.tool_calls"))
     if tool_calls_delta:
         return LLMStreamEvent(
@@ -379,6 +380,16 @@ def normalize_stream_chunk_with_profile(
     content = get_path(chunk, response_path(profile, "stream_response", "content_delta", "choices.0.delta.content"))
     if content:
         return LLMStreamEvent(kind="content_delta", content=str(content), raw=chunk)
+
+    # Done: finish_reason is set and no delta payload remains in this
+    # chunk.  The loop falls back to accumulated deltas via resolve_tool_calls.
+    if finish_reason:
+        return LLMStreamEvent(
+            kind="done",
+            raw=chunk,
+            usage=_usage_from_raw(usage) if usage else None,
+            metadata={"finish_reason": finish_reason},
+        )
 
     return None
 

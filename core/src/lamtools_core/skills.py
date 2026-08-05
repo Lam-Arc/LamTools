@@ -155,6 +155,12 @@ class SkillRegistry:
                 for p in root.glob("skills/*/SKILL.md"):
                     _add_if_skill(p)
 
+        # Explicit roots: {root}/*/SKILL.md — the root IS the skills directory
+        for root in self._explicit_roots:
+            if root.is_dir():
+                for p in root.glob("*/SKILL.md"):
+                    _add_if_skill(p)
+
         # Project skills: {work_root}/.lam/**/SKILL.md (recursive)
         if work_root:
             lam_dir = Path(work_root).resolve() / ".lam"

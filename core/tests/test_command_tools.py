@@ -72,7 +72,7 @@ def test_windows_command_shell_honors_explicit_powershell(monkeypatch):
     assert shell.name == "Windows PowerShell 5.1"
     assert shell.executable == "powershell.exe"
     assert "Windows PowerShell 5.1" in command_runner.command_shell_prompt()
-    assert "&&" in command_runner.command_shell_prompt()
+    assert "powershell.exe" in command_runner.command_shell_prompt()
 
 
 def test_windows_command_shell_falls_back_when_git_bash_is_missing(monkeypatch):

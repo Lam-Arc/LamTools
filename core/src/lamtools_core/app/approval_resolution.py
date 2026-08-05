@@ -261,9 +261,8 @@ class ApprovalResolutionLifecycle:
 
     async def _save_state_once(self, state: RuntimeState, *, tool_history: ChatMessage | None) -> None:
         if tool_history is not None and isinstance(self.state_store, RuntimeCheckpointStore):
-            history = await self.state_store.get_history(self.thread_id)
-            history.append(tool_history.to_dict())
-            await self.state_store.save_checkpoint(state, history)
+            await self.state_store.append_history(self.thread_id, [tool_history.to_dict()])
+            await self.state_store.save(state)
             return
         await self.state_store.save(state)
 

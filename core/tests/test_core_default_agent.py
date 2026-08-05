@@ -406,7 +406,7 @@ async def test_manual_compaction_uses_session_model_and_safe_segment_input_limit
 
     request = captured["request"]
     assert request.model == "session-model"
-    assert request.input_limit_tokens == 64_000
+    assert request.input_limit_tokens == 256_000
 
 
 def test_core_agent_spec_accepts_member_paths_without_product_names(tmp_path):
@@ -596,10 +596,9 @@ async def test_core_agent_instructs_parent_to_delegate_complete_deliverable(tmp_
     )
 
     system_prompt = llm.requests[0].messages[0].content
-    assert "delegate the complete requested deliverable" in system_prompt
-    assert "Parent Agent should verify the result" in system_prompt
-    assert "Treat successful tool results as reusable evidence" in system_prompt
-    assert "confirmed facts, remaining uncertainty, and the next action" in system_prompt
+    assert "委派" in system_prompt
+    assert "将成功的工具结果视为可复用证据" in system_prompt
+    assert "已确认事实、仍存疑点及下一步" in system_prompt
 
 
 @pytest.mark.asyncio
@@ -636,7 +635,7 @@ async def test_core_agent_operation_loads_plugin_skill_roots(tmp_path):
 @pytest.mark.asyncio
 async def test_core_agent_operation_exposes_load_skill_to_model(tmp_path):
     work_root = tmp_path / "work"
-    skill_dir = work_root / ".agents" / "skills" / "sample"
+    skill_dir = work_root / ".lam" / "skills" / "sample"
     skill_dir.mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text(
         "---\n"

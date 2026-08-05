@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Awaitable, Callable, Mapping
+from pathlib import Path
 from typing import Any
 
 from lamtools_core.context_compaction import (
@@ -10,6 +11,8 @@ from lamtools_core.context_compaction import (
     compaction_segment_input_limit,
 )
 from lamtools_core.llm import ChatMessage, LLMClient, LLMToolCall
+from lamtools_core.mem import MemoryStoreProtocol
+from lamtools_core.mem.dreaming import dream_session
 from lamtools_core.runtime import RuntimeCheckpointStore, RuntimeState, RuntimeStateStore
 
 
@@ -23,6 +26,7 @@ async def execute_command_action(
     thread_id: str,
     handlers: Mapping[str, CommandActionHandler],
     work_root: str = "",
+    arguments: str = "",
     on_event: Callable[[dict[str, Any]], Any] | None = None,
 ) -> dict[str, Any]:
     handler = handlers.get(command)
@@ -31,6 +35,7 @@ async def execute_command_action(
     kwargs = {
         "thread_id": thread_id,
         "work_root": work_root,
+        "arguments": arguments,
         "on_event": on_event,
     }
     accepted = _accepted_kwargs(handler, kwargs)
@@ -85,10 +90,23 @@ async def compact_runtime_history(
             "session_id": thread_id,
             "summary": result.summary,
         }
-    await runtime_state_store.save_checkpoint(
-        state,
-        [message.to_dict() for message in result.replacement_messages],
-    )
+    # Do NOT overwrite persisted history.  Store the compaction summary +
+    # boundary seq in state.metadata so subsequent runs load only messages
+    # after the boundary and prepend the summary.
+    compaction_boundary = 0
+    if isinstance(runtime_state_store, RuntimeCheckpointStore):
+        compaction_boundary = await runtime_state_store.history_max_seq(thread_id)
+    if not isinstance(state.metadata, dict):
+        state.metadata = {}
+    state.metadata["context_compaction"] = {
+        "summary": result.summary,
+        "summary_seq": compaction_boundary,
+        "compacted_count": result.compacted_count,
+        "retained_count": result.retained_count,
+        "before_tokens": result.before_tokens,
+        "after_tokens": result.after_tokens,
+    }
+    await runtime_state_store.save(state)
     return {
         "status": "compacted",
         "session_id": thread_id,
@@ -99,6 +117,66 @@ async def compact_runtime_history(
         "limit_tokens": result.limit_tokens,
         "trigger": "manual",
         "summary": result.summary,
+    }
+
+
+async def dream_session_memory(
+    *,
+    runtime_state_store: RuntimeStateStore,
+    memory_store: MemoryStoreProtocol,
+    thread_id: str,
+    work_root: str = "",
+    llm_client: LLMClient | None = None,
+    model: str = "",
+    on_event: Callable[[dict[str, Any]], Any] | None = None,
+) -> dict[str, Any]:
+    """Manually trigger dreaming for a session (the ``/dream`` command).
+
+    Mirrors :func:`compact_runtime_history`: loads state + history from the
+    runtime store, extracts the compaction summary if present, and delegates
+    to :func:`lamtools_core.mem.dreaming.dream_session`. The work root is
+    taken from ``state.metadata["work_root"]`` (set by ``on_run_start``) and
+    falls back to the ``work_root`` argument.
+    """
+    if not isinstance(runtime_state_store, RuntimeCheckpointStore):
+        raise RuntimeError("Runtime history storage does not support manual dreaming")
+    state = await runtime_state_store.get(thread_id) or RuntimeState(session_id=thread_id)
+    metadata = state.metadata if isinstance(state.metadata, dict) else {}
+
+    work_root_str = str(metadata.get("work_root") or work_root or "")
+    active_model = str(metadata.get("model_id") or model).strip()
+
+    # Pull the compaction summary if one exists for this session.
+    compaction = metadata.get("context_compaction")
+    compaction_summary: str | None = None
+    if isinstance(compaction, dict):
+        raw_summary = compaction.get("summary")
+        if isinstance(raw_summary, str) and raw_summary.strip():
+            compaction_summary = raw_summary
+
+    # Load full history (after_seq=0 → everything in the incremental table).
+    raw_history = await runtime_state_store.get_history(thread_id)
+    history = [message for item in raw_history if (message := _chat_message_from_dict(item)) is not None]
+
+    result = await dream_session(
+        session_id=thread_id,
+        work_root=Path(work_root_str) if work_root_str else "",
+        history=history,
+        compaction_summary=compaction_summary,
+        memory_store=memory_store,
+        llm_client=llm_client,
+        model=active_model,
+        on_event=on_event,
+    )
+    return {
+        "status": result.status,
+        "session_id": thread_id,
+        "extracted": result.extracted,
+        "added": result.added,
+        "updated": result.updated,
+        "memory_md_updated": result.memory_md_updated,
+        "summary": result.summary,
+        "error": result.error,
     }
 
 
@@ -158,5 +236,6 @@ __all__ = [
     "CommandActionHandler",
     "MANUAL_COMPACTION_LIMIT_TOKENS",
     "compact_runtime_history",
+    "dream_session_memory",
     "execute_command_action",
 ]

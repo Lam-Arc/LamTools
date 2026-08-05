@@ -101,6 +101,57 @@ def test_stream_chunk_uses_profile_paths():
     assert done.usage.total_tokens == 7
 
 
+def test_stream_chunk_tool_call_delta_not_dropped_when_finish_reason_present():
+    """A terminal chunk that carries BOTH the final tool_call arguments
+    fragment AND finish_reason must yield a tool_call_delta event, not a
+    done event.  Otherwise the last arguments fragment is silently lost
+    and the tool-call JSON ends up truncated.
+
+    Regression test for the bug that caused sub_agent calls to fail with
+    ``arguments_parse_error`` when the provider (e.g. xfyun/GLM) sent the
+    last arguments fragment alongside ``finish_reason=tool_calls``.
+    """
+    profile = {}  # empty profile → all defaults (choices.0.delta.tool_calls etc.)
+
+    chunk = {
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "function": {"arguments": '"key": "value"}'},
+                        }
+                    ]
+                },
+                "finish_reason": "tool_calls",
+            }
+        ]
+    }
+    event = normalize_stream_chunk_with_profile(chunk, profile)
+
+    assert event is not None
+    assert event.kind == "tool_call_delta"
+    assert event.metadata["tool_calls_delta"] == chunk["choices"][0]["delta"]["tool_calls"]
+
+
+def test_stream_chunk_pure_finish_reason_yields_done():
+    """A chunk with finish_reason and no delta payload still yields done."""
+    profile = {}
+
+    chunk = {
+        "choices": [
+            {"index": 0, "delta": {}, "finish_reason": "stop"}
+        ]
+    }
+    event = normalize_stream_chunk_with_profile(chunk, profile)
+
+    assert event is not None
+    assert event.kind == "done"
+    assert event.metadata["finish_reason"] == "stop"
+
+
 def test_non_stream_response_uses_profile_paths():
     profile = {
         "non_stream_response": {

@@ -177,6 +177,47 @@ class TestNormalizeUsage:
     def test_empty_usage_returns_none(self):
         assert normalize_usage({}) is None
 
+    def test_openai_nested_cached_tokens(self):
+        usage = normalize_usage({
+            "prompt_tokens": 1000,
+            "completion_tokens": 50,
+            "prompt_tokens_details": {"cached_tokens": 900},
+        })
+        assert usage is not None
+        assert usage.cached_tokens == 900
+        assert usage.cache_creation_tokens == 0
+
+    def test_anthropic_top_level_cache_fields(self):
+        usage = normalize_usage({
+            "input_tokens": 1200,
+            "output_tokens": 80,
+            "cache_read_input_tokens": 1100,
+            "cache_creation_input_tokens": 200,
+        })
+        assert usage is not None
+        assert usage.cached_tokens == 1100
+        assert usage.cache_creation_tokens == 200
+
+    def test_flattened_cached_tokens_from_to_dict(self):
+        """LLMUsage.to_dict() emits a flat cached_tokens key — normalize_usage
+        should round-trip it so the kernel→projection path preserves cache data."""
+        original = LLMUsage(prompt_tokens=500, completion_tokens=10, cached_tokens=480)
+        round_tripped = normalize_usage(original.to_dict())
+        assert round_tripped is not None
+        assert round_tripped.cached_tokens == 480
+
+    def test_to_dict_omits_zero_cache_fields(self):
+        usage = LLMUsage(prompt_tokens=100, completion_tokens=5)
+        d = usage.to_dict()
+        assert "cached_tokens" not in d
+        assert "cache_creation_tokens" not in d
+
+    def test_to_dict_includes_cache_fields_when_present(self):
+        usage = LLMUsage(prompt_tokens=100, completion_tokens=5, cached_tokens=90, cache_creation_tokens=10)
+        d = usage.to_dict()
+        assert d["cached_tokens"] == 90
+        assert d["cache_creation_tokens"] == 10
+
 
 # ---------------------------------------------------------------------------
 # build_openai_payload
@@ -797,3 +838,50 @@ class TestResolveToolCalls:
         }
         result = resolve_tool_calls(accumulated)
         assert result[0].raw is accumulated[0]
+
+
+# ---------------------------------------------------------------------------
+# Regression: tool_call arguments truncated when final fragment shares a
+# chunk with finish_reason (profiles.py path).  This simulates the full
+# streaming flow: multiple delta chunks + a terminal chunk that carries
+# both the last arguments fragment and finish_reason=tool_calls.
+# ---------------------------------------------------------------------------
+
+
+class TestStreamToolCallCompletion:
+    def test_final_fragment_with_finish_reason_is_not_lost(self):
+        """The terminal chunk sends the last arguments fragment together
+        with finish_reason.  The merged result must be complete JSON."""
+        accumulated: dict[int, dict] = {}
+
+        # Chunk 1: tool call header + first half of arguments
+        accumulated = merge_tool_call_deltas(accumulated, {
+            "tool_calls": [{
+                "index": 0,
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "sub_agent", "arguments": '{"task": "do work", "agent": "worker", "model": null, "mode": "consider", "attachments":'},
+            }]
+        })
+
+        # Chunk 2: terminal — last arguments fragment + finish_reason
+        accumulated = merge_tool_call_deltas(accumulated, {
+            "tool_calls": [{
+                "index": 0,
+                "function": {"arguments": ' null}'},
+            }]
+        })
+
+        result = resolve_tool_calls(accumulated)
+        assert len(result) == 1
+        assert result[0].name == "sub_agent"
+        # The full JSON must be parseable — no truncation
+        assert result[0].arguments == {
+            "task": "do work",
+            "agent": "worker",
+            "model": None,
+            "mode": "consider",
+            "attachments": None,
+        }
+        # No parse error
+        assert not result[0].metadata.get("arguments_parse_error")

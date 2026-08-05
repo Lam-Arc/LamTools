@@ -168,8 +168,11 @@ class RuntimeStateStore(Protocol):
 
 @runtime_checkable
 class RuntimeCheckpointStore(RuntimeStateStore, Protocol):
-    async def get_history(self, session_id: str) -> list[dict[str, Any]]: ...
+    async def get_history(self, session_id: str, *, after_seq: int = 0) -> list[dict[str, Any]]: ...
+    async def history_max_seq(self, session_id: str) -> int: ...
     async def save_checkpoint(self, state: RuntimeState, history: list[dict[str, Any]]) -> None: ...
+    async def append_history(self, session_id: str, messages: list[dict[str, Any]]) -> None: ...
+    async def replace_history(self, session_id: str, messages: list[dict[str, Any]]) -> None: ...
 
 
 @runtime_checkable
@@ -190,12 +193,25 @@ class InMemoryRuntimeStateStore:
     async def save(self, state: RuntimeState) -> None:
         self._states[state.session_id] = state
 
-    async def get_history(self, session_id: str) -> list[dict[str, Any]]:
-        return deepcopy(self._history.get(session_id, []))
+    async def get_history(self, session_id: str, *, after_seq: int = 0) -> list[dict[str, Any]]:
+        return deepcopy(self._history.get(session_id, [])[after_seq:])
+
+    async def history_max_seq(self, session_id: str) -> int:
+        return len(self._history.get(session_id, []))
 
     async def save_checkpoint(self, state: RuntimeState, history: list[dict[str, Any]]) -> None:
         self._states[state.session_id] = state
         self._history[state.session_id] = list(history)
+
+    async def append_history(self, session_id: str, messages: list[dict[str, Any]]) -> None:
+        if not messages:
+            return
+        existing = self._history.get(session_id, [])
+        existing.extend(deepcopy(msg) for msg in messages)
+        self._history[session_id] = existing
+
+    async def replace_history(self, session_id: str, messages: list[dict[str, Any]]) -> None:
+        self._history[session_id] = [deepcopy(msg) for msg in messages]
 
     async def find_pending_approval(self, request_id: str) -> RuntimeState | None:
         for state in self._states.values():

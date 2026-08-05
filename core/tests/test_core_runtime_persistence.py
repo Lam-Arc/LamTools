@@ -585,17 +585,22 @@ async def test_core_approval_resolution_failure_closes_all_persisted_surfaces(
                     def __init__(self, **_kwargs) -> None:
                         raise RuntimeError("kernel construction failed")
 
-                monkeypatch.setattr(kernel_loop, "CoreLoopKernel", FailingKernel)
+                monkeypatch.setattr(default_agent, "CoreLoopKernel", FailingKernel)
             else:
                 async def fail_kernel_start(self, _turn_input):
                     raise RuntimeError("kernel start failed")
 
                 monkeypatch.setattr(kernel_loop.CoreLoopKernel, "run", fail_kernel_start)
         elif failure_point == "history_save":
-            async def fail_history_save(_state, _history):
+            async def fail_save_checkpoint(_state, _history):
                 raise RuntimeError("tool history save failed")
 
-            monkeypatch.setattr(db.runtime_state_store, "save_checkpoint", fail_history_save)
+            async def fail_append_history(_session_id, _messages):
+                raise RuntimeError("tool history save failed")
+
+            monkeypatch.setattr(db.runtime_state_store, "save_checkpoint", fail_save_checkpoint)
+            monkeypatch.setattr(db.runtime_state_store, "append_history", fail_append_history)
+            monkeypatch.setattr(db.runtime_state_store, "replace_history", fail_append_history)
         elif failure_point == "run_item_persist":
             original_persist = default_agent._persist_run_items
             calls = 0
@@ -679,3 +684,143 @@ async def test_core_approval_resolution_failure_closes_all_persisted_surfaces(
         assert duplicate.payload["error"] == "no pending approval"
     finally:
         await reloaded.close()
+
+
+# ---------------------------------------------------------------------------
+# Tests: Incremental history storage (CoreHistoryEntry)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_append_history_increments_seq_and_round_trips(tmp_path) -> None:
+    db = await open_core_app_db(tmp_path / "history.db")
+    try:
+        store = db.runtime_state_store
+        state = RuntimeState(session_id="thread-1")
+        await store.save(state)
+
+        await store.append_history("thread-1", [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "hi there"},
+        ])
+        await store.append_history("thread-1", [
+            {"role": "user", "content": "second"},
+        ])
+
+        history = await store.get_history("thread-1")
+        assert len(history) == 3
+        assert history[0]["content"] == "hello"
+        assert history[1]["content"] == "hi there"
+        assert history[2]["content"] == "second"
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_append_history_migrates_legacy_blob_lazily(tmp_path) -> None:
+    """A session with data in the old history_json blob is migrated on first append."""
+    from lamtools_core.app.core_db import CoreRuntimeSession
+
+    db = await open_core_app_db(tmp_path / "legacy-blob.db")
+    try:
+        # Seed a session with the old-style blob (no incremental rows yet).
+        async with db.session_factory() as session:
+            session.add(CoreRuntimeSession(
+                thread_id="legacy-thread",
+                revision=1,
+                runtime_state_json={},
+                history_json=[
+                    {"role": "user", "content": "old message 1"},
+                    {"role": "assistant", "content": "old reply 1"},
+                ],
+                pending_approval_json={},
+                last_event_seq=0,
+            ))
+            await session.commit()
+
+        store = db.runtime_state_store
+
+        # Reading before migration falls back to the blob.
+        history = await store.get_history("legacy-thread")
+        assert len(history) == 2
+        assert history[0]["content"] == "old message 1"
+
+        # Appending triggers lazy migration then adds the new message.
+        await store.append_history("legacy-thread", [
+            {"role": "user", "content": "new message"},
+        ])
+
+        history = await store.get_history("legacy-thread")
+        assert len(history) == 3
+        assert history[0]["content"] == "old message 1"
+        assert history[2]["content"] == "new message"
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_replace_history_overwrites_all_rows(tmp_path) -> None:
+    db = await open_core_app_db(tmp_path / "replace.db")
+    try:
+        store = db.runtime_state_store
+        state = RuntimeState(session_id="thread-replace")
+        await store.save(state)
+
+        await store.append_history("thread-replace", [
+            {"role": "user", "content": "original 1"},
+            {"role": "assistant", "content": "original 2"},
+            {"role": "user", "content": "original 3"},
+        ])
+        assert len(await store.get_history("thread-replace")) == 3
+
+        # Replace with a compacted summary.
+        await store.replace_history("thread-replace", [
+            {"role": "system", "content": "[Compacted Context] earlier conversation"},
+            {"role": "user", "content": "latest message"},
+        ])
+
+        history = await store.get_history("thread-replace")
+        assert len(history) == 2
+        assert history[0]["content"] == "[Compacted Context] earlier conversation"
+        assert history[1]["content"] == "latest message"
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_replace_history_clears_legacy_blob(tmp_path) -> None:
+    """After replace_history, the old history_json blob is cleared so get_history
+    only reads from the incremental table."""
+    from lamtools_core.app.core_db import CoreRuntimeSession
+
+    db = await open_core_app_db(tmp_path / "clear-blob.db")
+    try:
+        async with db.session_factory() as session:
+            session.add(CoreRuntimeSession(
+                thread_id="thread-clear",
+                revision=1,
+                runtime_state_json={},
+                history_json=[
+                    {"role": "user", "content": "legacy"},
+                ],
+                pending_approval_json={},
+                last_event_seq=0,
+            ))
+            await session.commit()
+
+        store = db.runtime_state_store
+        await store.replace_history("thread-clear", [
+            {"role": "user", "content": "replaced"},
+        ])
+
+        # The blob should be empty now.
+        async with db.session_factory() as session:
+            row = await session.get(CoreRuntimeSession, "thread-clear")
+            assert row.history_json == []
+
+        # get_history should read only from the incremental table.
+        history = await store.get_history("thread-clear")
+        assert len(history) == 1
+        assert history[0]["content"] == "replaced"
+    finally:
+        await db.close()

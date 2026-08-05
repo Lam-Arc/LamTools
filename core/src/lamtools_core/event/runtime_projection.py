@@ -890,14 +890,7 @@ def _usage_metrics(payload: dict[str, Any]) -> dict[str, int | float]:
     input_tokens = int(usage.get("input_tokens") or usage.get("prompt_tokens") or 0)
     output_tokens = int(usage.get("output_tokens") or usage.get("completion_tokens") or 0)
     total_tokens = int(usage.get("total_tokens") or input_tokens + output_tokens or 0)
-    prompt_details = usage.get("input_tokens_details") or usage.get("prompt_tokens_details") or {}
-    cached_tokens = 0
-    if isinstance(prompt_details, dict):
-        cached_tokens = int(
-            prompt_details.get("cached_tokens")
-            or prompt_details.get("cache_read_input_tokens")
-            or 0
-        )
+    cached_tokens = _extract_cached_tokens(usage)
     return {
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
@@ -906,6 +899,30 @@ def _usage_metrics(payload: dict[str, Any]) -> dict[str, int | float]:
         "cache_hit_rate": round(cached_tokens / input_tokens, 4) if input_tokens > 0 else 0,
         "llm_calls": 1,
     }
+
+
+def _extract_cached_tokens(usage: dict[str, Any]) -> int:
+    """Extract cache-read token count across provider shapes.
+
+    Handles Anthropic top-level (``cache_read_input_tokens``), the flattened
+    ``cached_tokens`` key emitted by ``LLMUsage.to_dict()``, and OpenAI nested
+    detail dicts (``prompt_tokens_details.cached_tokens``).
+    """
+    direct = usage.get("cached_tokens") or usage.get("cache_read_input_tokens")
+    if direct:
+        try:
+            return int(direct)
+        except (TypeError, ValueError):
+            pass
+    details = usage.get("input_tokens_details") or usage.get("prompt_tokens_details")
+    if isinstance(details, dict):
+        nested = details.get("cached_tokens") or details.get("cache_read_input_tokens")
+        if nested:
+            try:
+                return int(nested)
+            except (TypeError, ValueError):
+                pass
+    return 0
 
 
 def _created_at_ms(fact: RuntimeProjectionInput) -> int:

@@ -25,6 +25,8 @@ from lamtools_core.composer_commands import (
 )
 from lamtools_core.checkpoint import CoreCheckpointCoordinator, register_checkpoint_operations
 from lamtools_core.member import MemberKit, PromptFragment, StaticMemberKit
+from lamtools_core.mem import MemoryStoreProtocol
+from lamtools_core.mem.store import InMemoryMemoryStore
 from lamtools_core.kernel.loop import CoreLoopKernel
 from lamtools_core.kernel.policy import LoopPolicy
 from lamtools_core.llm import LLMClient
@@ -53,7 +55,7 @@ from .base_agent import (
     core_events_to_run_items,
     core_events_to_snapshot,
 )
-from .command_execution import CommandActionHandler, compact_runtime_history, execute_command_action
+from .command_execution import CommandActionHandler, compact_runtime_history, dream_session_memory, execute_command_action
 from .approval_resolution import ApprovalResolutionLifecycle
 from .agent_app import AgentApp, AgentSpec, ModelProvider, ModelTurnOutput, TurnInput
 from .event_store import AppEventEnvelope, CORE_RUN_ITEM_METHOD, SqlAlchemyAppEventStore
@@ -73,6 +75,9 @@ class CoreAgentSpec:
     prompt_fragments: list[PromptFragment] = field(default_factory=list)
     tool_specs: list[ToolSpec] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
+    # Dreaming (memory consolidation) — off by default, opt in via spec.
+    dreaming_enabled: bool = False
+    dream_min_turns: int = 3
 
 
 @dataclass(frozen=True)
@@ -190,6 +195,7 @@ def create_core_agent_operations(
     enable_turn_checkpoints: bool = False,
     attachment_service: Any | None = None,
     model_display_resolver: Callable[[str], str] | None = None,
+    memory_store: MemoryStoreProtocol | None = None,
 ) -> OperationCatalog:
     spec = spec or CoreAgentSpec()
 
@@ -198,6 +204,7 @@ def create_core_agent_operations(
             return ""
         return model_display_resolver(model_id)
     runtime_state_store = runtime_state_store or InMemoryRuntimeStateStore()
+    memory_store = memory_store or InMemoryMemoryStore()
     runtime_task_registry = runtime_task_registry or default_runtime_task_registry()
     kit = member_kit or StaticMemberKit(
         id=spec.member_id,
@@ -372,15 +379,20 @@ def create_core_agent_operations(
                 plugin_roots=plugin_roots,
             )
             _logger.info("[default:turn_start] plugin assembly done thread_id=%s", thread_id)
-            # Load existing session state to get activated MCP servers
+            # Load existing session state to get activated MCP servers.
+            # Also accept them from the turn-start payload so callers (and
+            # tests) can pre-activate servers without a prior state.
             activated_mcp_servers: set[str] = set()
+            raw_payload = request.payload.get("activated_mcp_servers") or request.payload.get("activatedMcpServers")
+            if isinstance(raw_payload, list):
+                activated_mcp_servers = {str(item) for item in raw_payload}
             if runtime_state_store is not None and thread_id:
                 try:
                     existing_state = await runtime_state_store.get(thread_id)
                     if existing_state is not None and existing_state.metadata:
                         raw = existing_state.metadata.get("activated_mcp_servers")
                         if isinstance(raw, list):
-                            activated_mcp_servers = {str(item) for item in raw}
+                            activated_mcp_servers |= {str(item) for item in raw}
                 except Exception:
                     pass
             turn_checkpoint_coordinator = checkpoint_coordinator(runtime_work_root)
@@ -445,6 +457,8 @@ def create_core_agent_operations(
                         compact_trigger_tokens=runtime_options.compact_trigger_tokens,
                         compact_limit_tokens=runtime_options.compact_limit_tokens,
                         parallel_tool_names=("sub_agent",),
+                        dreaming_enabled=getattr(spec, "dreaming_enabled", False),
+                        dream_min_turns=getattr(spec, "dream_min_turns", 3),
                     ),
                     hook_engine=plugin_assembly["hook_engine"],
                     checkpoint_coordinator=turn_checkpoint_coordinator,
@@ -454,6 +468,7 @@ def create_core_agent_operations(
                         runtime_model_provider,
                         runtime_options.model_id,
                     ),
+                    memory_store=memory_store,
                 )
                 _logger.info("[default:turn_start] kernel created, starting run thread_id=%s model=%s",
                               thread_id, runtime_options.model_id)
@@ -586,6 +601,16 @@ def create_core_agent_operations(
         # it is defined in turn_start but not in this scope, so re-resolve it
         # from the request payload (same source as turn_start line ~332).
         turn_instructions = str(request.payload.get("instructions") or "").strip() or None
+        # Re-resolve approval policy from payload (injected by live_operations
+        # via _resolve_turn_approval_policy) so the continuation kernel inherits
+        # the same tier as the original turn_start — not a hardcoded "require".
+        approval_policy = str(request.payload.get("approval_policy") or "require")
+        if approval_policy not in {"require", "auto_approve"}:
+            approval_policy = "require"
+        active_tier = request.payload.get("active_tier")
+        if active_tier not in ("read_only", "limited_edit", "full_edit"):
+            active_tier = None
+        tier_tools = request.payload.get("tier_tools") if isinstance(request.payload.get("tier_tools"), dict) else None
         if _is_llm_client(model_provider):
             from lamtools_core.event import CoreEvent
             from lamtools_core.tool import ToolCall
@@ -593,6 +618,7 @@ def create_core_agent_operations(
                 ApprovedToolExecution,
                 approved_tool_continuation_prompt,
                 guidance_continuation_prompt,
+                question_answer_continuation_prompt,
                 resolve_waiting_decision,
             )
             from lamtools_core.tool.default_toolbox import build_core_toolbox
@@ -730,8 +756,22 @@ def create_core_agent_operations(
                 })
                 if inspect.isawaitable(durable_result):
                     await durable_result
+
+            original_task = str(state.metadata.get("original_user_message") or "")
+            tool_name = str(pending_call.get("name") or "")
+            tool_args = pending_call.get("arguments") if isinstance(pending_call.get("arguments"), dict) else {}
+
             if decision.action == "deny":
-                return await lifecycle.finalize_cancelled()
+                if tool_name == "question":
+                    # For the question tool, "deny" (cancel) means the user
+                    # declined to answer — treat as a skipped question rather
+                    # than cancelling the entire run.
+                    answer = "用户取消了该问题，未提供回答。"
+                    question_text = str(tool_args.get("question") or "")
+                else:
+                    return await lifecycle.finalize_cancelled()
+            else:
+                answer = ""
 
             try:
                 await lifecycle.clear_pending_for_execution()
@@ -740,6 +780,48 @@ def create_core_agent_operations(
                     raise
                 return await lifecycle.finalize_failure(exc)
             state = lifecycle.state
+
+            # question tool: inject the user's answer as the tool result and
+            # continue the loop with a question-specific continuation prompt.
+            if tool_name == "question":
+                if decision.action == "guide":
+                    answer = decision.guidance_text
+                question_text = str(tool_args.get("question") or "")
+                question_events: list[CoreEvent] = [
+                    CoreEvent(
+                        name="runtime.tool.finished",
+                        category="tool",
+                        payload={
+                            "tool_name": "question",
+                            "call_id": str(pending_call.get("id") or ""),
+                            "status": "ok",
+                            "content": answer,
+                            "error": "",
+                            "artifacts": [],
+                            "metadata": {"question": question_text, "answer": answer},
+                        },
+                        session_id=thread_id,
+                        run_id=state.run_id,
+                        tags=["tool"],
+                    ),
+                ]
+                try:
+                    await lifecycle.persist_tool_history(
+                        ChatMessage(
+                            role="tool",
+                            name="question",
+                            tool_call_id=str(pending_call.get("id") or ""),
+                            content=answer,
+                        )
+                    )
+                    continuation = question_answer_continuation_prompt(
+                        original_task=original_task,
+                        question=question_text,
+                        answer=answer,
+                    )
+                except BaseException as exc:
+                    return await lifecycle.finalize_failure(exc)
+                approval_events = question_events
 
             delegated_session = pending.get("delegated_session") if isinstance(pending, dict) else None
             if isinstance(delegated_session, dict) and decision.action == "approve":
@@ -773,7 +855,7 @@ def create_core_agent_operations(
                     toolbox, mcp_registry = await _build_core_runtime_toolbox(
                         work_root=runtime_work_root,
                         plugin_assembly=plugin_assembly,
-                        approval_policy="require",
+                        approval_policy=approval_policy,
                         llm_client=runtime_model_provider,
                         model_id=runtime_options.model_id,
                         instructions=turn_instructions or spec.instructions,
@@ -788,6 +870,8 @@ def create_core_agent_operations(
                         operation_catalog=catalog,
                         enable_goal_tool=goal_manager is not None,
                         enable_arrange_tool=arrange_manager is not None,
+                        active_tier=active_tier,
+                        tier_tools=tier_tools,
                         activated_mcp_servers=delegated_activated_mcp,
                     )
                     sub_agent_runner = toolbox.sub_agent_runner
@@ -995,10 +1079,11 @@ def create_core_agent_operations(
                     },
                 )
 
-            original_task = str(state.metadata.get("original_user_message") or "")
-            tool_name = str(pending_call.get("name") or "")
-            tool_args = pending_call.get("arguments") if isinstance(pending_call.get("arguments"), dict) else {}
-            if decision.action == "guide":
+            if tool_name == "question":
+                # Already handled above — continuation and approval_events
+                # are set, skip the standard guide/approve branches.
+                pass
+            elif decision.action == "guide":
                 try:
                     continuation = guidance_continuation_prompt(
                         original_task=original_task,
@@ -1145,7 +1230,7 @@ def create_core_agent_operations(
                 toolbox, mcp_registry = await _build_core_runtime_toolbox(
                     work_root=runtime_work_root,
                     plugin_assembly=plugin_assembly,
-                    approval_policy="require",
+                    approval_policy=approval_policy,
                     llm_client=runtime_model_provider,
                     model_id=runtime_options.model_id,
                     instructions=turn_instructions or spec.instructions,
@@ -1160,6 +1245,8 @@ def create_core_agent_operations(
                     operation_catalog=catalog,
                     enable_goal_tool=goal_manager is not None,
                     enable_arrange_tool=arrange_manager is not None,
+                    active_tier=active_tier,
+                    tier_tools=tier_tools,
                     activated_mcp_servers=continuation_activated_mcp,
                 )
                 kernel = CoreLoopKernel(
@@ -1379,6 +1466,17 @@ def create_core_agent_operations(
                 on_event=on_event,
             ),
         )
+        handlers.setdefault(
+            "dream",
+            lambda thread_id, on_event=None: dream_session_memory(
+                runtime_state_store=runtime_state_store,
+                memory_store=memory_store,
+                thread_id=thread_id,
+                llm_client=model_provider if _is_llm_client(model_provider) else None,  # type: ignore[arg-type]
+                model=spec.default_model,
+                on_event=on_event,
+            ),
+        )
         try:
             on_event = request.payload.get("_on_event")
             result = await execute_command_action(
@@ -1535,7 +1633,6 @@ def _runtime_options_from_state(spec: CoreAgentSpec, state: Any) -> CoreAgentRun
         context_window_tokens=_optional_int(
             metadata.get("context_window_tokens"),
             metadata.get("context_window"),
-            spec.metadata.get("context_window"),
         ),
         max_tokens=_optional_int(metadata.get("max_tokens")),
         temperature=0.2 if temperature is None else temperature,
@@ -1601,9 +1698,7 @@ async def _persist_run_items(
     )
 
     async def write(db):
-        envelopes = []
-        for item in run_items:
-            envelopes.append(await persistence.append_run_item(db, item))
+        envelopes = await persistence.append_batch(db, run_item_events=run_items)
         return await persistence.load(db, run_items[-1].thread_id), envelopes
 
     snapshot, envelopes = await persistence.write(write)
@@ -1664,9 +1759,7 @@ async def _persist_core_event_live(
     )
 
     async def write(db):
-        envelopes: list[Any] = []
-        for item in run_items:
-            envelopes.append(await persistence.append_run_item(db, item))
+        envelopes = await persistence.append_batch(db, run_item_events=run_items)
         return envelopes
 
     envelopes = await persistence.write(write)

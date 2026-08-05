@@ -44,13 +44,14 @@ def test_queue_guidance_plan_consumes_only_after_active_turn_match() -> None:
     assert applied.applied is True
     assert applied.reason == ""
     assert applied.input_items == [{"type": "text", "text": "updated text"}]
-    assert [event.method for event in applied.events] == ["turn/steered", "queue/itemDeleted"]
+    assert [event.method for event in applied.events] == ["turn/steered", "item/started", "queue/itemDeleted"]
     assert [event.event_id for event in applied.events] == [
         "queue-guide:queue-1:steer",
+        "queue-guide:queue-1:usermsg",
         "queue-guide:queue-1:consume",
     ]
     assert applied.events[0].payload["input"] == applied.input_items
-    assert applied.events[1].payload["status"] == "sent"
+    assert applied.events[2].payload["status"] == "sent"
     assert expired.applied is False
     assert expired.reason == "active_turn_mismatch"
     assert expired.events == ()

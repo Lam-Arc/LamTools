@@ -42,6 +42,7 @@ from .workflow_operations import register_workflow_operations
 from .event_store import AppEventInput
 from .factory import add_spa_fallback, create_app
 from .live_hub import CoreAppEventHub
+from .live_member import DefaultCoreLiveMemberHooks
 from .live_operations import CoreLiveContext, CoreLiveOperationHost, recover_stale_active_turns
 from .project_store import ActiveProjectSessionsError, CoreProjectStore
 from .live_router import create_core_live_router
@@ -101,7 +102,14 @@ class CoreConfigRoutingLLMClient:
 
     def _client_for_request(self, request: LLMRequest) -> tuple[Any, CoreHttpLLMClient]:
         model_ref = str(request.model or self.default_model_ref or "").strip()
-        config = load_llm_config(self.config_db_path, model_ref=model_ref)
+        try:
+            config = load_llm_config(self.config_db_path, model_ref=model_ref)
+        except ValueError:
+            # Unknown model_ref — fall back to empty ref so the config
+            # resolves the default model from the current config (not the
+            # startup-cached default_model_ref). This prevents 100x retry
+            # storms on a bad model parameter.
+            config = load_llm_config(self.config_db_path, model_ref="")
         profile = _resolve_adapter_profile(config, self.adapter_dirs)
         metadata = request.metadata if isinstance(request.metadata, dict) else {}
         thinking_enabled = (
@@ -124,6 +132,37 @@ class CoreConfigRoutingLLMClient:
             max_tokens=self.max_tokens or config.max_output_tokens,
             temperature=self.temperature if self.temperature is not None else config.temperature,
         )
+
+
+class _MemberDefaultsHooks(DefaultCoreLiveMemberHooks):
+    """Member hooks that inject member_defaults into thread materialization."""
+
+    def __init__(self, member_defaults: dict[str, Any]) -> None:
+        self._member_defaults = member_defaults
+
+    async def materialize_thread(self, *, db, thread_id, params):
+        session_defaults = self._member_defaults.get("session") if isinstance(self._member_defaults.get("session"), dict) else {}
+        return dict(session_defaults) if session_defaults else {}
+
+    async def materialize_turn(
+        self, *, db, thread_id, turn_id, user_item_id, client_message_id, prepared, params
+    ):
+        materialized = await super().materialize_turn(
+            db=db,
+            thread_id=thread_id,
+            turn_id=turn_id,
+            user_item_id=user_item_id,
+            client_message_id=client_message_id,
+            prepared=prepared,
+            params=params,
+        )
+        session_defaults = self._member_defaults.get("session") if isinstance(self._member_defaults.get("session"), dict) else {}
+        if session_defaults:
+            materialized = replace(
+                materialized,
+                turn_payload_extra={**materialized.turn_payload_extra, **session_defaults},
+            )
+        return materialized
 
 
 def create_core_agent_http_app(
@@ -279,6 +318,7 @@ def create_core_agent_http_app(
             enable_turn_checkpoints=True,
             model_display_resolver=_resolve_model_display,
             attachment_service=app_state.get("attachment_store"),
+            memory_store=core_db_handle.memory_store,
         )
         _register_core_project_operations(agent_operations, project_store=core_db_handle.project_store)
         _register_core_session_operations(agent_operations, session_store=session_store)
@@ -333,37 +373,36 @@ def create_core_agent_http_app(
                     client_message_id = uuid.uuid4().hex
 
                     async def _emit_arrange_turn_events(db):
-                        accepted = await core_db_handle.persistence.append(
+                        envelopes = await core_db_handle.persistence.append_batch(
                             db,
-                            AppEventInput(
-                                thread_id=thread_id,
-                                method="turn/accepted",
-                                turn_id=turn_id,
-                                client_message_id=client_message_id,
-                                payload={
-                                    "type": "turn",
-                                    "input": [{"type": "text", "text": message}],
-                                    "work_root": job.work_root or "",
-                                    "status": "running",
-                                },
-                            ),
+                            app_events=[
+                                AppEventInput(
+                                    thread_id=thread_id,
+                                    method="turn/accepted",
+                                    turn_id=turn_id,
+                                    client_message_id=client_message_id,
+                                    payload={
+                                        "type": "turn",
+                                        "input": [{"type": "text", "text": message}],
+                                        "work_root": job.work_root or "",
+                                        "status": "running",
+                                    },
+                                ),
+                                AppEventInput(
+                                    thread_id=thread_id,
+                                    method="item/started",
+                                    turn_id=turn_id,
+                                    item_id=user_item_id,
+                                    client_message_id=client_message_id,
+                                    payload={
+                                        "type": "userMessage",
+                                        "status": "completed",
+                                        "content": [{"type": "text", "text": message}],
+                                    },
+                                ),
+                            ],
                         )
-                        user = await core_db_handle.persistence.append(
-                            db,
-                            AppEventInput(
-                                thread_id=thread_id,
-                                method="item/started",
-                                turn_id=turn_id,
-                                item_id=user_item_id,
-                                client_message_id=client_message_id,
-                                payload={
-                                    "type": "userMessage",
-                                    "status": "completed",
-                                    "content": [{"type": "text", "text": message}],
-                                },
-                            ),
-                        )
-                        return accepted, user
+                        return envelopes[0], envelopes[1]
 
                     try:
                         accepted_envelope, user_envelope = await core_db_handle.persistence.write(
@@ -530,6 +569,10 @@ def create_core_agent_http_app(
                 hub=live_hub,
                 runtime_task_registry=runtime_task_registry,
                 runtime_state_store=core_db_handle.runtime_state_store,
+                llm_client=llm_client,
+                default_model_id=config.model_id,
+                session_store=session_store,
+                member_hooks=_MemberDefaultsHooks(core_db_handle.member_defaults),
             ),
         )
 
@@ -1152,6 +1195,26 @@ def _register_subagent_guide_operations(
         "config.subagent.guide.set": subagent_guide_set,
         "config.subagent.settings.get": subagent_settings_get,
         "config.subagent.settings.set": subagent_settings_set,
+    }.items():
+        if not catalog.has(name):
+            catalog.register(name, handler)
+
+    # ── Global AGENTS.md (additive instruction file, applies to all projects) ──
+    async def agents_md_get(request: OperationRequest) -> OperationResult:
+        del request
+        from lamtools_core.config.agents_md import read_global_agents_md
+        agents_md = read_global_agents_md()
+        return OperationResult(name="config.agents_md.get", payload={"agents_md": agents_md})
+
+    async def agents_md_set(request: OperationRequest) -> OperationResult:
+        content = str(request.payload.get("content") or "")
+        from lamtools_core.config.agents_md import write_global_agents_md
+        agents_md = write_global_agents_md(content)
+        return OperationResult(name="config.agents_md.set", payload={"agents_md": agents_md})
+
+    for name, handler in {
+        "config.agents_md.get": agents_md_get,
+        "config.agents_md.set": agents_md_set,
     }.items():
         if not catalog.has(name):
             catalog.register(name, handler)

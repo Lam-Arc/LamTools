@@ -95,6 +95,7 @@ DEFAULT_TOOL_PERMISSIONS: dict[str, PermissionTier] = {
     SUB_AGENT_TOOL_NAME: AUTO_ALLOW,
     "write_checklist": AUTO_ALLOW,
     "update_checklist": AUTO_ALLOW,
+    "question": ASK_USER,
 }
 
 
@@ -120,6 +121,7 @@ DEFAULT_TOOL_ORDER: tuple[str, ...] = (
     SUB_AGENT_TOOL_NAME,
     "write_checklist",
     "update_checklist",
+    "question",
 )
 
 
@@ -145,6 +147,7 @@ DEFAULT_TOOL_CATEGORIES: dict[str, str] = {
     SUB_AGENT_TOOL_NAME: "agent",
     "write_checklist": "control",
     "update_checklist": "control",
+    "question": "control",
 }
 
 
@@ -208,6 +211,7 @@ DEFAULT_TOOL_FAILURE_MODES: dict[str, list[dict[str, str]]] = {
         {"type": "mcp_error", "message": "MCP TOOL ERROR: {reason}"},
         {"type": "tool_not_found", "message": "MCP tool not found"},
     ],
+    "question": [],
 }
 
 
@@ -233,6 +237,7 @@ DEFAULT_TOOL_RECOVERY: dict[str, str] = {
     "browser_check": "Use local static server with http://127.0.0.1:<port>/ instead of file://",
     "mcp_activate": "Check the server name against available MCP servers; use exact names listed in the system prompt.",
     "mcp_tool": "Check tool name and arguments, verify MCP server status",
+    "question": "Rephrase the question, simplify options, or proceed with a reasonable default",
 }
 
 
@@ -510,6 +515,39 @@ DEFAULT_TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
             ["action", "reason"],
         ),
     },
+    {
+        "name": "question",
+        "description": (
+            "Ask the user a question or request confirmation when you need "
+            "clarification, a decision between options, or explicit approval "
+            "before proceeding. The run pauses until the user responds."
+        ),
+        "input_schema": _schema(
+            {
+                "question": {
+                    "type": "string",
+                    "description": "The question or confirmation prompt to present to the user.",
+                },
+                "options": {
+                    "type": "array",
+                    "description": "Selectable choices. Omit for a simple confirm/deny question.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "label": {"type": "string", "description": "Short option label."},
+                            "description": {"type": "string", "description": "Optional detail."},
+                        },
+                        "required": ["label"],
+                    },
+                },
+                "context": {
+                    "type": "string",
+                    "description": "Optional context or background for the question.",
+                },
+            },
+            ["question"],
+        ),
+    },
     deepcopy(SUB_AGENT_TOOL_SPEC),
 )
 
@@ -683,6 +721,30 @@ async def _update_checklist_handler(call: ToolCall) -> ToolResult:
     )
 
 
+async def _question_handler(call: ToolCall) -> ToolResult:
+    """Defensive fallback for the question tool.
+
+    Under normal operation the approval gate pauses the run before this
+    handler is reached, and the user's answer is injected as the tool result
+    by the approval-respond flow. This handler only runs when
+    ``approval_policy='auto_approve'`` bypasses the gate — in that case we
+    return a placeholder so the model knows no real user answer was collected.
+    """
+    args = call.arguments if isinstance(call.arguments, dict) else {}
+    question = str(args.get("question") or "")
+    return ToolResult(
+        call_id=call.id,
+        name=call.name,
+        status="ok",
+        content=(
+            "Question was auto-approved without user input."
+            + (f" The question was: {question}" if question else "")
+            + " No user answer was collected."
+        ),
+        metadata={"auto_approved": True},
+    )
+
+
 class CoreToolbox:
     def __init__(
         self,
@@ -822,6 +884,22 @@ class CoreToolbox:
         return self.skill_registry.prompt_index(self.work_root)
 
     def prepare_call(self, call: ToolCall) -> ToolCall:
+        # question is a user-interaction request, not a permission decision —
+        # bypass ApprovalGate entirely; it always requires user input and is
+        # never affected by approval_policy / active_tier.
+        if call.name == "question":
+            approval = {
+                "tier": "ask_user",
+                "reason": "Question requires user input",
+                "blocked": False,
+                "requires_approval": True,
+            }
+            return replace(
+                call,
+                requires_approval=True,
+                metadata={**dict(call.metadata or {}), "approval": approval},
+            )
+
         args = call.arguments if isinstance(call.arguments, dict) else {}
         decision = self.approval_gate.check(call.name, args)
         if call.name == "arrange" and not arrange_requires_approval(args) and not decision.blocked:
@@ -978,8 +1056,14 @@ class CoreToolbox:
             if not task:
                 return ToolResult(call_id=call.id, name=call.name, status="failed", error="sub_agent requires 'task'")
             agent = str(args.get("agent") or "").strip()
+            # Treat "null"/"None"/"undefined" strings as empty (LLMs sometimes
+            # emit these instead of JSON null for optional params).
             model = str(args.get("model") or "").strip()
+            if model.lower() in ("null", "none", "undefined"):
+                model = ""
             mode = str(args.get("mode") or "").strip()
+            if mode.lower() in ("null", "none", "undefined"):
+                mode = ""
             raw_attachments = args.get("attachments")
             attachments = [str(a) for a in raw_attachments if isinstance(a, (str, int)) and str(a).strip()] if isinstance(raw_attachments, list) else []
             failure_key = (agent.lower(), task)
@@ -1107,6 +1191,7 @@ class CoreToolbox:
             SUB_AGENT_TOOL_NAME: call_sub_agent,
             "write_checklist": _write_checklist_handler,
             "update_checklist": _update_checklist_handler,
+            "question": _question_handler,
         }
         if operation_executor is not None:
             handlers.update(durable_tool_handlers(operation_executor, work_root=self.work_root))

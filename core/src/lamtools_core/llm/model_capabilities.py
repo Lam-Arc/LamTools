@@ -43,6 +43,7 @@ BUILTIN_CAPABILITIES: dict[str, Capability] = {
     "xopdeepseekv32": "text",
     "xopdeepseekv4pro": "text",
     "xopdeepseekv4flash": "text",
+    "xopdeepseekv4flash0731": "text",
     # GLM family — text
     "xopglm5": "text",
     "xopglm51": "text",

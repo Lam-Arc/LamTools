@@ -137,6 +137,9 @@ async def test_approval_respond_uses_operation_catalog_without_member_lifecycle_
         assert calls == [{
             "thread_id": "thread-1", "request_id": "request-1",
             "decision": "approve", "guidance": "",
+            "approval_policy": "require",
+            "active_tier": None,
+            "tier_tools": None,
         }]
         assert not hasattr(context.host.member_hooks, "continue_approval")
     finally:
@@ -748,10 +751,7 @@ async def test_turn_start_uses_shared_auto_allow_setting_when_policy_is_omitted(
             payload={
                 "namespace": "core.runtimeControls",
                 "value": {
-                    "command_policies": {
-                        "regular": "auto_allow",
-                        "dangerous": "auto_allow",
-                    },
+                    "permission_mode": "full_edit",
                 },
             },
         )
@@ -994,7 +994,7 @@ async def test_queue_guidance_persists_consumed_guidance_after_locked_commit_ret
         result = guided.response["result"]
         assert result["applied"] is True
         assert result["reason"] == ""
-        assert [event["method"] for event in result["events"]] == ["turn/steered", "queue/itemDeleted"]
+        assert [event["method"] for event in result["events"]] == ["turn/steered", "item/started", "queue/itemDeleted"]
         assert accepted_statuses == ["accepted", "duplicate"]
         assert consumed == ["queued guidance"]
 
@@ -1066,7 +1066,7 @@ async def test_consumed_guidance_survives_exhausted_commit_retries_for_client_re
         assert result["reason"] == ""
         expected_methods = ["turn/steered"]
         if operation_name == "queue.guide":
-            expected_methods.append("queue/itemDeleted")
+            expected_methods = ["turn/steered", "item/started", "queue/itemDeleted"]
         assert [event["method"] for event in result["events"]] == expected_methods
 
         async with context.session_factory() as db:
@@ -1128,7 +1128,7 @@ async def test_queue_guidance_retracts_pending_guidance_after_exhausted_commit_r
         result = retried.response["result"]
         assert result["applied"] is True
         assert result["reason"] == ""
-        assert [event["method"] for event in result["events"]] == ["turn/steered", "queue/itemDeleted"]
+        assert [event["method"] for event in result["events"]] == ["turn/steered", "item/started", "queue/itemDeleted"]
         assert accepted_statuses[0] == "accepted"
         assert accepted_statuses[-1] == "accepted"
     finally:
@@ -2142,4 +2142,119 @@ async def test_force_reset_on_idle_thread_returns_reset_with_no_events(tmp_path)
         assert result["status"] == "reset"
         assert result["events"] == []
     finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_turn_start_releases_registry_claim_before_trailing_cleanup(tmp_path):
+    """After start_runtime returns (turn completed, terminal events persisted
+    live), the registry claim must be released *before* trailing cleanup
+    (_persist_operation_result, _ensure_turn_terminal, _dispatch_next_queue_item)
+    runs. Those steps do DB I/O that yields the event loop; if release_run is
+    deferred to after them, an SSE round-trip can race ahead and let the client
+    fire a new turn.start that hits "active turn already exists" from the
+    stale registry entry."""
+    engine, context = await _context(tmp_path)
+
+    # Track whether trailing cleanup has started yet when the registry claim
+    # is released. If release_run runs after start_runtime returns but before
+    # cleanup, the claim is gone before cleanup begins.
+    cleanup_started = asyncio.Event()
+    registry_released_before_cleanup = asyncio.Event()
+
+    async def turn_start(_request):
+        return OperationResult(name="turn.start")
+
+    context.operations.register("turn.start", turn_start)
+
+    # Wrap _dispatch_next_queue_item to signal that trailing cleanup has begun.
+    original_dispatch = live_operations_module._dispatch_next_queue_item
+
+    async def tracking_dispatch(*args, **kwargs):
+        cleanup_started.set()
+        if context.runtime_task_registry.active_run_id(kwargs.get("completed_turn_id", "")) is None:
+            registry_released_before_cleanup.set()
+        return await original_dispatch(*args, **kwargs)
+
+    live_operations_module._dispatch_next_queue_item = tracking_dispatch
+    try:
+        outcome = await handle_turn_start_operation(
+            request_id=1,
+            params={
+                "thread_id": "thread-race",
+                "client_message_id": "client-1",
+                "input": [{"type": "text", "text": "hello"}],
+            },
+            context=context,
+        )
+        turn_id = outcome.response["result"]["runtime_start"]["turn_id"]
+
+        # Wait for the background task to complete.
+        task = context.runtime_task_registry.task("thread-race")
+        if task is not None:
+            await task
+
+        # The registry claim must be released by now.
+        assert context.runtime_task_registry.active_run_id("thread-race") is None
+
+        # And it must have been released *before* trailing cleanup began.
+        assert registry_released_before_cleanup.is_set(), (
+            "release_run did not run before trailing cleanup — "
+            "the race window that causes 'active turn already exists' is still open"
+        )
+    finally:
+        live_operations_module._dispatch_next_queue_item = original_dispatch
+        context.runtime_task_registry.clear()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_completed_turn_does_not_block_next_turn_start(tmp_path):
+    """After a turn completes normally and its terminal status is persisted to
+    the snapshot, a new turn.start on the same thread must succeed — the
+    registry claim must already be released so the active-turn guard does not
+    reject it with 'active turn already exists'."""
+    llm = BlockingCoreLLM()
+    engine, context = await _live_core_context(tmp_path, llm)
+    try:
+        # Start first turn.
+        outcome = await handle_turn_start_operation(
+            request_id=1,
+            params={
+                "thread_id": "thread-consecutive",
+                "client_message_id": "client-1",
+                "input": [{"type": "text", "text": "hello"}],
+            },
+            context=context,
+        )
+        assert "result" in outcome.response
+
+        # Let the turn complete.
+        await llm.started.wait()
+        llm.release.set()
+        task = context.runtime_task_registry.task("thread-consecutive")
+        if task is not None:
+            await task
+
+        # Registry claim must be gone.
+        assert context.runtime_task_registry.active_run_id("thread-consecutive") is None
+
+        # Second turn.start must succeed, not hit "active turn already exists".
+        second = await handle_turn_start_operation(
+            request_id=2,
+            params={
+                "thread_id": "thread-consecutive",
+                "client_message_id": "client-2",
+                "input": [{"type": "text", "text": "again"}],
+            },
+            context=context,
+        )
+        assert "result" in second.response, (
+            f"second turn.start was rejected: {second.response.get('error', {}).get('message')}"
+        )
+        second_task = context.runtime_task_registry.task("thread-consecutive")
+        if second_task is not None:
+            context.runtime_task_registry.clear()
+    finally:
+        context.runtime_task_registry.clear()
         await engine.dispose()

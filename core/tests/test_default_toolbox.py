@@ -179,6 +179,34 @@ def test_core_toolbox_auto_approve_keeps_hard_blocks(tmp_path):
     assert escape_call.metadata["approval"]["blocked"] is True
 
 
+def test_core_toolbox_question_always_requires_approval(tmp_path):
+    """question bypasses ApprovalGate — always requires user input,
+    even under auto_approve (full_edit) and regardless of active_tier."""
+    toolbox = build_core_toolbox(work_root=tmp_path, approval_policy="auto_approve")
+
+    call = toolbox.prepare_call(
+        ToolCall(id="q-1", name="question", arguments={"question": "公仓还是私仓？"})
+    )
+
+    assert call.requires_approval is True
+    assert call.metadata["approval"]["requires_approval"] is True
+    assert call.metadata["approval"]["blocked"] is False
+    # Must NOT be auto-approved
+    assert call.metadata["approval"].get("auto_approved") is not True
+    assert call.metadata["approval"]["reason"] == "Question requires user input"
+
+
+def test_core_toolbox_question_requires_approval_under_require_policy(tmp_path):
+    toolbox = build_core_toolbox(work_root=tmp_path, approval_policy="require")
+
+    call = toolbox.prepare_call(
+        ToolCall(id="q-2", name="question", arguments={"question": "继续？"})
+    )
+
+    assert call.requires_approval is True
+    assert call.metadata["approval"]["requires_approval"] is True
+
+
 @pytest.mark.asyncio
 async def test_core_toolbox_blocks_path_escape_before_execution(tmp_path):
     toolbox = build_core_toolbox(work_root=tmp_path)
@@ -334,7 +362,7 @@ async def test_core_toolbox_propagates_sub_agent_no_progress_without_calling_it_
 
 @pytest.mark.asyncio
 async def test_core_toolbox_loads_skill_and_adds_resource_root(tmp_path):
-    skill_dir = tmp_path / ".agents" / "skills" / "sample"
+    skill_dir = tmp_path / ".lam" / "skills" / "sample"
     skill_dir.mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text(
         "---\n"

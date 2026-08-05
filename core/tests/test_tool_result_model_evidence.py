@@ -12,15 +12,16 @@ from lamtools_core.tool import ToolArtifact, ToolCall, ToolResult
 class _CapturingToolbox:
     def __init__(self) -> None:
         self.call: ToolCall | None = None
+        self.load_tools = None
 
-    async def execute(self, call: ToolCall) -> ToolResult:
+    async def execute(self, call: ToolCall, context=None) -> ToolResult:
         self.call = call
         return ToolResult(call_id=call.id, name=call.name, status="ok")
 
     def tool_specs(self):
         return []
 
-    def model_tools(self):
+    def model_tools(self, active_mode=None):
         return []
 
     def skill_index(self):

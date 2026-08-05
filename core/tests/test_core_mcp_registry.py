@@ -163,7 +163,7 @@ async def test_core_agent_operation_loads_plugin_mcp_tools(tmp_path: Path):
         plugin_roots=[plugin_root],
     )
 
-    result = await catalog.execute("turn.start", {"thread_id": "thread-mcp", "message": "call mcp"})
+    result = await catalog.execute("turn.start", {"thread_id": "thread-mcp", "message": "call mcp", "activated_mcp_servers": ["local"]})
 
     tool_results = [item for item in result.payload["run_items"] if item["kind"] == "tool_result"]
     assert result.status == "ok"

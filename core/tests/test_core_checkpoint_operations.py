@@ -151,6 +151,8 @@ def test_core_app_server_uses_one_operation_contract_for_list_rollback_and_resta
         "operation_id",
         "checkpoint_id",
         "undo_checkpoint_id",
+        "derived_checkpoint_id",
+        "scope",
         "status",
         "restored_paths",
     }

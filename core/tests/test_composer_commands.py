@@ -107,7 +107,7 @@ def test_core_catalog_includes_skills_and_core_prepares_skill_with_attachments(t
         core / "config" / "command" / "compact.json",
         '{"name":"compact","title":"Compact","description":"Compact context","icon":"archive","action":"run_action"}',
     )
-    skill_dir = work_root / ".codex" / "skills" / "reviewer"
+    skill_dir = work_root / ".lam" / "skills" / "reviewer"
     skill_dir.mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text(
         "---\nname: reviewer\ndescription: Review changes\n---\nREVIEW WORKFLOW\n",

@@ -75,3 +75,18 @@ def approved_tool_continuation_prompt(
         f"工具结果：{approved_tool.tool_content[:4000]}\n\n"
         "请基于这个真实工具结果继续后续步骤；如果已经完成，请给出最终回复。"
     )
+
+
+def question_answer_continuation_prompt(
+    *,
+    original_task: str,
+    question: str,
+    answer: str,
+) -> str:
+    return (
+        "继续完成同一个用户任务。你之前向用户提出了一个问题，用户已回答。\n\n"
+        f"原始任务：{original_task}\n"
+        f"你提出的问题：{question}\n"
+        f"用户的回答：{answer[:4000]}\n\n"
+        "请根据用户的回答继续后续步骤。"
+    )

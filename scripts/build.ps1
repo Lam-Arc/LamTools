@@ -1,9 +1,9 @@
 ﻿<#
 .SYNOPSIS
-  Build all or specific LamTools components.
+  Build LamTools Core components.
 .DESCRIPTION
   Usage:
-    .\scripts\build.ps1 [core|writer|sage|all]
+    .\scripts\build.ps1 [core|all]
 #>
 param(
     [Parameter(Position=0)][string]$Component = "all"
@@ -11,7 +11,6 @@ param(
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
-$script:CoreUiBuilt = $false
 
 function Build-Component {
     param([string]$Comp)
@@ -21,25 +20,13 @@ function Build-Component {
             Write-Host "[core/ui] npm run build" -ForegroundColor Cyan
             & npm.cmd run build --prefix "$Root\core\ui"
             if ($LASTEXITCODE -ne 0) { Write-Host "[core/ui] BUILD FAILED" -ForegroundColor Red; exit 1 }
-            $script:CoreUiBuilt = $true
         }
-        "writer" {
-            Write-Host "[writer/frontend] npm run build" -ForegroundColor Cyan
-            & npm.cmd run build --prefix "$Root\members\writer\frontend"
-            if ($LASTEXITCODE -ne 0) { Write-Host "[writer/frontend] BUILD FAILED" -ForegroundColor Red; exit 1 }
-        }
-        "sage" {
-            if (-not $script:CoreUiBuilt) { Build-Component "core" }
-            Write-Host "[sage/frontend] npm run build" -ForegroundColor Cyan
-            & npm.cmd run build --prefix "$Root\members\sage\frontend"
-            if ($LASTEXITCODE -ne 0) { Write-Host "[sage/frontend] BUILD FAILED" -ForegroundColor Red; exit 1 }
-        }
-        default { Write-Host "Unknown component: $Comp. Use: core, writer, sage, or all" -ForegroundColor Red; exit 1 }
+        default { Write-Host "Unknown component: $Comp. Use: core, or all" -ForegroundColor Red; exit 1 }
     }
 }
 
 if ($Component -eq "all") {
-    @("core","writer","sage") | ForEach-Object { Build-Component $_ }
+    Build-Component "core"
 } else {
     Build-Component $Component
 }

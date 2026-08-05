@@ -12,6 +12,7 @@ from lamtools_core.llm import (
     merge_system_messages,
     sum_usage,
 )
+from lamtools_core.llm.retry import classify_model_error
 
 
 class TestLLMTypes:
@@ -127,3 +128,33 @@ class TestSumUsage:
         assert result.prompt_tokens == 30
         assert result.completion_tokens == 15
         assert result.total_tokens == 45
+
+
+class TestClassifyModelError:
+    """classify_model_error determines whether an error should be retried.
+
+    Configuration errors (unknown model, etc.) must be classified as
+    ``"fatal"`` so the retry loops bail out immediately instead of
+    retrying 100 times — the bug that caused sub_agent calls with
+    ``model="null"`` to stall for minutes before failing.
+    """
+
+    def test_model_not_found_is_fatal(self):
+        exc = ValueError("model not found: null")
+        assert classify_model_error(exc) == "fatal"
+
+    def test_unknown_model_is_fatal(self):
+        exc = ValueError("unknown model: some-bogus-id")
+        assert classify_model_error(exc) == "fatal"
+
+    def test_token_overflow_not_retried(self):
+        exc = RuntimeError("context length exceeded")
+        assert classify_model_error(exc) == "token_overflow"
+
+    def test_rate_limit_is_retryable(self):
+        exc = RuntimeError("rate limit exceeded (429)")
+        assert classify_model_error(exc) == "rate_limit"
+
+    def test_generic_error_is_retryable(self):
+        exc = RuntimeError("connection reset")
+        assert classify_model_error(exc) == "retryable"

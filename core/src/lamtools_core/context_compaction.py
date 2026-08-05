@@ -99,11 +99,19 @@ class ContextCompactionResult:
 
 
 def compaction_segment_input_limit(context_window_tokens: int) -> int:
-    """Return the per-request input ceiling used by every compaction entrypoint."""
+    """Return the per-request input ceiling used by every compaction entrypoint.
+
+    Segmentation is only meaningful when the model's context window itself
+    cannot hold the full compaction input (e.g. switching from a 1M model to
+    a 200k model).  Within the same window the model can always accept its own
+    window worth of input, so we return the window itself rather than an
+    arbitrary cap.  ``MAX_COMPACTION_SEGMENT_INPUT_TOKENS`` is only a fallback
+    when the window is unknown.
+    """
     window = max(0, int(context_window_tokens or 0))
     if window <= 0:
         return MAX_COMPACTION_SEGMENT_INPUT_TOKENS
-    return max(1, min(MAX_COMPACTION_SEGMENT_INPUT_TOKENS, window // 2))
+    return window
 
 
 @dataclass(frozen=True)

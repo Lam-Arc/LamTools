@@ -189,7 +189,8 @@ def _write_config_db(path: Path) -> None:
                 thinking_budget integer,
                 temperature real,
                 extra text,
-                created_at text
+                created_at text,
+                is_default integer default 0
             )
             """
         )
@@ -429,6 +430,7 @@ async def test_core_cli_live_commands_call_core_app_server_operations(monkeypatc
         "thread_id": "thread-1", "input_items": [{"type": "text", "text": "start"}], "work_root": str(tmp_path),
         "model_id": "model-1", "thinking_enabled": False, "thinking_budget": 512,
         "shallow_thinking_enabled": True, "approval_policy": "auto_approve", "client_message_id": "message-1",
+        "goal_id": None,
     }) in calls
     assert ("turn.cancel", {"thread_id": "thread-1", "turn_id": "turn-1"}) in calls
     assert ("turn.steer", {"thread_id": "thread-1", "turn_id": "turn-1", "input_items": [{"type": "text", "text": "steer"}]}) in calls
@@ -471,12 +473,13 @@ async def test_core_cli_serve_builds_core_http_app_and_runs_uvicorn(monkeypatch,
 
     assert await args.func(args) == 0
     assert seen["app"] == "core-app"
-    assert seen["run_options"] == {"host": "127.0.0.2", "port": 7123}
+    assert seen["run_options"] == {"host": "127.0.0.2", "port": 7123, "reload": False}
     assert seen["served"] is True
     assert seen["app_options"] == {
         "model_id": "model-1", "config_db": str(tmp_path / "config.db"), "core_db": str(tmp_path / "core.db"),
         "data_dir": str(tmp_path / "data"), "work_root": str(tmp_path), "thinking_enabled": False,
         "thinking_budget": 512, "max_tokens": 1024, "temperature": 0.4,
+        "frontend_dir": None,
     }
     assert '"url": "http://127.0.0.2:7123"' in capsys.readouterr().out
 
@@ -641,6 +644,7 @@ async def test_core_cli_run_starts_and_watches_one_live_connection(monkeypatch, 
             auto_approve=True,
             raw=False,
             verbose=False,
+            goal_id="",
         )
     )
 
@@ -659,6 +663,8 @@ async def test_core_cli_run_starts_and_watches_one_live_connection(monkeypatch, 
         "temperature": 0.2,
         "compact_trigger_tokens": None,
         "compact_limit_tokens": None,
+        "context_window_tokens": None,
+        "goal_id": None,
         "approval_policy": "auto_approve",
     }
     assert observed["start_result"] == {"runtime_start": {"turn_id": "turn-new"}}
@@ -707,7 +713,12 @@ async def test_core_cli_start_watch_uses_one_connection_and_binds_started_turn(m
     assert observed["start_result"] == {"runtime_start": {"turn_id": "turn-new"}}
 
 
-@pytest.mark.parametrize("flag", ["--config-db", "--core-db", "--run-dir", "--adapter-dir", "--plugin-root"])
+def test_core_cli_run_accepts_config_db_option(tmp_path: Path) -> None:
+    args = build_parser().parse_args(["run", "hello", "--config-db", str(tmp_path / "value")])
+    assert args.message == ["hello"]
+
+
+@pytest.mark.parametrize("flag", ["--core-db", "--run-dir", "--adapter-dir", "--plugin-root"])
 def test_core_cli_run_does_not_advertise_service_only_options(flag: str, tmp_path: Path) -> None:
     with pytest.raises(SystemExit):
         build_parser().parse_args(["run", "hello", flag, str(tmp_path / "value")])
@@ -840,9 +851,13 @@ async def test_core_cli_sub_agent_uses_durable_child_session_and_parent_timeline
 
     with sqlite3.connect(core_db) as con:
         child = con.execute(
-            "select runtime_state_json,history_json from core_runtime_sessions where thread_id=?",
+            "select runtime_state_json from core_runtime_sessions where thread_id=?",
             (f"{thread_id}:sub:writer",),
         ).fetchone()
+        child_history = con.execute(
+            "select message_json from core_history_entries where thread_id=? order by seq asc",
+            (f"{thread_id}:sub:writer",),
+        ).fetchall()
         write_events = con.execute(
             "select payload_json from core_app_events where thread_id=? and payload_json like '%write_file%'",
             (thread_id,),
@@ -852,7 +867,7 @@ async def test_core_cli_sub_agent_uses_durable_child_session_and_parent_timeline
     assert (tmp_path / "workspace" / "delegated.txt").read_text(encoding="utf-8") == "delegated content"
     assert child is not None
     assert json.loads(child[0])["status"] == "completed"
-    assert not json.loads(child[1])[-1].get("tool_calls")
+    assert not json.loads(child_history[-1][0]).get("tool_calls")
     assert write_events
 
 

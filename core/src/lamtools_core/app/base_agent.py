@@ -213,7 +213,7 @@ class CoreBaseAgentKit:
     async def on_run_start(self, state: RuntimeState, turn_input: RuntimeTurnInput) -> None:
         state.metadata["agent_id"] = self.config.agent_id
         state.metadata["work_root"] = str(self.work_root)
-        for key in ("model_id", "thinking_enabled", "thinking_budget", "shallow_thinking_enabled", "capability", "deferred_attachments"):
+        for key in ("model_id", "thinking_enabled", "thinking_budget", "shallow_thinking_enabled", "capability", "deferred_attachments", "context_window_tokens", "compact_trigger_tokens", "compact_limit_tokens"):
             if key in turn_input.metadata:
                 state.metadata[key] = turn_input.metadata[key]
         state.metadata.setdefault("allow_agent_install_skill", self.config.allow_agent_install_skill)

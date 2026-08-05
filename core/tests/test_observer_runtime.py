@@ -74,6 +74,7 @@ async def test_observer_catches_up_events_created_while_core_was_off(tmp_path: P
     manager = ArrangeManager(store)
     job = await manager.create(
         thread_id="observer-thread",
+        work_root=str(work_root),
         kind="focus",
         operation="turn.start",
         payload={"message": "notify me"},

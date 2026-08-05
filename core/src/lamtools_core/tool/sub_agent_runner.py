@@ -38,7 +38,7 @@ def _resolve_model_id_for_capability(model_ref: str) -> str:
     throughout.
     """
     ref = (model_ref or "").strip()
-    if not ref:
+    if not ref or ref.lower() in ("null", "none", "undefined"):
         return ""
     try:
         from lamtools_core.config.model_store import ModelStore
@@ -382,16 +382,14 @@ class KernelSubAgentRunner:
         state.status = "running"
         state.loop_state = "continue"
         if isinstance(self.state_store, RuntimeCheckpointStore):
-            history = await self.state_store.get_history(session_id)
-            history.append(
-                ChatMessage(
-                    role="tool",
-                    name=call.name,
-                    tool_call_id=call.id,
-                    content=tool_result.content or tool_result.error,
-                ).to_dict()
-            )
-            await self.state_store.save_checkpoint(state, history)
+            tool_msg = ChatMessage(
+                role="tool",
+                name=call.name,
+                tool_call_id=call.id,
+                content=tool_result.content or tool_result.error,
+            ).to_dict()
+            await self.state_store.append_history(session_id, [tool_msg])
+            await self.state_store.save(state)
         else:
             await self.state_store.save(state)
 
