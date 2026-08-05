@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from datetime import datetime
@@ -143,6 +144,14 @@ class CheckpointConversationBackend(Protocol):
 
 _WORKSPACE_LOCKS: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
 _SKIPPED_DIRECTORIES = {".git", ".hg", ".svn", "node_modules", "__pycache__"}
+
+# Workspace-capture caps: a huge work_root (e.g. a game save directory) must
+# not stall the app — files beyond these limits are skipped from the capture.
+_MAX_CAPTURE_FILES = 2000
+_MAX_CAPTURE_TOTAL_BYTES = 64 * 1024 * 1024  # 64 MB total
+_MAX_CAPTURE_SINGLE_FILE_BYTES = 8 * 1024 * 1024  # 8 MB per file
+
+_logger = logging.getLogger(__name__)
 CHECKPOINT_OPERATION_NAMES = (
     "session.checkpoints.create",
     "session.checkpoints.graph",
@@ -529,7 +538,7 @@ class CoreCheckpointCoordinator:
         edge_kind: str,
         parent_checkpoint_id: str | None = None,
     ) -> CheckpointRef:
-        manifest_hash, entries, blobs = self._capture_workspace()
+        manifest_hash, entries, blobs = await asyncio.to_thread(self._capture_workspace)
         root_session_id = _root_session_id(session_id)
         conversation = await self.conversation_backend.capture(session_id, exclude_turn_id=turn_id)
         checkpoint_id = uuid.uuid4().hex
@@ -610,8 +619,25 @@ class CoreCheckpointCoordinator:
         if not self.work_root.exists():
             raise FileNotFoundError(f"Workspace does not exist: {self.work_root}")
 
+        # Cap the capture so a huge workspace (e.g. a game save directory with
+        # tens of thousands of files) cannot stall the app. Files beyond the
+        # limits are skipped — the checkpoint still records what it captured.
+        captured_files = 0
+        captured_bytes = 0
+        skipped_files = 0
         for path in self._workspace_files():
             relative = path.relative_to(self.work_root).as_posix()
+            try:
+                size = path.stat().st_size
+            except OSError:
+                continue
+            if (
+                size > _MAX_CAPTURE_SINGLE_FILE_BYTES
+                or captured_files >= _MAX_CAPTURE_FILES
+                or captured_bytes + size > _MAX_CAPTURE_TOTAL_BYTES
+            ):
+                skipped_files += 1
+                continue
             data = path.read_bytes()
             digest = hashlib.sha256(data).hexdigest()
             blob_path = blob_root / digest[:2] / digest
@@ -636,6 +662,17 @@ class CoreCheckpointCoordinator:
             mode = stat.S_IMODE(path.stat().st_mode)
             entries[relative] = {"hash": digest, "size": len(data), "mode": mode}
             blobs.append((digest, len(data), str(blob_path)))
+            captured_files += 1
+            captured_bytes += size
+
+        if skipped_files:
+            _logger.warning(
+                "workspace capture skipped %d file(s) (limit: files<=%d, total<=%dMB, single<=%dMB)",
+                skipped_files,
+                _MAX_CAPTURE_FILES,
+                _MAX_CAPTURE_TOTAL_BYTES // (1024 * 1024),
+                _MAX_CAPTURE_SINGLE_FILE_BYTES // (1024 * 1024),
+            )
 
         manifest_bytes = json.dumps(entries, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
         return hashlib.sha256(manifest_bytes).hexdigest(), entries, blobs
