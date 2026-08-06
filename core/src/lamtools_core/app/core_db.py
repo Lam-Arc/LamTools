@@ -340,10 +340,18 @@ class SqlAlchemyRuntimeStateStore:
         On first call for a session that still has data in the legacy
         ``history_json`` blob, the blob is migrated to rows first (lazy
         migration), then the new messages are appended.
+
+        Routed through the :class:`SQLiteWriteCoordinator` so the ``max_seq``
+        read and the inserts share a single ``BEGIN IMMEDIATE`` transaction.
+        This both closes a TOCTOU gap (seq could otherwise change between the
+        read and the insert) and serialises the write against concurrent
+        ``replace_history`` / sub-agent ``append_history`` calls — the
+        historical cause of ``database is locked`` deadlocks.
         """
         if not messages:
             return
-        async with self.session_factory() as db:
+
+        async def write(db) -> None:
             max_seq = int(
                 (
                     await db.execute(
@@ -376,7 +384,8 @@ class SqlAlchemyRuntimeStateStore:
                         message_json=_json_safe(msg),
                     )
                 )
-            await db.commit()
+
+        await self.write_coordinator.run(write)
 
     async def replace_history(self, session_id: str, messages: list[dict[str, Any]]) -> None:
         """Replace the entire history (used after compaction / truncation).
@@ -385,8 +394,12 @@ class SqlAlchemyRuntimeStateStore:
         messages with fresh sequential numbering. Also clears the legacy
         ``history_json`` blob so subsequent ``get_history`` calls read only
         from the incremental table.
+
+        Routed through the :class:`SQLiteWriteCoordinator` (single
+        ``BEGIN IMMEDIATE``) to avoid ``database is locked`` when a concurrent
+        sub-agent ``append_history`` is in flight — the deadlock root cause.
         """
-        async with self.session_factory() as db:
+        async def write(db) -> None:
             await db.execute(
                 delete(CoreHistoryEntry).where(CoreHistoryEntry.thread_id == session_id)
             )
@@ -402,11 +415,26 @@ class SqlAlchemyRuntimeStateStore:
             row = await db.get(CoreRuntimeSession, session_id)
             if row is not None:
                 row.history_json = []
-            await db.commit()
+
+        await self.write_coordinator.run(write)
 
     async def find_pending_approval(self, request_id: str) -> RuntimeState | None:
         async with self.session_factory() as db:
-            rows = (await db.execute(select(CoreRuntimeSession))).scalars().all()
+            # Filter at the SQL layer to only sessions that actually carry a
+            # pending_approval payload. Most sessions have an empty
+            # pending_approval_json, so this avoids deserialising the whole
+            # table on every approval lookup. json_extract is sqlite-native
+            # (the only backend this store targets).
+            rows = (
+                await db.execute(
+                    select(CoreRuntimeSession).where(
+                        func.json_extract(
+                            CoreRuntimeSession.pending_approval_json,
+                            "$.pending_approval",
+                        ).isnot(None)
+                    )
+                )
+            ).scalars().all()
         for row in rows:
             pending_root = row.pending_approval_json if isinstance(row.pending_approval_json, dict) else {}
             pending = pending_root.get("pending_approval") if isinstance(pending_root, dict) else None

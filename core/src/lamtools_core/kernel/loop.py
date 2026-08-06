@@ -221,6 +221,13 @@ class CoreLoopKernel:
     completion_gate: CompletionGate | None = None
     memory_store: Any | None = None  # MemoryStoreProtocol; Any to avoid import cycle
     _cancel_event: asyncio.Event = field(default_factory=asyncio.Event, init=False, repr=False)
+    # External cancel signal source (e.g. RuntimeTaskRegistry.get_cancel_event).
+    # When set by the app layer's turn.cancel path, the kernel can detect it
+    # mid-stream and abort the model call cooperatively instead of waiting for
+    # the next loop iteration — which may never arrive if the call is blocked
+    # on a slow/streaming response. None for sub-agent kernels (no external
+    # cancel). See live_operations.handle_turn_cancel_operation.
+    cancel_event_source: asyncio.Event | None = field(default=None, repr=False)
     _base_event_sink: EventSink = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -233,6 +240,23 @@ class CoreLoopKernel:
         failed with error='cancelled', and return.
         """
         self._cancel_event.set()
+
+    def _is_external_cancelled(self) -> bool:
+        """Check the external cancel source (registry event) and mirror it.
+
+        The app layer's ``turn.cancel`` path sets the
+        ``RuntimeTaskRegistry`` cancel event rather than calling
+        ``kernel.cancel()`` directly (it may not even hold a kernel
+        reference — the task is cancelled via ``task.cancel()``). Polling
+        this event from the streaming loop lets us abort a blocked model
+        call cooperatively, instead of relying on ``asyncio.CancelledError``
+        to unwind through arbitrary await points (which can stall on a
+        DB-locked persistence write — the 2b34c636 hang).
+        """
+        if self.cancel_event_source is not None and self.cancel_event_source.is_set():
+            self._cancel_event.set()
+            return True
+        return self._cancel_event.is_set()
 
     async def run(self, turn_input: RuntimeTurnInput) -> KernelResult:
         try:
@@ -569,7 +593,7 @@ class CoreLoopKernel:
                             for call in turn.tool_calls
                         ],
                     ))
-                    await self._save_checkpoint(state, history)
+                    await self._save_checkpoint(state)
 
                 # 5.8 Execute tool calls
                 tool_results: list[ToolResult] = []
@@ -681,7 +705,7 @@ class CoreLoopKernel:
                         if self.policy.persist_steps:
                             steps_log = state.metadata.setdefault("kernel_steps", [])
                             steps_log.append(self._summarize_step(step))
-                        await self._save_checkpoint(state, history)
+                        await self._save_checkpoint(state)
                         await self._emit_tool_waiting_for_approval(
                             state,
                             approval_call,
@@ -727,7 +751,7 @@ class CoreLoopKernel:
                         await self._emit_tool_finished(state, call, result, response_index=index)
                         tool_message = await self.kit.format_tool_result_for_model(state, call, result)
                         history.append(tool_message)
-                        await self._save_checkpoint(state, history)
+                        await self._save_checkpoint(state)
                 else:
                     # Sequential execution (OpenAI Codex default for shell-safety)
                     for call_index, call in enumerate(turn.tool_calls):
@@ -744,7 +768,7 @@ class CoreLoopKernel:
                         # 5.9 Append formatted tool result to history
                         tool_message = await self.kit.format_tool_result_for_model(state, call, result)
                         history.append(tool_message)
-                        await self._save_checkpoint(state, history)
+                        await self._save_checkpoint(state)
                         if not await self._consume_guidance(state, turn_input, history, index):
                             continue
                         remaining_calls = turn.tool_calls[call_index + 1:]
@@ -767,7 +791,7 @@ class CoreLoopKernel:
                             ))
                         if remaining_calls:
                             step.metadata["guidance_interrupted_tool_batch"] = True
-                            await self._save_checkpoint(state, history)
+                            await self._save_checkpoint(state)
                         break
 
                 payload_reassessment_required = False
@@ -799,7 +823,7 @@ class CoreLoopKernel:
                         ),
                     ))
                     step.metadata["substantive_payload_reassessment_required"] = True
-                    await self._save_checkpoint(state, history)
+                    await self._save_checkpoint(state)
 
                 executed_tool_round = any(result.status != "blocked" for result in tool_results)
 
@@ -836,7 +860,7 @@ class CoreLoopKernel:
                         )
                         if self.policy.persist_steps:
                             state.metadata.setdefault("kernel_steps", []).append(self._summarize_step(step))
-                        await self._save_checkpoint(state, history)
+                        await self._save_checkpoint(state)
                         break
 
                 repeat_observation = self._observe_repeated_tool_failures(
@@ -878,7 +902,7 @@ class CoreLoopKernel:
                     )
                     if self.policy.persist_steps:
                         state.metadata.setdefault("kernel_steps", []).append(self._summarize_step(step))
-                    await self._save_checkpoint(state, history)
+                    await self._save_checkpoint(state)
                     break
                 recovery_prompt = repeat_observation.get("recovery_prompt")
                 if isinstance(recovery_prompt, str) and recovery_prompt:
@@ -888,7 +912,7 @@ class CoreLoopKernel:
                         "status": "required",
                         "response_index": index,
                     }
-                    await self._save_checkpoint(state, history)
+                    await self._save_checkpoint(state)
 
                 if (
                     tool_progress_completed
@@ -903,7 +927,7 @@ class CoreLoopKernel:
                         "status": "completed",
                         "response_index": index,
                     }
-                    await self._save_checkpoint(state, history)
+                    await self._save_checkpoint(state)
                 elif tool_progress_incomplete:
                     history.append(ChatMessage(
                         role="system",
@@ -913,7 +937,7 @@ class CoreLoopKernel:
                         ),
                     ))
                     step.metadata["tool_progress_incomplete"] = True
-                    await self._save_checkpoint(state, history)
+                    await self._save_checkpoint(state)
                 elif turn.tool_calls and not turn.reply.strip() and executed_tool_round:
                     tool_only_rounds += 1
                     limit = self.policy.max_tool_only_rounds_without_progress
@@ -932,7 +956,7 @@ class CoreLoopKernel:
                             "response_index": index,
                             "tool_only_rounds": tool_only_rounds,
                         }
-                        await self._save_checkpoint(state, history)
+                        await self._save_checkpoint(state)
                 elif turn.reply.strip():
                     tool_only_rounds = 0
 
@@ -954,7 +978,7 @@ class CoreLoopKernel:
                             "response_index": index,
                             "consecutive_rounds": threshold,
                         }
-                        await self._save_checkpoint(state, history)
+                        await self._save_checkpoint(state)
                 else:
                     consecutive_failure_rounds = 0
 
@@ -1043,7 +1067,7 @@ class CoreLoopKernel:
                                     role="system",
                                     content=f"[GOAL_INCOMPLETE] {repair_instruction}",
                                 ))
-                                await self._save_checkpoint(state, history)
+                                await self._save_checkpoint(state)
                                 decision = "continue"
 
                 step.decision = decision
@@ -1065,7 +1089,7 @@ class CoreLoopKernel:
                     steps_log.append(self._summarize_step(step))
 
                 # 5.13 Save state
-                await self._save_checkpoint(state, history)
+                await self._save_checkpoint(state)
 
                 # 5.14 Break on terminal decisions
                 if decision != "continue":
@@ -1160,7 +1184,7 @@ class CoreLoopKernel:
         state.metadata.pop("pending_approval", None)
         state.metadata.pop("pending_waiting_request", None)
         history = await self._load_history(state.session_id)
-        await self._save_checkpoint(state, history)
+        await self._save_checkpoint(state)
 
     @staticmethod
     def _tool_call_fingerprint(call: ToolCall) -> str:
@@ -1333,23 +1357,17 @@ class CoreLoopKernel:
         messages = [message for item in raw_history if (message := _chat_message_from_dict(item)) is not None]
         return _repair_incomplete_tool_history(messages)
 
-    async def _save_checkpoint(
-        self, state: RuntimeState, history: list[ChatMessage], *, full: bool = False
-    ) -> None:
-        """Persist state and optionally full history.
+    async def _save_checkpoint(self, state: RuntimeState) -> None:
+        """Persist runtime state metadata (mid-loop checkpoint).
 
-        When *full* is False (the default), only state metadata is saved.
-        Full-history persistence is reserved for the initial checkpoint after
-        the user message and the final checkpoint at loop exit.
+        Only state metadata is saved here; conversation history is NOT
+        written. History is persisted separately at well-defined boundaries:
+        the initial checkpoint after the user message
+        (``_append_history_checkpoint``), after context compaction, and at
+        loop exit (``_replace_history_checkpoint``). Writing history on every
+        mid-loop step would be wasteful; the boundary checkpoints are
+        sufficient for crash recovery.
         """
-        if isinstance(self.state_store, RuntimeCheckpointStore):
-            if full:
-                await self.state_store.save_checkpoint(
-                    state, [message.to_dict() for message in history]
-                )
-            else:
-                await self.state_store.save(state)
-            return
         await self.state_store.save(state)
 
     async def _append_history_checkpoint(
@@ -1429,6 +1447,13 @@ class CoreLoopKernel:
                     event = await self._next_stream_event(stream_iterator)
                 except StopAsyncIteration:
                     break
+                # Cooperative cancel during streaming: the app-layer Stop
+                # button sets the registry cancel event. Abort the stream
+                # immediately rather than waiting for the model to finish —
+                # without this a long/slow stream makes Stop appear to do
+                # nothing (the 2b34c636 "stop 无效" symptom).
+                if self._is_external_cancelled():
+                    raise asyncio.CancelledError()
                 if event.kind == "content_delta" and event.content:
                     accumulated += event.content
                     await self.event_sink.emit(CoreEvent(
@@ -1663,7 +1688,7 @@ class CoreLoopKernel:
                 run_id=state.run_id,
                 tags=["guidance"],
             ))
-        await self._save_checkpoint(state, history)
+        await self._save_checkpoint(state)
         return True
 
     async def _next_stream_event(self, stream_iterator: Any) -> LLMStreamEvent:
@@ -2532,7 +2557,7 @@ class CoreLoopKernel:
         if history is None:
             await self.state_store.save(state)
         else:
-            await self._save_checkpoint(state, history)
+            await self._save_checkpoint(state)
         await self.event_sink.emit(CoreEvent(
             name="runtime.metrics",
             category="progress",

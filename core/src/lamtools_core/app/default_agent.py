@@ -134,6 +134,7 @@ def create_kernel(
     hook_engine: Any | None = None,
     checkpoint_coordinator: Any | None = None,
     completion_gate: CompletionGate | None = None,
+    memory_store: Any | None = None,
     model_timeout_seconds: int = 360,
     model_retries: int | None = None,
     persist_steps: bool = False,
@@ -141,9 +142,20 @@ def create_kernel(
     compact_trigger_tokens: int | None = None,
     compact_limit_tokens: int | None = None,
     parallel_tool_names: tuple[str, ...] = ("sub_agent",),
+    cancel_event_source: "asyncio.Event | None" = None,
     **extra_policy_kwargs: Any,
 ) -> CoreLoopKernel:
-    """Create a CoreLoopKernel with sensible production defaults."""
+    """Create a CoreLoopKernel with sensible production defaults.
+
+    Centralizes LoopPolicy construction so every kernel-assembly site
+    (turn_start, sub-agent handoff, approval continuation) applies the same
+    policy knobs. Kit config differs per site and is passed in pre-built.
+
+    ``cancel_event_source`` is the ``RuntimeTaskRegistry`` cancel event for
+    the owning thread; when set, the kernel can abort a blocked streaming
+    model call cooperatively (see ``CoreLoopKernel._is_external_cancelled``).
+    Pass None for sub-agent kernels — they do not respond to external Stop.
+    """
     policy_kwargs: dict[str, Any] = {
         "model_timeout_seconds": model_timeout_seconds,
         "parallel_tool_names": parallel_tool_names,
@@ -168,6 +180,8 @@ def create_kernel(
         hook_engine=hook_engine,
         checkpoint_coordinator=checkpoint_coordinator,
         completion_gate=completion_gate,
+        memory_store=memory_store,
+        cancel_event_source=cancel_event_source,
     )
 
 
@@ -426,7 +440,7 @@ def create_core_agent_operations(
             _mcp_count = len(mcp_registry._tools_by_name) if mcp_registry is not None else 0
             _logger.info("[default:turn_start] toolbox built thread_id=%s mcp_tools=%d", thread_id, _mcp_count)
             try:
-                kernel = CoreLoopKernel(
+                kernel = create_kernel(
                     kit=CoreBaseAgentKit(
                         work_root=runtime_work_root,
                         config=CoreBaseAgentConfig(
@@ -451,15 +465,11 @@ def create_core_agent_operations(
                     llm_client=runtime_model_provider,  # type: ignore[arg-type]
                     state_store=runtime_state_store,
                     event_sink=sink,
-                    policy=LoopPolicy(
-                            model_timeout_seconds=360,
-                            context_window_tokens=runtime_options.context_window_tokens,
-                        compact_trigger_tokens=runtime_options.compact_trigger_tokens,
-                        compact_limit_tokens=runtime_options.compact_limit_tokens,
-                        parallel_tool_names=("sub_agent",),
-                        dreaming_enabled=getattr(spec, "dreaming_enabled", False),
-                        dream_min_turns=getattr(spec, "dream_min_turns", 3),
-                    ),
+                    context_window_tokens=runtime_options.context_window_tokens,
+                    compact_trigger_tokens=runtime_options.compact_trigger_tokens,
+                    compact_limit_tokens=runtime_options.compact_limit_tokens,
+                    dreaming_enabled=getattr(spec, "dreaming_enabled", False),
+                    dream_min_turns=getattr(spec, "dream_min_turns", 3),
                     hook_engine=plugin_assembly["hook_engine"],
                     checkpoint_coordinator=turn_checkpoint_coordinator,
                     completion_gate=create_goal_gate(
@@ -469,6 +479,7 @@ def create_core_agent_operations(
                         runtime_options.model_id,
                     ),
                     memory_store=memory_store,
+                    cancel_event_source=runtime_task_registry.get_cancel_event(thread_id),
                 )
                 _logger.info("[default:turn_start] kernel created, starting run thread_id=%s model=%s",
                               thread_id, runtime_options.model_id)
@@ -964,7 +975,7 @@ def create_core_agent_operations(
                         run_id=state.run_id,
                         tags=["tool"],
                     ))
-                    kernel = CoreLoopKernel(
+                    kernel = create_kernel(
                         kit=CoreBaseAgentKit(
                             work_root=runtime_work_root,
                             config=CoreBaseAgentConfig(
@@ -985,15 +996,10 @@ def create_core_agent_operations(
                         llm_client=runtime_model_provider,  # type: ignore[arg-type]
                         state_store=runtime_state_store,
                         event_sink=sink,
-                        policy=LoopPolicy(
-                            model_timeout_seconds=360,
-                            model_retries=3,
-                            persist_steps=True,
-                            context_window_tokens=runtime_options.context_window_tokens,
-                            compact_trigger_tokens=runtime_options.compact_trigger_tokens,
-                            compact_limit_tokens=runtime_options.compact_limit_tokens,
-                            parallel_tool_names=("sub_agent",),
-                        ),
+                        persist_steps=True,
+                        context_window_tokens=runtime_options.context_window_tokens,
+                        compact_trigger_tokens=runtime_options.compact_trigger_tokens,
+                        compact_limit_tokens=runtime_options.compact_limit_tokens,
                         hook_engine=plugin_assembly["hook_engine"],
                         completion_gate=create_goal_gate(
                             goal_manager,
@@ -1249,7 +1255,7 @@ def create_core_agent_operations(
                     tier_tools=tier_tools,
                     activated_mcp_servers=continuation_activated_mcp,
                 )
-                kernel = CoreLoopKernel(
+                kernel = create_kernel(
                     kit=CoreBaseAgentKit(
                         work_root=runtime_work_root,
                         config=CoreBaseAgentConfig(
@@ -1269,13 +1275,9 @@ def create_core_agent_operations(
                     llm_client=runtime_model_provider,  # type: ignore[arg-type]
                     state_store=runtime_state_store,
                     event_sink=sink,
-                    policy=LoopPolicy(
-                            model_timeout_seconds=360,
-                            context_window_tokens=runtime_options.context_window_tokens,
-                        compact_trigger_tokens=runtime_options.compact_trigger_tokens,
-                        compact_limit_tokens=runtime_options.compact_limit_tokens,
-                        parallel_tool_names=("sub_agent",),
-                    ),
+                    context_window_tokens=runtime_options.context_window_tokens,
+                    compact_trigger_tokens=runtime_options.compact_trigger_tokens,
+                    compact_limit_tokens=runtime_options.compact_limit_tokens,
                     hook_engine=plugin_assembly["hook_engine"],
                     completion_gate=create_goal_gate(
                         goal_manager,

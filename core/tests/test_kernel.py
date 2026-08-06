@@ -572,7 +572,7 @@ class TestKernelTypes:
     def test_loop_policy_defaults(self):
         policy = LoopPolicy()
         assert policy.model_timeout_seconds == 360.0
-        assert policy.model_retries == 100
+        assert policy.model_retries == 3
         assert policy.tool_timeout_seconds is None
         assert policy.emit_debug_events is False
         assert policy.context_window_tokens is None
@@ -3314,6 +3314,78 @@ class TestKernelCancellation:
         assert result2.decision == "done"
         assert result2.error == ""
 
+    @pytest.mark.asyncio
+    async def test_external_cancel_aborts_streaming_model_call(self):
+        """A cancel set on cancel_event_source mid-stream aborts the streaming
+        model call cooperatively (Fix #3b) — the 2b34c636 "stop 无效" symptom.
+
+        Without the mid-stream check, the kernel would wait for the slow stream
+        to finish (or for an idle timeout) before noticing cancel, making Stop
+        appear to do nothing while the model is streaming.
+        """
+
+        class SlowStreamingLLM:
+            """Streams one chunk every 0.05s, long enough to cancel mid-flight."""
+            def __init__(self) -> None:
+                self.complete_calls = 0
+
+            async def stream(self, request: LLMRequest):
+                for chunk in ("alpha ", "beta ", "gamma ", "delta "):
+                    await asyncio.sleep(0.05)
+                    yield LLMStreamEvent(kind="content_delta", content=chunk)
+                yield LLMStreamEvent(kind="done")
+
+            async def complete(self, request: LLMRequest) -> LLMResponse:
+                self.complete_calls += 1
+                return LLMResponse(content="unexpected fallback")
+
+        class DoneOnReplyKit(MockRuntimeKit):
+            async def parse_model_output(self, state: RuntimeState, response: LLMResponse) -> KernelTurn:
+                return KernelTurn(reply=response.content)
+
+            async def decide_next(self, state, turn, verification, step):
+                return "done" if turn.reply else "failed"
+
+        cancel_event = asyncio.Event()
+        llm = SlowStreamingLLM()
+        kernel = _make_kernel(
+            DoneOnReplyKit(),
+            llm_client=llm,
+            policy=LoopPolicy(
+                model_timeout_seconds=5,
+                model_retries=1,
+                # Generous idle timeout so the cancel — not idle expiry —
+                # is what aborts the stream.
+                model_stream_idle_timeout_seconds=5,
+            ),
+        )
+        kernel.cancel_event_source = cancel_event
+
+        async def run_kernel():
+            return await kernel.run(_make_turn_input())
+
+        task = asyncio.create_task(run_kernel())
+        # Let the stream emit its first chunk, then cancel mid-stream.
+        await asyncio.sleep(0.08)
+        cancel_event.set()
+
+        # The kernel should abort via CancelledError (raised from
+        # _stream_model when _is_external_cancelled() is true), which run()
+        # catches and persists as a cancelled terminal.
+        try:
+            result = await asyncio.wait_for(task, timeout=3)
+        except asyncio.CancelledError:
+            # run() re-raises CancelledError after persisting the terminal
+            # state — that's the expected path.
+            result = None
+
+        if result is not None:
+            assert result.decision == "failed"
+            assert result.error == "cancelled"
+        # The fallback complete() must NOT have been called — cancel
+        # preempted it.
+        assert llm.complete_calls == 0
+
 
 # ---------------------------------------------------------------------------
 # Tests: Assistant response in history
@@ -3519,3 +3591,75 @@ class TestVerificationResultAttempt:
         assert result.steps[0].verification is not None
         assert result.steps[0].verification.attempt == 1
         assert result.steps[0].verification.max_attempts == 5
+
+
+# ---------------------------------------------------------------------------
+# Tests: empty-stop retry via CoreBaseAgentKit.decide_next
+# ---------------------------------------------------------------------------
+
+class _EmptyStopLLM:
+    """Yields empty content with finish_reason='stop' for the first N calls,
+    then a non-empty final response."""
+
+    def __init__(self, empty_count: int) -> None:
+        self.empty_count = empty_count
+        self.calls = 0
+
+    async def complete(self, request: LLMRequest) -> LLMResponse:
+        self.calls += 1
+        if self.calls <= self.empty_count:
+            return LLMResponse(content="", finish_reason="stop")
+        return LLMResponse(content="final answer", finish_reason="stop")
+
+
+@pytest.mark.asyncio
+async def test_empty_stop_retries_then_succeeds(tmp_path):
+    """When the model returns empty content with finish_reason='stop', the
+    kernel should retry (via _resolve_empty_stop setting decision_hint='continue')
+    instead of failing immediately. After up to 2 empty rounds, a real response
+    completes the task."""
+    from lamtools_core.app.base_agent import CoreBaseAgentConfig, CoreBaseAgentKit
+
+    llm = _EmptyStopLLM(empty_count=2)
+    kernel = CoreLoopKernel(
+        kit=CoreBaseAgentKit(
+            work_root=tmp_path,
+            config=CoreBaseAgentConfig(model_id="fake-model", approval_policy="auto_approve"),
+        ),
+        llm_client=llm,
+        state_store=InMemoryStateStore(),
+        event_sink=CollectingEventSink(),
+        policy=LoopPolicy(),
+    )
+
+    result = await kernel.run(_make_turn_input())
+
+    assert result.decision == "done"
+    assert result.message == "final answer"
+    # 2 empty retries + 1 successful response = 3 model calls
+    assert llm.calls == 3
+
+
+@pytest.mark.asyncio
+async def test_empty_stop_fails_after_max_retries(tmp_path):
+    """When the model keeps returning empty content beyond the retry limit
+    (attempts > 2), the kernel should fail with a clear error."""
+    from lamtools_core.app.base_agent import CoreBaseAgentConfig, CoreBaseAgentKit
+
+    llm = _EmptyStopLLM(empty_count=99)  # always empty
+    kernel = CoreLoopKernel(
+        kit=CoreBaseAgentKit(
+            work_root=tmp_path,
+            config=CoreBaseAgentConfig(model_id="fake-model", approval_policy="auto_approve"),
+        ),
+        llm_client=llm,
+        state_store=InMemoryStateStore(),
+        event_sink=CollectingEventSink(),
+        policy=LoopPolicy(),
+    )
+
+    result = await kernel.run(_make_turn_input())
+
+    assert result.decision == "failed"
+    # _resolve_empty_stop allows attempts <= 2 (3 retries), then fails on the 4th
+    assert llm.calls == 4

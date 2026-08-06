@@ -51,7 +51,8 @@ from .queue_state import (
 from .snapshot_store import SqlAlchemyThreadSnapshotStore
 from .session_autotitle import generate_session_title, is_default_title
 from .turn_acceptance import (
-    TURN_ACCEPT_DEDUPE_METHODS,
+    QUEUE_ITEM_ACCEPTED_METHODS,
+    TURN_ACCEPTED_METHODS,
     CoreAppEventSpec,
     build_cancelled_turn_event,
     build_turn_acceptance_plan,
@@ -481,7 +482,7 @@ async def handle_turn_start_operation(
             db,
             thread_id=thread_id,
             client_message_id=client_message_id,
-            methods=TURN_ACCEPT_DEDUPE_METHODS,
+            methods=TURN_ACCEPTED_METHODS,
         )
         _w1 = time_module.perf_counter()
         _logger.info("[PERF:turn_start:write] find_client_event=%.3fs", _w1 - _w0)
@@ -754,15 +755,10 @@ def _bundled_config_resources_dir() -> Path:
 
 
 def _load_tier_tools(context: "CoreLiveContext") -> TierTools | None:
-    """Load access_tools.jsonc — prefer .lam/core/config/, then data_dir, then bundled."""
+    """Load access_tools.jsonc — prefer .lam/core/config/, then bundled."""
     from lamtools_core.config.root import core_config_file
 
     candidates: list[Path] = [core_config_file("access_tools.jsonc")]
-
-    data_dir_raw = context.host.runtime_task_registry._data_dir if hasattr(context.host.runtime_task_registry, "_data_dir") else None
-    if data_dir_raw is not None:
-        data_dir = Path(str(data_dir_raw))
-        candidates.append(data_dir / "access_tools.jsonc")
     candidates.append(_bundled_config_resources_dir() / "access_tools.jsonc")
     for candidate in candidates:
         try:
@@ -774,10 +770,10 @@ def _load_tier_tools(context: "CoreLiveContext") -> TierTools | None:
 
 
 def _load_load_tools(context: "CoreLiveContext") -> LoadTools:
-    """Load loadtools.jsonc — prefer .lam/core/config/, then data_dir, fallback to Core default."""
+    """Load loadtools.jsonc — prefer .lam/core/config/, fallback to Core default."""
     from lamtools_core.config.root import core_config_file
 
-    # 1. Unified config directory (user-modifiable after packaging)
+    # Unified config directory (user-modifiable after packaging)
     candidate = core_config_file("loadtools.jsonc")
     try:
         if candidate.exists():
@@ -786,19 +782,6 @@ def _load_load_tools(context: "CoreLiveContext") -> LoadTools:
                 return member_tools
     except (OSError, ValueError):
         pass
-
-    # 2. data_dir override (legacy)
-    data_dir_raw = context.host.runtime_task_registry._data_dir if hasattr(context.host.runtime_task_registry, "_data_dir") else None
-    if data_dir_raw:
-        data_dir = Path(str(data_dir_raw))
-        candidate = data_dir / "loadtools.jsonc"
-        try:
-            if candidate.exists():
-                member_tools = load_loadtools(candidate)
-                if member_tools:
-                    return member_tools
-        except (OSError, ValueError):
-            pass
     # Fallback to Core built-in default
     return default_load_tools()
 
@@ -818,6 +801,14 @@ async def handle_turn_cancel_operation(
         snapshot = await context.persistence.load(db, thread_id)
         requested_turn_id = str(params.get("turn_id") or params.get("turnId") or "")
         turn_id = requested_turn_id or latest_active_turn_id(snapshot) or ""
+        # Fallback to the in-memory registry: when the snapshot has lost the
+        # active turn (e.g. a sub-agent DB-lock error rewrote state before the
+        # terminal event landed) the background task can still be running. The
+        # registry is the source of truth for "is there a live task", so a
+        # Stop click must still be able to target it — otherwise the user can
+        # only kill the process (the 2b34c636 deadlock).
+        if not turn_id:
+            turn_id = context.host.runtime_task_registry.active_run_id(thread_id) or ""
         if requested_turn_id and not _is_active_turn(snapshot, requested_turn_id):
             turn_id = ""
         if not turn_id:
@@ -1210,7 +1201,7 @@ async def handle_queue_create_operation(
             db,
             thread_id=thread_id,
             client_message_id=client_message_id,
-            methods=TURN_ACCEPT_DEDUPE_METHODS,
+            methods=QUEUE_ITEM_ACCEPTED_METHODS,
         )
         if existing is not None:
             snapshot = await context.persistence.load(db, thread_id)
@@ -1622,7 +1613,15 @@ async def _fail_runtime_start(
             await task
         except BaseException:
             pass
-    context.host.runtime_task_registry.release_run(thread_id, run_id=turn_id)
+    # Defer release_run until *after* the terminal event is durably
+    # persisted. Releasing first opens a window where the registry no longer
+    # reports an active run but the snapshot has no terminal status yet — a
+    # subsequent turn.start then passes both the snapshot guard and the
+    # registry guard and is accepted while the old turn's background work is
+    # still flushing, which is exactly the race that deadlocked session
+    # 2b34c636 (new turn's runtime_start raced the old turn's final
+    # replace_history for the DB write lock). If the write itself fails we
+    # still must release so the thread is not permanently stuck.
     async def write(
         db: AsyncSession,
     ) -> tuple[AppEventEnvelope, dict[str, Any]]:
@@ -1684,7 +1683,13 @@ async def _fail_runtime_start(
         snapshot = await context.persistence.load(db, thread_id)
         return event, snapshot
 
-    event, snapshot = await context.persistence.write(write)
+    try:
+        event, snapshot = await context.persistence.write(write)
+    finally:
+        # Release the run claim only once the terminal event is durably
+        # written (or the write failed — either way the claim must not
+        # outlive this function, or the thread would be stuck "active").
+        context.host.runtime_task_registry.release_run(thread_id, run_id=turn_id)
     await context.hub.publish(event)
     return event, snapshot
 

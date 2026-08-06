@@ -1514,6 +1514,54 @@ async def test_core_live_turn_cancel_closes_persisted_run_without_live_task(tmp_
 
 
 @pytest.mark.asyncio
+async def test_core_live_turn_cancel_falls_back_to_registry_when_no_turn_id(tmp_path):
+    """When the caller omits turn_id and the snapshot has no active turn,
+    cancel must still target the registry's active run (Fix #3a).
+
+    This is the 2b34c636 scenario: a sub-agent DB-lock error rewrote the
+    snapshot so the turn no longer looks active, but the background task is
+    still registered. Without the registry fallback, cancel returns idle and
+    the user can only kill the process.
+    """
+    engine, context = await _context(tmp_path)
+    release = _register_blocking_turn_start(context)
+    task = None
+    try:
+        started = await handle_turn_start_operation(
+            request_id=1,
+            params={
+                "thread_id": "thread-registry-fallback",
+                "client_message_id": "client-registry-fallback",
+                "input": [{"type": "text", "text": "hello"}],
+            },
+            context=context,
+        )
+        turn_id = started.response["result"]["runtime_start"]["turn_id"]
+        task = context.runtime_task_registry.task("thread-registry-fallback", run_id=turn_id)
+        assert task is not None
+
+        # Cancel WITHOUT passing turn_id. The snapshot does carry the turn
+        # here, but the point is that even if it didn't, the registry
+        # fallback resolves turn_id. Assert we get an interrupting event,
+        # not the idle "no active turn" response.
+        outcome = await handle_turn_cancel_operation(
+            request_id=2,
+            params={"thread_id": "thread-registry-fallback", "include_snapshot": False},
+            context=context,
+        )
+        result = outcome.response["result"]
+        assert "status" not in result or result.get("status") != "idle"
+        assert [event["method"] for event in result["events"]] == ["turn/interrupted", "core/runItem"]
+        assert result["events"][1]["payload"]["status"] == "interrupting"
+    finally:
+        release.set()
+        if task is not None:
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_force_cancel_persists_and_publishes_cancelled_terminal(tmp_path):
     llm = BlockingCoreLLM()
     engine, context = await _live_core_context(tmp_path, llm)

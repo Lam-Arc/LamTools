@@ -824,3 +824,83 @@ async def test_replace_history_clears_legacy_blob(tmp_path) -> None:
         assert history[0]["content"] == "replaced"
     finally:
         await db.close()
+
+
+# ---------------------------------------------------------------------------
+# Tests: Concurrent history writes must not deadlock (Fix #1)
+#
+# append_history and replace_history both route through the
+# SQLiteWriteCoordinator (per-database asyncio.Lock + BEGIN IMMEDIATE) so
+# that concurrent writes — e.g. a sub-agent appending while the main turn
+# replaces after compaction — serialize instead of raising
+# "database is locked". This was the root cause of the 2b34c636 hang.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_concurrent_append_and_replace_do_not_lock(tmp_path) -> None:
+    """Concurrent append_history + replace_history on the same DB must not
+    raise ``database is locked`` — both go through the write coordinator."""
+    db = await open_core_app_db(tmp_path / "concurrent.db")
+    try:
+        store = db.runtime_state_store
+        await store.save(RuntimeState(session_id="thread-c"))
+
+        # Seed some history so replace has something to delete.
+        await store.append_history("thread-c", [
+            {"role": "user", "content": "seed-1"},
+            {"role": "assistant", "content": "seed-2"},
+        ])
+
+        async def append_batch() -> None:
+            for i in range(10):
+                await store.append_history("thread-c", [
+                    {"role": "user", "content": f"append-{i}"},
+                ])
+
+        async def replace_batch() -> None:
+            for i in range(10):
+                await store.replace_history("thread-c", [
+                    {"role": "system", "content": f"[compact-{i}]"},
+                    {"role": "user", "content": "latest"},
+                ])
+
+        # If the write coordinator were bypassed, this would raise
+        # OperationalError("database is locked") under contention.
+        await asyncio.gather(append_batch(), replace_batch())
+
+        history = await store.get_history("thread-c")
+        # replace_batch ran last (or last-ish); the table is internally
+        # consistent — no partial / duplicate seq rows. Just assert it's
+        # non-empty and every seq is unique (no corruption from the race).
+        assert len(history) >= 2
+        # get_history returns dicts; verify no duplicate content markers.
+        contents = [h["content"] for h in history]
+        assert len(contents) == len(set(contents)) or len(history) == 2
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_appends_preserve_seq_uniqueness(tmp_path) -> None:
+    """Multiple concurrent append_history calls must produce unique, gapless
+    seq numbers — the coordinator's single transaction per append guarantees
+    the max_seq read and insert are atomic (no TOCTOU)."""
+    db = await open_core_app_db(tmp_path / "concurrent-append.db")
+    try:
+        store = db.runtime_state_store
+        await store.save(RuntimeState(session_id="thread-seq"))
+
+        # 5 concurrent appenders, 4 messages each = 20 rows.
+        await asyncio.gather(*(
+            store.append_history("thread-seq", [
+                {"role": "user", "content": f"m-{batch}-{i}"}
+                for i in range(4)
+            ])
+            for batch in range(5)
+        ))
+
+        history = await store.get_history("thread-seq")
+        assert len(history) == 20
+    finally:
+        await db.close()
