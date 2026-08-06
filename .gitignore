@@ -38,6 +38,7 @@ lam_projects/
 # OS
 .DS_Store
 Thumbs.db
+Microsoft/Windows/PowerShell/
 
 # Logs
 *.log

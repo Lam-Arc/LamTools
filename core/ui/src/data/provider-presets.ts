@@ -143,6 +143,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
       { modelId: 'xopdeepseekv32', displayName: 'DeepSeek-V3.2', contextWindow: 128000, maxOutputTokens: 32768, thinkingSupported: true, thinkingBudget: 10000, temperature: 0.7 },
       { modelId: 'xopdeepseekv4pro', displayName: 'DeepSeek-V4-Pro', contextWindow: 1000000, maxOutputTokens: 32768, thinkingSupported: true, thinkingBudget: 10000, temperature: 0.7 },
       { modelId: 'xopdeepseekv4flash', displayName: 'DeepSeek-V4-Flash', contextWindow: 1000000, maxOutputTokens: 32768, thinkingSupported: true, thinkingBudget: 10000, temperature: 0.7 },
+      { modelId: 'xopdeepseekv4flash0731', displayName: 'DeepSeek-V4-Flash-0731', contextWindow: 1000000, maxOutputTokens: 32768, thinkingSupported: true, thinkingBudget: 10000, temperature: 0.7 },
       { modelId: 'xopqwen36v35b', displayName: 'Qwen3.6-35B-A3B', contextWindow: 128000, maxOutputTokens: 32768, thinkingSupported: true, thinkingBudget: 10000, temperature: 0.7 },
       { modelId: 'xopqwen35v35b', displayName: 'Qwen3.5-35B-A3B', contextWindow: 128000, maxOutputTokens: 32768, thinkingSupported: true, thinkingBudget: 10000, temperature: 0.7 },
       { modelId: 'xop3qwencodernext', displayName: 'Qwen3-Coder-Next-FP8', contextWindow: 256000, maxOutputTokens: 32768, thinkingSupported: true, thinkingBudget: 10000, temperature: 0.7 },
