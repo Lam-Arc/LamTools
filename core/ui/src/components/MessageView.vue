@@ -1439,6 +1439,8 @@ function beamTick(ts: number) {
 }
 const vBeam = {
   mounted(el: HTMLElement) {
+    // prefers-reduced-motion：不注入光束，标题保持静态（无动效回退）
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
     const beam = document.createElement('span')
     beam.className = 'beam-sweep'
     beam.setAttribute('aria-hidden', 'true')
@@ -3044,9 +3046,34 @@ function agentConclusion(part: MessagePart): string {
   const meta = part.metadata || {}
   const finalAnswer = String(meta.final_answer || '').trim()
   if (finalAnswer) return finalAnswer
+  if (part.status === 'running') {
+    // While the sub-agent runs, part.content only carries the tool-call
+    // placeholder projected from the event label (e.g. "sub_agent"), not real
+    // output — rendering it flashed a bare "<p>sub_agent</p>" that was later
+    // replaced wholesale by the tool_result. Stream the sub-agent's own
+    // latest model text instead (child parts carry full accumulated content);
+    // fall back to an early tool result, else render nothing.
+    const streamed = latestSubLineModelText(part)
+    if (streamed) return streamed
+    const toolResult = String(part.toolResult || '').trim()
+    return toolResult || ''
+  }
   const text = String(part.content || part.toolResult || part.detail || '').trim()
   if (!text) return ''
   return text
+}
+
+function latestSubLineModelText(part: MessagePart): string {
+  const raw = (part.metadata || {}).subLineParts
+  if (!Array.isArray(raw)) return ''
+  for (let index = raw.length - 1; index >= 0; index -= 1) {
+    const item = raw[index] as Record<string, unknown>
+    const partType = String(item.partType || item.part_type || '')
+    if (partType !== 'model_text' && partType !== 'agentMessage' && partType !== 'text') continue
+    const content = String(item.content || '')
+    if (content.trim()) return content.trim()
+  }
+  return ''
 }
 
 function controlTitle(part: MessagePart): string {
