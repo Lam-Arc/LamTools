@@ -1302,6 +1302,7 @@ class TestKernelEvents:
         text_events = [
             event for event in sink.events
             if event.name == "runtime.part" and event.payload.get("part_type") == "text"
+            and event.metadata.get("delivery") != "transient"
         ]
         reasoning_events = [
             event for event in sink.events
@@ -1319,14 +1320,18 @@ class TestKernelEvents:
             if event.name == "runtime.part"
             and event.payload.get("part_type") == "reasoning"
             and event.metadata.get("delivery") == "transient"
+            and "delta" in event.payload
         ]
         assert response is not None
         assert response.content == text
         assert response.thinking == reasoning
         assert text_deltas == list(text)
         assert reasoning_deltas == list(reasoning)
-        assert 2 <= len(text_events) <= 12
-        assert 2 <= len(reasoning_events) <= 12
+        # Streaming progress snapshots (every _STREAM_TEXT_PROGRESS_CHARS) are
+        # transient now — only the final content event is persisted, so the
+        # non-transient part set is exactly the final flush.
+        assert 1 <= len(text_events) <= 3
+        assert 1 <= len(reasoning_events) <= 3
         assert text_events[-1].payload["content"] == text
         assert reasoning_events[-1].payload["content"] == reasoning
 

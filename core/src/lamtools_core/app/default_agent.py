@@ -1769,12 +1769,19 @@ async def _persist_core_event_live(
     )
 
     async def write(db):
-        # Turn-time events are appended without snapshot projection: each
-        # project rewrites the whole thread snapshot (1.3-2.3s on 55MB threads,
-        # measured) and stalls the stream. The snapshot is projected once at
-        # the turn boundary (_persist_run_items) instead; clients render from
-        # the runItem event stream in the meantime.
-        envelopes = await persistence.append_batch(db, run_item_events=run_items, project_snapshot=False)
+        # Streaming part events (runtime.part) are appended without snapshot
+        # projection: each project rewrites the whole thread snapshot
+        # (1.3-2.3s on 55MB threads, measured) and stalls the stream — their
+        # final state is projected once at the turn boundary
+        # (_persist_run_items). Final-state events (usage, status, cancelled,
+        # tool results) still project so interrupted/steered turns keep their
+        # snapshot up to date.
+        project_snapshot = getattr(event, "name", "") != "runtime.part"
+        envelopes = await persistence.append_batch(
+            db,
+            run_item_events=run_items,
+            project_snapshot=project_snapshot,
+        )
         return envelopes
 
     envelopes = await persistence.write(write)
