@@ -69,7 +69,6 @@ CORE_WORKBENCH_OPERATION_NAMES: tuple[str, ...] = (
     "project.agents_md.get",
     "project.agents_md.update",
     "session.rollback",
-    "session.rollback.undo",
 )
 
 

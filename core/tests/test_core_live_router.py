@@ -16,6 +16,7 @@ from lamtools_core.app.event_store import SqlAlchemyAppEventStore
 from lamtools_core.app.live_hub import CoreAppEventGap, CoreAppEventHub
 from lamtools_core.app.live_operations import CoreLiveContext, CoreLiveOperationOutcome
 from lamtools_core.app.live_operations import handle_thread_resume_operation
+from lamtools_core.app.live_protocol import rpc_result
 from lamtools_core.app.live_router import (
     CoreLiveConnection,
     CoreLiveConnectionAdapter,
@@ -219,6 +220,291 @@ def test_core_live_connection_sends_run_item_without_snapshot_reload() -> None:
     asyncio.run(run())
 
 
+def test_core_live_connection_skips_snapshot_for_non_boundary_event() -> None:
+    async def run() -> None:
+        class BoomSessionFactory:
+            async def __aenter__(self):
+                raise AssertionError("snapshot must not be loaded for a non-boundary event")
+
+            async def __aexit__(self, *args):
+                return None
+
+        connection = CoreLiveConnection(
+            DummyWebSocket(),
+            context=SimpleNamespace(session_factory=BoomSessionFactory()),
+        )
+        connection.subscription = asyncio.Queue()
+        await connection.subscription.put({
+            "event_id": "title-1",
+            "thread_id": "thread-1",
+            "seq": 0,
+            "method": "session/updated",
+            "payload": {"session": {"title": "renamed"}},
+            "created_at": "2026-07-15T00:00:00+00:00",
+            "transient": False,
+        })
+        reader = asyncio.create_task(connection._hub_reader())
+        try:
+            notification = await asyncio.wait_for(connection.outbound.get(), timeout=0.1)
+            assert notification["method"] == "session/updated"
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(connection.outbound.get(), timeout=0.02)
+        finally:
+            reader.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await reader
+
+    asyncio.run(run())
+
+
+def test_core_live_connection_sends_throttled_snapshot_for_boundary_event() -> None:
+    async def run() -> None:
+        class SessionFactory:
+            async def __aenter__(self):
+                return object()
+
+            async def __aexit__(self, *args):
+                return None
+
+        class SnapshotStore:
+            def __init__(self):
+                self.loads = 0
+
+            async def load(self, _db, thread_id: str):
+                self.loads += 1
+                return {"thread_id": thread_id, "snapshot_seq": 1}
+
+        snapshot_store = SnapshotStore()
+        connection = CoreLiveConnection(
+            DummyWebSocket(),
+            context=SimpleNamespace(
+                session_factory=SessionFactory,
+                snapshot_store=snapshot_store,
+            ),
+        )
+        connection.subscription = asyncio.Queue()
+        # Two boundary events back-to-back: the first triggers a snapshot, the
+        # second is throttled (SNAPSHOT_MIN_INTERVAL_SECONDS=1s).
+        for seq, event_id in [(0, "queue-1"), (1, "queue-2")]:
+            await connection.subscription.put({
+                "event_id": event_id,
+                "thread_id": "thread-1",
+                "seq": seq,
+                "method": "queue/itemAccepted",
+                "payload": {},
+                "created_at": "2026-07-15T00:00:00+00:00",
+                "transient": False,
+            })
+        reader = asyncio.create_task(connection._hub_reader())
+        try:
+            first = await asyncio.wait_for(connection.outbound.get(), timeout=0.1)
+            assert first["method"] == "queue/itemAccepted"
+            second = await asyncio.wait_for(connection.outbound.get(), timeout=0.1)
+            assert second["method"] == "thread/snapshot"
+            assert second["params"]["thread_id"] == "thread-1"
+            third = await asyncio.wait_for(connection.outbound.get(), timeout=0.1)
+            assert third["method"] == "queue/itemAccepted"
+            # Second boundary event within the throttle window: no snapshot.
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(connection.outbound.get(), timeout=0.02)
+            assert snapshot_store.loads == 1
+        finally:
+            reader.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await reader
+
+    asyncio.run(run())
+
+
+def test_core_live_connection_drops_message_when_outbound_full() -> None:
+    async def run() -> None:
+        websocket = DummyWebSocket()
+        connection = CoreLiveConnection(websocket, context=SimpleNamespace(), outbound_limit=1)
+        await connection.outbound.put({"id": "first"})
+        await connection._send({"id": "second"})
+        assert connection.outbound.qsize() == 1
+        assert websocket.close_calls == []
+        message = connection.outbound.get_nowait()
+        assert message["id"] == "first"
+
+    asyncio.run(run())
+
+
+def _run_item_event(event_id: str, delta: str, *, kind: str = "message") -> dict:
+    return {
+        "event_id": event_id,
+        "thread_id": "thread-1",
+        "seq": 0,
+        "method": "core/runItem",
+        "payload": {
+            "item_id": "item-1",
+            "kind": kind,
+            "event_id": event_id,
+            "payload": {"delta": delta},
+        },
+        "created_at": "2026-07-15T00:00:00+00:00",
+        "transient": False,
+    }
+
+
+def test_core_live_connection_coalesces_run_item_deltas_into_one_message() -> None:
+    async def run() -> None:
+        connection = CoreLiveConnection(DummyWebSocket(), context=SimpleNamespace())
+        connection.subscription = asyncio.Queue()
+        connection._run_item_flush_interval = 1.0  # window open long enough to prove buffering
+        for i in range(5):
+            await connection.subscription.put(_run_item_event(f"delta-{i + 1}", f"chunk{i + 1}"))
+        reader = asyncio.create_task(connection._hub_reader())
+        try:
+            # No message may hit the wire while the coalescing window is open.
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(connection.outbound.get(), timeout=0.05)
+            await connection._flush_run_item_buffer()
+            notification = await asyncio.wait_for(connection.outbound.get(), timeout=0.1)
+            assert notification["method"] == "core/runItem"
+            params = notification["params"]
+            value = params["payload"]
+            assert value["item_id"] == "item-1"
+            assert value["kind"] == "message"
+            assert value["payload"]["delta"] == "chunk1chunk2chunk3chunk4chunk5"
+            assert value["event_id"] == "delta-1"
+            assert value["_coalesced_event_ids"] == [f"delta-{i}" for i in range(1, 6)]
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(connection.outbound.get(), timeout=0.02)
+        finally:
+            reader.cancel()
+            if connection._run_item_flush_task is not None:
+                connection._run_item_flush_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await reader
+
+    asyncio.run(run())
+
+
+def test_core_live_connection_sends_non_delta_run_item_immediately_after_buffered_deltas() -> None:
+    async def run() -> None:
+        connection = CoreLiveConnection(DummyWebSocket(), context=SimpleNamespace())
+        connection.subscription = asyncio.Queue()
+        connection._run_item_flush_interval = 10.0  # never flushes on its own
+        await connection.subscription.put(_run_item_event("delta-1", "hello"))
+        await connection.subscription.put(_run_item_event("delta-2", " world"))
+        await connection.subscription.put({
+            "event_id": "result-1",
+            "thread_id": "thread-1",
+            "seq": 0,
+            "method": "core/runItem",
+            "payload": {"item_id": "item-1", "kind": "tool_result", "payload": {"ok": True}},
+            "created_at": "2026-07-15T00:00:00+00:00",
+            "transient": False,
+        })
+        reader = asyncio.create_task(connection._hub_reader())
+        try:
+            merged = await asyncio.wait_for(connection.outbound.get(), timeout=0.1)
+            assert merged["params"]["payload"]["payload"]["delta"] == "hello world"
+            tool = await asyncio.wait_for(connection.outbound.get(), timeout=0.1)
+            assert tool["params"]["payload"]["kind"] == "tool_result"
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(connection.outbound.get(), timeout=0.02)
+        finally:
+            reader.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await reader
+
+    asyncio.run(run())
+
+
+def test_core_live_connection_flushes_run_item_buffer_before_other_events() -> None:
+    async def run() -> None:
+        class SessionFactory:
+            async def __aenter__(self):
+                return object()
+
+            async def __aexit__(self, *args):
+                return None
+
+        class SnapshotStore:
+            async def load(self, _db, thread_id: str):
+                return {"thread_id": thread_id, "snapshot_seq": 1}
+
+        connection = CoreLiveConnection(
+            DummyWebSocket(),
+            context=SimpleNamespace(
+                session_factory=SessionFactory,
+                snapshot_store=SnapshotStore(),
+            ),
+        )
+        connection.subscription = asyncio.Queue()
+        connection._run_item_flush_interval = 10.0  # never flushes on its own
+        await connection.subscription.put(_run_item_event("delta-1", "partial"))
+        await connection.subscription.put({
+            "event_id": "interrupt-1",
+            "thread_id": "thread-1",
+            "seq": 0,
+            "method": "turn/interrupted",
+            "payload": {"turn_id": "turn-1"},
+            "created_at": "2026-07-15T00:00:00+00:00",
+            "transient": False,
+        })
+        reader = asyncio.create_task(connection._hub_reader())
+        try:
+            merged = await asyncio.wait_for(connection.outbound.get(), timeout=0.1)
+            assert merged["method"] == "core/runItem"
+            assert merged["params"]["payload"]["payload"]["delta"] == "partial"
+            interrupt = await asyncio.wait_for(connection.outbound.get(), timeout=0.1)
+            assert interrupt["method"] == "turn/interrupted"
+            snapshot = await asyncio.wait_for(connection.outbound.get(), timeout=0.1)
+            assert snapshot["method"] == "thread/snapshot"
+        finally:
+            reader.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await reader
+
+    asyncio.run(run())
+
+
+def test_core_live_connection_does_not_resend_snapshot_after_rpc_response() -> None:
+    async def run() -> None:
+        class Hub:
+            def subscribe(self, _thread_id: str):
+                return asyncio.Queue()
+
+            def unsubscribe(self, _thread_id: str, _subscription) -> None:
+                return None
+
+        class Host:
+            def operation_handlers(self):
+                return set()
+
+            async def execute(self, method, *, request_id, params, context):
+                return CoreLiveOperationOutcome(
+                    response=rpc_result(request_id, {"snapshot": {"thread_id": "thread-1", "snapshot_seq": 1}})
+                )
+
+        class Operations:
+            def has(self, method):
+                return True
+
+        connection = CoreLiveConnection(
+            DummyWebSocket(),
+            context=SimpleNamespace(host=Host(), operations=Operations(), hub=Hub()),
+        )
+        connection.initialized = True
+        await connection.handle_raw({
+            "id": 1,
+            "method": "thread.read",
+            "params": {"thread_id": "thread-1"},
+        })
+        response = await asyncio.wait_for(connection.outbound.get(), timeout=0.1)
+        assert response["id"] == 1
+        assert response["result"]["snapshot"]["thread_id"] == "thread-1"
+        # The response already carries result.snapshot — no duplicate
+        # thread/snapshot notification may follow.
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(connection.outbound.get(), timeout=0.02)
+
+    asyncio.run(run())
+
+
 def test_core_live_resume_response_exposes_page_cursor() -> None:
     class SessionFactory:
         async def __aenter__(self):
@@ -300,21 +586,19 @@ def test_core_live_router_accepts_turn_start_over_websocket(tmp_path):
             },
         })
         accepted = None
-        snapshot = None
         for _ in range(9):
             message = websocket.receive_json()
             if message.get("id") == 2:
                 accepted = message
-            elif message.get("method") == "thread/snapshot":
-                snapshot = message
-            if accepted is not None and snapshot is not None:
+            if accepted is not None:
                 break
 
         assert accepted is not None
         assert accepted["result"]["snapshot"]["status"] == "running"
-        assert snapshot is not None
-        assert snapshot["method"] == "thread/snapshot"
-        assert snapshot["params"]["thread_id"] == "thread-1"
+        assert accepted["result"]["snapshot"]["thread_id"] == "thread-1"
+        # No separate thread/snapshot notification: the RPC response already
+        # carries result.snapshot, and re-sending it doubled snapshot traffic.
+        assert all(message.get("method") != "thread/snapshot" for message in [accepted])
 
 
 def test_core_live_router_accepts_initialized_ack_from_core_client(tmp_path):

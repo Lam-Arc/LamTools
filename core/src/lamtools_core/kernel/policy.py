@@ -15,7 +15,17 @@ class LoopPolicy:
     """
 
     model_timeout_seconds: float = 360.0
+    # Transport-level retries (503/provider-busy/rate-limit/network). These
+    # are transient infra errors where high retry counts are desirable — a
+    # busy provider may recover after many backoffs. Bounded by
+    # model_timeout_seconds per attempt so the worst case is finite.
     model_retries: int = 100
+    # Empty-response retries: when the model returns a reply with NO content
+    # and NO tool calls (e.g. only thinking, or a bare stop), retry a bounded
+    # number of times before accepting the empty result. Unlike transport
+    # retries, this is not an infra blip — too many retries just wastes
+    # tokens, so the default is small.
+    empty_response_retries: int = 3
     model_stream_idle_timeout_seconds: float | None = 120.0
     tool_timeout_seconds: float | None = None
     emit_debug_events: bool = False

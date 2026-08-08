@@ -43,7 +43,6 @@ from .base_agent import (
     default_core_agent_plugin_roots,
 )
 from .default_agent import CoreAgentPaths, CoreAgentSpec, create_core_agent_operations
-from .approval_continuation import CoreApprovalContinuationCoordinator, build_core_approval_operation
 from .event_store import AppEventEnvelope, AppEventInput, CORE_RUN_ITEM_METHOD, SqlAlchemyAppEventStore
 from .persistence_host import AppPersistenceHost
 from .live_hub import CoreAppEventHub
@@ -93,7 +92,8 @@ from .project_store import (
 from .project_context import ProjectContextLoader, DEFAULT_PROJECT_CONTEXT_FILES
 from .turn_acceptance import (
     CoreAppEventSpec,
-    TURN_ACCEPT_DEDUPE_METHODS,
+    QUEUE_ITEM_ACCEPTED_METHODS,
+    TURN_ACCEPTED_METHODS,
     TurnAcceptancePlan,
     build_cancelled_turn_event,
     build_turn_acceptance_plan,
@@ -117,7 +117,6 @@ __all__ = [
     "CoreAppEventSpec",
     "CoreAppDb",
     "CoreAppServerClient",
-    "CoreApprovalContinuationCoordinator",
     "CliLiveFormatter",
     "CliLiveWatchResult",
     "OutputChunk",
@@ -152,9 +151,10 @@ __all__ = [
     "OperationCatalog",
     "OperationRequest",
     "OperationResult",
+    "QUEUE_ITEM_ACCEPTED_METHODS",
     "SqlAlchemyAppEventStore",
     "SqlAlchemyThreadSnapshotStore",
-    "TURN_ACCEPT_DEDUPE_METHODS",
+    "TURN_ACCEPTED_METHODS",
     "TurnAcceptancePlan",
     "TurnInput",
     "TurnResult",
@@ -167,7 +167,6 @@ __all__ = [
     "build_queue_guidance_plan",
     "build_turn_acceptance_plan",
     "build_member_operation_catalog",
-    "build_core_approval_operation",
     "create_app",
     "create_core_agent_operations",
     "core_events_to_run_items",

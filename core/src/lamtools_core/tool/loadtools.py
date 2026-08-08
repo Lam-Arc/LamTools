@@ -117,7 +117,7 @@ def default_load_tools() -> LoadTools:
             tools=[
                 "read_file", "list_dir", "search_files", "search_content",
                 "web_search", "web_fetch", "git_status", "git_diff",
-                "load_skill", "browser_check", "sub_agent",
+                "load_skill", "sub_agent",
             ],
         ),
         "execute": LoadToolMode(
@@ -128,7 +128,7 @@ def default_load_tools() -> LoadTools:
             description="工作流模式：操作工作流图与查阅资料，不直接改项目文件",
             tools=[
                 "read_file", "list_dir", "search_files", "search_content",
-                "web_fetch", "browser_check", "load_skill", "sub_agent",
+                "web_fetch", "load_skill", "sub_agent",
                 "goal", "arrange",
                 "workflow_graph", "workflow_add_node", "workflow_connect",
                 "workflow_delete_node", "workflow_update_node",

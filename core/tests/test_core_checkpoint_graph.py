@@ -31,7 +31,7 @@ async def _runtime(
 
 
 @pytest.mark.asyncio
-async def test_restore_creates_a_new_graph_branch_without_deleting_later_nodes(tmp_path: Path) -> None:
+async def test_restore_creates_a_new_branch_and_prunes_the_abandoned_future(tmp_path: Path) -> None:
     work_root = tmp_path / "workspace"
     work_root.mkdir()
     (work_root / "state.txt").write_text("one", encoding="utf-8")
@@ -75,12 +75,16 @@ async def test_restore_creates_a_new_graph_branch_without_deleting_later_nodes(t
         graph = await coordinator.graph("session-graph")
         nodes = {node.id: node for node in graph.nodes}
 
-        assert nodes[second.id].parent_checkpoint_id == first.id
-        assert nodes[restored.derived_checkpoint_id].parent_checkpoint_id == first.id
-        assert nodes[restored.derived_checkpoint_id].edge_kind == "rollback"
-        assert nodes[restored.derived_checkpoint_id].reason == "rollback_all"
-        assert nodes[third.id].parent_checkpoint_id == restored.derived_checkpoint_id
-        assert second.id in nodes
+        undo = nodes.get(restored.undo_checkpoint_id)
+        derived = nodes.get(restored.derived_checkpoint_id)
+        assert undo is not None and undo.parent_checkpoint_id == first.id
+        assert derived is not None and derived.edge_kind == "rollback"
+        assert derived.reason == "rollback_all"
+        assert derived.parent_checkpoint_id == undo.id
+        assert nodes[third.id].parent_checkpoint_id == derived.id
+        # Rolling back to `first` abandons the old future (`second`) — it is
+        # pruned from the main line and can no longer be revisited.
+        assert second.id not in nodes
         assert graph.heads["session-graph"] == third.id
         assert (work_root / "state.txt").read_text(encoding="utf-8") == "one"
     finally:
@@ -96,7 +100,7 @@ async def test_restore_creates_a_new_graph_branch_without_deleting_later_nodes(t
     ],
 )
 @pytest.mark.asyncio
-async def test_restore_and_undo_apply_only_the_requested_scope(
+async def test_restore_applies_only_the_requested_scope(
     tmp_path: Path,
     scope: str,
     expected_history: str,
@@ -135,18 +139,10 @@ async def test_restore_and_undo_apply_only_the_requested_scope(
         assert restored.restored_paths == (() if scope == "conversation" else ("state.txt",))
         graph = await coordinator.graph("session-scope")
         derived = next(node for node in graph.nodes if node.id == restored.derived_checkpoint_id)
+        undo = next(node for node in graph.nodes if node.id == restored.undo_checkpoint_id)
         assert derived.reason == f"rollback_{scope}"
-        assert derived.parent_checkpoint_id == checkpoint.id
-
-        undone = await coordinator.undo(restored.operation_id)
-
-        assert undone.scope == scope
-        assert await db.runtime_state_store.get_history("session-scope") == [
-            {"role": "user", "content": "after"}
-        ]
-        # Lazy capture: undo restores the conversation, but the workspace keeps
-        # whatever restore left (no "after" snapshot exists to go back to).
-        assert state_file.read_text(encoding="utf-8") == expected_file
+        assert derived.parent_checkpoint_id == undo.id
+        assert undo.parent_checkpoint_id == checkpoint.id
     finally:
         await db.close()
 

@@ -11,7 +11,6 @@
         "git_status",
         "git_diff",
         "load_skill",
-        "browser_check",
         "sub_agent"
       ]
     },
@@ -25,13 +24,9 @@
         "git_status",
         "git_diff",
         "load_skill",
-        "browser_check",
         "sub_agent",
         "write_file",
         "edit_file",
-        "write_spreadsheet",
-        "document_normalize",
-        "run_tests",
         "arrange",
         "goal"
       ]

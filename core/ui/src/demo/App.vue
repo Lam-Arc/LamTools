@@ -187,18 +187,41 @@
         @scroll.passive="threadScroll.handleScroll"
         @wheel.passive="threadScroll.handleWheel"
       >
+        <button
+          v-if="hasMoreHistory"
+          type="button"
+          class="thread-load-earlier"
+          @click="loadEarlierMessages"
+        >
+          加载更早消息（共 {{ totalMessages }} 条）
+        </button>
         <ChatThread
           :messages="messages"
           :process-expanded-ids="processExpandedIds"
           :typing-message-ids="typingMessageIds"
+          :message-actions="true"
           @toggle-process="toggleProcess"
           @decision-select="approvalController.handleDecision"
+          @fork-message="handleForkMessage"
+          @rollback-message="handleRollbackMessage"
         />
         <div v-if="pendingPlaceholder" class="user-row">
           <div class="user-stack">
             <div class="user-bubble user-bubble--placeholder">{{ pendingPlaceholder.content }}</div>
           </div>
         </div>
+        <Transition name="thread-jump-latest">
+          <button
+            v-if="!threadScroll.atBottom.value"
+            type="button"
+            class="thread-jump-latest"
+            aria-label="回到最新消息"
+            @click="threadScroll.scrollToBottom(true)"
+          >
+            <span class="thread-jump-latest__arrow" aria-hidden="true">↓</span>
+            回到最新
+          </button>
+        </Transition>
       </section>
     </template>
 
@@ -389,8 +412,11 @@
                     :messages="messages"
                     :process-expanded-ids="processExpandedIds"
                     :typing-message-ids="typingMessageIds"
+                    :message-actions="true"
                     @toggle-process="toggleProcess"
                     @decision-select="approvalController.handleDecision"
+                    @fork-message="handleForkMessage"
+                    @rollback-message="handleRollbackMessage"
                   />
                 </div>
               </div>
@@ -409,8 +435,11 @@
               :messages="messages"
               :process-expanded-ids="processExpandedIds"
               :typing-message-ids="typingMessageIds"
+              :message-actions="true"
               @toggle-process="toggleProcess"
               @decision-select="approvalController.handleDecision"
+              @fork-message="handleForkMessage"
+              @rollback-message="handleRollbackMessage"
             />
           </div>
         </section>
@@ -435,7 +464,7 @@
           :active-turn="rollbackActiveTurn"
           :turn-prompts="turnPrompts"
           @restored="refreshAfterRollback"
-          @undone="refreshAfterRollback"
+          @graph-loaded="onCheckpointGraphLoaded"
         />
       </template>
     </template>
@@ -702,7 +731,8 @@ async function stageSave(payload: { id: string; content: string }) {
     await projectClient.writeFile(projectId, tab.path, payload.content)
     stagePaneRef.value?.onSaved()
   } catch {
-    // 保存失败，保持 dirty 状态让用户重试
+    // 保存失败：复位 saving 让用户可重试，保持 dirty 状态提示未保存
+    stagePaneRef.value?.resetSaving()
   }
 }
 
@@ -772,6 +802,21 @@ const threadScroll = useCoreAutoFollowScroll(threadScrollEl)
 const COMPOSER_MAX_ROWS = 5
 let threadResizeObserver: ResizeObserver | null = null
 let configClient: CoreAppServerClient | null = null
+
+async function loadEarlierMessages(): Promise<void> {
+  const el = threadScrollEl.value
+  const prevScrollTop = el?.scrollTop ?? 0
+  const prevHeight = el?.scrollHeight ?? 0
+  loadMoreHistory()
+  await nextTick()
+  // Keep the viewport anchored: new history prepends above, so shift the
+  // scroll position by the height delta. The ResizeObserver's follow is
+  // gated by autoFollow (false while the user is not at the bottom), so it
+  // cannot yank us back down.
+  if (el && el.scrollHeight > prevHeight) {
+    el.scrollTop = prevScrollTop + (el.scrollHeight - prevHeight)
+  }
+}
 
 const defaultModel = computed(() => (
   availableModels.value.find((model) => model.id === defaultModelId.value) || null
@@ -1017,6 +1062,7 @@ const hasComposerCommandTokens = computed(() => (
 ))
 
 const approvalControllerRef = shallowRef<ReturnType<typeof useCoreApprovalController>>()
+const { activeGoal, goalError, refreshGoal, handleCancelGoal } = useCoreGoals({ activeSessionId })
 const projectionController = useCoreWorkbenchProjectionController({
   snapshot,
   activeThreadId: activeSessionId,
@@ -1027,14 +1073,13 @@ const projectionController = useCoreWorkbenchProjectionController({
   shallowThinkingPending: shallowThinkingEnabled,
   source: 'core_app_server',
   onStatusChange: ({ status }) => syncActiveSessionStatus(status),
+  onTurnFinished: () => void refreshGoal(activeSessionId.value, true),
 })
-const { messages, processExpandedIds, toggleProcess } = projectionController
+const { messages, processExpandedIds, toggleProcess, hasMoreHistory, totalMessages, loadMoreHistory } = projectionController
 
 const typingMessageIds = ref(new Set<string>())
 const pendingPlaceholder = ref<{ id: string; content: string } | null>(null)
 const stepGroups = computed(() => buildCurrentTurnChecklistGroups(messages.value))
-
-const { activeGoal, goalError, refreshGoal, handleCancelGoal } = useCoreGoals({ activeSessionId })
 
 const turnPrompts = computed(() => {
   const map: Record<string, string> = {}
@@ -1321,7 +1366,7 @@ async function selectSession(id: string) {
   setRuntimeStatus('', 0)
   await connectLive(id)
   await liveComposerController.loadCommandCatalog(id)
-  await refreshGoal(id)
+  await refreshGoal(id, true)
   await threadScroll.scrollToBottom(true)
 }
 
@@ -1330,6 +1375,74 @@ async function refreshAfterRollback() {
   if (!sessionId) return
   await refreshSessions()
   await selectSession(sessionId)
+}
+
+// ── Assistant message actions: fork / roll back at a turn's checkpoint ──
+const checkpointsByTurnId = ref<Record<string, string>>({})
+
+function onCheckpointGraphLoaded(nodes: Array<{
+  id: string
+  turn_id?: string
+  actor_kind?: string
+  reason?: string
+}>) {
+  const map: Record<string, string> = {}
+  for (const node of nodes) {
+    const turnId = String(node.turn_id || '').trim()
+    // Only the "before user prompt" node of a main-session turn maps 1:1 to a
+    // user message; sub-agent / manual / rollback-derived nodes are excluded.
+    if (turnId && node.actor_kind === 'main' && node.reason === 'before_user_prompt') {
+      map[turnId] = node.id
+    }
+  }
+  checkpointsByTurnId.value = map
+}
+
+async function handleForkMessage(payload: { turnId: string; content: string }) {
+  const sessionId = activeSessionId.value
+  const checkpointId = checkpointsByTurnId.value[payload.turnId]
+  if (!sessionId || !checkpointId) {
+    composerErrorText.value = '该消息没有可用的分叉节点'
+    return
+  }
+  if (rollbackActiveTurn.value) {
+    composerErrorText.value = '任务运行中，请先停止任务再分叉'
+    return
+  }
+  try {
+    const result = await requestConfigOperation('session.fork', {
+      session_id: sessionId,
+      checkpoint_id: checkpointId,
+    })
+    const forkedSessionId = String(result?.session_id || '')
+    await refreshSessions()
+    if (forkedSessionId) await selectSession(forkedSessionId)
+  } catch (error) {
+    composerErrorText.value = error instanceof Error ? error.message : String(error)
+  }
+}
+
+async function handleRollbackMessage(payload: { turnId: string; content: string }) {
+  const sessionId = activeSessionId.value
+  const checkpointId = checkpointsByTurnId.value[payload.turnId]
+  if (!sessionId || !checkpointId) {
+    composerErrorText.value = '该消息没有对应的回退节点'
+    return
+  }
+  if (rollbackActiveTurn.value) {
+    composerErrorText.value = '任务运行中，请先停止任务再回退'
+    return
+  }
+  try {
+    await requestConfigOperation('session.checkpoints.restore', {
+      session_id: sessionId,
+      checkpoint_id: checkpointId,
+      scope: 'all',
+    })
+    await refreshAfterRollback()
+  } catch (error) {
+    composerErrorText.value = error instanceof Error ? error.message : String(error)
+  }
 }
 
 async function connectLive(threadId: string) {
@@ -1921,23 +2034,20 @@ async function loadModelOptions() {
 
 function syncThreadResizeObserver() {
   if (typeof ResizeObserver === 'undefined') return
-  // Persist the observer instead of recreating on every call to avoid
-  // missing resize events during the disconnect/reconnect gap.
-  if (!threadResizeObserver) {
-    threadResizeObserver = new ResizeObserver(() => {
-      void threadScroll.scrollToBottom()
-    })
-    const element = threadScrollEl.value
-    if (!element) return
-    threadResizeObserver.observe(element)
-  }
-  // Ensure direct children of .thread are observed (e.g. .chat-thread).
-  // New children may appear if the DOM structure changes.
+  // One-shot setup: the observer callback already scrolls to bottom on every
+  // content height change, so per-message watchers no longer need to scroll.
+  // Per-frame re-observation is pointless — the observer instance and its
+  // targets persist for the lifetime of the app.
+  if (threadResizeObserver) return
+  threadResizeObserver = new ResizeObserver(() => {
+    void threadScroll.scrollToBottom()
+  })
   const element = threadScrollEl.value
-  if (!element || !threadResizeObserver) return
+  if (!element) return
+  threadResizeObserver.observe(element)
+  // Ensure direct children of .thread are observed (e.g. .chat-thread).
   for (const child of Array.from(element.children)) {
     if (child instanceof HTMLElement) {
-      // observe() is idempotent — already-observed elements are a no-op
       threadResizeObserver.observe(child)
     }
   }
@@ -1980,17 +2090,13 @@ watch(composerText, () => {
 })
 
 watch(messages, async (newVal, oldVal) => {
-  await nextTick()
-  syncThreadResizeObserver()
-  await threadScroll.scrollToBottom()
-  await nextTick()
-
   const oldIds = new Set((oldVal || []).map(m => m.id))
   const newUserMsgs = (newVal || []).filter(m => !oldIds.has(m.id) && m.role === 'user')
   for (const msg of newUserMsgs) {
     typingMessageIds.value.add(msg.id)
     pendingPlaceholder.value = null
   }
+  syncThreadResizeObserver()
 }, { deep: true })
 
 watch([activeSessionId, messages, latestStatus], ([threadId]) => {
@@ -2385,6 +2491,96 @@ onUnmounted(() => {
 .wf-node-info-block code {
   font-size: 11px;
   word-break: break-all;
+}
+
+/* ── "回到最新" floating affordance ──
+   Anchored to the bottom of the .thread scroll container via sticky
+   positioning (the .workspace-main ancestor is itself position:fixed,
+   so a fixed-positioned button would escape the content column). Stays
+   below the composer (z-edge-trigger < z-composer) and follows the
+   control-area surface recipe per the design spec. */
+.thread-load-earlier {
+  --text: var(--theme-control-text);
+  width: fit-content;
+  margin: var(--space-3, 12px) auto var(--space-2, 8px);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+  border-radius: var(--radius-sm);
+  background: var(--theme-control-background);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 560;
+  line-height: 1;
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  transition: background .18s ease, transform .18s ease;
+}
+.thread-load-earlier:hover {
+  background: color-mix(in srgb, var(--text) var(--alpha-hover, 8%), var(--theme-control-background));
+}
+.thread-load-earlier:active {
+  background: color-mix(in srgb, var(--text) var(--alpha-active, 12%), var(--theme-control-background));
+  transform: translateY(1px);
+}
+.thread-jump-latest {
+  --text: var(--theme-control-text);
+  position: sticky;
+  bottom: var(--space-2, 8px);
+  justify-self: center;
+  z-index: var(--z-edge-trigger, 35);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+  border-radius: var(--radius-sm);
+  background: var(--theme-control-background);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 560;
+  line-height: 1;
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  transition: background .18s ease, transform .18s ease;
+}
+.thread-jump-latest:hover {
+  background: color-mix(in srgb, var(--text) var(--alpha-hover, 8%), var(--theme-control-background));
+}
+.thread-jump-latest:active {
+  background: color-mix(in srgb, var(--text) var(--alpha-active, 12%), var(--theme-control-background));
+  transform: translateY(1px);
+}
+.thread-jump-latest__arrow {
+  font-size: 13px;
+  line-height: 1;
+}
+/* enter from just below; leave by fading. Reduced-motion drops the slide. */
+.thread-jump-latest-enter-active,
+.thread-jump-latest-leave-active {
+  transition: opacity .18s ease, transform .18s ease;
+}
+.thread-jump-latest-enter-from,
+.thread-jump-latest-leave-to {
+  opacity: 0;
+  transform: translateY(8px);
+}
+@media (prefers-reduced-motion: reduce) {
+  .thread-jump-latest,
+  .thread-jump-latest:hover,
+  .thread-jump-latest:active,
+  .thread-jump-latest-enter-active,
+  .thread-jump-latest-leave-active {
+    transition: opacity .18s ease;
+    transform: none;
+  }
+  .thread-jump-latest-enter-from,
+  .thread-jump-latest-leave-to {
+    transform: none;
+  }
 }
 
 </style>

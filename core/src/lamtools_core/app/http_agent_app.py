@@ -8,6 +8,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 import logging
+from urllib.parse import quote
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -166,6 +167,16 @@ class _MemberDefaultsHooks(DefaultCoreLiveMemberHooks):
         return materialized
 
 
+def _sqlite_uri(config_db_path: str | Path, *, query: str = "mode=ro") -> str:
+    """Build a URL-encoded sqlite file URI.
+
+    Mirrors cli._connect_config_db: paths with spaces or other reserved
+    characters must be percent-encoded or sqlite will reject/misread the URI.
+    """
+    raw_path = str(Path(config_db_path).resolve()).replace("\\", "/")
+    return f"file:{quote(raw_path, safe=':/')}?{query}"
+
+
 def create_core_agent_http_app(
     *,
     agent_spec: CoreAgentSpec | None = None,
@@ -295,13 +306,14 @@ def create_core_agent_http_app(
         goal_manager = GoalManager(core_db_handle.goal_store)
         arrange_manager = ArrangeManager(core_db_handle.arrange_store)
 
-        config_engine = create_async_engine(f"sqlite+aiosqlite:///{config_db_path}")
+        _config_db_uri_path = quote(str(Path(config_db_path).resolve()).replace("\\", "/"), safe=":/")
+        config_engine = create_async_engine(f"sqlite+aiosqlite:///{_config_db_uri_path}")
         config_session_factory = async_sessionmaker(config_engine, expire_on_commit=False)
 
         def _resolve_model_display(model_id: str) -> str:
             try:
                 import sqlite3
-                con = sqlite3.connect(f"file:{config_db_path}?mode=ro", uri=True)
+                con = sqlite3.connect(_sqlite_uri(config_db_path, query="mode=ro"), uri=True)
                 try:
                     row = con.execute(
                         "SELECT m.model_id, m.display_name, p.name as provider_name "

@@ -558,11 +558,11 @@ const permissionMode = computed(() => props.permissionMode || 'full_edit')
 const permissionTiers = [
   {
     id: 'read_only' as const, label: '只读调查',
-    tools: ['read_file', 'list_dir', 'search_files', 'search_content', 'web_search', 'web_fetch', 'git_status', 'git_diff', 'load_skill', 'browser_check', 'sub_agent'],
+    tools: ['read_file', 'list_dir', 'search_files', 'search_content', 'web_search', 'web_fetch', 'git_status', 'git_diff', 'load_skill', 'sub_agent'],
   },
   {
     id: 'limited_edit' as const, label: '有限编辑',
-    tools: ['read_file', 'list_dir', 'search_files', 'search_content', 'web_search', 'web_fetch', 'git_status', 'git_diff', 'load_skill', 'browser_check', 'sub_agent', 'write_file', 'edit_file', 'write_spreadsheet', 'document_normalize', 'run_tests'],
+    tools: ['read_file', 'list_dir', 'search_files', 'search_content', 'web_search', 'web_fetch', 'git_status', 'git_diff', 'load_skill', 'sub_agent', 'write_file', 'edit_file'],
   },
   {
     id: 'full_edit' as const, label: '完全编辑',

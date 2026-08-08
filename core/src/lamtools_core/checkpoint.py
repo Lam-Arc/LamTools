@@ -146,13 +146,20 @@ _WORKSPACE_LOCKS: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
 _SKIPPED_DIRECTORIES = {".git", ".hg", ".svn", "node_modules", "__pycache__"}
 
 _logger = logging.getLogger(__name__)
+# Files larger than this are never copied into checkpoint blob storage (full
+# copies of huge files on every tool edit would balloon disk usage).
+MAX_BACKUP_FILE_BYTES = 200 * 1024 * 1024  # 200 MB
+# Each session keeps only this many most-recent nodes on its main line.
+# Checkpoints created by branching (rolling back then continuing) fall off
+# the main line and are pruned together with older nodes — a branch cannot be
+# revisited once a newer turn has been accepted.
+MAX_CHECKPOINTS_PER_SESSION = 6
 CHECKPOINT_OPERATION_NAMES = (
     "session.checkpoints.create",
     "session.checkpoints.graph",
     "session.checkpoints.list",
     "session.checkpoints.restore",
     "session.rollback",
-    "session.rollback.undo",
     "session.fork",
 )
 
@@ -187,6 +194,10 @@ class CoreCheckpointCoordinator:
             lock = asyncio.Lock()
             _WORKSPACE_LOCKS[key] = lock
         self._workspace_lock = lock
+        # Most-recent checkpoint ref for this workspace, so backup_file can
+        # append to its manifest. Initialised to None so the `if ref is None`
+        # early-return in backup_file works before any save() has run.
+        self._latest_checkpoint: CheckpointRef | None = None
 
     async def begin_turn(
         self,
@@ -235,13 +246,28 @@ class CoreCheckpointCoordinator:
         """Back up a single file before it is modified by a tool.
 
         Reads the current content, writes a blob, and appends the file entry
-        to the latest checkpoint's workspace manifest.
+        to the latest checkpoint's workspace manifest. Files larger than
+        ``MAX_BACKUP_FILE_BYTES`` are skipped so a huge file being touched by
+        a tool cannot balloon blob storage (full copies of a multi-GB file on
+        every edit).
         """
         await self._ensure_schema()
         file_path = Path(path).resolve()
         if not file_path.is_file():
             return
         relative = str(file_path.relative_to(self.work_root).as_posix()) if _is_within(file_path, self.work_root) else file_path.as_posix()
+        try:
+            size = file_path.stat().st_size
+        except OSError:
+            return
+        if size > MAX_BACKUP_FILE_BYTES:
+            _logger.warning(
+                "checkpoint backup skipped (file too large: %.1f MB > %d MB): %s",
+                size / 1e6,
+                MAX_BACKUP_FILE_BYTES / 1e6,
+                relative,
+            )
+            return
         data = file_path.read_bytes()
         digest = hashlib.sha256(data).hexdigest()
         blob_root = self.storage_root / "blobs"
@@ -390,6 +416,11 @@ class CoreCheckpointCoordinator:
                 reason="before_rollback",
                 label="回滚前自动存档",
                 edge_kind="checkpoint",
+                # Attach the pre-rollback snapshot to the target node: the
+                # mainline prune keeps only the newest 6 nodes per session, and
+                # a tail-attached undo would push the rollback target out of
+                # the window before the derived node can link to it.
+                parent_checkpoint_id=target.id,
             )
             operation_id = uuid.uuid4().hex
             await self._create_operation(operation_id, target, undo.id, restore_scope)
@@ -411,7 +442,12 @@ class CoreCheckpointCoordinator:
                     reason=f"rollback_{restore_scope}",
                     label=_restore_label(restore_scope),
                     edge_kind="rollback",
-                    parent_checkpoint_id=target.id,
+                    # Link the post-rollback node under the pre-rollback undo
+                    # node so the mainline chain reads derived -> undo -> target.
+                    # (A sibling link straight to target would let the prune
+                    # drop the undo node, along with the restore operation that
+                    # references it.)
+                    parent_checkpoint_id=undo.id,
                 )
                 await self._complete_operation(operation_id, derived.id)
             except BaseException as exc:
@@ -445,21 +481,6 @@ class CoreCheckpointCoordinator:
             scope=scope,
             requesting_session_id=requesting_session_id,
         )
-
-    async def undo(self, operation_id: str) -> RestoreResult:
-        await self._ensure_schema()
-        async with self.session_factory() as db:
-            operation = await db.get(CoreRestoreOperation, operation_id)
-            if operation is None:
-                raise LookupError("Restore operation not found")
-            if operation.status != "committed":
-                raise ValueError("Only a committed restore can be undone")
-            undo_checkpoint_id = operation.undo_checkpoint_id
-            scope = _normalize_restore_scope(operation.scope)
-        return await self.load(undo_checkpoint_id, scope=scope)
-
-    async def undo_restore(self, operation_id: str) -> RestoreResult:
-        return await self.undo(operation_id)
 
     async def fork(
         self,
@@ -578,9 +599,79 @@ class CoreCheckpointCoordinator:
             )
             db.add(row)
             await db.flush()
+            await self._prune_mainline(db, root_session_id=root_session_id, latest_id=checkpoint_id)
             return _checkpoint_ref(row)
 
         return await self.write_coordinator.run(write)
+
+    async def _prune_mainline(
+        self,
+        db: Any,
+        *,
+        root_session_id: str,
+        latest_id: str,
+    ) -> None:
+        """Keep only the most recent ``MAX_CHECKPOINTS_PER_SESSION`` nodes on
+        the session's main line.
+
+        The main line is the chain ``latest -> parent -> ...``. Anything else
+        (older nodes and branches created by rolling back then continuing)
+        is deleted, and surviving nodes whose parent was pruned are re-linked
+        to the nearest surviving ancestor. Restore operations referencing
+        pruned checkpoints are deleted too.
+        """
+        rows = list((await db.execute(
+            select(CoreCheckpoint).where(CoreCheckpoint.root_session_id == root_session_id)
+        )).scalars())
+        if not rows:
+            return
+        by_id = {row.id: row for row in rows}
+
+        # Walk the main line from the newest node backwards.
+        chain: list[str] = []
+        seen: set[str] = set()
+        node_id = latest_id
+        while node_id and node_id not in seen:
+            seen.add(node_id)
+            chain.append(node_id)
+            node_id = by_id[node_id].parent_checkpoint_id if node_id in by_id else ""
+        keep = set(chain[:MAX_CHECKPOINTS_PER_SESSION])
+        deleted = {row.id for row in rows if row.id not in keep}
+        if not deleted:
+            return
+        deleted_sorted = sorted(deleted)
+
+        # Re-link surviving nodes (in this group or referencing pruned nodes
+        # across groups, e.g. a fork whose parent got pruned) to the nearest
+        # surviving ancestor on their parent chain.
+        def nearest_surviving_ancestor(from_id: str) -> str:
+            guard = 0
+            cursor = from_id
+            while cursor and guard < 1024:
+                guard += 1
+                if cursor in keep:
+                    return cursor
+                cursor = by_id[cursor].parent_checkpoint_id if cursor in by_id else ""
+            return ""
+
+        orphans = list((await db.execute(
+            select(CoreCheckpoint).where(CoreCheckpoint.parent_checkpoint_id.in_(deleted_sorted))
+        )).scalars())
+        for row in orphans:
+            row.parent_checkpoint_id = nearest_surviving_ancestor(row.parent_checkpoint_id)
+
+        await db.execute(
+            delete(CoreCheckpoint).where(CoreCheckpoint.id.in_(deleted_sorted))
+        )
+        # Drop restore operations that reference pruned checkpoints (their
+        # undo/redo targets no longer exist).
+        await db.execute(
+            delete(CoreRestoreOperation).where(
+                CoreRestoreOperation.target_checkpoint_id.in_(deleted_sorted)
+                | CoreRestoreOperation.undo_checkpoint_id.in_(deleted_sorted)
+                | CoreRestoreOperation.derived_checkpoint_id.in_(deleted_sorted)
+            )
+        )
 
     async def _resolve_parent(
         self,
@@ -837,6 +928,7 @@ class CoreCheckpointConversationBackend:
             raise ValueError("Fork session already exists")
         runtime_payload = payload.get("runtime")
         projection_payload = payload.get("projection")
+        events_payload = payload.get("events")
         checkpoint_id = str(options.get("checkpoint_id") or "") if options else ""
         runtime = _fork_runtime_payload(
             runtime_payload if isinstance(runtime_payload, dict) else None,
@@ -850,7 +942,7 @@ class CoreCheckpointConversationBackend:
             runtime_state_json=runtime["runtime_state_json"],
             history_json=runtime["history_json"],
             pending_approval_json={},
-            last_event_seq=0,
+            last_event_seq=runtime["last_event_seq"],
             updated_at=datetime.now(),
         ))
         projection = _fork_projection_payload(
@@ -862,10 +954,24 @@ class CoreCheckpointConversationBackend:
         )
         db.add(CoreThreadSnapshot(
             thread_id=new_session_id,
-            snapshot_seq=0,
+            snapshot_seq=projection["snapshot_seq"],
             snapshot_json=projection["snapshot_json"],
             updated_at=datetime.now(),
         ))
+        # Write captured events to the new session's event stream so the
+        # projector can rebuild the projection correctly instead of relying
+        # on a frozen inherited snapshot.  Session-id fields (turn_id etc.)
+        # are remapped from source to fork session.
+        forked_events: list[dict[str, Any]] = []
+        if isinstance(events_payload, list):
+            for event_payload in events_payload:
+                if isinstance(event_payload, dict):
+                    remapped = _replace_session_id(
+                        dict(event_payload), source_session_id, new_session_id
+                    )
+                    row = _app_event_row(remapped, thread_id=new_session_id)
+                    db.add(row)
+        await db.flush()
         return ForkConversationResult(
             conversation={
                 "session_id": new_session_id,
@@ -1011,26 +1117,11 @@ def register_checkpoint_operations(
             **({"session": row.session_payload} if row.session_payload else {}),
         })
 
-    async def rollback_undo(request: OperationRequest) -> OperationResult:
-        session_id = str(request.payload.get("session_id") or request.payload.get("thread_id") or "").strip()
-        operation_id = str(request.payload.get("operation_id") or "").strip()
-        if not session_id or not operation_id:
-            return _operation_error(request, "session_id and operation_id are required")
-        try:
-            schema_coordinator = coordinator(default_work_root)
-            await schema_coordinator._ensure_schema()
-            work_root = await _undo_work_root(session_factory, session_id, operation_id)
-            result = await coordinator(work_root).undo(operation_id)
-        except (LookupError, ValueError, OSError) as exc:
-            return _operation_error(request, str(exc))
-        return OperationResult(name=request.name, payload=_restore_payload(result))
-
     catalog.register("session.checkpoints.create", checkpoint_create)
     catalog.register("session.checkpoints.graph", checkpoints_graph)
     catalog.register("session.checkpoints.list", checkpoints_list)
     catalog.register("session.checkpoints.restore", restore_checkpoint)
     catalog.register("session.rollback", restore_checkpoint)
-    catalog.register("session.rollback.undo", rollback_undo)
     catalog.register("session.fork", fork_session)
 
 
@@ -1109,26 +1200,6 @@ async def _checkpoint_for_session(
             raise ValueError("Checkpoint does not belong to this session")
         db.expunge(row)
         return row
-
-
-async def _undo_work_root(
-    session_factory: async_sessionmaker,
-    session_id: str,
-    operation_id: str,
-) -> str:
-    root_session_id = _root_session_id(session_id)
-    async with session_factory() as db:
-        operation = await db.get(CoreRestoreOperation, operation_id)
-        if operation is None:
-            raise LookupError("Restore operation not found")
-        if operation.root_session_id != root_session_id:
-            raise ValueError("Restore operation does not belong to this session")
-        if operation.status != "committed":
-            raise ValueError("Only a committed restore can be undone")
-        checkpoint = await db.get(CoreCheckpoint, operation.undo_checkpoint_id)
-        if checkpoint is None:
-            raise LookupError("Undo checkpoint not found")
-        return checkpoint.work_root
 
 
 def _checkpoint_payload(row: CheckpointRef) -> dict[str, Any]:
@@ -1232,7 +1303,7 @@ def _fork_runtime_payload(
         "runtime_state_json": state,
         "history_json": history,
         "pending_approval_json": {},
-        "last_event_seq": 0,
+        "last_event_seq": int(source.get("last_event_seq") or 0),
     }
 
 
@@ -1251,8 +1322,11 @@ def _fork_projection_payload(
         state = CoreAppSnapshotProjector().empty(fork_session_id)
     state["thread_id"] = fork_session_id
     state["status"] = "idle"
-    state["snapshot_seq"] = 0
-    state["seen_event_ids"] = []
+    # Keep the original snapshot_seq and seen_event_ids — the checkpoint
+    # capture already filtered them to the correct range (the excluded turn
+    # is removed).  Resetting them to 0 / [] tells the projector that no
+    # events have been applied, which causes items to be projected twice
+    # and leads to duplicate / misordered messages in the forked session.
     session = dict(state.get("session") or {})
     source_title = str(session.get("title") or source_session_id)
     session["title"] = str(title or f"{source_title} fork")
@@ -1263,11 +1337,7 @@ def _fork_projection_payload(
     })
     session["metadata"] = metadata
     state["session"] = session
-    core = state.get("core")
-    if isinstance(core, dict):
-        core["snapshot_seq"] = 0
-        core["seen_event_ids"] = []
-    return {"snapshot_seq": 0, "snapshot_json": state}
+    return {"snapshot_seq": int(payload.get("snapshot_seq") or 0) if payload else 0, "snapshot_json": state}
 
 
 def _replace_session_id(value: Any, source_session_id: str, fork_session_id: str) -> Any:

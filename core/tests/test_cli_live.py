@@ -43,7 +43,7 @@ def test_live_formatter_keeps_writer_compatible_run_item_lines() -> None:
             {"type": "dynamicToolCall", "tool_name": "write_file", "arguments": {"path": "draft.md"}, "message": "writing"},
             status="running",
         )
-    ) == ["[00:00] file write_file draft.md writing"]
+    ) == ["[00:00] 创建 write_file draft.md writing"]
     assert formatter.format(
         core_run_item("status", {"type": "turn", "raw_end_reason": "llm_error"}, status="failed")
     ) == ["[00:00] failed llm_error"]

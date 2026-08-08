@@ -169,7 +169,14 @@ function onSaved() {
   codeEditorRef.value?.markSaved()
 }
 
-defineExpose({ onSaved })
+/** Reset only the saving flag so the save button can be retried.
+ *  Called by the parent on save failure; keeps dirty state so the user
+ *  sees unsaved content and can retry. */
+function resetSaving() {
+  saving.value = false
+}
+
+defineExpose({ onSaved, resetSaving })
 
 function kindIcon(kind: StageResource['kind']): string {
   const map: Record<string, string> = {

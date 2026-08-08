@@ -22,12 +22,7 @@ from lamtools_core.tool.durable_tools import (
 from lamtools_core.tool.git_tools import make_git_diff_handler, make_git_status_handler
 from lamtools_core.tool.mcp_tools import MCPToolCaller, execute_mcp_tool_call
 from lamtools_core.tool.permission import ASK_USER, AUTO_ALLOW, HARD_BLOCK, PermissionTier
-from lamtools_core.tool.spreadsheet import (
-    SPREADSHEET_WRITE_INPUT_SCHEMA,
-    write_spreadsheet_tool,
-)
 from lamtools_core.tool.web_tools import (
-    make_browser_check_handler,
     make_web_fetch_handler,
     make_web_search_handler,
 )
@@ -39,7 +34,6 @@ from lamtools_core.tool.workspace_files import (
     DEFAULT_MAX_LIST_ITEMS,
     DEFAULT_MAX_SEARCH_RESULTS,
     DEFAULT_MAX_TEXT_LENGTH,
-    make_document_normalize_handler,
     make_edit_file_handler,
     make_write_file_handler,
     WorkspaceReadOnlyTools,
@@ -75,21 +69,17 @@ DEFAULT_COMMAND_TIMEOUT = 120
 
 DEFAULT_TOOL_PERMISSIONS: dict[str, PermissionTier] = {
     "read_file": AUTO_ALLOW,
-    "document_normalize": ASK_USER,
     "list_dir": AUTO_ALLOW,
     "search_files": AUTO_ALLOW,
     "search_content": AUTO_ALLOW,
     "load_skill": AUTO_ALLOW,
     "write_file": ASK_USER,
-    "write_spreadsheet": ASK_USER,
     "edit_file": ASK_USER,
     "run_command": ASK_USER,
-    "run_tests": ASK_USER,
     "git_status": AUTO_ALLOW,
     "git_diff": AUTO_ALLOW,
     "web_search": AUTO_ALLOW,
     "web_fetch": ASK_USER,
-    "browser_check": AUTO_ALLOW,
     "mcp_tool": ASK_USER,
     "mcp_activate": AUTO_ALLOW,
     SUB_AGENT_TOOL_NAME: AUTO_ALLOW,
@@ -101,21 +91,17 @@ DEFAULT_TOOL_PERMISSIONS: dict[str, PermissionTier] = {
 
 DEFAULT_TOOL_ORDER: tuple[str, ...] = (
     "read_file",
-    "document_normalize",
     "list_dir",
     "search_files",
     "search_content",
     "load_skill",
     "write_file",
-    "write_spreadsheet",
     "edit_file",
     "run_command",
-    "run_tests",
     "git_status",
     "git_diff",
     "web_search",
     "web_fetch",
-    "browser_check",
     "mcp_activate",
     "mcp_tool",
     SUB_AGENT_TOOL_NAME,
@@ -127,21 +113,17 @@ DEFAULT_TOOL_ORDER: tuple[str, ...] = (
 
 DEFAULT_TOOL_CATEGORIES: dict[str, str] = {
     "read_file": "file_read",
-    "document_normalize": "file_write",
     "list_dir": "file_read",
     "search_files": "file_read",
     "search_content": "file_read",
     "load_skill": "skill",
     "write_file": "file_write",
-    "write_spreadsheet": "file_write",
     "edit_file": "file_write",
     "run_command": "command",
-    "run_tests": "command",
     "git_status": "git",
     "git_diff": "git",
     "web_search": "web",
     "web_fetch": "web",
-    "browser_check": "browser",
     "mcp_tool": "mcp",
     "mcp_activate": "mcp",
     SUB_AGENT_TOOL_NAME: "agent",
@@ -157,20 +139,10 @@ DEFAULT_TOOL_FAILURE_MODES: dict[str, list[dict[str, str]]] = {
         {"type": "file_not_found", "message": "File not found"},
         {"type": "read_error", "message": "Error reading file"},
     ],
-    "document_normalize": [
-        {"type": "path_outside_root", "message": "Blocked: path is outside work_root"},
-        {"type": "file_not_found", "message": "File not found"},
-        {"type": "normalize_error", "message": "Document normalization failed"},
-    ],
     "write_file": [
         {"type": "path_outside_root", "message": "Blocked: path is outside work_root"},
         {"type": "sensitive_pattern", "message": "Blocked: path contains sensitive pattern"},
         {"type": "write_rejected", "message": "WRITE REJECTED: {reason}"},
-    ],
-    "write_spreadsheet": [
-        {"type": "path_outside_root", "message": "Blocked: path is outside work_root"},
-        {"type": "invalid_workbook", "message": "Spreadsheet input or workbook is invalid"},
-        {"type": "write_rejected", "message": "Spreadsheet write rejected: {reason}"},
     ],
     "edit_file": [
         {"type": "old_string_empty", "message": "old_string is empty"},
@@ -190,19 +162,11 @@ DEFAULT_TOOL_FAILURE_MODES: dict[str, list[dict[str, str]]] = {
         {"type": "probe_http_error", "message": "Readiness URL returned a non-success HTTP status"},
         {"type": "readiness_text_missing", "message": "Readiness response did not contain readiness_text"},
     ],
-    "run_tests": [
-        {"type": "no_test_command", "message": "No test command detected"},
-        {"type": "test_failed", "message": "Tests failed"},
-        {"type": "command_timeout", "message": "Test command timed out"},
-    ],
     "web_search": [{"type": "search_failed", "message": "Web search failed"}],
     "web_fetch": [
         {"type": "fetch_failed", "message": "Failed to fetch URL"},
         {"type": "invalid_url", "message": "Invalid URL"},
-    ],
-    "browser_check": [
-        {"type": "file_protocol_blocked", "message": "Access to file: protocol is blocked"},
-        {"type": "fetch_failed", "message": "Failed to fetch URL"},
+        {"type": "expected_text_missing", "message": "Expected text not found in fetched content"},
     ],
     "mcp_activate": [
         {"type": "server_not_found", "message": "MCP server not found"},
@@ -217,24 +181,15 @@ DEFAULT_TOOL_FAILURE_MODES: dict[str, list[dict[str, str]]] = {
 
 DEFAULT_TOOL_RECOVERY: dict[str, str] = {
     "read_file": "Check path exists, use list_dir to find correct path",
-    "document_normalize": "Check that the path is a readable DOCX, PDF, or XLSX inside the workspace",
     "write_file": "Check path bounds, avoid sensitive patterns, ensure content is valid",
-    "write_spreadsheet": (
-        "Use workspace-relative .xlsx paths, valid A1 cell references, and formulas beginning with ="
-    ),
     "edit_file": "Read file first to get exact content, use precise old_string match",
     "search_content": "Use an exact substring from the file or narrow the search path",
     "run_command": (
         "Fix command syntax, check platform compatibility, or increase timeout. For local preview servers, use "
         "recommended_action from tool metadata; for port_in_use choose a free port instead of retrying the same command."
     ),
-    "run_tests": (
-        "If assertions fail, fix production code before rerunning equivalent tests. If the command itself is "
-        "invalid, pass an explicit command, create a test script, or use alternative verification."
-    ),
     "web_search": "Retry with simpler query, try different search terms",
     "web_fetch": "Check URL validity, try alternative URL",
-    "browser_check": "Use local static server with http://127.0.0.1:<port>/ instead of file://",
     "mcp_activate": "Check the server name against available MCP servers; use exact names listed in the system prompt.",
     "mcp_tool": "Check tool name and arguments, verify MCP server status",
     "question": "Rephrase the question, simplify options, or proceed with a reasonable default",
@@ -273,17 +228,6 @@ DEFAULT_TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
         ),
         "input_schema": _schema(
             {"path": {"type": "string", "description": "File path relative to the workspace"}},
-            ["path"],
-        ),
-    },
-    {
-        "name": "document_normalize",
-        "description": (
-            "Normalize a DOCX, PDF, or XLSX to Markdown and persist extracted DOCX image assets under "
-            ".lamtools/document-assets. This operation writes files and requires approval."
-        ),
-        "input_schema": _schema(
-            {"path": {"type": "string", "description": "Document path relative to the workspace"}},
             ["path"],
         ),
     },
@@ -337,15 +281,6 @@ DEFAULT_TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
         ),
     },
     {
-        "name": "write_spreadsheet",
-        "description": (
-            "Create a new XLSX workbook or apply structured cell updates to an existing XLSX workbook. "
-            "Supports literal values, formulas, common cell formatting, column widths, and freeze panes. "
-            "Formulas are preserved but not calculated by Core."
-        ),
-        "input_schema": SPREADSHEET_WRITE_INPUT_SCHEMA,
-    },
-    {
         "name": "edit_file",
         "description": "Replace one exact text segment in an existing file.",
         "input_schema": _schema(
@@ -379,16 +314,6 @@ DEFAULT_TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
         ),
     },
     {
-        "name": "run_tests",
-        "description": "Run the detected or specified test command inside the workspace.",
-        "input_schema": _schema(
-            {
-                "command": {"type": "string", "description": "Test command; auto-detected when omitted"},
-                "timeout": {"type": "integer", "description": "Timeout in seconds"},
-            }
-        ),
-    },
-    {
         "name": "git_status",
         "description": "Run git status in the workspace.",
         "input_schema": _schema({}),
@@ -414,17 +339,6 @@ DEFAULT_TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
         "name": "web_fetch",
         "description": "Fetch content from a URL.",
         "input_schema": _schema({"url": {"type": "string", "description": "URL to fetch"}}, ["url"]),
-    },
-    {
-        "name": "browser_check",
-        "description": "Fetch a URL and optionally check expected text.",
-        "input_schema": _schema(
-            {
-                "url": {"type": "string", "description": "URL to check"},
-                "expect": {"type": "string", "description": "Expected text"},
-            },
-            ["url"],
-        ),
     },
     {
         "name": "mcp_activate",
@@ -1100,6 +1014,9 @@ class CoreToolbox:
                     "model_id": outcome.model_id,
                     "tool_call_count": outcome.tool_call_count,
                     "ended_with_final_response": outcome.ended_with_final_response,
+                    "model_rounds": outcome.model_rounds,
+                    "tool_call_breakdown": dict(outcome.tool_call_breakdown),
+                    "death_scene": outcome.death_scene,
                 }
                 if outcome.decision == "wait":
                     waiting_request = dict(outcome.pending_waiting_request)
@@ -1134,11 +1051,28 @@ class CoreToolbox:
                 if not outcome.succeeded:
                     error = outcome.failure_message()
                     self._failed_sub_agent_calls[failure_key] = dict(metadata)
+                    # Build a rich failure message so the parent agent can make
+                    # an informed decision (retry with different wording, take
+                    # over, switch model, etc.) instead of seeing only a generic
+                    # "failed without a final response".
+                    content_lines = [f"SUB_AGENT FAILED: {error}"]
+                    content_lines.append(f"model_rounds: {outcome.model_rounds}")
+                    if outcome.tool_call_breakdown:
+                        breakdown = ", ".join(
+                            f"{name}={count}"
+                            for name, count in sorted(outcome.tool_call_breakdown.items())
+                        )
+                        content_lines.append(f"tool_calls: {outcome.tool_call_count} ({breakdown})")
+                    else:
+                        content_lines.append(f"tool_calls: {outcome.tool_call_count}")
+                    if outcome.death_scene:
+                        content_lines.append("")
+                        content_lines.append(outcome.death_scene)
                     return ToolResult(
                         call_id=call.id,
                         name=call.name,
                         status="failed",
-                        content=f"SUB_AGENT FAILED: {error}",
+                        content="\n".join(content_lines),
                         error=error,
                         metadata=metadata,
                     )
@@ -1162,16 +1096,10 @@ class CoreToolbox:
 
         handlers: dict[str, ToolHandler] = {
             **read_tools.as_dict(),
-            "document_normalize": make_document_normalize_handler(
-                self.work_root,
-                max_text_length=max_text_length,
-            ),
             "load_skill": load_skill,
             "write_file": make_write_file_handler(self.work_root),
-            "write_spreadsheet": lambda call: write_spreadsheet_tool(call, work_root=self.work_root),
             "edit_file": make_edit_file_handler(self.work_root),
             "run_command": command_handlers.run_command,
-            "run_tests": command_handlers.run_tests,
             "git_status": make_git_status_handler(
                 self.work_root,
                 command_timeout=command_timeout,
@@ -1185,7 +1113,6 @@ class CoreToolbox:
             ),
             "web_search": make_web_search_handler(str(self.work_root)),
             "web_fetch": make_web_fetch_handler(str(self.work_root)),
-            "browser_check": make_browser_check_handler(str(self.work_root)),
             "mcp_tool": call_mcp,
             "mcp_activate": activate_mcp,
             SUB_AGENT_TOOL_NAME: call_sub_agent,

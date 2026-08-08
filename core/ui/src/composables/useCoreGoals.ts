@@ -2,6 +2,9 @@ import { ref, type Ref } from 'vue'
 import { listGoals, updateGoal } from '../durable/api'
 import type { CoreGoal } from '../durable/types'
 
+/** Max goal refresh frequency during a stream (stream-tick watchers fire far more often). */
+const GOAL_REFRESH_THROTTLE_MS = 2_000
+
 export interface UseCoreGoalsOptions {
   activeSessionId: Ref<string | null>
 }
@@ -11,9 +14,16 @@ export function useCoreGoals(options: UseCoreGoalsOptions) {
   const activeGoal = ref<CoreGoal | null>(null)
   const goalError = ref('')
   let goalRequestGeneration = 0
+  let throttledUntil = 0
 
-  async function refreshGoal(threadId?: string | null) {
+  async function refreshGoal(threadId?: string | null, force = false) {
     const tid = threadId ?? activeSessionId.value
+    // Throttle the per-stream-tick refresh: goal strip still updates at most
+    // every GOAL_REFRESH_THROTTLE_MS during a long stream, while force
+    // (turn finished / session switch) refreshes immediately.
+    const now = Date.now()
+    if (!force && now < throttledUntil) return
+    throttledUntil = now + GOAL_REFRESH_THROTTLE_MS
     const generation = ++goalRequestGeneration
     goalError.value = ''
     if (!tid) return

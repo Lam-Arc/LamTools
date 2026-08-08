@@ -384,6 +384,12 @@ class CoreLoopKernel:
 
         # 3. Kit on_run_start
         await self.kit.on_run_start(state, turn_input)
+        # Expose the empty-response retry budget to the Kit (which owns
+        # empty-stop retry logic in decide_next). The Kit reads this from
+        # state.metadata instead of holding a separate policy reference.
+        if state.metadata is None:
+            state.metadata = {}
+        state.metadata.setdefault("empty_response_retries", int(self.policy.empty_response_retries or 0))
 
         # 3b. SessionStart hook
         await self._apply_session_start_hook(state, turn_input)
@@ -1479,6 +1485,12 @@ class CoreLoopKernel:
                             content=accumulated,
                             response_index=response_index,
                             raw=event.raw,
+                            # Transient: streaming progress snapshots are UI-only.
+                            # Persisting them on the hot path means projecting the
+                            # whole thread snapshot per 128 chars (measured 1.7-2.3s
+                            # on 55MB threads) — the final state is persisted once
+                            # when the turn finishes.
+                            transient=True,
                         )
                         emitted_text = accumulated
                 elif event.kind == "thinking_delta" and event.content:
@@ -1504,6 +1516,7 @@ class CoreLoopKernel:
                             content=thinking,
                             response_index=response_index,
                             raw=event.raw,
+                            transient=True,
                         )
                         emitted_thinking = thinking
                 elif event.kind == "refusal_delta" and event.refusal:
@@ -2457,6 +2470,21 @@ class CoreLoopKernel:
                 part_id=f"{state.run_id}:response-{response_index}:reasoning",
                 part_type="reasoning",
                 status="running",
+                label="思考",
+                content=thinking,
+                response_index=response_index,
+                raw=raw,
+            )
+        # Streamed reasoning parts are only ever emitted with status=running;
+        # without a terminal completed part the persisted item stays "running"
+        # forever — history turns keep live 流光 and process-group summaries
+        # remain stuck on 思考中… after the turn finished.
+        if thinking:
+            await self._emit_stream_part(
+                state,
+                part_id=f"{state.run_id}:response-{response_index}:reasoning",
+                part_type="reasoning",
+                status="completed",
                 label="思考",
                 content=thinking,
                 response_index=response_index,

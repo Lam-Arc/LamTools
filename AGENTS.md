@@ -24,3 +24,10 @@
 | 组件 | 路径 |
 |------|------|
 | Core | `data/core.db` |
+
+## 持续事项
+
+- Core UI 流式性能优化（卡顿调查、各包实施记录）的唯一权威文档：`docs/core-ui-streaming-perf.md`。每次相关改动或新会话必须先读它。
+  - 快速见效包（delta 合并 / 滚动合并 / goal 节流 / watcher 裁剪）已完成。
+  - 结构包（MessageView 组件化 + 投影增量更新 + Markdown 增量分段渲染）已完成（2026-08-07）。
+  - part 级 v-memo 隔离（5 处 part 循环元素级 v-for + v-memo）已完成（2026-08-07）。

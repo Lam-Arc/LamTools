@@ -50,7 +50,11 @@ let _configClient: CoreAppServerClient | null = null
 async function configRequest(method: string, params: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
   if (!_configClient) {
     const client = new CoreAppServerClient({
-      url: appServerUrl(window.location.origin, { path: '/api/core/app-server' }),
+      // '' resolves to __LAMTOOLS_API_BASE__ (direct backend) in the desktop
+      // app; in browser dev it falls back to the vite origin (proxied). Using
+      // window.location.origin here forced the desktop app through the vite
+      // proxy to the dead 5172 port — the arrange dialog never worked there.
+      url: appServerUrl('', { path: '/api/core/app-server' }),
       clientInfo: { name: 'lamtools_arrange', title: 'Arrange', version: '0.1.0' },
       onConnectionState: (state) => { if (state === 'closed' || state === 'error') _configClient = null },
     })

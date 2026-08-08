@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import uuid
 from collections.abc import Callable
 from datetime import datetime, timezone

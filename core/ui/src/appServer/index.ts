@@ -49,16 +49,20 @@ export {
 
 export {
   coreMessageHasProcessParts,
+  createCoreWorkbenchProjectionCache,
   normalizeCoreSessionStatus,
   coreAppItemToWorkbenchPart,
   coreInputToText,
   nextCoreProcessExpandedIds,
   selectCoreQueuedInputs,
   selectCoreWorkbenchMessages,
+  selectCoreWorkbenchMessagesWindow,
   selectLatestActiveTurnId,
   updateCoreSessionListStatus,
   type CoreQueuedInput,
   type CoreWorkbenchMessageOptions,
+  type CoreWorkbenchMessageProjection,
+  type CoreWorkbenchProjectionCache,
 } from './workbenchProjection.ts'
 
 export {

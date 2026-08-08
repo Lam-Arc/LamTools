@@ -572,7 +572,8 @@ class TestKernelTypes:
     def test_loop_policy_defaults(self):
         policy = LoopPolicy()
         assert policy.model_timeout_seconds == 360.0
-        assert policy.model_retries == 3
+        assert policy.model_retries == 100
+        assert policy.empty_response_retries == 3
         assert policy.tool_timeout_seconds is None
         assert policy.emit_debug_events is False
         assert policy.context_window_tokens is None

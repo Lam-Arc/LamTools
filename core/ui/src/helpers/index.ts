@@ -20,3 +20,5 @@ export {
 } from './slotValidation';
 
 export { createProductAdapter, createMemberSessionGroup } from './workbenchUtils';
+
+export { isExternalUrl, openExternalUrl } from './openUrl';

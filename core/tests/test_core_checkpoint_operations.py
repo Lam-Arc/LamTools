@@ -103,7 +103,7 @@ def _request(websocket, request_id: int, method: str, params: dict) -> dict:
             return response
 
 
-def test_core_app_server_uses_one_operation_contract_for_list_rollback_and_restart_safe_undo(
+def test_core_app_server_uses_one_operation_contract_for_list_and_rollback(
     tmp_path: Path,
 ) -> None:
     config_db = tmp_path / "config.db"
@@ -121,14 +121,14 @@ def test_core_app_server_uses_one_operation_contract_for_list_rollback_and_resta
     ))
     target.write_text("after\n", encoding="utf-8")
 
-    first_app = create_core_agent_http_app(
+    app = create_core_agent_http_app(
         model_id="model-record",
         config_db=config_db,
         core_db=core_db,
         data_dir=tmp_path / "core-data",
         work_root=work_root,
     )
-    with TestClient(first_app) as client:
+    with TestClient(app) as client:
         with client.websocket_connect("/api/core/app-server") as websocket:
             _initialize(websocket)
             listed = _request(
@@ -158,30 +158,6 @@ def test_core_app_server_uses_one_operation_contract_for_list_rollback_and_resta
     }
     # Lazy capture: the file was edited without backup_file(), so rollback
     # intentionally does NOT restore it (only tool-backed edits are restored).
-    assert target.read_text(encoding="utf-8") == "after\n"
-
-    restarted_app = create_core_agent_http_app(
-        model_id="model-record",
-        config_db=config_db,
-        core_db=core_db,
-        data_dir=tmp_path / "core-data-restarted",
-        work_root=work_root,
-    )
-    with TestClient(restarted_app) as client:
-        with client.websocket_connect("/api/core/app-server") as websocket:
-            _initialize(websocket)
-            undone = _request(
-                websocket,
-                4,
-                "session.rollback.undo",
-                {
-                    "session_id": "session-operation",
-                    "operation_id": rolled_back["operation_id"],
-                },
-            )["result"]
-
-    assert undone["status"] == rolled_back["status"] == "committed"
-    assert set(undone) == set(rolled_back)
     assert target.read_text(encoding="utf-8") == "after\n"
 
 
@@ -274,7 +250,6 @@ async def test_core_cli_checkpoint_commands_are_thin_adapters_over_the_same_oper
     commands = [
         ["session", "checkpoints", "session-1", "--raw"],
         ["session", "rollback", "session-1", "checkpoint-1", "--raw"],
-        ["session", "rollback-undo", "session-1", "operation-1", "--raw"],
     ]
     for command in commands:
         args = parser.parse_args(command)
@@ -286,11 +261,7 @@ async def test_core_cli_checkpoint_commands_are_thin_adapters_over_the_same_oper
             "session.rollback",
             {"session_id": "session-1", "checkpoint_id": "checkpoint-1"},
         ),
-        (
-            "session.rollback.undo",
-            {"session_id": "session-1", "operation_id": "operation-1"},
-        ),
     ]
     output = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert output[0]["checkpoints"][0]["id"] == "checkpoint-1"
-    assert output[1] == output[2] == operation_result
+    assert output[1] == operation_result

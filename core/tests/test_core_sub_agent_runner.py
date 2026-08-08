@@ -10,6 +10,28 @@ from lamtools_core.runtime import InMemoryRuntimeStateStore
 from lamtools_core.tool.sub_agent_runner import KernelSubAgentRunner
 
 
+def _write_project_model(tmp_path, model_id: str, capability: str, display_name: str = "") -> None:
+    """Write a project-scoped model jsonc so capability comes from jsonc.
+
+    jsonc is the single source of truth for model capability, so self-contained
+    tests must declare the model's modality in the project model dir rather
+    than relying on any hardcoded table (there is none anymore).
+    """
+    models_dir = tmp_path / ".lam" / "config" / "models"
+    models_dir.mkdir(parents=True, exist_ok=True)
+    content = (
+        "{\n"
+        f'  "model_id": "{model_id}",\n'
+        f'  "display_name": "{display_name or model_id}",\n'
+        '  "provider": "test",\n'
+        f'  "capability": "{capability}",\n'
+        '  "notes": "",\n'
+        '  "is_default": false\n'
+        "}\n"
+    )
+    (models_dir / f"{model_id}.jsonc").write_text(content, encoding="utf-8")
+
+
 class ScriptedSubAgentOnlyLLM:
     def __init__(self, *, expected_model: str = "fake-model", expected_instructions: str = "") -> None:
         self.requests: list[LLMRequest] = []
@@ -729,8 +751,10 @@ async def test_sub_agent_runner_forwards_image_attachment_to_multimodal_sub_agen
     png_path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 32)
     att = _FakeAttachment("att-img", png_path)
     service = _FakeAttachmentService({"att-img": att})
-    # Use a real multimodal model_id so resolve_capability recognises it.
-    llm = AttachmentInspectingLLM(expected_model="xopkimik26")
+    # jsonc is the single source of truth: declare a multimodal model in the
+    # project model dir — without this jsonc declaration the image is stripped.
+    _write_project_model(tmp_path, "mm-model", "multimodal")
+    llm = AttachmentInspectingLLM(expected_model="mm-model")
     runner = KernelSubAgentRunner(
         work_root=tmp_path,
         llm_client=llm,
@@ -741,7 +765,7 @@ async def test_sub_agent_runner_forwards_image_attachment_to_multimodal_sub_agen
     result = await runner.run(
         task="describe the attached image",
         agent="viewer",
-        model="xopkimik26",
+        model="mm-model",
         attachments=["att-img"],
     )
 
@@ -753,6 +777,40 @@ async def test_sub_agent_runner_forwards_image_attachment_to_multimodal_sub_agen
     block_types = [b.get("type") for b in user_msg.content if isinstance(b, dict)]
     assert "text" in block_types
     assert "image_url" in block_types
+
+
+@pytest.mark.asyncio
+async def test_sub_agent_runner_strips_image_when_jsonc_is_text(tmp_path):
+    """Regression: a jsonc-declared TEXT model must NOT receive image blocks.
+
+    This is the exact failure mode that used to strike mimo-v2.5-free when its
+    jsonc capability was ignored — the sub-agent got no image content block.
+    """
+    png_path = tmp_path / "test.png"
+    png_path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 32)
+    att = _FakeAttachment("att-img", png_path)
+    service = _FakeAttachmentService({"att-img": att})
+    _write_project_model(tmp_path, "text-model", "text")
+    llm = AttachmentInspectingLLM(expected_model="text-model")
+    runner = KernelSubAgentRunner(
+        work_root=tmp_path,
+        llm_client=llm,
+        model_id="text-model",
+        attachment_service=service,
+    )
+
+    result = await runner.run(
+        task="describe the attached image",
+        agent="viewer",
+        model="text-model",
+        attachments=["att-img"],
+    )
+
+    assert result.succeeded is True
+    user_msg = llm.requests[0].messages[-1]
+    # Text-only model: no image_url blocks may reach the LLM.
+    assert isinstance(user_msg.content, str)
+    assert "image_url" not in user_msg.content
 
 
 @pytest.mark.asyncio
@@ -792,7 +850,10 @@ async def test_sub_agent_runner_resolves_display_name_for_multimodal(tmp_path, m
     assert resolved == "xopkimik26" or resolved == "Kimi-K2.6"  # monkeypatched or real
 
     # The real test: create a runner with display_name model and verify
-    # the LLM receives image_url blocks (capability = multimodal)
+    # the LLM receives image_url blocks (capability = multimodal from jsonc)
+    # Declare the resolved model multimodal in the project model dir (jsonc is
+    # the single source of truth for capability).
+    _write_project_model(tmp_path, "xopkimik26", "multimodal", display_name="Kimi-K2.6")
     png_path = tmp_path / "test.png"
     png_path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 32)
     att = _FakeAttachment("att-img", png_path)

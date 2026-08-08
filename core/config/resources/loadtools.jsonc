@@ -12,7 +12,6 @@
         "git_status",
         "git_diff",
         "load_skill",
-        "browser_check",
         "sub_agent"
       ]
     },

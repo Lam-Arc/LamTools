@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - name: Check whitespace
+        run: git diff --check
+
+      - name: Install Core backend (editable) + test deps
+        run: |
+          cd core
+          pip install -e ".[dev]"
+
+      - name: Run Core backend tests
+        run: |
+          cd core
+          pytest tests/ -v --tb=short
+
+  frontend:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: core/ui/package-lock.json
+
+      - name: Check whitespace
+        run: git diff --check
+
+      - name: Install Core UI dependencies
+        run: |
+          cd core/ui
+          npm ci
+
+      - name: Typecheck Core UI
+        run: |
+          cd core/ui
+          npm run typecheck
+
+      - name: Run Core UI contract tests
+        run: |
+          cd core/ui
+          npm run test:contract
+
+      - name: Build Core UI
+        run: |
+          cd core/ui
+          npm run build

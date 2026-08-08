@@ -403,7 +403,10 @@ class CoreBaseAgentKit:
 
         reply = response.content or ""
         if decision_hint == "failed" and not reply:
-            reply = "Model produced empty output twice with no tool calls."
+            # _resolve_empty_stop returns the real exhaustion message in
+            # wait_reason; surface it as the visible reply so the run result
+            # carries a meaningful failure message.
+            reply = wait_reason or "Model stopped with no content after retries."
 
         return KernelTurn(reply=reply, tool_calls=calls, decision_hint=decision_hint, wait_reason=wait_reason)
 
@@ -432,13 +435,16 @@ class CoreBaseAgentKit:
 
     def _resolve_empty_stop(self, state: RuntimeState) -> tuple[LoopDecision, str]:
         attempts = int((state.metadata or {}).get("empty_stop_count", 0))
+        # Retry budget is injected by the Kernel from LoopPolicy.
+        # empty_response_retries=3 → allow attempts 0,1,2 (3 retries), fail on the 4th.
+        max_retries = int((state.metadata or {}).get("empty_response_retries", 3) or 0)
         has_delivery = self._detect_delivery_progress(state)
-        if attempts <= 2:
+        if attempts < max_retries:
             if state.metadata:
                 state.metadata["empty_stop_count"] = attempts + 1
                 state.metadata["empty_stop_retry_instruction"] = self._default_empty_retry_instruction(has_delivery)
             return "continue", ""
-        return "failed", "Model stopped with no content after 3 retries."
+        return "failed", f"Model stopped with no content after {max_retries} retries."
 
     def _tool_enabled(self, name: str) -> bool:
         tools = self._runtime_controls.get("tools", {})
@@ -621,6 +627,17 @@ class CoreBaseAgentKit:
                 step.metadata["pending_approval"] = dict(state.metadata["pending_approval"])
                 return "wait"
         if turn.tool_calls:
+            return "continue"
+        # parse_model_output may have already decided via _resolve_empty_stop
+        # (setting decision_hint to "continue" for retry or "failed" when
+        # retries are exhausted). Respect that hint *before* checking reply
+        # so the empty-stop retry counter and injected retry instructions
+        # actually take effect — otherwise the failure message injected by
+        # parse_model_output into turn.reply would be mistaken for a real
+        # answer and the run would end with "done" instead of "failed".
+        if turn.decision_hint == "failed":
+            return "failed"
+        if turn.decision_hint == "continue":
             return "continue"
         if turn.reply.strip():
             if verification.required and not verification.passed:

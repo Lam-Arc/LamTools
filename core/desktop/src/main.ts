@@ -19,6 +19,19 @@ async function init() {
     return await invoke<string | null>('pick_directory')
   }
 
+  // Open an external URL in the OS default browser. Returns true on success.
+  // Frontend link click handlers call this instead of letting the webview
+  // navigate, which would turn the app window into a browser.
+  ;(window as any).__LAMTOOLS_OPEN_URL__ = async (url: string): Promise<boolean> => {
+    try {
+      await invoke('open_external_url', { url })
+      return true
+    } catch (e) {
+      console.error('[Main] open_external_url failed:', e)
+      return false
+    }
+  }
+
   // Diagnostic: verify custom commands are registered
   try {
     const pong = await invoke<string>('ping');

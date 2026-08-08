@@ -3,20 +3,45 @@
 import { appServerUrl, CoreAppServerClient } from '../appServer'
 import type { WorkflowDef, WorkflowRunResult } from './types'
 
+// Shared persistent connection — see durable/api.ts for the rationale
+// (fresh WS per RPC = connect/initialize/close churn during streaming).
+let _appServerClient: CoreAppServerClient | null = null
+let _appServerConnecting: Promise<CoreAppServerClient> | null = null
+
+async function appServerClient(): Promise<CoreAppServerClient> {
+  if (_appServerClient) return _appServerClient
+  if (!_appServerConnecting) {
+    _appServerConnecting = (async () => {
+      const client = new CoreAppServerClient({
+        url: appServerUrl('', { path: '/api/core/app-server' }),
+        clientInfo: { name: 'core_ui', title: 'Core', version: '0.1.0' },
+        onConnectionState: (state) => {
+          if (state === 'closed' || state === 'error') {
+            _appServerClient = null
+          }
+        },
+      })
+      try {
+        await client.connect()
+        _appServerClient = client
+        return client
+      } catch (error) {
+        _appServerClient = null
+        throw error
+      } finally {
+        _appServerConnecting = null
+      }
+    })()
+  }
+  return await _appServerConnecting
+}
+
 async function appServerOperation<T>(
   method: string,
   params: Record<string, unknown> = {},
 ): Promise<T> {
-  const client = new CoreAppServerClient({
-    url: appServerUrl('', { path: '/api/core/app-server' }),
-    clientInfo: { name: 'core_ui', title: 'Core', version: '0.1.0' },
-  })
-  try {
-    await client.connect()
-    return (await client.request(method, params)) as T
-  } finally {
-    client.close()
-  }
+  const client = await appServerClient()
+  return (await client.request(method, params)) as T
 }
 
 export function listWorkflows(workRoot?: string): Promise<WorkflowDef[]> {

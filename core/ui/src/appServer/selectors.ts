@@ -66,18 +66,21 @@ export function selectApprovalCards(state: CoreAppSnapshot): CoreAppRequestState
   return [...requests.values()].sort((a, b) => Number(a.seq ?? 0) - Number(b.seq ?? 0))
 }
 
-export function selectChatMessages(state: CoreAppSnapshot): CoreAppServerChatMessage[] {
+export function selectChatMessages(
+  state: CoreAppSnapshot,
+  itemCache?: Map<CoreRuntimeItem, CoreAppItem>,
+): CoreAppServerChatMessage[] {
   const messages: CoreAppServerChatMessage[] = []
   const itemOrder = mergedItemOrder(state)
   const artifactsByItem = artifactsGroupedByItem(state)
-  const subAgentChildren = subAgentChildrenByParentId(state, itemOrder, artifactsByItem)
+  const subAgentChildren = subAgentChildrenByParentId(state, itemOrder, artifactsByItem, itemCache)
   const nestedChildItemIds = new Set(
     [...subAgentChildren.values()].flatMap(items => items.map(item => item.item_id)),
   )
-  const suppressedItemIds = duplicateSubAgentChildItemIds(state, itemOrder)
+  const suppressedItemIds = duplicateSubAgentChildItemIds(state, itemOrder, itemCache)
   for (const itemId of itemOrder) {
     if (suppressedItemIds.has(itemId) || nestedChildItemIds.has(itemId)) continue
-    const rawItem = canonicalItemForId(state, itemId) ?? outerProductItemForId(state, itemId)
+    const rawItem = canonicalItemForId(state, itemId, itemCache) ?? outerProductItemForId(state, itemId)
     const itemWithArtifacts = rawItem ? withItemArtifacts(rawItem, artifactsByItem.get(itemId)) : undefined
     const item = itemWithArtifacts
       ? withSubAgentChildren(itemWithArtifacts, subAgentChildren.get(itemId))
@@ -129,11 +132,12 @@ function subAgentChildrenByParentId(
   state: CoreAppSnapshot,
   itemOrder: string[],
   artifactsByItem: Map<string, Array<Record<string, unknown>>>,
+  cache?: Map<CoreRuntimeItem, CoreAppItem>,
 ): Map<string, CoreAppItem[]> {
   const subAgentParentIds = new Set<string>()
   const orderedItems: CoreAppItem[] = []
   for (const itemId of itemOrder) {
-    const rawItem = canonicalItemForId(state, itemId) ?? outerProductItemForId(state, itemId)
+    const rawItem = canonicalItemForId(state, itemId, cache) ?? outerProductItemForId(state, itemId)
     if (!rawItem) continue
     const item = withItemArtifacts(rawItem, artifactsByItem.get(itemId))
     orderedItems.push(item)
@@ -177,11 +181,11 @@ function isProtocolEnvelopeText(content: string): boolean {
   }
 }
 
-function duplicateSubAgentChildItemIds(state: CoreAppSnapshot, itemOrder: string[]): Set<string> {
+function duplicateSubAgentChildItemIds(state: CoreAppSnapshot, itemOrder: string[], cache?: Map<CoreRuntimeItem, CoreAppItem>): Set<string> {
   const subAgentOutputs = new Set<string>()
   const items = new Map<string, CoreAppItem>()
   for (const itemId of itemOrder) {
-    const item = canonicalItemForId(state, itemId) ?? outerProductItemForId(state, itemId)
+    const item = canonicalItemForId(state, itemId, cache) ?? outerProductItemForId(state, itemId)
     if (!item) continue
     items.set(itemId, item)
     if (item.type !== 'agent_summary' || item.tool_name !== 'sub_agent') continue
@@ -345,9 +349,20 @@ function lastAgentMessageItemIdForTurn(state: CoreAppSnapshot, turnId: string, i
   return last
 }
 
-function canonicalItemForId(state: CoreAppSnapshot, itemId: string): CoreAppItem | undefined {
+function canonicalItemForId(
+  state: CoreAppSnapshot,
+  itemId: string,
+  cache?: Map<CoreRuntimeItem, CoreAppItem>,
+): CoreAppItem | undefined {
   const coreItem = state.core?.items?.[itemId]
   if (!coreItem) return undefined
+  if (cache) {
+    const cached = cache.get(coreItem)
+    if (cached) return cached
+    const app = coreItemToAppItem(coreItem)
+    cache.set(coreItem, app)
+    return app
+  }
   return coreItemToAppItem(coreItem)
 }
 

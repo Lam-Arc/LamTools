@@ -42,7 +42,7 @@ def _make_config_db(db_path: Path) -> None:
         );
         INSERT INTO llm_models VALUES (
             'm-2', 'prov-1', 'xopkimik26', 'Kimi-K2.6', 256000, 32768,
-            1, 10000, 0.7, 1, 'null', '2026-01-02', '2026-01-02'
+            1, 10000, 0.7, 1, '{"capability":"multimodal"}', '2026-01-02', '2026-01-02'
         );
         """
     )

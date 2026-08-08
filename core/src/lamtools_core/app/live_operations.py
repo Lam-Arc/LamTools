@@ -555,15 +555,22 @@ async def handle_turn_start_operation(
                 include_turn_status=materialized.include_turn_status,
             )
             _w4 = time_module.perf_counter()
-            envelopes = await context.persistence.append_batch(
+            envelopes, projected = await context.persistence.append_batch(
                 db,
                 app_events=[_app_event_input(plan.turn_accepted), _app_event_input(plan.user_item)],
                 run_item_events=[plan.running_status],
+                return_state=True,
             )
             _w5 = time_module.perf_counter()
             _logger.info("[PERF:turn_start:write] append_batch=%.3fs", _w5 - _w4)
             accepted, user, running = envelopes[0], envelopes[1], envelopes[2]
-            snapshot = await context.persistence.load(db, thread_id)
+            # Reuse the in-memory projection from append_batch instead of
+            # re-loading (and re-parsing) the whole snapshot row from the DB.
+            # reconcile_status keeps the result byte-equivalent to load().
+            snapshot = projected if isinstance(projected, dict) else await context.persistence.load(db, thread_id)
+            if isinstance(projected, dict):
+                snapshot["snapshot_seq"] = int(projected.get("snapshot_seq") or 0)
+                context.persistence.snapshot_store.projector.reconcile_status(snapshot)
             _w6 = time_module.perf_counter()
             _logger.info("[PERF:turn_start:write] load#2=%.3fs", _w6 - _w5)
             return accepted, user, running, snapshot, materialized, is_first_message

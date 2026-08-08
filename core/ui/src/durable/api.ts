@@ -4,20 +4,48 @@ import {
 } from '../appServer'
 import type { CoreGoal, CoreArrangeJob } from './types'
 
+// One shared, lazily-created connection instead of a fresh WebSocket per RPC.
+// The goal strip refreshes on a 2s throttle during streaming; opening a new
+// WS per call turned every refresh into connect+initialize+close churn
+// (tens of connections per turn on the backend and 1005 close spam).
+let _appServerClient: CoreAppServerClient | null = null
+let _appServerConnecting: Promise<CoreAppServerClient> | null = null
+
+async function appServerClient(): Promise<CoreAppServerClient> {
+  if (_appServerClient) return _appServerClient
+  if (!_appServerConnecting) {
+    _appServerConnecting = (async () => {
+      const client = new CoreAppServerClient({
+        url: appServerUrl('', { path: '/api/core/app-server' }),
+        clientInfo: { name: 'core_ui', title: 'Core', version: '0.1.0' },
+        onConnectionState: (state) => {
+          // A dropped connection is re-established lazily on the next call.
+          if (state === 'closed' || state === 'error') {
+            _appServerClient = null
+          }
+        },
+      })
+      try {
+        await client.connect()
+        _appServerClient = client
+        return client
+      } catch (error) {
+        _appServerClient = null
+        throw error
+      } finally {
+        _appServerConnecting = null
+      }
+    })()
+  }
+  return await _appServerConnecting
+}
+
 async function appServerOperation<T>(
   method: string,
   params: Record<string, unknown> = {},
 ): Promise<T> {
-  const client = new CoreAppServerClient({
-    url: appServerUrl('', { path: '/api/core/app-server' }),
-    clientInfo: { name: 'core_ui', title: 'Core', version: '0.1.0' },
-  })
-  try {
-    await client.connect()
-    return await client.request(method, params) as T
-  } finally {
-    client.close()
-  }
+  const client = await appServerClient()
+  return await client.request(method, params) as T
 }
 
 export function listGoals(threadId?: string): Promise<CoreGoal[]> {

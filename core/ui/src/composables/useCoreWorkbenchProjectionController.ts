@@ -1,11 +1,12 @@
 import { ref, watch, type Ref } from 'vue'
 import {
+  createCoreWorkbenchProjectionCache,
   isCoreActiveTurnStatus,
   isCoreGuidableTurnStatus,
+  selectCoreWorkbenchMessagesWindow,
   type CoreAppSnapshot,
   nextCoreProcessExpandedIds,
   normalizeCoreSessionStatus,
-  selectCoreWorkbenchMessages,
 } from '../appServer'
 import type { CoreMessage } from '../types'
 
@@ -31,9 +32,30 @@ export interface UseCoreWorkbenchProjectionControllerOptions {
 export function useCoreWorkbenchProjectionController(options: UseCoreWorkbenchProjectionControllerOptions) {
   const messages = ref<CoreMessage[]>([])
   const processExpandedIds = ref<Set<string>>(new Set())
+  const projectionCache = createCoreWorkbenchProjectionCache()
   let observedThreadId: string | null = null
   let previousStatus: string | null = null
   let previousTurnWasActive = false
+
+  // History windowing: only the most recent N messages are projected/rendered
+  // initially; `loadMoreHistory` widens the window toward older messages. This
+  // keeps first render of very large threads fast (DOM creation is the
+  // dominant cost) while the projection cache keeps identities stable.
+  const historyTail = ref(150)
+  const hasMoreHistory = ref(false)
+  const totalMessages = ref(0)
+  const HISTORY_WINDOW_STEP = 150
+
+  function resetHistoryWindow(): void {
+    historyTail.value = 150
+    hasMoreHistory.value = false
+    totalMessages.value = 0
+  }
+
+  function loadMoreHistory(): void {
+    if (!hasMoreHistory.value) return
+    historyTail.value += HISTORY_WINDOW_STEP
+  }
 
   function toggleProcess(id: string): void {
     const next = new Set(processExpandedIds.value)
@@ -49,6 +71,8 @@ export function useCoreWorkbenchProjectionController(options: UseCoreWorkbenchPr
         previousStatus = null
         previousTurnWasActive = false
         processExpandedIds.value = new Set()
+        projectionCache.clear()
+        resetHistoryWindow()
       }
 
       const systemMessages = options.systemMessages?.value ?? []
@@ -73,15 +97,19 @@ export function useCoreWorkbenchProjectionController(options: UseCoreWorkbenchPr
         return
       }
 
+      const projected = selectCoreWorkbenchMessagesWindow(snapshot, {
+        source: options.source,
+        active: isCoreGuidableTurnStatus(rawStatus),
+        shallowThinkingPending: options.shallowThinkingPending.value,
+        submittingApprovalRequestIds: options.submittingApprovalRequestIds.value,
+        tailWindow: historyTail.value,
+      }, projectionCache)
       messages.value = [
         ...systemMessages,
-        ...selectCoreWorkbenchMessages(snapshot, {
-          source: options.source,
-          active: isCoreGuidableTurnStatus(rawStatus),
-          shallowThinkingPending: options.shallowThinkingPending.value,
-          submittingApprovalRequestIds: options.submittingApprovalRequestIds.value,
-        }),
+        ...projected.messages,
       ]
+      hasMoreHistory.value = projected.startIndex > 0
+      totalMessages.value = projected.total
 
       if (!finished) {
         processExpandedIds.value = nextCoreProcessExpandedIds(
@@ -112,6 +140,9 @@ export function useCoreWorkbenchProjectionController(options: UseCoreWorkbenchPr
     messages,
     processExpandedIds,
     toggleProcess,
+    hasMoreHistory,
+    totalMessages,
+    loadMoreHistory,
   }
 }
 

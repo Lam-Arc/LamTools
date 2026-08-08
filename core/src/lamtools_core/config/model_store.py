@@ -59,7 +59,8 @@ class ModelConfig:
 
     @property
     def resolved_capability(self) -> Capability:
-        return resolve_capability(self.model_id, self.capability)
+        # jsonc capability is the single source of truth; model_id plays no role.
+        return resolve_capability(jsonc_capability=self.capability)
 
     def to_extra(self) -> dict[str, Any]:
         """Materialise the model_extra dict consumed by the adapter profile resolver.
@@ -289,3 +290,18 @@ __all__ = [
     "ModelConfig",
     "ModelStore",
 ]
+
+
+def resolve_model_capability(model_id: str, *, work_root: str | None = None) -> str:
+    """Resolve a model's modality by reading its jsonc ``capability``.
+
+    jsonc is the single source of truth, so a bare model_id is *not* enough —
+    this looks up the model's jsonc definition (project over global over
+    built-in) and returns its resolved capability, defaulting to ``"text"``
+    when the model has no definition or no declared``capability``.
+    """
+    try:
+        model = ModelStore().get_sync(model_id, work_root=work_root)
+    except Exception:
+        return "text"
+    return model.resolved_capability if model is not None else "text"

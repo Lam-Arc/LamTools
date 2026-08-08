@@ -43,50 +43,6 @@ describe('CoreSessionRollback', () => {
     expect(wrapper.get('[data-rollback="checkpoint-main"]').attributes('type')).toBe('button')
   })
 
-  it('confirms rollback inline, then offers undo through the same Core operation surface', async () => {
-    const request = vi.fn()
-      .mockResolvedValueOnce({ checkpoints })
-      .mockResolvedValueOnce({
-        operation_id: 'restore-1',
-        checkpoint_id: 'checkpoint-main',
-        undo_checkpoint_id: 'undo-1',
-        status: 'committed',
-        restored_paths: ['state.txt'],
-      })
-      .mockResolvedValueOnce({ checkpoints })
-      .mockResolvedValueOnce({
-        operation_id: 'restore-2',
-        checkpoint_id: 'undo-1',
-        undo_checkpoint_id: 'undo-2',
-        status: 'committed',
-        restored_paths: ['state.txt'],
-      })
-      .mockResolvedValueOnce({ checkpoints })
-    const wrapper = mount(CoreSessionRollback, {
-      props: { sessionId: 'session-1', request },
-    })
-    await vi.waitFor(() => expect(wrapper.findAll('[data-checkpoint-row]')).toHaveLength(2))
-
-    await wrapper.get('[data-rollback="checkpoint-main"]').trigger('click')
-    expect(wrapper.get('[data-confirm-rollback="checkpoint-main"]').text()).toContain('确认回滚')
-    await wrapper.get('[data-confirm-rollback="checkpoint-main"]').trigger('click')
-
-    await vi.waitFor(() => expect(request).toHaveBeenCalledWith('session.rollback', {
-      session_id: 'session-1',
-      checkpoint_id: 'checkpoint-main',
-    }))
-    expect(wrapper.get('[data-undo-rollback]').text()).toContain('撤销回滚')
-    expect(wrapper.get('[role="status"]').text()).toContain('已恢复对话与文件')
-
-    await wrapper.get('[data-undo-rollback]').trigger('click')
-    await vi.waitFor(() => expect(request).toHaveBeenCalledWith('session.rollback.undo', {
-      session_id: 'session-1',
-      operation_id: 'restore-1',
-    }))
-    expect(wrapper.find('[data-undo-rollback]').exists()).toBe(false)
-    expect(wrapper.get('[role="status"]').text()).toContain('已撤销回滚')
-  })
-
   it('keeps active turns safe and communicates why rollback is unavailable', async () => {
     const request = vi.fn().mockResolvedValue({ checkpoints })
     const wrapper = mount(CoreSessionRollback, {

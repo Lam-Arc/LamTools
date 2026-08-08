@@ -447,7 +447,6 @@ async def run_core_cli_task(
             event_sink=sink,
             policy=LoopPolicy(
                 model_timeout_seconds=360,
-                model_retries=3,
                 persist_steps=True,
                 context_window_tokens=context_window_tokens,
                 compact_trigger_tokens=options.compact_trigger_tokens,
@@ -744,12 +743,15 @@ def _load_llm_config_from_connection(con: sqlite3.Connection, *, model_ref: str 
     data = dict(row)
     model_id = str(data.get("model_id") or "")
     model_extra = _json_dict(data.get("model_extra"))
-    # Capability: prefer the DB extra field, else resolve via the builtin table.
+    # Capability: prefer the DB extra field, else resolve from the model's
+    # jsonc definition (jsonc is the single source of truth).
     capability = ""
     if isinstance(model_extra.get("capability"), str):
         capability = str(model_extra["capability"]).strip().lower()
     if capability not in ("text", "multimodal"):
-        capability = resolve_capability(model_id, capability)
+        from lamtools_core.config.model_store import resolve_model_capability
+
+        capability = resolve_model_capability(model_id)
     return LLMConfig(
         provider_name=str(data.get("provider_name") or ""),
         provider_api_type=str(data.get("provider_api_type") or "openai"),
@@ -1018,12 +1020,6 @@ def build_parser() -> argparse.ArgumentParser:
     _add_live_connection_arguments(session_rollback)
     session_rollback.add_argument("--raw", action="store_true")
     session_rollback.set_defaults(func=cmd_session_rollback)
-    session_rollback_undo = session_sub.add_parser("rollback-undo", help="Undo a committed session rollback")
-    session_rollback_undo.add_argument("thread_id")
-    session_rollback_undo.add_argument("operation_id")
-    _add_live_connection_arguments(session_rollback_undo)
-    session_rollback_undo.add_argument("--raw", action="store_true")
-    session_rollback_undo.set_defaults(func=cmd_session_rollback_undo)
 
     project = sub.add_parser("project", help="Manage Core project workspaces")
     project_sub = project.add_subparsers(dest="project_command", required=True)
@@ -1654,18 +1650,6 @@ async def cmd_session_rollback(args: argparse.Namespace) -> int:
         ),
     )
     _print_live_result(args, result, f"rollback {result.get('status', '-')} ({result.get('operation_id', '-')})")
-    return 0
-
-
-async def cmd_session_rollback_undo(args: argparse.Namespace) -> int:
-    result = await _invoke_live(
-        args,
-        lambda client: client.request(
-            "session.rollback.undo",
-            {"session_id": args.thread_id, "operation_id": args.operation_id},
-        ),
-    )
-    _print_live_result(args, result, f"rollback undo {result.get('status', '-')}")
     return 0
 
 

@@ -81,6 +81,14 @@ def _db_row_to_model_config(row: dict[str, Any]) -> ModelConfig:
     adapter_profile_id = ""
     if isinstance(extra.get("adapter_profile_id"), str):
         adapter_profile_id = str(extra["adapter_profile_id"])
+    # Capability carried through from the DB's declared extra.capability, if any.
+    # jsonc is the single source of truth, so a model without an explicit
+    # capability declaration migrates blank and falls back to "text".
+    capability = ""
+    if isinstance(extra.get("capability"), str):
+        capability = str(extra["capability"]).strip().lower()
+        if capability not in ("text", "multimodal"):
+            capability = ""
     return ModelConfig(
         model_id=str(row.get("model_id") or ""),
         display_name=str(row.get("display_name") or ""),
@@ -91,8 +99,7 @@ def _db_row_to_model_config(row: dict[str, Any]) -> ModelConfig:
         thinking_supported=bool(row.get("thinking_supported")),
         thinking_budget=int(row.get("thinking_budget") or 10000),
         adapter_profile_id=adapter_profile_id,
-        # capability deliberately blank → resolved via the builtin capability table.
-        capability="",
+        capability=capability,
         is_default=bool(row.get("is_default")),
     )
 

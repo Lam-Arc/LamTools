@@ -11,7 +11,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 describe('ChatThread process cards', () => {
   it('renders live text directly without an artificial character-rate queue', () => {
-    const source = readFileSync(resolve(__dirname, '../src/components/ChatThread.vue'), 'utf8');
+    // Live text rendering lives in MessageView since the ChatThread extraction.
+    const source = readFileSync(resolve(__dirname, '../src/components/MessageView.vue'), 'utf8');
     expect(source).not.toContain('AnimatedStreamText');
     expect(source).not.toContain('STREAM_BASE_CHARS_PER_SECOND');
     expect(source).toContain(':content="part.content"');
@@ -87,8 +88,9 @@ describe('ChatThread process cards', () => {
 
     expect(wrapper.findAll('.process-step')).toHaveLength(1);
     expect(wrapper.findAll('.process-step--info')).toHaveLength(0);
-    expect(wrapper.find('.tool-card-header--command').text()).toContain('run_command');
-    expect(wrapper.find('.tool-card-header--command').text()).toContain('echo ok');
+    expect(wrapper.find('.tool-card-header--command').text()).toContain('已运行命令');
+    expect(wrapper.find('.command-output').exists()).toBe(false);
+    expect(messages[0].parts[0].toolArgs?.command).toBe('echo ok');
     expect(wrapper.find('.process-tool-row').exists()).toBe(false);
   });
 
@@ -121,9 +123,9 @@ describe('ChatThread process cards', () => {
     const row = wrapper.find('.process-tool-row');
     expect(row.exists()).toBe(true);
     expect(row.attributes('aria-expanded')).toBe('false');
-    expect(row.find('.tool-row-name').text()).toBe('write_file');
-    expect(row.find('.tool-row-summary').text()).toContain('notes.txt');
-    expect(row.find('.tool-row-status').text()).toBe('已完成');
+    expect(row.find('.tool-row-name').exists()).toBe(false);
+    expect(row.find('.tool-row-summary').text()).toContain('已创建 notes.txt');
+    expect(row.find('.tool-row-status').exists()).toBe(false);
     expect(row.find('.process-step-marker').exists()).toBe(false);
     expect(wrapper.find('.tool-type-tag').exists()).toBe(false);
   });
@@ -399,7 +401,7 @@ describe('ChatThread process cards', () => {
     });
 
     const header = wrapper.find('.tool-card-header');
-    expect(header.text()).toContain('browser_check');
+    expect(header.text()).toContain('获取网页');
     expect(header.text()).not.toContain('HTTP 502');
     expect(header.text()).not.toContain('WEB');
     expect(header.text()).not.toContain('TEST');
@@ -551,7 +553,7 @@ describe('ChatThread process cards', () => {
     });
 
     const title = wrapper.find('.tool-card-header .process-step-title');
-    expect(title.text()).toBe('写入 notes.txt');
+    expect(title.text()).toBe('已创建 notes.txt');
     expect(wrapper.find('.tool-card-header').text()).not.toContain('文件 notes.txt');
   });
 

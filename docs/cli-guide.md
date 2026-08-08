@@ -1,6 +1,6 @@
 # LamTools CLI 使用指南
 
-本文按当前源码整理 Core 维护命令。所有示例默认在仓库根目录 `E:\LamTools` 执行；如果已把仓库根目录加入 PATH，可省略 `.\`。
+本文按当前源码整理 Core 维护命令。所有示例默认在仓库根目录执行（即包含 `core/`、`scripts/` 的目录）；如果已把仓库根目录加入 PATH，可省略 `.\`。
 
 > Member 产品（Writer / Sage / Imager）已归档至 `archive/members/`，其 CLI 命令不再维护。以下仅保留 Core 入口。
 

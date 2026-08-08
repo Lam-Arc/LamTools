@@ -83,14 +83,28 @@ export class CoreAppServerClient {
     this.pending.clear()
   }
 
-  request(method: string, params: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+  request(method: string, params: Record<string, unknown> = {}, timeoutMs = 30_000): Promise<Record<string, unknown>> {
     const id = this.nextId++
     const payload: JsonRpcRequest = { id, method, params }
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject })
+      const timer = setTimeout(() => {
+        this.pending.delete(id)
+        reject(new Error(`Core App Server request timed out: ${method} (${timeoutMs}ms)`))
+      }, timeoutMs)
+      this.pending.set(id, {
+        resolve: (value) => {
+          clearTimeout(timer)
+          resolve(value)
+        },
+        reject: (error) => {
+          clearTimeout(timer)
+          reject(error)
+        },
+      })
       try {
         this.send(payload)
       } catch (error) {
+        clearTimeout(timer)
         this.pending.delete(id)
         reject(error instanceof Error ? error : new Error(String(error)))
       }

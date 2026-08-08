@@ -10,7 +10,6 @@ describe('Core demo rollback host wiring', () => {
     expect(source).toContain(':request="requestConfigOperation"')
     expect(source).toContain(':active-turn="rollbackActiveTurn"')
     expect(source).toContain('@restored="refreshAfterRollback"')
-    expect(source).toContain('@undone="refreshAfterRollback"')
   })
 
   it('reconnects the active thread after conversation and files are restored', () => {

@@ -72,7 +72,14 @@ data/
 .codex-tmp/
 .tmp/
 .playwright-mcp/
-.zcode/plans/
+.zcode/
+
+# Agent / automation working state (never project code)
+.agents/
+.superpowers/
+
+# Core UI app build artifacts (vite output, not source)
+core/ui/dist-core-app/
 
 # Workflow runtime output (generated scripts, hash files, runners)
 **/.lam/workflow_scripts/

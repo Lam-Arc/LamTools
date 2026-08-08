@@ -70,6 +70,23 @@ fn pick_directory() -> Option<String> {
         .map(|p| p.to_string_lossy().into_owned())
 }
 
+/// Open an external URL in the OS default browser.
+///
+/// The Tauri webview has no navigation policy by default, so a plain
+/// `<a href="https://...">` click would navigate the app window itself
+/// (turning it into a browser). The frontend intercepts link clicks and
+/// routes them through this command instead. Only http(s) URLs are
+/// accepted — everything else is rejected to prevent scheme/protocol abuse.
+#[tauri::command]
+fn open_external_url(url: String) -> Result<(), String> {
+    let parsed = url::Url::parse(&url).map_err(|_| "invalid URL".to_string())?;
+    match parsed.scheme() {
+        "http" | "https" => {}
+        other => return Err(format!("refused scheme: {other}")),
+    }
+    open::that(url).map_err(|e| e.to_string())
+}
+
 // ---------------------------------------------------------------------------
 // App entry point
 // ---------------------------------------------------------------------------
@@ -108,7 +125,7 @@ fn main() {
                 }
             }
         })
-        .invoke_handler(tauri::generate_handler![get_api_base, minimize_window, toggle_maximize_window, close_window, ping, pick_directory])
+        .invoke_handler(tauri::generate_handler![get_api_base, minimize_window, toggle_maximize_window, close_window, ping, pick_directory, open_external_url])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {
                 let state = window.state::<BackendState>();
@@ -259,7 +276,10 @@ fn pick_free_port() -> Result<u16, Box<dyn std::error::Error>> {
 }
 
 fn wait_for_health(port: u16) -> Result<(), Box<dyn std::error::Error>> {
-    let deadline = Instant::now() + Duration::from_secs(30);
+    // Generous timeout: on a loaded dev machine the backend can take a while
+    // to start (uvicorn --reload + stale-turn recovery), and failing here
+    // blocks the whole app on an error dialog for no reason.
+    let deadline = Instant::now() + Duration::from_secs(90);
     while Instant::now() < deadline {
         if let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) {
             let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
@@ -276,7 +296,7 @@ fn wait_for_health(port: u16) -> Result<(), Box<dyn std::error::Error>> {
         }
         thread::sleep(Duration::from_millis(250));
     }
-    Err("backend health check timed out after 30s".into())
+    Err("backend health check timed out after 90s".into())
 }
 
 fn stop_backend(state: &BackendState) {

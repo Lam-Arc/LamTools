@@ -31,14 +31,6 @@
 
     <div v-if="notice" class="rollback-result" role="status" aria-live="polite">
       <span>{{ notice }}</span>
-      <button
-        v-if="undoOperationId"
-        type="button"
-        class="quiet-action"
-        data-undo-rollback
-        :disabled="busy || activeTurn"
-        @click="undoRollback"
-      >{{ busyAction === 'undo' ? '正在撤销…' : '撤销刚才的恢复' }}</button>
     </div>
 
     <div v-if="error" class="rollback-error" role="alert">
@@ -208,7 +200,6 @@ export interface CoreSessionCheckpoint {
 export interface CoreSessionRollbackResult {
   operation_id: string
   checkpoint_id: string
-  undo_checkpoint_id: string
   derived_checkpoint_id: string
   scope: RestoreScope
   status: string
@@ -231,7 +222,6 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{
   restored: [result: CoreSessionRollbackResult]
-  undone: [result: CoreSessionRollbackResult]
   'graph-loaded': [nodes: CoreSessionCheckpoint[]]
 }>()
 
@@ -244,7 +234,6 @@ const busyAction = ref('')
 const error = ref('')
 const notice = ref('')
 const confirmingCheckpointId = ref('')
-const undoOperationId = ref('')
 const graphElement = ref<HTMLElement | null>(null)
 const restorePopoverElement = ref<HTMLElement | null>(null)
 const restorePopoverStyle = ref<Record<string, string>>({ left: '12px', top: '12px' })
@@ -296,7 +285,6 @@ watch(() => props.sessionId, () => {
   nodes.value = []
   heads.value = {}
   confirmingCheckpointId.value = ''
-  undoOperationId.value = ''
   notice.value = ''
   void loadGraph()
 }, { immediate: true })
@@ -473,7 +461,6 @@ async function restoreCheckpoint(checkpoint: CoreSessionCheckpoint, scope: Resto
       scope,
     })
     const result = normalizeRestoreResult(payload)
-    undoOperationId.value = result.operation_id
     confirmingCheckpointId.value = ''
     notice.value = restoreNotice(result)
     emit('restored', result)
@@ -506,29 +493,6 @@ async function forkCheckpoint(checkpoint: CoreSessionCheckpoint) {
   }
 }
 
-async function undoRollback() {
-  if (!undoOperationId.value || busy.value || props.activeTurn) return
-  busy.value = true
-  busyAction.value = 'undo'
-  error.value = ''
-  try {
-    const payload = await props.request('session.rollback.undo', {
-      session_id: props.sessionId,
-      operation_id: undoOperationId.value,
-    })
-    const result = normalizeRestoreResult(payload)
-    undoOperationId.value = ''
-    notice.value = '已撤销刚才的恢复'
-    emit('undone', result)
-    await loadGraph()
-  } catch (cause) {
-    error.value = errorMessage(cause)
-  } finally {
-    busy.value = false
-    busyAction.value = ''
-  }
-}
-
 function isCheckpoint(value: unknown): value is CoreSessionCheckpoint {
   if (!isRecord(value)) return false
   return typeof value.id === 'string' && typeof value.created_at === 'string'
@@ -549,7 +513,6 @@ function normalizeRestoreResult(value: Record<string, unknown>): CoreSessionRoll
   return {
     operation_id: operationId,
     checkpoint_id: String(value.checkpoint_id || ''),
-    undo_checkpoint_id: String(value.undo_checkpoint_id || ''),
     derived_checkpoint_id: String(value.derived_checkpoint_id || ''),
     scope: normalizeRestoreScope(value.scope),
     status: String(value.status || ''),

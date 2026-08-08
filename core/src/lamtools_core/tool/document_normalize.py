@@ -237,8 +237,7 @@ def _normalize_docx(
         )
     if image_count and not extract_assets:
         warning_items.append(
-            f"{image_count} embedded image(s) were not extracted by the read-only path; "
-            "use document_normalize with write approval to create local image assets."
+            f"{image_count} embedded image(s) were not extracted by the read-only path."
         )
     warnings = tuple(warning_items)
     return NormalizedDocument(

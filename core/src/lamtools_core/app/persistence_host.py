@@ -84,16 +84,32 @@ class AppPersistenceHost:
         *,
         app_events: Iterable[AppEventInput] = (),
         run_item_events: Iterable[RunItemEvent] = (),
-    ) -> list[AppEventEnvelope]:
+        return_state: bool = False,
+        project_snapshot: bool = True,
+    ) -> list[AppEventEnvelope] | tuple[list[AppEventEnvelope], dict[str, Any] | None]:
         """Append multiple events in one savepoint with a single batch projection.
 
-        Events are persisted individually (to allocate seq numbers) but the
-        snapshot is projected once per thread via ``apply_many``, avoiding the
-        per-event ``deepcopy`` that ``append``/``append_run_item`` incur.
+        With ``project_snapshot=False`` events are appended to the event table
+        only; the thread snapshot is NOT projected. Streaming emits many
+        low-frequency state events (part start/end, status, usage) while a turn
+        is running — projecting the full thread snapshot for each one costs
+        1.3-2.3s on 55MB threads (measured) and stalls the stream. The snapshot
+        is projected once at the turn boundary instead; clients keep rendering
+        from the runItem event stream in the meantime.
         """
+        if not project_snapshot:
+            async with db.begin_nested():
+                envelopes: list[AppEventEnvelope] = []
+                for event in app_events:
+                    envelopes.append(await self.event_store.append(db, event))
+                for item in run_item_events:
+                    envelopes.append(await self.event_store.append_run_item_event(db, item))
+                return envelopes
         app_event_list = list(app_events)
         run_item_list = list(run_item_events)
         if not app_event_list and not run_item_list:
+            if return_state:
+                return [], None
             return []
         async with db.begin_nested():
             envelopes: list[AppEventEnvelope] = []
@@ -106,8 +122,11 @@ class AppPersistenceHost:
             by_thread: dict[str, list[AppEventEnvelope]] = {}
             for envelope in envelopes:
                 by_thread.setdefault(envelope.thread_id, []).append(envelope)
+            state: dict[str, Any] | None = None
             for group in by_thread.values():
-                await self.snapshot_store.apply_many(db, group)
+                state = await self.snapshot_store.apply_many(db, group)
+            if return_state:
+                return envelopes, state
             return envelopes
 
     async def _append(self, db: AsyncSession, event: AppEventInput) -> AppEventEnvelope:

@@ -181,6 +181,89 @@ describe('core appServer runtime store', () => {
     expect(resumes[1].params.last_seen_seq).toBe(8)
     expect(runtime.state?.snapshot_seq).toBe(12)
   })
+
+  it('skips hydrating a snapshot that carries nothing new', async () => {
+    const runtime = createCoreAppServerRuntimeState()
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: () => fakeClient(),
+    })
+
+    const initial = snapshot(1, 'running')
+    initial.seen_event_ids = ['e1']
+    controller.hydrate(initial)
+    expect(runtime.state?.snapshot_seq).toBe(1)
+
+    // Newer seq, but every event is already seen and no derived state
+    // (requests / queue / status / items) differs — the state must NOT be
+    // replaced (that would bust projection caches and force a full re-render).
+    const redundant = snapshot(5, 'running')
+    redundant.seen_event_ids = ['e1']
+    controller.hydrate(redundant)
+    expect(runtime.state?.snapshot_seq).toBe(1)
+  })
+
+  it('hydrates when the snapshot contains events not seen on the wire', async () => {
+    const runtime = createCoreAppServerRuntimeState()
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: () => fakeClient(),
+    })
+
+    const initial = snapshot(1, 'running')
+    initial.seen_event_ids = ['e1']
+    controller.hydrate(initial)
+
+    const missed = snapshot(5, 'running')
+    missed.seen_event_ids = ['e1', 'e2']
+    controller.hydrate(missed)
+    expect(runtime.state?.snapshot_seq).toBe(5)
+  })
+
+  it('skips a snapshot whose events were all received on the wire mid-session', async () => {
+    const runtime = createCoreAppServerRuntimeState()
+    const frames: Array<() => void> = []
+    let onEvent: ((event: CoreAppEvent) => void) | undefined
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: (callbacks) => {
+        onEvent = callbacks.onEvent
+        return fakeClient(async (method) => method === 'thread/resume'
+          ? { snapshot: snapshot(1, 'running') }
+          : {})
+      },
+      scheduleFrame: (callback) => frames.push(callback),
+    })
+    await controller.connect('http://127.0.0.1:6173', 'thread-1')
+
+    onEvent?.(runItemDelta('wire-1', 'hel'))
+
+    const redundant = snapshot(5, 'running')
+    redundant.seen_event_ids = ['wire-1']
+    controller.hydrate(redundant)
+    expect(runtime.state?.snapshot_seq).toBe(1)
+  })
+
+  it('hydrates when approval request states changed', async () => {
+    const runtime = createCoreAppServerRuntimeState()
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: () => fakeClient(),
+    })
+
+    const initial = snapshot(1, 'running')
+    initial.seen_event_ids = ['e1']
+    controller.hydrate(initial)
+
+    const withDecision = snapshot(5, 'running')
+    withDecision.seen_event_ids = ['e1']
+    withDecision.requests = {
+      'functions.write_file:0': {
+        request_id: 'functions.write_file:0',
+        status: 'resolved',
+        decision: 'approve_once',
+      },
+    }
+    controller.hydrate(withDecision)
+    expect(runtime.state?.snapshot_seq).toBe(5)
+    expect(runtime.state?.requests?.['functions.write_file:0']?.status).toBe('resolved')
+  })
 })
 
 function fakeClient(
@@ -211,8 +294,13 @@ class ReconnectingClient implements CoreAppServerRuntimeClient {
   async request(method: string, params: Record<string, unknown> = {}) {
     ReconnectingClient.requests.push({ method, params })
     if (method === 'thread/resume') {
-      const seq = ReconnectingClient.requests.filter((item) => item.method === 'thread/resume').length === 1 ? 8 : 12
-      return { snapshot: snapshot(seq, 'running') }
+      const first = ReconnectingClient.requests.filter((item) => item.method === 'thread/resume').length === 1
+      const seq = first ? 8 : 12
+      const resumed = snapshot(seq, 'running')
+      // The second resume snapshot carries an event the client has not seen
+      // (it happened while disconnected), so it must be hydrated.
+      resumed.seen_event_ids = first ? ['s1'] : ['s1', 's2']
+      return { snapshot: resumed }
     }
     return { ok: true }
   }
@@ -234,6 +322,21 @@ function snapshot(seq: number, status: CoreAppSnapshot['status']): CoreAppSnapsh
     queue: [],
     requests: {},
     artifacts: {},
+    core: coreState(seq, status),
+  }
+}
+
+function coreState(seq: number, status: CoreAppSnapshot['status']): NonNullable<CoreAppSnapshot['core']> {
+  return {
+    thread_id: 'thread-1',
+    snapshot_seq: seq,
+    seen_event_ids: [],
+    turns: {},
+    items: {},
+    item_order: [],
+    requests: {},
+    artifacts: {},
+    status,
   }
 }
 

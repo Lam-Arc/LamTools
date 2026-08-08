@@ -2703,7 +2703,7 @@
 }
 .process-current {
   display: grid;
-  grid-template-columns: 14px minmax(82px, max-content) minmax(0, 1fr);
+  grid-template-columns: auto minmax(82px, max-content) minmax(0, 1fr);
   gap: 8px;
   align-items: baseline;
   min-width: 0;
@@ -2729,7 +2729,7 @@
 }
 .process-step {
   display: grid;
-  grid-template-columns: 14px minmax(74px, max-content) minmax(0, 1fr);
+  grid-template-columns: auto minmax(74px, max-content) minmax(0, 1fr);
   gap: 8px;
   align-items: baseline;
   min-width: 0;
@@ -2742,8 +2742,11 @@
   height: 7px;
   margin: 5px auto 0;
   border-radius: 50%;
-  background: color-mix(in srgb, var(--theme-main-text, #fff) 24%, transparent);
-  box-shadow: 0 0 0 3px transparent;
+  background: transparent;
+  box-shadow: none;
+}
+.process-step-marker--error {
+  background: var(--red, #e5484d);
 }
 .process-step-title {
   color: color-mix(in srgb, var(--theme-main-text, #fff) 72%, transparent);
@@ -2756,30 +2759,6 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: color-mix(in srgb, var(--theme-main-text, #fff) 43%, transparent);
-}
-/* process-step-marker 状态点 — 以 main area 文字为底，靠动画/混合区分 */
-.process-step--running .process-step-marker {
-  width: 9px; height: 9px;
-  margin: 4px auto 0;
-  border: 2px solid color-mix(in srgb, var(--theme-main-text, #fff) 14%, transparent);
-  border-top-color: var(--theme-main-text, #fff);
-  background: transparent;
-  border-radius: 50%;
-  box-shadow: none;
-  animation: stream-spin .9s linear infinite;
-}
-.process-step--pending .process-step-marker {
-  background: color-mix(in srgb, var(--theme-main-text, #fff) 40%, transparent);
-  box-shadow: none;
-}
-.process-step--completed .process-step-marker {
-  background: var(--theme-main-text, #fff);
-  box-shadow: none;
-}
-.process-step--error .process-step-marker,
-.process-step--failed .process-step-marker {
-  background: color-mix(in srgb, var(--theme-main-text, #fff) 30%, var(--red) 70%);
-  box-shadow: none;
 }
 .process-step--reasoning .process-step-detail {
   white-space: normal;
@@ -2933,10 +2912,6 @@
 }
 .process-toggle-hint {
   color: color-mix(in srgb, var(--theme-main-text, #fff) 34%, transparent);
-}
-.process-toggle-chevron {
-  color: color-mix(in srgb, var(--theme-main-text, #fff) 34%, transparent);
-  font-size: 12px;
 }
 
 .stream-spinner {

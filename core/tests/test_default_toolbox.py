@@ -71,6 +71,25 @@ class FailingSubAgentRunner:
         )
 
 
+class DiagnosticFailingSubAgentRunner:
+    """Returns a failed result with full diagnostics for failure-forwarding tests."""
+
+    async def run(self, **_kwargs):
+        return SubAgentRunResult(
+            session_id="parent:sub:worker",
+            run_id="child-run-diag",
+            decision="failed",
+            model_rounds=5,
+            tool_call_count=5,
+            tool_call_breakdown={"read_file": 4, "write_file": 1},
+            death_scene=(
+                "--- Sub-agent death scene (last model round) ---\n"
+                "Model reply: (empty — no text produced)\n"
+                "Tools called this round: (none)"
+            ),
+        )
+
+
 class NoProgressSubAgentRunner:
     async def run(self, **_kwargs):
         return SubAgentRunResult(
@@ -111,7 +130,10 @@ def test_core_toolbox_exposes_generic_tool_specs(tmp_path):
     specs = {spec.name: spec for spec in toolbox.tool_specs()}
 
     assert "read_file" in names
-    assert "document_normalize" in names
+    assert "document_normalize" not in names
+    assert "write_spreadsheet" not in names
+    assert "run_tests" not in names
+    assert "browser_check" not in names
     assert "write_file" in names
     assert "run_command" in names
     assert "git_diff" in names
@@ -121,7 +143,6 @@ def test_core_toolbox_exposes_generic_tool_specs(tmp_path):
     assert "sub_agent" in names
     assert toolbox.tool_permissions["write_file"] == "ask_user"
     assert toolbox.tool_permissions["read_file"] == "auto_allow"
-    assert toolbox.tool_permissions["document_normalize"] == "ask_user"
     assert toolbox.tool_permissions["load_skill"] == "auto_allow"
     assert "DOCX" in specs["read_file"].description
     assert "PDF" in specs["read_file"].description
@@ -151,16 +172,16 @@ def test_core_toolbox_marks_approval_required_tools(tmp_path):
     mcp_call = toolbox.prepare_call(
         ToolCall(id="mcp-1", name="mcp_tool", arguments={"tool_name": "server.tool", "arguments": {}})
     )
-    normalize_call = toolbox.prepare_call(
-        ToolCall(id="doc-1", name="document_normalize", arguments={"path": "report.docx"})
+    command_call = toolbox.prepare_call(
+        ToolCall(id="edit-1", name="edit_file", arguments={"path": "a.txt", "old_string": "x", "new_string": "y"})
     )
 
     assert write_call.requires_approval is True
     assert write_call.metadata["approval"]["tier"] == "ask_user"
     assert mcp_call.requires_approval is True
     assert mcp_call.metadata["approval"]["tier"] == "ask_user"
-    assert normalize_call.requires_approval is True
-    assert normalize_call.metadata["approval"]["tier"] == "ask_user"
+    assert command_call.requires_approval is True
+    assert command_call.metadata["approval"]["tier"] == "ask_user"
 
 
 def test_core_toolbox_auto_approve_keeps_hard_blocks(tmp_path):
@@ -341,6 +362,33 @@ async def test_core_toolbox_does_not_rerun_identical_failed_sub_agent_task(tmp_p
     assert second.status == "failed"
     assert runner.calls == 1
     assert second.metadata["duplicate_failure_blocked"] is True
+
+
+@pytest.mark.asyncio
+async def test_core_toolbox_sub_agent_failure_forwards_diagnostics(tmp_path):
+    """Failed sub-agent results must forward model_rounds, tool_call_breakdown,
+    and death_scene to the parent agent in both content and metadata."""
+    runner = DiagnosticFailingSubAgentRunner()
+    toolbox = build_core_toolbox(work_root=tmp_path, sub_agent_runner=runner)
+
+    result = await toolbox.execute(ToolCall(
+        id="sub-diag-1",
+        name="sub_agent",
+        arguments={"task": "inspect", "agent": "worker"},
+    ))
+
+    assert result.status == "failed"
+    # Metadata carries the raw diagnostic fields
+    assert result.metadata["model_rounds"] == 5
+    assert result.metadata["tool_call_breakdown"] == {"read_file": 4, "write_file": 1}
+    assert "death_scene" in result.metadata
+    # Content is a rich multi-line message the model can read
+    assert "SUB_AGENT FAILED:" in result.content
+    assert "model_rounds: 5" in result.content
+    assert "tool_calls: 5 (read_file=4, write_file=1)" in result.content
+    assert "death scene" in result.content
+    assert "Model reply: (empty" in result.content
+    assert "Tools called this round: (none)" in result.content
 
 
 @pytest.mark.asyncio

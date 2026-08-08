@@ -252,7 +252,16 @@ class ApprovalResolutionLifecycle:
             latest = await self.state_store.get(self.thread_id)
             if latest is None:
                 raise
-            latest.metadata = deepcopy(candidate.metadata)
+            # Merge onto the winning state instead of wholesale-replacing its
+            # metadata. Approval resolution only owns a small set of keys
+            # (pending_approval / pending_waiting_request / approval_resolution)
+            # plus status/loop_state; re-applying just those preserves any
+            # unrelated metadata a concurrent writer may have set.
+            for key in _APPROVAL_OWNED_METADATA_KEYS:
+                if key in candidate.metadata:
+                    latest.metadata[key] = deepcopy(candidate.metadata[key])
+                else:
+                    latest.metadata.pop(key, None)
             latest.status = candidate.status
             latest.loop_state = candidate.loop_state
             candidate = latest
@@ -312,6 +321,16 @@ class ApprovalResolutionLifecycle:
 def _failure_reason(exc: BaseException | str) -> str:
     reason = str(exc).strip()
     return reason or type(exc).__name__
+
+
+# Metadata keys owned by approval resolution. On a state-conflict retry,
+# only these keys are re-applied onto the winning state so unrelated metadata
+# written by a concurrent writer is preserved.
+_APPROVAL_OWNED_METADATA_KEYS: tuple[str, ...] = (
+    "pending_approval",
+    "pending_waiting_request",
+    "approval_resolution",
+)
 
 
 def _stable_event_id(thread_id: str, request_id: str, suffix: str) -> str:

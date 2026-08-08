@@ -39,7 +39,7 @@ def _is_loopback_url(url: str) -> bool:
         return False
 
 
-async def _browser_check_get(url: str) -> httpx.Response:
+async def _fetch_with_loopback_bypass(url: str) -> httpx.Response:
     if not _is_loopback_url(url):
         return await _http_session().get(url)
     async with httpx.AsyncClient(
@@ -176,14 +176,21 @@ def make_web_fetch_handler(work_root: str) -> Callable[[ToolCall], Awaitable[Too
     async def web_fetch(call: ToolCall) -> ToolResult:
         args = call.arguments if isinstance(call.arguments, dict) else {}
         url = args.get("url", "")
+        expect = args.get("expect")
         if not url or not isinstance(url, str):
             return ToolResult(call_id=call.id, name=call.name, status="failed", error="Missing 'url' argument")
         if url.startswith("file://"):
-            return ToolResult(call_id=call.id, name=call.name, status="failed", error="Access to file:// protocol is blocked")
+            return ToolResult(
+                call_id=call.id,
+                name=call.name,
+                status="failed",
+                error="Access to file:// protocol is blocked; serve the file over http://127.0.0.1:<port>/",
+            )
+        if expect is not None and not isinstance(expect, str):
+            return ToolResult(call_id=call.id, name=call.name, status="failed", error="'expect' must be a string or null")
 
         try:
-            client = _http_session()
-            resp = await client.get(url)
+            resp = await _fetch_with_loopback_bypass(url)
         except httpx.HTTPError as exc:
             return ToolResult(call_id=call.id, name=call.name, status="failed", error=f"web_fetch network error: {exc}")
         except Exception as exc:
@@ -200,81 +207,22 @@ def make_web_fetch_handler(work_root: str) -> Callable[[ToolCall], Awaitable[Too
         if len(clean) > 30000:
             clean = clean[:30000] + f"\n\n[... truncated at 30000 / {len(clean)} chars]"
 
+        expect_found = None
+        if expect:
+            expect_found = expect in text
+
         info = f"[web_fetch {url}] HTTP {resp.status_code}\n\n{clean}"
+        if expect:
+            info += f"\n\nexpect: {expect}\nexpect_found: {str(expect_found).lower()}"
         metadata = {
             "url": url,
             "status_code": resp.status_code,
             "content_type": content_type,
             "text_length": len(clean),
             "truncated": "[... truncated" in clean,
+            "expect": expect,
+            "expect_found": expect_found,
         }
-        return ToolResult(
-            call_id=call.id,
-            name=call.name,
-            status="ok",
-            content=info,
-            metadata=metadata,
-            artifacts=[
-                ToolArtifact(
-                    kind="web_fetch_content",
-                    uri=url,
-                    content=clean,
-                    metadata=metadata,
-                )
-            ],
-        )
-
-    return web_fetch
-
-
-def make_browser_check_handler(work_root: str) -> Callable[[ToolCall], Awaitable[ToolResult]]:
-    _ = work_root
-
-    async def browser_check(call: ToolCall) -> ToolResult:
-        args = call.arguments if isinstance(call.arguments, dict) else {}
-        url = args.get("url", "")
-        expect = args.get("expect")
-        if not url or not isinstance(url, str):
-            return ToolResult(call_id=call.id, name=call.name, status="failed", error="Missing 'url' argument")
-        if url.startswith("file://"):
-            return ToolResult(
-                call_id=call.id,
-                name=call.name,
-                status="failed",
-                error="Access to file:// protocol is blocked; serve the file over http://127.0.0.1:<port>/",
-            )
-        if expect is not None and not isinstance(expect, str):
-            return ToolResult(call_id=call.id, name=call.name, status="failed", error="'expect' must be a string or null")
-
-        try:
-            resp = await _browser_check_get(url)
-        except httpx.HTTPError as exc:
-            return ToolResult(call_id=call.id, name=call.name, status="failed", error=f"browser_check network error: {exc}")
-        except Exception as exc:
-            return ToolResult(call_id=call.id, name=call.name, status="failed", error=f"browser_check error: {exc}")
-
-        body = resp.text or ""
-        content_type = resp.headers.get("content-type", "")
-        title = ""
-        if "text/html" in content_type or "<html" in body[:500].lower():
-            title_match = re.search(r"<title[^>]*>(.*?)</title>", body, re.IGNORECASE | re.DOTALL)
-            if title_match:
-                title = re.sub(r"\s+", " ", title_match.group(1)).strip()
-
-        expect_found = None
-        if expect:
-            expect_found = expect in body
-
-        lines = [
-            f"[browser_check {url}] HTTP {resp.status_code}",
-            f"content_type: {content_type or 'unknown'}",
-            f"bytes: {len(resp.content)}",
-        ]
-        if title:
-            lines.append(f"title: {title}")
-        if expect:
-            lines.append(f"expect: {expect}")
-            lines.append(f"expect_found: {str(expect_found).lower()}")
 
         status: ToolResultStatus = "ok"
         error = ""
@@ -289,19 +237,20 @@ def make_browser_check_handler(work_root: str) -> Callable[[ToolCall], Awaitable
             call_id=call.id,
             name=call.name,
             status=status,
-            content="\n".join(lines),
+            content=info,
             error=error,
-            metadata={
-                "url": url,
-                "status_code": resp.status_code,
-                "content_type": content_type,
-                "title": title,
-                "expect": expect,
-                "expect_found": expect_found,
-            },
+            metadata=metadata,
+            artifacts=[
+                ToolArtifact(
+                    kind="web_fetch_content",
+                    uri=url,
+                    content=clean,
+                    metadata=metadata,
+                )
+            ],
         )
 
-    return browser_check
+    return web_fetch
 
 
 def _extract_readable_text(html: str, source_url: str = "") -> str:

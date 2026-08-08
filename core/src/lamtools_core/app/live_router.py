@@ -34,6 +34,26 @@ from .operation_catalog import OperationCatalog
 
 logger = logging.getLogger(__name__)
 
+# Events that change cross-client state outside the runItem stream and are
+# rare enough to justify a full snapshot push (multi-window sync). Every other
+# event is delivered as a plain event notification: clients apply core/runItem
+# deltas incrementally, and turn boundaries / joins / reconnects sync through
+# RPC responses and thread/resume. Sending a full snapshot per event turned a
+# 56MB-thread stream into a flood (outbound queue overflow -> 1013 reconnect
+# storm), which is the root cause of the mid-turn UI stutter on large threads.
+SNAPSHOT_TRIGGER_EVENTS = frozenset({
+    "turn/interrupted",
+    "turn/steered",
+    "queue/itemAccepted",
+    "queue/itemUpdated",
+    "queue/itemDeleted",
+    "queue/itemDispatched",
+})
+# Safety net: even for snapshot-trigger events, at most one snapshot per
+# connection per interval — the next trigger (or thread/resume) delivers the
+# latest state anyway.
+SNAPSHOT_MIN_INTERVAL_SECONDS = 1.0
+
 CoreLiveContextFactory = Callable[[], CoreLiveContext | Awaitable[CoreLiveContext]]
 CoreLiveClientResponseHandler = Callable[["CoreLiveConnection", dict[str, Any]], bool | Awaitable[bool]]
 CoreLiveOperationRequestHandler = Callable[["CoreLiveConnection", JsonRpcRequest], bool | Awaitable[bool]]
@@ -141,8 +161,23 @@ class CoreLiveConnection:
         self.initialized = False
         self.thread_id: str | None = None
         self.subscription: asyncio.Queue[Any | None] | None = None
+        # Signalled when a subscription is active so _hub_reader can block
+        # without busy-polling while idle. Cleared on unsubscribe.
+        self._subscription_ready = asyncio.Event()
         self.outbound: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=outbound_limit)
         self.request_tasks: set[asyncio.Task[None]] = set()
+        self._last_snapshot_sent_at = 0.0
+        # Per-item runItem delta coalescing window. Model streams can deliver
+        # thousands of tiny per-token deltas per second; sending each as its
+        # own WS message floods the renderer's task queue (measured ~2500
+        # msgs/s in bursts), starving requestAnimationFrame so the UI freezes
+        # and jumps instead of streaming smoothly. Batching per (thread, item,
+        # kind) over a ~20ms window cuts the message count ~30x with no
+        # protocol change — the client already merges in-frame deltas and
+        # understands `_coalesced_event_ids` for dedup.
+        self._run_item_buffer: dict[tuple[str, str, str], dict[str, Any]] = {}
+        self._run_item_flush_task: asyncio.Task[None] | None = None
+        self._run_item_flush_interval: float = 0.02
 
     async def run(self) -> None:
         await self.websocket.accept()
@@ -152,7 +187,8 @@ class CoreLiveConnection:
             while True:
                 try:
                     raw = await self.websocket.receive_json()
-                except WebSocketDisconnect:
+                except WebSocketDisconnect as exc:
+                    logger.info("core-app-server ws disconnected: code=%s reason=%r", exc.code, exc.reason)
                     break
                 if not self.initialized:
                     await self._handle_raw(raw)
@@ -163,6 +199,9 @@ class CoreLiveConnection:
         finally:
             sender.cancel()
             hub_reader.cancel()
+            if self._run_item_flush_task is not None:
+                self._run_item_flush_task.cancel()
+                self._run_item_flush_task = None
             pending = list(self.request_tasks)
             for task in pending:
                 task.cancel()
@@ -190,27 +229,115 @@ class CoreLiveConnection:
         try:
             self.outbound.put_nowait(message)
         except asyncio.QueueFull:
-            await self.websocket.close(code=1013, reason="Server overloaded; retry later.")
+            # Never kill a live connection over outbound pressure: dropping the
+            # message is safe because clients re-sync via boundary snapshots and
+            # thread/resume. Closing with 1013 here turned transient overload
+            # into a reconnect storm (56MB snapshots x many events).
+            logger.warning(
+                "Core app-server outbound queue full; dropping message for thread %s",
+                self.thread_id or "(unsubscribed)",
+            )
 
     async def send(self, message: dict[str, Any]) -> None:
         await self._send(message)
 
     async def _hub_reader(self) -> None:
         while True:
+            # Block until a subscription exists, instead of busy-polling at
+            # 20 Hz. Event.wait() yields the loop with no wakeups while idle.
             if self.subscription is None:
-                await asyncio.sleep(0.05)
+                await self._subscription_ready.wait()
                 continue
             event = await self.subscription.get()
             if isinstance(event, CoreAppEventGap):
+                logger.warning("core-app-server event stream overflow; closing ws 1013 (thread=%s)", self.thread_id or "-")
                 await self.websocket.close(code=1013, reason="Event stream overflow; reconnect to resume.")
                 return
             if event is None:
                 continue
-            await self._send(event_notification(event))
             event_method = event.get("method") if isinstance(event, dict) else getattr(event, "method", "")
-            if event_method in (CORE_RUN_ITEM_METHOD, "session/created", "workflow/changed"):
+            if event_method == CORE_RUN_ITEM_METHOD:
+                await self._enqueue_run_item(event)
                 continue
+            # Non-runItem events must land after any buffered deltas so the
+            # client never observes state out of order.
+            await self._flush_run_item_buffer()
+            await self._send(event_notification(event))
+            if event_method in (CORE_RUN_ITEM_METHOD, "session/created", "session/updated", "workflow/changed"):
+                continue
+            if event_method not in SNAPSHOT_TRIGGER_EVENTS:
+                continue
+            # Throttled boundary snapshot (latest state wins on the next
+            # trigger). The client applies everything else incrementally.
+            now = asyncio.get_running_loop().time()
+            if now - self._last_snapshot_sent_at < SNAPSHOT_MIN_INTERVAL_SECONDS:
+                logger.debug(
+                    "Core app-server skipping throttled snapshot for %s (%.2fs since last)",
+                    _event_thread_id(event),
+                    now - self._last_snapshot_sent_at,
+                )
+                continue
+            self._last_snapshot_sent_at = now
             await self._send_snapshot(_event_thread_id(event))
+
+    async def _enqueue_run_item(self, event: Any) -> None:
+        """Coalesce runItem text deltas for the same item into one message.
+
+        Deltas are merged in-place over a ~20ms window (see __init__ for why);
+        the merged message keeps the first event's identity and lists every
+        absorbed event id under ``_coalesced_event_ids`` so the client marks
+        them all seen and a later snapshot never replays them.
+        """
+        params = event_notification(event)["params"]
+        value = params.get("payload") if isinstance(params.get("payload"), dict) else params
+        inner = value.get("payload") if isinstance(value.get("payload"), dict) else {}
+        if not isinstance(inner.get("delta"), str):
+            # Non-delta runItem events (tool_result, status, usage, full
+            # content) carry completion/state — send immediately, ordered
+            # after any buffered deltas for the same item.
+            await self._flush_run_item_buffer()
+            await self._send({"method": CORE_RUN_ITEM_METHOD, "params": params})
+            return
+        key = (
+            str(value.get("thread_id") or params.get("thread_id") or self.thread_id or ""),
+            str(value.get("item_id") or params.get("item_id") or ""),
+            str(value.get("kind") or ""),
+        )
+        buffered = self._run_item_buffer.get(key)
+        if buffered is None:
+            buffered = self._run_item_buffer[key] = {
+                "method": CORE_RUN_ITEM_METHOD,
+                "params": _copy_run_item_params(params),
+            }
+            buffered["params"]["payload"]["_coalesced_event_ids"] = [
+                str(value.get("event_id") or params.get("event_id") or ""),
+            ]
+        else:
+            b_inner = buffered["params"]["payload"]["payload"]
+            if isinstance(b_inner, dict):
+                b_inner["delta"] = f"{b_inner.get('delta') or ''}{inner['delta']}"
+            event_id = str(value.get("event_id") or params.get("event_id") or "")
+            if event_id:
+                buffered["params"]["payload"]["_coalesced_event_ids"].append(event_id)
+        if self._run_item_flush_task is None:
+            self._run_item_flush_task = asyncio.create_task(self._flush_run_items_soon())
+
+    async def _flush_run_items_soon(self) -> None:
+        try:
+            await asyncio.sleep(self._run_item_flush_interval)
+        finally:
+            self._run_item_flush_task = None
+        await self._flush_run_item_buffer()
+
+    async def _flush_run_item_buffer(self) -> None:
+        if self._run_item_flush_task is not None:
+            self._run_item_flush_task.cancel()
+            self._run_item_flush_task = None
+        if not self._run_item_buffer:
+            return
+        buffer, self._run_item_buffer = self._run_item_buffer, {}
+        for message in buffer.values():
+            await self._send(message)
 
     async def _send_snapshot(self, thread_id: str) -> None:
         async with self.context.session_factory() as db:
@@ -260,6 +387,7 @@ class CoreLiveConnection:
         self._unsubscribe()
         self.thread_id = thread_id
         self.subscription = self.context.hub.subscribe(thread_id)
+        self._subscription_ready.set()
 
     def switch_thread_subscription(self, thread_id: str) -> None:
         self._subscribe(thread_id)
@@ -268,6 +396,7 @@ class CoreLiveConnection:
         if self.thread_id and self.subscription is not None:
             self.context.hub.unsubscribe(self.thread_id, self.subscription)
         self.subscription = None
+        self._subscription_ready.clear()
 
     async def _handle_raw(self, raw: dict[str, Any]) -> None:
         if await self._handle_client_response(raw):
@@ -311,10 +440,10 @@ class CoreLiveConnection:
         thread_id = _thread_id_from_params(request.params) or _thread_id_from_outcome(outcome)
         if thread_id:
             self._subscribe(thread_id)
-            result = outcome.response.get("result")
-            snapshot = result.get("snapshot") if isinstance(result, dict) else None
-            if isinstance(snapshot, dict):
-                await self._send(snapshot_notification(snapshot))
+            # Note: no separate thread/snapshot notification here — the RPC
+            # response already carries result.snapshot (when included), and
+            # re-sending it as a notification doubled snapshot traffic
+            # (56MB x 2 per operation on large threads).
 
     async def handle_raw(self, raw: dict[str, Any]) -> None:
         await self._handle_raw(raw)
@@ -414,6 +543,15 @@ class CoreLiveConnection:
             await self._send(rpc_error(request.id, code=INVALID_REQUEST, message="Invalid initialize params", data={"errors": exc.errors()}))
             return
         self.initialized = True
+        client_name = ""
+        if params.clientInfo is not None:
+            client_name = str(getattr(params.clientInfo, "name", "") or "")
+        logger.info(
+            "core-app-server initialize client=%s thread=%s last_seen_seq=%s",
+            client_name,
+            params.threadId or "-",
+            params.lastSeenSeq,
+        )
         if params.threadId:
             self._subscribe(params.threadId)
         if self.adapter.after_initialize is not None:
@@ -492,6 +630,27 @@ def _event_thread_id(event: Any) -> str:
     if isinstance(event, dict):
         return str(event.get("thread_id") or "")
     return ""
+
+
+def _copy_run_item_params(params: dict[str, Any]) -> dict[str, Any]:
+    """Deep-copy the two payload levels of a runItem event.
+
+    ``event_notification`` shallow-copies the envelope, so the runItem's inner
+    ``payload`` dict is still shared with the stored event. Coalescing mutates
+    that dict (appending deltas) — copy it first so the event store and other
+    subscribers never see rewritten history.
+    """
+    value = params.get("payload")
+    if isinstance(value, dict):
+        inner = value.get("payload")
+        return {
+            **params,
+            "payload": {
+                **value,
+                "payload": dict(inner) if isinstance(inner, dict) else inner,
+            },
+        }
+    return dict(params)
 
 
 __all__ = ["CoreLiveConnection", "CoreLiveConnectionAdapter", "create_core_live_router"]

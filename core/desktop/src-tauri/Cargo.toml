@@ -13,3 +13,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri = { version = "2", features = [] }
 rfd = "0.17"
+# Opens URLs/files in the OS default application. Used to route clicked
+# hyperlinks to the system browser so they never navigate the webview.
+open = "5"
+# Strict URL parsing for scheme validation in open_external_url. Already a
+# transitive dependency of Tauri, so adding it directly adds no new build.
+url = "2"

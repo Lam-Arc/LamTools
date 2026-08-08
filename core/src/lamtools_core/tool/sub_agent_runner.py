@@ -147,11 +147,11 @@ class KernelSubAgentRunner:
                 records.append(record)
         if not records:
             return task
-        # Resolve the sub-agent model's capability for the split.
-        # effective_model is already a canonical model_id (resolved in run()).
-        from lamtools_core.llm.model_capabilities import resolve_capability
+        # Resolve the sub-agent model's capability from its jsonc definition
+        # (jsonc is the single source of truth; model_id alone is insufficient).
+        from lamtools_core.config.model_store import resolve_model_capability
 
-        capability = resolve_capability(model_id or self.model_id)
+        capability = resolve_model_capability(model_id or self.model_id, work_root=str(self.work_root))
         index_text, content_blocks, _deferred = build_capability_aware_attachment_input(
             records, [r.id for r in records], capability
         )
@@ -268,15 +268,17 @@ class KernelSubAgentRunner:
             and last_turn.reply.strip()
         )
         logged_steps = result.state.metadata.get("kernel_steps")
-        tool_call_count = (
-            sum(
+        if isinstance(logged_steps, list):
+            tool_call_count = sum(
                 len(step.get("tool_calls") or [])
                 for step in logged_steps
                 if isinstance(step, dict)
             )
-            if isinstance(logged_steps, list)
-            else sum(len(step.tool_steps) for step in result.steps)
-        )
+        else:
+            tool_call_count = sum(len(step.tool_steps) for step in result.steps)
+        model_rounds = len(result.steps)
+        tool_call_breakdown = self._extract_tool_call_breakdown(result)
+        death_scene = self._extract_death_scene(result)
         return SubAgentRunResult(
             session_id=result.session_id,
             run_id=result.run_id,
@@ -288,7 +290,69 @@ class KernelSubAgentRunner:
             ended_with_final_response=ended_with_final_response,
             pending_approval=dict(result.state.metadata.get("pending_approval") or {}),
             pending_waiting_request=dict(result.state.metadata.get("pending_waiting_request") or {}),
+            model_rounds=model_rounds,
+            tool_call_breakdown=tool_call_breakdown,
+            death_scene=death_scene,
         )
+
+    @staticmethod
+    def _extract_tool_call_breakdown(result: Any) -> dict[str, int]:
+        """Aggregate tool call counts by tool name across all kernel steps."""
+        breakdown: dict[str, int] = {}
+        logged_steps = result.state.metadata.get("kernel_steps")
+        if isinstance(logged_steps, list):
+            for step in logged_steps:
+                if not isinstance(step, dict):
+                    continue
+                for tc in step.get("tool_calls") or []:
+                    if isinstance(tc, dict):
+                        name = str(tc.get("name") or "")
+                        if name:
+                            breakdown[name] = breakdown.get(name, 0) + 1
+        else:
+            for step in result.steps:
+                for ts in step.tool_steps:
+                    name = ts.call.name
+                    breakdown[name] = breakdown.get(name, 0) + 1
+        return breakdown
+
+    @staticmethod
+    def _extract_death_scene(result: Any) -> str:
+        """Build a compact summary of the last model round for failure forwarding.
+
+        Captures the model's last reply (truncated) and the tools it called in
+        that round along with their execution status, so the parent agent can
+        understand *why* the sub-agent died instead of seeing only a generic
+        'failed without a final response' message.
+        """
+        if not result.steps:
+            return ""
+        last_step = result.steps[-1]
+        lines = ["--- Sub-agent death scene (last model round) ---"]
+        turn = last_step.turn
+        if turn is not None and turn.reply.strip():
+            reply = turn.reply.strip()
+            if len(reply) > 500:
+                reply = reply[:500] + "…"
+            lines.append(f"Model reply: {reply}")
+        else:
+            lines.append("Model reply: (empty — no text produced)")
+        if last_step.tool_steps:
+            lines.append("Tools called this round:")
+            for ts in last_step.tool_steps:
+                status = ts.result.status if ts.result else "unknown"
+                entry = f"  - {ts.call.name} → {status}"
+                if ts.result and ts.result.error:
+                    err = ts.result.error.strip()
+                    if len(err) > 200:
+                        err = err[:200] + "…"
+                    entry += f": {err}"
+                lines.append(entry)
+        else:
+            lines.append("Tools called this round: (none)")
+        if last_step.error:
+            lines.append(f"Step error: {last_step.error}")
+        return "\n".join(lines)
 
     async def resume_approved(
         self,

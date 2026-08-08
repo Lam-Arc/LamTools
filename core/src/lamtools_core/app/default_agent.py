@@ -16,7 +16,7 @@ _logger = logging.getLogger(__name__)
 
 from lamtools_core.event import CollectingEventSink, EventSink
 from lamtools_core.llm import ChatMessage
-from lamtools_core.llm.model_capabilities import resolve_capability
+from lamtools_core.config.model_store import resolve_model_capability
 from lamtools_core.composer_commands import (
     build_composer_command_catalog,
     default_core_resource_roots,
@@ -353,7 +353,11 @@ def create_core_agent_operations(
         if _is_llm_client(model_provider):
             from lamtools_core.tool.default_toolbox import build_core_toolbox
 
-            runtime_options = _runtime_options_from_request(spec, request)
+            runtime_options = _runtime_options_from_request(
+                spec,
+                request,
+                work_root=runtime_work_root,
+            )
             runtime_model_provider = _model_provider_for_runtime(
                 model_provider,
                 runtime_options=runtime_options,
@@ -726,8 +730,12 @@ def create_core_agent_operations(
                     pending = refreshed_pending
                     pending_call = refreshed_call
 
-            runtime_options = _runtime_options_from_state(spec, state)
             runtime_work_root = _work_root_from_state(paths, state)
+            runtime_options = _runtime_options_from_state(
+                spec,
+                state,
+                work_root=runtime_work_root,
+            )
             runtime_model_provider = _model_provider_for_runtime(
                 model_provider,
                 runtime_options=runtime_options,
@@ -1541,7 +1549,7 @@ def _work_root_from_state(paths: CoreAgentPaths, state: Any) -> Path:
     return Path(metadata.get("work_root") or paths.work_root).expanduser().resolve()
 
 
-def _runtime_options_from_request(spec: CoreAgentSpec, request: OperationRequest) -> CoreAgentRuntimeOptions:
+def _runtime_options_from_request(spec: CoreAgentSpec, request: OperationRequest, work_root: str | None = None) -> CoreAgentRuntimeOptions:
     payload = request.payload if isinstance(request.payload, dict) else {}
     metadata = request.metadata if isinstance(request.metadata, dict) else {}
     model_id = str(
@@ -1614,11 +1622,11 @@ def _runtime_options_from_request(spec: CoreAgentSpec, request: OperationRequest
         temperature=0.2 if temperature is None else temperature,
         compact_trigger_tokens=compact_trigger_tokens,
         compact_limit_tokens=compact_limit_tokens,
-        capability=resolve_capability(model_id),
+        capability=resolve_model_capability(model_id, work_root=work_root),
     )
 
 
-def _runtime_options_from_state(spec: CoreAgentSpec, state: Any) -> CoreAgentRuntimeOptions:
+def _runtime_options_from_state(spec: CoreAgentSpec, state: Any, work_root: str | None = None) -> CoreAgentRuntimeOptions:
     metadata = state.metadata if isinstance(getattr(state, "metadata", None), dict) else {}
     model_id = str(metadata.get("model_id") or spec.default_model or "")
     temperature = _optional_float(metadata.get("temperature"))
@@ -1640,7 +1648,7 @@ def _runtime_options_from_state(spec: CoreAgentSpec, state: Any) -> CoreAgentRun
         temperature=0.2 if temperature is None else temperature,
         compact_trigger_tokens=_optional_int(metadata.get("compact_trigger_tokens")),
         compact_limit_tokens=_optional_int(metadata.get("compact_limit_tokens")),
-        capability=resolve_capability(model_id),
+        capability=resolve_model_capability(model_id, work_root=work_root),
     )
 
 
@@ -1761,7 +1769,12 @@ async def _persist_core_event_live(
     )
 
     async def write(db):
-        envelopes = await persistence.append_batch(db, run_item_events=run_items)
+        # Turn-time events are appended without snapshot projection: each
+        # project rewrites the whole thread snapshot (1.3-2.3s on 55MB threads,
+        # measured) and stalls the stream. The snapshot is projected once at
+        # the turn boundary (_persist_run_items) instead; clients render from
+        # the runItem event stream in the meantime.
+        envelopes = await persistence.append_batch(db, run_item_events=run_items, project_snapshot=False)
         return envelopes
 
     envelopes = await persistence.write(write)

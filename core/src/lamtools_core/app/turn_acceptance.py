@@ -6,7 +6,12 @@ from typing import Any
 from lamtools_core.event import RunItemEvent
 
 
-TURN_ACCEPT_DEDUPE_METHODS = {"turn/accepted", "queue/itemAccepted"}
+# Dedup method scopes. Each acceptance operation dedupes only against its own
+# prior accepted-event method, so a client_message_id collision across
+# turn.start and queue.create cannot cause one operation to be silently
+# deduped against the other.
+TURN_ACCEPTED_METHODS = {"turn/accepted"}
+QUEUE_ITEM_ACCEPTED_METHODS = {"queue/itemAccepted"}
 
 
 @dataclass(frozen=True)
@@ -118,7 +123,8 @@ def build_cancelled_turn_event(
 
 __all__ = [
     "CoreAppEventSpec",
-    "TURN_ACCEPT_DEDUPE_METHODS",
+    "QUEUE_ITEM_ACCEPTED_METHODS",
+    "TURN_ACCEPTED_METHODS",
     "TurnAcceptancePlan",
     "build_cancelled_turn_event",
     "build_turn_acceptance_plan",

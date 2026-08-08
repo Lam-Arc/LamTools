@@ -31,6 +31,7 @@
 
 <script setup lang="ts">
 import { ref, watch } from 'vue'
+import { openExternalUrl } from '../helpers/openUrl'
 
 const props = defineProps<{
   url: string
@@ -70,7 +71,9 @@ function reload() {
 
 function openExternal() {
   if (currentUrl.value) {
-    window.open(currentUrl.value, '_blank', 'noopener')
+    // Route to the OS default browser (Tauri) or a new tab (web) instead of
+    // window.open(...,'_blank'), which would navigate/open a webview window.
+    void openExternalUrl(currentUrl.value)
   }
 }
 

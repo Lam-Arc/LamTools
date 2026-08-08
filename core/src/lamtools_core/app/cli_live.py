@@ -146,8 +146,7 @@ class CliLiveFormatter:
                     if not path:
                         self._streamed_tool_content = content
                         return []
-                    label_parts = [self.label(tool_tag(tool_name), tool_name, time.monotonic())]
-                    label_parts.append(path)
+                    label_parts = [self.label(tool_tag(tool_name), path, time.monotonic())]
                     self._streamed_tool_label = " ".join(label_parts) + " "
                     self._streamed_tool_content = ""
                 prev = self._streamed_tool_content
@@ -608,8 +607,44 @@ def app_server_tool_detail(payload: dict[str, Any], fallback: str = "") -> str:
 
 
 def tool_tag(tool_name: str) -> str:
+    """Map a tool name to a concise Chinese action label for the live CLI.
+
+    Mirrors the simplified UI wording: no category tag, just the action verb.
+    """
     normalized = str(tool_name or "").lower()
-    return "file" if any(marker in normalized for marker in ("file", "dir", "path", "write", "edit", "read")) else "tool"
+    if "checklist" in normalized:
+        return "清单"
+    if "write" in normalized or "create" in normalized:
+        return "创建"
+    if "edit" in normalized or "patch" in normalized:
+        return "编辑"
+    if any(marker in normalized for marker in ("command", "run", "exec", "bash", "shell")):
+        return "运行命令"
+    if any(marker in normalized for marker in ("search", "grep", "glob", "find")):
+        return "搜索"
+    if any(marker in normalized for marker in ("fetch", "browser", "http")):
+        return "获取网页"
+    if any(marker in normalized for marker in ("read", "cat", "get-content")):
+        return "读取"
+    if any(marker in normalized for marker in ("list", "ls", "dir")):
+        return "列出"
+    if "git" in normalized:
+        return "git 差异" if "diff" in normalized else "git 状态"
+    if "question" in normalized or "ask" in normalized:
+        return "提问"
+    if "sub_agent" in normalized or "subagent" in normalized:
+        return "子代理"
+    if "skill" in normalized:
+        return "技能"
+    if "workflow" in normalized:
+        return "工作流"
+    if "goal" in normalized:
+        return "目标"
+    if "arrange" in normalized:
+        return "定时任务"
+    if "mcp" in normalized:
+        return "MCP"
+    return "工具"
 
 
 def is_failed_event(event: dict[str, Any]) -> bool:

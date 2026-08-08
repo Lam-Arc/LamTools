@@ -6,7 +6,6 @@ import pytest
 from lamtools_core.tool import ToolCall
 from lamtools_core.tool import web_tools
 from lamtools_core.tool.web_tools import (
-    make_browser_check_handler,
     make_web_fetch_handler,
     make_web_search_handler,
 )
@@ -85,7 +84,7 @@ async def test_web_fetch_returns_readable_html_artifact(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_browser_check_reports_expected_text(monkeypatch):
+async def test_web_fetch_reports_expected_text(monkeypatch):
     async def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
@@ -97,11 +96,11 @@ async def test_browser_check_reports_expected_text(monkeypatch):
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler), timeout=httpx.Timeout(5.0))
     monkeypatch.setattr(web_tools, "_HTTP_CLIENT", client)
     try:
-        tool = make_browser_check_handler("")
+        tool = make_web_fetch_handler("")
         result = await tool(
             ToolCall(
-                id="call-browser",
-                name="browser_check",
+                id="call-fetch-expect",
+                name="web_fetch",
                 arguments={"url": "http://example.test/", "expect": "Hello Browser"},
             )
         )
@@ -110,12 +109,38 @@ async def test_browser_check_reports_expected_text(monkeypatch):
         monkeypatch.setattr(web_tools, "_HTTP_CLIENT", None)
 
     assert result.status == "ok"
-    assert "title: Demo" in result.content
+    assert "Hello Browser" in result.content
+    assert "expect_found: true" in result.content
     assert result.metadata["expect_found"] is True
 
 
 @pytest.mark.asyncio
-async def test_browser_check_bypasses_system_proxy_for_loopback_urls(monkeypatch):
+async def test_web_fetch_fails_when_expected_text_missing(monkeypatch):
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="nothing relevant here", request=request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler), timeout=httpx.Timeout(5.0))
+    monkeypatch.setattr(web_tools, "_HTTP_CLIENT", client)
+    try:
+        tool = make_web_fetch_handler("")
+        result = await tool(
+            ToolCall(
+                id="call-fetch-expect-miss",
+                name="web_fetch",
+                arguments={"url": "http://example.test/", "expect": "needle"},
+            )
+        )
+    finally:
+        await client.aclose()
+        monkeypatch.setattr(web_tools, "_HTTP_CLIENT", None)
+
+    assert result.status == "failed"
+    assert "Expected text not found: needle" in result.error
+    assert result.metadata["expect_found"] is False
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_bypasses_system_proxy_for_loopback_urls(monkeypatch):
     real_client = httpx.AsyncClient
     created: list[dict] = []
 
@@ -133,10 +158,10 @@ async def test_browser_check_bypasses_system_proxy_for_loopback_urls(monkeypatch
         )
 
     monkeypatch.setattr(web_tools.httpx, "AsyncClient", client_factory)
-    tool = make_browser_check_handler("")
+    tool = make_web_fetch_handler("")
     result = await tool(ToolCall(
-        id="call-browser-local",
-        name="browser_check",
+        id="call-fetch-local",
+        name="web_fetch",
         arguments={"url": "http://localhost:8080/", "expect": "local ok"},
     ))
 

@@ -39,6 +39,11 @@ class SubAgentRunResult:
     ended_with_final_response: bool = False
     pending_approval: dict[str, Any] = field(default_factory=dict)
     pending_waiting_request: dict[str, Any] = field(default_factory=dict)
+    # Diagnostics forwarded to the parent agent on failure so it can make an
+    # informed decision (retry with different wording, take over, etc.).
+    model_rounds: int = 0  # total model call rounds (= len(kernel steps))
+    tool_call_breakdown: dict[str, int] = field(default_factory=dict)  # {tool_name: count}
+    death_scene: str = ""  # last model round: reply + tools called + statuses
 
     @property
     def succeeded(self) -> bool:

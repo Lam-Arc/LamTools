@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from lamtools_core.app.turn_acceptance import (
-    TURN_ACCEPT_DEDUPE_METHODS,
+    QUEUE_ITEM_ACCEPTED_METHODS,
+    TURN_ACCEPTED_METHODS,
     build_cancelled_turn_event,
     build_turn_acceptance_plan,
 )
@@ -17,7 +18,11 @@ def test_turn_acceptance_plan_builds_common_events_and_running_status() -> None:
         work_root="E:/work",
     )
 
-    assert TURN_ACCEPT_DEDUPE_METHODS == {"turn/accepted", "queue/itemAccepted"}
+    # Each acceptance operation dedupes only against its own method, so a
+    # client_message_id collision across turn.start and queue.create cannot
+    # cross-dedup.
+    assert TURN_ACCEPTED_METHODS == {"turn/accepted"}
+    assert QUEUE_ITEM_ACCEPTED_METHODS == {"queue/itemAccepted"}
     assert plan.turn_accepted.method == "turn/accepted"
     assert plan.turn_accepted.payload == {
         "type": "turn",

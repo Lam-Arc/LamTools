@@ -12,7 +12,6 @@ from lamtools_core.runtime.background_processes import (
 )
 from lamtools_core.tool import ToolArtifact, ToolCall, ToolResult
 from lamtools_core.tool.command import CommandExecution as _CommandExecution
-from lamtools_core.tool.command import detect_test_command
 from lamtools_core.tool.command import format_command_output as _format_command_output
 from lamtools_core.tool.command import format_running_command_output as _format_running_command_output
 from lamtools_core.tool.command import run_subprocess as _run_subprocess
@@ -99,8 +98,6 @@ class CommandToolHandlers:
 
     async def run_command(self, call: ToolCall) -> ToolResult:
         """Execute a shell command inside *work_root*.
-
-        Both ``run_command`` and ``run_tests`` map to this handler.
 
         On Unix (Linux/macOS): commands are split via ``shlex.split`` and
         executed without shell expansion.
@@ -394,73 +391,3 @@ class CommandToolHandlers:
             artifacts=[artifact],
             metadata=metadata,
         )
-    async def run_tests(self, call: ToolCall) -> ToolResult:
-        """Run tests and return a structured test-result contract."""
-        args = call.arguments if isinstance(call.arguments, dict) else {}
-        command = args.get("command")
-        if command is not None and not isinstance(command, str):
-            return ToolResult(call_id=call.id, name=call.name, status="failed", error="'command' must be a string or null")
-        command = (command or "").strip() or self._detect_test_command()
-        if not command:
-            return ToolResult(
-                call_id=call.id,
-                name=call.name,
-                status="failed",
-                error="No test command detected; pass an explicit command",
-                metadata={"command": "", "exit_code": None, "passed": False, "summary": "not_detected"},
-            )
-
-        timeout = args.get("timeout")
-        if timeout is None:
-            timeout = 180
-
-        command_result = await self.run_command(
-            ToolCall(
-                id=call.id,
-                name=call.name,
-                arguments={"command": command, "timeout": timeout},
-            )
-        )
-        command_metadata = dict(command_result.metadata or {})
-        exit_code = command_metadata.get("exit_code")
-        passed = command_result.status == "ok" and exit_code == 0
-        timed_out = bool(command_metadata.get("timed_out"))
-        duration_seconds = command_metadata.get("duration_seconds")
-        summary = "passed" if passed else "failed"
-        if timed_out:
-            summary = "timed_out"
-
-        content_lines = [
-            f"[test_result] {summary}",
-            f"[command] {command}",
-            f"[exit_code] {exit_code}",
-        ]
-        if isinstance(duration_seconds, (int, float)):
-            content_lines.append(f"[duration_seconds] {duration_seconds:.2f}")
-        content = "\n".join(content_lines) + "\n\n" + (command_result.content or command_result.error or "")
-
-        metadata = {
-            **command_metadata,
-            "command": command,
-            "passed": passed,
-            "summary": summary,
-        }
-        return ToolResult(
-            call_id=call.id,
-            name=call.name,
-            status="ok" if passed else "failed",
-            content=content,
-            error="" if passed else (command_result.error or f"Tests {summary}"),
-            artifacts=[
-                ToolArtifact(
-                    kind="test_result",
-                    uri="",
-                    content=command_result.content,
-                    metadata=metadata,
-                )
-            ],
-            metadata=metadata,
-        )
-
-    def _detect_test_command(self) -> str:
-        return detect_test_command(self._work_root)

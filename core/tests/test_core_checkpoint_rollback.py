@@ -176,7 +176,7 @@ async def _append_turn_completed(db: Any, *, session_id: str, turn_id: str, mess
 
 
 @pytest.mark.asyncio
-async def test_checkpoint_restores_conversation_and_all_workspace_file_classes_and_can_be_undone(
+async def test_checkpoint_restores_conversation_and_all_workspace_file_classes(
     tmp_path: Path,
 ) -> None:
     """One public checkpoint must own conversation and workspace rollback together."""
@@ -244,28 +244,12 @@ async def test_checkpoint_restores_conversation_and_all_workspace_file_classes_a
             {"role": "user", "content": "first turn"}
         ]
         _assert_workspace_restored_lazy(work_root)
-
-        undone = await coordinator.undo(restored.operation_id)
-
-        assert undone.status == "committed"
-        assert [message.content for message in await sessions.list_messages("session-rollback")] == [
-            "first turn",
-            "second turn",
-        ]
-        assert await db.runtime_state_store.get_history("session-rollback") == [
-            {"role": "user", "content": "first turn"},
-            {"role": "assistant", "content": "second turn"},
-        ]
-        # Lazy capture: undo restores the conversation but has no "after"
-        # workspace snapshot to go back to, so the workspace stays as restore
-        # left it.
-        _assert_workspace_restored_lazy(work_root)
     finally:
         await db.close()
 
 
 @pytest.mark.asyncio
-async def test_checkpoint_restore_and_undo_keep_runtime_projection_and_events_consistent(tmp_path: Path) -> None:
+async def test_checkpoint_restore_keeps_runtime_projection_and_events_consistent(tmp_path: Path) -> None:
     session_id = "session-live-rollback"
     first_turn = "turn-1"
     second_turn = "turn-2"
@@ -315,24 +299,6 @@ async def test_checkpoint_restore_and_undo_keep_runtime_projection_and_events_co
         assert await db.runtime_state_store.get_history(session_id) == [
             {"role": "user", "content": "first"},
             {"role": "assistant", "content": "FIRST_OK"},
-        ]
-
-        restarted_coordinator = _checkpoint_coordinator_type()(
-            work_root=work_root,
-            session_factory=db.session_factory,
-            write_coordinator=db.persistence.write_coordinator,
-            storage_root=tmp_path / "checkpoint-data",
-        )
-        await restarted_coordinator.undo(restored.operation_id)
-        undone_detail = await show_core_session(db, session_id)
-
-        assert undone_detail["snapshot"]["status"] == "completed"
-        assert {event["turn_id"] for event in undone_detail["events"]} == {first_turn, second_turn}
-        assert await db.runtime_state_store.get_history(session_id) == [
-            {"role": "user", "content": "first"},
-            {"role": "assistant", "content": "FIRST_OK"},
-            {"role": "user", "content": "second"},
-            {"role": "assistant", "content": "SECOND_OK"},
         ]
     finally:
         await db.close()

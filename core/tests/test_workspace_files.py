@@ -14,7 +14,6 @@ from lamtools_core.tool.document_normalize import (
 )
 from lamtools_core.tool.workspace_files import (
     WorkspaceReadOnlyTools,
-    document_normalize_tool,
     edit_file_tool,
     write_file_tool,
 )
@@ -129,57 +128,6 @@ async def test_read_file_does_not_write_docx_images_without_approval(tmp_path):
     assert first.metadata["assets"] == []
     assert "were not extracted by the read-only path" in first.content
     assert not (work_root / ".lamtools").exists()
-
-    normalized = await document_normalize_tool(
-        ToolCall(id="normalize-docx-image", name="document_normalize", arguments={"path": "illustrated.docx"}),
-        work_root=work_root,
-        max_text_length=50_000,
-    )
-
-    assert normalized.status == "ok"
-    assert len(normalized.metadata["assets"]) == 1
-    asset_path = normalized.metadata["assets"][0]
-    assert asset_path.startswith(".lamtools/document-assets/")
-    assert f"![Extracted image 1]({asset_path})" in normalized.content
-    assert (work_root / asset_path).read_bytes() == image_bytes
-
-
-@pytest.mark.asyncio
-async def test_document_normalize_rejects_asset_directory_symlink_escape(tmp_path):
-    from docx import Document
-
-    work_root = tmp_path / "project"
-    outside_root = tmp_path / "outside"
-    work_root.mkdir()
-    outside_root.mkdir()
-    try:
-        (work_root / ".lamtools").symlink_to(outside_root, target_is_directory=True)
-    except OSError as exc:
-        pytest.skip(f"directory symlinks are unavailable: {exc}")
-
-    image_bytes = base64.b64decode(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
-    )
-    source_image = work_root / "source.png"
-    source_image.write_bytes(image_bytes)
-    document = Document()
-    document.add_picture(str(source_image))
-    document.save(work_root / "linked-assets.docx")
-    source_image.unlink()
-
-    result = await document_normalize_tool(
-        ToolCall(
-            id="normalize-symlink-escape",
-            name="document_normalize",
-            arguments={"path": "linked-assets.docx"},
-        ),
-        work_root=work_root,
-        max_text_length=50_000,
-    )
-
-    assert result.status == "failed"
-    assert "outside the workspace" in result.error
-    assert list(outside_root.iterdir()) == []
 
 
 @pytest.mark.asyncio
