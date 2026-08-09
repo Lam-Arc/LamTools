@@ -14,7 +14,6 @@
     :density="density"
     :theme="theme"
     :content-width="contentWidth"
-    :allow-environment-import="true"
     :permission-mode="permissionMode"
     :request-rpc="requestConfigOperation"
     :workflows="settingsWorkflowList"
@@ -31,7 +30,6 @@
     @add-stop="uiPreferences.addStop"
     @remove-stop="uiPreferences.removeStop"
     @sort-stops="uiPreferences.sortStops"
-    @import-environment="importEnvironmentConfig"
     @update-permission-mode="updatePermissionMode"
     @create-provider="createProvider"
     @update-provider="updateProvider"
@@ -615,6 +613,16 @@ function setRuntimeStatus(text: string, duration = 3000) {
 }
 
 const loadError = ref<string | null>(null)
+let loadErrorTimer: ReturnType<typeof setTimeout> | null = null
+
+function setLoadError(text: string) {
+  loadError.value = text
+  if (loadErrorTimer) { clearTimeout(loadErrorTimer); loadErrorTimer = null }
+  if (text) {
+    // 错误横幅不自动消失会永久挂在主界面顶部，误导用户以为"一打开就有"问题。
+    loadErrorTimer = window.setTimeout(() => { loadError.value = null }, 8000)
+  }
+}
 const showProjectCreate = ref(false)
 const projectCreateLoading = ref(false)
 const projectCreateError = ref('')
@@ -1169,7 +1177,7 @@ async function loadInitialData() {
     await Promise.all([loadModelOptions(), loadPermissionMode(), refreshProjects(), refreshSessions()])
     if (sessions.value[0]) await selectSession(sessions.value[0].id)
   } catch (error) {
-    loadError.value = error instanceof Error ? error.message : String(error)
+    setLoadError(error instanceof Error ? error.message : String(error))
   }
 }
 
@@ -1633,10 +1641,6 @@ async function setDefaultModel(modelId: string) {
   await mutateConfig('config.models.set_default', { scope: 'global', model_id: modelId }, '已设为默认模型')
 }
 
-async function importEnvironmentConfig() {
-  await mutateConfig('config.import_env', {}, '已从当前环境导入')
-}
-
 async function loadPermissionMode() {
   try {
     const result = await requestConfigOperation('settings.get', { namespace: 'core.runtimeControls' })
@@ -1667,7 +1671,7 @@ async function mutateConfig(method: string, params: object, successText: string)
     await loadModelOptions()
     setRuntimeStatus(successText)
   } catch (error) {
-    loadError.value = error instanceof Error ? error.message : String(error)
+    setLoadError(error instanceof Error ? error.message : String(error))
   }
 }
 

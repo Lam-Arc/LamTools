@@ -253,7 +253,12 @@ def build_shared_config_operation_catalog(
             return OperationResult(name=request.name, payload=imported)
         api_key = os.environ.get("LAMTOOLS_LLM_API_KEY", "").strip()
         if not api_key:
-            return _error(request, "LAMTOOLS_LLM_API_KEY is not configured")
+            return _error(
+                request,
+                "LAMTOOLS_LLM_API_KEY is not configured — 请在设置中手动添加供应商/模型"
+                "（设置 → 模型与供应商），或在 CLI 中设置环境变量 LAMTOOLS_LLM_API_KEY"
+                "（需同时设置 LAMTOOLS_LLM_MODEL_ID）后重试",
+            )
         base_url = os.environ.get("LAMTOOLS_LLM_BASE_URL", "https://api.openai.com/v1").strip()
         model_id = os.environ.get("LAMTOOLS_LLM_MODEL_ID", "").strip()
         if not model_id:
