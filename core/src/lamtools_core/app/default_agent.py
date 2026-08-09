@@ -7,7 +7,7 @@ import inspect
 import logging
 import time as time_module
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -350,11 +350,26 @@ def create_core_agent_operations(
             if goal.status == "blocked":
                 await goal_manager.update(goal.id, status="active", status_reason="")
         runtime_work_root = _work_root_from_request(paths, request)
+        # Dreaming settings are read from app_settings (namespace core.dreaming)
+        # on every turn so a settings change takes effect without a restart —
+        # same pattern as live_operations' core.runtimeControls resolution.
+        # Failures fall back silently to the spec defaults.
+        turn_spec = spec
+        if catalog.has("settings.get"):
+            try:
+                dream_result = await catalog.execute("settings.get", {"namespace": "core.dreaming"})
+                dream_value = dream_result.payload.get("value") or {}
+                dream_enabled = bool(dream_value.get("enabled"))
+                dream_min_turns = int(dream_value.get("min_turns") or 3)
+                if dream_enabled != getattr(spec, "dreaming_enabled", False) or dream_min_turns != getattr(spec, "dream_min_turns", 3):
+                    turn_spec = replace(spec, dreaming_enabled=dream_enabled, dream_min_turns=dream_min_turns)
+            except Exception:
+                turn_spec = spec
         if _is_llm_client(model_provider):
             from lamtools_core.tool.default_toolbox import build_core_toolbox
 
             runtime_options = _runtime_options_from_request(
-                spec,
+                turn_spec,
                 request,
                 work_root=runtime_work_root,
             )
@@ -475,8 +490,8 @@ def create_core_agent_operations(
                     context_window_tokens=runtime_options.context_window_tokens,
                     compact_trigger_tokens=runtime_options.compact_trigger_tokens,
                     compact_limit_tokens=runtime_options.compact_limit_tokens,
-                    dreaming_enabled=getattr(spec, "dreaming_enabled", False),
-                    dream_min_turns=getattr(spec, "dream_min_turns", 3),
+                    dreaming_enabled=getattr(turn_spec, "dreaming_enabled", False),
+                    dream_min_turns=getattr(turn_spec, "dream_min_turns", 3),
                     hook_engine=plugin_assembly["hook_engine"],
                     checkpoint_coordinator=turn_checkpoint_coordinator,
                     completion_gate=create_goal_gate(

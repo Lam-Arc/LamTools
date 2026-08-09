@@ -1288,6 +1288,20 @@ def build_parser() -> argparse.ArgumentParser:
     memory_set = memory_sub.add_parser("set", help="Write the global memory.md from a UTF-8 file or stdin")
     memory_set.add_argument("source_file", help="Path to a markdown file, or '-' for stdin")
     memory_set.set_defaults(func=cmd_memory_set)
+    memory_dream = memory_sub.add_parser(
+        "dream", help="Show or configure automatic memory consolidation (Dreaming, 设置 → 上下文与记忆)"
+    )
+    memory_dream_sub = memory_dream.add_subparsers(dest="memory_dream_command", required=True)
+    memory_dream_show = memory_dream_sub.add_parser("show", help="Show the current dreaming configuration")
+    memory_dream_show.add_argument("--config-db", default="", help="LLM config database (default: data/lamtools.db)")
+    memory_dream_show.set_defaults(func=cmd_memory_dream_show)
+    memory_dream_config = memory_dream_sub.add_parser(
+        "config", help="Update the dreaming configuration (enabled / min_turns)"
+    )
+    memory_dream_config.add_argument("--enabled", default=None, choices=["true", "false"], help="Enable/disable automatic dreaming")
+    memory_dream_config.add_argument("--min-turns", default=None, type=int, help="Minimum turns between dream passes (default 3)")
+    memory_dream_config.add_argument("--config-db", default="", help="LLM config database (default: data/lamtools.db)")
+    memory_dream_config.set_defaults(func=cmd_memory_dream_config)
 
     load_context = sub.add_parser("load-context", help="Read or write the global load_context.jsonc (unified config dir)")
     load_context_sub = load_context.add_subparsers(dest="load_context_command", required=True)
@@ -2603,6 +2617,77 @@ async def cmd_memory_set(args: argparse.Namespace) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     print(f"[memory] saved {len(content)} chars to {path}")
+    return 0
+
+
+_DREAMING_NAMESPACE = "core.dreaming"
+
+
+def _memory_dream_db(args: argparse.Namespace) -> sqlite3.Connection | None:
+    """Open the config database (lamtools.db) where app_settings lives."""
+    try:
+        con = sqlite3.connect(_resolve_config_db(getattr(args, "config_db", "") or None))
+        con.row_factory = sqlite3.Row
+        return con
+    except (FileNotFoundError, sqlite3.OperationalError) as exc:
+        print(f"[memory dream] cannot open config database: {exc}", file=sys.stderr)
+        return None
+
+
+def _memory_dream_settings(con: sqlite3.Connection) -> dict[str, Any]:
+    try:
+        row = con.execute("select value from app_settings where namespace=?", (_DREAMING_NAMESPACE,)).fetchone()
+    except sqlite3.OperationalError:
+        return {}
+    return _json_dict(row["value"] if row is not None else None)
+
+
+async def cmd_memory_dream_show(args: argparse.Namespace) -> int:
+    con = _memory_dream_db(args)
+    if con is None:
+        return 1
+    try:
+        value = _memory_dream_settings(con)
+    finally:
+        con.close()
+    enabled = bool(value.get("enabled"))
+    print(f"enabled:  {'yes' if enabled else 'no'}")
+    print(f"min_turns: {int(value.get('min_turns') or 3)}")
+    print("说明:     开启后每轮会话结束时自动把值得长期保留的内容蒸馏到工作区 MEMORY.md；/dream 命令始终可手动触发")
+    return 0
+
+
+async def cmd_memory_dream_config(args: argparse.Namespace) -> int:
+    con = _memory_dream_db(args)
+    if con is None:
+        return 1
+    try:
+        value = _memory_dream_settings(con)
+        changed = False
+        if args.enabled is not None:
+            value["enabled"] = args.enabled == "true"
+            changed = True
+        if args.min_turns is not None:
+            if args.min_turns < 1:
+                print("error: --min-turns must be >= 1", file=sys.stderr)
+                return 1
+            value["min_turns"] = args.min_turns
+            changed = True
+        if not changed:
+            print("error: nothing to change (pass --enabled / --min-turns)", file=sys.stderr)
+            return 1
+        con.execute(
+            "insert into app_settings(namespace, value, updated_at) values(?, ?, ?) "
+            "on conflict(namespace) do update set value = excluded.value, updated_at = excluded.updated_at",
+            (_DREAMING_NAMESPACE, json.dumps(value, ensure_ascii=False), _now_iso()),
+        )
+        con.commit()
+    except sqlite3.OperationalError as exc:
+        print(f"[memory dream] cannot update settings: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        con.close()
+    print(f"[memory dream] saved: enabled={bool(value.get('enabled'))} min_turns={int(value.get('min_turns') or 3)}")
     return 0
 
 
