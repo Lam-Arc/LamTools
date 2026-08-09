@@ -11,7 +11,7 @@ $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $NsisDir = "$Root\core\desktop\src-tauri\target\release\nsis\x64"
 $NsiFile = "$NsisDir\installer.nsi"
 $Makensis = "$env:LOCALAPPDATA\tauri\NSIS\Bin\makensis.exe"
-$OutExe = "$Root\core\desktop\src-tauri\target\release\bundle\nsis\LamCore_0.1.0_x64-setup.exe"
+$OutExe = "$Root\core\desktop\src-tauri\target\release\bundle\nsis\LamCore_0.2.0_x64-setup.exe"
 
 if (-not (Test-Path $NsiFile)) {
     Write-Host "[FAIL] NSIS script not found: $NsiFile" -ForegroundColor Red
