@@ -1,6 +1,6 @@
 """LamTools Core SDK - protocols, types, and base interfaces."""
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 from lamtools_core.llm import (
     BackoffStrategy,
