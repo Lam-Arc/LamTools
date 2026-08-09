@@ -54,7 +54,7 @@ function commandLabel(command: CoreCommandCatalogItem): string {
   bottom: calc(100% + 6px);
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--theme-composer-text, currentColor) 16%, transparent);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: var(--theme-composer-background, #111);
   box-shadow: var(--shadow-md);
   z-index: 20;

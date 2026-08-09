@@ -108,5 +108,5 @@ watch(() => props.projectId, () => {
   font-size: 12px;
   color: rgba(255,255,255,0.5);
 }
-.file-tree-error { color: var(--orange, #e07a5b); }
+.file-tree-error { color: var(--orange, #ff9142); }
 </style>

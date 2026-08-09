@@ -443,7 +443,7 @@ function statusLabel(status: string): string {
 .conversation-more {
   width: 100%;
   padding: 6px 8px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: color-mix(in srgb, var(--theme-backdrop-text) 64%, transparent);
   font-size: 12px;

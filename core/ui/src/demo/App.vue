@@ -1360,6 +1360,7 @@ async function deleteSession(sessionId: string) {
 
 async function selectSession(id: string) {
   activeSessionId.value = id
+  restoreSessionModel(id)
   runtimeController.disconnect()
   liveComposerController.resetForThreadChange()
   composerErrorText.value = ''
@@ -1368,6 +1369,23 @@ async function selectSession(id: string) {
   await liveComposerController.loadCommandCatalog(id)
   await refreshGoal(id, true)
   await threadScroll.scrollToBottom(true)
+}
+
+// Session-scoped model memory: each session remembers its own model choice,
+// so switching sessions restores that session's model instead of sharing a
+// single global selection. The chosen model is persisted into the session's
+// metadata by the selectedModelId watcher below.
+function restoreSessionModel(id: string) {
+  if (id.startsWith('wf_')) return
+  const session = sessions.value.find((item) => item.id === id)
+  const storedModelId = session?.metadata?.model_id
+  if (
+    typeof storedModelId === 'string'
+    && storedModelId
+    && availableModels.value.some((model) => model.id === storedModelId)
+  ) {
+    executionControls.selectModel(storedModelId)
+  }
 }
 
 async function refreshAfterRollback() {
@@ -2087,6 +2105,31 @@ function messageFromError(error: unknown): string {
 
 watch(composerText, () => {
   void nextTick(resizeComposerTextarea)
+})
+
+// Persist the model chosen while a session is active into that session's
+// metadata (PATCH /sessions/:id) — the per-session model memory that
+// restoreSessionModel() reads back on every session switch. Best-effort: a
+// failed save must not undo the local selection.
+watch(selectedModelId, (modelId) => {
+  const sessionId = activeSessionId.value
+  if (!sessionId || sessionId.startsWith('wf_')) return
+  const session = sessions.value.find((item) => item.id === sessionId)
+  if (!session) return
+  const metadata: Record<string, unknown> = { ...(session.metadata || {}) }
+  if (modelId) metadata.model_id = modelId
+  else delete metadata.model_id
+  void requestJson(`/sessions/${encodeURIComponent(sessionId)}`, {
+    method: 'PATCH',
+    body: { metadata },
+  })
+    .then((updated) => {
+      const raw = updated as RawSession
+      sessions.value = sessions.value.map((item) =>
+        item.id === sessionId ? { ...item, metadata: raw.metadata } : item,
+      )
+    })
+    .catch(() => { /* best-effort persistence */ })
 })
 
 watch(messages, async (newVal, oldVal) => {

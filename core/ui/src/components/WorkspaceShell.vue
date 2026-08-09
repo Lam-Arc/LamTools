@@ -349,7 +349,7 @@ defineExpose({ leftPinned, rightPinned, toggleLeftPinned, toggleRightPinned })
 .icon-btn {
   width: 28px;
   height: 28px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--theme-main-text, #fff) 8%, transparent);
   color: var(--muted);
   display: grid;

@@ -594,9 +594,12 @@ const settingsThemeStyle = computed(() => {
       props.theme.controlOpacity,
     ),
     '--settings-control-text': props.theme.controlText,
-    '--settings-panel-2': lightMain ? '#f0efeb' : '#1d1e1e',
-    '--settings-line': lightMain ? '#d4d0cc' : '#3b3a38',
-    '--settings-muted': lightMain ? '#8a8580' : '#a7a29b',
+    // 暗色分支不重复字面量：layout.css 的 --settings-* fallback 即 :root 真值（单一来源）
+    ...(lightMain ? {
+      '--settings-panel-2': '#f0efeb',
+      '--settings-line': '#d4d0cc',
+      '--settings-muted': '#8a8580',
+    } : {}),
   }
 })
 
@@ -814,9 +817,9 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
   position: relative;
   width: min(960px, calc(100vw - 48px));
   max-height: calc(100dvh - var(--titlebar-offset, 36px) - 48px);
-  border: 1px solid color-mix(in srgb, var(--theme-main-text, #f2efeb) 12%, transparent);
-  border-radius: 16px;
-  background: var(--bg, #111111);
+  border: 1px solid color-mix(in srgb, var(--settings-main-text, #f2efeb) 12%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--settings-card-background, var(--theme-main-background, #111111));
   box-shadow: var(--shadow-lg);
   overflow: hidden;
   display: flex;
@@ -840,8 +843,8 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
   width: min(560px, 100%);
   max-height: calc(100% - 48px);
   overflow-y: auto;
-  border-radius: 12px;
-  background: var(--bg, #1a1a1a);
+  border-radius: var(--radius);
+  background: var(--settings-card-background, var(--theme-main-background, #111111));
   border: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 14%, transparent);
   box-shadow: var(--shadow-md);
   padding: 18px 20px;
@@ -896,7 +899,7 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
 .preset-summary {
   min-width: 0;
   padding: 10px 12px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--settings-main-text, #fff) 6%, transparent);
 }
 
@@ -949,7 +952,7 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
   gap: 4px;
   padding: 4px;
   border: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 12%, transparent);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
 }
 
 .density-options button {
@@ -1021,7 +1024,7 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
   align-items: center;
   justify-content: space-between;
   cursor: pointer;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   padding: 8px 10px;
   margin: -4px -10px;
   transition: background 0.12s ease;
@@ -1141,8 +1144,8 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
   color: var(--muted);
 }
 .capability-badge.multimodal {
-  background: color-mix(in srgb, var(--blue, #4a90d9) 18%, transparent);
-  color: color-mix(in srgb, var(--blue, #4a90d9) 80%, var(--text));
+  background: color-mix(in srgb, var(--blue, #79bcff) 18%, transparent);
+  color: color-mix(in srgb, var(--blue, #79bcff) 80%, var(--text));
 }
 .capability-badge.text {
   background: color-mix(in srgb, var(--muted) 18%, transparent);

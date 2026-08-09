@@ -47,9 +47,7 @@ def _make_config_db(db_path: Path) -> str:
 
 
 @pytest.mark.asyncio
-async def test_migrate_exports_db_models_to_jsonc(tmp_path, monkeypatch):
-    home = tmp_path / "home"
-    monkeypatch.setattr(Path, "home", lambda: home)
+async def test_migrate_exports_db_models_to_jsonc(tmp_path, isolated_config_root):
     db_path = tmp_path / "lamtools.db"
     _make_config_db(db_path)
 
@@ -59,15 +57,13 @@ async def test_migrate_exports_db_models_to_jsonc(tmp_path, monkeypatch):
 
     assert count == 2
     assert len(paths) == 2
-    # Files land under ~/.lam/config/models/.
-    global_dir = home / ".lam" / "config" / "models"
+    # Files land under the unified config dir models/.
+    global_dir = isolated_config_root / "models"
     assert (global_dir / "xopglm52.jsonc").is_file()
     assert (global_dir / "xopkimik26.jsonc").is_file()
 
 
-def test_migrate_preserves_provider_name_and_default_flag(tmp_path, monkeypatch):
-    home = tmp_path / "home"
-    monkeypatch.setattr(Path, "home", lambda: home)
+def test_migrate_preserves_provider_name_and_default_flag(tmp_path, isolated_config_root):
     db_path = tmp_path / "lamtools.db"
     _make_config_db(db_path)
 
@@ -88,14 +84,12 @@ def test_migrate_preserves_provider_name_and_default_flag(tmp_path, monkeypatch)
     assert store2.default_model_id_sync(work_root=None) == "xopkimik26"
 
 
-def test_migrate_skips_when_modelstore_already_populated(tmp_path, monkeypatch):
-    home = tmp_path / "home"
-    monkeypatch.setattr(Path, "home", lambda: home)
+def test_migrate_skips_when_modelstore_already_populated(tmp_path, isolated_config_root):
     db_path = tmp_path / "lamtools.db"
     _make_config_db(db_path)
 
     # Pre-populate with one model so the store is non-empty.
-    global_dir = home / ".lam" / "config" / "models"
+    global_dir = isolated_config_root / "models"
     global_dir.mkdir(parents=True, exist_ok=True)
     (global_dir / "existing.jsonc").write_text(
         '{"model_id":"existing","display_name":"Existing","provider":"P",'
@@ -113,12 +107,10 @@ def test_migrate_skips_when_modelstore_already_populated(tmp_path, monkeypatch):
     assert not (global_dir / "xopglm52.jsonc").exists()
 
 
-def test_migrate_force_overrides_existing_store(tmp_path, monkeypatch):
-    home = tmp_path / "home"
-    monkeypatch.setattr(Path, "home", lambda: home)
+def test_migrate_force_overrides_existing_store(tmp_path, isolated_config_root):
     db_path = tmp_path / "lamtools.db"
     _make_config_db(db_path)
-    global_dir = home / ".lam" / "config" / "models"
+    global_dir = isolated_config_root / "models"
     global_dir.mkdir(parents=True, exist_ok=True)
     (global_dir / "existing.jsonc").write_text(
         '{"model_id":"existing","display_name":"Existing","provider":"P",'
@@ -133,9 +125,7 @@ def test_migrate_force_overrides_existing_store(tmp_path, monkeypatch):
     assert count == 2  # force exports even though the store is non-empty
 
 
-def test_migrate_handles_missing_db(tmp_path, monkeypatch):
-    home = tmp_path / "home"
-    monkeypatch.setattr(Path, "home", lambda: home)
+def test_migrate_handles_missing_db(tmp_path, isolated_config_root):
     store = ModelStore()
     count, paths = migrate_models_from_db(tmp_path / "nonexistent.db", model_store=store, scope="global")
     assert count == 0

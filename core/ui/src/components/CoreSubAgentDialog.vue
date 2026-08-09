@@ -325,9 +325,9 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
-.core-sub-agent-dialog__status.is-running { color: var(--green, #5fca87); }
-.core-sub-agent-dialog__status.is-pending { color: var(--orange, #e9a23b); }
-.core-sub-agent-dialog__status.is-error { color: var(--red, #ef6b63); }
+.core-sub-agent-dialog__status.is-running { color: var(--green, #32d17d); }
+.core-sub-agent-dialog__status.is-pending { color: var(--orange, #ff9142); }
+.core-sub-agent-dialog__status.is-error { color: var(--red, #f5555d); }
 
 .core-sub-agent-dialog__close {
   position: relative;
@@ -357,7 +357,7 @@ onBeforeUnmount(() => {
 
 .core-sub-agent-dialog__close:focus-visible,
 .core-sub-agent-dialog__timeline:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--green, #5fca87) 62%, white 8%);
+  outline: 2px solid color-mix(in srgb, var(--green, #32d17d) 62%, white 8%);
   outline-offset: 2px;
 }
 
@@ -381,7 +381,7 @@ onBeforeUnmount(() => {
 .core-sub-agent-dialog__error {
   margin: 0;
   padding: .5rem .75rem 0;
-  color: var(--red, #ef6b63);
+  color: var(--red, #f5555d);
   font-size: .75rem;
   line-height: 1.45;
 }

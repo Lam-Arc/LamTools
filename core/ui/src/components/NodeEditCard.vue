@@ -437,7 +437,7 @@ function apply() {
 .port-value { flex: 1 1 auto; min-width: 0; background: var(--theme-main-subtle-background); border: 1px solid var(--theme-main-border); border-radius: var(--radius-sm, 6px); color: inherit; padding: 4px 6px; font-size: 11px; }
 .port-del {
   flex: 0 0 auto; border: none; background: transparent;
-  color: var(--red, #f87171); cursor: pointer; font-size: 13px; padding: 2px 4px;
+  color: var(--red, #f5555d); cursor: pointer; font-size: 13px; padding: 2px 4px;
   border-radius: 4px;
 }
 .port-del:hover { background: var(--theme-main-soft-background); }

@@ -671,85 +671,6 @@ function onRollbackMessage(payload: AssistantActionPayload): void {
 .tool-card-body--row .tool-output--error {
   background: transparent;
 }
-.command-output {
-  width: 100%;
-  min-width: 0;
-  display: grid;
-  overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--theme-main-text, #fff) 18%, transparent);
-  border-radius: var(--radius);
-  background: #050806;
-  color: #6ee36b;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
-}
-.command-terminal-chrome {
-  min-width: 0;
-  min-height: 32px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 12px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
-  background: linear-gradient(180deg, #2f3438 0%, #24282c 100%);
-}
-.command-terminal-light {
-  width: 10px;
-  height: 10px;
-  flex: 0 0 auto;
-  border-radius: 999px;
-}
-.command-terminal-light--close {
-  background: #ff5f56;
-}
-.command-terminal-light--minimize {
-  background: #ffbd2e;
-}
-.command-terminal-light--maximize {
-  background: #27c93f;
-}
-.command-terminal-title {
-  min-width: 0;
-  margin-left: 4px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 11px;
-  font-weight: 650;
-  line-height: 1;
-  color: rgba(255, 255, 255, 0.62);
-}
-.command-terminal-body {
-  min-width: 0;
-  display: grid;
-  gap: 10px;
-  padding: 13px 15px 15px;
-  background:
-    radial-gradient(circle at 18px 18px, rgba(110, 227, 107, 0.08), transparent 34px),
-    #050806;
-}
-.command-output-command {
-  min-width: 0;
-  display: block;
-  overflow-wrap: anywhere;
-  font-family: var(--font-mono);
-  font-size: 12.5px;
-  line-height: 1.45;
-  font-weight: 720;
-  color: #75ec72;
-  text-shadow: 0 0 8px rgba(117, 236, 114, 0.2);
-}
-.command-output-result {
-  min-width: 0;
-  margin: 0;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font-family: var(--font-mono);
-  font-size: 12.5px;
-  line-height: 1.5;
-  font-weight: 400;
-  color: #6ee36b;
-  text-shadow: 0 0 8px rgba(110, 227, 107, 0.16);
-}
 
 .process-step--model-text {
   width: 100%;
@@ -788,7 +709,7 @@ function onRollbackMessage(payload: AssistantActionPayload): void {
   gap: 8px;
   padding: 10px 11px;
   border: 1px solid color-mix(in srgb, var(--theme-main-text, #fff) 10%, transparent);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--theme-main-text, #fff) 4%, transparent);
 }
 
@@ -1119,7 +1040,8 @@ function onRollbackMessage(payload: AssistantActionPayload): void {
 /* 运行态标题流光（工具行 / sub-agent 行通用）：
    v-beam 指令给标题加 beam-host 并注入 beam-sweep 光束元素，
    JS rAF 驱动 transform；只有 running 状态下光束才显示。
-   颜色取聊天区背景，左右渐隐，范围被 overflow:hidden 限制在标题区域。 */
+   颜色取聊天区文字色（--theme-main-text）浅色扫过，左右渐隐，
+   范围被 overflow:hidden 限制在标题区域。 */
 .beam-host {
   position: relative;
   overflow: hidden;
@@ -1135,7 +1057,7 @@ function onRollbackMessage(payload: AssistantActionPayload): void {
   background: linear-gradient(
     90deg,
     transparent,
-    color-mix(in srgb, var(--bg, #111111) 90%, transparent),
+    color-mix(in srgb, var(--theme-main-text, #f2efeb) 25%, transparent),
     transparent
   );
   pointer-events: none;
@@ -1810,7 +1732,7 @@ function onRollbackMessage(payload: AssistantActionPayload): void {
   width: 26px;
   height: 20px;
   border: 0;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   padding: 0;
   background: transparent;
   color: color-mix(in srgb, var(--theme-main-text, #fff) 46%, transparent);
@@ -1823,7 +1745,7 @@ function onRollbackMessage(payload: AssistantActionPayload): void {
   color: var(--theme-main-text, #fff);
 }
 .assistant-action:focus-visible {
-  outline: 2px solid var(--blue, #6c8ed4);
+  outline: 2px solid var(--blue, #79bcff);
   outline-offset: 1px;
 }
 .assistant-action svg {
@@ -1831,7 +1753,7 @@ function onRollbackMessage(payload: AssistantActionPayload): void {
   height: 15px;
 }
 .assistant-action--copied {
-  color: var(--green, #4fa777);
+  color: var(--green, #32d17d);
 }
 @media (prefers-reduced-motion: reduce) {
   .assistant-actions,

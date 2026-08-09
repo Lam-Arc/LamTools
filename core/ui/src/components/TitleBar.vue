@@ -110,7 +110,7 @@ onUnmounted(() => {
 .brand {
   font-size: 15px;
   font-weight: 600;
-  color: #a1a1aa;
+  color: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 62%, transparent);
   letter-spacing: 0.3px;
   padding-left: 4px;
   line-height: 22px;   /* match .mode-toggle height → shared vertical center */
@@ -140,11 +140,11 @@ onUnmounted(() => {
   app-region: no-drag;
   font-family: inherit;
   font-size: 15px;
-  color: #a1a1aa;
+  color: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 62%, transparent);
 }
 
 .mode-toggle:focus-visible {
-  outline: 2px solid var(--blue, #3b82f6);
+  outline: 2px solid var(--blue, #79bcff);
   outline-offset: 1px;
 }
 
@@ -168,13 +168,13 @@ onUnmounted(() => {
 }
 
 /* per-mode tint on the text itself (no background). Desaturated so the tint
-   reads as a subtle wash rather than a bright color. */
-.mode-agent { color: color-mix(in srgb, #93c5fd 62%, #a1a1aa); }    /* 淡蓝,降饱和 */
-.mode-workflow { color: color-mix(in srgb, #fde68a 62%, #a1a1aa); } /* 淡黄,降饱和 */
+   reads as a subtle wash rather than a bright color. 底色取标题栏文字色降饱和。 */
+.mode-agent { color: color-mix(in srgb, var(--blue) 62%, color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 62%, transparent)); }    /* 淡蓝,降饱和 */
+.mode-workflow { color: color-mix(in srgb, var(--orange) 62%, color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 62%, transparent)); } /* 淡橙,降饱和 */
 
 /* hover brightens the visible word toward its lighter shade */
-.mode-toggle:hover .mode-agent.is-on { color: color-mix(in srgb, #bfdbfe 70%, #d4d4d8); }
-.mode-toggle:hover .mode-workflow.is-on { color: color-mix(in srgb, #fef9c3 70%, #d4d4d8); }
+.mode-toggle:hover .mode-agent.is-on { color: color-mix(in srgb, var(--blue) 70%, color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 85%, transparent)); }
+.mode-toggle:hover .mode-workflow.is-on { color: color-mix(in srgb, var(--orange) 70%, color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 85%, transparent)); }
 
 
 
@@ -196,19 +196,19 @@ onUnmounted(() => {
   justify-content: center;
   border: none;
   background: transparent;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   transition: background 0.12s ease;
-  color: #52525b;
+  color: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 30%, transparent);
 }
 
 .pin-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: #a1a1aa;
+  background: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) var(--alpha-hover), transparent);
+  color: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 62%, transparent);
 }
 
 .pin-btn.active {
-  color: #22c55e;
+  color: var(--green);
 }
 
 .pin-icon {
@@ -231,20 +231,20 @@ onUnmounted(() => {
   justify-content: center;
   border: none;
   background: transparent;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   transition: background 0.12s ease;
-  color: #71717a;
+  color: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 42%, transparent);
 }
 
 .ctrl-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: #e4e4e7;
+  background: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) var(--alpha-hover), transparent);
+  color: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 92%, transparent);
 }
 
 .ctrl-btn.close:hover {
-  background: #ef4444;
-  color: #fff;
+  background: var(--red);
+  color: var(--theme-backdrop-text, #f2efeb);
 }
 
 .ctrl-btn svg {

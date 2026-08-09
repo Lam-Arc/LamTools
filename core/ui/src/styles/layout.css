@@ -269,7 +269,7 @@
   right: var(--right-reveal);
   z-index: var(--z-stage, 15);
   overflow: hidden;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   border-left: 1px solid color-mix(in srgb, var(--theme-backdrop-text) 10%, transparent);
   border-right: 1px solid color-mix(in srgb, var(--theme-backdrop-text) 10%, transparent);
   background: color-mix(in srgb, var(--theme-titlebar-bg, #202020), var(--theme-main-solid, #111111));
@@ -751,7 +751,7 @@
 .resolved-card,
 .setting-card {
   border: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 12%, transparent);
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   background: var(--settings-card-background, #1b1c1c);
   color: var(--settings-card-text, var(--text));
 }
@@ -1058,8 +1058,8 @@
   content: "";
   width: 7px;
   height: 4px;
-  border-left: 2px solid var(--bg);
-  border-bottom: 2px solid var(--bg);
+  border-left: 2px solid var(--panel-2, #1d1e1e);
+  border-bottom: 2px solid var(--panel-2, #1d1e1e);
   opacity: 0;
   transform: rotate(-45deg) translateY(-1px);
 }
@@ -1178,7 +1178,7 @@
 }
 .agent-flow-steps span {
   min-width: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--settings-main-text, #fff) 5%, transparent);
   padding: 6px 8px;
 }
@@ -1214,7 +1214,7 @@
 }
 .agent-tabs button {
   border: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 10%, transparent);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--settings-main-text, #fff) 4%, transparent);
   color: var(--settings-card-text, var(--settings-main-text, #fff));
   padding: 6px 8px;
@@ -1306,7 +1306,7 @@
 .binary-segment button {
   min-height: 30px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
   padding: 6px 9px;
@@ -1859,7 +1859,7 @@
   display: grid;
   gap: 18px;
   border: 1px solid color-mix(in srgb, var(--theme-main-text) 14%, transparent);
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   background: var(--theme-main-background);
   color: var(--theme-main-text);
 }
@@ -1913,7 +1913,7 @@
   gap: 2px;
   padding: 8px;
   border: 1px solid color-mix(in srgb, var(--theme-backdrop-text) 9%, transparent);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--theme-backdrop-text) 4%, transparent);
 }
 .runtime-metric span {
@@ -2148,7 +2148,7 @@
   gap: 8px;
   align-items: center;
   border: 1px dashed color-mix(in srgb, var(--theme-backdrop-text) 16%, transparent);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: color-mix(in srgb, var(--theme-backdrop-text) 64%, transparent);
   padding: 0 8px;
@@ -2178,7 +2178,7 @@
 .review-diff-file {
   min-width: 0;
   border: 1px solid var(--theme-main-border, color-mix(in srgb, var(--theme-main-text, var(--text)) 12%, transparent));
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   overflow: hidden;
   background: var(--theme-main-soft-background, color-mix(in srgb, var(--theme-main-text, var(--text)) 3.5%, transparent));
   color: var(--theme-main-text, var(--text));
@@ -2525,7 +2525,7 @@
   gap: 6px;
   max-width: 280px;
   border: 1px solid color-mix(in srgb, var(--theme-main-text, #fff) 10%, transparent);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--theme-main-text, #fff) 6%, transparent);
   color: var(--theme-main-text, #f2efeb);
   padding: 5px 7px;

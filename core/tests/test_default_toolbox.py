@@ -389,6 +389,48 @@ async def test_core_toolbox_sub_agent_failure_forwards_diagnostics(tmp_path):
     assert "death scene" in result.content
     assert "Model reply: (empty" in result.content
     assert "Tools called this round: (none)" in result.content
+    # The error field itself must carry the death scene (wired via
+    # failure_message()) so callers that surface only the error — e.g. the
+    # approval-continuation path in default_agent — still see the reason.
+    assert result.error.startswith("Sub-agent failed without a final response.")
+    assert "death scene" in result.error
+    assert "Model reply: (empty" in result.error
+    # No duplication: the death scene renders exactly once in content
+    assert result.content.count("death scene") == 1
+
+
+def test_sub_agent_run_result_failure_message_embeds_death_scene():
+    """failure_message() must append the death scene so the parent agent sees
+    why the sub-agent died (model reply + tool statuses), not a generic line."""
+    result = SubAgentRunResult(
+        session_id="s",
+        run_id="r",
+        decision="failed",
+        death_scene=(
+            "--- Sub-agent death scene (last model round) ---\n"
+            "Model reply: I could not find the file\n"
+            "Tools called this round: (none)"
+        ),
+    )
+    message = result.failure_message()
+    assert message.startswith("Sub-agent failed without a final response.")
+    assert "death scene" in message
+    assert "Model reply: I could not find the file" in message
+
+    # Without a death scene the message stays as before
+    plain = SubAgentRunResult(session_id="s", run_id="r", decision="failed").failure_message()
+    assert plain == "Sub-agent failed without a final response."
+
+    # An explicit error wins as the summary; the death scene is still appended
+    with_error = SubAgentRunResult(
+        session_id="s",
+        run_id="r",
+        decision="failed",
+        error="boom",
+        death_scene="--- Sub-agent death scene (last model round) ---\nModel reply: nope",
+    ).failure_message()
+    assert with_error.startswith("boom")
+    assert "Model reply: nope" in with_error
 
 
 @pytest.mark.asyncio

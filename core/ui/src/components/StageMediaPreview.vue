@@ -37,7 +37,7 @@ const error = ref(false)
   max-width: 500px;
 }
 .stage-media-error {
-  color: #888;
+  color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 45%, transparent);
   font-size: 14px;
 }
 </style>

@@ -92,7 +92,7 @@ function onPointerUp() {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #888;
+  color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 45%, transparent);
   font-size: 14px;
 }
 .stage-image-controls {
@@ -103,19 +103,19 @@ function onPointerUp() {
   align-items: center;
   gap: 8px;
   padding: 4px 10px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: rgba(0,0,0,0.6);
-  color: #ccc;
+  color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 72%, transparent);
   font-size: 12px;
 }
 .stage-image-controls button {
   border: 0;
-  background: rgba(255,255,255,0.1);
-  color: #ccc;
-  border-radius: 4px;
+  background: color-mix(in srgb, var(--theme-main-text, #f2efeb) 10%, transparent);
+  color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 72%, transparent);
+  border-radius: var(--radius-sm);
   padding: 2px 8px;
   cursor: pointer;
   font-size: 12px;
 }
-.stage-image-controls button:hover { background: rgba(255,255,255,0.2); }
+.stage-image-controls button:hover { background: color-mix(in srgb, var(--theme-main-text, #f2efeb) 20%, transparent); }
 </style>

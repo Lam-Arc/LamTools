@@ -606,17 +606,17 @@ function errorMessage(cause: unknown): string {
 .rollback-header-actions { flex: 0 0 auto; gap: 4px; }
 .rollback-notice, .rollback-empty, .rollback-result, .rollback-error {
   margin: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   padding: 7px 8px;
   background: color-mix(in srgb, var(--theme-backdrop-text, currentColor) 5%, transparent);
   color: color-mix(in srgb, var(--theme-backdrop-text, currentColor) 74%, transparent);
   font-size: 11px;
   line-height: 1.45;
 }
-.rollback-notice { color: color-mix(in srgb, var(--orange, #d89a38) 84%, var(--theme-backdrop-text, currentColor) 16%); }
+.rollback-notice { color: color-mix(in srgb, var(--orange, #ff9142) 84%, var(--theme-backdrop-text, currentColor) 16%); }
 .rollback-result, .rollback-error { justify-content: space-between; gap: 8px; }
-.rollback-result { color: color-mix(in srgb, var(--green, #4fa777) 82%, var(--theme-backdrop-text, currentColor) 18%); }
-.rollback-error { color: color-mix(in srgb, var(--red, #df6b6b) 88%, var(--theme-backdrop-text, currentColor) 12%); }
+.rollback-result { color: color-mix(in srgb, var(--green, #32d17d) 82%, var(--theme-backdrop-text, currentColor) 18%); }
+.rollback-error { color: color-mix(in srgb, var(--red, #f5555d) 88%, var(--theme-backdrop-text, currentColor) 12%); }
 .rollback-restore-popover {
   position: fixed;
   inset: auto;
@@ -625,7 +625,7 @@ function errorMessage(cause: unknown): string {
   border: 1px solid color-mix(in srgb, var(--theme-backdrop-text, currentColor) 14%, transparent);
   border-radius: var(--radius);
   padding: 6px;
-  background: var(--theme-backdrop-background, #171717);
+  background: var(--theme-backdrop-background, #202020);
   box-shadow: var(--shadow-md);
   color: var(--theme-backdrop-text, currentColor);
   overflow: hidden;
@@ -671,8 +671,8 @@ function errorMessage(cause: unknown): string {
 .rollback-graph { position: relative; max-height: 360px; overflow: auto; --graph-gutter: 48px; }
 .rollback-graph-lines { position: absolute; inset: 0 auto auto 0; pointer-events: none; overflow: visible; }
 .rollback-edge { fill: none; stroke: color-mix(in srgb, var(--theme-backdrop-text, currentColor) 24%, transparent); stroke-width: 1.25; }
-.rollback-edge--rollback { stroke: color-mix(in srgb, var(--orange, #d89a38) 68%, transparent); }
-.rollback-edge--session_fork { stroke: color-mix(in srgb, var(--blue, #6c8ed4) 72%, transparent); }
+.rollback-edge--rollback { stroke: color-mix(in srgb, var(--orange, #ff9142) 68%, transparent); }
+.rollback-edge--session_fork { stroke: color-mix(in srgb, var(--blue, #79bcff) 72%, transparent); }
 .rollback-edge--hook { stroke-dasharray: 3 3; }
 .rollback-list { display: grid; margin: 0; padding: 0; list-style: none; }
 .rollback-row {
@@ -692,13 +692,13 @@ function errorMessage(cause: unknown): string {
   width: 12px;
   height: 12px;
   transform: translateX(-50%);
-  border: 2px solid var(--theme-backdrop-background, #171717);
+  border: 2px solid var(--theme-backdrop-background, #202020);
   border-radius: 50%;
   background: color-mix(in srgb, var(--theme-backdrop-text, currentColor) 72%, transparent);
 }
-.rollback-node-dot--rollback { background: var(--orange, #d89a38); }
-.rollback-node-dot--session_fork { background: var(--blue, #6c8ed4); }
-.rollback-node-dot--hook { background: var(--green, #4fa777); }
+.rollback-node-dot--rollback { background: var(--orange, #ff9142); }
+.rollback-node-dot--session_fork { background: var(--blue, #79bcff); }
+.rollback-node-dot--hook { background: var(--green, #32d17d); }
 .rollback-node-button {
   position: relative;
   width: 100%;
@@ -721,7 +721,7 @@ function errorMessage(cause: unknown): string {
   display: flex;
   align-items: center;
   overflow: hidden;
-  background: var(--theme-backdrop-background, #171717);
+  background: var(--theme-backdrop-background, #202020);
   color: var(--theme-backdrop-text, currentColor);
   font-size: 11px;
   line-height: 1.35;
@@ -745,7 +745,7 @@ function errorMessage(cause: unknown): string {
 .icon-action { width: 26px; border: 0; padding: 0; background: transparent; color: color-mix(in srgb, var(--theme-backdrop-text, currentColor) 72%, transparent); font-size: 15px; }
 .quiet-action:hover:not(:disabled), .icon-action:hover:not(:disabled) { background: color-mix(in srgb, var(--theme-backdrop-text, currentColor) var(--alpha-hover), transparent); color: var(--theme-backdrop-text, currentColor); }
 .quiet-action:focus-visible, .icon-action:focus-visible, .scope-action:focus-visible,
-.fork-action:focus-visible, .rollback-node-button:focus-visible { outline: 2px solid var(--blue, #6c8ed4); outline-offset: 2px; }
+.fork-action:focus-visible, .rollback-node-button:focus-visible { outline: 2px solid var(--blue, #79bcff); outline-offset: 2px; }
 .quiet-action:disabled, .icon-action:disabled, .scope-action:disabled,
 .fork-action:disabled, .rollback-node-button:disabled { cursor: default; opacity: .42; }
 .rollback-loading { display: grid; gap: 7px; padding: 5px 0; }

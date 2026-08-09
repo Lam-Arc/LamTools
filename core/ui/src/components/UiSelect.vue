@@ -162,7 +162,7 @@ onUnmounted(() => {
   width: max(280px, 100%);
   max-height: 320px;
   overflow: auto;
-  border: 1px solid color-mix(in srgb, currentColor 10%, transparent);
+  border: 1px solid color-mix(in srgb, currentColor 12%, transparent);
   border-radius: var(--radius);
   background: var(--settings-card-background, var(--theme-composer-background, #242424));
   color: var(--settings-card-text, var(--theme-composer-text, #f4f1ec));
@@ -185,7 +185,7 @@ onUnmounted(() => {
 .ui-select-group + .ui-select-group {
   margin-top: 6px;
   padding-top: 6px;
-  border-top: 1px solid color-mix(in srgb, currentColor 10%, transparent);
+  border-top: 1px solid color-mix(in srgb, currentColor 12%, transparent);
 }
 
 .ui-select-group-label {
@@ -230,7 +230,7 @@ onUnmounted(() => {
 
 .ui-select-option.active.active-accent {
   background: transparent;
-  color: var(--green, #5fca87);
+  color: var(--green, #32d17d);
 }
 
 .ui-select-option.separator-before {

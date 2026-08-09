@@ -84,6 +84,9 @@ core/ui/dist-core-app/
 # Workflow runtime output (generated scripts, hash files, runners)
 **/.lam/workflow_scripts/
 
+# Unified user config directory (seeded defaults, user-editable; never committed)
+**/.lam/core/
+
 # Root-level runtime/debug artifacts (not project code)
 /test-blog-project/
 /test-mod-site/

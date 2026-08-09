@@ -109,7 +109,7 @@ function isSubmitting(itemId: string): boolean {
 .core-queued-input-tray {
   margin: 4px 12px 6px;
   overflow: hidden;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   border: 1px solid color-mix(in srgb, var(--theme-composer-text) 7%, transparent);
   background: color-mix(in srgb, var(--theme-composer-text) 4%, var(--theme-composer-background));
 }

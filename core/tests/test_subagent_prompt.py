@@ -15,9 +15,8 @@ from lamtools_core.config.subagent_prompt import (
 
 
 @pytest.mark.asyncio
-async def test_load_subagent_guide_returns_builtin_when_no_file(tmp_path, monkeypatch):
+async def test_load_subagent_guide_returns_builtin_when_no_file(tmp_path, isolated_config_root):
     # Isolate from any real ~/.lam config on the test machine.
-    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
 
     guide = load_subagent_guide(tmp_path / "work")
 
@@ -27,11 +26,9 @@ async def test_load_subagent_guide_returns_builtin_when_no_file(tmp_path, monkey
 
 
 @pytest.mark.asyncio
-async def test_load_subagent_guide_prefers_project_over_global(tmp_path, monkeypatch):
-    home = tmp_path / "home"
+async def test_load_subagent_guide_prefers_project_over_global(tmp_path, isolated_config_root):
     work = tmp_path / "work"
-    monkeypatch.setattr(Path, "home", lambda: home)
-    global_dir = home / ".lam" / "config" / "subagent"
+    global_dir = isolated_config_root / "subagent"
     global_dir.mkdir(parents=True)
     (global_dir / "guide.md").write_text("# Global guide\nuse sub_agent wisely", encoding="utf-8")
     project_dir = work / ".lam" / "config" / "subagent"
@@ -48,11 +45,9 @@ async def test_load_subagent_guide_prefers_project_over_global(tmp_path, monkeyp
 
 
 @pytest.mark.asyncio
-async def test_load_subagent_guide_falls_back_to_global(tmp_path, monkeypatch):
-    home = tmp_path / "home"
+async def test_load_subagent_guide_falls_back_to_global(tmp_path, isolated_config_root):
     work = tmp_path / "work"
-    monkeypatch.setattr(Path, "home", lambda: home)
-    global_dir = home / ".lam" / "config" / "subagent"
+    global_dir = isolated_config_root / "subagent"
     global_dir.mkdir(parents=True)
     (global_dir / "guide.md").write_text("# Global only\nstandalone guide", encoding="utf-8")
 
@@ -62,28 +57,25 @@ async def test_load_subagent_guide_falls_back_to_global(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_write_subagent_guide_writes_to_requested_scope(tmp_path, monkeypatch):
-    home = tmp_path / "home"
+async def test_write_subagent_guide_writes_to_requested_scope(tmp_path, isolated_config_root):
     work = tmp_path / "work"
-    monkeypatch.setattr(Path, "home", lambda: home)
 
     project_path = write_subagent_guide("# New project guide", scope="project", work_root=work)
     global_path = write_subagent_guide("# New global guide", scope="global", work_root=work)
 
     assert project_path == work / ".lam" / "config" / "subagent" / "guide.md"
     assert project_path.read_text(encoding="utf-8") == "# New project guide"
-    assert global_path == home / ".lam" / "config" / "subagent" / "guide.md"
+    assert global_path == isolated_config_root / "subagent" / "guide.md"
     assert global_path.read_text(encoding="utf-8") == "# New global guide"
     # After writing, the loader returns the project (higher priority) content.
     assert "# New project guide" in load_subagent_guide(work)
 
 
-def test_guide_path_for_scope_project_without_work_root_falls_to_global(tmp_path, monkeypatch):
-    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+def test_guide_path_for_scope_project_without_work_root_falls_to_global(tmp_path, isolated_config_root):
     # Without a work_root, even a "project" scope cannot point at a project dir,
     # so the writer falls back to the global path (home) rather than erroring.
     path = guide_path_for_scope("project", None)
-    assert path == tmp_path / "home" / ".lam" / "config" / "subagent" / "guide.md"
+    assert path == isolated_config_root / "subagent" / "guide.md"
 
     path_with_root = guide_path_for_scope("project", tmp_path / "work")
     assert path_with_root == tmp_path / "work" / ".lam" / "config" / "subagent" / "guide.md"
@@ -101,8 +93,7 @@ def _guide_catalog(work_root: Path | None) -> OperationCatalog:
 
 
 @pytest.mark.asyncio
-async def test_rpc_guide_get_returns_builtin_when_unset(tmp_path, monkeypatch):
-    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+async def test_rpc_guide_get_returns_builtin_when_unset(tmp_path, isolated_config_root):
     catalog = _guide_catalog(tmp_path / "work")
 
     result = await catalog.execute(
@@ -116,8 +107,7 @@ async def test_rpc_guide_get_returns_builtin_when_unset(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_rpc_guide_set_then_get_roundtrips_project_scope(tmp_path, monkeypatch):
-    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+async def test_rpc_guide_set_then_get_roundtrips_project_scope(tmp_path, isolated_config_root):
     work = tmp_path / "work"
     catalog = _guide_catalog(work)
 
@@ -138,8 +128,7 @@ async def test_rpc_guide_set_then_get_roundtrips_project_scope(tmp_path, monkeyp
 
 
 @pytest.mark.asyncio
-async def test_rpc_guide_set_rejects_invalid_scope(tmp_path, monkeypatch):
-    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+async def test_rpc_guide_set_rejects_invalid_scope(tmp_path, isolated_config_root):
     catalog = _guide_catalog(tmp_path / "work")
 
     result = await catalog.execute(
@@ -152,8 +141,7 @@ async def test_rpc_guide_set_rejects_invalid_scope(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_rpc_guide_set_project_requires_work_root(tmp_path, monkeypatch):
-    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+async def test_rpc_guide_set_project_requires_work_root(tmp_path, isolated_config_root):
     # Catalog constructed without a work_root; payload also omits it.
     catalog = _guide_catalog(None)
 
@@ -170,12 +158,11 @@ async def test_rpc_guide_set_project_requires_work_root(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_base_agent_injects_custom_subagent_guide_into_system_prompt(tmp_path, monkeypatch):
+async def test_base_agent_injects_custom_subagent_guide_into_system_prompt(tmp_path, isolated_config_root):
     from lamtools_core.app.base_agent import CoreBaseAgentConfig, CoreBaseAgentKit
     from lamtools_core.kernel.state import RuntimeState
     from lamtools_core.prompt import PromptContext
 
-    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
     project_dir = tmp_path / "work" / ".lam" / "config" / "subagent"
     project_dir.mkdir(parents=True)
     (project_dir / "guide.md").write_text(
@@ -196,12 +183,11 @@ async def test_base_agent_injects_custom_subagent_guide_into_system_prompt(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_base_agent_injects_builtin_guide_when_no_file(tmp_path, monkeypatch):
+async def test_base_agent_injects_builtin_guide_when_no_file(tmp_path, isolated_config_root):
     from lamtools_core.app.base_agent import CoreBaseAgentConfig, CoreBaseAgentKit
     from lamtools_core.kernel.state import RuntimeState
     from lamtools_core.prompt import PromptContext
 
-    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
 
     kit = CoreBaseAgentKit(work_root=tmp_path / "work", config=CoreBaseAgentConfig())
     request = await kit.build_model_request(
@@ -214,12 +200,11 @@ async def test_base_agent_injects_builtin_guide_when_no_file(tmp_path, monkeypat
 
 
 @pytest.mark.asyncio
-async def test_base_agent_injects_capability_prompt_for_text_model(tmp_path, monkeypatch):
+async def test_base_agent_injects_capability_prompt_for_text_model(tmp_path, isolated_config_root):
     from lamtools_core.app.base_agent import CoreBaseAgentConfig, CoreBaseAgentKit
     from lamtools_core.kernel.state import RuntimeState
     from lamtools_core.prompt import PromptContext
 
-    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
     kit = CoreBaseAgentKit(
         work_root=tmp_path / "work",
         config=CoreBaseAgentConfig(capability="text"),
@@ -239,12 +224,11 @@ async def test_base_agent_injects_capability_prompt_for_text_model(tmp_path, mon
 
 
 @pytest.mark.asyncio
-async def test_base_agent_injects_capability_prompt_for_multimodal_model(tmp_path, monkeypatch):
+async def test_base_agent_injects_capability_prompt_for_multimodal_model(tmp_path, isolated_config_root):
     from lamtools_core.app.base_agent import CoreBaseAgentConfig, CoreBaseAgentKit
     from lamtools_core.kernel.state import RuntimeState
     from lamtools_core.prompt import PromptContext
 
-    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
     kit = CoreBaseAgentKit(
         work_root=tmp_path / "work",
         config=CoreBaseAgentConfig(capability="multimodal"),
@@ -261,12 +245,11 @@ async def test_base_agent_injects_capability_prompt_for_multimodal_model(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_base_agent_omits_capability_line_when_capability_unknown(tmp_path, monkeypatch):
+async def test_base_agent_omits_capability_line_when_capability_unknown(tmp_path, isolated_config_root):
     from lamtools_core.app.base_agent import CoreBaseAgentConfig, CoreBaseAgentKit
     from lamtools_core.kernel.state import RuntimeState
     from lamtools_core.prompt import PromptContext
 
-    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
     kit = CoreBaseAgentKit(
         work_root=tmp_path / "work",
         config=CoreBaseAgentConfig(capability=""),  # unknown

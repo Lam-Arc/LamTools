@@ -389,3 +389,130 @@ async def test_sqlalchemy_snapshot_store_applies_batch_in_one_projection(tmp_pat
             assert loaded["core"]["items"]["item-1"]["content"] == "hello"
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_apply_many_projects_deferred_events_with_seq_behind_snapshot(tmp_path):
+    """Streaming part events are appended without projection (project_snapshot=False);
+    their seq is then older than the snapshot seq advanced by later-projected
+    events. The turn-boundary apply_many must still project them (seen-dedup is
+    the only guard), otherwise message/thinking content never reaches the
+    snapshot and switching sessions loses the text."""
+    engine, session_factory = await _session_factory(tmp_path)
+    try:
+        async with session_factory() as db:
+            store = SqlAlchemyThreadSnapshotStore(
+                ThreadSnapshotRow,
+                projector=CoreAppSnapshotProjector(member_defaults={"queue": []}),
+            )
+            tool = RunItemEvent(
+                event_id="tool-10", kind="tool_result", thread_id="thread-1",
+                run_id="run-1", turn_id="turn-1", item_id="item-tool", seq=0,
+                status="completed",
+                payload={"tool_name": "ls", "content": "file list", "role": "tool"},
+            )
+            message = RunItemEvent(
+                event_id="msg-5", kind="message", thread_id="thread-1",
+                run_id="run-1", turn_id="turn-1", item_id="item-msg", seq=0,
+                status="completed",
+                payload={"role": "assistant", "content": "final answer"},
+                metadata={"runtime_phase": "runtime.part"},
+            )
+            # Later event projected first (tool result lands in snapshot, seq -> 10)
+            await store.apply(db, _envelope(10, tool.to_dict(), item_id="item-tool"))
+            # Boundary replay: batch contains the deferred message with seq=5 < 10
+            await store.apply_many(db, [_envelope(5, message.to_dict(), item_id="item-msg")])
+            await db.commit()
+
+        # A fresh session must read the message from the persisted JSON column —
+        # in-place projection on a shallow copy otherwise evades SQLAlchemy's
+        # attribute diff and the UPDATE silently drops snapshot_json.
+        async with session_factory() as db:
+            store = SqlAlchemyThreadSnapshotStore(
+                ThreadSnapshotRow,
+                projector=CoreAppSnapshotProjector(member_defaults={"queue": []}),
+            )
+            state = await store.load(db, "thread-1")
+            items = state["core"]["items"]
+            assert items["item-msg"]["content"] == "final answer"
+            assert items["item-tool"]["content"] == "file list"
+            assert state["snapshot_seq"] == 10
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_apply_many_is_idempotent_for_seen_events(tmp_path):
+    engine, session_factory = await _session_factory(tmp_path)
+    try:
+        async with session_factory() as db:
+            store = SqlAlchemyThreadSnapshotStore(
+                ThreadSnapshotRow,
+                projector=CoreAppSnapshotProjector(member_defaults={"queue": []}),
+            )
+            message = RunItemEvent(
+                event_id="msg-1", kind="message", thread_id="thread-1",
+                run_id="run-1", turn_id="turn-1", item_id="item-1", seq=0,
+                status="completed",
+                payload={"role": "assistant", "content": "answer"},
+            )
+            env = _envelope(1, message.to_dict(), item_id="item-1")
+            await store.apply_many(db, [env])
+            await store.apply_many(db, [env])  # same event id again
+
+            state = await store.load(db, "thread-1")
+            items = state["core"]["items"]
+            assert len(items) == 1
+            assert items["item-1"]["content"] == "answer"
+            assert len(state["seen_event_ids"]) == 1
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_apply_many_reorders_items_by_first_event_seq(tmp_path):
+    """Tool results project at runtime (before the turn boundary), while the
+    deferred thinking/message part events only reach the snapshot at the
+    boundary batch. The batch must reorder its items by first-event seq so the
+    turn renders as thinking -> message -> tool call, not tool calls first."""
+    engine, session_factory = await _session_factory(tmp_path)
+    try:
+        async with session_factory() as db:
+            store = SqlAlchemyThreadSnapshotStore(
+                ThreadSnapshotRow,
+                projector=CoreAppSnapshotProjector(member_defaults={"queue": []}),
+            )
+            tool = RunItemEvent(
+                event_id="tool-10", kind="tool_result", thread_id="thread-1",
+                run_id="run-1", turn_id="turn-1", item_id="item-tool", seq=0,
+                status="completed",
+                payload={"tool_name": "ls", "content": "file list", "role": "tool"},
+            )
+            message = RunItemEvent(
+                event_id="msg-5", kind="message", thread_id="thread-1",
+                run_id="run-1", turn_id="turn-1", item_id="item-msg", seq=0,
+                status="completed",
+                payload={"role": "assistant", "content": "final answer"},
+                metadata={"runtime_phase": "runtime.part"},
+            )
+            # Runtime projection: the tool result lands in the snapshot first.
+            await store.apply(db, _envelope(10, tool.to_dict(), item_id="item-tool"))
+
+            # Turn boundary: the full batch contains the deferred message
+            # (seq=5) plus the already-projected tool result (seq=10).
+            await store.apply_many(
+                db,
+                [
+                    _envelope(5, message.to_dict(), item_id="item-msg"),
+                    _envelope(10, tool.to_dict(), item_id="item-tool"),
+                ],
+            )
+
+            state = await store.load(db, "thread-1")
+            order = state["core"]["item_order"]
+            assert order == ["item-msg", "item-tool"]
+            # the ordering anchor is recorded on first creation
+            assert state["core"]["items"]["item-msg"]["seq"] == 5
+            assert state["core"]["items"]["item-tool"]["seq"] == 10
+    finally:
+        await engine.dispose()

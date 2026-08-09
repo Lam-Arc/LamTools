@@ -182,7 +182,7 @@ watch(() => props.language, (newLang) => {
   top: 6px;
   right: 10px;
   font-size: 10px;
-  color: var(--orange, #e07a5b);
+  color: var(--orange, #ff9142);
   pointer-events: none;
   z-index: 10;
 }

@@ -159,3 +159,91 @@ async def test_branch_from_recent_node_keeps_six_mainline_nodes(tmp_path: Path) 
         assert graph_ids == [*ids[-(MAX_CHECKPOINTS_PER_SESSION):-1], branch_id]
     finally:
         await db.close()
+
+
+@pytest.mark.asyncio
+async def test_rollback_bookkeeping_never_consumes_the_turn_window(tmp_path: Path) -> None:
+    """The 6-turn window counts conversation turns only. Each rollback adds
+    two bookkeeping nodes (undo/derived) that must not push turns out of the
+    window — otherwise repeated rollbacks would silently reduce the pool of
+    rollback targets below 6."""
+    core_db = tmp_path / "core.db"
+    work_root = tmp_path / "workspace"
+    work_root.mkdir()
+    db, coordinator = await _make_coordinator(core_db, work_root)
+    try:
+        ids = await _save_chain(coordinator, MAX_CHECKPOINTS_PER_SESSION)  # t1..t6
+        # Roll back twice: t1..t4..t6 become the abandoned future; the
+        # remaining line is t1 -> t2 (target) with 2× undo/derived bookkeeping.
+        first = await coordinator.load(ids[2], scope="conversation")  # to t3
+        assert first.status == "committed"
+        second = await coordinator.load(ids[1], scope="conversation")  # to t2
+        assert second.status == "committed"
+
+        # Continue with three new turns. With node-counting retention the two
+        # bookkeeping pairs would already have consumed the 6-node window and
+        # t1 would be pruned; with turn-counting it must survive.
+        for index in range(3):
+            await coordinator.save(
+                session_id="prune-session",
+                turn_id=f"after-rollback-{index}",
+            )
+
+        graph = await coordinator.graph("prune-session")
+        nodes = {node.id: node for node in graph.nodes}
+        turns = [n for n in graph.nodes if n.actor_kind == "main"]
+        assert ids[0] in nodes  # t1 still inside the window
+        assert ids[1] in nodes  # last rollback target stays too
+        assert len(turns) == 5  # t1, t2 + 3 new turns
+
+        # Fill the window: 6 new turns total → exactly the 6 newest turns
+        # remain; t1/t2 and the bookkeeping below them are pruned.
+        for index in range(3, MAX_CHECKPOINTS_PER_SESSION):
+            await coordinator.save(
+                session_id="prune-session",
+                turn_id=f"after-rollback-{index}",
+            )
+        graph = await coordinator.graph("prune-session")
+        turns = [n for n in graph.nodes if n.actor_kind == "main"]
+        assert len(turns) == MAX_CHECKPOINTS_PER_SESSION
+        assert ids[0] not in {n.id for n in graph.nodes}
+        assert ids[1] not in {n.id for n in graph.nodes}
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_manual_rpc_checkpoints_do_not_consume_the_turn_window(tmp_path: Path) -> None:
+    """Manual (actor_kind != main) checkpoints are bookkeeping: they never
+    count toward the 6-turn window and are pruned once the window passes
+    them."""
+    core_db = tmp_path / "core.db"
+    work_root = tmp_path / "workspace"
+    work_root.mkdir()
+    db, coordinator = await _make_coordinator(core_db, work_root)
+    try:
+        ids = await _save_chain(coordinator, MAX_CHECKPOINTS_PER_SESSION)
+        # A manual tool checkpoint between turns.
+        manual = (await coordinator.save(
+            session_id="prune-session",
+            turn_id="manual-1",
+            actor_kind="tool",
+            reason="manual",
+        )).id
+        # Two more turns — the manual node is above the window start, so it
+        # survives until the window slides past it.
+        extra = await _save_chain(coordinator, 1)
+        graph = await coordinator.graph("prune-session")
+        assert manual in {n.id for n in graph.nodes}
+        assert len([n for n in graph.nodes if n.actor_kind == "main"]) == MAX_CHECKPOINTS_PER_SESSION
+
+        # A sixth new turn slides the window: the manual node (bookkeeping)
+        # and the oldest turn are pruned together.
+        await _save_chain(coordinator, MAX_CHECKPOINTS_PER_SESSION - 1)
+        graph = await coordinator.graph("prune-session")
+        turns = [n for n in graph.nodes if n.actor_kind == "main"]
+        assert len(turns) == MAX_CHECKPOINTS_PER_SESSION
+        assert manual not in {n.id for n in graph.nodes}
+        assert extra[0] in {n.id for n in graph.nodes}
+    finally:
+        await db.close()

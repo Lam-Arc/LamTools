@@ -435,9 +435,9 @@ defineExpose({ renderStreaming })
 
 /* Inline code */
 .markdown-body :deep(code) {
-  background: rgba(255, 255, 255, 0.07);
+  background: color-mix(in srgb, var(--theme-main-text, #f2efeb) 7%, transparent);
   padding: 2px 6px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   font-size: 0.9em;
   font-family: var(--font-mono);
 }
@@ -446,8 +446,8 @@ defineExpose({ renderStreaming })
 .markdown-body :deep(pre) {
   margin: 6px 0;
   padding: 10px 14px;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.04);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--theme-main-text, #f2efeb) 4%, transparent);
   overflow-x: auto;
 }
 .markdown-body :deep(pre code) {
@@ -479,7 +479,7 @@ defineExpose({ renderStreaming })
 
 /* Links */
 .markdown-body :deep(a) {
-  color: #79bcff;
+  color: var(--blue);
   text-decoration: none;
 }
 .markdown-body :deep(a:hover) {
@@ -494,20 +494,20 @@ defineExpose({ renderStreaming })
 }
 .markdown-body :deep(th),
 .markdown-body :deep(td) {
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid color-mix(in srgb, var(--theme-main-text, #f2efeb) 12%, transparent);
   padding: 6px 10px;
   text-align: left;
   font-size: 13px;
 }
 .markdown-body :deep(th) {
-  background: rgba(255, 255, 255, 0.05);
+  background: color-mix(in srgb, var(--theme-main-text, #f2efeb) 5%, transparent);
   font-weight: 600;
 }
 
 /* Horizontal rule */
 .markdown-body :deep(hr) {
   border: 0;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-top: 1px solid color-mix(in srgb, var(--theme-main-text, #f2efeb) 8%, transparent);
   margin: 14px 0;
 }
 
@@ -524,9 +524,9 @@ defineExpose({ renderStreaming })
 
 /* Mermaid error fallback */
 .markdown-body :deep(.mermaid-error) {
-  color: #faa;
-  background: rgba(245, 85, 93, 0.08);
-  border: 1px solid rgba(245, 85, 93, 0.2);
+  color: color-mix(in srgb, var(--red) 55%, var(--theme-main-text, #f2efeb));
+  background: color-mix(in srgb, var(--red) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--red) 20%, transparent);
 }
 </style>
 

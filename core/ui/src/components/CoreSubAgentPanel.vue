@@ -212,7 +212,7 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: space-between;
   gap: .5rem;
-  color: color-mix(in srgb, var(--red, #ef6b63) 78%, var(--theme-backdrop-text, currentColor));
+  color: color-mix(in srgb, var(--red, #f5555d) 78%, var(--theme-backdrop-text, currentColor));
 }
 
 .core-sub-agent-panel__notice button {
@@ -258,7 +258,7 @@ onBeforeUnmount(() => {
 
 .core-sub-agent-panel__row:focus-visible,
 .core-sub-agent-panel__more:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--green, #5fca87) 62%, white 8%);
+  outline: 2px solid color-mix(in srgb, var(--green, #32d17d) 62%, white 8%);
   outline-offset: 2px;
 }
 
@@ -270,15 +270,15 @@ onBeforeUnmount(() => {
 }
 
 .core-sub-agent-panel__dot.is-running {
-  background: var(--green, #5fca87);
+  background: var(--green, #32d17d);
 }
 
 .core-sub-agent-panel__dot.is-pending {
-  background: var(--orange, #e9a23b);
+  background: var(--orange, #ff9142);
 }
 
 .core-sub-agent-panel__dot.is-error {
-  background: var(--red, #ef6b63);
+  background: var(--red, #f5555d);
 }
 
 .core-sub-agent-panel__name {

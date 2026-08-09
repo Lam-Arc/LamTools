@@ -28,18 +28,15 @@ def _write_model(dir_path: Path, model_id: str, **overrides) -> Path:
     return path
 
 
-def test_model_store_returns_empty_when_no_files(tmp_path, monkeypatch):
-    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+def test_model_store_returns_empty_when_no_files(tmp_path, isolated_config_root):
     store = ModelStore()
     assert store.list_sync(work_root=str(tmp_path / "work")) == []
     assert store.default_model_id_sync(work_root=str(tmp_path / "work")) == ""
     assert store.get_sync("anything", work_root=str(tmp_path / "work")) is None
 
 
-def test_model_store_loads_global_models(tmp_path, monkeypatch):
-    home = tmp_path / "home"
-    monkeypatch.setattr(Path, "home", lambda: home)
-    global_dir = home / ".lam" / "config" / "models"
+def test_model_store_loads_global_models(tmp_path, isolated_config_root):
+    global_dir = isolated_config_root / "models"
     _write_model(global_dir, "model-a", is_default=True)
     _write_model(global_dir, "model-b")
 
@@ -51,11 +48,9 @@ def test_model_store_loads_global_models(tmp_path, monkeypatch):
     assert store.get_sync("model-a", work_root=None).display_name == "MODEL-A"
 
 
-def test_model_store_project_overrides_global(tmp_path, monkeypatch):
-    home = tmp_path / "home"
+def test_model_store_project_overrides_global(tmp_path, isolated_config_root):
     work = tmp_path / "work"
-    monkeypatch.setattr(Path, "home", lambda: home)
-    global_dir = home / ".lam" / "config" / "models"
+    global_dir = isolated_config_root / "models"
     project_dir = work / ".lam" / "config" / "models"
     _write_model(global_dir, "shared", display_name="GLOBAL VERSION", capability="text")
     # Project overrides with a different display name + multimodal capability.
@@ -69,10 +64,8 @@ def test_model_store_project_overrides_global(tmp_path, monkeypatch):
     assert model.resolved_capability == "multimodal"
 
 
-def test_model_store_caches_by_mtime(tmp_path, monkeypatch):
-    home = tmp_path / "home"
-    monkeypatch.setattr(Path, "home", lambda: home)
-    global_dir = home / ".lam" / "config" / "models"
+def test_model_store_caches_by_mtime(tmp_path, isolated_config_root):
+    global_dir = isolated_config_root / "models"
     path = _write_model(global_dir, "cached")
 
     store = ModelStore()
@@ -92,10 +85,8 @@ def test_model_store_caches_by_mtime(tmp_path, monkeypatch):
     assert len(third) == 1
 
 
-def test_model_store_parses_jsonc_with_comments(tmp_path, monkeypatch):
-    home = tmp_path / "home"
-    monkeypatch.setattr(Path, "home", lambda: home)
-    global_dir = home / ".lam" / "config" / "models"
+def test_model_store_parses_jsonc_with_comments(tmp_path, isolated_config_root):
+    global_dir = isolated_config_root / "models"
     global_dir.mkdir(parents=True, exist_ok=True)
     (global_dir / "commented.jsonc").write_text(
         """{
@@ -122,10 +113,8 @@ def test_model_store_parses_jsonc_with_comments(tmp_path, monkeypatch):
     assert model.display_name == "Commented Model"
 
 
-def test_model_store_get_matches_by_display_name_and_substring(tmp_path, monkeypatch):
-    home = tmp_path / "home"
-    monkeypatch.setattr(Path, "home", lambda: home)
-    global_dir = home / ".lam" / "config" / "models"
+def test_model_store_get_matches_by_display_name_and_substring(tmp_path, isolated_config_root):
+    global_dir = isolated_config_root / "models"
     _write_model(global_dir, "xopglm52", display_name="GLM-5.2")
 
     store = ModelStore()
@@ -144,9 +133,7 @@ def test_model_store_to_extra_surfaces_adapter_profile_and_capability():
     assert extra["capability"] == "multimodal"
 
 
-def test_model_store_write_roundtrips(tmp_path, monkeypatch):
-    home = tmp_path / "home"
-    monkeypatch.setattr(Path, "home", lambda: home)
+def test_model_store_write_roundtrips(tmp_path, isolated_config_root):
     store = ModelStore()
     model = ModelConfig(
         model_id="written", display_name="Written", provider="P",
@@ -182,8 +169,7 @@ def _model_catalog(work_root: Path | None) -> "OperationCatalog":  # type: ignor
 
 
 @pytest.mark.asyncio
-async def test_rpc_models_upsert_then_list_roundtrip(tmp_path, monkeypatch):
-    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+async def test_rpc_models_upsert_then_list_roundtrip(tmp_path, isolated_config_root):
     work = tmp_path / "work"
     catalog = _model_catalog(work)
 
@@ -213,8 +199,7 @@ async def test_rpc_models_upsert_then_list_roundtrip(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_rpc_models_upsert_rejects_invalid_scope(tmp_path, monkeypatch):
-    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+async def test_rpc_models_upsert_rejects_invalid_scope(tmp_path, isolated_config_root):
     catalog = _model_catalog(tmp_path / "work")
     result = await catalog.execute("config.models.upsert", {
         "model_id": "x", "scope": "bogus",
@@ -224,8 +209,7 @@ async def test_rpc_models_upsert_rejects_invalid_scope(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_rpc_models_delete_removes_file(tmp_path, monkeypatch):
-    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+async def test_rpc_models_delete_removes_file(tmp_path, isolated_config_root):
     work = tmp_path / "work"
     catalog = _model_catalog(work)
     # First create, then delete.

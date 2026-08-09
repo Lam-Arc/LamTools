@@ -107,43 +107,44 @@ function onLoad() {
   gap: 6px;
   padding: 6px 10px;
   background: rgba(0,0,0,0.3);
-  border-bottom: 1px solid rgba(255,255,255,0.08);
+  border-bottom: 1px solid color-mix(in srgb, var(--theme-main-text, #f2efeb) 8%, transparent);
 }
 .stage-browser-url {
   flex: 1;
   min-width: 0;
   padding: 5px 10px;
-  border: 1px solid rgba(255,255,255,0.12);
-  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--theme-main-text, #f2efeb) 12%, transparent);
+  border-radius: var(--radius-sm);
   background: rgba(0,0,0,0.3);
-  color: #f2efeb;
+  color: var(--theme-main-text, #f2efeb);
   font-size: 13px;
   outline: none;
 }
-.stage-browser-url:focus { border-color: rgba(255,255,255,0.3); }
+.stage-browser-url:focus { border-color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 30%, transparent); }
 .stage-browser-btn {
   flex: 0 0 auto;
   width: 30px;
   height: 30px;
   border: 0;
-  border-radius: 6px;
-  background: rgba(255,255,255,0.08);
-  color: #ccc;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--theme-main-text, #f2efeb) var(--alpha-hover), transparent);
+  color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 72%, transparent);
   cursor: pointer;
   font-size: 14px;
   display: grid;
   place-items: center;
 }
-.stage-browser-btn:hover { background: rgba(255,255,255,0.16); }
+.stage-browser-btn:hover { background: color-mix(in srgb, var(--theme-main-text, #f2efeb) var(--alpha-press), transparent); }
 .stage-browser-frame-wrap {
   flex: 1;
   position: relative;
-  min-height: 0;
+  min-width: 0;
 }
 .stage-browser-frame {
   width: 100%;
   height: 100%;
   border: 0;
+  /* 空白网页内容底色，非界面表面层 */
   background: #fff;
 }
 .stage-browser-blocked {
@@ -152,21 +153,21 @@ function onLoad() {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(26,26,26,0.92);
+  background: rgba(0,0,0,0.92);
 }
 .stage-browser-blocked-content {
   text-align: center;
-  color: #aaa;
+  color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 58%, transparent);
 }
 .stage-browser-blocked-content p { margin: 0 0 12px; font-size: 14px; }
 .stage-browser-blocked-content button {
-  border: 1px solid rgba(255,255,255,0.2);
-  border-radius: 8px;
-  background: rgba(255,255,255,0.08);
-  color: #ccc;
+  border: 1px solid color-mix(in srgb, var(--theme-main-text, #f2efeb) 20%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--theme-main-text, #f2efeb) var(--alpha-hover), transparent);
+  color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 72%, transparent);
   padding: 6px 16px;
   cursor: pointer;
   font-size: 13px;
 }
-.stage-browser-blocked-content button:hover { background: rgba(255,255,255,0.16); }
+.stage-browser-blocked-content button:hover { background: color-mix(in srgb, var(--theme-main-text, #f2efeb) var(--alpha-press), transparent); }
 </style>

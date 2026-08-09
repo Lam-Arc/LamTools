@@ -6,8 +6,11 @@ from typing import Any
 import pytest
 
 from lamtools_core.app import open_core_app_db
+from lamtools_core.app.core_db import CoreThreadSnapshot
 from lamtools_core.app.core_session_store import CoreDbSessionStore
+from lamtools_core.app.event_store import AppEventInput
 from lamtools_core.checkpoint import CoreCheckpointCoordinator
+from lamtools_core.event import RunItemEvent
 from lamtools_core.plugins.engine import HookEngine
 from lamtools_core.plugins.models import HookDefinition, HookEvent, HookHandler
 from lamtools_core.runtime import RuntimeState
@@ -302,7 +305,91 @@ async def test_fork_creates_a_new_session_and_marks_the_graph_edge(tmp_path: Pat
         await db.close()
 
 
-class _RecordingCheckpointCoordinator:
+@pytest.mark.asyncio
+async def test_fork_with_events_remaps_item_keys_and_regenerates_event_ids(tmp_path: Path) -> None:
+    """Regression: forking a checkpoint that captured an event stream used to
+    (1) crash on the global event_id primary key and (2) leave the forked
+    projection's item dict keys pointing at the source session, so the
+    frontend dropped every pre-fork message (new messages appeared at the
+    top of the thread). Both must now be fixed."""
+    work_root = tmp_path / "workspace"
+    work_root.mkdir()
+    db = await open_core_app_db(tmp_path / "core.db")
+    sessions = CoreDbSessionStore(lambda: db)
+    coordinator = CoreCheckpointCoordinator(
+        work_root=work_root,
+        session_factory=db.session_factory,
+        write_coordinator=db.persistence.write_coordinator,
+        storage_root=tmp_path / "checkpoint-data",
+    )
+    try:
+        await sessions.create(SessionRecord(
+            id="session-source",
+            member_id="core",
+            title="Source",
+            status="idle",
+            metadata={"work_root": str(work_root)},
+        ))
+        await _runtime(db, "session-source", history=[{"role": "user", "content": "hello"}])
+        async with db.session_factory() as session:
+            await db.event_store.append(session, AppEventInput(
+                thread_id="session-source", method="thread/started", payload={"status": "idle"},
+            ))
+            await db.event_store.append(session, AppEventInput(
+                thread_id="session-source", method="turn/accepted",
+                payload={"turn_id": "turn-0", "input": "hello"}, turn_id="turn-0",
+            ))
+            await db.event_store.append_run_item_event(session, RunItemEvent(
+                kind="message", thread_id="session-source", event_id="evt-user",
+                turn_id="turn-0", item_id="session-source:turn:turn-0:user",
+                status="completed", payload={"role": "user", "content": "hello"},
+            ))
+            await db.event_store.append_run_item_event(session, RunItemEvent(
+                kind="message", thread_id="session-source", event_id="evt-assistant",
+                turn_id="turn-0", item_id="session-source:turn:turn-0:assistant",
+                status="running", payload={"role": "assistant", "content": "ok"},
+            ))
+            events = await db.event_store.list_thread(session, thread_id="session-source")
+            await db.snapshot_store.apply_many(session, events)
+            await session.commit()
+
+        # Checkpoint at the boundary BEFORE turn-1: the captured event stream
+        # (turn-0's messages) is what a fork must replay into the new session.
+        source = await coordinator.save(
+            session_id="session-source",
+            turn_id="turn-1",
+            actor_kind="main",
+            reason="manual",
+        )
+        forked = await coordinator.fork(source.id, new_session_id="session-forked")
+        assert forked.session_id == "session-forked"
+
+        # 1) Forked events must not collide with the source events' global ids.
+        async with db.session_factory() as session:
+            source_events = await db.event_store.list_thread(session, thread_id="session-source")
+            forked_events = await db.event_store.list_thread(session, thread_id="session-forked")
+            row = await session.get(CoreThreadSnapshot, "session-forked")
+        assert len(forked_events) == len(source_events)
+        assert {e.event_id for e in forked_events}.isdisjoint({e.event_id for e in source_events})
+        assert all(
+            str(e.item_id or "").startswith("session-forked:")
+            for e in forked_events
+            if e.item_id
+        )
+
+        # 2) Projection item dict keys must be remapped to the fork session and
+        #    stay consistent with item_order so the frontend can join them.
+        assert row is not None
+        core = row.snapshot_json["core"]
+        assert all(str(key).startswith("session-forked:") for key in core["items"])
+        assert all(iid in core["items"] for iid in core["item_order"])
+        assert all(
+            str(item.get("item_id", "")).startswith("session-forked:")
+            for item in core["items"].values()
+        )
+        assert len(core["items"]) == 2
+    finally:
+        await db.close()
     def __init__(self) -> None:
         self.calls: list[dict[str, str]] = []
 

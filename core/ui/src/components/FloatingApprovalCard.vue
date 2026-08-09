@@ -256,7 +256,7 @@ function compactDetail(value: string, limit = 140): string {
   padding: 16px 18px;
   border: 1px solid color-mix(in srgb, var(--orange) 38%, transparent);
   border-radius: var(--radius-lg, 18px);
-  background: color-mix(in srgb, var(--bg, #111111) 96%, var(--orange) 4%);
+  background: color-mix(in srgb, var(--theme-main-solid, #111111) 96%, var(--orange) 4%);
   box-shadow: var(--shadow-md);
   display: grid;
   gap: 10px;
@@ -293,9 +293,9 @@ function compactDetail(value: string, limit = 140): string {
   width: 24px;
   height: 24px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--muted, #a7a29b);
+  color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 58%, transparent);
   font-size: 18px;
   line-height: 1;
   cursor: pointer;
@@ -304,7 +304,7 @@ function compactDetail(value: string, limit = 140): string {
   transition: background 0.15s, color 0.15s;
 }
 .floating-approval-close:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: color-mix(in srgb, var(--theme-main-text, #f2efeb) var(--alpha-hover), transparent);
   color: var(--theme-main-text, var(--text, #f2efeb));
 }
 
@@ -338,7 +338,7 @@ function compactDetail(value: string, limit = 140): string {
   flex: 1;
   padding: 7px 12px;
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   font-size: 12.5px;
   font-weight: 600;
   cursor: pointer;
@@ -366,26 +366,26 @@ function compactDetail(value: string, limit = 140): string {
 
 .floating-approval-btn--dismiss {
   background: transparent;
-  border-color: color-mix(in srgb, var(--muted, #a7a29b) 22%, transparent);
-  color: var(--muted, #a7a29b);
+  border-color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 22%, transparent);
+  color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 58%, transparent);
 }
 .floating-approval-btn--dismiss:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: color-mix(in srgb, var(--theme-main-text, #f2efeb) var(--alpha-hover), transparent);
   color: var(--theme-main-text, var(--text, #f2efeb));
 }
 
 .floating-approval-hint {
   font-size: 10.5px;
-  color: var(--faint, #726e68);
+  color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 45%, transparent);
   text-align: center;
 }
 .floating-approval-hint kbd {
   font-family: inherit;
   font-size: 10.5px;
   padding: 1px 5px;
-  border: 1px solid color-mix(in srgb, var(--faint, #726e68) 28%, transparent);
-  border-radius: 4px;
-  background: color-mix(in srgb, var(--faint, #726e68) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--theme-main-text, #f2efeb) 28%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--theme-main-text, #f2efeb) 8%, transparent);
 }
 
 /* ------------------------------------------------------------------------- */

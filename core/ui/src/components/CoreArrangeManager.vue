@@ -760,7 +760,7 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
   width: min(860px, calc(100vw - 48px));
   max-height: calc(100dvh - var(--titlebar-offset, 36px) - 48px);
   border: 1px solid color-mix(in srgb, var(--theme-main-text, #f2efeb) 12%, transparent);
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   background: var(--theme-main-background, var(--bg, #111111));
   box-shadow: var(--shadow-lg);
   overflow: hidden;
@@ -776,7 +776,7 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
   width: 30px;
   height: 30px;
   border: none;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--theme-main-text, #f2efeb) 8%, transparent);
   color: var(--muted, #a7a29b);
   font-size: 18px;
@@ -806,14 +806,14 @@ h1 { margin: 0 0 6px; font-size: 30px; letter-spacing: -.025em; }
 .arrange-header p, .text-button { color: var(--muted); }
 p { margin: 0; }
 button { font: inherit; } .text-button, .quiet-button { border: 0; background: transparent; color: inherit; cursor: pointer; }
-.text-button { padding: 0; } .quiet-button { padding: 7px 12px; border: 1px solid color-mix(in srgb, var(--theme-main-text, var(--text)) 10%, transparent); border-radius: 8px; }
-.primary-button { padding: 7px 16px; border: 0; border-radius: 8px; background: var(--theme-control-background, var(--blue)); color: var(--theme-control-text, #fff); cursor: pointer; font-weight: 600; }
+.text-button { padding: 0; } .quiet-button { padding: 7px 12px; border: 1px solid color-mix(in srgb, var(--theme-main-text, var(--text)) 10%, transparent); border-radius: var(--radius-sm); }
+.primary-button { padding: 7px 16px; border: 0; border-radius: var(--radius-sm); background: var(--theme-control-background, var(--blue)); color: var(--theme-control-text, #fff); cursor: pointer; font-weight: 600; }
 .primary-button:disabled { opacity: .5; cursor: default; }
 .header-actions { display: flex; gap: 8px; align-items: center; }
 
 .arrange-loading, .arrange-empty { max-width: 780px; margin-inline: auto; padding: 28px 0; color: var(--muted); }
 .arrange-error { max-width: 780px; margin-inline: auto; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 0; color: var(--red); }
-.arrange-error button { flex: none; min-height: 36px; padding: 6px 11px; border: 1px solid currentColor; border-radius: 8px; background: transparent; color: inherit; cursor: pointer; }
+.arrange-error button { flex: none; min-height: 36px; padding: 6px 11px; border: 1px solid currentColor; border-radius: var(--radius-sm); background: transparent; color: inherit; cursor: pointer; }
 
 /* ---- form ---- */
 .form-card { max-width: 780px; margin: 0 auto 28px; padding: 20px; border: 1px solid color-mix(in srgb, var(--blue) 36%, transparent); border-radius: var(--radius); background: var(--theme-main-soft-background, color-mix(in srgb, var(--theme-main-text, var(--text)) 5%, transparent)); }
@@ -893,7 +893,7 @@ button { font: inherit; } .text-button, .quiet-button { border: 0; background: t
 /* expand */
 .expand-toggle, .error-toggle { padding: 0; border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 12px; }
 .expand-toggle:hover, .error-toggle:hover { color: var(--theme-main-text, var(--text)); }
-.card-expand { margin-top: 8px; padding: 10px 12px; border-radius: 8px; background: color-mix(in srgb, var(--theme-main-text, var(--text)) 4%, transparent); font-size: 13px; }
+.card-expand { margin-top: 8px; padding: 10px 12px; border-radius: var(--radius-sm); background: color-mix(in srgb, var(--theme-main-text, var(--text)) 4%, transparent); font-size: 13px; }
 
 .history-panel { max-height: 200px; overflow-y: auto; }
 .history-loading, .history-empty { color: var(--muted); }

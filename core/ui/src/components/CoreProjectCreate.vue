@@ -150,10 +150,10 @@ function onDirectorySelected(path: string) {
   width: min(520px, 100%);
   max-height: calc(100dvh - 48px);
   overflow-y: auto;
-  border: 1px solid color-mix(in srgb, var(--theme-main-text, #171717) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--theme-main-text, #f2efeb) 14%, transparent);
   border-radius: 12px;
-  background: color-mix(in srgb, var(--theme-main-background, #fff) 97%, var(--theme-main-text, #171717) 3%);
-  color: var(--theme-main-text, #171717);
+  background: color-mix(in srgb, var(--theme-main-background, #111111) 97%, var(--theme-main-text, #f2efeb) 3%);
+  color: var(--theme-main-text, #f2efeb);
   box-shadow: var(--shadow-md);
 }
 
@@ -171,7 +171,7 @@ function onDirectorySelected(path: string) {
 
 .core-project-dialog-header p {
   margin: 8px 0 0;
-  color: color-mix(in srgb, var(--theme-main-text, #171717) 62%, transparent);
+  color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 62%, transparent);
   font-size: 13px;
   line-height: 1.5;
 }
@@ -186,20 +186,20 @@ function onDirectorySelected(path: string) {
   display: grid;
   gap: 8px;
   min-width: 0;
-  color: color-mix(in srgb, var(--theme-main-text, #171717) 82%, transparent);
+  color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 82%, transparent);
   font-size: 13px;
   font-weight: 680;
 }
 
 .core-project-field em {
-  color: color-mix(in srgb, var(--theme-main-text, #171717) 48%, transparent);
+  color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 48%, transparent);
   font-size: 12px;
   font-style: normal;
   font-weight: 520;
 }
 
 .core-project-field small {
-  color: color-mix(in srgb, var(--theme-main-text, #171717) 54%, transparent);
+  color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 54%, transparent);
   font-size: 12px;
   font-weight: 480;
   line-height: 1.45;
@@ -249,17 +249,17 @@ function onDirectorySelected(path: string) {
   border: 0;
   border-radius: 6px;
   background: transparent;
-  color: var(--theme-main-text, #171717);
+  color: var(--theme-main-text, #f2efeb);
 }
 
 .core-project-browse:hover {
-  background: color-mix(in srgb, var(--theme-main-text, #171717) 8%, transparent);
+  background: color-mix(in srgb, var(--theme-main-text, #f2efeb) 8%, transparent);
 }
 
 .core-project-browse:focus-visible,
 .core-project-cancel:focus-visible,
 .core-project-submit:focus-visible {
-  outline: 2px solid var(--theme-main-text, #171717);
+  outline: 2px solid var(--theme-main-text, #f2efeb);
   outline-offset: 2px;
 }
 
@@ -275,7 +275,7 @@ function onDirectorySelected(path: string) {
 
 .core-project-error {
   margin: -6px 0 0;
-  color: var(--red, #b42318);
+  color: var(--red, #f5555d);
   font-size: 12px;
   line-height: 1.4;
 }
@@ -301,18 +301,18 @@ function onDirectorySelected(path: string) {
 .core-project-cancel {
   border: 0;
   background: transparent;
-  color: color-mix(in srgb, var(--theme-main-text, #171717) 72%, transparent);
+  color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 72%, transparent);
 }
 
 .core-project-cancel:hover {
-  background: color-mix(in srgb, var(--theme-main-text, #171717) 7%, transparent);
-  color: var(--theme-main-text, #171717);
+  background: color-mix(in srgb, var(--theme-main-text, #f2efeb) 7%, transparent);
+  color: var(--theme-main-text, #f2efeb);
 }
 
 .core-project-submit {
-  border: 1px solid var(--theme-main-text, #171717);
-  background: var(--theme-main-text, #171717);
-  color: var(--theme-main-background, #fff);
+  border: 1px solid var(--theme-main-text, #f2efeb);
+  background: var(--theme-main-text, #f2efeb);
+  color: var(--theme-main-background, #111111);
 }
 
 .core-project-submit:hover:not(:disabled) {

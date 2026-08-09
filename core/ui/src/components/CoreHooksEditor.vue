@@ -644,7 +644,7 @@ onMounted(fetchHooks)
   left: 3px;
   width: 3px;
   height: 7px;
-  border: solid #fff;
+  border: solid var(--theme-backdrop-text, #f2efeb);
   border-width: 0 1.5px 1.5px 0;
   transform: rotate(45deg);
 }

@@ -212,9 +212,12 @@ const settingsThemeStyle = computed(() => {
       props.theme.controlOpacity,
     ),
     '--settings-control-text': props.theme.controlText,
-    '--settings-panel-2': lightMain ? '#f0efeb' : '#1d1e1e',
-    '--settings-line': lightMain ? '#d4d0cc' : '#3b3a38',
-    '--settings-muted': lightMain ? '#8a8580' : '#a7a29b',
+    // 暗色分支不重复字面量：layout.css 的 --settings-* fallback 即 :root 真值（单一来源）
+    ...(lightMain ? {
+      '--settings-panel-2': '#f0efeb',
+      '--settings-line': '#d4d0cc',
+      '--settings-muted': '#8a8580',
+    } : {}),
   }
 })
 
@@ -244,9 +247,9 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
   position: relative;
   width: min(960px, calc(100vw - 48px));
   max-height: calc(100dvh - var(--titlebar-offset, 36px) - 48px);
-  border: 1px solid color-mix(in srgb, var(--theme-main-text, #f2efeb) 12%, transparent);
-  border-radius: 16px;
-  background: var(--bg, #111111);
+  border: 1px solid color-mix(in srgb, var(--settings-main-text, #f2efeb) 12%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--settings-card-background, var(--theme-main-background, #111111));
   box-shadow: var(--shadow-lg);
   overflow: hidden;
   display: flex;

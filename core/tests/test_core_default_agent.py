@@ -756,12 +756,14 @@ async def test_core_agent_operation_runs_trusted_pre_tool_hook(tmp_path):
 
 @pytest.mark.asyncio
 async def test_core_plugin_operation_catalog_uses_user_and_project_roots(tmp_path, monkeypatch):
-    appdata = tmp_path / "appdata"
+    # isolated_config_root (autouse) pins LAMTOOLS_HOME, so the user plugin
+    # root resolves to {lam_home}/plugins (green/portable layout).
+    from lamtools_core.config.root import lam_home
+
     data_dir = tmp_path / "data"
     work_root = tmp_path / "work"
-    user_plugin = appdata / "LamTools" / "plugins" / "user-policy"
+    user_plugin = lam_home() / "plugins" / "user-policy"
     project_plugin = work_root / ".lamtools" / "plugins" / "project-policy"
-    monkeypatch.setenv("APPDATA", str(appdata))
     user_plugin.mkdir(parents=True)
     project_plugin.mkdir(parents=True)
     (user_plugin / "plugin.json").write_text('{"name":"user-policy","version":"1.0.0"}', encoding="utf-8")

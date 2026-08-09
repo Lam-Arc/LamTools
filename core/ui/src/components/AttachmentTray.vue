@@ -94,15 +94,15 @@ function formatSize(size: number): string {
   align-items: center;
   min-height: 32px;
   border: 1px solid color-mix(in srgb, currentColor 12%, transparent);
-  border-radius: 8px;
-  background: color-mix(in srgb, currentColor 5%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, currentColor 8%, transparent);
   padding: 4px 5px 4px 8px;
   color: inherit;
 }
 
 .attachment-row--failed {
-  border-color: color-mix(in srgb, #b42318 36%, transparent);
-  background: color-mix(in srgb, #b42318 9%, transparent);
+  border-color: color-mix(in srgb, var(--red) 36%, transparent);
+  background: color-mix(in srgb, var(--red) 9%, transparent);
 }
 
 .attachment-main {
@@ -125,7 +125,7 @@ function formatSize(size: number): string {
   flex: 0 0 auto;
   min-width: 34px;
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, currentColor 10%, transparent);
+  background: color-mix(in srgb, currentColor 12%, transparent);
   padding: 2px 5px;
   font-size: 10px;
   font-weight: 800;
@@ -153,7 +153,7 @@ function formatSize(size: number): string {
 }
 
 .attachment-error {
-  color: #b42318;
+  color: var(--red);
   font-weight: 700;
 }
 
