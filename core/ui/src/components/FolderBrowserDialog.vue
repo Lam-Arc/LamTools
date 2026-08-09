@@ -383,7 +383,7 @@ function confirm() {
 .fb-btn-select {
   border: 1px solid var(--blue);
   background: var(--blue);
-  color: var(--bg);
+  color: var(--theme-main-solid, #111111);
 }
 
 .fb-btn-select:hover:not(:disabled) {

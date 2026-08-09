@@ -147,6 +147,8 @@ function onLoad() {
   /* 空白网页内容底色，非界面表面层 */
   background: #fff;
 }
+/* blocked 遮罩是内容覆盖层（92% 黑罩在网页内容上）：文字/按钮
+   固定白色系保证可见，不随主题（与图片预览控件同理）。 */
 .stage-browser-blocked {
   position: absolute;
   inset: 0;
@@ -157,17 +159,17 @@ function onLoad() {
 }
 .stage-browser-blocked-content {
   text-align: center;
-  color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 58%, transparent);
+  color: rgba(255,255,255,0.68);
 }
 .stage-browser-blocked-content p { margin: 0 0 12px; font-size: 14px; }
 .stage-browser-blocked-content button {
-  border: 1px solid color-mix(in srgb, var(--theme-main-text, #f2efeb) 20%, transparent);
+  border: 1px solid rgba(255,255,255,0.2);
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--theme-main-text, #f2efeb) var(--alpha-hover), transparent);
-  color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 72%, transparent);
+  background: rgba(255,255,255,0.08);
+  color: rgba(255,255,255,0.8);
   padding: 6px 16px;
   cursor: pointer;
   font-size: 13px;
 }
-.stage-browser-blocked-content button:hover { background: color-mix(in srgb, var(--theme-main-text, #f2efeb) var(--alpha-press), transparent); }
+.stage-browser-blocked-content button:hover { background: rgba(255,255,255,0.16); }
 </style>

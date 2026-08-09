@@ -1052,7 +1052,8 @@ function onRollbackMessage(payload: AssistantActionPayload): void {
 /* 运行态标题流光（工具行 / sub-agent 行通用）：
    v-beam 指令给标题加 beam-host 并注入 beam-sweep 光束元素，
    JS rAF 驱动 transform；只有 running 状态下光束才显示。
-   颜色取聊天区文字色（--theme-main-text）浅色扫过，左右渐隐，
+   光束 = 聊天区背景主题变量（--theme-main-background），
+   mask 做左右渐隐 → 完全随主题联动；扫过时标题被背景色短暂覆盖，
    范围被 overflow:hidden 限制在标题区域。 */
 .beam-host {
   position: relative;
@@ -1066,12 +1067,9 @@ function onRollbackMessage(payload: AssistantActionPayload): void {
   left: 0;
   width: 36%;
   min-width: 40px;
-  background: linear-gradient(
-    90deg,
-    transparent,
-    color-mix(in srgb, var(--theme-main-text, #f2efeb) 25%, transparent),
-    transparent
-  );
+  background: var(--theme-main-background, #111111);
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 32%, #000 68%, transparent);
+  mask-image: linear-gradient(to right, transparent, #000 32%, #000 68%, transparent);
   pointer-events: none;
   will-change: transform;
   z-index: 1;

@@ -95,6 +95,8 @@ function onPointerUp() {
   color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 45%, transparent);
   font-size: 14px;
 }
+/* controls 是内容覆盖层（黑 scrim 压在图片上）：固定白色系保证可见，
+   不随主题（与图片预览控件同理）。 */
 .stage-image-controls {
   position: absolute;
   bottom: 8px;
@@ -105,17 +107,17 @@ function onPointerUp() {
   padding: 4px 10px;
   border-radius: var(--radius-sm);
   background: rgba(0,0,0,0.6);
-  color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 72%, transparent);
+  color: rgba(255,255,255,0.85);
   font-size: 12px;
 }
 .stage-image-controls button {
   border: 0;
-  background: color-mix(in srgb, var(--theme-main-text, #f2efeb) 10%, transparent);
-  color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 72%, transparent);
+  background: rgba(255,255,255,0.12);
+  color: rgba(255,255,255,0.85);
   border-radius: var(--radius-sm);
   padding: 2px 8px;
   cursor: pointer;
   font-size: 12px;
 }
-.stage-image-controls button:hover { background: color-mix(in srgb, var(--theme-main-text, #f2efeb) 20%, transparent); }
+.stage-image-controls button:hover { background: rgba(255,255,255,0.2); }
 </style>

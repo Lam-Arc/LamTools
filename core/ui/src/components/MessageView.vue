@@ -3750,13 +3750,13 @@ function formatContextSummary(c: ContextCounts): string {
 /* Generated image artifact cards inside tool outputs + fullscreen preview. */
 .message-artifacts {
   margin-top: 12px;
-  border-top: 1px dashed color-mix(in srgb, var(--muted, #8b8b8b) 30%, transparent);
+  border-top: 1px dashed color-mix(in srgb, var(--theme-main-text, #f2efeb) 22%, transparent);
   padding-top: 4px;
 }
 
 .message-artifacts-head {
   font-size: 11px;
-  color: var(--muted);
+  color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 56%, transparent);
   padding: 6px 10px 0;
   opacity: .8;
 }
@@ -3774,10 +3774,10 @@ function formatContextSummary(c: ContextCounts): string {
 
 .tool-image-card {
   margin: 0;
-  border-radius: var(--radius-sm, 8px);
+  border-radius: var(--radius-sm, 6px);
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--muted, #8b8b8b) 26%, transparent);
-  background: color-mix(in srgb, var(--muted, #8b8b8b) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--theme-main-text, #f2efeb) 18%, transparent);
+  background: color-mix(in srgb, var(--theme-main-text, #f2efeb) 6%, transparent);
   cursor: zoom-in;
   line-height: 0;
 }
@@ -3793,7 +3793,7 @@ function formatContextSummary(c: ContextCounts): string {
 .image-preview-overlay {
   position: fixed;
   inset: 0;
-  z-index: 9999;
+  z-index: var(--z-fullscreen, 100);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3805,11 +3805,13 @@ function formatContextSummary(c: ContextCounts): string {
 .image-preview-full {
   max-width: 92vw;
   max-height: 92vh;
-  border-radius: 10px;
+  border-radius: var(--radius);
   box-shadow: 0 18px 60px rgba(0, 0, 0, .55);
   user-select: none;
 }
 
+/* 图片预览是内容覆盖层：悬浮在任意图片/黑遮罩之上，
+   必须用固定白色系保证可见，不随主题（与 Stage 控件同理）。 */
 .image-preview-close {
   position: fixed;
   top: 18px;

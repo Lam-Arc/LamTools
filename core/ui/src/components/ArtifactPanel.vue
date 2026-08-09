@@ -296,11 +296,11 @@ onMounted(fetchArtifacts)
 }
 
 .artifact-node:hover {
-  background: color-mix(in srgb, var(--muted, #8b8b8b) 14%, transparent);
+  background: color-mix(in srgb, var(--theme-main-text, #f2efeb) var(--alpha-hover), transparent);
 }
 
 .artifact-node--selected {
-  background: color-mix(in srgb, var(--muted, #8b8b8b) 22%, transparent);
+  background: color-mix(in srgb, var(--theme-main-text, #f2efeb) var(--alpha-active), transparent);
 }
 
 .artifact-check {
@@ -334,8 +334,8 @@ onMounted(fetchArtifacts)
 }
 
 .artifact-badge--user {
-  color: var(--accent, #5b8def);
-  background: color-mix(in srgb, var(--accent, #5b8def) 16%, transparent);
+  color: var(--blue, #79bcff);
+  background: color-mix(in srgb, var(--blue, #79bcff) 16%, transparent);
 }
 
 .artifact-detail {
@@ -343,27 +343,28 @@ onMounted(fetchArtifacts)
   max-height: 45%;
   overflow: auto;
   padding: 10px 8px;
-  border-top: 1px solid color-mix(in srgb, var(--muted, #8b8b8b) 22%, transparent);
+  border-top: 1px solid color-mix(in srgb, var(--theme-main-text, #f2efeb) 16%, transparent);
 }
 
 .artifact-preview {
   width: 100%;
   max-height: 180px;
   object-fit: contain;
-  border-radius: var(--radius-sm, 8px);
+  border-radius: var(--radius-sm, 6px);
   margin-bottom: 8px;
 }
 
+/* PDF 预览是文档内容底色（白纸），非界面表面层，不随主题 */
 .artifact-preview--pdf {
   height: 180px;
-  border: 1px solid color-mix(in srgb, var(--muted, #8b8b8b) 26%, transparent);
+  border: 1px solid color-mix(in srgb, var(--theme-main-text, #f2efeb) 18%, transparent);
   background: #fff;
 }
 
 .artifact-meta {
   margin: 0;
   font-size: 11px;
-  color: var(--muted);
+  color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 56%, transparent);
   display: grid;
   grid-template-columns: max-content 1fr;
   gap: 3px 10px;
@@ -385,15 +386,15 @@ onMounted(fetchArtifacts)
   margin: 0 0 8px;
   padding: 7px 10px;
   border-radius: var(--radius-sm, 6px);
-  border: 1px solid color-mix(in srgb, var(--red, #e5484d) 22%, transparent);
-  background: color-mix(in srgb, var(--red, #e5484d) 10%, transparent);
-  color: color-mix(in srgb, var(--red, #e5484d) 64%, #fff);
+  border: 1px solid color-mix(in srgb, var(--red, #f5555d) 22%, transparent);
+  background: color-mix(in srgb, var(--red, #f5555d) 10%, transparent);
+  color: color-mix(in srgb, var(--red, #f5555d) 64%, #fff);
   font-size: 12px;
 }
 
 .artifact-empty {
   padding: 14px 8px;
-  color: var(--muted);
+  color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 56%, transparent);
   font-size: 12px;
   line-height: 1.6;
 }

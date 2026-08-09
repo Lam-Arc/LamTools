@@ -38,6 +38,7 @@
   --z-popover: 60;
   --z-modal: 80;
   --z-toast: 90;
+  --z-fullscreen: 100;
   --theme-backdrop-background: linear-gradient(180deg, #202020 0%, #202020 100%);
   --theme-backdrop-text: #f2efeb;
   --theme-main-background: linear-gradient(180deg, #111111 0%, #111111 100%);

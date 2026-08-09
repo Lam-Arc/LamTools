@@ -350,15 +350,15 @@ defineExpose({ leftPinned, rightPinned, toggleLeftPinned, toggleRightPinned })
   width: 28px;
   height: 28px;
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--theme-main-text, #fff) 8%, transparent);
-  color: var(--muted);
+  background: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 8%, transparent);
+  color: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 56%, transparent);
   display: grid;
   place-items: center;
   font-size: 18px;
   font-weight: 700;
 }
 .icon-btn:hover {
-  background: color-mix(in srgb, var(--theme-main-text, #fff) 14%, transparent);
-  color: var(--text);
+  background: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 14%, transparent);
+  color: var(--theme-backdrop-text, #f2efeb);
 }
 </style>
