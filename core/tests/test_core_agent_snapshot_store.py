@@ -25,6 +25,16 @@ class ThreadSnapshotRow(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
 
 
+class SnapshotItemRow(Base):
+    __tablename__ = "test_thread_snapshot_items"
+
+    thread_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    item_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    item_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+
+
 async def _session_factory(tmp_path):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'snapshots.db'}", future=True)
     async with engine.begin() as conn:
@@ -227,7 +237,7 @@ def test_projector_remove_turns_cleans_generic_records_and_recomputes_status():
 @pytest.mark.asyncio
 async def test_snapshot_load_reconciles_stale_running_status_from_terminal_turns(tmp_path):
     engine, session_factory = await _session_factory(tmp_path)
-    store = SqlAlchemyThreadSnapshotStore(ThreadSnapshotRow)
+    store = SqlAlchemyThreadSnapshotStore(ThreadSnapshotRow, item_model=SnapshotItemRow)
     stale = store.projector.empty("thread-stale")
     stale["status"] = "running"
     stale["turns"] = {
@@ -254,7 +264,7 @@ async def test_snapshot_load_reconciles_stale_running_status_from_terminal_turns
 @pytest.mark.asyncio
 async def test_snapshot_load_closes_open_requests_from_cancelled_turns(tmp_path):
     engine, session_factory = await _session_factory(tmp_path)
-    store = SqlAlchemyThreadSnapshotStore(ThreadSnapshotRow)
+    store = SqlAlchemyThreadSnapshotStore(ThreadSnapshotRow, item_model=SnapshotItemRow)
     stale = store.projector.empty("thread-cancelled")
     stale["status"] = "cancelled"
     stale["turns"] = {
@@ -312,7 +322,7 @@ async def test_sqlalchemy_snapshot_store_load_apply_rebuild(tmp_path):
     try:
         async with session_factory() as db:
             projector = CoreAppSnapshotProjector(member_defaults={"queue": []})
-            store = SqlAlchemyThreadSnapshotStore(ThreadSnapshotRow, projector=projector)
+            store = SqlAlchemyThreadSnapshotStore(ThreadSnapshotRow, item_model=SnapshotItemRow, projector=projector)
             first = RunItemEvent(
                 event_id="run-item-1",
                 kind="message",
@@ -354,6 +364,7 @@ async def test_sqlalchemy_snapshot_store_applies_batch_in_one_projection(tmp_pat
         async with session_factory() as db:
             store = SqlAlchemyThreadSnapshotStore(
                 ThreadSnapshotRow,
+                item_model=SnapshotItemRow,
                 projector=CoreAppSnapshotProjector(member_defaults={"queue": []}),
             )
             first = RunItemEvent(
@@ -403,6 +414,7 @@ async def test_apply_many_projects_deferred_events_with_seq_behind_snapshot(tmp_
         async with session_factory() as db:
             store = SqlAlchemyThreadSnapshotStore(
                 ThreadSnapshotRow,
+                item_model=SnapshotItemRow,
                 projector=CoreAppSnapshotProjector(member_defaults={"queue": []}),
             )
             tool = RunItemEvent(
@@ -430,6 +442,7 @@ async def test_apply_many_projects_deferred_events_with_seq_behind_snapshot(tmp_
         async with session_factory() as db:
             store = SqlAlchemyThreadSnapshotStore(
                 ThreadSnapshotRow,
+                item_model=SnapshotItemRow,
                 projector=CoreAppSnapshotProjector(member_defaults={"queue": []}),
             )
             state = await store.load(db, "thread-1")
@@ -448,6 +461,7 @@ async def test_apply_many_is_idempotent_for_seen_events(tmp_path):
         async with session_factory() as db:
             store = SqlAlchemyThreadSnapshotStore(
                 ThreadSnapshotRow,
+                item_model=SnapshotItemRow,
                 projector=CoreAppSnapshotProjector(member_defaults={"queue": []}),
             )
             message = RunItemEvent(
@@ -480,6 +494,7 @@ async def test_apply_many_reorders_items_by_first_event_seq(tmp_path):
         async with session_factory() as db:
             store = SqlAlchemyThreadSnapshotStore(
                 ThreadSnapshotRow,
+                item_model=SnapshotItemRow,
                 projector=CoreAppSnapshotProjector(member_defaults={"queue": []}),
             )
             tool = RunItemEvent(
@@ -514,5 +529,141 @@ async def test_apply_many_reorders_items_by_first_event_seq(tmp_path):
             # the ordering anchor is recorded on first creation
             assert state["core"]["items"]["item-msg"]["seq"] == 5
             assert state["core"]["items"]["item-tool"]["seq"] == 10
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_partial_projection_preserves_untouched_item_rows(tmp_path):
+    """A later batch touching only one item must not disturb the other item
+    rows — the incremental write upserts the touched row(s) only."""
+    engine, session_factory = await _session_factory(tmp_path)
+    try:
+        async with session_factory() as db:
+            store = SqlAlchemyThreadSnapshotStore(
+                ThreadSnapshotRow,
+                item_model=SnapshotItemRow,
+                projector=CoreAppSnapshotProjector(member_defaults={"queue": []}),
+            )
+            tool = RunItemEvent(
+                event_id="tool-1", kind="tool_result", thread_id="thread-1",
+                run_id="run-1", turn_id="turn-1", item_id="item-tool", seq=0,
+                status="completed",
+                payload={"tool_name": "ls", "content": "file list", "role": "tool"},
+            )
+            message = RunItemEvent(
+                event_id="msg-2", kind="message", thread_id="thread-1",
+                run_id="run-1", turn_id="turn-1", item_id="item-msg", seq=0,
+                status="completed",
+                payload={"role": "assistant", "content": "answer"},
+                metadata={"runtime_phase": "runtime.part"},
+            )
+            await store.apply_many(db, [_envelope(1, tool.to_dict(), item_id="item-tool")])
+            await store.apply_many(db, [_envelope(2, message.to_dict(), item_id="item-msg")])
+            await db.commit()
+
+        async with session_factory() as db:
+            store = SqlAlchemyThreadSnapshotStore(
+                ThreadSnapshotRow,
+                item_model=SnapshotItemRow,
+                projector=CoreAppSnapshotProjector(member_defaults={"queue": []}),
+            )
+            state = await store.load(db, "thread-1")
+            items = state["core"]["items"]
+            assert items["item-tool"]["content"] == "file list"
+            assert items["item-msg"]["content"] == "answer"
+            assert state["core"]["item_order"] == ["item-tool", "item-msg"]
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_interrupted_turn_keeps_streamed_part_content(tmp_path):
+    """Stop scenario: part events project immediately (no turn boundary), so
+    an interrupted turn keeps every chunk that already streamed."""
+    engine, session_factory = await _session_factory(tmp_path)
+    try:
+        async with session_factory() as db:
+            store = SqlAlchemyThreadSnapshotStore(
+                ThreadSnapshotRow,
+                item_model=SnapshotItemRow,
+                projector=CoreAppSnapshotProjector(member_defaults={"queue": []}),
+            )
+            first = RunItemEvent(
+                event_id="msg-1", kind="message", thread_id="thread-1",
+                run_id="run-1", turn_id="turn-1", item_id="item-msg", seq=0,
+                status="running",
+                payload={"role": "assistant", "content": "partial answer"},
+                metadata={"runtime_phase": "runtime.part"},
+            )
+            second = RunItemEvent(
+                event_id="msg-2", kind="message", thread_id="thread-1",
+                run_id="run-1", turn_id="turn-1", item_id="item-msg", seq=0,
+                status="running",
+                payload={"role": "assistant", "delta": " more"},
+                metadata={"runtime_phase": "runtime.part"},
+            )
+            await store.apply_many(db, [_envelope(1, first.to_dict(), item_id="item-msg")])
+            await store.apply_many(db, [_envelope(2, second.to_dict(), item_id="item-msg")])
+            await db.commit()
+
+        async with session_factory() as db:
+            store = SqlAlchemyThreadSnapshotStore(
+                ThreadSnapshotRow,
+                item_model=SnapshotItemRow,
+                projector=CoreAppSnapshotProjector(member_defaults={"queue": []}),
+            )
+            state = await store.load(db, "thread-1")
+            assert state["core"]["items"]["item-msg"]["content"] == "partial answer more"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_full_projection_roundtrip_via_write_full_projection(tmp_path):
+    """Checkpoint-style roundtrip: a captured full projection (items included)
+    written back via write_full_projection reassembles identically."""
+    engine, session_factory = await _session_factory(tmp_path)
+    try:
+        async with session_factory() as db:
+            store = SqlAlchemyThreadSnapshotStore(
+                ThreadSnapshotRow,
+                item_model=SnapshotItemRow,
+                projector=CoreAppSnapshotProjector(member_defaults={"queue": []}),
+            )
+            message = RunItemEvent(
+                event_id="msg-1", kind="message", thread_id="thread-1",
+                run_id="run-1", turn_id="turn-1", item_id="item-1", seq=0,
+                status="completed",
+                payload={"role": "assistant", "content": "hello"},
+                metadata={"runtime_phase": "runtime.part"},
+            )
+            await store.apply_many(db, [_envelope(1, message.to_dict(), item_id="item-1")])
+            await db.commit()
+
+        async with session_factory() as db:
+            store = SqlAlchemyThreadSnapshotStore(
+                ThreadSnapshotRow,
+                item_model=SnapshotItemRow,
+                projector=CoreAppSnapshotProjector(member_defaults={"queue": []}),
+            )
+            captured = await store.load(db, "thread-1")
+            payload = {
+                "snapshot_seq": captured["snapshot_seq"],
+                "snapshot_json": captured,
+            }
+            await store.write_full_projection(db, "thread-1", payload)
+            await db.commit()
+
+        async with session_factory() as db:
+            store = SqlAlchemyThreadSnapshotStore(
+                ThreadSnapshotRow,
+                item_model=SnapshotItemRow,
+                projector=CoreAppSnapshotProjector(member_defaults={"queue": []}),
+            )
+            restored = await store.load(db, "thread-1")
+            assert restored["snapshot_seq"] == captured["snapshot_seq"]
+            assert restored["core"]["items"] == captured["core"]["items"]
+            assert restored["core"]["item_order"] == captured["core"]["item_order"]
     finally:
         await engine.dispose()

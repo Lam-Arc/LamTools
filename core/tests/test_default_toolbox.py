@@ -498,3 +498,351 @@ async def test_core_toolbox_accepts_custom_skill_registry(tmp_path):
     assert load_result.status == "ok"
     assert read_result.status == "ok"
     assert "custom registry helper" in read_result.content
+
+
+# ---------------------------------------------------------------------------
+# loadtools mode enforcement at execution time
+# ---------------------------------------------------------------------------
+
+MODE_BLOCK_SUFFIX = "Please make the plan prepared and ask user to switch mode."
+
+
+def _consider_toolbox(tmp_path):
+    from lamtools_core.tool.loadtools import default_load_tools
+
+    return build_core_toolbox(
+        work_root=tmp_path,
+        load_tools=default_load_tools(),
+        active_mode="consider",
+    )
+
+
+def test_core_toolbox_mode_enforcement_blocks_write_in_consider(tmp_path):
+    toolbox = _consider_toolbox(tmp_path)
+
+    for name in ("write_file", "edit_file", "run_command"):
+        call = toolbox.prepare_call(ToolCall(id=f"mode-{name}", name=name, arguments={}))
+
+        approval = call.metadata["approval"]
+        assert approval["blocked"] is True
+        assert call.requires_approval is False
+        assert approval["reason"] == (
+            f"You are in the consider mode, you can't use {name}. {MODE_BLOCK_SUFFIX}"
+        )
+
+
+def test_core_toolbox_mode_enforcement_allows_read_in_consider(tmp_path):
+    toolbox = _consider_toolbox(tmp_path)
+
+    call = toolbox.prepare_call(
+        ToolCall(id="mode-read", name="read_file", arguments={"path": "x.txt"})
+    )
+
+    assert call.metadata["approval"]["blocked"] is False
+
+
+@pytest.mark.asyncio
+async def test_core_toolbox_mode_blocked_call_returns_error_to_model(tmp_path):
+    toolbox = _consider_toolbox(tmp_path)
+
+    call = toolbox.prepare_call(
+        ToolCall(id="mode-write", name="write_file", arguments={"path": "out.txt", "content": "x"})
+    )
+    result = await toolbox.execute(call)
+
+    assert result.status == "blocked"
+    assert result.error == (
+        "You are in the consider mode, you can't use write_file. "
+        "Please make the plan prepared and ask user to switch mode."
+    )
+
+
+def test_core_toolbox_mode_execute_mode_is_full_access(tmp_path):
+    from lamtools_core.tool.loadtools import default_load_tools
+
+    toolbox = build_core_toolbox(
+        work_root=tmp_path,
+        load_tools=default_load_tools(),
+        active_mode="execute",
+    )
+
+    call = toolbox.prepare_call(ToolCall(id="mode-exec", name="write_file", arguments={}))
+
+    # Mode does not block; normal approval gating still applies.
+    assert call.metadata["approval"]["blocked"] is False
+    assert call.requires_approval is True
+
+
+def test_core_toolbox_mode_unknown_mode_does_not_block(tmp_path):
+    from lamtools_core.tool.loadtools import default_load_tools
+
+    toolbox = build_core_toolbox(
+        work_root=tmp_path,
+        load_tools=default_load_tools(),
+        active_mode="bogus-mode",
+    )
+
+    call = toolbox.prepare_call(ToolCall(id="mode-unknown", name="write_file", arguments={}))
+
+    assert call.metadata["approval"]["blocked"] is False
+
+
+def test_core_toolbox_mode_without_loadtools_does_not_block(tmp_path):
+    toolbox = build_core_toolbox(work_root=tmp_path, active_mode="consider")
+
+    call = toolbox.prepare_call(ToolCall(id="mode-noload", name="write_file", arguments={}))
+
+    assert call.metadata["approval"]["blocked"] is False
+
+
+def test_core_toolbox_workflow_mode_allows_dynamic_workflow_tools(tmp_path):
+    from lamtools_core.tool import ToolSpec
+    from lamtools_core.tool.loadtools import default_load_tools
+
+    class FakeWorkflowBundle:
+        specs = [ToolSpec(name="wf_run_dynamic", metadata={"category": "workflow"}, permission="auto_allow")]
+        handlers = {}
+
+    toolbox = build_core_toolbox(
+        work_root=tmp_path,
+        load_tools=default_load_tools(),
+        active_mode="workflow",
+        workflow_tool_provider=lambda: FakeWorkflowBundle,
+    )
+
+    dynamic = toolbox.prepare_call(ToolCall(id="wf-dyn", name="wf_run_dynamic", arguments={}))
+    assert dynamic.metadata["approval"]["blocked"] is False
+    # write_file is not in the workflow whitelist — still blocked.
+    write = toolbox.prepare_call(ToolCall(id="wf-write", name="write_file", arguments={}))
+    assert write.metadata["approval"]["blocked"] is True
+
+
+def test_core_toolbox_consider_mode_blocks_dynamic_workflow_tools(tmp_path):
+    from lamtools_core.tool import ToolSpec
+    from lamtools_core.tool.loadtools import default_load_tools
+
+    class FakeWorkflowBundle:
+        specs = [ToolSpec(name="wf_run_dynamic", metadata={"category": "workflow"}, permission="auto_allow")]
+        handlers = {}
+
+    toolbox = build_core_toolbox(
+        work_root=tmp_path,
+        load_tools=default_load_tools(),
+        active_mode="consider",
+        workflow_tool_provider=lambda: FakeWorkflowBundle,
+    )
+
+    call = toolbox.prepare_call(ToolCall(id="wf-dyn-consider", name="wf_run_dynamic", arguments={}))
+    assert call.metadata["approval"]["blocked"] is True
+
+
+# ── generate_image ──────────────────────────────────────────────────────────
+
+class FakeImageResponse:
+    def __init__(self, status_code=200, json_data=None, content=b"", headers=None):
+        self.status_code = status_code
+        self._json = json_data
+        self.content = content
+        self.headers = headers or {}
+
+    def json(self):
+        return self._json
+
+    def raise_for_status(self):
+        assert self.status_code < 400, f"HTTP {self.status_code}"
+
+
+class FakeImageClient:
+    """In-memory httpx.AsyncClient stand-in; routes keyed by 'post:<url>' / 'get:<url>'."""
+
+    def __init__(self, routes=None):
+        self.routes = routes or {}
+        self.posts = []
+        self.multipart_posts = []
+        self.gets = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def post(self, url, json=None, files=None, data=None):
+        self.posts.append((url, json))
+        if files is not None:
+            self.multipart_posts.append((url, files, data))
+        return self.routes.get("post:" + url, FakeImageResponse())
+
+    async def get(self, url):
+        self.gets.append(url)
+        return self.routes.get("get:" + url, FakeImageResponse())
+
+
+def _install_fake_image_client(monkeypatch, client):
+    monkeypatch.setattr("lamtools_core.tool.image_tools.httpx.AsyncClient", lambda *a, **k: client)
+
+
+_PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"\x00" * 24
+
+IMAGE_CONFIG = {
+    "enabled": True,
+    "api_url": "https://img.example.com/v1",
+    "api_key": "sk-test",
+    "model": "img-model-1",
+}
+
+
+def test_core_toolbox_exposes_generate_image_spec(tmp_path):
+    toolbox = build_core_toolbox(work_root=tmp_path, imagegen_config=IMAGE_CONFIG)
+
+    specs = {spec.name: spec for spec in toolbox.tool_specs()}
+    assert "generate_image" in specs
+    spec = specs["generate_image"]
+    assert spec.permission == "ask_user"
+    assert spec.metadata["category"] == "image"
+    assert "prompt" in {key for key in spec.input_schema["properties"]}
+    assert "reference_urls" in spec.input_schema["properties"]
+    assert {item["type"] for item in spec.metadata["failure_modes"]} >= {"missing_image_provider", "api_timeout"}
+    assert spec.metadata["recovery"]
+
+
+def test_generate_image_disabled_tool_hidden(tmp_path):
+    toolbox = build_core_toolbox(work_root=tmp_path, disabled_tools={"generate_image"})
+
+    names = [spec.name for spec in toolbox.tool_specs()]
+    assert "generate_image" not in names
+    assert toolbox.tool_permissions["generate_image"] == "hard_block"
+
+
+def test_generate_image_requires_approval(tmp_path):
+    toolbox = build_core_toolbox(work_root=tmp_path, imagegen_config=IMAGE_CONFIG)
+
+    call = toolbox.prepare_call(ToolCall(id="img-1", name="generate_image", arguments={"prompt": "a cat"}))
+
+    assert call.requires_approval is True
+    assert call.metadata["approval"]["tier"] == "ask_user"
+
+    auto = build_core_toolbox(work_root=tmp_path, imagegen_config=IMAGE_CONFIG, approval_policy="auto_approve")
+    call2 = auto.prepare_call(ToolCall(id="img-2", name="generate_image", arguments={"prompt": "a cat"}))
+    assert call2.requires_approval is False
+    assert call2.metadata["approval"]["auto_approved"] is True
+
+
+@pytest.mark.asyncio
+async def test_generate_image_missing_provider(tmp_path):
+    toolbox = build_core_toolbox(work_root=tmp_path, imagegen_config=None)
+
+    result = await toolbox.execute(ToolCall(id="img-1", name="generate_image", arguments={"prompt": "a cat"}))
+
+    assert result.status == "failed"
+    assert result.metadata.get("error") == "missing_image_provider"
+
+
+@pytest.mark.asyncio
+async def test_generate_image_text_to_image(tmp_path, monkeypatch):
+    import base64
+
+    client = FakeImageClient(routes={
+        "post:https://img.example.com/v1/images/generations": FakeImageResponse(
+            json_data={"data": [{"b64_json": base64.b64encode(_PNG_BYTES).decode()}]}
+        ),
+    })
+    _install_fake_image_client(monkeypatch, client)
+    toolbox = build_core_toolbox(work_root=tmp_path, imagegen_config=IMAGE_CONFIG, approval_policy="auto_approve")
+
+    result = await toolbox.execute(
+        ToolCall(id="img-1", name="generate_image", arguments={"prompt": "a red cat", "count": 2})
+    )
+
+    assert result.status == "ok"
+    url, payload = client.posts[0]
+    assert url.endswith("/images/generations")
+    assert payload["prompt"] == "a red cat"
+    assert payload["n"] == 2
+    assert payload["model"] == "img-model-1"
+    assert result.artifacts and result.artifacts[0].kind == "image"
+    rel = result.artifacts[0].uri
+    assert rel.startswith(".lam/artifacts/images/")
+    saved = tmp_path / rel
+    assert saved.exists()
+    assert saved.read_bytes() == _PNG_BYTES
+
+
+@pytest.mark.asyncio
+async def test_generate_image_reference_edit_with_local_reference(tmp_path, monkeypatch):
+    import base64
+
+    (tmp_path / "ref.png").write_bytes(_PNG_BYTES)
+    client = FakeImageClient(routes={
+        "post:https://img.example.com/v1/images/edits": FakeImageResponse(
+            json_data={"data": [{"b64_json": base64.b64encode(_PNG_BYTES).decode()}]}
+        ),
+    })
+    _install_fake_image_client(monkeypatch, client)
+    toolbox = build_core_toolbox(work_root=tmp_path, imagegen_config=IMAGE_CONFIG, approval_policy="auto_approve")
+
+    result = await toolbox.execute(
+        ToolCall(
+            id="img-edit-1",
+            name="generate_image",
+            arguments={"prompt": "make it night", "reference_urls": ["ref.png"]},
+        )
+    )
+
+    assert result.status == "ok"
+    assert client.multipart_posts, "expected a multipart /images/edits request"
+    url, files, data = client.multipart_posts[0]
+    assert url.endswith("/images/edits")
+    assert data["prompt"] == "make it night"
+    assert data["model"] == "img-model-1"
+    assert files[0][0] == "image"
+    assert files[0][1][1] == _PNG_BYTES  # local reference uploaded as file bytes
+    assert files[0][1][2] == "image/png"
+    assert result.artifacts and result.artifacts[0].kind == "image"
+    assert (tmp_path / result.artifacts[0].uri).exists()
+
+
+@pytest.mark.asyncio
+async def test_generate_image_reference_edit_with_http_url(tmp_path, monkeypatch):
+    import base64
+
+    client = FakeImageClient(routes={
+        "get:https://cdn.example.com/ref.png": FakeImageResponse(
+            content=_PNG_BYTES, headers={"content-type": "image/png"}
+        ),
+        "post:https://img.example.com/v1/images/edits": FakeImageResponse(
+            json_data={"data": [{"b64_json": base64.b64encode(_PNG_BYTES).decode()}]}
+        ),
+    })
+    _install_fake_image_client(monkeypatch, client)
+    toolbox = build_core_toolbox(work_root=tmp_path, imagegen_config=IMAGE_CONFIG, approval_policy="auto_approve")
+
+    result = await toolbox.execute(
+        ToolCall(
+            id="img-edit-2",
+            name="generate_image",
+            arguments={"prompt": "make it night", "reference_urls": ["https://cdn.example.com/ref.png"]},
+        )
+    )
+
+    assert result.status == "ok"
+    assert client.gets == ["https://cdn.example.com/ref.png"]
+    assert client.multipart_posts and client.multipart_posts[0][0].endswith("/images/edits")
+    assert client.multipart_posts[0][1][0][1][1] == _PNG_BYTES
+
+
+@pytest.mark.asyncio
+async def test_generate_image_timeout_returns_failed(tmp_path, monkeypatch):
+    import httpx
+
+    class SlowClient(FakeImageClient):
+        async def post(self, url, json=None):
+            raise httpx.ReadTimeout("timed out", request=None)
+
+    _install_fake_image_client(monkeypatch, SlowClient())
+    toolbox = build_core_toolbox(work_root=tmp_path, imagegen_config=IMAGE_CONFIG, approval_policy="auto_approve")
+
+    result = await toolbox.execute(ToolCall(id="img-t", name="generate_image", arguments={"prompt": "slow"}))
+
+    assert result.status == "failed"
+    assert "超时" in result.error

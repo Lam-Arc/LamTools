@@ -20,6 +20,7 @@ from lamtools_core.tool.durable_tools import (
     durable_tool_specs,
 )
 from lamtools_core.tool.git_tools import make_git_diff_handler, make_git_status_handler
+from lamtools_core.tool.image_tools import make_generate_image_handler
 from lamtools_core.tool.mcp_tools import MCPToolCaller, execute_mcp_tool_call
 from lamtools_core.tool.permission import ASK_USER, AUTO_ALLOW, HARD_BLOCK, PermissionTier
 from lamtools_core.tool.web_tools import (
@@ -80,6 +81,7 @@ DEFAULT_TOOL_PERMISSIONS: dict[str, PermissionTier] = {
     "git_diff": AUTO_ALLOW,
     "web_search": AUTO_ALLOW,
     "web_fetch": ASK_USER,
+    "generate_image": ASK_USER,
     "mcp_tool": ASK_USER,
     "mcp_activate": AUTO_ALLOW,
     SUB_AGENT_TOOL_NAME: AUTO_ALLOW,
@@ -102,6 +104,7 @@ DEFAULT_TOOL_ORDER: tuple[str, ...] = (
     "git_diff",
     "web_search",
     "web_fetch",
+    "generate_image",
     "mcp_activate",
     "mcp_tool",
     SUB_AGENT_TOOL_NAME,
@@ -124,6 +127,7 @@ DEFAULT_TOOL_CATEGORIES: dict[str, str] = {
     "git_diff": "git",
     "web_search": "web",
     "web_fetch": "web",
+    "generate_image": "image",
     "mcp_tool": "mcp",
     "mcp_activate": "mcp",
     SUB_AGENT_TOOL_NAME: "agent",
@@ -168,6 +172,13 @@ DEFAULT_TOOL_FAILURE_MODES: dict[str, list[dict[str, str]]] = {
         {"type": "invalid_url", "message": "Invalid URL"},
         {"type": "expected_text_missing", "message": "Expected text not found in fetched content"},
     ],
+    "generate_image": [
+        {"type": "missing_image_provider", "message": "生图未配置：请在设置 → 生图中配置 API 地址"},
+        {"type": "api_timeout", "message": "生图 API 超时（生成较慢可稍后重试）"},
+        {"type": "api_error", "message": "生图 API 请求失败: {reason}"},
+        {"type": "no_image_in_response", "message": "生图响应中没有解析出图片"},
+        {"type": "reference_missing", "message": "参考图文件不存在: {path}"},
+    ],
     "mcp_activate": [
         {"type": "server_not_found", "message": "MCP server not found"},
     ],
@@ -190,6 +201,9 @@ DEFAULT_TOOL_RECOVERY: dict[str, str] = {
     ),
     "web_search": "Retry with simpler query, try different search terms",
     "web_fetch": "Check URL validity, try alternative URL",
+    "generate_image": (
+        "Check 设置 → 生图 已启用且 API 地址正确；生成较慢可重试；参考图需为可访问 URL 或工作区内文件"
+    ),
     "mcp_activate": "Check the server name against available MCP servers; use exact names listed in the system prompt.",
     "mcp_tool": "Check tool name and arguments, verify MCP server status",
     "question": "Rephrase the question, simplify options, or proceed with a reasonable default",
@@ -339,6 +353,34 @@ DEFAULT_TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
         "name": "web_fetch",
         "description": "Fetch content from a URL.",
         "input_schema": _schema({"url": {"type": "string", "description": "URL to fetch"}}, ["url"]),
+    },
+    {
+        "name": "generate_image",
+        "description": (
+            "调用生图 API 生成或编辑图片。无 reference_urls 时按提示词文生图（可一次生成多张）；"
+            "带 reference_urls（可访问的图片 URL 或工作区内图片路径）时走参考图编辑模式，"
+            "参考图作为输入、生成其编辑/变体。图片保存到 .lam/artifacts/images/ 并在界面中预览；"
+            "如需把图片转存到正常工作区，可后续用 run_command 复制。"
+        ),
+        "input_schema": _schema(
+            {
+                "prompt": {"type": "string", "description": "生图提示词，描述期望的画面内容（英文效果更佳）"},
+                "count": {
+                    "type": "integer",
+                    "description": "生成图片数量，默认 1，最多 4（仅文生图模式生效）",
+                },
+                "size": {
+                    "type": "string",
+                    "description": "图片尺寸，默认 1024x1024",
+                },
+                "reference_urls": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "可选参考图列表（http(s) URL 或工作区内相对路径），提供时走参考图编辑模式",
+                },
+            },
+            ["prompt"],
+        ),
     },
     {
         "name": "mcp_activate",
@@ -681,9 +723,11 @@ class CoreToolbox:
         enable_goal_tool: bool = False,
         enable_arrange_tool: bool = False,
         workflow_build: bool = False,
+        imagegen_config: dict | None = None,
         active_tier: "PermissionMode | None" = None,
         tier_tools: "TierTools | None" = None,
         load_tools: LoadTools | None = None,
+        active_mode: str | None = None,
         activated_mcp_servers: set[str] | None = None,
         workflow_tool_provider: Callable[[], Any] | None = None,
     ) -> None:
@@ -698,7 +742,9 @@ class CoreToolbox:
         # FIXME: web_search 暂不上线（bug 较多），默认禁用
         self.disabled_tools.add("web_search")
         self.load_tools = load_tools or {}
+        self.active_mode = active_mode
         self.activated_mcp_servers = activated_mcp_servers or set()
+        self.imagegen_config = imagegen_config
         self.tool_permissions = dict(DEFAULT_TOOL_PERMISSIONS)
         self.skill_registry = skill_registry or SkillRegistry(explicit_roots=self.loaded_skill_roots)
         self.workflow_tool_provider = workflow_tool_provider
@@ -716,6 +762,10 @@ class CoreToolbox:
             self.tool_permissions[spec.name] = spec.permission  # type: ignore[assignment]
         for name in self.disabled_tools:
             self.tool_permissions[name] = HARD_BLOCK
+        # Dynamic (exposed-workflow) specs declare their own permission; prime
+        # the permission map BEFORE the approval gate snapshots it, so those
+        # tools are gated per declaration instead of defaulting to HARD_BLOCK.
+        self._workflow_specs()
         self.approval_gate = ApprovalGate(
             work_root=self.work_root,
             tool_permissions=self.tool_permissions,
@@ -732,6 +782,7 @@ class CoreToolbox:
             core_event_callback=core_event_callback,
             operation_executor=operation_executor,
             workflow_build=workflow_build,
+            imagegen_config=imagegen_config,
         )
 
     def _workflow_specs(self) -> list[ToolSpec]:
@@ -741,7 +792,14 @@ class CoreToolbox:
             bundle = self.workflow_tool_provider()
         except Exception:  # noqa: BLE001 — workflow tools must never break the toolbox
             return []
-        return list(getattr(bundle, "specs", []) or [])
+        specs = list(getattr(bundle, "specs", []) or [])
+        # Dynamic (exposed-workflow) tools carry their own permission on the
+        # spec; register it so the approval gate treats them per declaration
+        # instead of defaulting unknown names to HARD_BLOCK.
+        for spec in specs:
+            if spec.name not in self.tool_permissions:
+                self.tool_permissions[spec.name] = spec.permission
+        return specs
 
     def tool_specs(self) -> list[ToolSpec]:
         specs = [
@@ -797,7 +855,49 @@ class CoreToolbox:
     def skill_index(self) -> str:
         return self.skill_registry.prompt_index(self.work_root)
 
+    def _mode_block_reason(self, name: str) -> str | None:
+        """Return the fixed mode-enforcement error when ``name`` is not allowed
+        in the current active mode, or None when the call may proceed.
+
+        Mirrors the advertisement filter in :meth:`model_tools`: an unknown
+        mode or a full-access mode (empty whitelist) never blocks; the
+        workflow mode additionally allows dynamic workflow-category tools.
+        """
+        if not self.active_mode or not self.load_tools:
+            return None
+        allowed = mode_tool_set(self.load_tools, self.active_mode)
+        if allowed is None:
+            return None
+        if self.active_mode == "workflow":
+            allowed = set(allowed) | {
+                spec.name for spec in self.tool_specs()
+                if str(spec.metadata.get("category")) == "workflow"
+            }
+        if name in allowed:
+            return None
+        return (
+            f"You are in the {self.active_mode} mode, you can't use {name}. "
+            "Please make the plan prepared and ask user to switch mode."
+        )
+
     def prepare_call(self, call: ToolCall) -> ToolCall:
+        # Mode enforcement runs first: the toolset advertised to the model is
+        # mode-filtered, and the same filter must hold at execution time — a
+        # model with stale context (e.g. the mode changed between turns) must
+        # not be able to run a tool the current mode forbids.
+        mode_reason = self._mode_block_reason(call.name)
+        if mode_reason:
+            approval = {
+                "tier": "blocked",
+                "reason": mode_reason,
+                "blocked": True,
+                "requires_approval": False,
+            }
+            return replace(
+                call,
+                requires_approval=False,
+                metadata={**dict(call.metadata or {}), "approval": approval},
+            )
         # question is a user-interaction request, not a permission decision —
         # bypass ApprovalGate entirely; it always requires user input and is
         # never affected by approval_policy / active_tier.
@@ -876,6 +976,7 @@ class CoreToolbox:
         core_event_callback: Callable[[CoreEvent], Awaitable[None]] | None,
         operation_executor: OperationExecutor | None,
         workflow_build: bool = False,
+        imagegen_config: dict | None = None,
     ) -> dict[str, ToolHandler]:
         read_tools = WorkspaceReadOnlyTools(
             self.work_root,
@@ -1109,6 +1210,11 @@ class CoreToolbox:
             ),
             "web_search": make_web_search_handler(str(self.work_root)),
             "web_fetch": make_web_fetch_handler(str(self.work_root)),
+            "generate_image": make_generate_image_handler(
+                imagegen_config,
+                str(self.work_root),
+                artifact_registry=self.imagegen_config.get("artifact_registry") if isinstance(imagegen_config, dict) else None,
+            ),
             "mcp_tool": call_mcp,
             "mcp_activate": activate_mcp,
             SUB_AGENT_TOOL_NAME: call_sub_agent,

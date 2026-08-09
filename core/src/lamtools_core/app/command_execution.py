@@ -71,6 +71,9 @@ async def compact_runtime_history(
         loop_policy.get("context_window_tokens"),
     )
     active_model = str(metadata.get("model_id") or metrics.get("model_id") or model).strip()
+    compaction_meta = metadata.get("context_compaction")
+    compaction_meta = compaction_meta if isinstance(compaction_meta, dict) else {}
+    existing_summary = str(compaction_meta.get("summary") or "")
     raw_history = await runtime_state_store.get_history(thread_id)
     messages = [message for item in raw_history if (message := _chat_message_from_dict(item)) is not None]
     result = await compact_context(
@@ -81,6 +84,7 @@ async def compact_runtime_history(
             model=active_model,
             limit_tokens=MANUAL_COMPACTION_LIMIT_TOKENS,
             input_limit_tokens=compaction_segment_input_limit(context_window_tokens),
+            existing_summary=existing_summary,
             on_event=on_event,
         )
     )
@@ -90,12 +94,38 @@ async def compact_runtime_history(
             "session_id": thread_id,
             "summary": result.summary,
         }
-    # Do NOT overwrite persisted history.  Store the compaction summary +
-    # boundary seq in state.metadata so subsequent runs load only messages
-    # after the boundary and prepend the summary.
+    # Resume boundary = the row seq of the first retained message MINUS one
+    # (never the history tail, otherwise the retained span is dropped on the
+    # next run).  The marker travels with that message through a full history
+    # rewrite so later replaces can re-anchor the boundary after renumbering.
     compaction_boundary = 0
+    retained_messages = result.retained_messages
+    if retained_messages:
+        first_retained = retained_messages[0]
+        first_seq = (
+            first_retained.metadata.get("history_seq")
+            if isinstance(first_retained.metadata, dict)
+            else None
+        )
+        if isinstance(first_seq, int) and first_seq > 0:
+            compaction_boundary = first_seq - 1
+        else:
+            compaction_boundary = next(
+                (
+                    index
+                    for index, message in enumerate(messages)
+                    if id(message) == id(first_retained)
+                ),
+                0,
+            )
+        if isinstance(first_retained.metadata, dict):
+            first_retained.metadata["lam_compaction_resume"] = True
+    # Persist the resume marker (and keep row numbering stable) so later full
+    # replaces can re-anchor the boundary after rows are renumbered.
     if isinstance(runtime_state_store, RuntimeCheckpointStore):
-        compaction_boundary = await runtime_state_store.history_max_seq(thread_id)
+        await runtime_state_store.replace_history(
+            thread_id, [message.to_dict() for message in messages]
+        )
     if not isinstance(state.metadata, dict):
         state.metadata = {}
     state.metadata["context_compaction"] = {

@@ -55,6 +55,16 @@ class ThreadSnapshotRow(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
 
 
+class SnapshotItemRow(Base):
+    __tablename__ = "test_operation_thread_snapshot_items"
+
+    thread_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    item_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    item_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+
+
 class ScriptedReadLLM:
     def __init__(self) -> None:
         self.requests: list[LLMRequest] = []
@@ -151,7 +161,7 @@ async def _persistence(tmp_path):
         await conn.run_sync(Base.metadata.create_all)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     event_store = SqlAlchemyAppEventStore(AppEventRow, protocol_version="test.v1")
-    snapshot_store = SqlAlchemyThreadSnapshotStore(ThreadSnapshotRow, projector=CoreAppSnapshotProjector())
+    snapshot_store = SqlAlchemyThreadSnapshotStore(ThreadSnapshotRow, item_model=SnapshotItemRow, projector=CoreAppSnapshotProjector())
     return engine, session_factory, event_store, snapshot_store
 
 

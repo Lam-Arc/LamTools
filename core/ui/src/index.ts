@@ -117,6 +117,8 @@ export { default as CoreProjectSettings } from './components/CoreProjectSettings
 export type { CoreProjectSettingsProject } from './components/CoreProjectSettings.vue';
 export { default as CoreProjectCreate } from './components/CoreProjectCreate.vue';
 export { default as CoreSessionTitleEditor } from './components/CoreSessionTitleEditor.vue';
+export { default as CoreImageGenEditor } from './components/CoreImageGenEditor.vue';
+export { default as ArtifactPanel } from './components/ArtifactPanel.vue';
 export { default as CoreSessionRollback } from './components/CoreSessionRollback.vue';
 export type {
   CoreSessionCheckpoint,

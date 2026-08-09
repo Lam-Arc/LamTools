@@ -7,12 +7,13 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
 from lamtools_core.event import RunItemEvent
 from lamtools_core.snapshot import (
+    TERMINAL_STATUSES,
     apply_run_item_event_in_place,
     empty_thread_snapshot,
     reconcile_terminal_requests,
@@ -412,10 +413,11 @@ def _already_projected(state: dict[str, Any], event: AppEventEnvelope) -> bool:
     after the seen list was trimmed past 2000 entries).
 
     Streaming part events (metadata.runtime_phase == "runtime.part") are the
-    exception: they are appended without projection (project_snapshot=False)
-    and only reach the snapshot at the turn boundary, so their seq commonly
-    trails the snapshot seq — treating them as already projected would drop
-    the message/thinking content from the snapshot entirely.
+    exception: replaying a part event is harmless (the reducer appends its
+    content once per event_id via seen-dedup), and treating it as projected
+    would be wrong for snapshots persisted by older code that deferred part
+    projection — those parts only reach the snapshot at the turn boundary,
+    so their seq commonly trails the snapshot seq.
     """
     if int(state.get("snapshot_seq") or 0) < int(event.seq or 0):
         return False
@@ -427,31 +429,145 @@ def _already_projected(state: dict[str, Any], event: AppEventEnvelope) -> bool:
 
 
 class SqlAlchemyThreadSnapshotStore:
+    """Incremental snapshot storage: items live in one row each.
+
+    ``core_thread_snapshot_items`` (item rows) hold the thread's items; the
+    snapshot row holds only the small derived state (seen_event_ids, turns,
+    requests, queue, artifacts, status, session, top-level user items). A
+    streaming part event therefore upserts a single item row instead of
+    rewriting the whole thread JSON (1.3-2.3s on 55MB threads) — projection is
+    incremental and can happen for every event, so there is no deferred
+    intermediate state between "event written" and "snapshot projected".
+    """
+
     def __init__(
         self,
         snapshot_model: type[Any],
         *,
+        item_model: type[Any],
         projector: CoreAppSnapshotProjector | None = None,
     ) -> None:
         self.snapshot_model = snapshot_model
+        self.item_model = item_model
         self.projector = projector or CoreAppSnapshotProjector()
 
     async def load(self, db: AsyncSession, thread_id: str) -> dict[str, Any]:
         row = await db.get(self.snapshot_model, thread_id)
         if row is None:
             return self.projector.empty(thread_id)
-        return self._state_from_row(row, thread_id)
+        return await self._assemble(db, row, thread_id)
+
+    async def _assemble(self, db: AsyncSession, row: Any, thread_id: str) -> dict[str, Any]:
+        """Full assembly: metadata row + every item row, ordered by seq.
+
+        The result is byte-equivalent to the old single-JSON snapshot, so
+        consumers (frontend, checkpoint, session stores) are unaffected.
+        """
+        state = dict(row.snapshot_json or self.projector.empty(thread_id))
+        state["snapshot_seq"] = row.snapshot_seq
+        items: dict[str, Any] = {}
+        order: list[str] = []
+        result = await db.execute(
+            select(self.item_model)
+            .where(self.item_model.thread_id == thread_id)
+            .order_by(self.item_model.seq.asc(), self.item_model.item_id.asc())
+        )
+        for item_row in result.scalars():
+            item = dict(item_row.item_json or {})
+            item["seq"] = item_row.seq
+            items[str(item_row.item_id)] = item
+            order.append(str(item_row.item_id))
+        core = state.get("core")
+        if not isinstance(core, dict):
+            core = empty_thread_snapshot(thread_id)
+            state["core"] = core
+        core["items"] = items
+        core["item_order"] = order
+        return self.projector.reconcile_status(state)
+
+    async def _partial_state(
+        self,
+        db: AsyncSession,
+        row: Any,
+        thread_id: str,
+        events: list[AppEventEnvelope],
+    ) -> dict[str, Any]:
+        """Partial assembly: metadata row + only the touched item rows.
+
+        The reducer only mutates the items named by the batch's events (plus,
+        for terminal status events, every item of the closing turn), so the
+        untouched items never need to be loaded on the projection hot path.
+        ``_item_seq_map`` (item_id -> first seq) is injected so item_order
+        insertions still bisect against every item's anchor.
+        """
+        state = dict(row.snapshot_json or self.projector.empty(thread_id))
+        state["snapshot_seq"] = row.snapshot_seq
+        core = state.get("core")
+        if not isinstance(core, dict):
+            core = empty_thread_snapshot(thread_id)
+            state["core"] = core
+        touched = self._touched_item_ids(events, core)
+        seq_map: dict[str, int] = {}
+        result = await db.execute(
+            select(self.item_model.item_id, self.item_model.seq).where(
+                self.item_model.thread_id == thread_id
+            )
+        )
+        order = list(core.get("item_order") or [])
+        order_set = set(order)
+        for item_id, seq in result.all():
+            item_id = str(item_id)
+            seq_map[item_id] = int(seq or 0)
+            if item_id not in order_set:
+                order.append(item_id)
+                order_set.add(item_id)
+        items: dict[str, Any] = {}
+        if touched:
+            result = await db.execute(
+                select(self.item_model).where(
+                    self.item_model.thread_id == thread_id,
+                    self.item_model.item_id.in_(touched),
+                )
+            )
+            for item_row in result.scalars():
+                item = dict(item_row.item_json or {})
+                item["seq"] = item_row.seq
+                items[str(item_row.item_id)] = item
+        core["items"] = items
+        core["item_order"] = order
+        core["_item_seq_map"] = seq_map
+        return state
+
+    @staticmethod
+    def _touched_item_ids(events: list[AppEventEnvelope], core: dict[str, Any]) -> set[str]:
+        touched: set[str] = set()
+        for event in events:
+            payload = event.payload if isinstance(event.payload, dict) else {}
+            item_id = str(payload.get("item_id") or "")
+            if item_id:
+                touched.add(item_id)
+            # Terminal status closes the turn: the reducer stamps every item of
+            # that turn, so those rows must be loaded too.
+            if payload.get("kind") == "status" and payload.get("status") in TERMINAL_STATUSES:
+                turn_id = str(event.turn_id or "")
+                turns = core.get("turns") or {}
+                turn = turns.get(turn_id) if isinstance(turns, dict) else None
+                if isinstance(turn, dict):
+                    touched.update(str(iid) for iid in turn.get("items") or [])
+        return touched
 
     async def apply(self, db: AsyncSession, event: AppEventEnvelope) -> dict[str, Any]:
         row = await db.get(self.snapshot_model, event.thread_id)
-        base = dict(row.snapshot_json) if row is not None and row.snapshot_json else None
-        if base is not None and _already_projected(base, event):
-            return self._state_from_row(row, event.thread_id)
-        state = self.projector.apply(base, event)
-        if row is None:
+        if row is not None and row.snapshot_json:
+            base = await self._partial_state(db, row, event.thread_id, [event])
+            if _already_projected(base, event):
+                return await self._assemble(db, row, event.thread_id)
+            state = self.projector.apply(base, event)
+        else:
+            state = self.projector.apply(None, event)
             row = self.snapshot_model(thread_id=event.thread_id)
             db.add(row)
-        self._assign(row, state)
+        await self._persist(db, row, state, event.thread_id)
         await db.flush()
         return state
 
@@ -464,11 +580,10 @@ class SqlAlchemyThreadSnapshotStore:
         if any(event.thread_id != thread_id for event in events):
             raise ValueError("Snapshot batches must contain one thread")
         row = await db.get(self.snapshot_model, thread_id)
-        state = (
-            dict(row.snapshot_json)
-            if row is not None and row.snapshot_json
-            else self.projector.empty(thread_id)
-        )
+        if row is not None and row.snapshot_json:
+            state = await self._partial_state(db, row, thread_id, events)
+        else:
+            state = self.projector.empty(thread_id)
         for event in sorted(events, key=lambda item: item.seq):
             if _already_projected(state, event):
                 continue
@@ -476,7 +591,7 @@ class SqlAlchemyThreadSnapshotStore:
         if row is None:
             row = self.snapshot_model(thread_id=thread_id)
             db.add(row)
-        self._assign(row, state)
+        await self._persist(db, row, state, thread_id)
         await db.flush()
         return state
 
@@ -497,7 +612,7 @@ class SqlAlchemyThreadSnapshotStore:
         rows = list((await db.execute(select(self.snapshot_model))).scalars())
         matches: list[tuple[str, dict[str, Any]]] = []
         for row in rows:
-            state = dict(row.snapshot_json or {})
+            state = await self._assemble(db, row, str(row.thread_id))
             request = (state.get("core") or {}).get("requests", {}).get(request_id)
             if not isinstance(request, dict):
                 request = (state.get("requests") or {}).get(request_id)
@@ -508,11 +623,6 @@ class SqlAlchemyThreadSnapshotStore:
     async def list_thread_ids(self, db: AsyncSession) -> list[str]:
         result = await db.execute(select(self.snapshot_model.thread_id))
         return [str(row[0]) for row in result.all() if row[0]]
-
-    def _state_from_row(self, row: Any, thread_id: str) -> dict[str, Any]:
-        state = dict(row.snapshot_json or self.projector.empty(thread_id))
-        state["snapshot_seq"] = row.snapshot_seq
-        return self.projector.reconcile_status(state)
 
     async def rebuild(
         self,
@@ -525,23 +635,91 @@ class SqlAlchemyThreadSnapshotStore:
         if row is None:
             row = self.snapshot_model(thread_id=thread_id)
             db.add(row)
-        self._assign(row, state)
+        await db.execute(delete(self.item_model).where(self.item_model.thread_id == thread_id))
+        await self._persist(db, row, state, thread_id)
         await db.flush()
         return state
 
-    def _assign(self, row: Any, state: dict[str, Any]) -> None:
+    async def write_full_projection(
+        self,
+        db: AsyncSession,
+        thread_id: str,
+        projection_payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Write a complete captured projection (checkpoint restore/fork).
+
+        The payload's snapshot_json holds the full snapshot (items included);
+        it is split back into item rows + metadata row, replacing any existing
+        rows for the thread.
+        """
+        state = dict(projection_payload.get("snapshot_json") or {})
+        state["snapshot_seq"] = int(projection_payload.get("snapshot_seq") or 0)
+        row = await db.get(self.snapshot_model, thread_id)
+        if row is None:
+            row = self.snapshot_model(thread_id=thread_id)
+            db.add(row)
+        await db.execute(delete(self.item_model).where(self.item_model.thread_id == thread_id))
+        await self._persist(db, row, state, thread_id)
+        await db.flush()
+        return state
+
+    async def _persist(
+        self,
+        db: AsyncSession,
+        row: Any,
+        state: dict[str, Any],
+        thread_id: str,
+    ) -> None:
+        """Write the projected state back incrementally.
+
+        The touched item dicts (state["core"]["items"] — the partial assembly
+        only holds those) are upserted one row each; the small metadata JSON is
+        rewritten whole from a copy so the returned state keeps its items.
+        flag_modified keeps the JSON column write honest (the shallow-copy
+        projection mutates shared children, which SQLAlchemy's value-equality
+        diff would otherwise miss).
+        """
+        core = state.get("core")
+        items: dict[str, Any] = {}
+        metadata_state = state
+        if isinstance(core, dict):
+            raw_items = core.get("items")
+            if isinstance(raw_items, dict):
+                items = raw_items
+            metadata_state = dict(state)
+            core_copy = dict(core)
+            core_copy["items"] = {}
+            core_copy.pop("_item_seq_map", None)
+            metadata_state["core"] = core_copy
+        metadata_state.pop("_item_seq_map", None)
+        now = datetime.now()
+        for item_id, item in items.items():
+            seq = int(item.get("seq") or 0) if isinstance(item, dict) else 0
+            existing = await db.get(self.item_model, (thread_id, str(item_id)))
+            if existing is None:
+                db.add(
+                    self.item_model(
+                        thread_id=thread_id,
+                        item_id=str(item_id),
+                        seq=seq,
+                        item_json=item,
+                        updated_at=now,
+                    )
+                )
+            else:
+                existing.seq = seq
+                existing.item_json = item
+                existing.updated_at = now
         row.snapshot_seq = int(state.get("snapshot_seq") or 0)
-        row.snapshot_json = state
+        row.snapshot_json = metadata_state
         if hasattr(row, "updated_at"):
-            row.updated_at = datetime.now()
-        # apply_many projects onto a shallow copy whose children are shared
-        # with the previously loaded snapshot_json: in-place mutations make
-        # the new value compare equal to the old one, SQLAlchemy's attribute
-        # diff sees no change, and the JSON column is silently skipped on
-        # UPDATE (deferred events then never reach the snapshot). Force the
-        # dirty flag so the projected state always persists.
+            row.updated_at = now
         flag_modified(row, "snapshot_json")
         flag_modified(row, "snapshot_seq")
+        # Keep the returned state clean of the internal anchor map.
+        if isinstance(core, dict):
+            core.pop("_item_seq_map", None)
+        state.pop("_item_seq_map", None)
 
 
 __all__ = [

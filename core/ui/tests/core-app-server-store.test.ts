@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   createCoreAppServerRuntimeController,
   createCoreAppServerRuntimeState,
+  selectChatMessages,
   type CoreAppServerRuntimeClient,
   type CoreAppEvent,
   type CoreAppSnapshot,
@@ -264,6 +265,38 @@ describe('core appServer runtime store', () => {
     expect(runtime.state?.snapshot_seq).toBe(5)
     expect(runtime.state?.requests?.['functions.write_file:0']?.status).toBe('resolved')
   })
+
+  it('merges tool_result artifacts from the runItem top level into chat parts', async () => {
+    // RunItemEvent serializes artifacts OUTSIDE payload (run_item.py to_dict);
+    // the store must merge value.artifacts so image cards render from the
+    // event stream without waiting for the turn-boundary snapshot.
+    const runtime = createCoreAppServerRuntimeState()
+    const frames: Array<() => void> = []
+    let onEvent: ((event: CoreAppEvent) => void) | undefined
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: (callbacks) => {
+        onEvent = callbacks.onEvent
+        return fakeClient(async (method) => method === 'thread/resume'
+          ? { snapshot: snapshot(1, 'running') }
+          : {})
+      },
+      scheduleFrame: (callback) => frames.push(callback),
+    })
+    await controller.connect('http://127.0.0.1:6173', 'thread-1')
+
+    onEvent?.(runItemToolResult('tr-1', 'img-1'))
+    frames[0]()
+
+    // Artifacts merged into the snapshot-level core artifacts map.
+    expect(runtime.state?.core?.artifacts?.['art-1']?.uri).toBe('.lam/artifacts/images/x.png')
+
+    // Chat parts carry artifacts (image preview rendering prerequisite).
+    const messages = selectChatMessages(runtime.state!)
+    const part = messages.flatMap((message) => message.parts).find((p) => p.artifacts?.length)
+    expect(part?.artifacts).toHaveLength(1)
+    expect(part?.artifacts?.[0]?.kind).toBe('image')
+    expect(part?.artifacts?.[0]?.artifact_id).toBe('art-1')
+  })
 })
 
 function fakeClient(
@@ -377,6 +410,40 @@ function runStatusEvent(eventId: string, status: string): CoreAppEvent {
       kind: 'status',
       status,
       payload: { type: 'turn', status },
+    },
+  }
+}
+
+function runItemToolResult(eventId: string, itemId: string): CoreAppEvent {
+  return {
+    event_id: eventId,
+    thread_id: 'thread-1',
+    seq: 3,
+    method: 'core/runItem',
+    created_at: '2026-07-15T00:00:02Z',
+    transient: true,
+    item_id: itemId,
+    turn_id: 'turn-1',
+    payload: {
+      event_id: eventId,
+      thread_id: 'thread-1',
+      item_id: itemId,
+      turn_id: 'turn-1',
+      kind: 'tool_result',
+      status: 'completed',
+      payload: {
+        type: 'dynamicToolCall',
+        tool_name: 'generate_image',
+        tool_result: '[generate_image] 已生成 1 张图片',
+        status: 'ok',
+      },
+      artifacts: [{
+        artifact_id: 'art-1',
+        item_id: itemId,
+        kind: 'image',
+        name: 'x.png',
+        uri: '.lam/artifacts/images/x.png',
+      }],
     },
   }
 }

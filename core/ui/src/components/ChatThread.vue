@@ -15,6 +15,8 @@
         :process-expanded-ids="processExpandedIds"
         :typing-message-ids="typingMessageIds"
         :message-actions="messageActions"
+        :api-base="apiBase"
+        :project-id="projectId"
         @toggle-process="onToggleProcess"
         @decision-select="onDecisionSelect"
         @fork-message="onForkMessage"
@@ -63,12 +65,18 @@ const props = withDefaults(
     typingMessageIds?: Set<string>
     /** Show hover actions (copy / fork / roll back) under assistant replies */
     messageActions?: boolean
+    /** API base for building file raw URLs (e.g. /api/core); used for image artifact previews */
+    apiBase?: string
+    /** Project id whose work_root contains the image artifact paths */
+    projectId?: string | null
   }>(),
   {
     assistantLabel: 'Assistant',
     processExpandedIds: () => new Set(),
     typingMessageIds: () => new Set(),
     messageActions: false,
+    apiBase: '/api/core',
+    projectId: null,
   },
 )
 

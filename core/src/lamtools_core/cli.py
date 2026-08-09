@@ -11,6 +11,7 @@ import sys
 import time
 import uuid
 from dataclasses import dataclass, field, replace
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -994,6 +995,37 @@ def build_parser() -> argparse.ArgumentParser:
     attachment_upload.add_argument("--raw", action="store_true")
     attachment_upload.set_defaults(func=cmd_attachment_upload)
 
+    imagegen = sub.add_parser("imagegen", help="Manage the generate_image tool configuration (设置 → 生图)")
+    imagegen_sub = imagegen.add_subparsers(dest="imagegen_command", required=True)
+    imagegen_show = imagegen_sub.add_parser("show", help="Show the current image generation configuration")
+    imagegen_show.add_argument("--config-db", default="", help="LLM config database (default: data/lamtools.db)")
+    imagegen_show.set_defaults(func=cmd_imagegen_show)
+    imagegen_config = imagegen_sub.add_parser("config", help="Update the image generation configuration")
+    imagegen_config.add_argument(
+        "--enabled", choices=["true", "false"], default=None,
+        help="Enable or disable the generate_image tool (disabled tools are hidden from the model)",
+    )
+    imagegen_config.add_argument("--api-url", default=None, help="Image generation API base URL")
+    imagegen_config.add_argument("--api-key", default=None, help="API key (stored in plaintext in the config database)")
+    imagegen_config.add_argument("--model", default=None, help="Image model id")
+    imagegen_config.add_argument("--config-db", default="", help="LLM config database (default: data/lamtools.db)")
+    imagegen_config.set_defaults(func=cmd_imagegen_config)
+
+    artifact = sub.add_parser("artifact", help="Manage project artifacts (.lam/artifact/)")
+    artifact_sub = artifact.add_subparsers(dest="artifact_command", required=True)
+    artifact_list = artifact_sub.add_parser("list", help="List artifacts of a project workspace")
+    artifact_list.add_argument("--work-root", default="", help="Project work_root (default: current directory)")
+    artifact_list.add_argument("--include-deleted", action="store_true", help="Also list soft-deleted tombstones")
+    artifact_list.set_defaults(func=cmd_artifact_list)
+    artifact_show = artifact_sub.add_parser("show", help="Show a single artifact manifest")
+    artifact_show.add_argument("artifact_id")
+    artifact_show.add_argument("--work-root", default="", help="Project work_root (default: current directory)")
+    artifact_show.set_defaults(func=cmd_artifact_show)
+    artifact_delete = artifact_sub.add_parser("delete", help="Soft-delete artifacts (id/manifest 保留)")
+    artifact_delete.add_argument("artifact_ids", nargs="+")
+    artifact_delete.add_argument("--work-root", default="", help="Project work_root (default: current directory)")
+    artifact_delete.set_defaults(func=cmd_artifact_delete)
+
     session = sub.add_parser("session", help="Query Core Agent sessions")
     session_sub = session.add_subparsers(dest="session_command", required=True)
     session_list = session_sub.add_parser("list", help="List Core Agent sessions")
@@ -1234,6 +1266,36 @@ def build_parser() -> argparse.ArgumentParser:
     models_import.add_argument("--work-root", default="")
     models_import.add_argument("--force", action="store_true")
     models_import.set_defaults(func=cmd_models_import_from_db)
+
+    loadtools = sub.add_parser("loadtools", help="Manage mode tool-set configuration (loadtools.jsonc)")
+    loadtools_sub = loadtools.add_subparsers(dest="loadtools_command", required=True)
+    loadtools_show = loadtools_sub.add_parser("show", help="Print the effective mode tool-sets")
+    loadtools_show.set_defaults(func=cmd_loadtools_show)
+    loadtools_edit = loadtools_sub.add_parser("edit-mode", help="Create or update a mode's tool whitelist")
+    loadtools_edit.add_argument("--mode", required=True, help="Mode name (e.g. consider)")
+    loadtools_edit.add_argument("--description", default="", help="Mode description shown in the system prompt")
+    loadtools_edit.add_argument("--tools", default="", help="Comma-separated tool names; empty means all tools allowed")
+    loadtools_edit.add_argument("--no-limit", action="store_true", help="Full access: empty tools list (all tools allowed)")
+    loadtools_edit.set_defaults(func=cmd_loadtools_edit_mode)
+    loadtools_delete = loadtools_sub.add_parser("delete-mode", help="Remove a mode from the configuration")
+    loadtools_delete.add_argument("--mode", required=True)
+    loadtools_delete.set_defaults(func=cmd_loadtools_delete_mode)
+
+    memory = sub.add_parser("memory", help="Read or write the global memory.md (unified config dir)")
+    memory_sub = memory.add_subparsers(dest="memory_command", required=True)
+    memory_get = memory_sub.add_parser("get", help="Print the global memory.md content")
+    memory_get.set_defaults(func=cmd_memory_get)
+    memory_set = memory_sub.add_parser("set", help="Write the global memory.md from a UTF-8 file or stdin")
+    memory_set.add_argument("source_file", help="Path to a markdown file, or '-' for stdin")
+    memory_set.set_defaults(func=cmd_memory_set)
+
+    load_context = sub.add_parser("load-context", help="Read or write the global load_context.jsonc (unified config dir)")
+    load_context_sub = load_context.add_subparsers(dest="load_context_command", required=True)
+    load_context_get = load_context_sub.add_parser("get", help="Print the parsed global load_context (addition/except)")
+    load_context_get.set_defaults(func=cmd_load_context_get)
+    load_context_set = load_context_sub.add_parser("set", help="Write global load_context from a JSON file or stdin")
+    load_context_set.add_argument("source_file", help="Path to a JSON file, or '-' for stdin")
+    load_context_set.set_defaults(func=cmd_load_context_set)
     return parser
 
 
@@ -2286,6 +2348,323 @@ async def cmd_models_import_from_db(args: argparse.Namespace) -> int:
     print(f"[models] exported {count} models to {args.scope} scope")
     for path in paths:
         print(f"  {path}")
+    return 0
+
+
+def _loadtools_for_cli() -> tuple[LoadTools, Path, bool]:
+    """Load the effective mode tool-sets: config file when present, else built-in."""
+    from lamtools_core.config.root import core_config_file
+    from lamtools_core.tool.loadtools import LoadTools, default_load_tools, load_loadtools
+
+    path = core_config_file("loadtools.jsonc")
+    if path.is_file():
+        loaded = load_loadtools(path)
+        if loaded:
+            return loaded, path, True
+    return default_load_tools(), path, False
+
+
+def _imagegen_db(args: argparse.Namespace) -> sqlite3.Connection | None:
+    """Open the config database (lamtools.db) where app_settings lives."""
+    try:
+        con = sqlite3.connect(_resolve_config_db(getattr(args, "config_db", "") or None))
+        con.row_factory = sqlite3.Row
+        return con
+    except (FileNotFoundError, sqlite3.OperationalError) as exc:
+        print(f"[imagegen] cannot open config database: {exc}", file=sys.stderr)
+        return None
+
+
+def _imagegen_settings(con: sqlite3.Connection) -> dict[str, Any]:
+    try:
+        row = con.execute("select value from app_settings where namespace=?", ("core.imagegen",)).fetchone()
+    except sqlite3.OperationalError:
+        return {}
+    return _json_dict(row["value"] if row is not None else None)
+
+
+def _mask_api_key(api_key: str) -> str:
+    if not api_key:
+        return ""
+    if len(api_key) > 8:
+        return api_key[:4] + "****" + api_key[-4:]
+    return "****"
+
+
+def _now_iso() -> str:
+    return datetime.now().isoformat(timespec="seconds")
+
+
+async def cmd_imagegen_show(args: argparse.Namespace) -> int:
+    con = _imagegen_db(args)
+    if con is None:
+        return 1
+    try:
+        value = _imagegen_settings(con)
+    finally:
+        con.close()
+    enabled = bool(value.get("enabled"))
+    print(f"enabled:  {'yes' if enabled else 'no'}")
+    print(f"api_url:  {value.get('api_url') or '(未配置)'}")
+    print(f"api_key:  {_mask_api_key(str(value.get('api_key') or '')) or '(未配置)'}")
+    print(f"model:    {value.get('model') or '(默认)'}")
+    print("说明:     未启用时 generate_image 工具不会上传到工具集（execute 模式留空=全部工具），模型调用会被拦截")
+    return 0
+
+
+async def cmd_imagegen_config(args: argparse.Namespace) -> int:
+    con = _imagegen_db(args)
+    if con is None:
+        return 1
+    try:
+        value = _imagegen_settings(con)
+        changed = False
+        if args.enabled is not None:
+            value["enabled"] = args.enabled == "true"
+            changed = True
+        if args.api_url is not None:
+            value["api_url"] = args.api_url.strip()
+            changed = True
+        if args.api_key is not None:
+            value["api_key"] = args.api_key.strip()
+            changed = True
+        if args.model is not None:
+            value["model"] = args.model.strip()
+            changed = True
+        if not changed:
+            print("error: nothing to change (pass --enabled / --api-url / --api-key / --model)", file=sys.stderr)
+            return 1
+        con.execute(
+            "insert into app_settings(namespace, value, updated_at) values(?, ?, ?) "
+            "on conflict(namespace) do update set value = excluded.value, updated_at = excluded.updated_at",
+            ("core.imagegen", json.dumps(value, ensure_ascii=False), _now_iso()),
+        )
+        con.commit()
+    except sqlite3.OperationalError as exc:
+        print(f"[imagegen] cannot update settings: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        con.close()
+    print(f"[imagegen] saved: enabled={bool(value.get('enabled'))} api_url={value.get('api_url') or ''} "
+          f"api_key={_mask_api_key(str(value.get('api_key') or ''))} model={value.get('model') or ''}")
+    return 0
+
+
+def _artifact_registry_for_cli(work_root: str) -> ArtifactRegistry:
+    from lamtools_core.artifact import ArtifactRegistry
+
+    root = Path(work_root).resolve() if work_root else Path.cwd().resolve()
+    return ArtifactRegistry(root)
+
+
+def _artifact_work_root(args: argparse.Namespace) -> str:
+    return str(getattr(args, "work_root", "") or "")
+
+
+def _format_artifact(record: Any, *, with_prompt: bool = False) -> str:
+    marker = "🗑" if record.deleted else ("🧊" if record.source == "user_upload" else "✨")
+    line = (
+        f"{marker} {record.artifact_id[:8]}  {record.kind:<8} {record.name}  "
+        f"[{record.source}] {record.created_at or '-'}"
+    )
+    if record.parent_ids:
+        line += f"  parents={','.join(p[:8] for p in record.parent_ids)}"
+    if with_prompt and record.prompt:
+        line += f"\n    prompt: {record.prompt[:200]}"
+    return line
+
+
+async def cmd_artifact_list(args: argparse.Namespace) -> int:
+    registry = _artifact_registry_for_cli(_artifact_work_root(args))
+    records = registry.list(include_deleted=bool(args.include_deleted))
+    if not records:
+        print(f"[artifact] 无任何 artifact（registry: {registry.root}）")
+        return 0
+    print(f"[artifact] {len(records)} 个（{registry.root}）")
+    for record in records:
+        print(_format_artifact(record, with_prompt=True))
+    return 0
+
+
+async def cmd_artifact_show(args: argparse.Namespace) -> int:
+    registry = _artifact_registry_for_cli(_artifact_work_root(args))
+    record = registry.get(args.artifact_id)
+    if record is None:
+        print(f"[artifact] not found: {args.artifact_id}", file=sys.stderr)
+        return 1
+    print(f"artifact_id: {record.artifact_id}")
+    print(f"kind:        {record.kind}")
+    print(f"mime_type:   {record.mime_type}")
+    print(f"name:        {record.name}")
+    print(f"path:        {record.path}")
+    print(f"source:      {record.source}")
+    print(f"prompt:      {record.prompt or '-'}")
+    print(f"parent_ids:  {', '.join(record.parent_ids) or '-'}")
+    print(f"children_ids:{', '.join(record.children_ids) or '-'}")
+    print(f"created_at:  {record.created_at or '-'}")
+    print(f"deleted:     {record.deleted}")
+    return 0
+
+
+async def cmd_artifact_delete(args: argparse.Namespace) -> int:
+    registry = _artifact_registry_for_cli(_artifact_work_root(args))
+    deleted = registry.soft_delete(args.artifact_ids)
+    print(f"[artifact] 已软删 {deleted} 个（manifest 保留，id 不清理）")
+    return 0
+
+
+async def cmd_loadtools_show(args: argparse.Namespace) -> int:
+    modes, path, from_config = _loadtools_for_cli()
+    source = "config" if from_config else "builtin"
+    print(f"[loadtools] source={source}  file={path}")
+    for name, mode in modes.items():
+        tool_text = ", ".join(mode.tools) if mode.tools else "(all tools — no limit)"
+        print(f"  {name}: {mode.description or '(no description)'}")
+        print(f"    tools: {tool_text}")
+    return 0
+
+
+async def cmd_loadtools_edit_mode(args: argparse.Namespace) -> int:
+    from lamtools_core.tool.loadtools import LoadToolMode, serialize_loadtools
+
+    modes, path, _ = _loadtools_for_cli()
+    name = args.mode.strip()
+    if not name:
+        print("error: --mode is required", file=sys.stderr)
+        return 1
+    if args.no_limit:
+        tools: list[str] = []
+    elif args.tools.strip():
+        tools = [t.strip() for t in args.tools.split(",") if t.strip()]
+    else:
+        existing = modes.get(name)
+        tools = list(existing.tools) if existing is not None else []
+    description = args.description.strip() or (modes.get(name).description if modes.get(name) else "")
+    modes[name] = LoadToolMode(description=description, tools=tools)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(serialize_loadtools(modes), encoding="utf-8")
+    except OSError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(f"[loadtools] mode '{name}' saved to {path}")
+    return 0
+
+
+async def cmd_loadtools_delete_mode(args: argparse.Namespace) -> int:
+    from lamtools_core.tool.loadtools import serialize_loadtools
+
+    modes, path, from_config = _loadtools_for_cli()
+    name = args.mode.strip()
+    if name not in modes:
+        print(f"error: mode '{name}' not found", file=sys.stderr)
+        return 1
+    del modes[name]
+    if not modes:
+        print("error: cannot delete the last mode", file=sys.stderr)
+        return 1
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(serialize_loadtools(modes), encoding="utf-8")
+    except OSError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(f"[loadtools] mode '{name}' deleted; file={path}")
+    return 0
+
+
+async def cmd_memory_get(args: argparse.Namespace) -> int:
+    from lamtools_core.config.root import core_config_file
+
+    path = core_config_file("memory.md")
+    if not path.is_file():
+        print("[memory] (no global memory.md yet)", flush=True)
+        return 0
+    print(path.read_text(encoding="utf-8", errors="replace"), end="")
+    return 0
+
+
+async def cmd_memory_set(args: argparse.Namespace) -> int:
+    from lamtools_core.config.root import core_config_file
+
+    if args.source_file == "-":
+        content = sys.stdin.read()
+    else:
+        try:
+            content = Path(args.source_file).read_text(encoding="utf-8")
+        except OSError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+    path = core_config_file("memory.md")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    except OSError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(f"[memory] saved {len(content)} chars to {path}")
+    return 0
+
+
+async def cmd_load_context_get(args: argparse.Namespace) -> int:
+    from lamtools_core.app.project_context import ContextConfig
+    from lamtools_core.config.root import core_config_file
+
+    path = core_config_file("load_context.jsonc")
+    config = ContextConfig.from_file(path) if path.is_file() else None
+    print(json.dumps(
+        {
+            "path": str(path),
+            "exists": config is not None,
+            "addition": [dict(item) for item in config.addition] if config is not None else [],
+            "except": list(config.except_files) if config is not None else [],
+        },
+        ensure_ascii=False,
+        indent=2,
+    ), flush=True)
+    return 0
+
+
+async def cmd_load_context_set(args: argparse.Namespace) -> int:
+    import json as _json
+
+    from lamtools_core.config.root import core_config_file
+
+    if args.source_file == "-":
+        raw_text = sys.stdin.read()
+    else:
+        try:
+            raw_text = Path(args.source_file).read_text(encoding="utf-8")
+        except OSError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+    try:
+        data = _json.loads(raw_text)
+    except _json.JSONDecodeError as exc:
+        print(f"error: invalid JSON: {exc}", file=sys.stderr)
+        return 1
+    if not isinstance(data, dict):
+        print("error: expected a JSON object with addition/except", file=sys.stderr)
+        return 1
+    additions: list[dict[str, object]] = []
+    for item in data.get("addition") or []:
+        if not isinstance(item, dict) or not isinstance(item.get("name"), str):
+            print("error: addition items must be objects with a string name", file=sys.stderr)
+            return 1
+        additions.append({
+            "name": str(item["name"]).strip(),
+            "priority": int(item.get("priority") or 50),
+            "kind": str(item.get("kind") or "system"),
+        })
+    exceptions = [str(item).strip() for item in (data.get("except") or []) if isinstance(item, str) and str(item).strip()]
+    path = core_config_file("load_context.jsonc")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(_json.dumps({"addition": additions, "except": exceptions}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    except OSError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(f"[load-context] saved {len(additions)} additions, {len(exceptions)} exceptions to {path}")
     return 0
 
 

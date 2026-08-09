@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from sqlalchemy import text
 
 from lamtools_core.app import open_core_app_db
 from lamtools_core.app.core_db import CoreThreadSnapshot
@@ -377,17 +378,21 @@ async def test_fork_with_events_remaps_item_keys_and_regenerates_event_ids(tmp_p
             if e.item_id
         )
 
-        # 2) Projection item dict keys must be remapped to the fork session and
-        #    stay consistent with item_order so the frontend can join them.
+        # 2) Projection item keys must be remapped to the fork session and stay
+        #    consistent with item_order so the frontend can join them. Items
+        #    live in per-item rows now; assembly reproduces the remapped keys.
         assert row is not None
         core = row.snapshot_json["core"]
-        assert all(str(key).startswith("session-forked:") for key in core["items"])
-        assert all(iid in core["items"] for iid in core["item_order"])
-        assert all(
-            str(item.get("item_id", "")).startswith("session-forked:")
-            for item in core["items"].values()
-        )
-        assert len(core["items"]) == 2
+        assert core["items"] == {}
+        assert all(str(key).startswith("session-forked:") for key in core["item_order"])
+        async with db.session_factory() as session:
+            item_rows = (
+                await session.execute(
+                    text("SELECT item_id FROM core_thread_snapshot_items WHERE thread_id = 'session-forked'")
+                )
+            ).scalars().all()
+        assert len(item_rows) == 2
+        assert all(str(item_id).startswith("session-forked:") for item_id in item_rows)
     finally:
         await db.close()
     def __init__(self) -> None:

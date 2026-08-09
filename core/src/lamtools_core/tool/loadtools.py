@@ -41,6 +41,8 @@ def load_loadtools(path: Path | str) -> LoadTools:
     """Load a ``loadtools.jsonc`` file and return a mode-name → LoadToolMode map.
 
     Returns an empty dict when the file is missing, unreadable, or invalid.
+    Comment lines are stripped so files with a human-readable header (see
+    :func:`serialize_loadtools`) parse cleanly.
     """
     result: LoadTools = {}
     try:
@@ -48,7 +50,7 @@ def load_loadtools(path: Path | str) -> LoadTools:
     except (FileNotFoundError, OSError):
         return result
     try:
-        data = json.loads(raw)
+        data = json.loads(_strip_jsonc_comments(raw))
     except json.JSONDecodeError:
         return result
     if not isinstance(data, dict):
@@ -68,6 +70,13 @@ def load_loadtools(path: Path | str) -> LoadTools:
             tools = [str(t) for t in tools_raw if isinstance(t, str) and str(t).strip()]
         result[name.strip()] = LoadToolMode(description=description, tools=tools)
     return result
+
+
+def _strip_jsonc_comments(text: str) -> str:
+    """Remove // and /* */ comments from a JSONC document (strings preserved)."""
+    import re
+
+    return re.sub(r"/\*.*?\*/|//[^\n]*", "", text, flags=re.DOTALL)
 
 
 def mode_tool_set(
@@ -109,6 +118,29 @@ def mode_names(load_tools: LoadTools) -> list[str]:
     return list(load_tools.keys())
 
 
+def serialize_loadtools(load_tools: LoadTools) -> str:
+    """Serialize a LoadTools map to the ``loadtools.jsonc`` file format.
+
+    The output is plain JSON (a JSONC superset) so the file stays
+    human-editable; a leading comment documents the "empty list = all tools"
+    semantics for the reader.
+    """
+    body = {
+        "modes": {
+            name: {
+                "description": mode.description,
+                "tools": list(mode.tools),
+            }
+            for name, mode in load_tools.items()
+        }
+    }
+    header = (
+        "// loadtools.jsonc — 模式工具集配置\n"
+        "// 每个模式是一个工具白名单：tools 为空数组表示该模式可使用全部工具（不限制）。\n"
+    )
+    return header + json.dumps(body, ensure_ascii=False, indent=2) + "\n"
+
+
 def default_load_tools() -> LoadTools:
     """Return a built-in default (consider + execute) suitable for Core."""
     return LoadTools({
@@ -146,4 +178,5 @@ __all__ = [
     "mode_names",
     "mode_prompt_line",
     "mode_tool_set",
+    "serialize_loadtools",
 ]

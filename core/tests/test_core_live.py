@@ -76,13 +76,24 @@ class ThreadSnapshotRow(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
 
 
+class SnapshotItemRow(Base):
+    __tablename__ = "test_core_live_thread_snapshot_items"
+
+    thread_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    item_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    item_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+
+
+
 async def _context(tmp_path) -> tuple[object, CoreLiveContext]:
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'core-live.db'}", future=True)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     event_store = SqlAlchemyAppEventStore(AppEventRow, protocol_version="core.app_server.v1")
-    snapshot_store = SqlAlchemyThreadSnapshotStore(ThreadSnapshotRow, projector=CoreAppSnapshotProjector(member_defaults={"queue": []}))
+    snapshot_store = SqlAlchemyThreadSnapshotStore(ThreadSnapshotRow, item_model=SnapshotItemRow, projector=CoreAppSnapshotProjector(member_defaults={"queue": []}))
     return engine, CoreLiveContext(
         session_factory=session_factory,
         event_store=event_store,
@@ -657,6 +668,7 @@ async def _live_core_context(tmp_path, llm: BlockingCoreLLM) -> tuple[object, Co
     event_store = SqlAlchemyAppEventStore(AppEventRow, protocol_version="core.app_server.v1")
     snapshot_store = SqlAlchemyThreadSnapshotStore(
         ThreadSnapshotRow,
+        item_model=SnapshotItemRow,
         projector=CoreAppSnapshotProjector(member_defaults={"queue": []}),
     )
     hub = CoreAppEventHub()
@@ -1748,6 +1760,7 @@ async def test_core_live_operation_host_uses_injected_persistence_and_runtime_re
     event_store = SqlAlchemyAppEventStore(AppEventRow, protocol_version="core.app_server.v1")
     snapshot_store = SqlAlchemyThreadSnapshotStore(
         ThreadSnapshotRow,
+        item_model=SnapshotItemRow,
         projector=CoreAppSnapshotProjector(member_defaults={"queue": []}),
     )
 

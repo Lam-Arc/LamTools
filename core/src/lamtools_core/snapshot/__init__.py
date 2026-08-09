@@ -297,12 +297,25 @@ def _upsert_item(state: dict[str, Any], event: RunItemEvent) -> dict[str, Any]:
         # any post-hoc reordering.
         item["seq"] = item_seq
         order = state["item_order"]
+        # The store projects onto a partial item map (only the touched items
+        # are loaded); it injects ``_item_seq_map`` (item_id -> first seq) so
+        # the insertion position still reflects every item's anchor.
+        seq_map = state.get("_item_seq_map") or {}
         items = state.get("items") or {}
         index = bisect.bisect_right(
-            [int((items.get(iid) or {}).get("seq") or 0) for iid in order],
+            [
+                int(
+                    seq_map.get(iid)
+                    or int((items.get(iid) or {}).get("seq") or 0)
+                    or 0
+                )
+                for iid in order
+            ],
             item_seq,
         )
         order.insert(index, item_id)
+        if isinstance(seq_map, dict):
+            seq_map[item_id] = item_seq
     elif "seq" not in item:
         item["seq"] = item_seq
     return item

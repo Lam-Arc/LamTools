@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 import uuid
 
-from sqlalchemy import DateTime, Float, Integer, JSON, String, UniqueConstraint, delete, func, select, text, update
+from sqlalchemy import DateTime, Float, Index, Integer, JSON, String, UniqueConstraint, delete, func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -66,6 +66,27 @@ class CoreThreadSnapshot(CoreDbBase):
     snapshot_seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     snapshot_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+
+
+class CoreThreadSnapshotItem(CoreDbBase):
+    """One row per snapshot item (incremental projection).
+
+    The thread snapshot's items live here instead of inside
+    ``CoreThreadSnapshot.snapshot_json`` so a streaming part event only
+    upserts the changed item row instead of rewriting the whole thread
+    JSON (1.3-2.3s on 55MB threads). ``seq`` is the first-event seq anchor
+    that keeps item_order equal to production order.
+    """
+
+    __tablename__ = "core_thread_snapshot_items"
+
+    thread_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    item_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    item_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+
+    __table_args__ = (Index("idx_core_snapshot_items_thread_seq", "thread_id", "seq"),)
 
 
 class CoreRuntimeSession(CoreDbBase):
@@ -367,6 +388,8 @@ class SqlAlchemyRuntimeStateStore:
                 row = await db.get(CoreRuntimeSession, session_id)
                 if row is not None and isinstance(row.history_json, list) and row.history_json:
                     for i, msg in enumerate(row.history_json, 1):
+                        if isinstance(msg, dict) and isinstance(msg.get("metadata"), dict):
+                            msg["metadata"]["history_seq"] = i
                         db.add(
                             CoreHistoryEntry(
                                 thread_id=session_id,
@@ -377,6 +400,10 @@ class SqlAlchemyRuntimeStateStore:
                     max_seq = len(row.history_json)
             for msg in messages:
                 max_seq += 1
+                # Tag each row with its own seq so context compaction can anchor
+                # the resume boundary at the first retained message.
+                if isinstance(msg, dict) and isinstance(msg.get("metadata"), dict):
+                    msg["metadata"]["history_seq"] = max_seq
                 db.add(
                     CoreHistoryEntry(
                         thread_id=session_id,
@@ -404,6 +431,10 @@ class SqlAlchemyRuntimeStateStore:
                 delete(CoreHistoryEntry).where(CoreHistoryEntry.thread_id == session_id)
             )
             for i, msg in enumerate(messages, 1):
+                # Keep row seqs in sync on every rewrite so compaction anchors
+                # stay valid after truncation / loop-exit replaces renumber.
+                if isinstance(msg, dict) and isinstance(msg.get("metadata"), dict):
+                    msg["metadata"]["history_seq"] = i
                 db.add(
                     CoreHistoryEntry(
                         thread_id=session_id,
@@ -1075,7 +1106,11 @@ async def open_core_app_db(path: Path | str, *, member_defaults: dict | None = N
     from lamtools_core.mem.store import SqlAlchemyMemoryStore
 
     event_store = SqlAlchemyAppEventStore(CoreAppEvent)
-    snapshot_store = SqlAlchemyThreadSnapshotStore(CoreThreadSnapshot, projector=CoreAppSnapshotProjector())
+    snapshot_store = SqlAlchemyThreadSnapshotStore(
+        CoreThreadSnapshot,
+        item_model=CoreThreadSnapshotItem,
+        projector=CoreAppSnapshotProjector(),
+    )
     persistence = AppPersistenceHost(
         event_store,
         snapshot_store,
@@ -1407,6 +1442,7 @@ __all__ = [
     "CoreRestoreOperation",
     "CoreRuntimeSession",
     "CoreThreadSnapshot",
+    "CoreThreadSnapshotItem",
     "CoreWorkspaceManifest",
     "RuntimeStateConflictError",
     "SqlAlchemyRuntimeStateStore",

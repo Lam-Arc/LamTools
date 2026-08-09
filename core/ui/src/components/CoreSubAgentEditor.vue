@@ -64,7 +64,7 @@ import type { CoreSettingsModel } from './CoreSettings.vue'
 const props = withDefaults(defineProps<{
   requestRpc: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>
   models?: CoreSettingsModel[]
-  /** Config scope this editor reads/writes. 'global' (default) edits ~/.lam/config;
+  /** Config scope this editor reads/writes. 'global' (default) edits ~/.lam/core/config;
    *  'project' edits {workRoot}/.lam/config and falls back to global/builtin on read. */
   scope?: 'global' | 'project'
   /** Required when scope === 'project'. */
@@ -82,7 +82,7 @@ const error = ref('')
 const isBuiltin = ref(true)
 
 /** Merge scope + work_root into an RPC params object so the backend reads/writes
- *  the correct tier (global → ~/.lam/config, project → {workRoot}/.lam/config). */
+ *  the correct tier (global → ~/.lam/core/config, project → {workRoot}/.lam/config). */
 function withScope<T extends Record<string, unknown>>(extra: T): T {
   return { scope: props.scope, ...(props.workRoot ? { work_root: props.workRoot } : {}), ...extra } as T
 }
@@ -100,14 +100,14 @@ const statusLabel = computed(() => {
 const settingsTargetPath = computed(() =>
   props.scope === 'project'
     ? `${props.workRoot || '(项目根)'}/.lam/config/subagent/settings.json`
-    : '~/.lam/config/subagent/settings.json',
+    : '~/.lam/core/config/subagent/settings.json',
 )
 
 const guideDescription = computed(() => {
   if (props.scope === 'project') {
     return `保存到项目配置 ${props.workRoot || '(项目根)'}/.lam/config/subagent/guide.md。留空保存则移除项目级配置，回退到继承的全局 / 内置默认。CLI：core subagent guide show/set/edit --scope project --work-root <root>`
   }
-  return '保存到全局配置 ~/.lam/config/subagent/guide.md。项目级配置请在项目设置内编辑。留空保存则恢复为内置默认。CLI：core subagent guide show/set/edit --scope global'
+  return '保存到全局配置 ~/.lam/core/config/subagent/guide.md。项目级配置请在项目设置内编辑。留空保存则恢复为内置默认。CLI：core subagent guide show/set/edit --scope global'
 })
 
 async function fetchGuide() {

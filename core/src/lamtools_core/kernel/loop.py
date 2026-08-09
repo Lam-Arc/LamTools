@@ -131,6 +131,33 @@ def _chat_message_from_dict(value: Any) -> ChatMessage | None:
     )
 
 
+_INTERNAL_MESSAGE_METADATA_KEYS = ("history_seq", "lam_compaction_resume")
+
+
+def _strip_internal_message_metadata(messages: list[ChatMessage]) -> list[ChatMessage]:
+    """Copy messages without internal bookkeeping keys before model dispatch.
+
+    Uses ``dataclasses.replace`` so the shared objects still referenced by the
+    in-memory history keep their seq/marker tags for later compactions.
+    """
+    result: list[ChatMessage] = []
+    for message in messages:
+        if not isinstance(message.metadata, dict):
+            result.append(message)
+            continue
+        if any(key in message.metadata for key in _INTERNAL_MESSAGE_METADATA_KEYS):
+            message = replace(
+                message,
+                metadata={
+                    key: value
+                    for key, value in message.metadata.items()
+                    if key not in _INTERNAL_MESSAGE_METADATA_KEYS
+                },
+            )
+        result.append(message)
+    return result
+
+
 def _repair_incomplete_tool_history(messages: list[ChatMessage]) -> list[ChatMessage]:
     repaired: list[ChatMessage] = []
     pending: dict[str, LLMToolCall] = {}
@@ -320,16 +347,28 @@ class CoreLoopKernel:
         # compaction boundary and prepend the summary so build_model_request
         # sees [summary, *recent_messages] without touching the original history.
         compaction_meta = state.metadata.get("context_compaction") if isinstance(state.metadata, dict) else None
-        if isinstance(compaction_meta, dict) and compaction_meta.get("summary_seq", 0) > 0:
-            boundary = int(compaction_meta["summary_seq"])
-            history = await self._load_history(state.session_id, after_seq=boundary)
-            summary_text = str(compaction_meta.get("summary") or "")
-            if summary_text:
-                history.insert(0, ChatMessage(
-                    role="system",
-                    content=summary_text,
-                    metadata={"key": "context_compaction_summary"},
-                ))
+        summary_text = str(compaction_meta.get("summary") or "") if isinstance(compaction_meta, dict) else ""
+        if isinstance(compaction_meta, dict) and summary_text.strip():
+            # A summary exists whenever compaction happened; the boundary seq
+            # is the first retained row minus one and may legitimately be 0.
+            boundary = int(compaction_meta.get("summary_seq") or 0)
+            if boundary > 0:
+                history = await self._load_history(state.session_id, after_seq=boundary)
+                # Boundary drift guard: when nothing loads past the anchor the
+                # stored seq is stale (history was rebuilt/cleared externally).
+                # Fall back to the full history so context is not reduced to
+                # the summary alone; the next compaction re-anchors from rows.
+                if not history:
+                    full_history = await self._load_history(state.session_id)
+                    if full_history:
+                        history = full_history
+            else:
+                history = await self._load_history(state.session_id)
+            history.insert(0, ChatMessage(
+                role="system",
+                content=summary_text,
+                metadata={"key": "context_compaction_summary"},
+            ))
         else:
             history = await self._load_history(state.session_id)
         _logger.info("[kernel:_run] history loaded sid=%s len=%d", state.session_id, len(history))
@@ -472,6 +511,10 @@ class CoreLoopKernel:
                 # 5.3 Build model request
                 request = await self.kit.build_model_request(state, context)
                 await self._compact_request_if_needed(state, request, history=history)
+                # Strip internal bookkeeping metadata (history seq / resume
+                # marker) before the request reaches the model — the shared
+                # objects in `history` keep their tags for later compactions.
+                request.messages = _strip_internal_message_metadata(request.messages)
 
                 # 5.4 Call model — try streaming first
                 _step_start = time_module.time()
@@ -1360,7 +1403,31 @@ class CoreLoopKernel:
         if not isinstance(self.state_store, RuntimeCheckpointStore):
             return []
         raw_history = await self.state_store.get_history(session_id, after_seq=after_seq)
-        messages = [message for item in raw_history if (message := _chat_message_from_dict(item)) is not None]
+        messages: list[ChatMessage] = []
+        for index, item in enumerate(raw_history):
+            message = _chat_message_from_dict(item)
+            if message is None:
+                continue
+            # Tag each loaded message with its persistent row seq (based on the
+            # raw row order, before repair) so context compaction can anchor the
+            # resume boundary at the first retained message instead of the
+            # tail of history.  Rows written by this version already carry the
+            # tag; older rows get it filled in here.  The tag is stripped from
+            # model-bound requests, never from persisted history.
+            if isinstance(message.metadata, dict) and "history_seq" not in message.metadata:
+                message.metadata["history_seq"] = after_seq + index + 1
+            messages.append(message)
+        # Skip persisted summary rows: compaction summaries live in
+        # state.metadata only and must never appear as history rows (legacy
+        # pollution guard — the summary is prepended below instead).
+        messages = [
+            message
+            for message in messages
+            if not (
+                message.role == "system"
+                and message.metadata.get("key") == "context_compaction_summary"
+            )
+        ]
         return _repair_incomplete_tool_history(messages)
 
     async def _save_checkpoint(self, state: RuntimeState) -> None:
@@ -1402,12 +1469,40 @@ class CoreLoopKernel:
         incremental operations.
         """
         if isinstance(self.state_store, RuntimeCheckpointStore):
+            self._recompute_compaction_boundary(state, history)
             await self.state_store.replace_history(
                 state.session_id, [m.to_dict() for m in history]
             )
             await self.state_store.save(state)
             return
         await self.state_store.save(state)
+
+    @staticmethod
+    def _recompute_compaction_boundary(
+        state: RuntimeState, history: list[ChatMessage]
+    ) -> None:
+        """Re-anchor ``summary_seq`` after a full replace renumbers the rows.
+
+        The resume marker travels with the first retained message; the newest
+        marker wins because each compaction keeps a smaller tail.  When no
+        marker is present and the stored anchor exceeds the rewritten row
+        count, the anchor is stale (history was rebuilt) — reset to zero so
+        the next run loads everything instead of nothing.
+        """
+        if not isinstance(state.metadata, dict):
+            return
+        compaction = state.metadata.get("context_compaction")
+        if not isinstance(compaction, dict):
+            return
+        marker_indexes = [
+            index
+            for index, message in enumerate(history)
+            if message.metadata.get("lam_compaction_resume") is True
+        ]
+        if marker_indexes:
+            compaction["summary_seq"] = max(marker_indexes)
+        elif int(compaction.get("summary_seq") or 0) > len(history):
+            compaction["summary_seq"] = 0
 
     async def _stream_model(
         self,
@@ -2453,17 +2548,11 @@ class CoreLoopKernel:
         emitted_thinking: str,
         raw: Any = None,
     ) -> None:
-        if accumulated and accumulated != emitted_text:
-            await self._emit_stream_part(
-                state,
-                part_id=f"{state.run_id}:response-{response_index}:text",
-                part_type="text",
-                status="running",
-                label="输出",
-                content=accumulated,
-                response_index=response_index,
-                raw=raw,
-            )
+        # Emit in the model-stream order (thinking first, then text) so the
+        # persisted event sequence matches what the client rendered live.
+        # Emitting text first here would reverse the order for every reloaded
+        # snapshot (item_order anchors to the first-event seq) — the thinking
+        # would render below the message it belongs with after a reload.
         if thinking and thinking != emitted_thinking:
             await self._emit_stream_part(
                 state,
@@ -2487,6 +2576,17 @@ class CoreLoopKernel:
                 status="completed",
                 label="思考",
                 content=thinking,
+                response_index=response_index,
+                raw=raw,
+            )
+        if accumulated and accumulated != emitted_text:
+            await self._emit_stream_part(
+                state,
+                part_id=f"{state.run_id}:response-{response_index}:text",
+                part_type="text",
+                status="running",
+                label="输出",
+                content=accumulated,
                 response_index=response_index,
                 raw=raw,
             )
@@ -2771,11 +2871,30 @@ class CoreLoopKernel:
 
         request.messages[:] = result.replacement_messages
         # Do NOT overwrite persisted history.  Store the compaction summary +
-        # boundary seq in state.metadata so the next _run can load only the
-        # messages after the boundary and prepend the summary.
+        # boundary seq in state.metadata so the next _run loads only the
+        # retained span after the boundary and prepends the summary.  The
+        # boundary is the row seq of the first retained message MINUS one —
+        # never the history tail, otherwise the retained span (c) is dropped
+        # on the next run and context degrades to a summary-only ghost.
         compaction_boundary = 0
-        if isinstance(self.state_store, RuntimeCheckpointStore):
-            compaction_boundary = await self.state_store.history_max_seq(state.session_id)
+        retained_messages = result.retained_messages
+        if retained_messages:
+            first_retained = retained_messages[0]
+            first_seq = (
+                first_retained.metadata.get("history_seq")
+                if isinstance(first_retained.metadata, dict)
+                else None
+            )
+            if isinstance(first_seq, int) and first_seq > 0:
+                compaction_boundary = first_seq - 1
+                # Resume marker travels with the first retained message so any
+                # later full history rewrite (truncation / loop exit) can
+                # re-anchor summary_seq after rows are renumbered.
+                first_retained.metadata["lam_compaction_resume"] = True
+            else:
+                # No known row seq (e.g. a message synthesized by tool-history
+                # repair): fall back to loading everything so nothing is lost.
+                compaction_boundary = 0
         state.metadata["context_compaction"] = {
             "summary": result.summary,
             "summary_seq": compaction_boundary,
@@ -2785,7 +2904,8 @@ class CoreLoopKernel:
             "after_tokens": result.after_tokens,
         }
         # Mutate the in-memory history list so the rest of this run sees the
-        # compacted view, but do NOT persist the replacement over the original.
+        # compacted view, but do NOT persist the replacement over the original
+        # and do NOT let the summary message leak into history rows.
         if history is not None:
             history_message_ids = {id(message) for message in history}
             if any(id(message) in history_message_ids for message in request_messages_before_compaction):
@@ -2798,6 +2918,7 @@ class CoreLoopKernel:
                     message
                     for message in result.replacement_messages
                     if id(message) not in request_only_ids
+                    and message.metadata.get("key") != "context_compaction_summary"
                 ]
         request.metadata["estimated_prompt_tokens"] = result.after_tokens
 

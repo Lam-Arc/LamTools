@@ -58,7 +58,7 @@
                   :disabled="agentsLoading"
                 />
                 <p v-if="agentsError" class="skill-error" role="alert">{{ agentsError }}</p>
-                <p class="hook-meta">保存到 <code>{{ project.workRoot || '(项目根)' }}/AGENTS.md</code>。注入顺序：先全局约束（~/.lam/config/AGENTS.md），再本文件，两者相加。全局约束在「设置 → 项目规则」内编辑。</p>
+                <p class="hook-meta">保存到 <code>{{ project.workRoot || '(项目根)' }}/AGENTS.md</code>。注入顺序：先全局约束（.lam/core/config/AGENTS.md），再本文件，两者相加。全局约束在「设置 → 项目规则」内编辑。</p>
               </article>
 
               <p v-if="projectActionError" class="skill-error" role="alert">{{ projectActionError }}</p>

@@ -251,6 +251,11 @@
                           </div>
                           <pre class="tool-output-content" :class="{ 'tool-output-content--wrap': isToolWrapEnabled(part.id) }" @click="toggleToolWrap(part.id)">{{ toolOutputContent(part) }}</pre>
                         </div>
+                        <div v-if="imageArtifacts(part).length" class="tool-image-row">
+                          <figure v-for="artifact in imageArtifacts(part)" :key="artifact.artifact_id || artifact.uri" class="tool-image-card" @click="openImagePreview(artifact)">
+                            <img :src="imageSrc(artifact)" :alt="imageAlt(artifact)" loading="lazy" />
+                          </figure>
+                        </div>
                         <pre v-else-if="readableProcessDetail(part)" class="tool-output">{{ readableProcessDetail(part) }}</pre>
                       </div>
                     </div>
@@ -384,6 +389,11 @@
                                   <span v-for="item in toolMetaItems(part)" :key="item">{{ item }}</span>
                                 </div>
                                 <pre class="tool-output-content" :class="{ 'tool-output-content--wrap': isToolWrapEnabled(part.id) }" @click="toggleToolWrap(part.id)">{{ toolOutputContent(part) }}</pre>
+                              </div>
+                              <div v-if="imageArtifacts(part).length" class="tool-image-row">
+                                <figure v-for="artifact in imageArtifacts(part)" :key="artifact.artifact_id || artifact.uri" class="tool-image-card" @click="openImagePreview(artifact)">
+                                  <img :src="imageSrc(artifact)" :alt="imageAlt(artifact)" loading="lazy" />
+                                </figure>
                               </div>
                               <pre v-else-if="readableProcessDetail(part)" class="tool-output">{{ readableProcessDetail(part) }}</pre>
                             </div>
@@ -566,6 +576,11 @@
                               <span v-for="item in toolMetaItems(group.part)" :key="item">{{ item }}</span>
                             </div>
                             <pre class="tool-output-content" :class="{ 'tool-output-content--wrap': isToolWrapEnabled(group.part.id) }" @click="toggleToolWrap(group.part.id)">{{ toolOutputContent(group.part) }}</pre>
+                          </div>
+                          <div v-if="imageArtifacts(group.part).length" class="tool-image-row">
+                            <figure v-for="artifact in imageArtifacts(group.part)" :key="artifact.artifact_id || artifact.uri" class="tool-image-card" @click="openImagePreview(artifact)">
+                              <img :src="imageSrc(artifact)" :alt="imageAlt(artifact)" loading="lazy" />
+                            </figure>
                           </div>
                           <pre v-else-if="readableProcessDetail(group.part)" class="tool-output">{{ readableProcessDetail(group.part) }}</pre>
                         </div>
@@ -1120,6 +1135,11 @@
                         </div>
                           <pre class="tool-output-content" :class="{ 'tool-output-content--wrap': isToolWrapEnabled(group.part.id) }" @click="toggleToolWrap(group.part.id)">{{ toolOutputContent(group.part) }}</pre>
                       </div>
+                      <div v-if="imageArtifacts(group.part).length" class="tool-image-row">
+                        <figure v-for="artifact in imageArtifacts(group.part)" :key="artifact.artifact_id || artifact.uri" class="tool-image-card" @click="openImagePreview(artifact)">
+                          <img :src="imageSrc(artifact)" :alt="imageAlt(artifact)" loading="lazy" />
+                        </figure>
+                      </div>
                       <pre v-else-if="readableProcessDetail(group.part)" class="tool-output">{{ readableProcessDetail(group.part) }}</pre>
                     </div>
                   </div>
@@ -1347,6 +1367,21 @@
             <MarkdownRenderer class="assistant-answer" :content="answerContent(msg)" />
           </slot>
 
+          <!-- 本轮 artifact 产出（生图等）统一挂到消息结尾 -->
+          <div v-if="messageImages.length" class="message-artifacts" aria-label="本轮产出">
+            <div class="message-artifacts-head">本轮产出</div>
+            <div class="tool-image-row">
+              <figure
+                v-for="artifact in messageImages"
+                :key="artifact.artifact_id || artifact.uri"
+                class="tool-image-card"
+                @click="openImagePreview(artifact)"
+              >
+                <img :src="imageSrc(artifact)" :alt="imageAlt(artifact)" loading="lazy" />
+              </figure>
+            </div>
+          </div>
+
           <!-- Message footer slot (for global stats line etc.) -->
           <slot name="message-footer" :message="msg" />
 
@@ -1402,11 +1437,18 @@
         </div>
       </div>
   </div>
+
+  <Teleport to="body">
+    <div v-if="previewImageSrc" class="image-preview-overlay" @click.self="previewImageSrc = ''" @keydown.esc="previewImageSrc = ''">
+      <img :src="previewImageSrc" :alt="previewImageAlt" class="image-preview-full" />
+      <button type="button" class="image-preview-close" aria-label="关闭预览" @click="previewImageSrc = ''">✕</button>
+    </div>
+  </Teleport>
 </template>
 
 <script setup lang="ts">
-import type { CoreAttachment, CoreMessage, MessagePart, MessagePartStatus } from '../types'
-import { onBeforeUnmount, ref, watch } from 'vue'
+import type { CoreAttachment, CoreMessage, MessagePart, MessagePartStatus, ToolArtifact } from '../types'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import MarkdownRenderer from './MarkdownRenderer.vue'
 import TypewriterText from './TypewriterText.vue'
 import MessageView from './MessageView.vue'
@@ -1483,12 +1525,18 @@ const props = withDefaults(
     typingMessageIds?: Set<string>
     /** Show hover actions (copy / fork / roll back) under assistant replies */
     messageActions?: boolean
+    /** API base for building file raw URLs (e.g. /api/core); used for image artifact previews */
+    apiBase?: string
+    /** Project id whose work_root contains the image artifact paths */
+    projectId?: string | null
   }>(),
   {
     assistantLabel: 'Assistant',
     processExpandedIds: () => new Set(),
     typingMessageIds: () => new Set(),
     messageActions: false,
+    apiBase: '/api/core',
+    projectId: null,
   },
 )
 
@@ -2561,6 +2609,61 @@ function fileArtifact(part: MessagePart) {
   return part.artifacts?.find(artifact => artifact.kind === 'file_change' || artifact.kind === 'file_read')
 }
 
+const IMAGE_URI_RE = /\.(png|jpe?g|webp|gif)$/i
+
+function imageArtifacts(part: MessagePart): Array<ToolArtifact & { artifact_id?: string }> {
+  return (part.artifacts || []).filter(
+    (artifact): artifact is ToolArtifact & { artifact_id?: string } =>
+      artifact.kind === 'image' || (typeof artifact.uri === 'string' && IMAGE_URI_RE.test(artifact.uri)),
+  )
+}
+
+function imageSrc(artifact: { uri?: string }): string {
+  let path = typeof artifact.uri === 'string' ? artifact.uri : ''
+  if (path.startsWith('workspace://')) path = path.slice('workspace://'.length)
+  if (path.startsWith('attachment://')) return ''
+  if (!props.projectId || !path) return ''
+  const base = (props.apiBase || '/api/core').replace(/\/+$/, '')
+  return `${base}/projects/${encodeURIComponent(props.projectId)}/files/raw?path=${encodeURIComponent(path)}`
+}
+
+function imageAlt(artifact: { name?: string; uri?: string }): string {
+  return artifact.name || (typeof artifact.uri === 'string' ? artifact.uri.split('/').pop() || '生成图片' : '生成图片')
+}
+
+const previewImageSrc = ref('')
+const previewImageAlt = ref('')
+
+/** 本轮（消息）所有 image artifact，含子代理 sub-line 递归收集，按 id/uri 去重。 */
+function collectImageArtifacts(
+  part: MessagePart,
+  out: Array<ToolArtifact & { artifact_id?: string }>,
+): void {
+  for (const artifact of imageArtifacts(part)) {
+    const duplicate = out.some(
+      (existing) =>
+        (existing.artifact_id && existing.artifact_id === artifact.artifact_id)
+        || (!existing.artifact_id && !artifact.artifact_id && existing.uri === artifact.uri),
+    )
+    if (!duplicate) out.push(artifact)
+  }
+  const subLineParts = (part.metadata as { subLineParts?: MessagePart[] } | undefined)?.subLineParts
+  if (Array.isArray(subLineParts)) {
+    for (const sub of subLineParts) collectImageArtifacts(sub, out)
+  }
+}
+
+const messageImages = computed<Array<ToolArtifact & { artifact_id?: string }>>(() => {
+  const out: Array<ToolArtifact & { artifact_id?: string }> = []
+  for (const part of props.msg.parts || []) collectImageArtifacts(part, out)
+  return out
+})
+
+function openImagePreview(artifact: NonNullable<MessagePart['artifacts']>[number]): void {
+  previewImageSrc.value = imageSrc(artifact)
+  previewImageAlt.value = imageAlt(artifact)
+}
+
 function fileArtifactContent(part: MessagePart): string {
   const artifact = fileArtifact(part)
   return typeof artifact?.content === 'string' ? artifact.content.trim() : ''
@@ -3402,8 +3505,16 @@ function compactGroups(groups: PartGroup[]): PartGroup[] {
   for (const g of groups) {
     if (g.kind === 'process') {
       const pt = g.part.partType
-      if (pt === 'reasoning' || pt === 'tool_call' || pt === 'tool_result') {
-        if ((pt === 'tool_call' || pt === 'tool_result') && isControlTool(g.part)) {
+      if (pt === 'reasoning') {
+        // Thinking always renders as its own expandable toggle — never bury it
+        // inside a collapsed process-group. The group merge only happens once
+        // the following tool part arrives (compactGroups runs on the final
+        // parts), so a reloaded snapshot would otherwise show thinking that
+        // was visible while streaming disappear into a "思考了一会" summary.
+        flush()
+        result.push(g)
+      } else if (pt === 'tool_call' || pt === 'tool_result') {
+        if (isControlTool(g.part)) {
           flush()
           result.push(g)
         } else {
@@ -3612,4 +3723,83 @@ function formatContextSummary(c: ContextCounts): string {
   return items.join(' · ') || ''
 }
 </script>
+
+<style>
+/* Generated image artifact cards inside tool outputs + fullscreen preview. */
+.message-artifacts {
+  margin-top: 12px;
+  border-top: 1px dashed color-mix(in srgb, var(--muted, #8b8b8b) 30%, transparent);
+  padding-top: 4px;
+}
+
+.message-artifacts-head {
+  font-size: 11px;
+  color: var(--muted);
+  padding: 6px 10px 0;
+  opacity: .8;
+}
+
+.message-artifacts .tool-image-row {
+  padding-bottom: 4px;
+}
+
+.tool-image-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 8px;
+  padding: 8px 10px 10px;
+}
+
+.tool-image-card {
+  margin: 0;
+  border-radius: var(--radius-sm, 8px);
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--muted, #8b8b8b) 26%, transparent);
+  background: color-mix(in srgb, var(--muted, #8b8b8b) 8%, transparent);
+  cursor: zoom-in;
+  line-height: 0;
+}
+
+.tool-image-card img {
+  width: 100%;
+  height: auto;
+  display: block;
+  object-fit: cover;
+  aspect-ratio: 1 / 1;
+}
+
+.image-preview-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, #000 78%, transparent);
+  backdrop-filter: blur(3px);
+  cursor: zoom-out;
+}
+
+.image-preview-full {
+  max-width: 92vw;
+  max-height: 92vh;
+  border-radius: 10px;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, .55);
+  user-select: none;
+}
+
+.image-preview-close {
+  position: fixed;
+  top: 18px;
+  right: 22px;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, .25);
+  background: rgba(255, 255, 255, .12);
+  color: #fff;
+  font-size: 15px;
+  cursor: pointer;
+}
+</style>
 

@@ -380,7 +380,11 @@ async def test_manual_compaction_uses_session_model_and_safe_segment_input_limit
     state_store = InMemoryRuntimeStateStore()
     state = RuntimeState(
         session_id="thread-large-compact",
-        metadata={"model_id": "session-model", "context_window_tokens": 256_000},
+        metadata={
+            "model_id": "session-model",
+            "context_window_tokens": 256_000,
+            "context_compaction": {"summary": "previous compacted summary"},
+        },
     )
     await state_store.save_checkpoint(
         state,
@@ -407,6 +411,72 @@ async def test_manual_compaction_uses_session_model_and_safe_segment_input_limit
     request = captured["request"]
     assert request.model == "session-model"
     assert request.input_limit_tokens == 256_000
+    assert request.existing_summary == "previous compacted summary"
+
+
+class _ManualCompactionLLM:
+    def __init__(self) -> None:
+        self.last_request = None
+
+    async def complete(self, request):
+        self.last_request = request
+        return LLMResponse(
+            content=(
+                "[Compacted Context]\n"
+                "1. Current Objective And Done Criteria\n- Continue.\n\n"
+                "2. Active User Instructions\n- Preserve constraints.\n\n"
+                "3. External Action Authorization\n- None confirmed.\n\n"
+                "4. Confirmed Facts And Decisions\n- None.\n\n"
+                "5. Current Execution State\n- Manual compaction.\n\n"
+                "6. Verification Evidence\n- None.\n\n"
+                "7. Open Issues, Risks, And Hypotheses\n- None.\n\n"
+                "8. Rejected Or Superseded Directions\n- None.\n\n"
+                "9. Next Actions\n- Continue."
+            ),
+            finish_reason="stop",
+        )
+
+    async def stream(self, request):
+        raise NotImplementedError
+
+
+@pytest.mark.asyncio
+async def test_manual_compaction_anchors_boundary_at_first_retained_message():
+    store = InMemoryRuntimeStateStore()
+    state = RuntimeState(
+        session_id="thread-manual-anchor",
+        metadata={"context_window_tokens": 256_000},
+    )
+    history = [
+        {"role": "user", "content": f"old message {index} " + ("x" * 5000)}
+        for index in range(6)
+    ]
+    await store.save_checkpoint(state, history)
+    llm = _ManualCompactionLLM()
+
+    result = await command_execution.compact_runtime_history(
+        runtime_state_store=store,
+        thread_id="thread-manual-anchor",
+        llm_client=llm,
+        model="mock-model",
+    )
+
+    assert result["status"] == "compacted"
+    saved = await store.get("thread-manual-anchor")
+    compaction = saved.metadata["context_compaction"]
+    boundary = compaction["summary_seq"]
+    # The boundary points at the first retained row (not the history tail),
+    # and the resume marker travels with that row through future rewrites.
+    stored_history = await store.get_history("thread-manual-anchor")
+    assert boundary < len(stored_history)
+    assert stored_history[boundary]["metadata"]["lam_compaction_resume"] is True
+    assert "old message 0" not in str(stored_history[boundary]["content"])
+    assert "old message 5" in "\n".join(str(item["content"]) for item in stored_history)
+    # Summary rows never leak into persisted history.
+    assert all(
+        item.get("metadata", {}).get("key") != "context_compaction_summary"
+        for item in stored_history
+    )
 
 
 def test_core_agent_spec_accepts_member_paths_without_product_names(tmp_path):

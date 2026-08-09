@@ -200,6 +200,8 @@
           :process-expanded-ids="processExpandedIds"
           :typing-message-ids="typingMessageIds"
           :message-actions="true"
+          :api-base="apiBase"
+          :project-id="selectedProjectId ?? activeProjectId"
           @toggle-process="toggleProcess"
           @decision-select="approvalController.handleDecision"
           @fork-message="handleForkMessage"
@@ -413,6 +415,8 @@
                     :process-expanded-ids="processExpandedIds"
                     :typing-message-ids="typingMessageIds"
                     :message-actions="true"
+                    :api-base="apiBase"
+                    :project-id="selectedProjectId ?? activeProjectId"
                     @toggle-process="toggleProcess"
                     @decision-select="approvalController.handleDecision"
                     @fork-message="handleForkMessage"
@@ -455,17 +459,13 @@
           :messages="messages"
           :context-window="executionControls.activeModel.value?.context_window"
         />
-        <RuntimePanel :step-groups="stepGroups" />
-        <CoreSessionRollback
-          v-if="activeSessionId"
-          :key="activeSessionId"
-          :session-id="activeSessionId"
-          :request="requestConfigOperation"
-          :active-turn="rollbackActiveTurn"
-          :turn-prompts="turnPrompts"
-          @restored="refreshAfterRollback"
-          @graph-loaded="onCheckpointGraphLoaded"
+        <ArtifactPanel
+          v-if="activeProjectId"
+          :project-id="activeProjectId"
+          :api-base="apiBase"
+          :request-rpc="requestConfigOperation"
         />
+        <RuntimePanel :step-groups="stepGroups" />
       </template>
     </template>
   </WorkspaceShell>
@@ -547,7 +547,7 @@ import FileTreePanel from '../components/FileTreePanel.vue'
 import type { StageResource, StageKind } from '../types'
 import CoreProjectCreate from '../components/CoreProjectCreate.vue'
 import CoreSessionTitleEditor from '../components/CoreSessionTitleEditor.vue'
-import CoreSessionRollback from '../components/CoreSessionRollback.vue'
+import ArtifactPanel from '../components/ArtifactPanel.vue'
 import CoreSettings, {
   type CoreSettingsModelPayload,
   type CoreSettingsProviderPayload,
@@ -1504,7 +1504,10 @@ async function uploadFiles(files: FileList | File[]) {
     try {
       const body = new FormData()
       body.append('file', file)
-      const response = await fetch(`${apiBase}/sessions/${encodeURIComponent(sessionId)}/attachments`, { method: 'POST', body })
+      const projectQuery = activeProjectId.value
+        ? `?project_id=${encodeURIComponent(activeProjectId.value)}`
+        : ''
+      const response = await fetch(`${apiBase}/sessions/${encodeURIComponent(sessionId)}/attachments${projectQuery}`, { method: 'POST', body })
       if (!response.ok) throw new Error(await response.text() || '上传失败')
       addUploaded(await response.json() as CoreAttachment)
     } catch (error) {

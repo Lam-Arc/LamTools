@@ -20,6 +20,8 @@ CORE_WORKBENCH_OPERATION_NAMES: tuple[str, ...] = (
     "queue.guide",
     "artifact.read",
     "artifact.open",
+    "artifact.list",
+    "artifact.delete",
     "command.catalog",
     "command.execute",
     "attachment.list",

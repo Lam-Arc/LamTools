@@ -122,6 +122,14 @@
         <CoreSkillsEditor :request-rpc="requestRpc || defaultRequestRpc" />
       </section>
 
+      <section v-else-if="activeSection === 'loadtools'" class="settings-panel">
+        <CoreLoadToolsEditor :request-rpc="requestRpc || defaultRequestRpc" />
+      </section>
+
+      <section v-else-if="activeSection === 'imagegen'" class="settings-panel">
+        <CoreImageGenEditor :request-rpc="requestRpc || defaultRequestRpc" />
+      </section>
+
       <section v-else-if="activeSection === 'hooks'" class="settings-panel">
         <CoreHooksEditor :request-rpc="requestRpc || defaultRequestRpc" />
       </section>
@@ -157,14 +165,14 @@
 
       <section v-else-if="activeSection === 'agents'" class="settings-panel">
         <header class="settings-title">
-          <h1>项目规则</h1>
-          <p>全局约束，对所有项目生效。注入顺序：先全局约束，再项目约束（{workRoot}/AGENTS.md），两者相加。</p>
+          <h1>上下文与记忆</h1>
+          <p>全局上下文三件套，对所有项目生效。注入顺序：全局 AGENTS.md（优先级 5）→ 全局 memory.md（15）→ 项目 AGENTS.md / MEMORY.md（10 / 20）；load_context 的 addition/except 全局叠加到每个工作区。</p>
         </header>
         <article class="setting-card">
           <div class="subhead">
             <span class="muted subhead-title">
               全局约束
-              <span class="subhead-sub">AGENTS.md · ~/.lam/config/</span>
+              <span class="subhead-sub">AGENTS.md · .lam/core/config/</span>
             </span>
             <div class="subhead-actions">
               <button class="text-btn" type="button" :disabled="agentsLoading" @click="fetchGlobalAgentsMd">刷新</button>
@@ -174,13 +182,87 @@
           <textarea
             v-model="agentsDraft"
             class="guide-editor"
-            rows="16"
+            rows="10"
             spellcheck="false"
             :placeholder="agentsLoading ? '加载中…' : '# 全局约束\n对所有项目生效的指令。项目级 AGENTS.md 会在此基础上叠加…'"
             :disabled="agentsLoading"
           />
           <p v-if="agentsError" class="skill-error" role="alert">{{ agentsError }}</p>
-          <p class="hook-meta">保存到 <code>~/.lam/config/AGENTS.md</code>。项目级规则请在「项目设置 → 项目规则」内编辑，两者会相加注入系统提示词。</p>
+          <p class="hook-meta">保存到 <code>.lam/core/config/AGENTS.md</code>（统一配置目录）。项目级规则请在「项目设置 → 项目规则」内编辑，两者会相加注入系统提示词。</p>
+        </article>
+
+        <article class="setting-card">
+          <div class="subhead">
+            <span class="muted subhead-title">
+              全局记忆
+              <span class="subhead-sub">memory.md · .lam/core/config/</span>
+            </span>
+            <div class="subhead-actions">
+              <button class="text-btn" type="button" :disabled="memoryLoading" @click="fetchGlobalMemory">刷新</button>
+              <button class="text-btn" type="button" :disabled="memoryLoading || memorySaving" @click="saveGlobalMemory">保存</button>
+            </div>
+          </div>
+          <textarea
+            v-model="memoryDraft"
+            class="guide-editor"
+            rows="10"
+            spellcheck="false"
+            :placeholder="memoryLoading ? '加载中…' : '# 全局记忆\n跨项目长期记忆，以 memory 优先级注入每个会话；工作区 MEMORY.md 会叠加在它之后…'"
+            :disabled="memoryLoading"
+          />
+          <p v-if="memoryError" class="skill-error" role="alert">{{ memoryError }}</p>
+          <p class="hook-meta">保存到 <code>.lam/core/config/memory.md</code>。CLI：<code>core memory get/set</code>。</p>
+        </article>
+
+        <article class="setting-card">
+          <div class="subhead">
+            <span class="muted subhead-title">
+              全局上下文加载
+              <span class="subhead-sub">load_context.jsonc · .lam/core/config/</span>
+            </span>
+            <div class="subhead-actions">
+              <button class="text-btn" type="button" :disabled="contextLoading" @click="fetchLoadContext">刷新</button>
+              <button class="text-btn" type="button" :disabled="contextLoading || contextSaving" @click="saveLoadContext">保存</button>
+            </div>
+          </div>
+
+          <div class="lc-block">
+            <div class="lc-label">追加加载的文件（addition）</div>
+            <div v-for="(item, index) in contextAdditions" :key="index" class="lc-row">
+              <input v-model="item.name" class="lc-input lc-name" spellcheck="false" placeholder="文件名（如 TEAM_RULES.md）" :disabled="contextLoading" />
+              <input v-model.number="item.priority" type="number" class="lc-input lc-priority" title="注入优先级（越小越靠前）" :disabled="contextLoading" />
+              <select v-model="item.kind" class="lc-input lc-kind" :disabled="contextLoading">
+                <option value="system">system</option>
+                <option value="memory">memory</option>
+              </select>
+              <button class="text-btn danger" type="button" :disabled="contextSaving" @click="contextAdditions.splice(index, 1)">移除</button>
+            </div>
+            <button class="small-btn quiet" type="button" :disabled="contextLoading" @click="contextAdditions.push({ name: '', priority: 50, kind: 'system' })">＋ 追加文件</button>
+          </div>
+
+          <div class="lc-block">
+            <div class="lc-label">排除的默认上下文文件（except）</div>
+            <div class="lc-chips">
+              <span v-for="(name, index) in contextExcept" :key="name" class="lc-chip">
+                {{ name }}
+                <button type="button" class="lc-chip-x" :disabled="contextSaving" @click="contextExcept.splice(index, 1)">×</button>
+              </span>
+            </div>
+            <div class="lc-row">
+              <input
+                v-model="contextExceptDraft"
+                class="lc-input lc-name"
+                spellcheck="false"
+                placeholder="如 AGENTS.md / MEMORY.md"
+                :disabled="contextLoading"
+                @keydown.enter.prevent="addContextExcept"
+              />
+              <button class="small-btn quiet" type="button" :disabled="contextLoading || !contextExceptDraft.trim()" @click="addContextExcept">添加</button>
+            </div>
+          </div>
+
+          <p v-if="contextError" class="skill-error" role="alert">{{ contextError }}</p>
+          <p class="hook-meta">保存到 <code>.lam/core/config/load_context.jsonc</code>，全局叠加到每个工作区（工作区自己的 load_context.jsonc 在其上叠加）。CLI：<code>core load-context get/set</code>。</p>
         </article>
       </section>
 
@@ -368,6 +450,8 @@ import ThemeEditor from './ThemeEditor.vue'
 import CoreSkillsEditor from './CoreSkillsEditor.vue'
 import CoreHooksEditor from './CoreHooksEditor.vue'
 import CoreSubAgentEditor from './CoreSubAgentEditor.vue'
+import CoreLoadToolsEditor from './CoreLoadToolsEditor.vue'
+import CoreImageGenEditor from './CoreImageGenEditor.vue'
 
 export type CoreSettingsDensity = 'compact' | 'standard' | 'loose'
 
@@ -480,10 +564,12 @@ function refreshWorkflowList() {
 const sections: SettingsSection[] = [
   { id: 'models', label: '模型与供应商', icon: '◈' },
   { id: 'appearance', label: '界面', icon: '◐' },
+  { id: 'loadtools', label: '工具模式', icon: '⚙' },
+  { id: 'imagegen', label: '生图', icon: '🖼' },
   { id: 'skills', label: 'Skills', icon: '✦' },
   { id: 'hooks', label: 'Hooks', icon: '⌘' },
   { id: 'permissions', label: '权限', icon: '◇' },
-  { id: 'agents', label: '项目规则', icon: '▣' },
+  { id: 'agents', label: '上下文与记忆', icon: '▣' },
   { id: 'workflow', label: '工作流', icon: '◆' },
   { id: 'subagent', label: 'Sub agent', icon: '✷' },
 ]
@@ -540,6 +626,102 @@ async function saveGlobalAgentsMd() {
     agentsError.value = e instanceof Error ? e.message : String(e)
   } finally {
     agentsSaving.value = false
+  }
+}
+
+// ── Global memory.md (上下文与记忆) editor state ──
+const memoryDraft = ref('')
+const memoryLoading = ref(false)
+const memorySaving = ref(false)
+const memoryError = ref('')
+
+async function fetchGlobalMemory() {
+  const rpc = props.requestRpc || defaultRequestRpc
+  memoryLoading.value = true
+  memoryError.value = ''
+  try {
+    const result = await rpc('config.memory.get')
+    memoryDraft.value = String(result.content ?? '')
+  } catch (e) {
+    memoryError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    memoryLoading.value = false
+  }
+}
+
+async function saveGlobalMemory() {
+  const rpc = props.requestRpc || defaultRequestRpc
+  memorySaving.value = true
+  memoryError.value = ''
+  try {
+    await rpc('config.memory.set', { content: memoryDraft.value })
+    await fetchGlobalMemory()
+  } catch (e) {
+    memoryError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    memorySaving.value = false
+  }
+}
+
+// ── Global load_context.jsonc (上下文与记忆) editor state ──
+interface ContextAdditionDraft {
+  name: string
+  priority: number
+  kind: string
+}
+
+const contextAdditions = ref<ContextAdditionDraft[]>([])
+const contextExcept = ref<string[]>([])
+const contextExceptDraft = ref('')
+const contextLoading = ref(false)
+const contextSaving = ref(false)
+const contextError = ref('')
+
+function addContextExcept() {
+  const name = contextExceptDraft.value.trim()
+  if (!name) return
+  if (!contextExcept.value.includes(name)) contextExcept.value.push(name)
+  contextExceptDraft.value = ''
+}
+
+async function fetchLoadContext() {
+  const rpc = props.requestRpc || defaultRequestRpc
+  contextLoading.value = true
+  contextError.value = ''
+  try {
+    const result = await rpc('config.load_context.get')
+    const additions = Array.isArray(result.addition) ? result.addition : []
+    contextAdditions.value = additions.map(item => ({
+      name: String((item as Record<string, unknown>).name ?? ''),
+      priority: Number((item as Record<string, unknown>).priority ?? 50),
+      kind: String((item as Record<string, unknown>).kind ?? 'system'),
+    }))
+    contextExcept.value = Array.isArray(result.except)
+      ? result.except.map(item => String(item))
+      : []
+  } catch (e) {
+    contextError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    contextLoading.value = false
+  }
+}
+
+async function saveLoadContext() {
+  const rpc = props.requestRpc || defaultRequestRpc
+  contextSaving.value = true
+  contextError.value = ''
+  try {
+    await rpc('config.load_context.set', {
+      addition: contextAdditions.value
+        .filter(item => item.name.trim())
+        .map(item => ({ name: item.name.trim(), priority: Number(item.priority) || 50, kind: item.kind })),
+      except: contextExcept.value.filter(name => name.trim()),
+    })
+    await fetchLoadContext()
+  } catch (e) {
+    contextError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    contextSaving.value = false
   }
 }
 
@@ -795,11 +977,83 @@ function onKeydown(e: KeyboardEvent) {
 onMounted(() => {
   document.addEventListener('keydown', onKeydown)
   void fetchGlobalAgentsMd()
+  void fetchGlobalMemory()
+  void fetchLoadContext()
 })
 onUnmounted(() => document.removeEventListener('keydown', onKeydown))
 </script>
 
 <style scoped>
+/* ── 上下文与记忆 (global context) editor ── */
+.lc-block {
+  margin-top: 12px;
+}
+
+.lc-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 6px;
+  opacity: 0.85;
+}
+
+.lc-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.lc-input {
+  padding: 4px 8px;
+  border: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 18%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--settings-main-text, #fff) 6%, transparent);
+  color: inherit;
+  font-size: 13px;
+}
+
+.lc-name {
+  flex: 1;
+  min-width: 0;
+}
+
+.lc-priority {
+  width: 84px;
+}
+
+.lc-kind {
+  width: 110px;
+}
+
+.lc-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.lc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 18%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--settings-main-text, #fff) 6%, transparent);
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+
+.lc-chip-x {
+  border: none;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 0;
+}
+
 /* ── Overlay — full-viewport backdrop with centered card ── */
 .settings-overlay {
   position: fixed;

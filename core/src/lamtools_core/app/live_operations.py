@@ -604,6 +604,7 @@ async def handle_turn_start_operation(
         ))
 
     resolved = await _resolve_turn_approval_policy(context=context, params=params)
+    imagegen_config = await _resolve_imagegen_config(context=context)
     runtime_start = {
         "thread_id": thread_id,
         "turn_id": turn_id,
@@ -617,6 +618,7 @@ async def handle_turn_start_operation(
         "active_mode": resolved["active_mode"],
         "allow_agent_install_skill": resolved.get("allow_agent_install_skill", False),
         "allow_agent_create_hooks": resolved.get("allow_agent_create_hooks", False),
+        "imagegen_config": imagegen_config,
         "model_id": str(params.get("model_id") or params.get("modelId") or ""),
         "thinking_enabled": params.get("thinking_enabled") if isinstance(params.get("thinking_enabled"), bool) else None,
         "thinking_budget": params.get("thinking_budget") if isinstance(params.get("thinking_budget"), int) else None,
@@ -746,6 +748,37 @@ async def _resolve_turn_approval_policy(*, context: "CoreLiveContext", params: d
         "active_mode": active_mode,
         "allow_agent_install_skill": allow_agent_install_skill,
         "allow_agent_create_hooks": allow_agent_create_hooks,
+    }
+
+
+async def _resolve_imagegen_config(*, context: "CoreLiveContext") -> dict[str, Any]:
+    """Resolve generate_image runtime config from the core.imagegen settings namespace.
+
+    Independent of the approval-policy resolution so explicit per-turn
+    approval overrides (e.g. CLI --auto-approve) still apply imagegen settings.
+    Missing/invalid settings → disabled (the tool is hidden from the model).
+    """
+    default: dict[str, Any] = {"enabled": False, "api_url": "", "api_key": "", "model": ""}
+    if not context.operations.has("settings.get"):
+        return default
+    try:
+        result = await context.operations.execute(
+            "settings.get",
+            {"namespace": "core.imagegen"},
+            metadata={"source": "core_live"},
+        )
+    except Exception:
+        return default
+    if result.status != "ok":
+        return default
+    value = result.payload.get("value") if isinstance(result.payload, dict) else None
+    if not isinstance(value, dict):
+        return default
+    return {
+        "enabled": bool(value.get("enabled")),
+        "api_url": str(value.get("api_url") or "").strip(),
+        "api_key": str(value.get("api_key") or "").strip(),
+        "model": str(value.get("model") or "").strip(),
     }
 
 

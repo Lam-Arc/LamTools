@@ -126,6 +126,11 @@ class AppPersistenceHost:
             for group in by_thread.values():
                 state = await self.snapshot_store.apply_many(db, group)
             if return_state:
+                # apply_many returns the partial projection (only touched
+                # items); callers that hand the state to clients need the full
+                # assembled snapshot.
+                if state is not None:
+                    state = await self.snapshot_store.load(db, state.get("thread_id") or "")
                 return envelopes, state
             return envelopes
 

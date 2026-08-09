@@ -37,10 +37,11 @@ from lamtools_core.app.core_db import (
     CoreRestoreOperation,
     CoreRuntimeSession,
     CoreThreadSnapshot,
+    CoreThreadSnapshotItem,
     CoreWorkspaceManifest,
 )
 from lamtools_core.app.event_store import SqlAlchemyAppEventStore
-from lamtools_core.app.snapshot_store import CoreAppSnapshotProjector
+from lamtools_core.app.snapshot_store import CoreAppSnapshotProjector, SqlAlchemyThreadSnapshotStore
 from lamtools_core.app.sqlite_write import SQLiteWriteCoordinator
 from lamtools_core.app.operation_catalog import OperationCatalog, OperationRequest, OperationResult
 
@@ -874,7 +875,13 @@ class CoreCheckpointConversationBackend:
         is_root_session = session_id == root_session_id
         async with self.session_factory() as db:
             runtime = await db.get(CoreRuntimeSession, session_id)
-            snapshot = await db.get(CoreThreadSnapshot, session_id) if is_root_session else None
+            snapshot = (
+                await SqlAlchemyThreadSnapshotStore(
+                    CoreThreadSnapshot, item_model=CoreThreadSnapshotItem
+                ).load(db, session_id)
+                if is_root_session
+                else None
+            )
             events = (
                 await SqlAlchemyAppEventStore(CoreAppEvent).list_thread(db, thread_id=session_id)
                 if is_root_session
@@ -917,14 +924,17 @@ class CoreCheckpointConversationBackend:
         is_root_session = session_id == _root_session_id(session_id)
         projection = await db.get(CoreThreadSnapshot, session_id) if is_root_session else None
         if isinstance(projection_payload, dict):
-            if projection is None:
-                projection = CoreThreadSnapshot(thread_id=session_id)
-                db.add(projection)
-            projection.snapshot_seq = int(projection_payload.get("snapshot_seq") or 0)
-            projection.snapshot_json = dict(projection_payload.get("snapshot_json") or {})
-            projection.updated_at = datetime.now()
+            # Split the captured full snapshot back into item rows + metadata
+            # row (the snapshot store's write_full_projection replaces the
+            # thread's existing rows).
+            await SqlAlchemyThreadSnapshotStore(
+                CoreThreadSnapshot, item_model=CoreThreadSnapshotItem
+            ).write_full_projection(db, session_id, projection_payload)
         elif projection is not None:
             await db.delete(projection)
+            await db.execute(
+                delete(CoreThreadSnapshotItem).where(CoreThreadSnapshotItem.thread_id == session_id)
+            )
 
         if is_root_session and isinstance(events_payload, list):
             await db.execute(delete(CoreAppEvent).where(CoreAppEvent.thread_id == session_id))
@@ -975,12 +985,10 @@ class CoreCheckpointConversationBackend:
             checkpoint_id=checkpoint_id,
             title=title,
         )
-        db.add(CoreThreadSnapshot(
-            thread_id=new_session_id,
-            snapshot_seq=projection["snapshot_seq"],
-            snapshot_json=projection["snapshot_json"],
-            updated_at=datetime.now(),
-        ))
+        # Split the forked full projection into item rows + metadata row.
+        await SqlAlchemyThreadSnapshotStore(
+            CoreThreadSnapshot, item_model=CoreThreadSnapshotItem
+        ).write_full_projection(db, new_session_id, projection)
         # Write captured events to the new session's event stream so the
         # projector can rebuild the projection correctly instead of relying
         # on a frozen inherited snapshot.  Session-id fields (turn_id etc.)
@@ -1400,33 +1408,33 @@ def _runtime_payload(row: CoreRuntimeSession | None) -> dict[str, Any] | None:
     }
 
 
-def _projection_payload(row: CoreThreadSnapshot | None) -> dict[str, Any] | None:
-    if row is None:
+def _projection_payload(state: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(state, dict):
         return None
     return {
-        "snapshot_seq": int(row.snapshot_seq or 0),
-        "snapshot_json": dict(row.snapshot_json or {}),
+        "snapshot_seq": int(state.get("snapshot_seq") or 0),
+        "snapshot_json": dict(state),
     }
 
 
 def _projection_payload_without_turn(
-    row: CoreThreadSnapshot | None,
+    state: dict[str, Any] | None,
     *,
     excluded_turn_id: str,
     kept_events: list[Any],
 ) -> dict[str, Any] | None:
-    payload = _projection_payload(row)
+    payload = _projection_payload(state)
     if payload is None or not excluded_turn_id:
         return payload
-    state = copy.deepcopy(payload.get("snapshot_json") or {})
-    CoreAppSnapshotProjector().remove_turns(state, {excluded_turn_id})
+    snapshot = copy.deepcopy(payload.get("snapshot_json") or {})
+    CoreAppSnapshotProjector().remove_turns(snapshot, {excluded_turn_id})
     kept_event_ids = {str(event.event_id) for event in kept_events}
-    state["seen_event_ids"] = [
-        event_id for event_id in list(state.get("seen_event_ids") or []) if str(event_id) in kept_event_ids
+    snapshot["seen_event_ids"] = [
+        event_id for event_id in list(snapshot.get("seen_event_ids") or []) if str(event_id) in kept_event_ids
     ]
     snapshot_seq = max((int(event.seq or 0) for event in kept_events), default=0)
-    state["snapshot_seq"] = snapshot_seq
-    core = state.get("core")
+    snapshot["snapshot_seq"] = snapshot_seq
+    core = snapshot.get("core")
     if isinstance(core, dict):
         core["seen_event_ids"] = [
             event_id for event_id in list(core.get("seen_event_ids") or []) if str(event_id) in kept_event_ids
@@ -1434,7 +1442,7 @@ def _projection_payload_without_turn(
         core["snapshot_seq"] = snapshot_seq
     return {
         "snapshot_seq": snapshot_seq,
-        "snapshot_json": state,
+        "snapshot_json": snapshot,
     }
 
 

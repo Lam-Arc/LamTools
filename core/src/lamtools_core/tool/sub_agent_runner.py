@@ -84,6 +84,7 @@ class KernelSubAgentRunner:
         active_mode: str | None = None,
         load_tools: LoadTools | None = None,
         attachment_service: AttachmentServiceLike = None,
+        imagegen_config: dict | None = None,
     ) -> None:
         self.work_root = Path(work_root)
         self.llm_client = llm_client
@@ -107,6 +108,15 @@ class KernelSubAgentRunner:
         self.active_mode = active_mode
         self.load_tools = load_tools
         self.attachment_service = attachment_service
+        self.imagegen_config = imagegen_config
+
+    def _disabled_tools(self) -> set[str]:
+        """Sub-agent disabled set: never sub_agent itself; generate_image only
+        when the 生图 setting is disabled (mirrors the main agent)."""
+        disabled = {SUB_AGENT_TOOL_NAME}
+        if not bool((self.imagegen_config or {}).get("enabled")):
+            disabled.add("generate_image")
+        return disabled
 
     def _resolve_mode(self, mode: str) -> str | None:
         """Resolve a per-call mode override against the configured loadtools.
@@ -181,7 +191,7 @@ class KernelSubAgentRunner:
         )
         effective_mode = self._resolve_mode(mode)
         user_content = await self._fetch_attachment_content(task, list(attachments or []), model_id=effective_model)
-        disabled_tools = {SUB_AGENT_TOOL_NAME}
+        disabled_tools = self._disabled_tools()
         toolbox = build_core_toolbox(
             work_root=self.work_root,
             approval_policy=self.approval_policy,
@@ -189,8 +199,10 @@ class KernelSubAgentRunner:
             mcp_caller=self.mcp_caller,
             mcp_tool_specs=self.mcp_tool_specs,
             disabled_tools=disabled_tools,
+            imagegen_config=self.imagegen_config,
             activated_mcp_servers=self.activated_mcp_servers,
             load_tools=self.load_tools,
+            active_mode=effective_mode,
         )
         agent_name = normalize_sub_session_agent_name(agent)
         child_sink = SubAgentEventForwardingSink(
@@ -417,7 +429,8 @@ class KernelSubAgentRunner:
             loaded_skill_roots=self.loaded_skill_roots,
             mcp_caller=self.mcp_caller,
             mcp_tool_specs=self.mcp_tool_specs,
-            disabled_tools={SUB_AGENT_TOOL_NAME},
+            disabled_tools=self._disabled_tools(),
+            imagegen_config=self.imagegen_config,
             activated_mcp_servers=self.activated_mcp_servers,
             load_tools=self.load_tools,
         )
@@ -501,7 +514,7 @@ class KernelSubAgentRunner:
         )
         effective_mode = self._resolve_mode(mode)
         user_content = await self._fetch_attachment_content(task, list(attachments or []), model_id=effective_model)
-        disabled_tools = {SUB_AGENT_TOOL_NAME}
+        disabled_tools = self._disabled_tools()
         toolbox = build_core_toolbox(
             work_root=self.work_root,
             approval_policy=self.approval_policy,
@@ -509,8 +522,10 @@ class KernelSubAgentRunner:
             mcp_caller=self.mcp_caller,
             mcp_tool_specs=self.mcp_tool_specs,
             disabled_tools=disabled_tools,
+            imagegen_config=self.imagegen_config,
             activated_mcp_servers=self.activated_mcp_servers,
             load_tools=self.load_tools,
+            active_mode=effective_mode,
         )
         agent_name = normalize_sub_session_agent_name(agent)
         child_sink = SubAgentEventForwardingSink(

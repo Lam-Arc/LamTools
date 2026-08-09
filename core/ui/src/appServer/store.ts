@@ -540,14 +540,20 @@ function applyCoreRunItemEvent(snapshot: CoreAppSnapshot, event: CoreAppEvent): 
   }
   items[itemId] = item
 
-  // Tool results carry artifacts in the runItem payload; merge them into the
-  // snapshot-level artifacts map so file/change cards render from the event
-  // stream instead of waiting for the next full snapshot (snapshots are now
-  // only pushed at turn boundaries).
+  // Tool results carry artifacts on the runItem event TOP level (RunItemEvent
+  // serializes artifacts outside payload — see run_item.py to_dict); merge them
+  // into the snapshot-level artifacts map so file/change/image cards render
+  // from the event stream instead of waiting for the next full snapshot
+  // (snapshots are now only pushed at turn boundaries).
   let artifacts = currentCore.artifacts
-  if (kind === 'tool_result' && Array.isArray(runPayload.artifacts) && runPayload.artifacts.length > 0) {
+  const eventArtifacts = Array.isArray(value.artifacts)
+    ? value.artifacts
+    : Array.isArray(runPayload.artifacts)
+      ? runPayload.artifacts
+      : undefined
+  if (kind === 'tool_result' && eventArtifacts && eventArtifacts.length > 0) {
     let merged: Record<string, Record<string, unknown>> | null = null
-    for (const artifact of runPayload.artifacts) {
+    for (const artifact of eventArtifacts) {
       if (!isRecord(artifact)) continue
       const artifactId = typeof artifact.artifact_id === 'string' ? artifact.artifact_id : ''
       if (!artifactId) continue

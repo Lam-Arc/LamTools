@@ -57,6 +57,17 @@ class ThreadSnapshotRow(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
 
 
+class SnapshotItemRow(Base):
+    __tablename__ = "test_core_live_router_thread_snapshot_items"
+
+    thread_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    item_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    item_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+
+
+
 class DummyWebSocket:
     def __init__(self):
         self.close_calls = []
@@ -557,6 +568,7 @@ def test_core_live_router_accepts_turn_start_over_websocket(tmp_path):
             event_store=SqlAlchemyAppEventStore(AppEventRow, protocol_version="core.app_server.v1"),
             snapshot_store=SqlAlchemyThreadSnapshotStore(
                 ThreadSnapshotRow,
+                item_model=SnapshotItemRow,
                 projector=CoreAppSnapshotProjector(member_defaults={"queue": []}),
             ),
             operations=operations,
@@ -612,6 +624,7 @@ def test_core_live_router_accepts_initialized_ack_from_core_client(tmp_path):
             event_store=SqlAlchemyAppEventStore(AppEventRow, protocol_version="core.app_server.v1"),
             snapshot_store=SqlAlchemyThreadSnapshotStore(
                 ThreadSnapshotRow,
+                item_model=SnapshotItemRow,
                 projector=CoreAppSnapshotProjector(member_defaults={"queue": []}),
             ),
             operations=OperationCatalog(),
@@ -663,6 +676,7 @@ def test_core_live_router_dispatches_catalog_operations(tmp_path):
             event_store=SqlAlchemyAppEventStore(AppEventRow, protocol_version="core.app_server.v1"),
             snapshot_store=SqlAlchemyThreadSnapshotStore(
                 ThreadSnapshotRow,
+                item_model=SnapshotItemRow,
                 projector=CoreAppSnapshotProjector(member_defaults={"queue": []}),
             ),
             operations=operations,
@@ -714,6 +728,7 @@ def test_core_live_router_delegates_context_operations_to_the_host(tmp_path) -> 
             event_store=SqlAlchemyAppEventStore(AppEventRow, protocol_version="core.app_server.v1"),
             snapshot_store=SqlAlchemyThreadSnapshotStore(
                 ThreadSnapshotRow,
+                item_model=SnapshotItemRow,
                 projector=CoreAppSnapshotProjector(member_defaults={"queue": []}),
             ),
             operations=operations,
@@ -750,6 +765,7 @@ def test_core_live_connection_adapter_handles_member_client_response(tmp_path):
             event_store=SqlAlchemyAppEventStore(AppEventRow, protocol_version="core.app_server.v1"),
             snapshot_store=SqlAlchemyThreadSnapshotStore(
                 ThreadSnapshotRow,
+                item_model=SnapshotItemRow,
                 projector=CoreAppSnapshotProjector(member_defaults={"queue": []}),
             ),
             operations=OperationCatalog(),
@@ -790,6 +806,7 @@ def test_core_live_connection_adapter_handles_member_operation_request(tmp_path)
             event_store=SqlAlchemyAppEventStore(AppEventRow, protocol_version="core.app_server.v1"),
             snapshot_store=SqlAlchemyThreadSnapshotStore(
                 ThreadSnapshotRow,
+                item_model=SnapshotItemRow,
                 projector=CoreAppSnapshotProjector(member_defaults={"queue": []}),
             ),
             operations=OperationCatalog(),
@@ -831,6 +848,7 @@ def test_core_live_connection_adapter_dispatches_member_operation_catalog(tmp_pa
             event_store=SqlAlchemyAppEventStore(AppEventRow, protocol_version="core.app_server.v1"),
             snapshot_store=SqlAlchemyThreadSnapshotStore(
                 ThreadSnapshotRow,
+                item_model=SnapshotItemRow,
                 projector=CoreAppSnapshotProjector(member_defaults={"queue": []}),
             ),
             operations=OperationCatalog(),
@@ -880,6 +898,7 @@ def test_core_live_connection_dispatches_operation_outcome_hooks(tmp_path):
             event_store=SqlAlchemyAppEventStore(AppEventRow, protocol_version="core.app_server.v1"),
             snapshot_store=SqlAlchemyThreadSnapshotStore(
                 ThreadSnapshotRow,
+                item_model=SnapshotItemRow,
                 projector=CoreAppSnapshotProjector(member_defaults={"queue": []}),
             ),
             operations=OperationCatalog(),
@@ -937,6 +956,7 @@ def test_core_live_resume_switches_connection_subscription_before_replaying(tmp_
             event_store=SqlAlchemyAppEventStore(AppEventRow, protocol_version="core.app_server.v1"),
             snapshot_store=SqlAlchemyThreadSnapshotStore(
                 ThreadSnapshotRow,
+                item_model=SnapshotItemRow,
                 projector=CoreAppSnapshotProjector(member_defaults={"queue": []}),
             ),
             operations=OperationCatalog(),
@@ -1002,6 +1022,7 @@ def test_core_live_subscribes_before_running_a_thread_operation(tmp_path):
             event_store=SqlAlchemyAppEventStore(AppEventRow, protocol_version="core.app_server.v1"),
             snapshot_store=SqlAlchemyThreadSnapshotStore(
                 ThreadSnapshotRow,
+                item_model=SnapshotItemRow,
                 projector=CoreAppSnapshotProjector(member_defaults={"queue": []}),
             ),
             operations=operations,

@@ -35,7 +35,11 @@ class _CompactionClient:
                 "6. Open Issues Or Risks\n"
                 "- None.\n\n"
                 "7. Next Best Actions\n"
-                "- Continue from the latest raw user message."
+                "- Continue from the latest raw user message.\n\n"
+                "8. Rejected Or Superseded Directions\n"
+                "- None.\n\n"
+                "9. Next Actions\n"
+                "- Continue."
             ),
             finish_reason="stop",
         )
@@ -58,7 +62,9 @@ class _SegmentingCompactionClient:
                 "4. Key Decisions And Constraints\n- Keep evidence.\n\n"
                 "5. Files, APIs, Commands, And Results\n- Recorded.\n\n"
                 "6. Open Issues Or Risks\n- None.\n\n"
-                "7. Next Best Actions\n- Continue."
+                "7. Next Best Actions\n- Continue.\n\n"
+                "8. Rejected Or Superseded Directions\n- None.\n\n"
+                "9. Next Actions\n- Continue."
             ),
             finish_reason="stop",
         )
@@ -91,7 +97,9 @@ class _CharacterStreamingCompactionClient:
         "4. Key Decisions And Constraints\n- Keep evidence.\n\n"
         "5. Files, APIs, Commands, And Results\n- None.\n\n"
         "6. Open Issues Or Risks\n- None.\n\n"
-        "7. Next Best Actions\n- Continue."
+        "7. Next Best Actions\n- Continue.\n\n"
+        "8. Rejected Or Superseded Directions\n- None.\n\n"
+        "9. Next Actions\n- Continue."
     )
 
     async def complete(self, request):
@@ -432,7 +440,7 @@ async def test_compact_context_segments_oversized_history_within_model_input_lim
             llm_client=llm,
             model="smaller-model",
             limit_tokens=1200,
-            input_limit_tokens=1000,
+            input_limit_tokens=1200,
             preserve_latest_user=False,
             estimate_tokens=_estimate,
             on_event=progress.append,
@@ -442,7 +450,7 @@ async def test_compact_context_segments_oversized_history_within_model_input_lim
     assert result.status == "compacted"
     assert result.segment_count > 1
     assert len(llm.requests) > 1
-    assert all(_estimate(request.messages) <= 1000 for request in llm.requests)
+    assert all(_estimate(request.messages) <= 1200 for request in llm.requests)
     assert result.after_tokens < result.before_tokens
     assert result.after_tokens <= 1200
     assert any(event["phase"] == "segment" for event in progress)
@@ -591,3 +599,104 @@ async def test_compact_context_emits_failed_then_propagates_cancellation_without
     assert [message.to_dict() for message in messages] == original
     assert progress[-1]["status"] == "failed"
     assert progress[-1]["reason"] == "cancelled"
+
+
+class _UnstructuredCompactionClient:
+    async def complete(self, request):
+        return LLMResponse(
+            content="Just some notes without the required nine-section structure at all.",
+            finish_reason="stop",
+        )
+
+    async def stream(self, request):
+        raise NotImplementedError
+
+
+@pytest.mark.asyncio
+async def test_model_output_without_nine_sections_falls_back_to_structured_summary():
+    messages = [
+        ChatMessage(role="user", content="keep this requirement visible " + ("x" * 6000)),
+        ChatMessage(role="assistant", content="implemented export route " + ("y" * 6000)),
+        ChatMessage(role="user", content="continue"),
+    ]
+
+    result = await compact_context(
+        ContextCompactionRequest(
+            trigger="auto",
+            messages=messages,
+            llm_client=_UnstructuredCompactionClient(),
+            model="mock-model",
+            limit_tokens=3600,
+            estimate_tokens=_estimate,
+        )
+    )
+
+    assert result.status == "compacted"
+    assert result.summary.startswith(COMPACTION_PREFIX)
+    assert "Just some notes" not in result.summary
+    for section in (
+        "1. Current Objective And Done Criteria",
+        "2. Active User Instructions",
+        "3. External Action Authorization",
+        "4. Confirmed Facts And Decisions",
+        "5. Current Execution State",
+        "6. Verification Evidence",
+        "7. Open Issues, Risks, And Hypotheses",
+        "8. Rejected Or Superseded Directions",
+        "9. Next Actions",
+    ):
+        assert section in result.summary
+    assert "keep this requirement visible" in result.summary
+
+
+@pytest.mark.asyncio
+async def test_auto_compaction_transcript_includes_prior_summary_and_excludes_retained_span():
+    llm = _CompactionClient()
+    prior_summary = (
+        "[Compacted Context]\n\n"
+        "1. Current Objective And Done Criteria\n- Finish acceptance.\n\n"
+        "2. Active User Instructions\n- Use Kimi-K2.6 without thinking.\n\n"
+        "3. External Action Authorization\n- Do not commit, publish, or deploy without user confirmation.\n\n"
+        "4. Confirmed Facts And Decisions\n- Keep one compaction interface.\n\n"
+        "5. Current Execution State\n- Prior work summarized.\n\n"
+        "6. Verification Evidence\n- core.db\n\n"
+        "7. Open Issues, Risks, And Hypotheses\n- Recheck the GUI.\n\n"
+        "8. Rejected Or Superseded Directions\n- None.\n\n"
+        "9. Next Actions\n- Continue."
+    )
+    messages = [
+        ChatMessage(role="system", content="stable system prefix"),
+        ChatMessage(
+            role="system",
+            content=prior_summary,
+            metadata={"key": "context_compaction_summary", "kind": "history"},
+        ),
+        ChatMessage(role="user", content="old instruction to compress " + ("x" * 2000)),
+        ChatMessage(role="assistant", content="old result to compress " + ("y" * 2000)),
+        ChatMessage(role="user", content="recent user 2"),
+        ChatMessage(role="assistant", content="recent assistant 3"),
+        ChatMessage(role="user", content="latest request"),
+    ]
+
+    result = await compact_context(
+        ContextCompactionRequest(
+            trigger="auto",
+            messages=messages,
+            llm_client=llm,
+            model="mock-model",
+            limit_tokens=2000,
+            estimate_tokens=_estimate,
+        )
+    )
+
+    assert result.status == "compacted"
+    assert "Use Kimi-K2.6 without thinking." in result.summary
+    transcript = str(llm.last_request.messages[-1].content)
+    # The prior summary is part of the compacted span (a) and is fed to the
+    # compaction model as a regular message; the retained span (c) is excluded.
+    assert "[Compacted Context]" in transcript
+    assert "Use Kimi-K2.6 without thinking." in transcript
+    assert "old instruction to compress" in transcript
+    assert "recent user 2" not in transcript
+    assert "recent assistant 3" not in transcript
+    assert "latest request" not in transcript

@@ -10,7 +10,8 @@ from typing import Any
 import logging
 from urllib.parse import quote
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from lamtools_core.cli import (
@@ -47,6 +48,7 @@ from .live_hub import CoreAppEventHub
 from .live_member import DefaultCoreLiveMemberHooks
 from .live_operations import CoreLiveContext, CoreLiveOperationHost, recover_stale_active_turns
 from .project_store import ActiveProjectSessionsError, CoreProjectStore
+from lamtools_core.artifact import ArtifactRegistry, kind_from_mime
 from .live_router import create_core_live_router
 from .operation_catalog import OperationCatalog, OperationRequest, OperationResult
 
@@ -353,6 +355,7 @@ def create_core_agent_http_app(
             memory_store=core_db_handle.memory_store,
         )
         _register_core_project_operations(agent_operations, project_store=core_db_handle.project_store)
+        _register_core_artifact_operations(agent_operations, project_store=core_db_handle.project_store)
         _register_core_session_operations(agent_operations, session_store=session_store)
         _register_core_config_operations(
             agent_operations,
@@ -650,8 +653,46 @@ def create_core_agent_http_app(
         return store
 
     @app.post("/api/core/sessions/{session_id}/attachments")
-    async def upload_attachment(session_id: str, file: UploadFile = File(...)) -> dict[str, Any]:
-        return await attachment_store().create(session_id, file.filename or "attachment", await file.read(), file.content_type)
+    async def upload_attachment(
+        session_id: str,
+        file: UploadFile = File(...),
+        project_id: str | None = Query(default=None),
+    ) -> dict[str, Any]:
+        record = await attachment_store().create(session_id, file.filename or "attachment", await file.read(), file.content_type)
+        await register_uploaded_artifact(record, project_id)
+        return record
+
+    @app.get("/api/core/attachments/{attachment_id}/download")
+    async def download_attachment(attachment_id: str) -> FileResponse:
+        record = await attachment_store().get(attachment_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="Attachment not found")
+        path = Path(record.storage_path)
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="Attachment file missing")
+        return FileResponse(path, media_type=record.mime_type, filename=record.filename)
+
+    async def register_uploaded_artifact(record: dict[str, Any], project_id: str | None) -> None:
+        """上传即注册：把用户上传的附件登记到项目 artifact 注册表（best-effort，失败不影响上传）。"""
+        if not project_id:
+            return
+        artifact_id = str(record.get("id") or "")
+        if not artifact_id:
+            return
+        try:
+            project = await app_state["core_db"].project_store.get(project_id)
+            if project is None:
+                return
+            registry = ArtifactRegistry(project.work_root)
+            registry.register(
+                kind=kind_from_mime(str(record.get("mime_type") or "")),
+                mime_type=str(record.get("mime_type") or ""),
+                name=str(record.get("filename") or artifact_id),
+                path=f"attachment://{artifact_id}",
+                source="user_upload",
+            )
+        except Exception:  # noqa: BLE001 — registration must never break uploads
+            pass
 
     @app.get("/api/core/sessions/{session_id}/attachments")
     async def list_attachments(session_id: str) -> dict[str, Any]:
@@ -816,6 +857,69 @@ def _project_id(request: OperationRequest) -> str:
     return str(request.payload.get("project_id") or request.payload.get("projectId") or request.payload.get("id") or "")
 
 
+def _register_core_artifact_operations(catalog: OperationCatalog, *, project_store: CoreProjectStore) -> None:
+    """artifact.* operations — per-project registry under ``{work_root}/.lam/artifact``."""
+
+    async def _registry_for(request: OperationRequest) -> ArtifactRegistry | None:
+        project = await project_store.get(_project_id(request))
+        if project is None:
+            return None
+        return ArtifactRegistry(project.work_root)
+
+    async def artifact_list(request: OperationRequest) -> OperationResult:
+        registry = await _registry_for(request)
+        if registry is None:
+            return OperationResult(name=request.name, status="error", payload={"error": "Project not found"})
+        include_deleted = bool(request.payload.get("include_deleted"))
+        return OperationResult(
+            name=request.name,
+            payload={
+                "artifacts": [record.to_dict() for record in registry.list(include_deleted=include_deleted)],
+            },
+        )
+
+    async def artifact_read(request: OperationRequest) -> OperationResult:
+        registry = await _registry_for(request)
+        if registry is None:
+            return OperationResult(name=request.name, status="error", payload={"error": "Project not found"})
+        artifact_id = str(request.payload.get("artifact_id") or request.payload.get("artifactId") or "")
+        record = registry.get(artifact_id)
+        if record is None:
+            return OperationResult(name=request.name, status="error", payload={"error": "Artifact not found"})
+        return OperationResult(name=request.name, payload={"artifact": record.to_dict()})
+
+    async def artifact_delete(request: OperationRequest) -> OperationResult:
+        registry = await _registry_for(request)
+        if registry is None:
+            return OperationResult(name=request.name, status="error", payload={"error": "Project not found"})
+        raw = request.payload.get("artifact_ids") or request.payload.get("artifactIds")
+        artifact_ids = [str(item) for item in raw if str(item).strip()] if isinstance(raw, list) else []
+        if not artifact_ids:
+            return OperationResult(name=request.name, status="error", payload={"error": "artifact_ids is required"})
+        deleted = registry.soft_delete(artifact_ids)
+        return OperationResult(name=request.name, payload={"deleted": deleted})
+
+    async def artifact_open(request: OperationRequest) -> OperationResult:
+        registry = await _registry_for(request)
+        if registry is None:
+            return OperationResult(name=request.name, status="error", payload={"error": "Project not found"})
+        artifact_id = str(request.payload.get("artifact_id") or request.payload.get("artifactId") or "")
+        record = registry.get(artifact_id)
+        if record is None:
+            return OperationResult(name=request.name, status="error", payload={"error": "Artifact not found"})
+        return OperationResult(name=request.name, payload={"path": record.path})
+
+    handlers = {
+        "artifact.list": artifact_list,
+        "artifact.read": artifact_read,
+        "artifact.delete": artifact_delete,
+        "artifact.open": artifact_open,
+    }
+    for name, handler in handlers.items():
+        if not catalog.has(name):
+            catalog.register(name, handler)
+
+
 def _register_core_config_operations(
     catalog: OperationCatalog,
     *,
@@ -876,6 +980,112 @@ def _register_core_config_operations(
 
     _register_subagent_guide_operations(catalog, work_root=work_root)
     _register_model_operations(catalog, work_root=work_root, config_db_path=config_db_path)
+    _register_loadtools_operations(catalog)
+
+
+def _register_loadtools_operations(catalog: OperationCatalog) -> None:
+    """config.loadtools.get/set — read & manage the mode tool-set config.
+
+    ``loadtools.jsonc`` lives in the unified config directory; when it does
+    not exist yet the built-in modes are served (and the UI saves a file on
+    first edit). The catalog lists every known tool with its category so the
+    UI can render a grouped checklist instead of a raw text editor.
+    """
+    from lamtools_core.config.root import core_config_file
+    from lamtools_core.tool.default_toolbox import (
+        DEFAULT_TOOL_CATEGORIES,
+        default_core_tool_specs,
+    )
+    from lamtools_core.tool.durable_tools import durable_tool_specs
+    from lamtools_core.tool.loadtools import (
+        LoadToolMode,
+        LoadTools,
+        default_load_tools,
+        load_loadtools,
+        serialize_loadtools,
+    )
+    from lamtools_core.tool.workflow_build_tools import workflow_build_tool_specs
+
+    def _config_path() -> Path:
+        return core_config_file("loadtools.jsonc")
+
+    def _current_modes() -> tuple[LoadTools, str]:
+        path = _config_path()
+        if path.is_file():
+            loaded = load_loadtools(path)
+            if loaded:
+                return loaded, "config"
+        return default_load_tools(), "builtin"
+
+    def _catalog() -> list[dict[str, str]]:
+        specs = [
+            *default_core_tool_specs(),
+            *durable_tool_specs(goal=True, arrange=True),
+            *workflow_build_tool_specs(),
+        ]
+        seen: set[str] = set()
+        result: list[dict[str, str]] = []
+        for spec in specs:
+            if spec.name in seen:
+                continue
+            seen.add(spec.name)
+            result.append({
+                "name": spec.name,
+                "category": str(spec.metadata.get("category") or DEFAULT_TOOL_CATEGORIES.get(spec.name, "other")),
+            })
+        return result
+
+    def _modes_payload(modes: LoadTools) -> dict[str, dict[str, object]]:
+        return {
+            name: {"description": mode.description, "tools": list(mode.tools)}
+            for name, mode in modes.items()
+        }
+
+    async def loadtools_get(request: OperationRequest) -> OperationResult:
+        del request
+        modes, source = _current_modes()
+        return OperationResult(name="config.loadtools.get", payload={
+            "modes": _modes_payload(modes),
+            "source": source,
+            "catalog": _catalog(),
+        })
+
+    async def loadtools_set(request: OperationRequest) -> OperationResult:
+        raw_modes = (request.payload or {}).get("modes")
+        if not isinstance(raw_modes, dict):
+            return OperationResult(name=request.name, status="error", payload={"error": "modes is required"})
+        modes: LoadTools = {}
+        for name, raw in raw_modes.items():
+            name = str(name).strip()
+            if not name:
+                continue
+            if not isinstance(raw, dict):
+                return OperationResult(name=request.name, status="error", payload={"error": f"mode {name} must be an object"})
+            description = str(raw.get("description") or "").strip()
+            tools_raw = raw.get("tools")
+            if not isinstance(tools_raw, list):
+                return OperationResult(name=request.name, status="error", payload={"error": f"mode {name} tools must be a list"})
+            tools = [str(t) for t in tools_raw if isinstance(t, str) and str(t).strip()]
+            modes[name] = LoadToolMode(description=description, tools=tools)
+        if not modes:
+            return OperationResult(name=request.name, status="error", payload={"error": "at least one mode is required"})
+        path = _config_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(serialize_loadtools(modes), encoding="utf-8")
+        except OSError as exc:
+            return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
+        return OperationResult(name="config.loadtools.set", payload={
+            "modes": _modes_payload(modes),
+            "source": "config",
+        })
+
+    for name, handler in {
+        "config.loadtools.get": loadtools_get,
+        "config.loadtools.set": loadtools_set,
+    }.items():
+        if not catalog.has(name):
+            catalog.register(name, handler)
 
 
 def _register_model_operations(
@@ -1247,6 +1457,116 @@ def _register_subagent_guide_operations(
     for name, handler in {
         "config.agents_md.get": agents_md_get,
         "config.agents_md.set": agents_md_set,
+    }.items():
+        if not catalog.has(name):
+            catalog.register(name, handler)
+
+    _register_memory_operations(catalog)
+    _register_load_context_operations(catalog)
+
+
+def _register_memory_operations(catalog: OperationCatalog) -> None:
+    """config.memory.get/set — read & write the global memory.md file.
+
+    The file lives in the unified config directory and is injected into every
+    workspace's prompt as the global memory tier (before the project
+    MEMORY.md).
+    """
+    from lamtools_core.config.root import core_config_file
+
+    async def memory_get(request: OperationRequest) -> OperationResult:
+        del request
+        path = core_config_file("memory.md")
+        if not path.is_file():
+            return OperationResult(name="config.memory.get", payload={"content": "", "exists": False})
+        try:
+            content = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            content = path.read_text(encoding="utf-8", errors="replace")
+        return OperationResult(name="config.memory.get", payload={"content": content, "exists": True})
+
+    async def memory_set(request: OperationRequest) -> OperationResult:
+        content = str(request.payload.get("content") or "")
+        path = core_config_file("memory.md")
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+        except OSError as exc:
+            return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
+        return OperationResult(name="config.memory.set", payload={"content": content, "exists": True})
+
+    for name, handler in {
+        "config.memory.get": memory_get,
+        "config.memory.set": memory_set,
+    }.items():
+        if not catalog.has(name):
+            catalog.register(name, handler)
+
+
+def _register_load_context_operations(catalog: OperationCatalog) -> None:
+    """config.load_context.get/set — read & write the global load_context.jsonc.
+
+    The file lives in the unified config directory and stacks on top of each
+    workspace's own load_context.jsonc (global additions + workspace additions;
+    exceptions from either tier apply).
+    """
+    from lamtools_core.app.project_context import ContextConfig
+    from lamtools_core.config.root import core_config_file
+
+    def _payload(config: ContextConfig | None) -> dict[str, object]:
+        return {
+            "addition": [dict(item) for item in config.addition] if config is not None else [],
+            "except": list(config.except_files) if config is not None else [],
+        }
+
+    async def load_context_get(request: OperationRequest) -> OperationResult:
+        del request
+        path = core_config_file("load_context.jsonc")
+        config = ContextConfig.from_file(path) if path.is_file() else None
+        return OperationResult(name="config.load_context.get", payload={
+            **_payload(config),
+            "exists": config is not None,
+        })
+
+    async def load_context_set(request: OperationRequest) -> OperationResult:
+        raw = request.payload if isinstance(request.payload, dict) else {}
+        addition_raw = raw.get("addition")
+        except_raw = raw.get("except")
+        if not isinstance(addition_raw, list) or not isinstance(except_raw, list):
+            return OperationResult(
+                name=request.name,
+                status="error",
+                payload={"error": "addition (list) and except (list) are required"},
+            )
+        additions: list[dict[str, object]] = []
+        for item in addition_raw:
+            if not isinstance(item, dict) or not isinstance(item.get("name"), str):
+                return OperationResult(name=request.name, status="error", payload={"error": "addition items must be objects with a string name"})
+            additions.append({
+                "name": str(item["name"]).strip(),
+                "priority": int(item.get("priority") or 50),
+                "kind": str(item.get("kind") or "system"),
+            })
+        exceptions = [str(item).strip() for item in except_raw if isinstance(item, str) and str(item).strip()]
+        path = core_config_file("load_context.jsonc")
+        body = {
+            "addition": additions,
+            "except": exceptions,
+        }
+        from lamtools_core.config.defaults import DEFAULT_LOAD_CONTEXT_JSONC
+
+        header = DEFAULT_LOAD_CONTEXT_JSONC.split("{", 1)[0] if "{" in DEFAULT_LOAD_CONTEXT_JSONC else ""
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            import json as _json
+            path.write_text(header + _json.dumps(body, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        except OSError as exc:
+            return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
+        return OperationResult(name="config.load_context.set", payload={**_payload(ContextConfig(addition=additions, except_files=exceptions)), "exists": True})
+
+    for name, handler in {
+        "config.load_context.get": load_context_get,
+        "config.load_context.set": load_context_set,
     }.items():
         if not catalog.has(name):
             catalog.register(name, handler)

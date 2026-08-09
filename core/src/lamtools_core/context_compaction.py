@@ -35,7 +35,12 @@ COMPACTION_PROMPT = (
     "quote prohibitions and permissions.\n"
     "- Separate outcomes from external authorization; facts/evidence/done/not-done from plans/hypotheses. Put rejections in section 8.\n"
     "- Keep artifacts, results, errors, and approvals; order actions.\n"
-    "- Use the user's language; keep headings."
+    "- Use the user's language; keep headings.\n"
+    "\n"
+    "Output requirements:\n"
+    "- Output ONLY the numbered sections above, in order, with their exact headings.\n"
+    "- No preamble, no commentary, no markdown code fences, and no closing remarks.\n"
+    "- Every section must be present; write \"None\" when a section has nothing to record."
 )
 
 
@@ -772,7 +777,7 @@ async def _summarize_compaction_chunk(
                 raise ContextCompactionError(f"Context compaction failed: {exc}") from exc
         if not content:
             raise ContextCompactionError("Context compaction failed: model returned an empty summary")
-    if not content:
+    if not content or not _has_structured_sections(content):
         content = fallback_structured_compaction_summary(messages, existing_summary=existing_summary)
     summary = with_compaction_prefix(content)
     if estimate_text_tokens(summary) > output_tokens:
@@ -862,6 +867,12 @@ def with_compaction_prefix(content: str) -> str:
     if text.startswith(COMPACTION_PREFIX):
         return text
     return f"{COMPACTION_PREFIX}\n{text}".strip()
+
+
+def _has_structured_sections(content: str) -> bool:
+    """Return whether the content contains all nine numbered compaction sections."""
+    text = str(content or "")
+    return all(_numbered_summary_section_title(text, number) for number in range(1, 10))
 
 
 def _inherit_prior_protected_context(summary: str, prior_summaries: list[str]) -> str:
@@ -1119,7 +1130,14 @@ def compress_structured_compaction_summary(text: str, max_tokens: int) -> str:
                 ),
                 next(
                     (index for index in range(len(lines) - 1, -1, -1) if lines[index].startswith("- ")),
-                    len(lines) - 1,
+                    next(
+                        (
+                            index
+                            for index in range(len(lines) - 1, -1, -1)
+                            if _line_is_in_numbered_sections(lines, index, {2, 3})
+                        ),
+                        len(lines) - 1,
+                    ),
                 ),
             ),
         )

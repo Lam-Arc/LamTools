@@ -391,6 +391,8 @@ def create_core_agent_operations(
             turn_instructions = str(request.payload.get("instructions") or "").strip() or None
             allow_agent_install_skill = bool(request.payload.get("allow_agent_install_skill"))
             allow_agent_create_hooks = bool(request.payload.get("allow_agent_create_hooks"))
+            raw_imagegen = request.payload.get("imagegen_config")
+            imagegen_config = raw_imagegen if isinstance(raw_imagegen, dict) else None
             plugin_assembly = assemble_core_agent_plugins(
                 data_dir=paths.data_dir,
                 work_root=runtime_work_root,
@@ -440,6 +442,7 @@ def create_core_agent_operations(
                 active_mode=active_mode,
                 activated_mcp_servers=activated_mcp_servers,
                 attachment_service=attachment_service,
+                imagegen_config=imagegen_config,
             )
             _mcp_count = len(mcp_registry._tools_by_name) if mcp_registry is not None else 0
             _logger.info("[default:turn_start] toolbox built thread_id=%s mcp_tools=%d", thread_id, _mcp_count)
@@ -1769,19 +1772,12 @@ async def _persist_core_event_live(
     )
 
     async def write(db):
-        # Streaming part events (runtime.part) are appended without snapshot
-        # projection: each project rewrites the whole thread snapshot
-        # (1.3-2.3s on 55MB threads, measured) and stalls the stream — their
-        # final state is projected once at the turn boundary
-        # (_persist_run_items). Final-state events (usage, status, cancelled,
-        # tool results) still project so interrupted/steered turns keep their
-        # snapshot up to date.
-        project_snapshot = getattr(event, "name", "") != "runtime.part"
-        envelopes = await persistence.append_batch(
-            db,
-            run_item_events=run_items,
-            project_snapshot=project_snapshot,
-        )
+        # Every event projects now: the snapshot store writes items
+        # incrementally (one row per touched item), so a streaming part event
+        # no longer rewrites the whole thread snapshot. There is no deferred
+        # intermediate state — an interrupted turn (stop/steer) keeps every
+        # chunk that already streamed.
+        envelopes = await persistence.append_batch(db, run_item_events=run_items)
         return envelopes
 
     envelopes = await persistence.write(write)
@@ -1822,12 +1818,14 @@ async def _build_core_runtime_toolbox(
     workflow_store: Any = None,
     enable_workflow_tool: bool = False,
     attachment_service: Any = None,
+    imagegen_config: dict | None = None,
 ):
     from lamtools_core.mcp import MCPToolRegistry
     from lamtools_core.tool.sub_agent_runner import KernelSubAgentRunner
     from lamtools_core.tool.default_toolbox import build_core_toolbox
     from lamtools_core.tool.loadtools import LoadTools, default_load_tools, load_loadtools
     from lamtools_core.tool.workflow_tools import workflow_tool_provider
+    from lamtools_core.artifact import ArtifactRegistry
 
     registry = MCPToolRegistry(work_root, config_files=plugin_assembly.get("mcp_files") or [])
     await registry.load()
@@ -1897,6 +1895,20 @@ async def _build_core_runtime_toolbox(
             execute_operation,
             work_root=work_root,
         )
+    # generate_image 是否上传工具集：除 loadtools 模式白名单外，还受
+    # 设置 → 生图 的启用开关控制；未启用时从模型可见工具中剔除，
+    # 即使模型仍尝试调用也会被 execute() 以 "Tool disabled" 拦截。
+    disabled_tools: set[str] = set()
+    imagegen_enabled = bool((imagegen_config or {}).get("enabled"))
+    runtime_imagegen_config: dict | None = None
+    if imagegen_enabled:
+        runtime_imagegen_config = dict(imagegen_config or {})
+        try:
+            runtime_imagegen_config["artifact_registry"] = ArtifactRegistry(work_root)
+        except OSError:
+            runtime_imagegen_config.pop("artifact_registry", None)
+    if not imagegen_enabled:
+        disabled_tools.add("generate_image")
     toolbox = build_core_toolbox(
         work_root=work_root,
         approval_policy=normalized_policy,
@@ -1908,9 +1920,12 @@ async def _build_core_runtime_toolbox(
         enable_goal_tool=enable_goal_tool,
         enable_arrange_tool=enable_arrange_tool,
         workflow_build=enable_workflow_tool,
+        imagegen_config=runtime_imagegen_config,
+        disabled_tools=disabled_tools,
         active_tier=active_tier,
         tier_tools=tier_tools,
         load_tools=load_tools,
+        active_mode=active_mode,
         activated_mcp_servers=activated_mcp_servers,
         workflow_tool_provider=workflow_provider,
     )

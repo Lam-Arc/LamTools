@@ -2662,14 +2662,25 @@ class TestKernelContextCompaction:
             event for event in sink.events if event.name == "runtime.context_compacted"
         ]
         assert len(compacted_events) == 1
-        # Original history is preserved; compaction summary lives in state metadata.
+        # The compaction summary lives in state metadata; the resume boundary
+        # is re-anchored to the first retained message when the loop exit
+        # rewrites history rows, so the next run loads [summary, *retained].
         compaction_meta = store.state.metadata.get("context_compaction") if store.state else None
         assert compaction_meta is not None
         assert "[Compacted Context]" in str(compaction_meta.get("summary", ""))
-        # The original history rows are still intact (not overwritten).
+        assert compaction_meta.get("summary_seq") == 0
+        # Persisted history holds the compacted view after the loop exit:
+        # compacted rows are replaced by the retained span + new messages,
+        # and the summary message never leaks into history rows.
         assert len(store.history) > 0
-        original_content = "\n".join(str(item.get("content") or "") for item in store.history)
-        assert "old user 0" in original_content
+        persisted_content = "\n".join(str(item.get("content") or "") for item in store.history)
+        assert "old user 4" in persisted_content
+        assert "current task" in persisted_content
+        assert "old user 0" not in persisted_content
+        assert all(
+            item.get("metadata", {}).get("key") != "context_compaction_summary"
+            for item in store.history
+        )
 
     @pytest.mark.asyncio
     async def test_model_switch_tries_previous_model_once_before_current_sampling(self):
@@ -3151,6 +3162,304 @@ class TestKernelContextCompaction:
         assert done.payload["runtime_metrics"]["context_window_tokens"] == 10_000
         assert done.payload["runtime_metrics"]["estimated_prompt_tokens"] > 0
         assert done.payload["runtime_metrics"]["llm_calls"] == 1
+
+    @pytest.mark.asyncio
+    async def test_next_run_after_compaction_loads_summary_plus_retained_span(self):
+        class SeededCheckpointStore:
+            def __init__(self, history: list[ChatMessage]) -> None:
+                self.state: RuntimeState | None = None
+                self.history = [message.to_dict() for message in history]
+
+            async def get(self, session_id: str) -> RuntimeState | None:
+                return self.state
+
+            async def save(self, state: RuntimeState) -> None:
+                self.state = state
+
+            async def get_history(self, session_id: str, *, after_seq: int = 0) -> list[dict[str, Any]]:
+                return list(self.history[after_seq:])
+
+            async def history_max_seq(self, session_id: str) -> int:
+                return len(self.history)
+
+            async def save_checkpoint(
+                self, state: RuntimeState, history: list[dict[str, Any]]
+            ) -> None:
+                self.state = state
+                self.history = list(history)
+
+            async def append_history(self, session_id: str, messages: list[dict[str, Any]]) -> None:
+                self.history.extend(messages)
+
+            async def replace_history(self, session_id: str, messages: list[dict[str, Any]]) -> None:
+                self.history = list(messages)
+
+        class HistoryRequestKit(MockRuntimeKit):
+            async def build_model_request(self, state, context):
+                return LLMRequest(
+                    messages=[
+                        ChatMessage(role="system", content="stable prefix"),
+                        *context.history,
+                    ],
+                    model="mock-model",
+                )
+
+        old_history: list[ChatMessage] = []
+        for index in range(5):
+            old_history.append(ChatMessage(
+                role="user",
+                content=f"old user {index} " + ("x" * 500),
+            ))
+            old_history.append(ChatMessage(
+                role="assistant",
+                content=f"old assistant {index} " + ("y" * 500),
+            ))
+        store = SeededCheckpointStore(old_history)
+        sink = CollectingEventSink()
+        llm = CapturingLLMClient()
+        kernel = _make_kernel(
+            HistoryRequestKit(steps=[MockKitStep(decision="done")]),
+            llm_client=llm,
+            state_store=store,  # type: ignore[arg-type]
+            event_sink=sink,
+            policy=LoopPolicy(
+                context_window_tokens=2_000,
+                compact_trigger_ratio=0.8,
+                compact_limit_ratio=0.6,
+            ),
+        )
+
+        first = await kernel.run(_make_turn_input(user_message="current task"))
+        assert first.decision == "done"
+        compaction_meta = store.state.metadata["context_compaction"]
+        assert "[Compacted Context]" in compaction_meta["summary"]
+
+        # Second turn on the same session: context must be
+        # [summary, *retained, *new] — the retained span must NOT be dropped
+        # (regression: the boundary used the history tail, so the next run
+        # degraded to a summary-only ghost context).
+        second = await kernel.run(_make_turn_input(user_message="follow-up"))
+        assert second.decision == "done"
+        final_request = llm.last_request
+        summaries = [
+            message
+            for message in final_request.messages
+            if message.metadata.get("key") == "context_compaction_summary"
+        ]
+        assert len(summaries) == 1
+        text = "\n".join(str(message.content) for message in final_request.messages)
+        assert "old user 4" in text
+        assert "current task" in text
+        # The compacted raw messages must not resurface; the summary may still
+        # reference them by content, so only inspect non-summary messages.
+        raw_text = "\n".join(
+            str(message.content)
+            for message in final_request.messages
+            if message.metadata.get("key") != "context_compaction_summary"
+        )
+        assert "old user 0" not in raw_text
+        assert final_request.messages[-1].content == "follow-up"
+
+    def test_recompute_compaction_boundary_uses_newest_resume_marker(self):
+        state = RuntimeState(
+            session_id="boundary-session",
+            metadata={"context_compaction": {"summary_seq": 99}},
+        )
+        history = [
+            ChatMessage(role="user", content="m0"),
+            ChatMessage(
+                role="user",
+                content="m1",
+                metadata={"lam_compaction_resume": True},
+            ),
+            ChatMessage(
+                role="user",
+                content="m2",
+                metadata={"lam_compaction_resume": True},
+            ),
+            ChatMessage(role="user", content="m3"),
+        ]
+
+        CoreLoopKernel._recompute_compaction_boundary(state, history)
+
+        assert state.metadata["context_compaction"]["summary_seq"] == 2
+
+    def test_recompute_compaction_boundary_resets_stale_anchor(self):
+        state = RuntimeState(
+            session_id="boundary-session",
+            metadata={"context_compaction": {"summary_seq": 10}},
+        )
+        history = [ChatMessage(role="user", content=f"m{index}") for index in range(3)]
+
+        CoreLoopKernel._recompute_compaction_boundary(state, history)
+
+        assert state.metadata["context_compaction"]["summary_seq"] == 0
+
+    @pytest.mark.asyncio
+    async def test_compaction_boundary_drift_falls_back_to_full_history(self):
+        class SeededCheckpointStore:
+            def __init__(self, history: list[ChatMessage]) -> None:
+                self.state: RuntimeState | None = None
+                self.history = [message.to_dict() for message in history]
+
+            async def get(self, session_id: str) -> RuntimeState | None:
+                return self.state
+
+            async def save(self, state: RuntimeState) -> None:
+                self.state = state
+
+            async def get_history(self, session_id: str, *, after_seq: int = 0) -> list[dict[str, Any]]:
+                return list(self.history[after_seq:])
+
+            async def history_max_seq(self, session_id: str) -> int:
+                return len(self.history)
+
+            async def save_checkpoint(
+                self, state: RuntimeState, history: list[dict[str, Any]]
+            ) -> None:
+                self.state = state
+                self.history = list(history)
+
+            async def append_history(self, session_id: str, messages: list[dict[str, Any]]) -> None:
+                self.history.extend(messages)
+
+            async def replace_history(self, session_id: str, messages: list[dict[str, Any]]) -> None:
+                self.history = list(messages)
+
+        class EchoKit(MockRuntimeKit):
+            async def build_model_request(self, state, context):
+                return LLMRequest(messages=[ChatMessage(role="system", content="stable prefix"), *context.history], model="mock-model")
+
+        store = SeededCheckpointStore(
+            [ChatMessage(role="user", content="surviving message 0"), ChatMessage(role="user", content="surviving message 1")]
+        )
+        await store.save(RuntimeState(
+            session_id="drift-session",
+            metadata={
+                "context_compaction": {
+                    "summary_seq": 5,  # stale: history only has two rows
+                    "summary": "[Compacted Context]\n1. Current Objective And Done Criteria\n- Continue.\n\n"
+                    "2. Active User Instructions\n- None.\n\n"
+                    "3. External Action Authorization\n- None.\n\n"
+                    "4. Confirmed Facts And Decisions\n- None.\n\n"
+                    "5. Current Execution State\n- Compacted earlier.\n\n"
+                    "6. Verification Evidence\n- None.\n\n"
+                    "7. Open Issues, Risks, And Hypotheses\n- None.\n\n"
+                    "8. Rejected Or Superseded Directions\n- None.\n\n"
+                    "9. Next Actions\n- Continue.",
+                }
+            },
+        ))
+        sink = CollectingEventSink()
+        llm = CapturingLLMClient()
+        kernel = _make_kernel(
+            EchoKit(steps=[MockKitStep(decision="done")]),
+            llm_client=llm,
+            state_store=store,  # type: ignore[arg-type]
+            event_sink=sink,
+        )
+
+        result = await kernel.run(_make_turn_input(user_message="new turn", session_id="drift-session"))
+
+        assert result.decision == "done"
+        text = "\n".join(str(message.content) for message in llm.last_request.messages)
+        assert "surviving message 0" in text
+        assert "surviving message 1" in text
+        assert "new turn" in text
+        summaries = [
+            message
+            for message in llm.last_request.messages
+            if message.metadata.get("key") == "context_compaction_summary"
+        ]
+        assert len(summaries) == 1
+
+    @pytest.mark.asyncio
+    async def test_legacy_summary_row_in_history_is_skipped_not_duplicated(self):
+        class SeededCheckpointStore:
+            def __init__(self, history: list[ChatMessage]) -> None:
+                self.state: RuntimeState | None = None
+                self.history = [message.to_dict() for message in history]
+
+            async def get(self, session_id: str) -> RuntimeState | None:
+                return self.state
+
+            async def save(self, state: RuntimeState) -> None:
+                self.state = state
+
+            async def get_history(self, session_id: str, *, after_seq: int = 0) -> list[dict[str, Any]]:
+                return list(self.history[after_seq:])
+
+            async def history_max_seq(self, session_id: str) -> int:
+                return len(self.history)
+
+            async def save_checkpoint(
+                self, state: RuntimeState, history: list[dict[str, Any]]
+            ) -> None:
+                self.state = state
+                self.history = list(history)
+
+            async def append_history(self, session_id: str, messages: list[dict[str, Any]]) -> None:
+                self.history.extend(messages)
+
+            async def replace_history(self, session_id: str, messages: list[dict[str, Any]]) -> None:
+                self.history = list(messages)
+
+        class EchoKit(MockRuntimeKit):
+            async def build_model_request(self, state, context):
+                return LLMRequest(messages=[ChatMessage(role="system", content="stable prefix"), *context.history], model="mock-model")
+
+        legacy_summary = (
+            "[Compacted Context]\n"
+            "1. Current Objective And Done Criteria\n- Continue.\n\n"
+            "2. Active User Instructions\n- None.\n\n"
+            "3. External Action Authorization\n- None.\n\n"
+            "4. Confirmed Facts And Decisions\n- None.\n\n"
+            "5. Current Execution State\n- Legacy polluted row.\n\n"
+            "6. Verification Evidence\n- None.\n\n"
+            "7. Open Issues, Risks, And Hypotheses\n- None.\n\n"
+            "8. Rejected Or Superseded Directions\n- None.\n\n"
+            "9. Next Actions\n- Continue."
+        )
+        store = SeededCheckpointStore([
+            ChatMessage(role="user", content="message 0"),
+            ChatMessage(
+                role="system",
+                content=legacy_summary,
+                metadata={"key": "context_compaction_summary", "kind": "history"},
+            ),
+            ChatMessage(role="user", content="message 1"),
+        ])
+        await store.save(RuntimeState(
+            session_id="legacy-session",
+            metadata={
+                "context_compaction": {
+                    "summary_seq": 1,
+                    "summary": legacy_summary,
+                }
+            },
+        ))
+        sink = CollectingEventSink()
+        llm = CapturingLLMClient()
+        kernel = _make_kernel(
+            EchoKit(steps=[MockKitStep(decision="done")]),
+            llm_client=llm,
+            state_store=store,  # type: ignore[arg-type]
+            event_sink=sink,
+        )
+
+        result = await kernel.run(_make_turn_input(user_message="new turn", session_id="legacy-session"))
+
+        assert result.decision == "done"
+        summaries = [
+            message
+            for message in llm.last_request.messages
+            if message.metadata.get("key") == "context_compaction_summary"
+        ]
+        assert len(summaries) == 1
+        assert summaries[0].content.startswith("[Compacted Context]")
+        text = "\n".join(str(message.content) for message in llm.last_request.messages)
+        assert "message 1" in text
+        assert text.count("[Compacted Context]") == 1
 
 
 # ---------------------------------------------------------------------------
