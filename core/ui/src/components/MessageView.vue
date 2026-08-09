@@ -118,7 +118,7 @@
                       <span v-beam class="process-step-title">{{ reasoningTitle(part.status) }}</span>
                       <span v-if="reasoningDuration(part, true)" class="reasoning-duration">{{ reasoningDuration(part, true) }}</span>
                     </button>
-                    <div v-if="isPartExpanded(part, true)" class="reasoning-body">
+                    <div v-if="isPartExpanded(part, true)" v-auto-follow-scroll="part.content" class="reasoning-body">
                       <slot name="reasoning-content" :content="part.content" :live="true">
                         <MarkdownRenderer class="process-step-detail part-text-content--streaming" :content="part.content" :streaming="true" />
                       </slot>
@@ -245,7 +245,7 @@
                             <pre class="command-output-result">{{ commandOutputText(part) }}</pre>
                           </div>
                         </div>
-                        <div v-else-if="displayToolResult(part)" class="tool-output">
+                        <div v-else-if="displayToolResult(part)" v-auto-follow-scroll="toolOutputContent(part)" class="tool-output">
                           <div v-if="toolMetaItems(part).length > 0" class="tool-output-meta">
                             <span v-for="item in toolMetaItems(part)" :key="item">{{ item }}</span>
                           </div>
@@ -256,7 +256,7 @@
                             <img :src="imageSrc(artifact)" :alt="imageAlt(artifact)" loading="lazy" />
                           </figure>
                         </div>
-                        <pre v-else-if="readableProcessDetail(part)" class="tool-output">{{ readableProcessDetail(part) }}</pre>
+                        <pre v-else-if="readableProcessDetail(part)" v-auto-follow-scroll="readableProcessDetail(part)" class="tool-output">{{ readableProcessDetail(part) }}</pre>
                       </div>
                     </div>
 
@@ -309,7 +309,7 @@
                               <span v-beam class="process-step-title">{{ reasoningTitle(part.status) }}</span>
                               <span v-if="reasoningDuration(part, true)" class="reasoning-duration">{{ reasoningDuration(part, true) }}</span>
                             </button>
-                            <div v-if="isPartExpanded(part, true)" class="reasoning-body">
+                            <div v-if="isPartExpanded(part, true)" v-auto-follow-scroll="part.content" class="reasoning-body">
                               <slot name="reasoning-content" :content="part.content" :live="true">
                                 <MarkdownRenderer class="process-step-detail part-text-content--streaming" :content="part.content" :streaming="true" />
                               </slot>
@@ -384,7 +384,7 @@
                                   <pre class="command-output-result">{{ commandOutputText(part) }}</pre>
                                 </div>
                               </div>
-                              <div v-else-if="displayToolResult(part)" class="tool-output">
+                              <div v-else-if="displayToolResult(part)" v-auto-follow-scroll="toolOutputContent(part)" class="tool-output">
                                 <div v-if="toolMetaItems(part).length > 0" class="tool-output-meta">
                                   <span v-for="item in toolMetaItems(part)" :key="item">{{ item }}</span>
                                 </div>
@@ -395,7 +395,7 @@
                                   <img :src="imageSrc(artifact)" :alt="imageAlt(artifact)" loading="lazy" />
                                 </figure>
                               </div>
-                              <pre v-else-if="readableProcessDetail(part)" class="tool-output">{{ readableProcessDetail(part) }}</pre>
+                              <pre v-else-if="readableProcessDetail(part)" v-auto-follow-scroll="readableProcessDetail(part)" class="tool-output">{{ readableProcessDetail(part) }}</pre>
                             </div>
                           </div>
                         </div>
@@ -852,7 +852,7 @@
                     <span v-if="group.part.status === 'error'" class="process-step-marker process-step-marker--error" />
                     <span v-beam class="process-step-title">{{ reasoningTitle(group.part.status) }}</span>
                   </button>
-                  <div v-if="isPartExpanded(group.part, true)" class="reasoning-body">
+                  <div v-if="isPartExpanded(group.part, true)" v-auto-follow-scroll="group.part.content" class="reasoning-body">
                     <slot name="reasoning-content" :content="group.part.content" :live="true">
                       <MarkdownRenderer class="process-step-detail" :content="group.part.content" />
                     </slot>
@@ -904,7 +904,7 @@
                             <span v-if="part.status === 'error'" class="process-step-marker process-step-marker--error" />
                             <span v-beam class="process-step-title">{{ reasoningTitle(part.status) }}</span>
                           </button>
-                          <div v-if="isPartExpanded(part, true)" class="reasoning-body">
+                          <div v-if="isPartExpanded(part, true)" v-auto-follow-scroll="part.content" class="reasoning-body">
                             <slot name="reasoning-content" :content="part.content" :live="true">
                               <MarkdownRenderer class="process-step-detail" :content="part.content" />
                             </slot>
