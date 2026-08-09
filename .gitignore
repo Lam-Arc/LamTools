@@ -105,3 +105,6 @@ core/ui/dist-core-app/
 /xfyun-*.png
 /小说.txt
 /睡前故事_月亮摇篮曲.md
+
+# LamCore runtime data (artifacts, generated images) — never commit or package
+/.lam/

@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 
 async function init() {
   try {
@@ -8,6 +8,18 @@ async function init() {
   } catch {
     console.log('[Main] Not running in Tauri, using default API base');
   }
+
+  // Local file URL resolver (asset protocol): artifact previews read files
+  // straight from disk (.lam/artifacts/...) instead of round-tripping HTTP.
+  // Falls back to undefined in plain browsers (dev via vite).
+  (window as any).__LAMTOOLS_FILE_SRC__ = (absolutePath: string): string => {
+    try {
+      return convertFileSrc(absolutePath);
+    } catch (e) {
+      console.error('[Main] convertFileSrc failed:', e);
+      return '';
+    }
+  };
 
   // Window controls: invoke custom Rust commands
   (window as any).__LAMTOOLS_MINIMIZE = () => invoke('minimize_window');

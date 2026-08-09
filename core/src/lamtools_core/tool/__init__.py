@@ -67,9 +67,14 @@ class ToolArtifact:
     uri: str = ""
     content: Any = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    # 顶层 artifact_id（registry uuid）——投影层 _artifact_id 优先沿用顶层 id，
+    # 否则生成派生的 artifact-{sha1} id，导致按 id 读取产物时无法命中 manifest。
+    artifact_id: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {"kind": self.kind, "uri": self.uri, "content": self.content}
+        if self.artifact_id:
+            d["artifact_id"] = self.artifact_id
         if self.metadata:
             d["metadata"] = self.metadata
         return d

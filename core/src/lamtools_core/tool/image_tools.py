@@ -143,6 +143,7 @@ def make_generate_image_handler(
                     parent_ids=parent_ids,
                 )
                 for artifact, artifact_id in zip(artifacts, registered):
+                    artifact.artifact_id = artifact_id
                     artifact.metadata["artifact_id"] = artifact_id
             except Exception:  # noqa: BLE001 — registration must never fail the tool call
                 pass

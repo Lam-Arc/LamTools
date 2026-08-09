@@ -1529,6 +1529,8 @@ const props = withDefaults(
     apiBase?: string
     /** Project id whose work_root contains the image artifact paths */
     projectId?: string | null
+    /** Project work_root — enables direct local file reads in Tauri (asset protocol) */
+    workRoot?: string | null
   }>(),
   {
     assistantLabel: 'Assistant',
@@ -1537,6 +1539,7 @@ const props = withDefaults(
     messageActions: false,
     apiBase: '/api/core',
     projectId: null,
+    workRoot: null,
   },
 )
 
@@ -2618,12 +2621,31 @@ function imageArtifacts(part: MessagePart): Array<ToolArtifact & { artifact_id?:
   )
 }
 
-function imageSrc(artifact: { uri?: string }): string {
+function imageSrc(artifact: { uri?: string; artifact_id?: string }): string {
+  const base = (props.apiBase || '/api/core').replace(/\/+$/, '')
   let path = typeof artifact.uri === 'string' ? artifact.uri : ''
   if (path.startsWith('workspace://')) path = path.slice('workspace://'.length)
+  // Tauri 桌面端：work_root 内相对路径（.lam/artifacts/...）直接读本地文件
+  // （asset protocol），不绕后端 HTTP——新旧消息的 uri 均为无前缀相对路径
+  const localFileSrc = (window as { __LAMTOOLS_FILE_SRC__?: (abs: string) => string }).__LAMTOOLS_FILE_SRC__
+  if (
+    typeof localFileSrc === 'function'
+    && props.workRoot
+    && path
+    && !path.startsWith('attachment://')
+    && !/^https?:\/\//i.test(path)
+  ) {
+    const abs = `${String(props.workRoot).replace(/\\+$/, '')}\\${path.replace(/\//g, '\\')}`
+    const src = localFileSrc(abs)
+    if (src) return src
+  }
+  // 按 artifact id 读取（manifest 为权威路径，兼容 workspace:// 与 attachment://）
+  if (props.projectId && artifact.artifact_id) {
+    const query = path ? `?path=${encodeURIComponent(path)}` : ''
+    return `${base}/projects/${encodeURIComponent(props.projectId)}/artifacts/${encodeURIComponent(artifact.artifact_id)}/file${query}`
+  }
   if (path.startsWith('attachment://')) return ''
   if (!props.projectId || !path) return ''
-  const base = (props.apiBase || '/api/core').replace(/\/+$/, '')
   return `${base}/projects/${encodeURIComponent(props.projectId)}/files/raw?path=${encodeURIComponent(path)}`
 }
 

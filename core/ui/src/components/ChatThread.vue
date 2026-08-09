@@ -15,9 +15,10 @@
         :process-expanded-ids="processExpandedIds"
         :typing-message-ids="typingMessageIds"
         :message-actions="messageActions"
-        :api-base="apiBase"
-        :project-id="projectId"
-        @toggle-process="onToggleProcess"
+      :api-base="apiBase"
+      :project-id="projectId"
+      :work-root="workRoot"
+      @toggle-process="onToggleProcess"
         @decision-select="onDecisionSelect"
         @fork-message="onForkMessage"
         @rollback-message="onRollbackMessage"
@@ -69,6 +70,8 @@ const props = withDefaults(
     apiBase?: string
     /** Project id whose work_root contains the image artifact paths */
     projectId?: string | null
+    /** Project work_root — enables direct local file reads in Tauri (asset protocol) */
+    workRoot?: string | null
   }>(),
   {
     assistantLabel: 'Assistant',
@@ -77,6 +80,7 @@ const props = withDefaults(
     messageActions: false,
     apiBase: '/api/core',
     projectId: null,
+    workRoot: null,
   },
 )
 

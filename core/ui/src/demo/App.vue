@@ -201,7 +201,8 @@
           :typing-message-ids="typingMessageIds"
           :message-actions="true"
           :api-base="apiBase"
-          :project-id="selectedProjectId ?? activeProjectId"
+          :project-id="activeProjectId ?? selectedProjectId"
+          :work-root="activeProject?.workRoot"
           @toggle-process="toggleProcess"
           @decision-select="approvalController.handleDecision"
           @fork-message="handleForkMessage"
@@ -416,7 +417,8 @@
                     :typing-message-ids="typingMessageIds"
                     :message-actions="true"
                     :api-base="apiBase"
-                    :project-id="selectedProjectId ?? activeProjectId"
+                    :project-id="activeProjectId ?? selectedProjectId"
+                    :work-root="activeProject?.workRoot"
                     @toggle-process="toggleProcess"
                     @decision-select="approvalController.handleDecision"
                     @fork-message="handleForkMessage"
@@ -954,6 +956,9 @@ const activeProjectId = computed(() => {
   const project = projects.value.find((p) => p.workRoot === workRoot)
   return project?.id ?? null
 })
+const activeProject = computed(() => (
+  projects.value.find((project) => project.id === activeProjectId.value) || null
+))
 const projectWorkspace = createCoreProjectWorkspaceActions({
   client: projectClient,
   projects,

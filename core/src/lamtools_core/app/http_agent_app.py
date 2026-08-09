@@ -672,6 +672,46 @@ def create_core_agent_http_app(
             raise HTTPException(status_code=404, detail="Attachment file missing")
         return FileResponse(path, media_type=record.mime_type, filename=record.filename)
 
+    @app.get("/api/core/projects/{project_id}/artifacts/{artifact_id}/file")
+    async def artifact_file(
+        project_id: str,
+        artifact_id: str,
+        path: str | None = Query(default=None),
+    ) -> FileResponse:
+        """按 artifact id 读取产物文件（manifest 为权威路径，支持 workspace:// 与 attachment://）。
+
+        ``path`` 为兜底：旧会话事件里的 artifact_id 是投影派生 id（artifact-{sha1}），
+        无法直接命中 manifest，此时按 path 反查注册表。
+        """
+        project = await app_state["core_db"].project_store.get(project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        registry = ArtifactRegistry(project.work_root)
+        record = registry.get(artifact_id)
+        if record is None and path:
+            resolved_id = registry.resolve_artifact_id(path, work_root=project.work_root)
+            if resolved_id:
+                record = registry.get(resolved_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="Artifact not found")
+        if record.path.startswith("attachment://"):
+            attachment = await attachment_store().get(record.path[len("attachment://"):])
+            if attachment is None:
+                raise HTTPException(status_code=404, detail="Attachment not found")
+            path = Path(attachment.storage_path)
+            filename = attachment.filename
+            mime = attachment.mime_type
+        elif record.path.startswith("workspace://"):
+            rel = record.path[len("workspace://"):]
+            path = Path(project.work_root) / rel
+            filename = record.name
+            mime = record.mime_type
+        else:
+            raise HTTPException(status_code=404, detail="Unsupported artifact path")
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="Artifact file missing")
+        return FileResponse(path, media_type=mime or None, filename=filename)
+
     async def register_uploaded_artifact(record: dict[str, Any], project_id: str | None) -> None:
         """上传即注册：把用户上传的附件登记到项目 artifact 注册表（best-effort，失败不影响上传）。"""
         if not project_id:
