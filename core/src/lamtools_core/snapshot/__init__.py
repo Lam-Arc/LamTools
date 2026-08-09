@@ -7,6 +7,7 @@ member-neutral and idempotent.
 
 from __future__ import annotations
 
+import bisect
 from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
@@ -286,8 +287,24 @@ def _upsert_item(state: dict[str, Any], event: RunItemEvent) -> dict[str, Any]:
     elif isinstance(content, str):
         item["content"] = content
 
+    item_seq = int(event.seq or 0)
     if item_id not in state.setdefault("item_order", []):
-        state["item_order"].append(item_id)
+        # Record the first event's seq as the ordering anchor and insert the
+        # item at the correct position right away. Deferred part events are
+        # projected at the turn boundary (after runtime-projected tool
+        # results), so appending would leave the turn's items out of order;
+        # inserting by seq keeps item_order equal to production order without
+        # any post-hoc reordering.
+        item["seq"] = item_seq
+        order = state["item_order"]
+        items = state.get("items") or {}
+        index = bisect.bisect_right(
+            [int((items.get(iid) or {}).get("seq") or 0) for iid in order],
+            item_seq,
+        )
+        order.insert(index, item_id)
+    elif "seq" not in item:
+        item["seq"] = item_seq
     return item
 
 

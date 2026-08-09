@@ -9,6 +9,7 @@ from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
 from lamtools_core.event import RunItemEvent
 from lamtools_core.snapshot import (
@@ -95,8 +96,10 @@ class CoreAppSnapshotProjector:
         payload = dict(event.payload or {})
         if not payload.get("kind") or not payload.get("thread_id"):
             return
-        if not int(payload.get("seq") or 0):
-            payload["seq"] = event.seq
+        # The payload seq is batch-relative (always 0/1); the envelope seq is
+        # the thread's global ordering anchor. Override unconditionally so
+        # item_order bisect insertion matches production order.
+        payload["seq"] = event.seq
         core = state.get("core") if isinstance(state.get("core"), dict) else empty_thread_snapshot(event.thread_id)
         apply_run_item_event_in_place(core, RunItemEvent.from_dict(payload))
         state["core"] = core
@@ -402,6 +405,27 @@ class CoreAppSnapshotProjector:
             state["status"] = status
 
 
+def _already_projected(state: dict[str, Any], event: AppEventEnvelope) -> bool:
+    """True when the event is already reflected in the snapshot, so replaying
+    it must be skipped (applying it again would duplicate content — e.g. a
+    live-sink event projected once that reappears in the turn boundary batch
+    after the seen list was trimmed past 2000 entries).
+
+    Streaming part events (metadata.runtime_phase == "runtime.part") are the
+    exception: they are appended without projection (project_snapshot=False)
+    and only reach the snapshot at the turn boundary, so their seq commonly
+    trails the snapshot seq — treating them as already projected would drop
+    the message/thinking content from the snapshot entirely.
+    """
+    if int(state.get("snapshot_seq") or 0) < int(event.seq or 0):
+        return False
+    payload = event.payload if isinstance(event.payload, dict) else {}
+    metadata = payload.get("metadata")
+    if isinstance(metadata, dict) and metadata.get("runtime_phase") == "runtime.part":
+        return False
+    return True
+
+
 class SqlAlchemyThreadSnapshotStore:
     def __init__(
         self,
@@ -420,9 +444,9 @@ class SqlAlchemyThreadSnapshotStore:
 
     async def apply(self, db: AsyncSession, event: AppEventEnvelope) -> dict[str, Any]:
         row = await db.get(self.snapshot_model, event.thread_id)
-        if row is not None and int(row.snapshot_seq or 0) >= int(event.seq or 0):
-            return self._state_from_row(row, event.thread_id)
         base = dict(row.snapshot_json) if row is not None and row.snapshot_json else None
+        if base is not None and _already_projected(base, event):
+            return self._state_from_row(row, event.thread_id)
         state = self.projector.apply(base, event)
         if row is None:
             row = self.snapshot_model(thread_id=event.thread_id)
@@ -446,7 +470,7 @@ class SqlAlchemyThreadSnapshotStore:
             else self.projector.empty(thread_id)
         )
         for event in sorted(events, key=lambda item: item.seq):
-            if int(state.get("snapshot_seq") or 0) >= int(event.seq or 0):
+            if _already_projected(state, event):
                 continue
             self.projector.apply_in_place(state, event)
         if row is None:
@@ -510,6 +534,14 @@ class SqlAlchemyThreadSnapshotStore:
         row.snapshot_json = state
         if hasattr(row, "updated_at"):
             row.updated_at = datetime.now()
+        # apply_many projects onto a shallow copy whose children are shared
+        # with the previously loaded snapshot_json: in-place mutations make
+        # the new value compare equal to the old one, SQLAlchemy's attribute
+        # diff sees no change, and the JSON column is silently skipped on
+        # UPDATE (deferred events then never reach the snapshot). Force the
+        # dirty flag so the projected state always persists.
+        flag_modified(row, "snapshot_json")
+        flag_modified(row, "snapshot_seq")
 
 
 __all__ = [

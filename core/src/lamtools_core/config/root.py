@@ -46,6 +46,28 @@ def core_config_file(name: str) -> Path:
     return core_config_root() / "config" / name
 
 
+def core_config_dir() -> Path:
+    """Return the unified user config directory: .lam/core/config/.
+
+    Every user-editable configuration file (loadtools.jsonc,
+    access_tools.jsonc, hooks.json, AGENTS.md, load_context.jsonc,
+    memory.md, subagent/, models/) lives under this single directory so
+    installs and migrations have exactly one place to seed defaults.
+    """
+    return core_config_root() / "config"
+
+
+def legacy_user_config_dir() -> Path:
+    """Return the legacy user config directory: {lam_home}/config.
+
+    Kept as a read-only fallback for configurations that historically lived
+    there (global AGENTS.md, models/, subagent/) before the unified
+    .lam/core/config/ directory existed. New writes always go to
+    :func:`core_config_dir`.
+    """
+    return lam_home() / "config"
+
+
 def core_skills_root() -> Path:
     """Return .lam/core/skills/ for user-installed skills."""
     return core_config_root() / "skills"

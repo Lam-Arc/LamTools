@@ -108,6 +108,15 @@ def _run() -> None:
     )
     work_root.mkdir(parents=True, exist_ok=True)
 
+    # --- unified config directory defaults -------------------------------
+    # Seed .lam/core/config/ with built-in default files (loadtools.jsonc,
+    # access_tools.jsonc, hooks.json, AGENTS.md, load_context.jsonc,
+    # memory.md, subagent/) on first run. Idempotent — existing user edits
+    # are never overwritten.
+    from lamtools_core.config.defaults import ensure_default_config_files
+
+    ensure_default_config_files()
+
     os.environ.setdefault("LAMTOOLS_LLM_CONFIG_DB", str(config_db))
     os.environ.setdefault("LAMTOOLS_CORE_DB", str(core_db))
     os.environ.setdefault("LAMTOOLS_CORE_DATA_DIR", str(data_dir))

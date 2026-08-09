@@ -56,12 +56,18 @@ class SubAgentRunResult:
 
     def failure_message(self) -> str:
         if self.error.strip():
-            return self.error.strip()
-        if self.decision == "wait":
-            return "Sub-agent is waiting and did not produce a final response."
-        if self.decision == "done":
-            return "Sub-agent ended without a final response after tool use."
-        return "Sub-agent failed without a final response."
+            message = self.error.strip()
+        elif self.decision == "wait":
+            message = "Sub-agent is waiting and did not produce a final response."
+        elif self.decision == "done":
+            message = "Sub-agent ended without a final response after tool use."
+        else:
+            message = "Sub-agent failed without a final response."
+        # Attach the death scene (last model round: reply + tool statuses) so
+        # the parent agent sees *why* the sub-agent failed, not just that it did.
+        if self.death_scene:
+            return f"{message}\n\n{self.death_scene}"
+        return message
 
 
 SUB_AGENT_SPEC = CoreAgentSpec(

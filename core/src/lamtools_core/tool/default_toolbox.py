@@ -1051,10 +1051,9 @@ class CoreToolbox:
                 if not outcome.succeeded:
                     error = outcome.failure_message()
                     self._failed_sub_agent_calls[failure_key] = dict(metadata)
-                    # Build a rich failure message so the parent agent can make
-                    # an informed decision (retry with different wording, take
-                    # over, switch model, etc.) instead of seeing only a generic
-                    # "failed without a final response".
+                    # failure_message() already carries the death scene (last
+                    # model round: reply + tools + statuses); append the summary
+                    # counters so the parent agent sees the full picture.
                     content_lines = [f"SUB_AGENT FAILED: {error}"]
                     content_lines.append(f"model_rounds: {outcome.model_rounds}")
                     if outcome.tool_call_breakdown:
@@ -1065,9 +1064,6 @@ class CoreToolbox:
                         content_lines.append(f"tool_calls: {outcome.tool_call_count} ({breakdown})")
                     else:
                         content_lines.append(f"tool_calls: {outcome.tool_call_count}")
-                    if outcome.death_scene:
-                        content_lines.append("")
-                        content_lines.append(outcome.death_scene)
                     return ToolResult(
                         call_id=call.id,
                         name=call.name,

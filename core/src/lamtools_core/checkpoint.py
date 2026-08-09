@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 import hashlib
@@ -149,9 +149,12 @@ _logger = logging.getLogger(__name__)
 # Files larger than this are never copied into checkpoint blob storage (full
 # copies of huge files on every tool edit would balloon disk usage).
 MAX_BACKUP_FILE_BYTES = 200 * 1024 * 1024  # 200 MB
-# Each session keeps only this many most-recent nodes on its main line.
+# Each session keeps only this many most-recent TURNS on its main line
+# (nodes with actor_kind == "main"). Restore bookkeeping (undo/derived) and
+# fork markers never consume the window, so the pool of rollback targets is
+# always MAX_CHECKPOINTS_PER_SESSION — rolling back can't shrink it.
 # Checkpoints created by branching (rolling back then continuing) fall off
-# the main line and are pruned together with older nodes — a branch cannot be
+# the main line and are pruned together with older turns — a branch cannot be
 # revisited once a newer turn has been accepted.
 MAX_CHECKPOINTS_PER_SESSION = 6
 CHECKPOINT_OPERATION_NAMES = (
@@ -611,14 +614,20 @@ class CoreCheckpointCoordinator:
         root_session_id: str,
         latest_id: str,
     ) -> None:
-        """Keep only the most recent ``MAX_CHECKPOINTS_PER_SESSION`` nodes on
-        the session's main line.
+        """Keep only the most recent ``MAX_CHECKPOINTS_PER_SESSION`` turns.
 
-        The main line is the chain ``latest -> parent -> ...``. Anything else
-        (older nodes and branches created by rolling back then continuing)
-        is deleted, and surviving nodes whose parent was pruned are re-linked
-        to the nearest surviving ancestor. Restore operations referencing
-        pruned checkpoints are deleted too.
+        Only real conversation turns consume the window — nodes whose
+        ``actor_kind == "main"`` (the automatic ``before_user_prompt`` saves
+        plus manual main-line saves). Restore bookkeeping (the ``undo`` /
+        ``derived`` nodes each rollback creates) never counts against it, so
+        rolling back cannot shrink the pool of rollback targets: 6 turns in
+        the window means 6 rollbacks available, guaranteed.
+
+        The main line is the chain ``latest -> parent -> ...``. Everything
+        below the 6th turn checkpoint (older turns and their bookkeeping) is
+        deleted; surviving nodes whose parent was pruned are re-linked to the
+        nearest surviving ancestor. Restore operations referencing pruned
+        checkpoints are deleted too.
         """
         rows = list((await db.execute(
             select(CoreCheckpoint).where(CoreCheckpoint.root_session_id == root_session_id)
@@ -627,15 +636,23 @@ class CoreCheckpointCoordinator:
             return
         by_id = {row.id: row for row in rows}
 
-        # Walk the main line from the newest node backwards.
+        # Walk the main line from the newest node backwards, counting turns.
         chain: list[str] = []
         seen: set[str] = set()
         node_id = latest_id
+        turn_count = 0
         while node_id and node_id not in seen:
+            row = by_id.get(node_id)
+            if row is None:
+                break
             seen.add(node_id)
             chain.append(node_id)
-            node_id = by_id[node_id].parent_checkpoint_id if node_id in by_id else ""
-        keep = set(chain[:MAX_CHECKPOINTS_PER_SESSION])
+            if row.actor_kind == "main":
+                turn_count += 1
+                if turn_count == MAX_CHECKPOINTS_PER_SESSION:
+                    break  # everything below the 6th turn is pruned
+            node_id = row.parent_checkpoint_id
+        keep = set(chain)
         deleted = {row.id for row in rows if row.id not in keep}
         if not deleted:
             return
@@ -749,7 +766,13 @@ class CoreCheckpointCoordinator:
                 except OSError:
                     pass
                 applied.append(relative)
-            _remove_empty_directories(self.work_root, self.storage_root)
+            _remove_empty_directories(
+                self.work_root,
+                self.storage_root,
+                [destination.parent for destination in (
+                    _safe_workspace_path(self.work_root, relative) for relative in applied
+                )],
+            )
             return applied
         finally:
             shutil.rmtree(stage_root, ignore_errors=True)
@@ -969,6 +992,10 @@ class CoreCheckpointConversationBackend:
                     remapped = _replace_session_id(
                         dict(event_payload), source_session_id, new_session_id
                     )
+                    # event_id is a GLOBAL primary key — the source session's
+                    # rows already own these ids, so regenerate them for the
+                    # forked stream or the insert violates the PK constraint.
+                    remapped.pop("event_id", None)
                     row = _app_event_row(remapped, thread_id=new_session_id)
                     db.add(row)
         await db.flush()
@@ -1342,8 +1369,13 @@ def _fork_projection_payload(
 
 def _replace_session_id(value: Any, source_session_id: str, fork_session_id: str) -> Any:
     if isinstance(value, dict):
+        # Remap keys too — item ids live in dict keys (items / turns maps) as
+        # well as in list values (item_order), and leaving keys stale breaks
+        # the frontend lookup that joins the two.
         return {
-            key: _replace_session_id(item, source_session_id, fork_session_id)
+            _replace_session_id(key, source_session_id, fork_session_id): _replace_session_id(
+                item, source_session_id, fork_session_id
+            )
             for key, item in value.items()
         }
     if isinstance(value, list):
@@ -1441,15 +1473,28 @@ def _is_within(path: Path, parent: Path) -> bool:
         return False
 
 
-def _remove_empty_directories(work_root: Path, storage_root: Path) -> None:
-    directories = [path for path in work_root.rglob("*") if path.is_dir()]
-    for path in sorted(directories, key=lambda item: len(item.parts), reverse=True):
-        if path.name in _SKIPPED_DIRECTORIES or _is_within(path.resolve(), storage_root):
-            continue
-        try:
-            path.rmdir()
-        except OSError:
-            pass
+def _remove_empty_directories(work_root: Path, storage_root: Path, roots: Iterable[Path]) -> None:
+    """Remove directories left empty by a restore, walking only *upward*
+    from each restored file's parent directory.
+
+    Never scans the workspace: on a huge work_root (e.g. a game-save
+    directory) a full walk would stall the app, and the rollback contract is
+    to touch only the files it restored.
+    """
+    work_root = work_root.resolve()
+    storage_root = storage_root.resolve()
+    seen: set[Path] = set()
+    for root in roots:
+        cursor = Path(root).resolve()
+        while _is_within(cursor, work_root) and cursor != work_root and cursor not in seen:
+            seen.add(cursor)
+            if cursor.name in _SKIPPED_DIRECTORIES or _is_within(cursor, storage_root):
+                break
+            try:
+                cursor.rmdir()
+            except OSError:
+                break  # not empty (or locked) — stop walking up
+            cursor = cursor.parent
 
 
 __all__ = [

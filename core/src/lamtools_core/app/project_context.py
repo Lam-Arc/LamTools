@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from lamtools_core.config.agents_md import global_agents_md_path
+from lamtools_core.config.root import core_config_dir
 from lamtools_core.prompt import PromptPart, PromptPartKind
 
 
@@ -79,18 +80,28 @@ class ProjectContextLoader:
     def _resolve_specs(
         self, work_root: Path
     ) -> list[tuple[str, int, PromptPartKind]]:
-        config = ContextConfig.from_file(work_root / _CONTEXT_CONFIG_FILE)
-        if config is None:
+        # Global load_context.jsonc (unified config directory) applies to every
+        # workspace; the workspace's own load_context.jsonc (if any) stacks on
+        # top of it. Exceptions from either tier are honoured.
+        global_config = ContextConfig.from_file(core_config_dir() / _CONTEXT_CONFIG_FILE)
+        workspace_config = ContextConfig.from_file(work_root / _CONTEXT_CONFIG_FILE)
+        if global_config is None and workspace_config is None:
             return self._base_specs
 
         specs = list(self._base_specs)
-        for item in config.addition:
-            name = str(item["name"])
-            priority = int(item.get("priority", 50))
-            kind = _coerce_kind(str(item.get("kind", "system")))
-            specs.append((name, priority, kind))
+        for config in (global_config, workspace_config):
+            if config is None:
+                continue
+            for item in config.addition:
+                name = str(item["name"])
+                priority = int(item.get("priority", 50))
+                kind = _coerce_kind(str(item.get("kind", "system")))
+                specs.append((name, priority, kind))
 
-        except_set = set(config.except_files)
+        except_set: set[str] = set()
+        for config in (global_config, workspace_config):
+            if config is not None:
+                except_set.update(config.except_files)
         specs = [s for s in specs if s[0] not in except_set]
         specs.sort(key=lambda s: s[1])
         return specs
@@ -112,6 +123,21 @@ class ProjectContextLoader:
                         content=content,
                         priority=5,
                         kind="system",
+                    )
+                )
+        # Global memory (unified config directory) applies to every workspace;
+        # it sits between the global instructions and the workspace MEMORY.md.
+        global_memory_path = core_config_dir() / "memory.md"
+        if global_memory_path.is_file():
+            content = self._read(global_memory_path, self._max_chars_per_file)
+            if content.strip():
+                results.append(
+                    ProjectContextFile(
+                        name="GLOBAL_MEMORY.md",
+                        path=global_memory_path,
+                        content=content,
+                        priority=15,
+                        kind="memory",
                     )
                 )
         if not work_root:

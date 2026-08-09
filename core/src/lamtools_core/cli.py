@@ -1269,6 +1269,11 @@ async def cmd_serve(args: argparse.Namespace) -> int:
         import uvicorn
     except ImportError as exc:
         raise RuntimeError("serve requires uvicorn; install the Core HTTP server dependencies") from exc
+    # Seed the unified config directory with built-in defaults on first run
+    # (idempotent; user edits are never overwritten).
+    from lamtools_core.config.defaults import ensure_default_config_files
+
+    ensure_default_config_files()
     from lamtools_core.app.http_agent_app import create_core_agent_http_app
 
     app = create_core_agent_http_app(
@@ -1293,6 +1298,10 @@ async def cmd_serve(args: argparse.Namespace) -> int:
 async def cmd_setup(args: argparse.Namespace) -> int:
     del args
     root = ensure_projects_root()
+    # Seed the unified config directory with built-in defaults (idempotent).
+    from lamtools_core.config.defaults import ensure_default_config_files
+
+    ensure_default_config_files()
     print(json.dumps({"lam_projects": str(root), "created": True}, ensure_ascii=False), flush=True)
     return 0
 
