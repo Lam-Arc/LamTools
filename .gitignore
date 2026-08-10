@@ -108,3 +108,10 @@ core/ui/dist-core-app/
 
 # LamCore runtime data (artifacts, generated images) — never commit or package
 /.lam/
+
+# 本地 API key / 模型探测文件（含真实密钥，禁止提交）
+.free_key.txt
+.go_key.txt
+.go_models.json
+.openrouter_models.json
+.zen_models.json
