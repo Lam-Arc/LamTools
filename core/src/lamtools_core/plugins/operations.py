@@ -220,6 +220,38 @@ def build_plugin_operation_catalog(
             return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
         return OperationResult(name=request.name, payload={"path": str(config_path), "saved": True})
 
+    # ── websearch config read / write (websearch.jsonc) ───────────────────
+
+    def _strip_jsonc_comments(text: str) -> str:
+        import re
+
+        return re.sub(r"/\*.*?\*/|//[^\n]*", "", text, flags=re.DOTALL)
+
+    async def websearch_config_get(request: OperationRequest) -> OperationResult:
+        config_path = core_config_file("websearch.jsonc")
+        if config_path.exists():
+            try:
+                content = config_path.read_text(encoding="utf-8")
+            except OSError as exc:
+                return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
+        else:
+            content = ""
+        return OperationResult(name=request.name, payload={"content": content, "path": str(config_path)})
+
+    async def websearch_config_update(request: OperationRequest) -> OperationResult:
+        content = str(request.payload.get("content") or "")
+        config_path = core_config_file("websearch.jsonc")
+        try:
+            # validate – allow JSONC (comments), factory strips them on read
+            _json.loads(_strip_jsonc_comments(content)) if content.strip() else {}
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            config_path.write_text(content, encoding="utf-8")
+        except _json.JSONDecodeError as exc:
+            return OperationResult(name=request.name, status="error", payload={"error": f"Invalid JSON/JSONC: {exc}"})
+        except OSError as exc:
+            return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
+        return OperationResult(name=request.name, payload={"path": str(config_path), "saved": True})
+
     # ── skill operations ──────────────────────────────────────────────────
 
     async def skill_list(request: OperationRequest) -> OperationResult:
@@ -269,6 +301,8 @@ def build_plugin_operation_catalog(
     catalog.register("hook.delete", hook_delete)
     catalog.register("hook.config.get", hook_config_get)
     catalog.register("hook.config.update", hook_config_update)
+    catalog.register("websearch.config.get", websearch_config_get)
+    catalog.register("websearch.config.update", websearch_config_update)
     catalog.register("skill.list", skill_list)
     catalog.register("skill.enable", skill_enable)
     catalog.register("skill.disable", skill_disable)

@@ -131,6 +131,10 @@
         <CoreImageGenEditor :request-rpc="requestRpc || defaultRequestRpc" />
       </section>
 
+      <section v-else-if="activeSection === 'websearch'" class="settings-panel">
+        <CoreWebSearchEditor :request-rpc="requestRpc || defaultRequestRpc" />
+      </section>
+
       <section v-else-if="activeSection === 'hooks'" class="settings-panel">
         <CoreHooksEditor :request-rpc="requestRpc || defaultRequestRpc" />
       </section>
@@ -489,6 +493,7 @@ import CoreHooksEditor from './CoreHooksEditor.vue'
 import CoreSubAgentEditor from './CoreSubAgentEditor.vue'
 import CoreLoadToolsEditor from './CoreLoadToolsEditor.vue'
 import CoreImageGenEditor from './CoreImageGenEditor.vue'
+import CoreWebSearchEditor from './CoreWebSearchEditor.vue'
 
 export type CoreSettingsDensity = 'compact' | 'standard' | 'loose'
 
@@ -604,6 +609,7 @@ const sections: SettingsSection[] = [
   { id: 'appearance', label: '界面', icon: '◐' },
   { id: 'loadtools', label: '工具模式', icon: '⚙' },
   { id: 'imagegen', label: '生图', icon: '🖼' },
+  { id: 'websearch', label: '搜索', icon: '🔍' },
   { id: 'skills', label: 'Skills', icon: '✦' },
   { id: 'hooks', label: 'Hooks', icon: '⌘' },
   { id: 'permissions', label: '权限', icon: '◇' },

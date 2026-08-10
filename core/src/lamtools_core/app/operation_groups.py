@@ -58,6 +58,8 @@ CORE_WORKBENCH_OPERATION_NAMES: tuple[str, ...] = (
     "hook.delete",
     "hook.config.get",
     "hook.config.update",
+    "websearch.config.get",
+    "websearch.config.update",
     "skill.list",
     "skill.enable",
     "skill.disable",

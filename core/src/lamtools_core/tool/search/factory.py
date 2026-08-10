@@ -56,7 +56,19 @@ def _load_config(work_root: str | None = None) -> dict:
 def _default_config(work_root: str | None = None) -> dict:
     cfg = _load_config(work_root)
     provider = str(cfg.get("provider") or os.environ.get("WEBSEARCH_PROVIDER") or DEFAULT_PROVIDER)
-    return {"provider": provider, **(cfg.get(provider) or {})}
+    # 顶层通用字段（limit/timeout 等）作为默认，provider 内联配置可覆盖
+    merged: dict = {
+        "provider": provider,
+        "limit": cfg.get("limit", 5),
+        "timeout": cfg.get("timeout", 15),
+        "command": cfg.get("command"),
+        "url": cfg.get("url"),
+        "transport": cfg.get("transport"),
+    }
+    provider_cfg = cfg.get(provider)
+    if isinstance(provider_cfg, dict):
+        merged.update(provider_cfg)
+    return merged
 
 
 def list_providers() -> list[str]:
@@ -112,9 +124,13 @@ def build_web_search_handler(work_root: str) -> Callable[[ToolCall], Awaitable[T
         if not query or not isinstance(query, str) or not query.strip():
             return ToolResult(call_id=call.id, name=call.name, status="failed", error="Missing 'query' argument")
         try:
-            limit = max(1, min(int(args.get("limit", 5) or 5), _MAX_RESULT_COUNT))
+            cfg_limit = int(cfg.get("limit") or 5)
         except (TypeError, ValueError):
-            limit = 5
+            cfg_limit = 5
+        try:
+            limit = max(1, min(int(args.get("limit", cfg_limit) or cfg_limit), _MAX_RESULT_COUNT))
+        except (TypeError, ValueError):
+            limit = cfg_limit
         raw_domains = args.get("domains")
         domains = (
             [str(item).strip() for item in raw_domains if str(item).strip()]
