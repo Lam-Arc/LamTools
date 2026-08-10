@@ -15,7 +15,16 @@
           :data-settings-section="section.id"
           @click="activeSection = section.id; $emit('section-change', section.id)"
         >
-          <span>{{ section.icon || '○' }}</span>
+          <span class="settings-nav-icon">
+            <component
+              :is="iconComponent(section.icon)"
+              v-if="iconComponent(section.icon)"
+              :size="16"
+              :stroke-width="1.8"
+              aria-hidden="true"
+            />
+            <template v-else>{{ section.icon || '○' }}</template>
+          </span>
           <span>{{ section.label }}</span>
         </button>
       </nav>
@@ -69,6 +78,69 @@
  * Product provides sections array and slot content per section.
  */
 import { ref } from 'vue'
+import {
+  Activity,
+  AppWindow,
+  Bell,
+  Bot,
+  Braces,
+  Brush,
+  Database,
+  Eye,
+  FileCode2,
+  Globe,
+  Image as ImageIcon,
+  Layers,
+  ListChecks,
+  Lock,
+  Palette,
+  Plug,
+  Scale,
+  Search,
+  Server,
+  Settings2,
+  Sparkles,
+  UsersRound,
+  Wand2,
+  Workflow,
+  type LucideIcon,
+} from 'lucide-vue-next'
+
+/**
+ * 设置分区图标注册表：icon 字段填键名（如 "search"），渲染为 lucide 矢量图标。
+ * 未注册的键回退到文本显示（保持向后兼容）。
+ */
+const ICON_MAP: Record<string, LucideIcon> = {
+  activity: Activity,
+  'app-window': AppWindow,
+  bell: Bell,
+  bot: Bot,
+  braces: Braces,
+  brush: Brush,
+  database: Database,
+  eye: Eye,
+  'file-code': FileCode2,
+  globe: Globe,
+  image: ImageIcon,
+  layers: Layers,
+  'list-checks': ListChecks,
+  lock: Lock,
+  palette: Palette,
+  plug: Plug,
+  scale: Scale,
+  search: Search,
+  server: Server,
+  settings: Settings2,
+  sparkles: Sparkles,
+  users: UsersRound,
+  wand: Wand2,
+  workflow: Workflow,
+}
+
+function iconComponent(icon: string | undefined) {
+  if (!icon) return null
+  return ICON_MAP[icon.toLowerCase()] || null
+}
 
 export interface SettingsSection {
   id: string

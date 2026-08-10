@@ -605,17 +605,17 @@ function refreshWorkflowList() {
 }
 
 const sections: SettingsSection[] = [
-  { id: 'models', label: '模型与供应商', icon: '◈' },
-  { id: 'appearance', label: '界面', icon: '◐' },
-  { id: 'loadtools', label: '工具模式', icon: '⚙' },
-  { id: 'imagegen', label: '生图', icon: '◈' },
-  { id: 'websearch', label: '搜索', icon: '⚵' },
-  { id: 'skills', label: 'Skills', icon: '✦' },
-  { id: 'hooks', label: 'Hooks', icon: '⌘' },
-  { id: 'permissions', label: '权限', icon: '◇' },
-  { id: 'agents', label: '上下文与记忆', icon: '▣' },
-  { id: 'workflow', label: '工作流', icon: '◆' },
-  { id: 'subagent', label: 'Sub agent', icon: '✷' },
+  { id: 'models', label: '模型与供应商', icon: 'database' },
+  { id: 'appearance', label: '界面', icon: 'palette' },
+  { id: 'loadtools', label: '工具模式', icon: 'list-checks' },
+  { id: 'imagegen', label: '生图', icon: 'image' },
+  { id: 'websearch', label: '搜索', icon: 'search' },
+  { id: 'skills', label: 'Skills', icon: 'sparkles' },
+  { id: 'hooks', label: 'Hooks', icon: 'plug' },
+  { id: 'permissions', label: '权限', icon: 'lock' },
+  { id: 'agents', label: '上下文与记忆', icon: 'file-code' },
+  { id: 'workflow', label: '工作流', icon: 'workflow' },
+  { id: 'subagent', label: 'Sub agent', icon: 'bot' },
 ]
 
 const densityOptions: Array<{ value: CoreSettingsDensity; label: string }> = [
