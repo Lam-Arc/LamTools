@@ -2741,7 +2741,9 @@
 .process-step-marker {
   width: 7px;
   height: 7px;
-  margin: 5px auto 0;
+  /* 水平不用 auto：在 flex 容器（如 .process-tool-row）里 auto 外边距会
+     吞掉所有剩余空间，把红点推到行中间、文字挤到最右侧 */
+  margin: 5px 0 0;
   border-radius: 50%;
   background: transparent;
   box-shadow: none;

@@ -38,6 +38,7 @@
 	    @update-model="updateModel"
 	    @delete-model="deleteModel"
 	    @set-default-model="setDefaultModel"
+    @reopen-onboarding="reopenOnboarding"
     @refresh-workflows="loadSettingsWorkflows"
     @toggle-workflow-exposed="onToggleWorkflowExposed"
   />
@@ -45,6 +46,18 @@
     v-if="showArrange"
     :work-root="currentWorkRoot()"
     @back="showArrange = false"
+  />
+  <OnboardingWizard
+    v-if="showOnboarding"
+    :providers="availableProviders"
+    :models="availableModels"
+    :default-model-id="defaultModelId"
+    :theme="theme"
+    :loading="wizardLoading"
+    :error="wizardError"
+    @create-provider="onboardingCreateProvider"
+    @skip="showOnboarding = false"
+    @finish="finishOnboarding"
   />
   <WorkspaceShell
     ref="shellRef"
@@ -548,6 +561,7 @@ import type { StageResource, StageKind } from '../types'
 import CoreProjectCreate from '../components/CoreProjectCreate.vue'
 import CoreSessionTitleEditor from '../components/CoreSessionTitleEditor.vue'
 import ArtifactPanel from '../components/ArtifactPanel.vue'
+import OnboardingWizard from '../components/OnboardingWizard.vue'
 import CoreSettings, {
   type CoreSettingsModelPayload,
   type CoreSettingsProviderPayload,
@@ -658,6 +672,9 @@ function toggleRightPinned() {
 const settingsStorageKey = 'lamtools.core.ui'
 const showSettings = ref(false)
 const showArrange = ref(false)
+const showOnboarding = ref(false)
+const wizardLoading = ref(false)
+const wizardError = ref('')
 const workflowMode = ref(false)
 const canvasLocked = ref(false)
 const workflows = ref<WorkflowDef[]>([])
@@ -1615,6 +1632,59 @@ async function createProvider(payload: CoreSettingsProviderPayload) {
   await mutateConfig('config.provider.create', payload, '供应商已添加')
 }
 
+// ---- 首次启动引导 ----
+
+async function checkOnboarding() {
+  try {
+    const result = await requestConfigOperation('settings.get', { namespace: 'core.onboarding' })
+    const value = result.value && typeof result.value === 'object' ? result.value as Record<string, unknown> : {}
+    if (value.completed === true) return
+  } catch {
+    return // 配置服务不可用时 fail-open，不阻塞老用户
+  }
+  if (availableProviders.value.some((provider) => provider.has_api_key)) return
+  showOnboarding.value = true
+}
+
+async function onboardingCreateProvider(payload: CoreSettingsProviderPayload) {
+  wizardError.value = ''
+  wizardLoading.value = true
+  try {
+    loadError.value = null
+    await requestConfigOperation('config.provider.create', payload as unknown as Record<string, unknown>)
+    await loadModelOptions()
+    setRuntimeStatus('供应商已添加')
+  } catch (error) {
+    wizardError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    wizardLoading.value = false
+  }
+}
+
+async function finishOnboarding() {
+  showOnboarding.value = false
+  try {
+    await requestConfigOperation('settings.update', {
+      namespace: 'core.onboarding',
+      value: { completed: true, version: 1, completed_at: new Date().toISOString() },
+    })
+  } catch {
+    // 标记失败不阻塞进入主界面
+  }
+}
+
+async function reopenOnboarding() {
+  try {
+    await requestConfigOperation('settings.update', {
+      namespace: 'core.onboarding',
+      value: { completed: false },
+    })
+  } catch {
+    // 忽略：标记清除失败仍允许重开引导
+  }
+  showOnboarding.value = true
+}
+
 async function updateProvider(payload: CoreSettingsProviderPayload) {
   await mutateConfig('config.provider.update', payload, '供应商已更新')
 }
@@ -2208,7 +2278,7 @@ watch(shellRef, (shell) => {
 
 onMounted(() => {
   void uiPreferences.load()
-  void loadInitialData()
+  void loadInitialData().then(() => checkOnboarding())
 })
 
 onUnmounted(() => {

@@ -1013,3 +1013,91 @@ async def test_core_cli_run_loads_plugin_skill_roots(tmp_path: Path) -> None:
     assert summary["result"]["decision"] == "done"
     assert "plugin skill resource" in events
     assert Path(summary["artifacts"]["core_db"]).parent == tmp_path
+
+
+def test_core_cli_memory_dream_config_writes_app_settings(tmp_path: Path) -> None:
+    db_path = tmp_path / "config.db"
+    with sqlite3.connect(db_path) as con:
+        con.execute(
+            """
+            create table app_settings (
+                namespace text primary key,
+                value text,
+                updated_at text
+            )
+            """
+        )
+        con.commit()
+
+    assert core_cli.main(["memory", "dream", "config", "--enabled", "true", "--min-turns", "5", "--config-db", str(db_path)]) == 0
+
+    with sqlite3.connect(db_path) as con:
+        row = con.execute("select value from app_settings where namespace='core.dreaming'").fetchone()
+        assert row is not None
+        value = json.loads(row[0])
+        assert value["enabled"] is True
+        assert value["min_turns"] == 5
+
+
+def test_core_cli_memory_dream_show_reports_saved_settings(tmp_path: Path, capsys) -> None:
+    db_path = tmp_path / "config.db"
+    with sqlite3.connect(db_path) as con:
+        con.execute(
+            """
+            create table app_settings (
+                namespace text primary key,
+                value text,
+                updated_at text
+            )
+            """
+        )
+        con.execute(
+            "insert into app_settings(namespace, value, updated_at) values('core.dreaming', ?, '2026-01-01')",
+            (json.dumps({"enabled": True, "min_turns": 7}),),
+        )
+        con.commit()
+
+    rc = core_cli.main(["memory", "dream", "show", "--config-db", str(db_path)])
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "enabled:  yes" in captured.out
+    assert "min_turns: 7" in captured.out
+
+
+def test_core_cli_memory_dream_show_defaults_when_absent(tmp_path: Path, capsys) -> None:
+    db_path = tmp_path / "config.db"
+    with sqlite3.connect(db_path) as con:
+        con.execute(
+            """
+            create table app_settings (
+                namespace text primary key,
+                value text,
+                updated_at text
+            )
+            """
+        )
+        con.commit()
+
+    rc = core_cli.main(["memory", "dream", "show", "--config-db", str(db_path)])
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "enabled:  no" in captured.out
+    assert "min_turns: 3" in captured.out
+
+
+def test_core_cli_memory_dream_config_validates_min_turns(tmp_path: Path) -> None:
+    db_path = tmp_path / "config.db"
+    with sqlite3.connect(db_path) as con:
+        con.execute(
+            """
+            create table app_settings (
+                namespace text primary key,
+                value text,
+                updated_at text
+            )
+            """
+        )
+        con.commit()
+
+    rc = core_cli.main(["memory", "dream", "config", "--min-turns", "0", "--config-db", str(db_path)])
+    assert rc == 1

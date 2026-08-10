@@ -1303,6 +1303,18 @@ def build_parser() -> argparse.ArgumentParser:
     memory_dream_config.add_argument("--config-db", default="", help="LLM config database (default: data/lamtools.db)")
     memory_dream_config.set_defaults(func=cmd_memory_dream_config)
 
+    onboarding = sub.add_parser("onboarding", help="首次启动引导（Onboarding）状态：显示 / 标记完成 / 重置")
+    onboarding_sub = onboarding.add_subparsers(dest="onboarding_command", required=True)
+    onboarding_show = onboarding_sub.add_parser("show", help="显示当前首次引导状态（是否已完成、是否已配置供应商）")
+    onboarding_show.add_argument("--config-db", default="", help="LLM config database (default: data/lamtools.db)")
+    onboarding_show.set_defaults(func=cmd_onboarding_show)
+    onboarding_complete = onboarding_sub.add_parser("complete", help="标记首次引导已完成（此后启动不再弹出向导）")
+    onboarding_complete.add_argument("--config-db", default="", help="LLM config database (default: data/lamtools.db)")
+    onboarding_complete.set_defaults(func=cmd_onboarding_complete)
+    onboarding_reset = onboarding_sub.add_parser("reset", help="清除完成标记，下次启动重新弹出引导向导")
+    onboarding_reset.add_argument("--config-db", default="", help="LLM config database (default: data/lamtools.db)")
+    onboarding_reset.set_defaults(func=cmd_onboarding_reset)
+
     load_context = sub.add_parser("load-context", help="Read or write the global load_context.jsonc (unified config dir)")
     load_context_sub = load_context.add_subparsers(dest="load_context_command", required=True)
     load_context_get = load_context_sub.add_parser("get", help="Print the parsed global load_context (addition/except)")
@@ -2688,6 +2700,96 @@ async def cmd_memory_dream_config(args: argparse.Namespace) -> int:
     finally:
         con.close()
     print(f"[memory dream] saved: enabled={bool(value.get('enabled'))} min_turns={int(value.get('min_turns') or 3)}")
+    return 0
+
+
+_ONBOARDING_NAMESPACE = "core.onboarding"
+
+
+def _onboarding_db(args: argparse.Namespace) -> sqlite3.Connection | None:
+    """Open the config database (lamtools.db) where app_settings lives."""
+    try:
+        con = sqlite3.connect(_resolve_config_db(getattr(args, "config_db", "") or None))
+        con.row_factory = sqlite3.Row
+        return con
+    except (FileNotFoundError, sqlite3.OperationalError) as exc:
+        print(f"[onboarding] cannot open config database: {exc}", file=sys.stderr)
+        return None
+
+
+def _onboarding_settings(con: sqlite3.Connection) -> dict[str, Any]:
+    try:
+        row = con.execute("select value from app_settings where namespace=?", (_ONBOARDING_NAMESPACE,)).fetchone()
+    except sqlite3.OperationalError:
+        return {}
+    return _json_dict(row["value"] if row is not None else None)
+
+
+def _onboarding_providers_configured(con: sqlite3.Connection) -> bool:
+    """True when at least one provider has a non-empty API key."""
+    try:
+        row = con.execute(
+            "select count(*) as n from llm_providers where api_key is not null and length(api_key) > 0"
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return False
+    return bool(row is not None and row["n"])
+
+
+async def cmd_onboarding_show(args: argparse.Namespace) -> int:
+    con = _onboarding_db(args)
+    if con is None:
+        return 1
+    try:
+        value = _onboarding_settings(con)
+        configured = _onboarding_providers_configured(con)
+    finally:
+        con.close()
+    completed = bool(value.get("completed"))
+    skipped = bool(value.get("skipped"))
+    print(f"completed: {'yes' if completed else 'no'}")
+    if completed:
+        print(f"completed_at: {value.get('completed_at') or ''}")
+    print(f"skipped:   {'yes' if skipped else 'no'}")
+    print(f"provider_configured: {'yes' if configured else 'no'}")
+    print("说明:     未完成且未配置供应商时，启动会弹出首次引导向导；onboarding complete 标记完成，onboarding reset 清除标记")
+    return 0
+
+
+async def cmd_onboarding_complete(args: argparse.Namespace) -> int:
+    con = _onboarding_db(args)
+    if con is None:
+        return 1
+    value = {"completed": True, "version": 1, "completed_at": _now_iso()}
+    try:
+        con.execute(
+            "insert into app_settings(namespace, value, updated_at) values(?, ?, ?) "
+            "on conflict(namespace) do update set value = excluded.value, updated_at = excluded.updated_at",
+            (_ONBOARDING_NAMESPACE, json.dumps(value, ensure_ascii=False), _now_iso()),
+        )
+        con.commit()
+    except sqlite3.OperationalError as exc:
+        print(f"[onboarding] cannot update settings: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        con.close()
+    print("[onboarding] marked completed; the wizard will not show on next start")
+    return 0
+
+
+async def cmd_onboarding_reset(args: argparse.Namespace) -> int:
+    con = _onboarding_db(args)
+    if con is None:
+        return 1
+    try:
+        con.execute("delete from app_settings where namespace=?", (_ONBOARDING_NAMESPACE,))
+        con.commit()
+    except sqlite3.OperationalError as exc:
+        print(f"[onboarding] cannot reset settings: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        con.close()
+    print("[onboarding] reset; the wizard will show again on next start if no provider is configured")
     return 0
 
 
