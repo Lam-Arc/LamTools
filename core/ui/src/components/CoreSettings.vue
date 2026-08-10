@@ -24,6 +24,7 @@
           <button class="small-btn primary" type="button" data-provider-create @click="startProviderCreate">新增供应商</button>
           <button class="small-btn quiet" type="button" data-model-create @click="startModelCreate">新增模型</button>
           <button v-if="allowEnvironmentImport" class="small-btn quiet" type="button" @click="$emit('import-environment')">从当前环境导入</button>
+          <button class="small-btn quiet" type="button" data-reopen-onboarding @click="$emit('reopen-onboarding')">重新显示首次引导</button>
         </div>
 
         <div v-if="providers.length" class="provider-list">
@@ -263,6 +264,42 @@
 
           <p v-if="contextError" class="skill-error" role="alert">{{ contextError }}</p>
           <p class="hook-meta">保存到 <code>.lam/core/config/load_context.jsonc</code>，全局叠加到每个工作区（工作区自己的 load_context.jsonc 在其上叠加）。CLI：<code>core load-context get/set</code>。</p>
+        </article>
+
+        <article class="setting-card">
+          <div class="subhead">
+            <span class="muted subhead-title">
+              记忆整理
+              <span class="subhead-sub">Dreaming · 自动沉淀会话记忆</span>
+            </span>
+            <div class="subhead-actions">
+              <button class="text-btn" type="button" :disabled="dreamingLoading" @click="fetchDreamingSettings">刷新</button>
+            </div>
+          </div>
+          <div class="dream-row">
+            <label class="dream-toggle">
+              <input v-model="dreamingEnabled" type="checkbox" :disabled="dreamingLoading" @change="saveDreamingSettings" />
+              <span class="dream-toggle-label">自动记忆整理</span>
+            </label>
+            <span class="muted">每轮会话结束时自动把值得长期保留的内容蒸馏到工作区 MEMORY.md</span>
+          </div>
+          <div class="dream-row">
+            <label class="dream-min-turns" for="dream-min-turns-input">
+              最小触发间隔（轮）
+            </label>
+            <input
+              id="dream-min-turns-input"
+              v-model.number="dreamingMinTurns"
+              type="number"
+              class="lc-input lc-priority"
+              min="1"
+              max="20"
+              :disabled="dreamingLoading"
+            />
+            <button class="small-btn quiet" type="button" :disabled="dreamingLoading || dreamingSaving" @click="saveDreamingSettings">保存</button>
+          </div>
+          <p v-if="dreamingError" class="skill-error" role="alert">{{ dreamingError }}</p>
+          <p class="hook-meta">内容写入 <code>&lt;workRoot&gt;/MEMORY.md</code>，下个会话自动加载；<code>/dream</code> 命令始终可手动触发；短期记忆存 SQLite（<code>core_memories</code> 表）。CLI：<code>core memory dream show/config</code>。</p>
         </article>
       </section>
 
@@ -526,6 +563,7 @@ const emit = defineEmits<{
   'update:density': [density: CoreSettingsDensity]
   'update:content-width': [width: number]
   'import-environment': []
+  'reopen-onboarding': []
   'update-permission-mode': [mode: 'read_only' | 'limited_edit' | 'full_edit']
   'reset-theme': []
   'apply-preset': [preset: ThemePreset]
@@ -725,6 +763,46 @@ async function saveLoadContext() {
   }
 }
 
+// ── Dreaming settings (记忆整理, app_settings core.dreaming) ──
+const dreamingEnabled = ref(false)
+const dreamingMinTurns = ref(3)
+const dreamingLoading = ref(false)
+const dreamingSaving = ref(false)
+const dreamingError = ref('')
+
+async function fetchDreamingSettings() {
+  const rpc = props.requestRpc || defaultRequestRpc
+  dreamingLoading.value = true
+  dreamingError.value = ''
+  try {
+    const result = await rpc('settings.get', { namespace: 'core.dreaming' })
+    const value = (result.value ?? {}) as Record<string, unknown>
+    dreamingEnabled.value = Boolean(value.enabled)
+    const rawTurns = Number(value.min_turns ?? 3)
+    dreamingMinTurns.value = Number.isFinite(rawTurns) && rawTurns >= 1 ? Math.floor(rawTurns) : 3
+  } catch (e) {
+    dreamingError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    dreamingLoading.value = false
+  }
+}
+
+async function saveDreamingSettings() {
+  const rpc = props.requestRpc || defaultRequestRpc
+  dreamingSaving.value = true
+  dreamingError.value = ''
+  try {
+    await rpc('settings.update', {
+      namespace: 'core.dreaming',
+      value: { enabled: dreamingEnabled.value, min_turns: dreamingMinTurns.value || 3 },
+    })
+  } catch (e) {
+    dreamingError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    dreamingSaving.value = false
+  }
+}
+
 // Editor overlay: teleport into the settings card so the popover layers above content.
 const overlayTarget = ref<HTMLElement | null>(null)
 function closeEditors() {
@@ -878,6 +956,8 @@ function applyProviderPreset() {
   editor.name = preset.name
   editor.api_type = preset.apiType
   editor.base_url = preset.baseUrl
+  // 模板可预置 API Key（如 OpenCode Free 的 public），用户可覆盖
+  editor.api_key = preset.defaultApiKey || ''
   editor.extra = { ...(preset.extra || {}), adapter_profile_id: preset.adapterProfile }
   editor.extra_json = JSON.stringify(editor.extra, null, 2)
 }
@@ -979,6 +1059,7 @@ onMounted(() => {
   void fetchGlobalAgentsMd()
   void fetchGlobalMemory()
   void fetchLoadContext()
+  void fetchDreamingSettings()
 })
 onUnmounted(() => document.removeEventListener('keydown', onKeydown))
 </script>
@@ -1023,6 +1104,34 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
 
 .lc-kind {
   width: 110px;
+}
+
+/* ── 记忆整理 (Dreaming) card ── */
+.dream-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+.dream-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.dream-toggle-label {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.dream-min-turns {
+  font-size: 12px;
+  color: var(--muted);
+  opacity: 0.85;
+  min-width: 96px;
 }
 
 .lc-chips {
