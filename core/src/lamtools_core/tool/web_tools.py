@@ -52,122 +52,14 @@ async def _fetch_with_loopback_bypass(url: str) -> httpx.Response:
 
 
 def make_web_search_handler(work_root: str) -> Callable[[ToolCall], Awaitable[ToolResult]]:
-    _ = work_root
+    """兼容转发：web_search 已重构到 tool/search 包（可替换内核架构）。
 
-    async def web_search(call: ToolCall) -> ToolResult:
-        args = call.arguments if isinstance(call.arguments, dict) else {}
-        query = args.get("query", "")
-        limit = int(args.get("limit", 5) or 5)
-        raw_domains = args.get("domains")
-        domains = [str(item).strip() for item in raw_domains if str(item).strip()] if isinstance(raw_domains, list) else []
-        if not query or not isinstance(query, str):
-            return ToolResult(call_id=call.id, name=call.name, status="failed", error="Missing 'query' argument")
-        search_query = query
-        if domains:
-            search_query = f"{query} " + " ".join(f"site:{domain}" for domain in domains)
+    保留此函数以维持既有 import/API 兼容，实际逻辑走
+    ``lamtools_core.tool.search.build_web_search_handler``。
+    """
+    from lamtools_core.tool.search import build_web_search_handler as _build
 
-        try:
-            client = _http_session()
-            resp = await client.post(_WEB_SEARCH_URL, data={"q": search_query})
-            if resp.status_code != 200:
-                return ToolResult(
-                    call_id=call.id,
-                    name=call.name,
-                    status="ok",
-                    content=(
-                        f"[web_search] HTTP {resp.status_code} from DuckDuckGo - "
-                        "try a different query or use web_fetch to a known URL"
-                    ),
-                    metadata={
-                        "query": query,
-                        "domains": domains,
-                        "provider": "duckduckgo_html",
-                        "status_code": resp.status_code,
-                        "result_count": 0,
-                    },
-                )
-            text = resp.text
-            results: list[str] = []
-            structured_results: list[dict[str, str]] = []
-            link_pattern = re.compile(r'<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)</a>', re.DOTALL)
-            snippet_pattern = re.compile(r'<a[^>]*class="result__snippet"[^>]*>(.*?)</a>', re.DOTALL)
-
-            links = link_pattern.findall(text)
-            snippets = snippet_pattern.findall(text)
-
-            for i, (url, title) in enumerate(links[:limit]):
-                title_clean = re.sub(r"<[^>]+>", "", title).strip()
-                title_clean = (
-                    title_clean
-                    .replace("&amp;", "&")
-                    .replace("&lt;", "<")
-                    .replace("&gt;", ">")
-                    .replace("&quot;", "\"")
-                    .replace("&#39;", "'")
-                )
-                snippet = ""
-                if i < len(snippets):
-                    snippet = re.sub(r"<[^>]+>", "", snippets[i]).strip()
-                results.append(f"{i+1}. {title_clean}\n   URL: {url}\n   {snippet}")
-                structured_results.append({
-                    "title": title_clean,
-                    "url": url,
-                    "snippet": snippet,
-                    "source": "duckduckgo_html",
-                })
-
-            if not results:
-                return ToolResult(
-                    call_id=call.id,
-                    name=call.name,
-                    status="ok",
-                    content="[web_search] No results found for query: " + query,
-                    metadata={
-                        "query": query,
-                        "domains": domains,
-                        "provider": "duckduckgo_html",
-                        "status_code": resp.status_code,
-                        "result_count": 0,
-                        "results": [],
-                    },
-                )
-
-            content = f"[web_search results for '{query}']\n\n" + "\n\n".join(results)
-            if len(content) > 8000:
-                content = content[:8000] + "\n[... truncated]"
-            metadata = {
-                "query": query,
-                "domains": domains,
-                "provider": "duckduckgo_html",
-                "status_code": resp.status_code,
-                "result_count": len(structured_results),
-                "results": structured_results,
-            }
-            return ToolResult(
-                call_id=call.id,
-                name=call.name,
-                status="ok",
-                content=content,
-                metadata=metadata,
-                artifacts=[
-                    ToolArtifact(
-                        kind="web_search_result",
-                        uri="duckduckgo_html",
-                        content=structured_results,
-                        metadata={
-                            "query": query,
-                            "domains": domains,
-                            "result_count": len(structured_results),
-                        },
-                    )
-                ],
-            )
-        except httpx.HTTPError as exc:
-            return ToolResult(call_id=call.id, name=call.name, status="failed", error=f"web_search network error: {exc}")
-        except Exception as exc:
-            return ToolResult(call_id=call.id, name=call.name, status="failed", error=f"web_search error: {exc}")
-
-    return web_search
+    return _build(work_root)
 
 
 def make_web_fetch_handler(work_root: str) -> Callable[[ToolCall], Awaitable[ToolResult]]:

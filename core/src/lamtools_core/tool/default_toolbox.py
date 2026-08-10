@@ -23,10 +23,8 @@ from lamtools_core.tool.git_tools import make_git_diff_handler, make_git_status_
 from lamtools_core.tool.image_tools import make_generate_image_handler
 from lamtools_core.tool.mcp_tools import MCPToolCaller, execute_mcp_tool_call
 from lamtools_core.tool.permission import ASK_USER, AUTO_ALLOW, HARD_BLOCK, PermissionTier
-from lamtools_core.tool.web_tools import (
-    make_web_fetch_handler,
-    make_web_search_handler,
-)
+from lamtools_core.tool.web_tools import make_web_fetch_handler
+from lamtools_core.tool.search import build_web_search_handler
 from lamtools_core.tool.workflow_build_tools import (
     workflow_build_tool_handlers,
     workflow_build_tool_specs,
@@ -739,8 +737,6 @@ class CoreToolbox:
         self._failed_sub_agent_calls: dict[tuple[str, str], dict[str, Any]] = {}
         self.approval_policy = approval_policy
         self.disabled_tools = set(disabled_tools or set())
-        # FIXME: web_search 暂不上线（bug 较多），默认禁用
-        self.disabled_tools.add("web_search")
         self.load_tools = load_tools or {}
         self.active_mode = active_mode
         self.activated_mcp_servers = activated_mcp_servers or set()
@@ -1208,7 +1204,7 @@ class CoreToolbox:
                 max_text_length=max_text_length,
                 run_subprocess=run_subprocess,
             ),
-            "web_search": make_web_search_handler(str(self.work_root)),
+            "web_search": build_web_search_handler(str(self.work_root)),
             "web_fetch": make_web_fetch_handler(str(self.work_root)),
             "generate_image": make_generate_image_handler(
                 imagegen_config,
