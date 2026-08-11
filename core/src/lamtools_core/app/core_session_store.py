@@ -10,6 +10,7 @@ from sqlalchemy import delete, select
 from lamtools_core.session import MessageRecord, SessionRecord
 
 from .core_db import CoreAppDb, CoreAppEvent, CoreRuntimeSession, CoreThreadSnapshot
+from .session_autotitle import is_default_title
 from .snapshot_store import CoreAppSnapshotProjector
 
 
@@ -80,6 +81,7 @@ class CoreDbSessionStore:
         title: str | None = None,
         status: str | None = None,
         metadata: dict | None = None,
+        only_if_title_default: bool = False,
     ) -> SessionRecord | None:
         db = self._db_provider()
 
@@ -88,6 +90,16 @@ class CoreDbSessionStore:
             if row is None:
                 return None
             record = session_record_from_snapshot(row)
+            if (
+                only_if_title_default
+                and title is not None
+                and not is_default_title(record.title, session_id=session_id)
+            ):
+                # The title was set (e.g. renamed manually) since the caller's
+                # earlier guard check — skip the write instead of clobbering it.
+                # Returning None is indistinguishable from a missing row, which
+                # is exactly what callers need: nothing was updated.
+                return None
             if title is not None:
                 record.title = title
             if status is not None:

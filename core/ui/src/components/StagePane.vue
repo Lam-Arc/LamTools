@@ -9,14 +9,17 @@
         :class="{ active: tab.id === activeId }"
         @click="$emit('activate', tab.id)"
       >
-        <span class="stage-tab-icon" aria-hidden="true">{{ kindIcon(tab.kind) }}</span>
+        <span class="stage-tab-icon" aria-hidden="true">
+          <component v-if="typeof kindIcon(tab.kind) !== 'string'" :is="kindIcon(tab.kind)" :size="12" :stroke-width="1.8" />
+          <template v-else>{{ kindIcon(tab.kind) }}</template>
+        </span>
         <span class="stage-tab-label" :title="tab.label">{{ tab.label }}</span>
         <button
           type="button"
           class="stage-tab-close"
           aria-label="关闭"
           @click.stop="$emit('close', tab.id)"
-        >×</button>
+        ><X :size="11" :stroke-width="2" aria-hidden="true" /></button>
       </div>
     </div>
 
@@ -122,6 +125,7 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { Globe, Image, Music, Video, X, type LucideIcon } from 'lucide-vue-next'
 import type { StageResource } from '../types'
 import StageCodeEditor from './StageCodeEditor.vue'
 import StageImagePreview from './StageImagePreview.vue'
@@ -178,18 +182,21 @@ function resetSaving() {
 
 defineExpose({ onSaved, resetSaving })
 
-function kindIcon(kind: StageResource['kind']): string {
+function kindIcon(kind: StageResource['kind']): LucideIcon | string {
   const map: Record<string, string> = {
     code: '{}',
-    image: '🖼',
-    video: '▶',
-    audio: '♪',
-    browser: '🌐',
     pdf: 'P',
     markdown: 'M',
     empty: '·',
   }
-  return map[kind] ?? '·'
+  if (map[kind]) return map[kind]
+  const iconMap: Record<string, LucideIcon> = {
+    image: Image,
+    video: Video,
+    audio: Music,
+    browser: Globe,
+  }
+  return iconMap[kind] ?? '·'
 }
 </script>
 

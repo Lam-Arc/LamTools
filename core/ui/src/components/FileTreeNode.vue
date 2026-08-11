@@ -6,7 +6,10 @@
       :style="{ paddingLeft: `${depth * 14 + 4}px` }"
       @click="onClick"
     >
-      <span class="file-tree-icon" aria-hidden="true">{{ icon }}</span>
+      <span class="file-tree-icon" aria-hidden="true">
+        <component v-if="typeof icon !== 'string'" :is="icon" :size="13" :stroke-width="1.8" />
+        <template v-else>{{ icon }}</template>
+      </span>
       <span class="file-tree-name" :title="entry.name">{{ entry.name }}</span>
     </button>
     <template v-if="entry.type === 'directory' && expanded">
@@ -29,6 +32,7 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
+import { ChevronDown, ChevronRight, Image, Music, Video, type LucideIcon } from 'lucide-vue-next'
 import type { CoreProjectClient, CoreFileEntry } from '../projects/client'
 import FileTreeNode from './FileTreeNode.vue'
 
@@ -53,21 +57,23 @@ const childPath = computed(() => {
   return props.entry.name
 })
 
-const icon = computed(() => {
-  if (props.entry.type === 'directory') return expanded.value ? '▾' : '▸'
+const icon = computed<LucideIcon | string>(() => {
+  if (props.entry.type === 'directory') return expanded.value ? ChevronDown : ChevronRight
   return fileIcon(props.entry.ext)
 })
 
-function fileIcon(ext: string): string {
+function fileIcon(ext: string): LucideIcon | string {
   const map: Record<string, string> = {
     ts: 'TS', tsx: 'TS', js: 'JS', jsx: 'JS', mjs: 'JS',
     vue: 'V', py: 'PY', json: '{}', css: '#', scss: '#',
     html: '<>', md: 'M', yml: 'Y', yaml: 'Y', toml: 'T',
-    png: '🖼', jpg: '🖼', jpeg: '🖼', gif: '🖼', webp: '🖼', svg: '🖼',
-    mp4: '▶', webm: '▶', mov: '▶', mp3: '♪', wav: '♪',
     pdf: 'P',
   }
-  return map[ext] ?? '·'
+  if (map[ext]) return map[ext]
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(ext)) return Image
+  if (['mp4', 'webm', 'mov'].includes(ext)) return Video
+  if (['mp3', 'wav'].includes(ext)) return Music
+  return '·'
 }
 
 async function onClick() {
@@ -134,7 +140,9 @@ function onChildOpenFile(entry: { path: string; name: string; ext: string }) {
 .file-tree-icon {
   flex: 0 0 auto;
   width: 16px;
-  text-align: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   font-size: 11px;
   opacity: 0.7;
 }

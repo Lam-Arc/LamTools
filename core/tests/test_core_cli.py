@@ -160,62 +160,6 @@ class CapturingCoreCliLLM:
         yield LLMStreamEvent(kind="done")
 
 
-def _write_config_db(path: Path) -> None:
-    con = sqlite3.connect(path)
-    try:
-        con.execute(
-            """
-            create table llm_providers (
-                id text primary key,
-                name text,
-                api_type text,
-                base_url text,
-                api_key text,
-                extra text,
-                created_at text
-            )
-            """
-        )
-        con.execute(
-            """
-            create table llm_models (
-                id text primary key,
-                provider_id text,
-                model_id text,
-                display_name text,
-                context_window integer,
-                max_output_tokens integer,
-                thinking_supported integer,
-                thinking_budget integer,
-                temperature real,
-                extra text,
-                created_at text,
-                is_default integer default 0
-            )
-            """
-        )
-        con.execute(
-            """
-            insert into llm_providers (id,name,api_type,base_url,api_key,extra,created_at)
-            values ('provider-1','Provider','openai','https://example.test/v1','secret','{}','2026-01-01')
-            """
-        )
-        con.execute(
-            """
-            insert into llm_models (
-                id,provider_id,model_id,display_name,context_window,max_output_tokens,
-                thinking_supported,thinking_budget,temperature,extra,created_at
-            )
-            values (
-                'model-record','provider-1','model-name','Model Name',128000,4096,
-                1,10000,0.2,'{}','2026-01-01'
-            )
-            """
-        )
-        con.commit()
-    finally:
-        con.close()
-
 
 def test_core_cli_parser_exposes_agent_run_options(tmp_path: Path) -> None:
     parser = build_parser()
@@ -321,7 +265,7 @@ def test_core_cli_parser_exposes_live_control_commands(tmp_path: Path) -> None:
 
     serve = parser.parse_args([
         "serve", "--host", "0.0.0.0", "--port", "7123", "--model-id", "core-model",
-        "--config-db", str(tmp_path / "config.db"), "--core-db", str(tmp_path / "core.db"),
+        "--core-db", str(tmp_path / "core.db"),
         "--data-dir", str(tmp_path / "data"), "--work-root", str(tmp_path), "--thinking", "disabled",
         "--thinking-budget", "512", "--max-tokens", "1024", "--temperature", "0.4", "--raw",
     ])
@@ -466,7 +410,7 @@ async def test_core_cli_serve_builds_core_http_app_and_runs_uvicorn(monkeypatch,
     monkeypatch.setitem(sys.modules, "uvicorn", SimpleNamespace(Config=Config, Server=Server))
     args = build_parser().parse_args([
         "serve", "--host", "127.0.0.2", "--port", "7123", "--model-id", "model-1",
-        "--config-db", str(tmp_path / "config.db"), "--core-db", str(tmp_path / "core.db"),
+        "--core-db", str(tmp_path / "core.db"),
         "--data-dir", str(tmp_path / "data"), "--work-root", str(tmp_path), "--thinking", "disabled",
         "--thinking-budget", "512", "--max-tokens", "1024", "--temperature", "0.4", "--raw",
     ])
@@ -476,7 +420,7 @@ async def test_core_cli_serve_builds_core_http_app_and_runs_uvicorn(monkeypatch,
     assert seen["run_options"] == {"host": "127.0.0.2", "port": 7123, "reload": False}
     assert seen["served"] is True
     assert seen["app_options"] == {
-        "model_id": "model-1", "config_db": str(tmp_path / "config.db"), "core_db": str(tmp_path / "core.db"),
+        "model_id": "model-1", "core_db": str(tmp_path / "core.db"),
         "data_dir": str(tmp_path / "data"), "work_root": str(tmp_path), "thinking_enabled": False,
         "thinking_budget": 512, "max_tokens": 1024, "temperature": 0.4,
         "frontend_dir": None,
@@ -515,100 +459,102 @@ def test_core_cli_wrapper_does_not_repeat_failed_tasks_with_another_python() -> 
     assert "if %errorlevel% equ 0 exit /b 0" not in content
 
 
-def test_load_llm_config_can_read_shared_config_when_sqlite_is_locked(tmp_path: Path) -> None:
-    db_path = tmp_path / "config.db"
-    _write_config_db(db_path)
-    lock = sqlite3.connect(db_path)
-    try:
-        lock.execute("begin exclusive")
+def _write_jsonc_config(config_root: Path, *, is_default_model: bool = False) -> None:
+    """Write a provider + model jsonc pair (jsonc replacement for _write_config_db)."""
+    provider_dir = config_root / "providers"
+    provider_dir.mkdir(parents=True, exist_ok=True)
+    (provider_dir / "provider-1.jsonc").write_text(
+        '{\n'
+        '  "id": "provider-1",\n'
+        '  "name": "Provider",\n'
+        '  "api_type": "openai",\n'
+        '  "base_url": "https://example.test/v1",\n'
+        '  "api_key": "secret"\n'
+        '}\n',
+        encoding="utf-8",
+    )
+    model_dir = config_root / "models"
+    model_dir.mkdir(parents=True, exist_ok=True)
+    (model_dir / "model-name.jsonc").write_text(
+        '{\n'
+        '  "model_id": "model-name",\n'
+        '  "display_name": "Model Name",\n'
+        '  "provider": "Provider",\n'
+        '  "provider_id": "provider-1",\n'
+        '  "context_window": 128000,\n'
+        '  "max_output_tokens": 4096,\n'
+        '  "thinking": {"supported": true, "budget": 10000},\n'
+        f'  "is_default": {"true" if is_default_model else "false"}\n'
+        '}\n',
+        encoding="utf-8",
+    )
 
-        config = load_llm_config(db_path, model_ref="model-record")
 
-        assert config.model_record_id == "model-record"
-        assert config.model_id == "model-name"
-        assert config.thinking_supported is True
-    finally:
-        lock.rollback()
-        lock.close()
+def _write_settings_jsonc(config_root: Path, namespace: str, value: object) -> None:
+    """Write a two-level namespace into the global settings.jsonc."""
+    group, _, key = namespace.partition(".")
+    config_root.mkdir(parents=True, exist_ok=True)
+    settings_path = config_root / "settings.jsonc"
+    data: dict[str, object] = {}
+    if settings_path.exists():
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
+    group_data = data.get(group)
+    if not isinstance(group_data, dict):
+        group_data = {}
+    group_data[key] = value
+    data[group] = group_data
+    settings_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def test_load_llm_config_reads_core_model_routing_from_shared_config(tmp_path: Path) -> None:
-    db_path = tmp_path / "config.db"
-    _write_config_db(db_path)
-    with sqlite3.connect(db_path) as con:
-        con.execute(
-            """
-            create table app_settings (
-                namespace text primary key,
-                value text,
-                updated_at text
-            )
-            """
-        )
-        con.execute(
-            """
-            insert into app_settings (namespace,value,updated_at)
-            values ('lamtools.modelRouting', '{"routes":{"core":{"mode":"model","model_id":"model-record"}}}', '2026-01-01')
-            """
-        )
-        con.commit()
+def test_load_llm_config_resolves_from_jsonc_without_sqlite(isolated_config_root: Path) -> None:
+    _write_jsonc_config(isolated_config_root, is_default_model=True)
 
-    config = load_llm_config(db_path)
+    config = load_llm_config()
 
-    assert config.model_record_id == "model-record"
+    assert config.model_record_id == "model-name"
+    assert config.model_id == "model-name"
+    assert config.thinking_supported is True
+    assert config.provider_name == "Provider"
+    assert config.api_key == "secret"
+
+
+def test_load_llm_config_reads_core_model_routing_from_settings_jsonc(isolated_config_root: Path) -> None:
+    _write_jsonc_config(isolated_config_root)
+    _write_settings_jsonc(
+        isolated_config_root,
+        "lamtools.modelRouting",
+        {"routes": {"core": {"mode": "model", "model_id": "model-name"}}},
+    )
+
+    config = load_llm_config()
+
+    assert config.model_record_id == "model-name"
     assert config.model_id == "model-name"
 
 
-def test_load_llm_config_ignores_member_model_routing_from_shared_config(tmp_path: Path) -> None:
-    db_path = tmp_path / "config.db"
-    _write_config_db(db_path)
-    with sqlite3.connect(db_path) as con:
-        con.execute(
-            """
-            insert into llm_models (
-                id,provider_id,model_id,display_name,context_window,max_output_tokens,
-                thinking_supported,thinking_budget,temperature,extra,created_at
-            )
-            values (
-                'legacy-route-record','provider-1','legacy-route-model','Legacy Route Model',128000,4096,
-                1,10000,0.2,'{}','2026-01-02'
-            )
-            """
-        )
-        con.execute(
-            """
-            create table app_settings (
-                namespace text primary key,
-                value text,
-                updated_at text
-            )
-            """
-        )
-        con.execute(
-            """
-            insert into app_settings (namespace,value,updated_at)
-            values ('lamwriter.modelRouting', '{"routes":{"writer":{"mode":"model","model_id":"legacy-route-record"}}}', '2026-01-01')
-            """
-        )
-        con.commit()
+def test_load_llm_config_ignores_member_model_routing_from_settings_jsonc(isolated_config_root: Path) -> None:
+    _write_jsonc_config(isolated_config_root, is_default_model=True)
+    _write_settings_jsonc(
+        isolated_config_root,
+        "lamwriter.modelRouting",
+        {"routes": {"writer": {"mode": "model", "model_id": "legacy-route-record"}}},
+    )
 
-    config = load_llm_config(db_path)
+    config = load_llm_config()
 
-    assert config.model_record_id == "model-record"
+    # lamwriter routing must not affect core; the jsonc default model wins.
     assert config.model_id == "model-name"
 
 
-def test_load_llm_config_uses_first_shared_model_when_core_routing_is_missing(tmp_path: Path) -> None:
-    db_path = tmp_path / "config.db"
-    _write_config_db(db_path)
+def test_load_llm_config_uses_default_jsonc_model_when_routing_missing(isolated_config_root: Path) -> None:
+    _write_jsonc_config(isolated_config_root, is_default_model=True)
 
-    config = load_llm_config(db_path)
+    config = load_llm_config()
 
-    assert config.model_record_id == "model-record"
+    assert config.model_record_id == "model-name"
     assert config.model_id == "model-name"
 
 
-@pytest.mark.asyncio
 async def test_core_cli_run_starts_and_watches_one_live_connection(monkeypatch, capsys, tmp_path: Path) -> None:
     observed: dict[str, object] = {}
 
@@ -629,7 +575,6 @@ async def test_core_cli_run_starts_and_watches_one_live_connection(monkeypatch, 
         SimpleNamespace(
             message=["write", "doc"],
             model_id="fake-model",
-            config_db="",
             core_db="",
             thread_id="",
             work_root=str(tmp_path),
@@ -713,9 +658,9 @@ async def test_core_cli_start_watch_uses_one_connection_and_binds_started_turn(m
     assert observed["start_result"] == {"runtime_start": {"turn_id": "turn-new"}}
 
 
-def test_core_cli_run_accepts_config_db_option(tmp_path: Path) -> None:
-    args = build_parser().parse_args(["run", "hello", "--config-db", str(tmp_path / "value")])
-    assert args.message == ["hello"]
+def test_core_cli_run_rejects_config_db_option(tmp_path: Path) -> None:
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["run", "hello", "--config-db", str(tmp_path / "value")])
 
 
 @pytest.mark.parametrize("flag", ["--core-db", "--run-dir", "--adapter-dir", "--plugin-root"])
@@ -1015,89 +960,33 @@ async def test_core_cli_run_loads_plugin_skill_roots(tmp_path: Path) -> None:
     assert Path(summary["artifacts"]["core_db"]).parent == tmp_path
 
 
-def test_core_cli_memory_dream_config_writes_app_settings(tmp_path: Path) -> None:
-    db_path = tmp_path / "config.db"
-    with sqlite3.connect(db_path) as con:
-        con.execute(
-            """
-            create table app_settings (
-                namespace text primary key,
-                value text,
-                updated_at text
-            )
-            """
-        )
-        con.commit()
-
-    assert core_cli.main(["memory", "dream", "config", "--enabled", "true", "--min-turns", "5", "--config-db", str(db_path)]) == 0
-
-    with sqlite3.connect(db_path) as con:
-        row = con.execute("select value from app_settings where namespace='core.dreaming'").fetchone()
-        assert row is not None
-        value = json.loads(row[0])
-        assert value["enabled"] is True
-        assert value["min_turns"] == 5
+def test_core_cli_memory_dream_config_writes_settings_jsonc(isolated_config_root: Path) -> None:
+    assert core_cli.main(["memory", "dream", "config", "--enabled", "true", "--min-turns", "5"]) == 0
+    path = isolated_config_root / "settings.jsonc"
+    assert path.is_file()
+    value = json.loads(path.read_text(encoding="utf-8"))["core"]["dreaming"]
+    assert value["enabled"] is True
+    assert value["min_turns"] == 5
 
 
-def test_core_cli_memory_dream_show_reports_saved_settings(tmp_path: Path, capsys) -> None:
-    db_path = tmp_path / "config.db"
-    with sqlite3.connect(db_path) as con:
-        con.execute(
-            """
-            create table app_settings (
-                namespace text primary key,
-                value text,
-                updated_at text
-            )
-            """
-        )
-        con.execute(
-            "insert into app_settings(namespace, value, updated_at) values('core.dreaming', ?, '2026-01-01')",
-            (json.dumps({"enabled": True, "min_turns": 7}),),
-        )
-        con.commit()
+def test_core_cli_memory_dream_show_reports_saved_settings(isolated_config_root: Path, capsys) -> None:
+    _write_settings_jsonc(isolated_config_root, "core.dreaming", {"enabled": True, "min_turns": 7})
 
-    rc = core_cli.main(["memory", "dream", "show", "--config-db", str(db_path)])
+    rc = core_cli.main(["memory", "dream", "show"])
     assert rc == 0
     captured = capsys.readouterr()
     assert "enabled:  yes" in captured.out
     assert "min_turns: 7" in captured.out
 
 
-def test_core_cli_memory_dream_show_defaults_when_absent(tmp_path: Path, capsys) -> None:
-    db_path = tmp_path / "config.db"
-    with sqlite3.connect(db_path) as con:
-        con.execute(
-            """
-            create table app_settings (
-                namespace text primary key,
-                value text,
-                updated_at text
-            )
-            """
-        )
-        con.commit()
-
-    rc = core_cli.main(["memory", "dream", "show", "--config-db", str(db_path)])
+def test_core_cli_memory_dream_show_defaults_when_absent(capsys) -> None:
+    rc = core_cli.main(["memory", "dream", "show"])
     assert rc == 0
     captured = capsys.readouterr()
     assert "enabled:  no" in captured.out
     assert "min_turns: 3" in captured.out
 
 
-def test_core_cli_memory_dream_config_validates_min_turns(tmp_path: Path) -> None:
-    db_path = tmp_path / "config.db"
-    with sqlite3.connect(db_path) as con:
-        con.execute(
-            """
-            create table app_settings (
-                namespace text primary key,
-                value text,
-                updated_at text
-            )
-            """
-        )
-        con.commit()
-
-    rc = core_cli.main(["memory", "dream", "config", "--min-turns", "0", "--config-db", str(db_path)])
+def test_core_cli_memory_dream_config_validates_min_turns(capsys) -> None:
+    rc = core_cli.main(["memory", "dream", "config", "--min-turns", "0"])
     assert rc == 1

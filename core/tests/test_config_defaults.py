@@ -19,6 +19,7 @@ def test_ensure_default_config_files_creates_every_default(tmp_path, isolated_co
         isolated_config_root / "AGENTS.md",
         isolated_config_root / "load_context.jsonc",
         isolated_config_root / "memory.md",
+        isolated_config_root / "model_retry.jsonc",
         isolated_config_root / "subagent" / "guide.md",
         isolated_config_root / "subagent" / "settings.json",
     } | _bundled_copied(isolated_config_root)

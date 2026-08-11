@@ -8,7 +8,7 @@
       @keydown.escape="dismiss"
     >
       <div class="float-approval-header">
-        <span class="float-approval-icon" aria-hidden="true">&#x1F6E1;&#xFE0F;</span>
+        <span class="float-approval-icon" aria-hidden="true"><ShieldCheck :size="16" :stroke-width="1.8" /></span>
         <span class="float-approval-title">{{ decisionTitle(currentDecision.part) }}</span>
         <button
           class="float-approval-close"
@@ -16,7 +16,7 @@
           aria-label="忽略此审批"
           title="忽略（可稍后在对话中处理）"
           @click="dismiss"
-        >&times;</button>
+        ><X :size="13" :stroke-width="1.8" aria-hidden="true" /></button>
       </div>
 
       <p v-if="decisionDetail(currentDecision.part)" class="float-approval-detail">
@@ -54,6 +54,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { ShieldCheck, X } from 'lucide-vue-next'
 import type { MessagePart } from '../types'
 
 // ---------------------------------------------------------------------------

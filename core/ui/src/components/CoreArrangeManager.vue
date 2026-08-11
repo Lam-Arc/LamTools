@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { X } from 'lucide-vue-next'
 import type { CoreArrangeJob } from '../durable/types'
 import { listArrangeJobs, createArrangeJob, updateArrangeJob, renameArrangeJob, editArrangeJob as editArrangeJobApi, listArrangeOccurrences } from '../durable/api'
 import { CoreAppServerClient, appServerUrl } from '../appServer'
+import UiSelect from './UiSelect.vue'
 
 const props = defineProps<{ workRoot?: string }>()
 const emit = defineEmits<{ back: [] }>()
@@ -45,6 +47,31 @@ const availableModels = ref<Array<{ id: string; display_name: string }>>([])
 const availableSessions = ref<Array<{ id: string; title: string }>>([])
 const availableProjects = ref<Array<{ id: string; name: string; work_root: string }>>([])
 const loadingSessions = ref(false)
+
+/* ---- UiSelect option lists ---- */
+const kindOptions = [
+  { value: 'routine', label: 'routine · 常规' },
+  { value: 'focus', label: 'focus · 专注' },
+]
+const sessionStrategyOptions = [
+  { value: 'new', label: '每次新建' },
+  { value: 'fixed', label: '固定会话' },
+]
+const scheduleTypeOptions = [
+  { value: 'once', label: '单次' },
+  { value: 'daily', label: '每天' },
+  { value: 'monthly', label: '每月' },
+  { value: 'interval', label: '间隔' },
+  { value: 'event', label: '事件' },
+]
+const modelOptions = computed(() => [
+  { value: '', label: '跟随默认' },
+  ...availableModels.value.map(m => ({ value: m.id, label: m.display_name })),
+])
+const threadOptions = computed(() => [
+  { value: '', label: loadingSessions.value ? '加载中…' : '-- 选择会话 --' },
+  ...availableSessions.value.map(s => ({ value: s.id, label: s.title || s.id.slice(0, 8) })),
+])
 
 let _configClient: CoreAppServerClient | null = null
 async function configRequest(method: string, params: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
@@ -430,7 +457,9 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
   <Teleport defer to=".workspace-shell">
     <div class="arrange-overlay" @click.self="$emit('back')">
       <div class="arrange-dialog">
-        <button class="arrange-card-close" type="button" aria-label="关闭安排" title="关闭安排" @click="$emit('back')">&times;</button>
+        <button class="arrange-card-close" type="button" aria-label="关闭安排" title="关闭安排" @click="$emit('back')">
+          <X :size="15" :stroke-width="1.8" aria-hidden="true" />
+        </button>
         <main class="arrange-page" :aria-busy="loading">
           <header class="arrange-header">
             <div>
@@ -479,43 +508,25 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
         <div class="form-row">
           <label class="form-field">
             <span>类型</span>
-            <select v-model="formKind">
-              <option value="routine">routine · 常规</option>
-              <option value="focus">focus · 专注</option>
-            </select>
+            <UiSelect :model-value="formKind" :options="kindOptions" aria-label="类型" @update:model-value="formKind = $event" />
           </label>
           <label class="form-field">
             <span>会话策略</span>
-            <select v-model="formSessionStrategy">
-              <option value="new">每次新建</option>
-              <option value="fixed">固定会话</option>
-            </select>
+            <UiSelect :model-value="formSessionStrategy" :options="sessionStrategyOptions" aria-label="会话策略" @update:model-value="formSessionStrategy = $event" />
           </label>
         </div>
         <label class="form-field">
           <span>模型 <em>可选</em></span>
-          <select v-model="formModelId">
-            <option value="">跟随默认</option>
-            <option v-for="m in availableModels" :key="m.id" :value="m.id">{{ m.display_name }}</option>
-          </select>
+          <UiSelect :model-value="formModelId" :options="modelOptions" placeholder="跟随默认" aria-label="模型" @update:model-value="formModelId = $event" />
         </label>
         <label v-if="formSessionStrategy === 'fixed'" class="form-field">
           <span>绑定会话</span>
-          <select v-model="formThreadId" :disabled="loadingSessions">
-            <option value="">{{ loadingSessions ? '加载中…' : '-- 选择会话 --' }}</option>
-            <option v-for="s in availableSessions" :key="s.id" :value="s.id">{{ s.title || s.id.slice(0, 8) }}</option>
-          </select>
+          <UiSelect :model-value="formThreadId" :options="threadOptions" :disabled="loadingSessions" placeholder="-- 选择会话 --" aria-label="绑定会话" @update:model-value="formThreadId = $event" />
         </label>
         <div class="form-row">
           <label class="form-field">
             <span>调度方式</span>
-            <select v-model="formScheduleType">
-              <option value="once">单次</option>
-              <option value="daily">每天</option>
-              <option value="monthly">每月</option>
-              <option value="interval">间隔</option>
-              <option value="event">事件</option>
-            </select>
+            <UiSelect :model-value="formScheduleType" :options="scheduleTypeOptions" direction="up" aria-label="调度方式" @update:model-value="formScheduleType = $event as 'once' | 'daily' | 'monthly' | 'interval' | 'event'" />
           </label>
           <label v-if="formScheduleType !== 'event' && formScheduleType !== 'interval'" class="form-field">
             <span>时区</span>
@@ -708,7 +719,7 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
               class="history-item"
             >
               <span class="history-time">{{ formatTime(occ.scheduled_at) }}</span>
-              <span class="history-status" :style="{ color: occ.status === 'completed' ? 'var(--green)' : occ.status === 'failed' ? 'var(--red)' : 'var(--muted)' }">
+              <span class="history-status" :style="{ color: occ.status === 'completed' ? 'var(--green)' : occ.status === 'failed' ? 'var(--red)' : 'color-mix(in srgb, var(--theme-main-text) 65%, transparent)' }">
                 {{ occ.status === 'completed' ? '完成' : occ.status === 'failed' ? '失败' : occ.status }}
               </span>
               <span v-if="occ.attempt_count > 1" class="history-attempts">×{{ occ.attempt_count }}</span>
@@ -746,7 +757,7 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
 .arrange-overlay {
   position: fixed;
   inset: var(--titlebar-offset, 36px) 0 0 0;
-  z-index: 90;
+  z-index: var(--z-modal);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -778,7 +789,7 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
   border: none;
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--theme-main-text, #f2efeb) 8%, transparent);
-  color: var(--muted, #a7a29b);
+  color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 65%, transparent);
   font-size: 18px;
   line-height: 1;
   cursor: pointer;
@@ -803,7 +814,7 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
 
 .arrange-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; max-width: 780px; margin: 0 auto 20px; }
 h1 { margin: 0 0 6px; font-size: 30px; letter-spacing: -.025em; }
-.arrange-header p, .text-button { color: var(--muted); }
+.arrange-header p, .text-button { color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 65%, transparent); }
 p { margin: 0; }
 button { font: inherit; } .text-button, .quiet-button { border: 0; background: transparent; color: inherit; cursor: pointer; }
 .text-button { padding: 0; } .quiet-button { padding: 7px 12px; border: 1px solid color-mix(in srgb, var(--theme-main-text, var(--text)) 10%, transparent); border-radius: var(--radius-sm); }
@@ -811,7 +822,7 @@ button { font: inherit; } .text-button, .quiet-button { border: 0; background: t
 .primary-button:disabled { opacity: .5; cursor: default; }
 .header-actions { display: flex; gap: 8px; align-items: center; }
 
-.arrange-loading, .arrange-empty { max-width: 780px; margin-inline: auto; padding: 28px 0; color: var(--muted); }
+.arrange-loading, .arrange-empty { max-width: 780px; margin-inline: auto; padding: 28px 0; color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 65%, transparent); }
 .arrange-error { max-width: 780px; margin-inline: auto; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 0; color: var(--red); }
 .arrange-error button { flex: none; min-height: 36px; padding: 6px 11px; border: 1px solid currentColor; border-radius: var(--radius-sm); background: transparent; color: inherit; cursor: pointer; }
 
@@ -820,15 +831,19 @@ button { font: inherit; } .text-button, .quiet-button { border: 0; background: t
 .form-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
 .form-body { display: flex; flex-direction: column; gap: 14px; }
 .form-field { display: flex; flex-direction: column; gap: 4px; }
-.form-field span { font-size: 13px; color: var(--muted); }
+.form-field span { font-size: 13px; color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 65%, transparent); }
 .form-field em { font-style: normal; color: var(--orange); }
-.form-field input, .form-field textarea, .form-field select {
+.form-field input, .form-field textarea {
   box-sizing: border-box; width: 100%; padding: 7px 10px;
   border: 1px solid color-mix(in srgb, var(--theme-main-text, var(--text)) 12%, transparent); border-radius: 6px;
   background: var(--theme-main-subtle-background, var(--bg)); color: var(--theme-main-text, var(--text)); font: inherit; font-size: 14px;
 }
+.form-field :deep(.ui-select-trigger) {
+  min-height: 36px;
+  border: 1px solid color-mix(in srgb, var(--theme-main-text, var(--text)) 12%, transparent); border-radius: 6px;
+  background: var(--theme-main-subtle-background, var(--bg)); color: var(--theme-main-text, var(--text)); font-size: 14px;
+}
 .form-field textarea { resize: vertical; min-height: 64px; }
-.form-field select { cursor: pointer; }
 .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .form-error { color: var(--red); font-size: 13px; }
 .form-actions { display: flex; gap: 8px; margin-top: 4px; }
@@ -854,25 +869,25 @@ button { font: inherit; } .text-button, .quiet-button { border: 0; background: t
 .card-title:hover { background: color-mix(in srgb, var(--theme-main-text, var(--text)) var(--alpha-hover), transparent); }
 .card-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .title-actions { display: flex; gap: 4px; flex-shrink: 0; }
-.action-btn { padding: 4px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; font-size: 13px; }
+.action-btn { padding: 4px 8px; border: 0; border-radius: 6px; background: transparent; color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 65%, transparent); cursor: pointer; font-size: 13px; }
 .action-btn:hover { background: color-mix(in srgb, var(--theme-main-text, var(--text)) var(--alpha-hover), transparent); color: var(--theme-main-text, var(--text)); }
 .action-btn:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .action-btn.danger { color: var(--red); }
 
 /* row 2: instruction */
 .instruction-row { flex-wrap: wrap; }
-.card-instruction { color: var(--muted); font-size: 13px; cursor: pointer; border-radius: 4px; padding: 2px 4px; margin: -2px -4px; white-space: pre-wrap; }
+.card-instruction { color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 65%, transparent); font-size: 13px; cursor: pointer; border-radius: 4px; padding: 2px 4px; margin: -2px -4px; white-space: pre-wrap; }
 .card-instruction:hover { background: color-mix(in srgb, var(--theme-main-text, var(--text)) var(--alpha-hover), transparent); color: var(--theme-main-text, var(--text)); }
 .card-instruction:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 
 /* row 3+4: meta */
-.meta-row, .trigger-row { color: var(--muted); font-size: 13px; }
+.meta-row, .trigger-row { color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 65%, transparent); font-size: 13px; }
 .meta-item { display: inline-flex; align-items: center; gap: 4px; }
 .meta-item.clickable { cursor: pointer; border-radius: 4px; padding: 1px 4px; margin: -1px -4px; }
 .meta-item.clickable:hover { background: color-mix(in srgb, var(--theme-main-text, var(--text)) var(--alpha-hover), transparent); color: var(--theme-main-text, var(--text)); }
 .meta-item.clickable:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
-.meta-item code { font-size: 12px; color: var(--muted); background: color-mix(in srgb, var(--theme-main-text, var(--text)) 6%, transparent); border-radius: 4px; padding: 1px 5px; }
-.meta-divider { color: var(--faint); }
+.meta-item code { font-size: 12px; color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 65%, transparent); background: color-mix(in srgb, var(--theme-main-text, var(--text)) 6%, transparent); border-radius: 4px; padding: 1px 5px; }
+.meta-divider { color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 45%, transparent); }
 .kind-badge { font-size: 11px; padding: 1px 6px; border-radius: 4px; background: color-mix(in srgb, var(--theme-main-text, var(--text)) 8%, transparent); }
 .kind-badge.focus { background: color-mix(in srgb, var(--orange) 20%, transparent); color: var(--orange); }
 
@@ -887,21 +902,21 @@ button { font: inherit; } .text-button, .quiet-button { border: 0; background: t
 .instruction-edit { resize: vertical; min-height: 48px; font-size: 13px; }
 .edit-hint { display: flex; gap: 4px; margin-top: 4px; }
 .mini-btn { padding: 3px 8px; border: 0; border-radius: var(--radius-sm); background: var(--theme-control-background, var(--blue)); color: var(--theme-control-text, #fff); cursor: pointer; font-size: 12px; }
-.mini-btn:last-child { background: transparent; color: var(--muted); }
+.mini-btn:last-child { background: transparent; color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 65%, transparent); }
 .mini-btn:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 
 /* expand */
-.expand-toggle, .error-toggle { padding: 0; border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 12px; }
+.expand-toggle, .error-toggle { padding: 0; border: 0; background: transparent; color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 65%, transparent); cursor: pointer; font-size: 12px; }
 .expand-toggle:hover, .error-toggle:hover { color: var(--theme-main-text, var(--text)); }
 .card-expand { margin-top: 8px; padding: 10px 12px; border-radius: var(--radius-sm); background: color-mix(in srgb, var(--theme-main-text, var(--text)) 4%, transparent); font-size: 13px; }
 
 .history-panel { max-height: 200px; overflow-y: auto; }
-.history-loading, .history-empty { color: var(--muted); }
+.history-loading, .history-empty { color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 65%, transparent); }
 .history-item { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
 .history-item + .history-item { border-top: 1px solid color-mix(in srgb, var(--theme-main-text, var(--text)) 5%, transparent); }
-.history-time { color: var(--muted); min-width: 140px; font-size: 12px; }
+.history-time { color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 65%, transparent); min-width: 140px; font-size: 12px; }
 .history-status { font-size: 12px; }
-.history-attempts { color: var(--muted); font-size: 11px; }
+.history-attempts { color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 65%, transparent); font-size: 11px; }
 
 .error-panel { color: var(--red); white-space: pre-wrap; word-break: break-all; font-size: 12px; }
 

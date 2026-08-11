@@ -36,7 +36,7 @@ from .loop import CoreLoopKernel
 from .policy import LoopPolicy
 from .state import KernelResult, KernelStep, KernelTurn, LoopDecision, LoopPhase, VerificationResult
 from .tracing import InMemoryTracer, NoopTracer, TraceSpan, Tracer
-from lamtools_core.llm.policy import BackoffStrategy, RetryPolicy
+from lamtools_core.llm.policy import RetryPolicy
 
 __all__ = [
     # State types
@@ -49,7 +49,6 @@ __all__ = [
     # Policy
     "LoopPolicy",
     "RetryPolicy",
-    "BackoffStrategy",
     # Protocol
     "RuntimeKit",
     # Kernel

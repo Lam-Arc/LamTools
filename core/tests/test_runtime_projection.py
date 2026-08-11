@@ -664,6 +664,39 @@ def test_runtime_projection_maps_flattened_cached_tokens_from_llm_usage_to_dict(
     assert event.usage["cache_hit_rate"] == 0.95
 
 
+def test_runtime_projection_maps_deepseek_prompt_cache_hit_tokens():
+    """DeepSeek usage reports cache reads as ``prompt_cache_hit_tokens``;
+    the projection must count them so the UI cache-hit-rate works."""
+    events = runtime_fact_to_run_item_events(
+        thread_id="thread-1",
+        event_id="event-1",
+        group="usage",
+        source="core",
+        phase="runtime.usage",
+        status="completed",
+        sequence=3,
+        metadata={
+            "payload": {
+                "turn_id": "turn-1",
+                "usage": {
+                    "prompt_tokens": 1000,
+                    "completion_tokens": 50,
+                    "prompt_cache_hit_tokens": 800,
+                    "prompt_cache_miss_tokens": 200,
+                },
+            }
+        },
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+
+    assert events is not None
+    assert len(events) == 1
+    event = events[0]
+    assert event.kind == "usage"
+    assert event.usage["cached_tokens"] == 800
+    assert event.usage["cache_hit_rate"] == 0.8
+
+
 def test_runtime_projection_keeps_stream_terminal_usage_without_text():
     events = runtime_fact_to_run_item_events(
         thread_id="thread-1",

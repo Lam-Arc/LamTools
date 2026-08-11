@@ -3,7 +3,6 @@
 __version__ = "0.2.1"
 
 from lamtools_core.llm import (
-    BackoffStrategy,
     ChatMessage,
     LLMClient,
     LLMRequest,

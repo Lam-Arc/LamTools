@@ -41,7 +41,10 @@
           class="text-btn"
           type="button"
           @click="toggleConfigView"
-        >{{ showConfig ? '返回列表' : '原始配置' }}</button>
+        >
+          <ChevronLeft v-if="showConfig" :size="13" :stroke-width="1.8" aria-hidden="true" />
+          {{ showConfig ? '返回列表' : '原始配置' }}
+        </button>
       </div>
     </div>
 
@@ -52,9 +55,12 @@
       </div>
       <form class="config-form" @submit.prevent="saveHookForm">
         <label class="field">事件
-          <select v-model="hookForm.event">
-            <option v-for="ev in eventOrder" :key="ev" :value="ev">{{ eventLabel(ev) }} ({{ ev }})</option>
-          </select>
+          <UiSelect
+            :model-value="hookForm.event"
+            :options="hookEventOptions"
+            aria-label="事件"
+            @update:model-value="hookForm.event = $event"
+          />
         </label>
         <label class="field">匹配器
           <input
@@ -63,12 +69,12 @@
           />
         </label>
         <label class="field">处理器类型
-          <select v-model="hookForm.handlerType">
-            <option value="command">command (Shell 命令)</option>
-            <option value="http">http (HTTP 请求)</option>
-            <option value="mcp">mcp (MCP 工具)</option>
-            <option value="prompt">prompt (内联提示)</option>
-          </select>
+          <UiSelect
+            :model-value="hookForm.handlerType"
+            :options="handlerTypeOptions"
+            aria-label="处理器类型"
+            @update:model-value="hookForm.handlerType = $event"
+          />
         </label>
         <label class="field">超时 (秒)
           <input
@@ -211,6 +217,8 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { ChevronLeft } from 'lucide-vue-next'
+import UiSelect from './UiSelect.vue'
 import type { CoreHookItem, CoreHookListPayload } from '../types'
 
 const props = defineProps<{
@@ -271,6 +279,16 @@ const eventOrder = [
   'PostToolUse',
   'PostToolUseFailure',
   'Stop',
+]
+
+const hookEventOptions = computed(() =>
+  eventOrder.map(ev => ({ value: ev, label: `${eventLabel(ev)} (${ev})` })),
+)
+const handlerTypeOptions = [
+  { value: 'command', label: 'command (Shell 命令)' },
+  { value: 'http', label: 'http (HTTP 请求)' },
+  { value: 'mcp', label: 'mcp (MCP 工具)' },
+  { value: 'prompt', label: 'prompt (内联提示)' },
 ]
 
 const groupedHooks = computed(() => {
@@ -608,6 +626,15 @@ onMounted(fetchHooks)
 
 .hook-form .config-form textarea {
   min-height: 72px;
+}
+
+/* UiSelect 在 hook 表单内对齐 .field input 的 control 配方 */
+.hook-form :deep(.ui-select-trigger) {
+  min-height: 34px;
+  border: 1px solid color-mix(in srgb, var(--settings-control-text, var(--theme-control-text)) 12%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--settings-control-solid, var(--theme-control-background)) 70%, transparent);
+  color: var(--settings-control-text, var(--theme-control-text));
 }
 
 .hook-form input[type="checkbox"] {

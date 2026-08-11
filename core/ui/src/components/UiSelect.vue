@@ -22,6 +22,7 @@ const props = defineProps<{
   /** Direction the menu opens: 'down' (default) or 'up' */
   direction?: 'up' | 'down'
   hideArrow?: boolean
+  disabled?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -53,6 +54,7 @@ const groupedOptions = computed(() => {
 })
 
 function toggle() {
+  if (props.disabled) return
   open.value = !open.value
 }
 
@@ -82,6 +84,7 @@ onUnmounted(() => {
     <button
       class="ui-select-trigger"
       type="button"
+      :disabled="disabled"
       :aria-label="ariaLabel || `当前选择：${selectedLabel}`"
       :aria-expanded="open"
       @click="toggle"
@@ -129,6 +132,11 @@ onUnmounted(() => {
   display: inline-flex;
   align-items: center;
   text-align: left;
+}
+
+.ui-select-trigger:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 .ui-select-trigger span:first-child {

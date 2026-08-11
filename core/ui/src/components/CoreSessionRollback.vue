@@ -21,7 +21,9 @@
           aria-label="刷新存档节点图"
           title="刷新节点"
           @click="loadGraph"
-        >↻</button>
+        >
+          <RefreshCw :size="14" :stroke-width="1.8" aria-hidden="true" />
+        </button>
       </div>
     </header>
 
@@ -179,6 +181,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { RefreshCw } from 'lucide-vue-next'
 
 export interface CoreSessionCheckpoint {
   id: string

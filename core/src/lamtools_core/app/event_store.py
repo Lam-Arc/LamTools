@@ -48,10 +48,9 @@ class AppEventEnvelope:
     client_message_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        data = {
             "event_id": self.event_id,
             "protocol_version": self.protocol_version,
-            "seq": self.seq,
             "thread_id": self.thread_id,
             "method": self.method,
             "payload": dict(self.payload or {}),
@@ -61,6 +60,13 @@ class AppEventEnvelope:
             "parent_item_id": self.parent_item_id,
             "client_message_id": self.client_message_id,
         }
+        # seq=0 means "no persisted anchor" (transient stream deltas published
+        # with a placeholder seq). Omitting it keeps clients from treating 0
+        # as a real ordering anchor — they must fall back to the item's
+        # existing seq (or leave it unset) until a real event lands.
+        if self.seq:
+            data["seq"] = self.seq
+        return data
 
 
 class SqlAlchemyAppEventStore:

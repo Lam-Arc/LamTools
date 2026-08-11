@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import sqlite3
 import threading
 import time
 from datetime import datetime, timezone
@@ -24,89 +23,60 @@ from lamtools_core.runtime.arrange import ArrangeManager
 from lamtools_core.runtime.observer import prepare_observer
 
 
-def _write_config_db(path: Path) -> None:
-    con = sqlite3.connect(path)
-    try:
-        con.execute(
-            """
-            create table llm_providers (
-                id text primary key,
-                name text,
-                api_type text,
-                base_url text,
-                api_key text,
-                extra text,
-                created_at text
-            )
-            """
-        )
-        con.execute(
-            """
-            create table llm_models (
-                id text primary key,
-                provider_id text,
-                model_id text,
-                display_name text,
-                context_window integer,
-                max_output_tokens integer,
-                thinking_supported integer,
-                thinking_budget integer,
-                temperature real,
-                extra text,
-                created_at text
-            )
-            """
-        )
-        con.execute(
-            """
-            insert into llm_providers (id,name,api_type,base_url,api_key,extra,created_at)
-            values ('provider-1','Provider','openai','https://example.test/v1','secret','{}','2026-01-01')
-            """
-        )
-        con.execute(
-            """
-            insert into llm_models (
-                id,provider_id,model_id,display_name,context_window,max_output_tokens,
-                thinking_supported,thinking_budget,temperature,extra,created_at
-            )
-            values (
-                'model-record','provider-1','model-name','Model Name',128000,4096,
-                1,10000,0.2,'{}','2026-01-01'
-            )
-            """
-        )
-        con.commit()
-    finally:
-        con.close()
+def _write_jsonc_config(config_root: Path) -> None:
+    """Write provider-1 + model-record jsonc (replaces the old config.db fixture)."""
+    provider_dir = config_root / "providers"
+    provider_dir.mkdir(parents=True, exist_ok=True)
+    (provider_dir / "provider-1.jsonc").write_text(
+        '{\n'
+        '  "id": "provider-1",\n'
+        '  "name": "Provider",\n'
+        '  "api_type": "openai",\n'
+        '  "base_url": "https://example.test/v1",\n'
+        '  "api_key": "secret"\n'
+        '}\n',
+        encoding="utf-8",
+    )
+    model_dir = config_root / "models"
+    model_dir.mkdir(parents=True, exist_ok=True)
+    (model_dir / "model-record.jsonc").write_text(
+        '{\n'
+        '  "model_id": "model-record",\n'
+        '  "display_name": "Model Name",\n'
+        '  "provider": "Provider",\n'
+        '  "provider_id": "provider-1",\n'
+        '  "context_window": 128000,\n'
+        '  "max_output_tokens": 4096,\n'
+        '  "temperature": 0.2,\n'
+        '  "thinking": {"supported": true, "budget": 10000}\n'
+        '}\n',
+        encoding="utf-8",
+    )
 
 
-def _write_two_model_config_db(path: Path) -> None:
-    _write_config_db(path)
-    con = sqlite3.connect(path)
-    try:
-        con.execute(
-            """
-            insert into llm_models (
-                id,provider_id,model_id,display_name,context_window,max_output_tokens,
-                thinking_supported,thinking_budget,temperature,extra,created_at
-            )
-            values (
-                'second-record','provider-1','second-provider-model','Second Model',128000,8192,
-                1,7000,0.3,'{}','2026-01-02'
-            )
-            """
-        )
-        con.commit()
-    finally:
-        con.close()
+def _write_two_model_jsonc_config(config_root: Path) -> None:
+    _write_jsonc_config(config_root)
+    model_dir = config_root / "models"
+    model_dir.mkdir(parents=True, exist_ok=True)
+    (model_dir / "second-record.jsonc").write_text(
+        '{\n'
+        '  "model_id": "second-record",\n'
+        '  "display_name": "Second Model",\n'
+        '  "provider": "Provider",\n'
+        '  "provider_id": "provider-1",\n'
+        '  "context_window": 128000,\n'
+        '  "max_output_tokens": 8192,\n'
+        '  "temperature": 0.3,\n'
+        '  "thinking": {"supported": true, "budget": 7000}\n'
+        '}\n',
+        encoding="utf-8",
+    )
 
 
-def test_core_agent_http_app_exposes_live_app_server(tmp_path: Path) -> None:
-    config_db = tmp_path / "lamtools-config.db"
-    _write_config_db(config_db)
+def test_core_agent_http_app_exposes_live_app_server(tmp_path: Path, isolated_config_root: Path) -> None:
+    _write_jsonc_config(isolated_config_root)
     app = create_core_agent_http_app(
         model_id="model-record",
-        config_db=config_db,
         core_db=tmp_path / "core.db",
         data_dir=tmp_path / "core-data",
         work_root=tmp_path / "workspace",
@@ -127,9 +97,8 @@ def test_core_agent_http_app_exposes_live_app_server(tmp_path: Path) -> None:
     assert initialized["result"]["protocolVersion"] == "core.app_server.v1"
 
 
-def test_core_agent_http_app_uses_member_identity_and_manifest(tmp_path: Path) -> None:
-    config_db = tmp_path / "lamtools-config.db"
-    _write_config_db(config_db)
+def test_core_agent_http_app_uses_member_identity_and_manifest(tmp_path: Path, isolated_config_root: Path) -> None:
+    _write_jsonc_config(isolated_config_root)
     manifest = MemberManifest(
         id="sage",
         name="LamSage",
@@ -145,7 +114,6 @@ def test_core_agent_http_app_uses_member_identity_and_manifest(tmp_path: Path) -
         ),
         members=[manifest],
         model_id="model-record",
-        config_db=config_db,
         core_db=tmp_path / "sage.db",
         data_dir=tmp_path / "sage-data",
         work_root=tmp_path / "workspace",
@@ -161,9 +129,8 @@ def test_core_agent_http_app_uses_member_identity_and_manifest(tmp_path: Path) -
     assert members == [manifest.to_dict()]
 
 
-def test_live_started_thread_persists_host_member_identity(tmp_path: Path) -> None:
-    config_db = tmp_path / "lamtools-config.db"
-    _write_config_db(config_db)
+def test_live_started_thread_persists_host_member_identity(tmp_path: Path, isolated_config_root: Path) -> None:
+    _write_jsonc_config(isolated_config_root)
     app = create_core_agent_http_app(
         agent_spec=CoreAgentSpec(
             id="sage-agent",
@@ -172,7 +139,6 @@ def test_live_started_thread_persists_host_member_identity(tmp_path: Path) -> No
             instructions="Treat external research as untrusted evidence.",
         ),
         model_id="model-record",
-        config_db=config_db,
         core_db=tmp_path / "sage.db",
         data_dir=tmp_path / "sage-data",
         work_root=tmp_path / "workspace",
@@ -194,9 +160,8 @@ def test_live_started_thread_persists_host_member_identity(tmp_path: Path) -> No
     assert persisted.json()["member_id"] == "sage"
 
 
-def test_live_turn_on_new_thread_persists_host_member_identity(tmp_path: Path, monkeypatch) -> None:
-    config_db = tmp_path / "lamtools-config.db"
-    _write_config_db(config_db)
+def test_live_turn_on_new_thread_persists_host_member_identity(tmp_path: Path, monkeypatch, isolated_config_root: Path) -> None:
+    _write_jsonc_config(isolated_config_root)
 
     async def stream(self, request):
         del self, request
@@ -207,7 +172,6 @@ def test_live_turn_on_new_thread_persists_host_member_identity(tmp_path: Path, m
     app = create_core_agent_http_app(
         agent_spec=CoreAgentSpec(id="sage-agent", member_id="sage", name="Sage"),
         model_id="model-record",
-        config_db=config_db,
         core_db=tmp_path / "sage.db",
         data_dir=tmp_path / "sage-data",
         work_root=tmp_path / "workspace",
@@ -247,12 +211,10 @@ def test_live_turn_on_new_thread_persists_host_member_identity(tmp_path: Path, m
     reason="TestClient tears down its asyncio loop before the background ArrangeWorker completes; "
     "arrange lifecycle is covered by direct ArrangeManager tests."
 )
-def test_core_agent_http_app_exposes_durable_goal_and_arrange_operations(tmp_path: Path) -> None:
-    config_db = tmp_path / "lamtools-config.db"
-    _write_config_db(config_db)
+def test_core_agent_http_app_exposes_durable_goal_and_arrange_operations(tmp_path: Path, isolated_config_root: Path) -> None:
+    _write_jsonc_config(isolated_config_root)
     app = create_core_agent_http_app(
         model_id="model-record",
-        config_db=config_db,
         core_db=tmp_path / "core.db",
         data_dir=tmp_path / "core-data",
         work_root=tmp_path / "workspace",
@@ -299,10 +261,9 @@ def test_core_agent_http_app_exposes_durable_goal_and_arrange_operations(tmp_pat
     assert status == "completed"
 
 
-def test_core_agent_http_restart_reclaims_running_arrange_occurrence(tmp_path: Path) -> None:
-    config_db = tmp_path / "lamtools-config.db"
+def test_core_agent_http_restart_reclaims_running_arrange_occurrence(tmp_path: Path, isolated_config_root: Path) -> None:
     core_db = tmp_path / "core.db"
-    _write_config_db(config_db)
+    _write_jsonc_config(isolated_config_root)
 
     async def seed_abandoned_job() -> tuple[str, str]:
         db = await open_core_app_db(core_db)
@@ -330,7 +291,6 @@ def test_core_agent_http_restart_reclaims_running_arrange_occurrence(tmp_path: P
     job_id, occurrence_id = asyncio.run(seed_abandoned_job())
     app = create_core_agent_http_app(
         model_id="model-record",
-        config_db=config_db,
         core_db=core_db,
         data_dir=tmp_path / "core-data",
         work_root=tmp_path / "workspace",
@@ -355,13 +315,12 @@ def test_core_agent_http_restart_reclaims_running_arrange_occurrence(tmp_path: P
     assert recovered["occurrence_id"] == occurrence_id
 
 
-def test_core_agent_http_startup_restores_persisted_observer(tmp_path: Path) -> None:
-    config_db = tmp_path / "lamtools-config.db"
+def test_core_agent_http_startup_restores_persisted_observer(tmp_path: Path, isolated_config_root: Path) -> None:
     core_db = tmp_path / "core.db"
     data_dir = tmp_path / "core-data"
     work_root = tmp_path / "workspace"
     work_root.mkdir()
-    _write_config_db(config_db)
+    _write_jsonc_config(isolated_config_root)
     script = work_root / "observer.py"
     script.write_text(
         "import json, time\n"
@@ -396,7 +355,6 @@ def test_core_agent_http_startup_restores_persisted_observer(tmp_path: Path) -> 
     job_id = asyncio.run(seed())
     app = create_core_agent_http_app(
         model_id="model-record",
-        config_db=config_db,
         core_db=core_db,
         data_dir=data_dir,
         work_root=work_root,
@@ -424,12 +382,10 @@ def test_core_agent_http_startup_restores_persisted_observer(tmp_path: Path) -> 
     assert status == "completed"
 
 
-def test_core_agent_http_app_owns_attachment_storage(tmp_path: Path) -> None:
-    config_db = tmp_path / "lamtools-config.db"
-    _write_config_db(config_db)
+def test_core_agent_http_app_owns_attachment_storage(tmp_path: Path, isolated_config_root: Path) -> None:
+    _write_jsonc_config(isolated_config_root)
     app = create_core_agent_http_app(
         model_id="model-record",
-        config_db=config_db,
         core_db=tmp_path / "core.db",
         data_dir=tmp_path / "core-data",
         work_root=tmp_path / "workspace",
@@ -449,14 +405,12 @@ def test_core_agent_http_app_owns_attachment_storage(tmp_path: Path) -> None:
     assert (tmp_path / "core-data" / "attachments" / "thread-attachment" / "notes.md").is_file()
 
 
-def test_core_http_sessions_survive_app_restart(tmp_path: Path) -> None:
-    config_db = tmp_path / "lamtools-config.db"
+def test_core_http_sessions_survive_app_restart(tmp_path: Path, isolated_config_root: Path) -> None:
     core_db = tmp_path / "core.db"
-    _write_config_db(config_db)
+    _write_jsonc_config(isolated_config_root)
 
     app = create_core_agent_http_app(
         model_id="model-record",
-        config_db=config_db,
         core_db=core_db,
         data_dir=tmp_path / "core-data",
         work_root=tmp_path / "workspace",
@@ -481,7 +435,6 @@ def test_core_http_sessions_survive_app_restart(tmp_path: Path) -> None:
 
     restarted_app = create_core_agent_http_app(
         model_id="model-record",
-        config_db=config_db,
         core_db=core_db,
         data_dir=tmp_path / "core-data",
         work_root=tmp_path / "workspace",
@@ -511,14 +464,12 @@ def test_core_http_sessions_survive_app_restart(tmp_path: Path) -> None:
     ]
 
 
-def test_core_http_session_delete_removes_persisted_thread(tmp_path: Path) -> None:
-    config_db = tmp_path / "lamtools-config.db"
+def test_core_http_session_delete_removes_persisted_thread(tmp_path: Path, isolated_config_root: Path) -> None:
     core_db = tmp_path / "core.db"
-    _write_config_db(config_db)
+    _write_jsonc_config(isolated_config_root)
 
     app = create_core_agent_http_app(
         model_id="model-record",
-        config_db=config_db,
         core_db=core_db,
         data_dir=tmp_path / "core-data",
         work_root=tmp_path / "workspace",
@@ -541,7 +492,6 @@ def test_core_http_session_delete_removes_persisted_thread(tmp_path: Path) -> No
 
     restarted_app = create_core_agent_http_app(
         model_id="model-record",
-        config_db=config_db,
         core_db=core_db,
         data_dir=tmp_path / "core-data",
         work_root=tmp_path / "workspace",
@@ -552,15 +502,13 @@ def test_core_http_session_delete_removes_persisted_thread(tmp_path: Path) -> No
     assert asyncio.run(list_core_cli_sessions(core_db=core_db)) == []
 
 
-def test_project_http_round_trip_survives_restart_and_uses_agents_md(tmp_path: Path) -> None:
-    config_db = tmp_path / "lamtools-config.db"
+def test_project_http_round_trip_survives_restart_and_uses_agents_md(tmp_path: Path, isolated_config_root: Path) -> None:
     core_db = tmp_path / "core.db"
     root = tmp_path / "workspace"
-    _write_config_db(config_db)
+    _write_jsonc_config(isolated_config_root)
 
     app = create_core_agent_http_app(
         model_id="model-record",
-        config_db=config_db,
         core_db=core_db,
         data_dir=tmp_path / "core-data",
         work_root=root,
@@ -611,7 +559,6 @@ def test_project_http_round_trip_survives_restart_and_uses_agents_md(tmp_path: P
 
     restarted_app = create_core_agent_http_app(
         model_id="model-record",
-        config_db=config_db,
         core_db=core_db,
         data_dir=tmp_path / "core-data",
         work_root=root,
@@ -620,12 +567,10 @@ def test_project_http_round_trip_survives_restart_and_uses_agents_md(tmp_path: P
         assert client.get(f"/api/core/projects/{project_id}").json()["name"] == "Docs"
 
 
-def test_project_http_delete_rejects_active_session_and_app_server_uses_project_operations(tmp_path: Path) -> None:
-    config_db = tmp_path / "lamtools-config.db"
-    _write_config_db(config_db)
+def test_project_http_delete_rejects_active_session_and_app_server_uses_project_operations(tmp_path: Path, isolated_config_root: Path) -> None:
+    _write_jsonc_config(isolated_config_root)
     app = create_core_agent_http_app(
         model_id="model-record",
-        config_db=config_db,
         core_db=tmp_path / "core.db",
         data_dir=tmp_path / "core-data",
         work_root=tmp_path / "workspace",
@@ -710,9 +655,8 @@ def _initialize_websocket(websocket) -> None:
     assert _receive_rpc_response(websocket, 2)["result"] == {"ok": True}
 
 
-def test_core_http_websocket_active_turn_steer_and_second_start_matrix(tmp_path: Path, monkeypatch) -> None:
-    config_db = tmp_path / "lamtools-config.db"
-    _write_config_db(config_db)
+def test_core_http_websocket_active_turn_steer_and_second_start_matrix(tmp_path: Path, monkeypatch, isolated_config_root: Path) -> None:
+    _write_jsonc_config(isolated_config_root)
     model_started = threading.Event()
     release_model = threading.Event()
     guided_call_seen = threading.Event()
@@ -734,7 +678,6 @@ def test_core_http_websocket_active_turn_steer_and_second_start_matrix(tmp_path:
     monkeypatch.setattr(CoreHttpLLMClient, "stream", fake_stream)
     app = create_core_agent_http_app(
         model_id="model-record",
-        config_db=config_db,
         core_db=tmp_path / "core.db",
         data_dir=tmp_path / "core-data",
         work_root=tmp_path / "workspace",
@@ -793,9 +736,8 @@ def test_core_http_websocket_active_turn_steer_and_second_start_matrix(tmp_path:
         registry.clear()
 
 
-def test_core_http_websocket_rejects_steer_after_kernel_seal_before_task_done(tmp_path: Path, monkeypatch) -> None:
-    config_db = tmp_path / "lamtools-config.db"
-    _write_config_db(config_db)
+def test_core_http_websocket_rejects_steer_after_kernel_seal_before_task_done(tmp_path: Path, monkeypatch, isolated_config_root: Path) -> None:
+    _write_jsonc_config(isolated_config_root)
     sealed_window = threading.Event()
     release_writeback = threading.Event()
     original_writeback = CoreBaseAgentKit.writeback
@@ -815,7 +757,6 @@ def test_core_http_websocket_rejects_steer_after_kernel_seal_before_task_done(tm
     monkeypatch.setattr(CoreBaseAgentKit, "writeback", blocking_writeback)
     app = create_core_agent_http_app(
         model_id="model-record",
-        config_db=config_db,
         core_db=tmp_path / "core.db",
         data_dir=tmp_path / "core-data",
         work_root=tmp_path / "workspace",
@@ -862,15 +803,12 @@ def test_core_http_websocket_rejects_steer_after_kernel_seal_before_task_done(tm
         registry.clear()
 
 
-def test_core_agent_http_app_exposes_shared_model_catalog_without_secrets(tmp_path: Path, monkeypatch) -> None:
-    # Isolate from the developer's real ~/.lam/config/models jsonc files so the
-    # DB-backed fallback path (rather than the jsonc path) is exercised.
-    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
-    config_db = tmp_path / "lamtools-config.db"
-    _write_config_db(config_db)
+def test_core_agent_http_app_exposes_shared_model_catalog_without_secrets(tmp_path: Path, isolated_config_root: Path) -> None:
+    # isolated_config_root (autouse conftest fixture) isolates from the
+    # developer's real ~/.lam/config jsonc files.
+    _write_jsonc_config(isolated_config_root)
     app = create_core_agent_http_app(
         model_id="model-record",
-        config_db=config_db,
         core_db=tmp_path / "core.db",
         data_dir=tmp_path / "core-data",
         work_root=tmp_path / "workspace",
@@ -887,26 +825,28 @@ def test_core_agent_http_app_exposes_shared_model_catalog_without_secrets(tmp_pa
             "provider_id": "provider-1",
             "provider_name": "Provider",
             "provider_api_type": "openai",
-            "model_id": "model-name",
+            "model_id": "model-record",
             "display_name": "Model Name",
             "context_window": 128000,
             "max_output_tokens": 4096,
             "thinking_supported": True,
             "thinking_budget": 10000,
             "temperature": 0.2,
+            "capability": "text",
+            "notes": "",
+            "is_default": False,
+            "adapter_profile_id": "",
         }
     ]
     assert "secret" not in response.text
 
 
-def test_core_agent_http_app_exposes_config_catalog_over_live_operations(tmp_path: Path, monkeypatch) -> None:
-    # Isolate from the developer's real ~/.lam/config/models jsonc files.
-    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
-    config_db = tmp_path / "lamtools-config.db"
-    _write_config_db(config_db)
+def test_core_agent_http_app_exposes_config_catalog_over_live_operations(tmp_path: Path, isolated_config_root: Path) -> None:
+    # isolated_config_root (autouse conftest fixture) isolates from the
+    # developer's real ~/.lam/config jsonc files.
+    _write_jsonc_config(isolated_config_root)
     app = create_core_agent_http_app(
         model_id="model-record",
-        config_db=config_db,
         core_db=tmp_path / "core.db",
         data_dir=tmp_path / "core-data",
         work_root=tmp_path / "workspace",
@@ -942,6 +882,8 @@ def test_core_agent_http_app_exposes_config_catalog_over_live_operations(tmp_pat
             "base_url": "https://example.test/v1",
             "api_key": "********",
             "has_api_key": True,
+            "is_default": False,
+            "extra": {},
         }
     ]
     assert "secret" not in str(providers)
@@ -963,9 +905,8 @@ def test_core_agent_http_app_exposes_config_catalog_over_live_operations(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_core_config_routing_llm_client_uses_per_request_model_and_thinking(tmp_path: Path, monkeypatch) -> None:
-    config_db = tmp_path / "lamtools-config.db"
-    _write_two_model_config_db(config_db)
+async def test_core_config_routing_llm_client_uses_per_request_model_and_thinking(tmp_path: Path, monkeypatch, isolated_config_root: Path) -> None:
+    _write_two_model_jsonc_config(isolated_config_root)
     captured: list[dict[str, object]] = []
 
     async def fake_stream(self, request):
@@ -981,7 +922,6 @@ async def test_core_config_routing_llm_client_uses_per_request_model_and_thinkin
 
     monkeypatch.setattr(CoreHttpLLMClient, "stream", fake_stream)
     client = CoreConfigRoutingLLMClient(
-        config_db_path=config_db,
         default_model_ref="model-record",
         thinking_enabled=True,
         thinking_budget=10000,
@@ -998,8 +938,8 @@ async def test_core_config_routing_llm_client_uses_per_request_model_and_thinkin
     assert [event.kind for event in events] == ["done"]
     assert captured == [
         {
-            "config_model": "second-provider-model",
-            "request_model": "second-provider-model",
+            "config_model": "second-record",
+            "request_model": "second-record",
             "thinking_enabled": False,
             "thinking_budget": 1234,
         }
@@ -1010,9 +950,9 @@ async def test_core_config_routing_llm_client_uses_per_request_model_and_thinkin
 async def test_core_config_routing_llm_client_uses_selected_model_output_limit_by_default(
     tmp_path: Path,
     monkeypatch,
+    isolated_config_root: Path,
 ) -> None:
-    config_db = tmp_path / "lamtools-config.db"
-    _write_two_model_config_db(config_db)
+    _write_two_model_jsonc_config(isolated_config_root)
     captured: list[int] = []
 
     async def fake_stream(self, request):
@@ -1021,7 +961,6 @@ async def test_core_config_routing_llm_client_uses_selected_model_output_limit_b
 
     monkeypatch.setattr(CoreHttpLLMClient, "stream", fake_stream)
     client = CoreConfigRoutingLLMClient(
-        config_db_path=config_db,
         default_model_ref="model-record",
         thinking_enabled=True,
         thinking_budget=10000,

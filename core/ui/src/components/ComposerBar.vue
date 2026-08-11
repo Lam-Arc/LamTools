@@ -8,6 +8,9 @@
       @dragleave="dragOver = false"
       @drop.prevent="$emit('drop', $event); dragOver = false"
     >
+      <div class="composer-ambient" :class="{ 'composer-ambient--on': active }" aria-hidden="true">
+        <span v-for="i in 7" :key="i" class="composer-particle" :style="{ '--i': i - 1 }" />
+      </div>
       <slot name="preamble" />
       <div class="composer-main-card">
         <slot name="status" />
@@ -65,6 +68,8 @@ withDefaults(defineProps<{
   stopLabel?: string
   sendTitle?: string
   stopTitle?: string
+  /** 运行时：背景粒子浮动层亮起（仅运行时出现的动效） */
+  active?: boolean
 }>(), {
   modelValue: '',
   placeholder: '输入内容...',
@@ -75,6 +80,7 @@ withDefaults(defineProps<{
   stopLabel: 'stop',
   sendTitle: '发送',
   stopTitle: '停止运行',
+  active: false,
 })
 
 defineEmits<{
@@ -90,6 +96,49 @@ const dragOver = ref(false)
 .composer-root--embedded {
   min-width: 0;
   width: 100%;
+}
+
+/* ── 背景粒子层：运行时亮起，粒子沿 y 轴浮动（stagger 100ms）── */
+.composer-ambient {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity .3s ease;
+  /* 上下边缘渐隐，粒子浮出边界时柔化消失，避免硬裁剪 */
+  -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 22%, #000 78%, transparent 100%);
+  mask-image: linear-gradient(180deg, transparent 0, #000 22%, #000 78%, transparent 100%);
+}
+.composer-ambient--on {
+  opacity: 1;
+}
+.composer-ambient:not(.composer-ambient--on) .composer-particle {
+  animation-play-state: paused;
+}
+.composer-particle {
+  position: absolute;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--green) 10%, transparent);
+  animation: composer-particle-float 3s ease-in-out infinite;
+  animation-delay: calc(var(--i) * 100ms);
+}
+/* 7 个粒子：位置错落、大小不一 */
+.composer-particle:nth-child(1) { left: 12%; top: 24%; width: 8px; height: 8px; }
+.composer-particle:nth-child(2) { left: 27%; top: 72%; width: 5px; height: 5px; }
+.composer-particle:nth-child(3) { left: 39%; top: 32%; width: 10px; height: 10px; }
+.composer-particle:nth-child(4) { left: 53%; top: 64%; width: 7px; height: 7px; }
+.composer-particle:nth-child(5) { left: 66%; top: 28%; width: 5px; height: 5px; }
+.composer-particle:nth-child(6) { left: 78%; top: 68%; width: 8px; height: 8px; }
+.composer-particle:nth-child(7) { left: 90%; top: 44%; width: 7px; height: 7px; }
+@keyframes composer-particle-float {
+  0%, 100% { transform: translateY(-50px); }
+  50% { transform: translateY(50px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .composer-particle {
+    animation: none;
+  }
 }
 
 .composer-root .floating-composer.composer-bar--embedded {

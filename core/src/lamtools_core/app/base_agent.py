@@ -40,6 +40,7 @@ from lamtools_core.tool.default_toolbox import ApprovalPolicy, CoreToolbox, buil
 from lamtools_core.tool.command_runner import command_shell_prompt
 from lamtools_core.tool.loadtools import mode_prompt_line
 from lamtools_core.tool.workspace import line_count
+from lamtools_core.tool.workspace_files import IMAGE_DATA_URL_METADATA_KEY
 from lamtools_core.app.project_context import ProjectContextLoader
 from lamtools_core.config.subagent_prompt import load_subagent_guide
 
@@ -67,6 +68,20 @@ def _redact_model_tool_evidence(value: str) -> str:
     for pattern in _MODEL_SECRET_PATTERNS:
         redacted = pattern.sub(r"\1[REDACTED]", redacted)
     return redacted
+
+
+def _find_image_data_url(result: ToolResult) -> str | None:
+    """从 tool result 提取 read_file 图片分支产生的 base64 data URL。"""
+    candidates: list[Any] = []
+    if isinstance(result.metadata, dict):
+        candidates.append(result.metadata.get(IMAGE_DATA_URL_METADATA_KEY))
+    for artifact in result.artifacts:
+        if isinstance(artifact.metadata, dict):
+            candidates.append(artifact.metadata.get(IMAGE_DATA_URL_METADATA_KEY))
+    for candidate in candidates:
+        if isinstance(candidate, str) and candidate:
+            return candidate
+    return None
 
 
 def _format_model_tool_evidence(result: ToolResult) -> str:
@@ -163,12 +178,14 @@ class CoreBaseAgentKit:
         config: CoreBaseAgentConfig | None = None,
         toolbox: CoreToolbox | None = None,
         verification_policy: VerificationPolicy | None = None,
+        allow_access_outside_workdir: bool = False,
     ) -> None:
         self.work_root = Path(work_root).resolve()
         self.config = config or CoreBaseAgentConfig()
         self.toolbox = toolbox or build_core_toolbox(
             work_root=self.work_root,
             approval_policy=self.config.approval_policy,
+            allow_access_outside_workdir=allow_access_outside_workdir,
         )
         self.verification_policy = verification_policy or VerificationPolicy()
         self._runtime_controls = self.config.runtime_controls or {}
@@ -183,31 +200,36 @@ class CoreBaseAgentKit:
         """Build a system-prompt line describing the model's input modality."""
         cap = (self.config.capability or "").strip().lower()
         if cap == "text":
-            # Resolve the default multimodal model from sub-agent settings.
-            from lamtools_core.config.subagent_prompt import load_subagent_settings
-            settings = load_subagent_settings(self.work_root)
-            mm_model = str(settings.get("default_multimodal_model") or "").strip()
-            if mm_model:
-                model_hint = f'（指定 model 为 "{mm_model}"）'
-                delegate_model = mm_model
+            # Resolve the default multimodal model from sub-agent settings,
+            # falling back to the first multimodal model in the store.
+            from lamtools_core.config.subagent_prompt import resolve_default_multimodal_model
+            delegate_model = resolve_default_multimodal_model(self.work_root)
+            if delegate_model:
+                model_hint = f'（指定 model 为 "{delegate_model}"）'
             else:
-                model_hint = "（指定 model 为支持图片的模型，如 Kimi-K2.6、Qwen3.5-397B-A17B、MiniMax-M2.5 等）"
-                delegate_model = "Kimi-K2.6"
+                model_hint = "（指定 model 为支持图片的模型）"
             base = (
                 "当前模型能力: 文本模型（不支持图片/视频/音频输入；这类附件内容不会发送给你，你无法看到图片）。"
                 "当用户附带图片且任务需要理解图片内容时，用 sub_agent 委派一个多模态模型"
                 f"{model_hint}去查看图片并返回文字描述，再据此继续。"
+                "read_file 读取图片文件时同样只返回文件说明（文件名/大小），你不会收到像素内容；"
+                "如需理解图片内容，用 sub_agent 委派多模态模型读取同一路径并返回文字描述。"
             )
             if deferred_attachments:
                 ids = ", ".join(f'"{i}"' for i in deferred_attachments)
+                model_arg = f', model="{delegate_model}"' if delegate_model else ""
                 base += (
                     f"\n当前有以下附件你无法直接查看（id: {ids}）。"
                     f"如需理解其内容，立即用 sub_agent(task=\"查看并描述附件内容\", "
-                    f"attachments=[{ids}], model=\"{delegate_model}\") 委派查看并返回文字描述。"
+                    f"attachments=[{ids}]{model_arg}) 委派查看并返回文字描述。"
                 )
             return base
         if cap == "multimodal":
-            return "当前模型能力: 多模态模型（支持图片输入）。"
+            return (
+                "当前模型能力: 多模态模型（支持图片输入）。"
+                "使用 read_file 读取图片文件（.png/.jpg/.jpeg/.gif/.webp/.avif/.bmp）时，"
+                "会随工具结果直接收到图片像素内容，可直接查看并描述。"
+            )
         return ""
 
     async def on_run_start(self, state: RuntimeState, turn_input: RuntimeTurnInput) -> None:
@@ -508,11 +530,22 @@ class CoreBaseAgentKit:
         call: ToolCall,
         result: ToolResult,
     ) -> ChatMessage:
+        evidence = _format_model_tool_evidence(result)
+        image_data_url = _find_image_data_url(result)
+        if image_data_url and (self.config.capability or "").strip().lower() == "multimodal":
+            # 多模态模型：图片以 image_url 块随文本 evidence 一起发送（text 块不含 base64，
+            # 12K 截断照旧只作用于文本）。文本模型不发图片块，仅保留 read_file 的说明文字。
+            content: str | list[dict[str, Any]] = [
+                {"type": "text", "text": evidence},
+                {"type": "image_url", "image_url": {"url": image_data_url, "detail": "auto"}},
+            ]
+        else:
+            content = evidence
         return ChatMessage(
             role="tool",
             name=call.name,
             tool_call_id=call.id,
-            content=_format_model_tool_evidence(result),
+            content=content,
         )
 
     async def verify(

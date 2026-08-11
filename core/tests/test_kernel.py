@@ -28,7 +28,8 @@ from lamtools_core.kernel import (
 )
 from lamtools_core.kernel.loop import _repair_incomplete_tool_history
 from lamtools_core.llm import ChatMessage, LLMClient, LLMRequest, LLMResponse, LLMStreamEvent, LLMToolCall
-from lamtools_core.llm.policy import BackoffStrategy, RetryPolicy
+from lamtools_core.llm.helpers import normalize_usage
+from lamtools_core.llm.policy import RetryPolicy
 from lamtools_core.prompt import PromptContext
 from lamtools_core.runtime import RuntimeState, RuntimeStateStore, RuntimeTaskRegistry, RuntimeToolStep, RuntimeTurnInput
 from lamtools_core.tool import ToolCall, ToolResult
@@ -1197,6 +1198,55 @@ class TestKernelEvents:
         assert input_events[-1].payload["arguments_text"] == arguments_text
 
     @pytest.mark.asyncio
+    async def test_standalone_usage_event_survives_into_done(self):
+        """A standalone usage chunk (usage without finish_reason, as sent by
+        OpenAI-compatible providers with stream_options.include_usage) must be
+        carried into the done event instead of dropped — otherwise streaming
+        turns lose cached-token / cache-hit-rate metrics entirely."""
+
+        class StandaloneUsageStreamLLM:
+            async def stream(self, request: LLMRequest):
+                _ = request
+                yield LLMStreamEvent(kind="content_delta", content="hi")
+                yield LLMStreamEvent(
+                    kind="usage",
+                    usage=normalize_usage({
+                        "prompt_tokens": 1000,
+                        "completion_tokens": 50,
+                        "prompt_cache_hit_tokens": 800,
+                        "prompt_cache_miss_tokens": 200,
+                    }),
+                )
+                yield LLMStreamEvent(kind="done", metadata={"finish_reason": "stop"})
+
+            async def complete(self, request: LLMRequest) -> LLMResponse:
+                raise AssertionError("streaming fixture must not fall back to complete()")
+
+        sink = CollectingEventSink()
+        kernel = _make_kernel(
+            MockRuntimeKit(),
+            llm_client=StandaloneUsageStreamLLM(),
+            event_sink=sink,
+        )
+
+        response = await kernel._stream_model(
+            LLMRequest(messages=[ChatMessage(role="user", content="hi")]),
+            RuntimeState(session_id="stream-session", run_id="stream-run"),
+            response_index=0,
+        )
+
+        assert response is not None
+        assert response.usage is not None
+        assert response.usage.cached_tokens == 800
+        done_deltas = [
+            event
+            for event in sink.events
+            if event.name == "runtime.reply_delta" and "done" in (event.tags or [])
+        ]
+        assert len(done_deltas) == 1
+        assert done_deltas[0].payload.get("usage", {}).get("cached_tokens") == 800
+
+    @pytest.mark.asyncio
     async def test_truncated_streamed_tool_arguments_are_not_executed(self):
         """An output-limit cutoff must not turn partial JSON into an empty tool call."""
 
@@ -2139,9 +2189,7 @@ class TestKernelModelCall:
         llm = FailingLLMClient()
         policy = LoopPolicy(model_retries=3)
         retry_policy = RetryPolicy(
-            backoff_strategy=BackoffStrategy.LINEAR,
-            initial_delay_seconds=0.25,
-            max_delay_seconds=1.0,
+            delay_sequence_seconds=(0.25, 0.5),
             jitter=False,
         )
         kernel = _make_kernel(
@@ -2940,10 +2988,8 @@ class TestKernelContextCompaction:
                 model_retries=3,
             ),
             retry_policy=RetryPolicy(
-                initial_delay_seconds=0,
-                max_delay_seconds=0,
+                delay_sequence_seconds=(0.0,),
                 jitter=False,
-                staged_delay_seconds=(),
             ),
         )
 
@@ -3010,10 +3056,8 @@ class TestKernelContextCompaction:
                 model_retries=3,
             ),
             retry_policy=RetryPolicy(
-                initial_delay_seconds=0,
-                max_delay_seconds=0,
+                delay_sequence_seconds=(0.0,),
                 jitter=False,
-                staged_delay_seconds=(),
             ),
         )
 

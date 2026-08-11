@@ -236,7 +236,7 @@ from lamtools_core.llm.helpers import (
     parse_tool_call_arguments,
     resolve_tool_calls,
 )
-from lamtools_core.llm.policy import BackoffStrategy, RetryPolicy
+from lamtools_core.llm.policy import RetryPolicy
 
 
 __all__ = [
@@ -266,6 +266,5 @@ __all__ = [
     "normalize_usage",
     "parse_tool_call_arguments",
     "resolve_tool_calls",
-    "BackoffStrategy",
     "RetryPolicy",
 ]

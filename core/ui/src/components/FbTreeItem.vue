@@ -7,7 +7,10 @@
       :style="{ paddingLeft: `${depth * varIndent + 6}px` }"
       @click="onClick"
     >
-      <span class="fb-tree-icon" aria-hidden="true">{{ icon }}</span>
+      <span class="fb-tree-icon" aria-hidden="true">
+        <component v-if="typeof icon !== 'string'" :is="icon" :size="13" :stroke-width="1.8" />
+        <template v-else>{{ icon }}</template>
+      </span>
       <span class="fb-tree-name" :title="entry.name">{{ entry.name }}</span>
     </button>
     <template v-if="expanded && entry.type === 'directory'">
@@ -31,6 +34,7 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
+import { ChevronDown, ChevronRight, EyeOff, FileText, Image, Lock, Music, Video, type LucideIcon } from 'lucide-vue-next'
 
 const props = defineProps<{
   entry: { name: string; type: 'directory' | 'file'; size: number; ext: string; path?: string }
@@ -65,25 +69,29 @@ const isSelected = computed(() => {
   return slashed(props.selectedPath) === slashed(childBase.value)
 })
 
-const icon = computed(() => {
+const icon = computed<LucideIcon | string>(() => {
   if (props.entry.type === 'directory') {
-    return expanded.value ? '▾' : '▸'
+    return expanded.value ? ChevronDown : ChevronRight
   }
   return fileIcon(props.entry.ext)
 })
 
-function fileIcon(ext: string): string {
+function fileIcon(ext: string): LucideIcon | string {
   const map: Record<string, string> = {
     ts: 'TS', tsx: 'TS', js: 'JS', jsx: 'JS', mjs: 'JS', cjs: 'JS',
     vue: 'V', py: 'PY', rs: 'RS', go: 'GO', java: 'JV', c: 'C', cpp: 'C+',
     json: '{}', css: '#', scss: '#', less: '#',
     html: '<>', xml: '<>', md: 'M', yml: 'Y', yaml: 'Y', toml: 'T',
-    png: '🖼', jpg: '🖼', jpeg: '🖼', gif: '🖼', webp: '🖼', svg: '🖼', ico: '🖼',
-    mp4: '▶', webm: '▶', mov: '▶', avi: '▶', mp3: '♪', wav: '♪', ogg: '♪',
-    pdf: 'P', txt: '¶', log: '¶',
-    lock: '🔒', gitignore: '🙈',
+    pdf: 'P',
   }
-  return map[ext] ?? '·'
+  if (map[ext]) return map[ext]
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico'].includes(ext)) return Image
+  if (['mp4', 'webm', 'mov', 'avi'].includes(ext)) return Video
+  if (['mp3', 'wav', 'ogg'].includes(ext)) return Music
+  if (ext === 'lock') return Lock
+  if (ext === 'gitignore') return EyeOff
+  if (ext === 'txt' || ext === 'log') return FileText
+  return '·'
 }
 
 async function onClick() {
@@ -158,7 +166,9 @@ function onChildNavigate(path: string) {
 .fb-tree-icon {
   flex: 0 0 auto;
   width: 18px;
-  text-align: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   font-size: 11px;
   opacity: 0.7;
 }

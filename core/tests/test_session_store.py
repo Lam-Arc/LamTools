@@ -1,7 +1,11 @@
 """Tests for lamtools_core.session module."""
 
+import asyncio
 from datetime import datetime, timedelta
+from pathlib import Path
 
+from lamtools_core.app.core_db import open_core_app_db
+from lamtools_core.app.core_session_store import CoreDbSessionStore
 from lamtools_core.session import InMemorySessionStore, MessageRecord, SessionRecord
 
 
@@ -195,3 +199,69 @@ class TestInMemorySessionStore:
         store.create(session)
         messages = store.list_messages("s1")
         assert messages == []
+
+
+class TestCoreDbSessionStoreConditionalTitlePatch:
+    """CoreDbSessionStore.patch(only_if_title_default=True) — the atomic guard
+    that keeps the autotitle task from clobbering a manual rename that landed
+    while the LLM was generating."""
+
+    async def _scenario(self, tmp_path: Path) -> dict:
+        db = await open_core_app_db(tmp_path / "core.db")
+        store = CoreDbSessionStore(lambda: db)
+
+        # Untouched session: title falls back to the bare session id.
+        await store.create(SessionRecord(id="t-default", member_id="core", title=None, status="idle"))
+        # Session with a manual/user title.
+        await store.create(SessionRecord(id="t-manual", member_id="core", title="用户标题", status="idle"))
+        # Session with a literal default placeholder.
+        await store.create(SessionRecord(id="t-placeholder", member_id="core", title="new session", status="idle"))
+
+        default_result = await store.patch("t-default", title="LLM 标题", only_if_title_default=True)
+        default_after = (await store.get("t-default")).title
+
+        manual_result = await store.patch("t-manual", title="LLM 标题", only_if_title_default=True)
+        manual_after = (await store.get("t-manual")).title
+
+        placeholder_result = await store.patch("t-placeholder", title="LLM 标题", only_if_title_default=True)
+        placeholder_after = (await store.get("t-placeholder")).title
+
+        # Regression: without the guard the patch still overwrites unconditionally.
+        unconditional = await store.patch("t-manual", title="无条件覆盖", only_if_title_default=False)
+        unconditional_after = (await store.get("t-manual")).title
+
+        await db.engine.dispose()
+        return {
+            "default_result": default_result,
+            "default_after": default_after,
+            "manual_result": manual_result,
+            "manual_after": manual_after,
+            "placeholder_result": placeholder_result,
+            "placeholder_after": placeholder_after,
+            "unconditional": unconditional,
+            "unconditional_after": unconditional_after,
+        }
+
+    def test_only_if_title_default(self, tmp_path: Path) -> None:
+        result = asyncio.run(self._scenario(tmp_path))
+        # Default (bare id) and literal placeholder titles are overwritten.
+        assert result["default_result"] is not None
+        assert result["default_after"] == "LLM 标题"
+        assert result["placeholder_result"] is not None
+        assert result["placeholder_after"] == "LLM 标题"
+        # A manual title is protected: patch returns None, title untouched.
+        assert result["manual_result"] is None
+        assert result["manual_after"] == "用户标题"
+        # Without the guard, the manual title is overwritten as before.
+        assert result["unconditional"] is not None
+        assert result["unconditional_after"] == "无条件覆盖"
+
+    def test_patch_missing_row_returns_none(self, tmp_path: Path) -> None:
+        async def scenario() -> None:
+            db = await open_core_app_db(tmp_path / "core-missing.db")
+            store = CoreDbSessionStore(lambda: db)
+            result = await store.patch("no-such-session", title="x", only_if_title_default=True)
+            await db.engine.dispose()
+            return result
+
+        assert asyncio.run(scenario()) is None

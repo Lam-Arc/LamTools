@@ -85,6 +85,7 @@ class KernelSubAgentRunner:
         load_tools: LoadTools | None = None,
         attachment_service: AttachmentServiceLike = None,
         imagegen_config: dict | None = None,
+        allow_access_outside_workdir: bool = False,
     ) -> None:
         self.work_root = Path(work_root)
         self.llm_client = llm_client
@@ -109,6 +110,7 @@ class KernelSubAgentRunner:
         self.load_tools = load_tools
         self.attachment_service = attachment_service
         self.imagegen_config = imagegen_config
+        self.allow_access_outside_workdir = allow_access_outside_workdir
 
     def _disabled_tools(self) -> set[str]:
         """Sub-agent disabled set: never sub_agent itself; generate_image only
@@ -203,6 +205,7 @@ class KernelSubAgentRunner:
             activated_mcp_servers=self.activated_mcp_servers,
             load_tools=self.load_tools,
             active_mode=effective_mode,
+            allow_access_outside_workdir=self.allow_access_outside_workdir,
         )
         agent_name = normalize_sub_session_agent_name(agent)
         child_sink = SubAgentEventForwardingSink(
@@ -264,11 +267,33 @@ class KernelSubAgentRunner:
             event_sink=event_sink,
             checkpoint_coordinator=self.checkpoint_coordinator,
             policy=LoopPolicy(
-                model_timeout_seconds=360,
-                context_window_tokens=self.context_window_tokens,
-                compact_trigger_ratio=self.compact_trigger_ratio,
+                **{
+                    **self._retry_policy_overrides(),
+                    "model_timeout_seconds": 360,
+                    "context_window_tokens": self.context_window_tokens,
+                    "compact_trigger_ratio": self.compact_trigger_ratio,
+                }
             ),
+            retry_policy=self._retry_policy(),
         )
+
+    def _retry_policy_overrides(self) -> dict[str, Any]:
+        """LoopPolicy retry knobs from model_retry.jsonc (config-file defaults)."""
+        from lamtools_core.config.retry_store import (
+            load_model_retry_config,
+            loop_policy_overrides,
+        )
+
+        return loop_policy_overrides(load_model_retry_config())
+
+    def _retry_policy(self) -> Any:
+        """Transport RetryPolicy from model_retry.jsonc."""
+        from lamtools_core.config.retry_store import (
+            load_model_retry_config,
+            retry_policy_from_config,
+        )
+
+        return retry_policy_from_config(load_model_retry_config())
 
     def _result_from_kernel(self, result: Any, *, model_id: str = "") -> SubAgentRunResult:
         last_turn = result.steps[-1].turn if result.steps else None
@@ -433,6 +458,7 @@ class KernelSubAgentRunner:
             imagegen_config=self.imagegen_config,
             activated_mcp_servers=self.activated_mcp_servers,
             load_tools=self.load_tools,
+            allow_access_outside_workdir=self.allow_access_outside_workdir,
         )
         tool_result = await approval_toolbox.execute(call)
         await child_sink.emit(CoreEvent(
@@ -526,6 +552,7 @@ class KernelSubAgentRunner:
             activated_mcp_servers=self.activated_mcp_servers,
             load_tools=self.load_tools,
             active_mode=effective_mode,
+            allow_access_outside_workdir=self.allow_access_outside_workdir,
         )
         agent_name = normalize_sub_session_agent_name(agent)
         child_sink = SubAgentEventForwardingSink(

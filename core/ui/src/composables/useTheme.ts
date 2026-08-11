@@ -42,6 +42,7 @@ export function useTheme(storageKey: string) {
         theme.value.mainOpacity,
       ),
       '--settings-main-text': theme.value.mainText,
+      '--settings-control-solid': theme.value.controlStops[0]?.color || '#3a3834',
       '--settings-card-background': gradientFromStops(
         theme.value.composerAngle,
         theme.value.composerStops,

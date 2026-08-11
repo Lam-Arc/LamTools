@@ -15,18 +15,14 @@
           <button class="text-btn" type="button" :disabled="settingsLoading || settingsSaving" @click="saveSettings">保存</button>
         </div>
       </div>
-      <select
-        v-model="defaultMmModel"
+      <UiSelect
+        :model-value="defaultMmModel"
         class="mm-select"
+        :options="mmModelOptions"
         :disabled="settingsLoading"
-      >
-        <option value="">未配置（使用内置兜底：Kimi-K2.6 等）</option>
-        <option
-          v-for="m in multimodalModels"
-          :key="m.id"
-          :value="m.display_name || m.model_id || m.id"
-        >{{ m.display_name || m.model_id || m.id }}</option>
-      </select>
+        aria-label="默认多模态解析模型"
+        @update:model-value="defaultMmModel = $event"
+      />
       <p class="hook-meta">
         当主模型为文本模型且需要理解图片/视频等附件时，能力提示词会引导主 Agent 用此模型委派 sub_agent 查看。仅显示已声明 <strong>多模态</strong> 能力的模型。保存到 <code>{{ settingsTargetPath }}</code>。
       </p>
@@ -59,6 +55,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import UiSelect from './UiSelect.vue'
 import type { CoreSettingsModel } from './CoreSettings.vue'
 
 const props = withDefaults(defineProps<{
@@ -148,6 +145,28 @@ const multimodalModels = computed(() =>
   (props.models ?? []).filter(m => m.capability === 'multimodal')
 )
 
+const mmModelOptions = computed(() => [
+  { value: '', label: `未配置（使用内置兜底：${fallbackLabel.value}）` },
+  ...multimodalModels.value.map(m => ({
+    value: m.display_name || m.model_id || m.id,
+    label: m.display_name || m.model_id || m.id,
+  })),
+])
+
+/** Built-in fallback when no default_multimodal_model is configured: the first
+ *  multimodal model by model_id — same ordering as the backend ModelStore. */
+const fallbackMultimodalModel = computed(() =>
+  [...(props.models ?? [])]
+    .filter(m => m.capability === 'multimodal')
+    .sort((a, b) => String(a.model_id || a.id || '').localeCompare(String(b.model_id || b.id || '')))[0] ?? null,
+)
+
+const fallbackLabel = computed(() => {
+  const m = fallbackMultimodalModel.value
+  if (!m) return '无多模态模型'
+  return m.display_name || m.model_id || m.id
+})
+
 async function fetchSettings() {
   settingsLoading.value = true
   error.value = ''
@@ -188,10 +207,10 @@ onMounted(() => {
   width: 100%;
   min-height: 320px;
   margin-top: 10px;
-  border: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 18%, transparent);
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--settings-main-text, #fff) 6%, transparent);
-  color: inherit;
+  border: 1px solid color-mix(in srgb, var(--settings-control-text, var(--settings-main-text, #fff)) 12%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--settings-control-solid, #343331) 70%, transparent);
+  color: var(--settings-control-text, var(--settings-main-text, #fff));
   padding: 9px;
   font-family: var(--font-mono);
   font-size: 13px;
@@ -202,11 +221,14 @@ onMounted(() => {
   width: 100%;
   max-width: 400px;
   margin-top: 8px;
-  padding: 6px 8px;
-  border: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 18%, transparent);
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--settings-main-text, #fff) 6%, transparent);
-  color: inherit;
+}
+
+.mm-select :deep(.ui-select-trigger) {
+  min-height: 34px;
+  border: 1px solid color-mix(in srgb, var(--settings-control-text, var(--settings-main-text, #fff)) 12%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--settings-control-solid, #343331) 70%, transparent);
+  color: var(--settings-control-text, var(--settings-main-text, #fff));
   font-size: 13px;
 }
 

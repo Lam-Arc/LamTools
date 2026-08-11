@@ -1,4 +1,4 @@
-// jsdom does not implement window.matchMedia; the beam sweep directive
+// jsdom does not implement window.matchMedia; the text flow directive
 // (v-beam) consults it on mount. Without a mock every test mounting
 // MessageView fails with "window.matchMedia is not a function".
 if (typeof window !== 'undefined' && !window.matchMedia) {

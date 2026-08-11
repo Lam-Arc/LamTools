@@ -9,7 +9,7 @@
     <MessageView
       v-for="msg in messages"
       :key="msg.id"
-      v-memo="[msg, assistantLabel, processExpandedIds.has(msg.id), typingMessageIds.has(msg.id), messageActions]"
+      v-memo="[msg, assistantLabel, processExpandedIds.has(msg.id), typingMessageIds.has(msg.id), messageActions, turnActive, activeTurnId, checkpointTurnIds]"
       :msg="msg"
         :assistant-label="assistantLabel"
         :process-expanded-ids="processExpandedIds"
@@ -18,10 +18,14 @@
       :api-base="apiBase"
       :project-id="projectId"
       :work-root="workRoot"
+      :active-turn-id="activeTurnId"
+      :turn-active="turnActive"
+      :checkpoint-turn-ids="checkpointTurnIds"
       @toggle-process="onToggleProcess"
         @decision-select="onDecisionSelect"
         @fork-message="onForkMessage"
         @rollback-message="onRollbackMessage"
+        @edit-message="onEditMessage"
       >
         <template v-if="$slots['message-product']" #message-product="slotProps">
           <slot name="message-product" v-bind="slotProps" />
@@ -42,7 +46,7 @@
 </template>
 
 <script setup lang="ts">
-import type { CoreMessage } from '../types'
+import type { CoreAttachment, CoreMessage } from '../types'
 import MessageView from './MessageView.vue'
 
 defineOptions({ name: 'ChatThread' })
@@ -72,6 +76,12 @@ const props = withDefaults(
     projectId?: string | null
     /** Project work_root — enables direct local file reads in Tauri (asset protocol) */
     workRoot?: string | null
+    /** 当前 active turn id（与 turnActive 搭配：消息属于运行中的 turn 时显示底部三圆点） */
+    activeTurnId?: string | null
+    /** 当前 turn 是否在运行（与 composer stop 按钮同一信号源） */
+    turnActive?: boolean
+    /** 有 checkpoint 的 turn ids：回退/分叉/编辑按钮依赖 checkpoint，无节点时不显示 */
+    checkpointTurnIds?: Set<string>
   }>(),
   {
     assistantLabel: 'Assistant',
@@ -81,6 +91,9 @@ const props = withDefaults(
     apiBase: '/api/core',
     projectId: null,
     workRoot: null,
+    activeTurnId: null,
+    turnActive: false,
+    checkpointTurnIds: () => new Set(),
   },
 )
 
@@ -89,6 +102,7 @@ const emit = defineEmits<{
   'decision-select': [payload: { partId: string; option: DecisionOption; response: string }]
   'fork-message': [payload: AssistantActionPayload]
   'rollback-message': [payload: AssistantActionPayload]
+  'edit-message': [payload: EditMessagePayload]
 }>()
 
 interface DecisionOption {
@@ -101,6 +115,13 @@ interface DecisionOption {
 interface AssistantActionPayload {
   turnId: string
   content: string
+}
+
+interface EditMessagePayload {
+  turnId: string
+  content: string
+  /** 原消息附件（已上传，随编辑重新发送，无需重新上传） */
+  attachments?: CoreAttachment[]
 }
 
 // Stable function references (not inline arrows) so MessageView props keep
@@ -120,6 +141,10 @@ function onForkMessage(payload: AssistantActionPayload): void {
 
 function onRollbackMessage(payload: AssistantActionPayload): void {
   emit('rollback-message', payload)
+}
+
+function onEditMessage(payload: EditMessagePayload): void {
+  emit('edit-message', payload)
 }
 </script>
 
@@ -149,9 +174,15 @@ function onRollbackMessage(payload: AssistantActionPayload): void {
   content-visibility: auto;
   contain-intrinsic-size: auto 220px;
   /* Isolate each message's layout/style invalidation so a streaming text
-     change doesn't reflow/re-render sibling messages (viewport-wide repaint
+     change doesn't reflow/render sibling messages (viewport-wide repaint
      showed up as 200-300ms render tasks on large threads). */
   contain: layout style;
+  /* Grid item auto minimum = min-content: any unbreakable content inside a
+     message (wide markdown table etc.) would stretch the whole chat-thread
+     column past the viewport, pushing right-aligned user bubbles off-screen
+     (horizontal scrollbar needed to read them). min-width: 0 keeps the column
+     within the viewport; wide content is contained at the part level instead. */
+  min-width: 0;
 }
 
 /* Per-part wrapper: v-memo cache key carrier. display:contents keeps the
@@ -511,8 +542,8 @@ function onRollbackMessage(payload: AssistantActionPayload): void {
   margin: 6px 0 8px 22px;
   position: relative;
   border: 1px solid color-mix(in srgb, var(--theme-main-text, #fff) 10%, transparent);
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--bg) 34%, transparent);
+  border-radius: var(--radius-sm);
+  background: var(--theme-main-sunken-background, rgba(0, 0, 0, 0.32));
 }
 .process-detail-panel--error {
   border-color: color-mix(in srgb, var(--red) 32%, transparent);
@@ -620,6 +651,40 @@ function onRollbackMessage(payload: AssistantActionPayload): void {
   color: var(--theme-main-text, var(--text));
   max-height: 320px;
   overflow: auto;
+}
+
+/* Command-run output — the one tool card styled as a dark terminal (all other
+   tool cards stay line-based/borderless). Also contains long output lines
+   horizontally instead of stretching the message column. */
+.command-output {
+  border: 1px solid color-mix(in srgb, var(--theme-main-text, #f2efeb) 18%, transparent);
+  border-radius: var(--radius-sm);
+  background: var(--theme-main-sunken-background, rgba(0, 0, 0, 0.32));
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  max-height: 320px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--theme-main-text, var(--text));
+}
+.command-output-command {
+  display: block;
+  margin-bottom: 6px;
+  color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 55%, transparent);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.command-output-result {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 .tool-output-meta {
   display: flex;
@@ -1050,34 +1115,30 @@ function onRollbackMessage(payload: AssistantActionPayload): void {
 }
 
 /* 运行态标题流光（工具行 / sub-agent 行通用）：
-   v-beam 指令给标题加 beam-host 并注入 beam-sweep 光束元素，
-   JS rAF 驱动 transform；只有 running 状态下光束才显示。
-   光束 = 聊天区背景主题变量（--theme-main-background），
-   mask 做左右渐隐 → 完全随主题联动；扫过时标题被背景色短暂覆盖，
-   范围被 overflow:hidden 限制在标题区域。 */
-.beam-host {
-  position: relative;
-  overflow: hidden;
+   v-beam 指令给 running 态标题加 .flow-text，通过 background-clip:text
+   与 JS rAF 驱动的 background-position 实现「文字本身渐变流动」。
+   为避免旧版 WebView2/Chromium<111 不支持 color-mix 导致渐变整条失效，
+   RGB 分量由 JS 从 --theme-main-text 解析后写入 --flow-r/g/b。 */
+.process-step--running .process-step-title,
+.sub-line--running .sub-line-title,
+.process-group-summary--running .process-group-text {
+  color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 58%, transparent);
 }
-.beam-sweep {
-  display: none;
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  width: 36%;
-  min-width: 40px;
-  background: var(--theme-main-background, #111111);
-  -webkit-mask-image: linear-gradient(to right, transparent, #000 32%, #000 68%, transparent);
-  mask-image: linear-gradient(to right, transparent, #000 32%, #000 68%, transparent);
-  pointer-events: none;
-  will-change: transform;
-  z-index: 1;
-}
-.process-step--running .process-step-title .beam-sweep,
-.sub-line--running .sub-line-title .beam-sweep,
-.process-group-summary--running .process-group-text .beam-sweep {
-  display: block;
+.process-step--running .process-step-title.flow-text,
+.sub-line--running .sub-line-title.flow-text,
+.process-group-summary--running .process-group-text.flow-text {
+  background-image: linear-gradient(
+    90deg,
+    rgba(var(--flow-r, 242), var(--flow-g, 239), var(--flow-b, 235), 0.18) 0%,
+    rgba(var(--flow-r, 242), var(--flow-g, 239), var(--flow-b, 235), 1) 30%,
+    rgba(var(--flow-r, 242), var(--flow-g, 239), var(--flow-b, 235), 1) 70%,
+    rgba(var(--flow-r, 242), var(--flow-g, 239), var(--flow-b, 235), 0.18) 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  will-change: background-position;
 }
 
 .sub-line-status {
@@ -1768,6 +1829,68 @@ function onRollbackMessage(payload: AssistantActionPayload): void {
 @media (prefers-reduced-motion: reduce) {
   .assistant-actions,
   .assistant-action {
+    transition: none;
+  }
+}
+
+/* ── User message hover actions & inline edit ── */
+.user-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 2px;
+  padding: 4px 0 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 150ms ease-out;
+}
+.user-row:hover .user-actions,
+.user-row:focus-within .user-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+.user-bubble.user-bubble--editing {
+  display: grid;
+  width: 100%;
+  max-width: 100%;
+  gap: 6px;
+  padding: 8px;
+}
+.user-bubble.user-bubble--editing .user-edit-input {
+  font-size: 13px;
+  line-height: 1.5;
+  font-family: var(--font-sans, inherit);
+}
+.user-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 2px;
+}
+.user-edit-button {
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 2px 10px;
+  background: transparent;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 46%, transparent);
+  font-size: 12px;
+  font-family: var(--font-sans, inherit);
+  cursor: pointer;
+  transition: background-color 150ms ease-out, color 150ms ease-out;
+}
+.user-edit-button:hover,
+.user-edit-button:focus-visible {
+  background: color-mix(in srgb, var(--theme-main-text, #fff) 9%, transparent);
+  color: var(--theme-main-text, #fff);
+}
+.user-edit-button--primary {
+  color: var(--theme-main-text, #fff);
+}
+.user-edit-button:focus-visible {
+  outline: 2px solid var(--blue, #79bcff);
+  outline-offset: 1px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .user-actions,
+  .user-edit-button {
     transition: none;
   }
 }

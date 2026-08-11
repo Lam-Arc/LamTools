@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -262,3 +263,92 @@ async def test_base_agent_omits_capability_line_when_capability_unknown(tmp_path
 
     system_prompt = str(request.messages[0].content)
     assert "当前模型能力" not in system_prompt
+
+
+# --- Default multimodal model resolution -----------------------------------
+
+
+def _write_model(config_dir: Path, model_id: str, *, capability: str) -> None:
+    """Write a minimal model jsonc into a config-root models dir."""
+    models_dir = config_dir / "models"
+    models_dir.mkdir(parents=True, exist_ok=True)
+    (models_dir / f"{model_id}.jsonc").write_text(
+        json.dumps({"model_id": model_id, "capability": capability}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
+def test_resolve_default_multimodal_model_prefers_settings(tmp_path, isolated_config_root):
+    from lamtools_core.config.subagent_prompt import resolve_default_multimodal_model
+
+    _write_model(isolated_config_root, "alpha-mm", capability="multimodal")
+    settings_dir = isolated_config_root / "subagent"
+    settings_dir.mkdir(parents=True, exist_ok=True)
+    (settings_dir / "settings.json").write_text(
+        json.dumps({"default_multimodal_model": "alpha-mm"}), encoding="utf-8"
+    )
+
+    assert resolve_default_multimodal_model(tmp_path / "work") == "alpha-mm"
+
+
+def test_resolve_default_multimodal_model_picks_first_multimodal_from_store(tmp_path, isolated_config_root):
+    from lamtools_core.config.subagent_prompt import resolve_default_multimodal_model
+
+    # Two multimodal models: "model-a" sorts before "model-b" by model_id.
+    _write_model(isolated_config_root, "model-b", capability="multimodal")
+    _write_model(isolated_config_root, "model-a", capability="multimodal")
+    # A text model must never be picked.
+    _write_model(isolated_config_root, "text-only", capability="text")
+
+    assert resolve_default_multimodal_model(tmp_path / "work") == "model-a"
+
+
+def test_resolve_default_multimodal_model_returns_none_without_multimodal(tmp_path, isolated_config_root):
+    from lamtools_core.config.subagent_prompt import resolve_default_multimodal_model
+
+    _write_model(isolated_config_root, "text-only", capability="text")
+
+    assert resolve_default_multimodal_model(tmp_path / "work") is None
+
+
+@pytest.mark.asyncio
+async def test_text_model_capability_prompt_uses_first_multimodal_model(tmp_path, isolated_config_root):
+    from lamtools_core.app.base_agent import CoreBaseAgentConfig, CoreBaseAgentKit
+    from lamtools_core.kernel.state import RuntimeState
+    from lamtools_core.prompt import PromptContext
+
+    _write_model(isolated_config_root, "alpha-mm", capability="multimodal")
+
+    kit = CoreBaseAgentKit(
+        work_root=tmp_path / "work",
+        config=CoreBaseAgentConfig(capability="text"),
+    )
+    request = await kit.build_model_request(
+        RuntimeState(session_id="cap-dynamic"),
+        PromptContext(session_id="cap-dynamic"),
+    )
+
+    system_prompt = str(request.messages[0].content)
+    assert '指定 model 为 "alpha-mm"' in system_prompt
+    assert "Kimi-K2.6" not in system_prompt
+
+
+@pytest.mark.asyncio
+async def test_text_model_capability_prompt_omits_concrete_model_when_none(tmp_path, isolated_config_root):
+    from lamtools_core.app.base_agent import CoreBaseAgentConfig, CoreBaseAgentKit
+    from lamtools_core.kernel.state import RuntimeState
+    from lamtools_core.prompt import PromptContext
+
+    kit = CoreBaseAgentKit(
+        work_root=tmp_path / "work",
+        config=CoreBaseAgentConfig(capability="text"),
+    )
+    request = await kit.build_model_request(
+        RuntimeState(session_id="cap-no-mm"),
+        PromptContext(session_id="cap-no-mm"),
+    )
+
+    system_prompt = str(request.messages[0].content)
+    assert "指定 model 为支持图片的模型" in system_prompt
+    assert 'model="' not in system_prompt
+    assert "Kimi-K2.6" not in system_prompt

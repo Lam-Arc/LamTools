@@ -486,11 +486,18 @@ defineExpose({ renderStreaming })
   text-decoration: underline;
 }
 
-/* Tables */
+/* Tables — like code blocks, wide tables scroll horizontally inside their
+   own box instead of stretching the message column (which pushes
+   right-aligned user bubbles past the viewport). display:block makes the
+   table box a block scroll container; the internal auto-laid-out table keeps
+   its natural column widths and scrolls when it doesn't fit. */
 .markdown-body :deep(table) {
   border-collapse: collapse;
   margin: 8px 0;
   width: 100%;
+  max-width: 100%;
+  display: block;
+  overflow-x: auto;
 }
 .markdown-body :deep(th),
 .markdown-body :deep(td) {

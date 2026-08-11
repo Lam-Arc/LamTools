@@ -10,10 +10,38 @@
       <!-- User message -->
       <div v-else-if="msg.role === 'user'" class="user-row">
         <div class="user-stack">
-          <div class="user-bubble">
-            <TypewriterText v-if="typingMessageIds?.has(msg.id)" :text="msg.content" />
-            <template v-else>{{ msg.content }}</template>
+          <div v-if="editingMessageId === msg.id" class="user-bubble user-bubble--editing">
+            <AutoTextarea
+              v-model="editDraft"
+              class="user-edit-input"
+              :min-rows="2"
+              :max-rows="6"
+              aria-label="编辑消息"
+              @keydown.ctrl.enter.prevent="confirmEditMessage(msg)"
+              @keydown.meta.enter.prevent="confirmEditMessage(msg)"
+              @keydown.esc.prevent="cancelEditMessage"
+            />
+            <div class="user-edit-actions">
+              <button
+                type="button"
+                class="user-edit-button user-edit-button--primary"
+                data-user-edit-confirm
+                @click="confirmEditMessage(msg)"
+              >发送</button>
+              <button
+                type="button"
+                class="user-edit-button"
+                data-user-edit-cancel
+                @click="cancelEditMessage"
+              >取消</button>
+            </div>
           </div>
+          <template v-else>
+            <div class="user-bubble">
+              <TypewriterText v-if="typingMessageIds?.has(msg.id)" :text="msg.content" />
+              <template v-else>{{ msg.content }}</template>
+            </div>
+          </template>
           <div v-if="attachmentParts(msg).length" class="message-attachment-list" aria-label="消息附件">
             <div
               v-for="part in attachmentParts(msg)"
@@ -24,13 +52,45 @@
               <span class="message-attachment-name">{{ attachmentName(part) }}</span>
             </div>
           </div>
+          <!-- Hover actions: copy / edit (hidden while editing this message) -->
+          <div
+            v-if="messageActions && editingMessageId !== msg.id && userActionable(msg)"
+            class="user-actions"
+            data-user-actions
+          >
+            <button
+              type="button"
+              class="assistant-action"
+              :class="{ 'assistant-action--copied': copiedActionId === msg.id }"
+              :title="copiedActionId === msg.id ? '已复制' : '复制消息'"
+              :aria-label="copiedActionId === msg.id ? '已复制' : '复制消息'"
+              data-user-copy
+              @click="copyAssistantMessage(msg)"
+            >
+              <Copy v-if="copiedActionId !== msg.id" :size="15" :stroke-width="1.8" aria-hidden="true" />
+              <Check v-else :size="15" :stroke-width="1.8" aria-hidden="true" />
+            </button>
+            <button
+              v-if="userHasCheckpoint(msg)"
+              type="button"
+              class="assistant-action"
+              title="编辑消息"
+              aria-label="编辑消息"
+              data-user-edit
+              @click="startEditMessage(msg)"
+            >
+              <Pencil :size="15" :stroke-width="1.8" aria-hidden="true" />
+            </button>
+          </div>
         </div>
       </div>
 
       <!-- System message (lifecycle, status, errors) -->
       <div v-else-if="msg.role === 'system'" class="system-row">
         <div class="system-bubble" :class="systemBubbleClass(msg)">
-          <span class="system-icon">{{ systemIcon(msg) }}</span>
+          <span class="system-icon">
+            <component :is="systemIcon(msg)" :size="14" :stroke-width="1.8" aria-hidden="true" />
+          </span>
           <span class="system-text">{{ msg.content }}</span>
         </div>
       </div>
@@ -428,6 +488,7 @@
                         <button
                           type="button"
                           class="process-group-summary"
+                          :class="{ 'process-group-summary--running': groupHasRunningPart(group) }"
                           @click="toggleGroupExpand(processGroupId(group))"
                         >
                           <span v-if="groupHasError(group)" class="process-step-marker process-step-marker--error" />
@@ -752,7 +813,7 @@
                         </div>
                         <ol class="checklist-items">
                           <li v-for="item in checklistItems(group.part)" :key="item.id" class="checklist-item" :class="'checklist-item--' + item.status">
-                            <span class="checklist-box">{{ item.checked ? '✓' : '' }}</span>
+                            <span class="checklist-box"><Check v-if="item.checked" :size="10" :stroke-width="2.4" aria-hidden="true" /></span>
                             <span class="checklist-text">{{ item.text }}</span>
                           </li>
                         </ol>
@@ -1313,7 +1374,7 @@
                     </div>
                     <ol class="checklist-items">
                       <li v-for="item in checklistItems(group.part)" :key="item.id" class="checklist-item" :class="'checklist-item--' + item.status">
-                        <span class="checklist-box">{{ item.checked ? '✓' : '' }}</span>
+                        <span class="checklist-box"><Check v-if="item.checked" :size="10" :stroke-width="2.4" aria-hidden="true" /></span>
                         <span class="checklist-text">{{ item.text }}</span>
                       </li>
                     </ol>
@@ -1382,6 +1443,11 @@
             </div>
           </div>
 
+          <!-- 输出中（turn 运行中，与 stop 按钮同步）：文字区域最下方三个圆点逐个显现循环 -->
+          <div v-if="isActiveTurnMessage(msg)" class="streaming-dots" role="status" aria-label="正在输出">
+            <span aria-hidden="true"></span><span aria-hidden="true"></span><span aria-hidden="true"></span>
+          </div>
+
           <!-- Message footer slot (for global stats line etc.) -->
           <slot name="message-footer" :message="msg" />
 
@@ -1400,12 +1466,11 @@
               data-message-copy
               @click="copyAssistantMessage(msg)"
             >
-              <svg viewBox="0 0 16 16" aria-hidden="true">
-                <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4" />
-                <path d="M10.5 4v-.5a1.5 1.5 0 0 0-1.5-1.5H4a1.5 1.5 0 0 0-1.5 1.5V11a1.5 1.5 0 0 0 1.5 1.5h.5" fill="none" stroke="currentColor" stroke-width="1.4" />
-              </svg>
+              <Copy v-if="copiedActionId !== msg.id" :size="15" :stroke-width="1.8" aria-hidden="true" />
+              <Check v-else :size="15" :stroke-width="1.8" aria-hidden="true" />
             </button>
             <button
+              v-if="hasTurnCheckpoint(msg)"
               type="button"
               class="assistant-action"
               title="从此处另开会话"
@@ -1413,14 +1478,10 @@
               data-message-fork
               @click="emit('fork-message', assistantActionPayload(msg))"
             >
-              <svg viewBox="0 0 16 16" aria-hidden="true">
-                <circle cx="5" cy="3.5" r="1.8" fill="none" stroke="currentColor" stroke-width="1.4" />
-                <circle cx="5" cy="12.5" r="1.8" fill="none" stroke="currentColor" stroke-width="1.4" />
-                <circle cx="11.5" cy="8" r="1.8" fill="none" stroke="currentColor" stroke-width="1.4" />
-                <path d="M5 5.3v5.4M5 12.5C5 10.4 5.8 8.8 7 8h4.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
-              </svg>
+              <GitFork :size="15" :stroke-width="1.8" aria-hidden="true" />
             </button>
             <button
+              v-if="hasTurnCheckpoint(msg)"
               type="button"
               class="assistant-action"
               title="回退到上一节点（对话与文件）"
@@ -1428,10 +1489,7 @@
               data-message-rollback
               @click="emit('rollback-message', assistantActionPayload(msg))"
             >
-              <svg viewBox="0 0 16 16" aria-hidden="true">
-                <path d="M7.5 3 4 6.5 7.5 10" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
-                <path d="M4.5 6.5h4a3.5 3.5 0 0 1 0 7h-3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
-              </svg>
+              <Undo2 :size="15" :stroke-width="1.8" aria-hidden="true" />
             </button>
           </div>
         </div>
@@ -1441,7 +1499,9 @@
   <Teleport to="body">
     <div v-if="previewImageSrc" class="image-preview-overlay" @click.self="previewImageSrc = ''" @keydown.esc="previewImageSrc = ''">
       <img :src="previewImageSrc" :alt="previewImageAlt" class="image-preview-full" />
-      <button type="button" class="image-preview-close" aria-label="关闭预览" @click="previewImageSrc = ''">✕</button>
+      <button type="button" class="image-preview-close" aria-label="关闭预览" @click="previewImageSrc = ''">
+        <X :size="18" :stroke-width="2" aria-hidden="true" />
+      </button>
     </div>
   </Teleport>
 </template>
@@ -1449,6 +1509,9 @@
 <script setup lang="ts">
 import type { CoreAttachment, CoreMessage, MessagePart, MessagePartStatus, ToolArtifact } from '../types'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { Check, Copy, GitFork, Hourglass, Info, Pencil, Undo2, X, type LucideIcon } from 'lucide-vue-next'
+import { assistantSegmentTurnId } from '../appServer'
+import AutoTextarea from './AutoTextarea.vue'
 import MarkdownRenderer from './MarkdownRenderer.vue'
 import TypewriterText from './TypewriterText.vue'
 import MessageView from './MessageView.vue'
@@ -1456,51 +1519,66 @@ import { autoFollowScrollDirective as vAutoFollowScroll } from '../directives/au
 
 /**
  * 运行态标题流光（工具行 / sub-agent 行通用）：v-beam 挂在标题元素上，
- * 自动在标题内创建光束元素，并用共享 rAF 循环逐帧驱动 transform。
+ * 给 running 态文字添加「文字本身渐变流动」效果。
  * WebView2 下纯 CSS animation（left/transform/background-position 均无效）不触发重绘，
  * 只有每帧直接写内联样式才可靠。
  */
-const beamEls = new Set<HTMLElement>()
-let beamRaf = 0
-let beamPos = -100
-let beamLast = 0
-let beamSkip = 0
-const BEAM_SPEED = 0.072 // 单位/毫秒：一次扫过约 400/0.072 ≈ 5.6s，约为初版速度的 75%
-function beamTick(ts: number) {
+const flowEls = new Set<HTMLElement>()
+let flowRaf = 0
+let flowPos = 200
+let flowLast = 0
+let flowSkip = 0
+const FLOW_SPEED = 0.036 // %/毫秒：background-size 200%，一次循环 200/0.036 ≈ 5.6s
+
+function parseColorToRgb(color: string): [number, number, number] {
+  // 用临时元素让浏览器把任意颜色格式归一化为 rgb/rgba
+  const probe = document.createElement('div')
+  probe.style.color = color
+  document.body.appendChild(probe)
+  const computed = window.getComputedStyle(probe).color
+  probe.remove()
+  const m = computed.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/)
+  return m ? [parseInt(m[1], 10), parseInt(m[2], 10), parseInt(m[3], 10)] : [242, 239, 235]
+}
+
+function flowTick(ts: number) {
   // Re-arm unconditionally so the rAF chain can never stall; only the style
   // write is throttled (~20fps = every 3rd frame). Conditional re-arming
   // (skip this frame unless counter % 3 === 0) deadlocks on the first tick
   // because frame 1 never re-arms frame 2.
-  beamRaf = requestAnimationFrame(beamTick)
-  beamSkip += 1
-  if (beamSkip % 3 !== 0) return
-  if (beamLast) beamPos += (ts - beamLast) * BEAM_SPEED
-  beamLast = ts
-  if (beamPos > 300) beamPos = -100
-  for (const el of beamEls) el.style.transform = `translateX(${beamPos}%)`
+  flowRaf = requestAnimationFrame(flowTick)
+  flowSkip += 1
+  if (flowSkip % 3 !== 0) return
+  if (flowLast) flowPos -= (ts - flowLast) * FLOW_SPEED
+  flowLast = ts
+  if (flowPos < 0) flowPos = 200
+  for (const el of flowEls) el.style.backgroundPositionX = `${flowPos}%`
 }
 const vBeam = {
   mounted(el: HTMLElement) {
-    // prefers-reduced-motion：不注入光束，标题保持静态（无动效回退）
+    // prefers-reduced-motion：不注入流光，标题保持静态（无动效回退）
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
-    const beam = document.createElement('span')
-    beam.className = 'beam-sweep'
-    beam.setAttribute('aria-hidden', 'true')
-    el.appendChild(beam)
-    el.classList.add('beam-host')
-    beamEls.add(beam)
-    if (beamEls.size === 1) beamRaf = requestAnimationFrame(beamTick)
-    ;(el as HTMLElement & { __beamSweep?: HTMLElement }).__beamSweep = beam
+    // 避免 color-mix（旧版 WebView2/Chromium<111 不支持），用 JS 算出主题文字色的 RGB
+    const themeText = window.getComputedStyle(el).getPropertyValue('--theme-main-text').trim() || '#f2efeb'
+    const [r, g, b] = parseColorToRgb(themeText)
+    el.style.setProperty('--flow-r', String(r))
+    el.style.setProperty('--flow-g', String(g))
+    el.style.setProperty('--flow-b', String(b))
+    el.classList.add('flow-text')
+    el.style.backgroundPositionX = '200%'
+    flowEls.add(el)
+    if (flowEls.size === 1) flowRaf = requestAnimationFrame(flowTick)
   },
   unmounted(el: HTMLElement) {
-    const beam = (el as HTMLElement & { __beamSweep?: HTMLElement }).__beamSweep
-    if (beam) {
-      beamEls.delete(beam)
-      beam.remove()
-    }
-    if (beamEls.size === 0 && beamRaf) {
-      cancelAnimationFrame(beamRaf)
-      beamRaf = 0
+    el.classList.remove('flow-text')
+    el.style.backgroundPositionX = ''
+    el.style.removeProperty('--flow-r')
+    el.style.removeProperty('--flow-g')
+    el.style.removeProperty('--flow-b')
+    flowEls.delete(el)
+    if (flowEls.size === 0 && flowRaf) {
+      cancelAnimationFrame(flowRaf)
+      flowRaf = 0
     }
   },
 }
@@ -1531,6 +1609,12 @@ const props = withDefaults(
     projectId?: string | null
     /** Project work_root — enables direct local file reads in Tauri (asset protocol) */
     workRoot?: string | null
+    /** 当前 active turn id（与 turnActive 搭配：消息属于运行中的 turn 时显示底部三圆点） */
+    activeTurnId?: string | null
+    /** 当前 turn 是否在运行（与 composer stop 按钮同一信号源） */
+    turnActive?: boolean
+    /** 有 checkpoint 的 turn ids：回退/分叉/编辑按钮依赖 checkpoint，无节点时不显示 */
+    checkpointTurnIds?: Set<string>
   }>(),
   {
     assistantLabel: 'Assistant',
@@ -1540,6 +1624,9 @@ const props = withDefaults(
     apiBase: '/api/core',
     projectId: null,
     workRoot: null,
+    activeTurnId: null,
+    turnActive: false,
+    checkpointTurnIds: () => new Set(),
   },
 )
 
@@ -1548,11 +1635,19 @@ const emit = defineEmits<{
   'decision-select': [payload: { partId: string; option: DecisionOption; response: string }]
   'fork-message': [payload: AssistantActionPayload]
   'rollback-message': [payload: AssistantActionPayload]
+  'edit-message': [payload: EditMessagePayload]
 }>()
 
 interface AssistantActionPayload {
   turnId: string
   content: string
+}
+
+interface EditMessagePayload {
+  turnId: string
+  content: string
+  /** 原消息附件（已上传，随编辑重新发送，无需重新上传） */
+  attachments?: CoreAttachment[]
 }
 
 const decisionGuideDrafts = ref<Record<string, string>>({})
@@ -2050,6 +2145,16 @@ function isLiveMessage(msg: CoreMessage): boolean {
   return !!(msg.metadata as Record<string, unknown>)?.live
 }
 
+/**
+ * 消息所属 turn 当前正在运行（与 composer stop 按钮的 isCoreActiveTurnStatus 同步）。
+ * 显示条件：turnActive（running/waiting/interrupting）且该消息属于 active turn。
+ */
+function isActiveTurnMessage(msg: CoreMessage): boolean {
+  return props.turnActive === true
+    && typeof props.activeTurnId === 'string' && props.activeTurnId !== ''
+    && assistantSegmentTurnId(msg.id) === props.activeTurnId
+}
+
 function isInitialWaitingMessage(msg: CoreMessage): boolean {
   return !!(msg.metadata as Record<string, unknown>)?.initialWaiting
 }
@@ -2117,12 +2222,12 @@ function systemBubbleClass(msg: CoreMessage): string {
   return 'system-bubble--info'
 }
 
-function systemIcon(msg: CoreMessage): string {
+function systemIcon(msg: CoreMessage): LucideIcon {
   const meta = (msg.metadata || {}) as Record<string, unknown>
-  if (meta.systemKind === 'error' || meta.systemKind === 'failed') return '✕'
-  if (meta.systemKind === 'done' || meta.systemKind === 'completed') return '✓'
-  if (meta.systemKind === 'waiting') return '⏳'
-  return 'ℹ'
+  if (meta.systemKind === 'error' || meta.systemKind === 'failed') return X
+  if (meta.systemKind === 'done' || meta.systemKind === 'completed') return Check
+  if (meta.systemKind === 'waiting') return Hourglass
+  return Info
 }
 
 function isProcessExpanded(msg: CoreMessage): boolean {
@@ -2207,6 +2312,50 @@ function answerContent(msg: CoreMessage): string {
   return String(liveModelText?.content || '').trim()
 }
 
+// ── User message hover actions: copy / edit ──
+
+const editingMessageId = ref('')
+const editDraft = ref('')
+
+/** Extract the turn id from a `{turn_id}:user` message id (queue guide
+ *  messages `…:user:guide:…` don't match and are not editable). */
+function userTurnId(msg: CoreMessage): string {
+  const id = String(msg.id || '')
+  return id.endsWith(':user') ? id.slice(0, id.length - ':user'.length) : ''
+}
+
+function userActionable(msg: CoreMessage): boolean {
+  return Boolean(userTurnId(msg) && String(msg.content || '').trim())
+}
+
+function userHasCheckpoint(msg: CoreMessage): boolean {
+  const turnId = userTurnId(msg)
+  return Boolean(turnId && props.checkpointTurnIds.has(turnId))
+}
+
+function startEditMessage(msg: CoreMessage) {
+  editDraft.value = String(msg.content || '')
+  editingMessageId.value = msg.id
+}
+
+function cancelEditMessage() {
+  editingMessageId.value = ''
+  editDraft.value = ''
+}
+
+function confirmEditMessage(msg: CoreMessage) {
+  const content = editDraft.value.trim()
+  if (!content) return
+  emit('edit-message', {
+    turnId: userTurnId(msg),
+    content,
+    attachments: attachmentParts(msg)
+      .map(part => attachmentFromPart(part))
+      .filter((attachment): attachment is CoreAttachment => attachment !== null),
+  })
+  cancelEditMessage()
+}
+
 // ── Assistant reply hover actions ──
 
 const copiedActionId = ref('')
@@ -2215,8 +2364,14 @@ let copiedActionTimer: ReturnType<typeof setTimeout> | null = null
 function assistantTurnId(msg: CoreMessage): string {
   const id = String(msg.id || '')
   if (!id.startsWith('assistant:')) return ''
-  const turnId = id.slice('assistant:'.length)
-  return turnId && !turnId.startsWith('waiting:') ? turnId : ''
+  const rest = id.slice('assistant:'.length)
+  if (!rest || rest.startsWith('waiting:')) return ''
+  // Mid-turn guide messages split a turn into several assistant segments
+  // (`assistant:<turn>` for the first, `assistant:<turn>#<n>` for later ones;
+  // turn ids contain colons, so `#` is the segment marker); fork/rollback
+  // target the whole turn, so strip the segment suffix.
+  const hash = rest.indexOf('#')
+  return hash >= 0 ? rest.slice(0, hash) : rest
 }
 
 function assistantActionable(msg: CoreMessage): boolean {
@@ -2225,6 +2380,11 @@ function assistantActionable(msg: CoreMessage): boolean {
 
 function assistantActionPayload(msg: CoreMessage): AssistantActionPayload {
   return { turnId: assistantTurnId(msg), content: answerContent(msg) }
+}
+
+function hasTurnCheckpoint(msg: CoreMessage): boolean {
+  const turnId = assistantTurnId(msg)
+  return Boolean(turnId && props.checkpointTurnIds.has(turnId))
 }
 
 async function copyAssistantMessage(msg: CoreMessage) {
@@ -2617,11 +2777,16 @@ const IMAGE_URI_RE = /\.(png|jpe?g|webp|gif)$/i
 function imageArtifacts(part: MessagePart): Array<ToolArtifact & { artifact_id?: string }> {
   return (part.artifacts || []).filter(
     (artifact): artifact is ToolArtifact & { artifact_id?: string } =>
-      artifact.kind === 'image' || (typeof artifact.uri === 'string' && IMAGE_URI_RE.test(artifact.uri)),
+      artifact.kind === 'image'
+      || (typeof artifact.uri === 'string' && IMAGE_URI_RE.test(artifact.uri))
+      || typeof artifact.metadata?.image_data_url === 'string', // read_file 图片结果（base64 data URL）
   )
 }
 
-function imageSrc(artifact: { uri?: string; artifact_id?: string }): string {
+function imageSrc(artifact: { uri?: string; artifact_id?: string; metadata?: Record<string, unknown> }): string {
+  // read_file 图片结果：base64 data URL 直接内联渲染，不走 HTTP/本地文件路径
+  const dataUrl = artifact.metadata?.image_data_url
+  if (typeof dataUrl === 'string' && dataUrl.startsWith('data:image')) return dataUrl
   const base = (props.apiBase || '/api/core').replace(/\/+$/, '')
   let path = typeof artifact.uri === 'string' ? artifact.uri : ''
   if (path.startsWith('workspace://')) path = path.slice('workspace://'.length)

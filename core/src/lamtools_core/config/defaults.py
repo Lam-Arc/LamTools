@@ -123,6 +123,12 @@ def ensure_default_config_files() -> list[Path]:
         if _write_if_missing(config_dir / name, content):
             created.append(config_dir / name)
 
+    # Model request retry configuration.
+    from lamtools_core.config.retry_store import DEFAULT_MODEL_RETRY_JSONC
+
+    if _write_if_missing(config_dir / "model_retry.jsonc", DEFAULT_MODEL_RETRY_JSONC):
+        created.append(config_dir / "model_retry.jsonc")
+
     # Sub-agent delegation guide + settings.
     from lamtools_core.config.subagent_prompt import (
         DEFAULT_SUBAGENT_GUIDE,

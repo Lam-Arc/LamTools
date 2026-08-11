@@ -131,6 +131,7 @@ class ApprovalGate:
         command_policies: dict[str, object] | None = None,
         active_tier: PermissionMode | None = None,
         tier_tools: TierTools | None = None,
+        allow_access_outside_workdir: bool = False,
     ) -> None:
         self.work_root = Path(work_root).resolve()
         self.tool_permissions = dict(tool_permissions)
@@ -139,6 +140,7 @@ class ApprovalGate:
         self.command_policies = normalize_command_policies(command_policies)
         self.active_tier = active_tier
         self.tier_tools = tier_tools or {"read_only": set(), "limited_edit": set(), "full_edit": set()}
+        self.allow_access_outside_workdir = allow_access_outside_workdir
 
     def check(self, tool_name: str, params: dict[str, Any] | None = None) -> ToolApprovalDecision:
         params = params or {}
@@ -148,7 +150,10 @@ class ApprovalGate:
         if block_reason:
             return ToolApprovalDecision(False, block_reason, base_tier, blocked=True)
 
-        if tool_name in {"read_file", "write_file", "edit_file"}:
+        # Workdir bounds check is bypassed when the user allows access outside
+        # work_root (settings core.runtimeControls.allow_access_outside_workdir);
+        # sensitive-pattern hard blocks above still apply.
+        if tool_name in {"read_file", "write_file", "edit_file"} and not self.allow_access_outside_workdir:
             path_check = self._check_path_bounds(params)
             if path_check:
                 return ToolApprovalDecision(False, path_check, base_tier, blocked=True)

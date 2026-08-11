@@ -198,6 +198,33 @@ class TestNormalizeUsage:
         assert usage.cached_tokens == 1100
         assert usage.cache_creation_tokens == 200
 
+    def test_deepseek_prompt_cache_hit_tokens(self):
+        """DeepSeek reports cache reads as prompt_cache_hit_tokens at the
+        top level of usage — these must count as cached_tokens."""
+        usage = normalize_usage({
+            "prompt_tokens": 1000,
+            "completion_tokens": 50,
+            "prompt_cache_hit_tokens": 800,
+            "prompt_cache_miss_tokens": 200,
+        })
+        assert usage is not None
+        assert usage.cached_tokens == 800
+
+    def test_deepseek_prompt_cache_hit_tokens_round_trip(self):
+        """normalize_usage(to_dict(normalize_usage(raw))) keeps the DeepSeek
+        cache count across the kernel → projection boundary."""
+        raw = {
+            "prompt_tokens": 1000,
+            "completion_tokens": 50,
+            "prompt_cache_hit_tokens": 800,
+            "prompt_cache_miss_tokens": 200,
+        }
+        first = normalize_usage(raw)
+        assert first is not None
+        round_tripped = normalize_usage(first.to_dict())
+        assert round_tripped is not None
+        assert round_tripped.cached_tokens == 800
+
     def test_flattened_cached_tokens_from_to_dict(self):
         """LLMUsage.to_dict() emits a flat cached_tokens key — normalize_usage
         should round-trip it so the kernel→projection path preserves cache data."""

@@ -39,7 +39,9 @@
                 class="fb-tree-up"
                 title="上级目录"
                 @click="goUp"
-              >↑</button>
+              >
+                <ArrowUp :size="14" :stroke-width="1.8" aria-hidden="true" />
+              </button>
             </div>
             <div class="fb-tree-list">
               <div v-if="loading && entries.length === 0" class="fb-tree-loading">加载中...</div>
@@ -77,6 +79,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, defineAsyncComponent } from 'vue'
+import { ArrowUp } from 'lucide-vue-next'
 
 const FbTreeItem = defineAsyncComponent(() => import('./FbTreeItem.vue'))
 

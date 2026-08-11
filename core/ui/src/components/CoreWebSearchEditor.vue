@@ -33,11 +33,13 @@
 
       <label class="field">
         <span>默认内核 provider</span>
-        <select v-model="form.provider" :disabled="loading || saving">
-          <option value="baidu">baidu（百度，国内可达）</option>
-          <option value="bing">bing（必应中文）</option>
-          <option value="ddg">ddg（DuckDuckGo，海外）</option>
-        </select>
+        <UiSelect
+          :model-value="form.provider"
+          :options="providerOptions"
+          :disabled="loading || saving"
+          aria-label="默认内核 provider"
+          @update:model-value="form.provider = $event"
+        />
       </label>
 
       <label class="field">
@@ -62,7 +64,7 @@
         />
       </label>
 
-      <p v-if="saved" class="hook-meta" role="status">已保存 ✓</p>
+      <p v-if="saved" class="hook-meta" role="status"><Check :size="12" :stroke-width="2.2" aria-hidden="true" /> 已保存</p>
     </article>
 
     <!-- 原始 JSONC 编辑器 -->
@@ -85,7 +87,10 @@
         :disabled="configSaving"
         placeholder="{ &quot;provider&quot;: &quot;baidu&quot;, &quot;limit&quot;: 5, &quot;timeout&quot;: 15 }"
       />
-      <p class="hook-meta" :class="{ 'hook-config-error': configError }">{{ configMessage || '支持注释（JSONC），保存后即时生效。' }}</p>
+      <p class="hook-meta" :class="{ 'hook-config-error': configError }">
+        <Check v-if="configSaved" :size="12" :stroke-width="2.2" aria-hidden="true" />
+        {{ configMessage || '支持注释（JSONC），保存后即时生效。' }}
+      </p>
     </article>
 
     <!-- 说明卡片 -->
@@ -109,6 +114,8 @@
 
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
+import { Check } from 'lucide-vue-next'
+import UiSelect from './UiSelect.vue'
 
 const props = defineProps<{
   requestRpc: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>
@@ -125,11 +132,18 @@ const form = reactive({
   timeout: 15,
 })
 
+const providerOptions = [
+  { value: 'baidu', label: 'baidu（百度，国内可达）' },
+  { value: 'bing', label: 'bing（必应中文）' },
+  { value: 'ddg', label: 'ddg（DuckDuckGo，海外）' },
+]
+
 // raw config editor
 const configDraft = ref('')
 const configOriginal = ref('')
 const configSaving = ref(false)
 const configMessage = ref('')
+const configSaved = ref(false)
 const configError = ref(false)
 
 const activeProvider = ref('baidu')
@@ -207,18 +221,21 @@ async function saveForm() {
 function revertConfig() {
   configDraft.value = configOriginal.value
   configMessage.value = ''
+  configSaved.value = false
   configError.value = false
 }
 
 async function saveRawConfig() {
   configSaving.value = true
   configMessage.value = ''
+  configSaved.value = false
   configError.value = false
   try {
     await props.requestRpc('websearch.config.update', { content: configDraft.value })
     configOriginal.value = configDraft.value
     syncFormFromContent(configDraft.value)
-    configMessage.value = '已保存 ✓'
+    configSaved.value = true
+    configMessage.value = '已保存'
   } catch (e) {
     configError.value = true
     configMessage.value = e instanceof Error ? e.message : String(e)
@@ -285,14 +302,23 @@ onMounted(fetchConfig)
   font-weight: 600;
 }
 
-.field select,
 .field input {
   width: 100%;
   padding: 7px 10px;
-  border-radius: var(--radius-sm, 8px);
-  border: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 18%, transparent);
-  background: color-mix(in srgb, var(--settings-main-text, #fff) 5%, transparent);
-  color: var(--settings-main-text, #fff);
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--settings-control-text, var(--settings-main-text, #fff)) 12%, transparent);
+  background: color-mix(in srgb, var(--settings-control-solid, #343331) 70%, transparent);
+  color: var(--settings-control-text, var(--settings-main-text, #fff));
+  font-size: 13px;
+}
+
+.field :deep(.ui-select-trigger) {
+  width: 100%;
+  min-height: 34px;
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--settings-control-text, var(--settings-main-text, #fff)) 12%, transparent);
+  background: color-mix(in srgb, var(--settings-control-solid, #343331) 70%, transparent);
+  color: var(--settings-control-text, var(--settings-main-text, #fff));
   font-size: 13px;
 }
 
@@ -310,10 +336,10 @@ onMounted(fetchConfig)
   width: 100%;
   min-height: 140px;
   padding: 10px;
-  border-radius: var(--radius-sm, 8px);
-  border: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 18%, transparent);
-  background: color-mix(in srgb, var(--settings-main-text, #fff) 5%, transparent);
-  color: var(--settings-main-text, #fff);
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--settings-control-text, var(--settings-main-text, #fff)) 12%, transparent);
+  background: color-mix(in srgb, var(--settings-control-solid, #343331) 70%, transparent);
+  color: var(--settings-control-text, var(--settings-main-text, #fff));
   font-family: var(--mono, ui-monospace, 'Cascadia Code', Consolas, monospace);
   font-size: 12px;
   line-height: 1.6;

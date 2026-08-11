@@ -2,7 +2,9 @@
   <div class="file-tree-panel">
     <div class="file-tree-header">
       <strong>文件</strong>
-      <button type="button" class="file-tree-refresh" title="刷新" @click="refresh">↻</button>
+      <button type="button" class="file-tree-refresh" title="刷新" @click="refresh">
+        <RefreshCw :size="14" :stroke-width="1.8" aria-hidden="true" />
+      </button>
     </div>
     <div class="file-tree-body">
       <div v-if="loading && rootEntries.length === 0" class="file-tree-loading">加载中...</div>
@@ -25,6 +27,7 @@
 
 <script setup lang="ts">
 import { ref, watch, onMounted } from 'vue'
+import { RefreshCw } from 'lucide-vue-next'
 import type { CoreProjectClient, CoreFileEntry } from '../projects/client'
 import FileTreeNode from './FileTreeNode.vue'
 
@@ -95,7 +98,7 @@ watch(() => props.projectId, () => {
   font-size: 14px;
   opacity: 0.6;
 }
-.file-tree-refresh:hover { opacity: 1; background: rgba(255,255,255,0.08); }
+.file-tree-refresh:hover { opacity: 1; background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-hover), transparent); }
 .file-tree-body {
   flex: 1;
   overflow: auto;
@@ -106,7 +109,7 @@ watch(() => props.projectId, () => {
 .file-tree-loading, .file-tree-error {
   padding: 8px 4px;
   font-size: 12px;
-  color: rgba(255,255,255,0.5);
+  color: color-mix(in srgb, var(--theme-backdrop-text) 50%, transparent);
 }
 .file-tree-error { color: var(--orange, #ff9142); }
 </style>

@@ -8,8 +8,12 @@
         placeholder="输入网址..."
         @keydown.enter="navigate"
       />
-      <button type="button" class="stage-browser-btn" title="刷新" @click="reload">↻</button>
-      <button type="button" class="stage-browser-btn" title="在新窗口打开" @click="openExternal">↗</button>
+      <button type="button" class="stage-browser-btn" title="刷新" @click="reload">
+        <RefreshCw :size="14" :stroke-width="1.8" aria-hidden="true" />
+      </button>
+      <button type="button" class="stage-browser-btn" title="在新窗口打开" @click="openExternal">
+        <ExternalLink :size="14" :stroke-width="1.8" aria-hidden="true" />
+      </button>
     </div>
     <div class="stage-browser-frame-wrap">
       <iframe
@@ -22,7 +26,9 @@
       <div v-if="blocked" class="stage-browser-blocked">
         <div class="stage-browser-blocked-content">
           <p>该站点不允许内嵌预览</p>
-          <button type="button" @click="openExternal">在新窗口打开 ↗</button>
+          <button type="button" @click="openExternal">
+            <ExternalLink :size="12" :stroke-width="2" aria-hidden="true" /> 在新窗口打开
+          </button>
         </div>
       </div>
     </div>
@@ -31,6 +37,7 @@
 
 <script setup lang="ts">
 import { ref, watch } from 'vue'
+import { ExternalLink, RefreshCw } from 'lucide-vue-next'
 import { openExternalUrl } from '../helpers/openUrl'
 
 const props = defineProps<{

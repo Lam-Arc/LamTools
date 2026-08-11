@@ -8,17 +8,14 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 import logging
-from urllib.parse import quote
 
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from lamtools_core.cli import (
     CoreHttpLLMClient,
     LLMConfig,
     _resolve_adapter_profile,
-    _resolve_config_db,
     _resolve_core_db,
     configure_model_store_context,
     list_llm_model_configs,
@@ -26,7 +23,8 @@ from lamtools_core.cli import (
 )
 from lamtools_core.http import create_core_router
 from lamtools_core.llm import LLMRequest
-from lamtools_core.config import build_shared_config_operation_catalog
+from lamtools_core.config import build_config_operation_catalog
+from lamtools_core.config.provider_store import ProviderConfig, ProviderStore, mask_api_key
 from lamtools_core.config.root import ensure_projects_root
 from lamtools_core.attachment import CoreAttachmentStore
 from lamtools_core.runtime import RuntimeTaskRegistry
@@ -57,12 +55,11 @@ _logger = logging.getLogger(__name__)
 
 
 class CoreConfigRoutingLLMClient:
-    """LLM client that resolves provider/model from the shared config DB per request."""
+    """LLM client that resolves provider/model from jsonc config files per request."""
 
     def __init__(
         self,
         *,
-        config_db_path: Path,
         default_model_ref: str,
         adapter_dirs: tuple[Path | str, ...] = (),
         thinking_enabled: bool = True,
@@ -70,7 +67,6 @@ class CoreConfigRoutingLLMClient:
         max_tokens: int | None = None,
         temperature: float = 0.2,
     ) -> None:
-        self.config_db_path = Path(config_db_path)
         self.default_model_ref = default_model_ref
         self.adapter_dirs = tuple(Path(item) for item in adapter_dirs)
         self.thinking_enabled = thinking_enabled
@@ -86,7 +82,6 @@ class CoreConfigRoutingLLMClient:
         thinking_budget: int | None = None,
     ) -> "CoreConfigRoutingLLMClient":
         return CoreConfigRoutingLLMClient(
-            config_db_path=self.config_db_path,
             default_model_ref=model_id or self.default_model_ref,
             adapter_dirs=self.adapter_dirs,
             thinking_enabled=self.thinking_enabled if thinking_enabled is None else thinking_enabled,
@@ -107,13 +102,13 @@ class CoreConfigRoutingLLMClient:
     def _client_for_request(self, request: LLMRequest) -> tuple[Any, CoreHttpLLMClient]:
         model_ref = str(request.model or self.default_model_ref or "").strip()
         try:
-            config = load_llm_config(self.config_db_path, model_ref=model_ref)
+            config = load_llm_config(model_ref=model_ref)
         except ValueError:
             # Unknown model_ref — fall back to empty ref so the config
             # resolves the default model from the current config (not the
             # startup-cached default_model_ref). This prevents 100x retry
             # storms on a bad model parameter.
-            config = load_llm_config(self.config_db_path, model_ref="")
+            config = load_llm_config(model_ref="")
         profile = _resolve_adapter_profile(config, self.adapter_dirs)
         metadata = request.metadata if isinstance(request.metadata, dict) else {}
         thinking_enabled = (
@@ -169,23 +164,12 @@ class _MemberDefaultsHooks(DefaultCoreLiveMemberHooks):
         return materialized
 
 
-def _sqlite_uri(config_db_path: str | Path, *, query: str = "mode=ro") -> str:
-    """Build a URL-encoded sqlite file URI.
-
-    Mirrors cli._connect_config_db: paths with spaces or other reserved
-    characters must be percent-encoded or sqlite will reject/misread the URI.
-    """
-    raw_path = str(Path(config_db_path).resolve()).replace("\\", "/")
-    return f"file:{quote(raw_path, safe=':/')}?{query}"
-
-
 def create_core_agent_http_app(
     *,
     agent_spec: CoreAgentSpec | None = None,
     member_kit: MemberKit | None = None,
     members: list[MemberManifest] | None = None,
     model_id: str = "",
-    config_db: Path | str | None = None,
     core_db: Path | str | None = None,
     data_dir: Path | str | None = None,
     work_root: Path | str | None = None,
@@ -196,17 +180,15 @@ def create_core_agent_http_app(
     temperature: float = 0.2,
     frontend_dir: Path | str | None = None,
 ) -> FastAPI:
-    config_db_path = _resolve_config_db(config_db)
     try:
-        config = load_llm_config(config_db_path, model_ref=model_id)
+        config = load_llm_config(model_ref=model_id)
     except ValueError:
-        # No usable model configured yet (e.g. legacy/empty config.db). Boot
+        # No usable model configured yet (no jsonc model/provider). Boot
         # with an unconfigured placeholder instead of crashing — the UI can
         # set up a real provider/model afterwards.
         _logger.warning(
-            "Model %r not found in %s; booting with an unconfigured placeholder",
+            "Model %r not resolvable from jsonc config; booting with an unconfigured placeholder",
             model_id,
-            config_db_path,
         )
         config = LLMConfig(
             provider_name="",
@@ -218,7 +200,6 @@ def create_core_agent_http_app(
             display_name=str(model_id or ""),
         )
     llm_client = CoreConfigRoutingLLMClient(
-        config_db_path=config_db_path,
         default_model_ref=model_id or config.model_record_id or config.model_id,
         thinking_enabled=thinking_enabled,
         thinking_budget=thinking_budget or config.thinking_budget,
@@ -253,7 +234,7 @@ def create_core_agent_http_app(
     resolved_work_root.mkdir(parents=True, exist_ok=True)
     resolved_data_dir.mkdir(parents=True, exist_ok=True)
     # Register the project work_root so load_llm_config resolves project-scoped
-    # model jsonc files and triggers the one-time DB→jsonc migration.
+    # model jsonc files (models/providers are jsonc-only).
     configure_model_store_context(work_root=str(resolved_work_root))
 
     operations = OperationCatalog()
@@ -276,14 +257,14 @@ def create_core_agent_http_app(
     async def _config_models_list(request: OperationRequest) -> OperationResult:
         del request
         return OperationResult(name="config.models.list", payload={
-            "models": list_llm_model_configs(config_db_path),
+            "models": list_llm_model_configs(),
             "default_model_id": config.model_record_id,
         })
 
     async def _config_providers_list(request: OperationRequest) -> OperationResult:
         del request
         return OperationResult(name="config.providers.list", payload={
-            "providers": _list_llm_provider_configs(config_db_path),
+            "providers": _list_llm_provider_configs(),
         })
 
     async def _project_list(request: OperationRequest) -> OperationResult:
@@ -308,28 +289,17 @@ def create_core_agent_http_app(
         goal_manager = GoalManager(core_db_handle.goal_store)
         arrange_manager = ArrangeManager(core_db_handle.arrange_store)
 
-        _config_db_uri_path = quote(str(Path(config_db_path).resolve()).replace("\\", "/"), safe=":/")
-        config_engine = create_async_engine(f"sqlite+aiosqlite:///{_config_db_uri_path}")
-        config_session_factory = async_sessionmaker(config_engine, expire_on_commit=False)
-
         def _resolve_model_display(model_id: str) -> str:
+            # jsonc-only: resolve "<provider>/<model>" from the model store.
             try:
-                import sqlite3
-                con = sqlite3.connect(_sqlite_uri(config_db_path, query="mode=ro"), uri=True)
-                try:
-                    row = con.execute(
-                        "SELECT m.model_id, m.display_name, p.name as provider_name "
-                        "FROM llm_models m LEFT JOIN llm_providers p ON p.id = m.provider_id "
-                        "WHERE m.id = ?", (model_id,)
-                    ).fetchone()
-                    if row is None:
-                        return ""
-                    provider_name, model_name = row[2] or "", (row[1] or row[0] or "")
-                    if provider_name and model_name:
-                        return f"{provider_name}/{model_name}"
-                    return model_name
-                finally:
-                    con.close()
+                from lamtools_core.config.model_store import ModelStore
+
+                model = ModelStore().get_sync(model_id)
+                if model is None:
+                    return ""
+                if model.provider and model.display_name:
+                    return f"{model.provider}/{model.display_name}"
+                return model.display_name or model.model_id
             except Exception:
                 return ""
 
@@ -359,14 +329,10 @@ def create_core_agent_http_app(
         _register_core_session_operations(agent_operations, session_store=session_store)
         _register_core_config_operations(
             agent_operations,
-            config_db_path=config_db_path,
             default_model_id=config.model_record_id,
             work_root=resolved_work_root,
         )
-        _register_missing_operations(
-            agent_operations,
-            build_shared_config_operation_catalog(config_session_factory),
-        )
+        _register_missing_operations(agent_operations, build_config_operation_catalog(work_root=resolved_work_root))
 
         async def execute_arranged_job(job: Any) -> OperationResult:
             payload = arranged_operation_payload(job)
@@ -477,7 +443,6 @@ def create_core_agent_http_app(
             wake_observers=observer_supervisor.wake,
             observer_status=observer_supervisor.status,
         )
-        app_state["config_engine"] = config_engine
         app_state["operations"] = agent_operations
         app_state["arrange_runner"] = arrange_runner
         app_state["observer_supervisor"] = observer_supervisor
@@ -584,9 +549,6 @@ def create_core_agent_http_app(
         if arrange_runner is not None:
             await arrange_runner.stop()
         await runtime_task_registry.shutdown()
-        config_engine = app_state.get("config_engine")
-        if config_engine is not None:
-            await config_engine.dispose()
         core_db_handle = app_state.get("core_db")
         if core_db_handle is not None:
             await core_db_handle.close()
@@ -633,6 +595,7 @@ def create_core_agent_http_app(
             session_store=session_store,
             operations=operations,
             project_store=lambda: app_state["core_db"].project_store,
+            publish_event=live_hub.publish,
         ),
         prefix="/api/core",
     )
@@ -640,11 +603,11 @@ def create_core_agent_http_app(
 
     @app.get("/api/core/config/models")
     async def list_config_models() -> dict[str, Any]:
-        return {"models": list_llm_model_configs(config_db_path)}
+        return {"models": list_llm_model_configs()}
 
     @app.get("/api/core/config/providers")
     async def list_config_providers() -> dict[str, Any]:
-        return {"providers": _list_llm_provider_configs(config_db_path)}
+        return {"providers": _list_llm_provider_configs()}
 
     def attachment_store() -> CoreAttachmentStore:
         store = app_state.get("attachment_store")
@@ -963,7 +926,6 @@ def _register_core_artifact_operations(catalog: OperationCatalog, *, project_sto
 def _register_core_config_operations(
     catalog: OperationCatalog,
     *,
-    config_db_path: Path,
     default_model_id: str,
     work_root: Path | str | None = None,
 ) -> None:
@@ -972,19 +934,19 @@ def _register_core_config_operations(
         return OperationResult(
             name="config.models.list",
             payload={
-                "models": list_llm_model_configs(config_db_path),
+                "models": list_llm_model_configs(),
                 "default_model_id": default_model_id,
             },
         )
 
     async def config_providers_list(request: OperationRequest) -> OperationResult:
         del request
-        return OperationResult(name="config.providers.list", payload={"providers": _list_llm_provider_configs(config_db_path)})
+        return OperationResult(name="config.providers.list", payload={"providers": _list_llm_provider_configs()})
 
     async def config_resolved_get(request: OperationRequest) -> OperationResult:
         task_type = str(request.payload.get("task_type") or request.payload.get("taskType") or "core")
         model_ref = str(request.payload.get("model_id") or request.payload.get("modelId") or "")
-        config = load_llm_config(config_db_path, model_ref=model_ref)
+        config = load_llm_config(model_ref=model_ref)
         return OperationResult(
             name="config.resolved.get",
             payload={
@@ -1019,7 +981,7 @@ def _register_core_config_operations(
             catalog.register(name, handler)
 
     _register_subagent_guide_operations(catalog, work_root=work_root)
-    _register_model_operations(catalog, work_root=work_root, config_db_path=config_db_path)
+    _register_model_operations(catalog, work_root=work_root)
     _register_loadtools_operations(catalog)
 
 
@@ -1132,9 +1094,9 @@ def _register_model_operations(
     catalog: OperationCatalog,
     *,
     work_root: Path | str | None = None,
-    config_db_path: Path | None = None,
 ) -> None:
     from lamtools_core.config.model_store import ModelConfig, ModelStore
+    from lamtools_core.config.provider_store import ProviderStore
     from dataclasses import replace
 
     def _store() -> ModelStore:
@@ -1143,31 +1105,21 @@ def _register_model_operations(
         return _get_model_store()
 
     def _resolve_provider_name(provider_id: str, fallback: str) -> str:
-        """Resolve a provider display name from the DB by provider_id."""
-        if fallback or not provider_id or config_db_path is None:
+        """Resolve a provider display name from the jsonc provider store."""
+        if fallback or not provider_id:
             return fallback
-        import sqlite3
-
-        try:
-            con = sqlite3.connect(f"file:{config_db_path}?mode=ro", uri=True)
-            try:
-                row = con.execute(
-                    "select name from llm_providers where id=? limit 1", (provider_id,)
-                ).fetchone()
-                return str(row[0]) if row else fallback
-            finally:
-                con.close()
-        except sqlite3.OperationalError:
-            return fallback
+        provider = ProviderStore().get_sync(provider_id)
+        return provider.name if provider is not None else fallback
 
     def _payload_model_config(model_id: str, payload: dict[str, Any]) -> ModelConfig:
         thinking = payload.get("thinking") if isinstance(payload.get("thinking"), dict) else {}
         request_body = payload.get("request_body") if isinstance(payload.get("request_body"), dict) else {}
         provider_id = str(payload.get("provider_id") or "")
-        # Prefer resolving the provider name from the DB by provider_id so the
-        # jsonc file always carries the correct name even if the UI's cached
-        # provider_name was stale. Fall back to the payload-provided name.
-        if provider_id and config_db_path is not None:
+        # Prefer resolving the provider name from the provider store by
+        # provider_id so the jsonc file always carries the correct name even
+        # if the UI's cached provider_name was stale. Fall back to the
+        # payload-provided name.
+        if provider_id:
             provider_name = _resolve_provider_name(provider_id, str(payload.get("provider") or payload.get("provider_name") or ""))
         else:
             provider_name = str(payload.get("provider") or payload.get("provider_name") or "")
@@ -1228,23 +1180,6 @@ def _register_model_operations(
         _store()._cached_models = None
         return OperationResult(name=request.name, payload={"deleted": str(path)})
 
-    async def models_import_from_db(request: OperationRequest) -> OperationResult:
-        from lamtools_core.config.migrate_models import migrate_models_from_db
-
-        payload = request.payload if isinstance(request.payload, dict) else {}
-        config_db_str = str(payload.get("config_db") or "").strip()
-        if not config_db_str:
-            return OperationResult(name=request.name, status="error", payload={"error": "config_db is required"})
-        root = str(payload.get("work_root") or payload.get("workRoot") or "").strip() or work_root
-        count, paths = migrate_models_from_db(
-            _Path(config_db_str),
-            model_store=_store(),
-            work_root=root,
-            scope=str(payload.get("scope") or "global"),
-            force=bool(payload.get("force") or False),
-        )
-        return OperationResult(name=request.name, payload={"exported": count, "paths": [str(p) for p in paths]})
-
     async def models_set_default(request: OperationRequest) -> OperationResult:
         payload = request.payload if isinstance(request.payload, dict) else {}
         model_id = str(payload.get("model_id") or payload.get("model_record_id") or "").strip()
@@ -1271,7 +1206,6 @@ def _register_model_operations(
         "config.models.upsert": models_upsert,
         "config.models.delete": models_delete,
         "config.models.set_default": models_set_default,
-        "config.models.import_from_db": models_import_from_db,
     }.items():
         if not catalog.has(name):
             catalog.register(name, handler)
@@ -1626,31 +1560,21 @@ def _register_missing_operations(target: OperationCatalog, source: OperationCata
         target.register(operation_name, execute)
 
 
-def _list_llm_provider_configs(config_db_path: Path) -> list[dict[str, Any]]:
-    import sqlite3
-
-    con = sqlite3.connect(config_db_path)
-    con.row_factory = sqlite3.Row
-    try:
-        rows = con.execute(
-            """
-            select id,name,api_type,base_url,api_key
-            from llm_providers
-            order by created_at asc
-            """
-        ).fetchall()
-    finally:
-        con.close()
+def _list_llm_provider_configs() -> list[dict[str, Any]]:
+    """List providers from the jsonc provider store (api keys masked)."""
+    providers = ProviderStore().list_sync()
     return [
         {
-            "id": str(row["id"] or ""),
-            "name": str(row["name"] or ""),
-            "api_type": str(row["api_type"] or ""),
-            "base_url": str(row["base_url"] or ""),
-            "api_key": "********" if (row["api_key"] or "") else "",
-            "has_api_key": bool(row["api_key"] or ""),
+            "id": provider.id,
+            "name": provider.name,
+            "api_type": provider.api_type,
+            "base_url": provider.base_url,
+            "api_key": mask_api_key(provider.api_key),
+            "has_api_key": bool(provider.api_key),
+            "is_default": provider.is_default,
+            "extra": dict(provider.extra),
         }
-        for row in rows
+        for provider in providers
     ]
 
 
@@ -1658,13 +1582,11 @@ def create_default_core_agent_http_app() -> FastAPI:
     # No built-in "default-model" anymore: empty model_id means "unconfigured",
     # and the app boots with a placeholder until the user sets up a model.
     model_id = os.environ.get("LAMTOOLS_CORE_MODEL_ID") or ""
-    config_db = os.environ.get("LAMTOOLS_LLM_CONFIG_DB") or None
     core_db = os.environ.get("LAMTOOLS_CORE_DB") or None
     data_dir = os.environ.get("LAMTOOLS_CORE_DATA_DIR") or None
     work_root = os.environ.get("LAMTOOLS_CORE_WORK_ROOT") or None
     return create_core_agent_http_app(
         model_id=model_id,
-        config_db=config_db,
         core_db=core_db,
         data_dir=data_dir,
         work_root=work_root,

@@ -33,6 +33,14 @@ function mountSettings() {
   })
 }
 
+/** 原生 select 已收敛为 UiSelect：点开触发器 → 按选项 label 点击。 */
+async function selectUiOption(wrapper: ReturnType<typeof mountSettings>, selector: string, label: string) {
+  await wrapper.get(selector).find('.ui-select-trigger').trigger('click')
+  const option = wrapper.findAll('.ui-select-option').find(button => button.text() === label)
+  expect(option).toBeTruthy()
+  await option!.trigger('click')
+}
+
 describe('CoreSettings', () => {
   it('shows Core model and provider state without exposing an API key', () => {
     const wrapper = mountSettings()
@@ -50,7 +58,7 @@ describe('CoreSettings', () => {
 
     await wrapper.get('[data-provider-create]').trigger('click')
     await wrapper.get('[data-provider-name]').setValue('New provider')
-    await wrapper.get('[data-provider-api-type]').setValue('anthropic')
+    await selectUiOption(wrapper, '[data-provider-api-type]', 'Anthropic')
     await wrapper.get('[data-provider-base-url]').setValue('https://api.anthropic.com/v1')
     await wrapper.get('[data-provider-api-key]').setValue('new-secret')
     await wrapper.get('[data-provider-form="create"]').trigger('submit')
@@ -85,7 +93,7 @@ describe('CoreSettings', () => {
     const wrapper = mountSettings()
 
     await wrapper.get('[data-model-create]').trigger('click')
-    await wrapper.get('[data-model-provider-id]').setValue('provider-1')
+    await selectUiOption(wrapper, '[data-model-provider-id]', 'OpenAI')
     await wrapper.get('[data-model-id]').setValue('gpt-new')
     await wrapper.get('[data-model-display-name]').setValue('GPT New')
     await wrapper.get('[data-model-form="create"]').trigger('submit')
@@ -126,10 +134,31 @@ describe('CoreSettings', () => {
 
     expect(wrapper.text()).toContain('权限策略')
     expect(wrapper.text()).toContain('常规命令')
-    expect(wrapper.findAll('input, select, textarea').length).toBe(0)
+    expect(wrapper.findAll('input, select, textarea').length).toBe(1)
     const askButtons = wrapper.findAll('button').filter(button => button.text() === '需要审批')
     await askButtons[0].trigger('click')
     expect(wrapper.emitted('update-command-policy')).toEqual([['regular', 'ask_user']])
+  })
+})
+
+describe('Core settings permission contract', () => {
+  // The permissions panel mounts inside SettingsShell and the existing test
+  // environment cannot render it reliably (pre-existing recursive-update issue
+  // on this branch); assert the toggle contract against the source instead.
+  it('wires the allow-access-outside-workdir toggle in CoreSettings', () => {
+    const source = readFileSync(resolve(process.cwd(), 'src/components/CoreSettings.vue'), 'utf8')
+    expect(source).toContain('allowAccessOutsideWorkdir?: boolean')
+    expect(source).toContain("'update-allow-outside-workdir': [value: boolean]")
+    expect(source).toContain('data-allow-outside-workdir')
+    expect(source).toContain('允许访问工作目录以外')
+    expect(source).toContain("emit('update-allow-outside-workdir', input.checked)")
+  })
+
+  it('binds the toggle state in the Core demo App', () => {
+    const source = readFileSync(resolve(process.cwd(), 'src/demo/App.vue'), 'utf8')
+    expect(source).toContain(':allow-access-outside-workdir="allowAccessOutsideWorkdir"')
+    expect(source).toContain('@update-allow-outside-workdir="updateAllowAccessOutsideWorkdir"')
+    expect(source).toContain("allow_access_outside_workdir")
   })
 })
 

@@ -1541,6 +1541,9 @@ class CoreLoopKernel:
         pending_tool_calls: dict[int, dict] = {}
         emitted_tool_call_indexes: set[int] = set()
         emitted_tool_input_arguments: dict[int, str] = {}
+        # Some providers send usage in a standalone chunk (usage present but no
+        # delta / finish_reason); keep it so the done event can carry it.
+        pending_usage = None
         try:
             stream_iterator = stream.__aiter__()
             while True:
@@ -1682,6 +1685,8 @@ class CoreLoopKernel:
                                         raw=event.raw,
                                     )
                                     emitted_tool_input_arguments[tool_index] = arguments_text
+                elif event.kind == "usage":
+                    pending_usage = event.usage or pending_usage
                 elif event.kind == "done":
                     # Prefer tool_calls from the done event (some providers
                     # include complete tool_calls in the final chunk);
@@ -1710,7 +1715,8 @@ class CoreLoopKernel:
                     )
                     # Emit a terminal delta so members can format the done chunk
                     finish_reason = event.metadata.get("finish_reason", "stop") if event.metadata else "stop"
-                    usage_dict = event.usage.to_dict() if event.usage else None
+                    usage = event.usage or pending_usage
+                    usage_dict = usage.to_dict() if usage else None
                     await self.event_sink.emit(CoreEvent(
                         name="runtime.reply_delta",
                         category="message",
@@ -1728,7 +1734,7 @@ class CoreLoopKernel:
                         content=accumulated,
                         thinking=thinking,
                         tool_calls=tool_calls,
-                        usage=event.usage,
+                        usage=usage,
                         finish_reason=finish_reason,
                         metadata=event.metadata or {},
                     )

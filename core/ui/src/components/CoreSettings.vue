@@ -4,7 +4,7 @@
       class="settings-overlay"
       @click.self="$emit('close')"
     >
-      <div ref="overlayTarget" class="settings-card">
+      <div ref="overlayTarget" class="settings-card" :style="settingsThemeStyle">
         <SettingsShell
           :sections="sections"
           title="Core 设置"
@@ -49,7 +49,9 @@
                     </span>
                   </div>
                   <div class="row-actions">
-                    <button class="text-btn" :class="{ active: model.is_default }" type="button" :data-model-default="model.id" @click="$emit('set-default-model', model.id)">{{ model.is_default ? '★ 默认' : '☆ 默认' }}</button>
+                    <button class="text-btn" :class="{ active: model.is_default }" type="button" :data-model-default="model.id" @click="$emit('set-default-model', model.id)">
+                      <Star :size="12" :stroke-width="1.8" :fill="model.is_default ? 'currentColor' : 'none'" aria-hidden="true" /> 默认
+                    </button>
                     <button class="text-btn" type="button" :data-model-edit="model.id" @click="startModelUpdate(model)">编辑</button>
                     <button class="text-btn danger" type="button" :data-model-delete="model.id" @click="$emit('delete-model', model.id)">删除</button>
                   </div>
@@ -166,6 +168,21 @@
             </div>
           </div>
         </article>
+        <article class="setting-card">
+          <h3>工作目录访问</h3>
+          <div class="dream-row">
+            <label class="dream-toggle">
+              <input
+                type="checkbox"
+                data-allow-outside-workdir
+                :checked="allowAccessOutsideWorkdir"
+                @change="toggleAllowOutsideWorkdir"
+              />
+              <span class="dream-toggle-label">允许访问工作目录以外</span>
+            </label>
+            <span class="muted">开启后 Agent 可读写工作目录之外的任意路径（敏感文件仍受拦截）</span>
+          </div>
+        </article>
       </section>
 
       <section v-else-if="activeSection === 'agents'" class="settings-panel">
@@ -236,10 +253,14 @@
             <div v-for="(item, index) in contextAdditions" :key="index" class="lc-row">
               <input v-model="item.name" class="lc-input lc-name" spellcheck="false" placeholder="文件名（如 TEAM_RULES.md）" :disabled="contextLoading" />
               <input v-model.number="item.priority" type="number" class="lc-input lc-priority" title="注入优先级（越小越靠前）" :disabled="contextLoading" />
-              <select v-model="item.kind" class="lc-input lc-kind" :disabled="contextLoading">
-                <option value="system">system</option>
-                <option value="memory">memory</option>
-              </select>
+              <UiSelect
+                :model-value="item.kind"
+                :options="lcKindOptions"
+                class="lc-kind"
+                :disabled="contextLoading"
+                aria-label="加载类型"
+                @update:model-value="item.kind = $event"
+              />
               <button class="text-btn danger" type="button" :disabled="contextSaving" @click="contextAdditions.splice(index, 1)">移除</button>
             </div>
             <button class="small-btn quiet" type="button" :disabled="contextLoading" @click="contextAdditions.push({ name: '', priority: 50, kind: 'system' })">＋ 追加文件</button>
@@ -250,7 +271,9 @@
             <div class="lc-chips">
               <span v-for="(name, index) in contextExcept" :key="name" class="lc-chip">
                 {{ name }}
-                <button type="button" class="lc-chip-x" :disabled="contextSaving" @click="contextExcept.splice(index, 1)">×</button>
+                <button type="button" class="lc-chip-x" :disabled="contextSaving" @click="contextExcept.splice(index, 1)">
+                  <X :size="10" :stroke-width="2.2" aria-hidden="true" />
+                </button>
               </span>
             </div>
             <div class="lc-row">
@@ -316,7 +339,9 @@
           <div class="subhead">
             <h3>已创建的工作流</h3>
             <div class="subhead-actions">
-              <button class="small-btn" type="button" @click="refreshWorkflowList">↻ 刷新</button>
+              <button class="small-btn" type="button" @click="refreshWorkflowList">
+                <RefreshCw :size="13" :stroke-width="1.8" aria-hidden="true" /> 刷新
+              </button>
             </div>
           </div>
           <div v-if="workflowListLoading" class="model-empty">加载中…</div>
@@ -363,13 +388,18 @@
             <form v-if="providerEditor" :data-provider-form="providerEditor.mode" class="config-form" @submit.prevent="submitProvider">
               <div class="editor-popover-head">
                 <h3>{{ providerEditor.mode === 'create' ? '新增供应商' : '编辑供应商' }}</h3>
-                <button type="button" class="editor-popover-close" @click="providerEditor = null">×</button>
+                <button type="button" class="editor-popover-close" @click="providerEditor = null">
+                  <X :size="14" :stroke-width="1.8" aria-hidden="true" />
+                </button>
               </div>
               <label v-if="providerEditor.mode === 'create'" class="field">官方模板
-                <select v-model="providerEditor.preset_id" @change="applyProviderPreset">
-                  <option value="">自定义</option>
-                  <option v-for="preset in providerPresets" :key="preset.id" :value="preset.id">{{ preset.label }}</option>
-                </select>
+                <UiSelect
+                  :model-value="providerEditor.preset_id"
+                  :options="providerPresetOptions"
+                  placeholder="自定义"
+                  aria-label="官方模板"
+                  @update:model-value="onProviderPresetChange"
+                />
               </label>
               <div v-if="providerEditor.preset_id" class="preset-summary field-wide">
                 <strong>{{ providerEditor.name }}</strong>
@@ -395,10 +425,14 @@
                 <summary>高级设置</summary>
                 <div class="advanced-fields">
                   <label class="field">接口类型
-                    <select v-model="providerEditor.api_type" data-provider-api-type>
-                      <option value="openai">OpenAI compatible</option>
-                      <option value="anthropic">Anthropic</option>
-                    </select>
+                    <UiSelect
+                      :model-value="providerEditor.api_type"
+                      :options="apiTypeOptions"
+                      data-provider-api-type
+                      direction="up"
+                      aria-label="接口类型"
+                      @update:model-value="providerEditor!.api_type = $event"
+                    />
                   </label>
                   <label class="field field-wide">高级适配 JSON
                     <textarea v-model="providerEditor.extra_json" rows="5" spellcheck="false" placeholder="{}"></textarea>
@@ -415,12 +449,18 @@
             <form v-if="modelEditor" :data-model-form="modelEditor.mode" class="config-form" @submit.prevent="submitModel">
               <div class="editor-popover-head">
                 <h3>{{ modelEditor.mode === 'create' ? '新增模型' : '编辑模型' }}</h3>
-                <button type="button" class="editor-popover-close" @click="modelEditor = null">×</button>
+                <button type="button" class="editor-popover-close" @click="modelEditor = null">
+                  <X :size="14" :stroke-width="1.8" aria-hidden="true" />
+                </button>
               </div>
               <label class="field">供应商
-                <select v-model="modelEditor.provider_id" data-model-provider-id required>
-                  <option v-for="p in providers" :key="p.id" :value="p.id">{{ p.name || p.id }}</option>
-                </select>
+                <UiSelect
+                  :model-value="modelEditor.provider_id"
+                  :options="providerOptions"
+                  data-model-provider-id
+                  aria-label="供应商"
+                  @update:model-value="modelEditor!.provider_id = $event"
+                />
               </label>
               <label class="field">模型标识
                 <input v-model.trim="modelEditor.model_id" data-model-id required />
@@ -450,11 +490,13 @@
                     <input v-model="modelEditor.thinking_supported" type="checkbox" /> 支持推理
                   </label>
                   <label class="field">能力分类
-                    <select v-model="modelEditor.capability">
-                      <option value="">自动（内置声明）</option>
-                      <option value="text">文本（不支持图片）</option>
-                      <option value="multimodal">多模态（支持图片）</option>
-                    </select>
+                    <UiSelect
+                      :model-value="modelEditor.capability ?? ''"
+                      :options="capabilityOptions"
+                      direction="up"
+                      aria-label="能力分类"
+                      @update:model-value="modelEditor!.capability = $event ?? ''"
+                    />
                   </label>
                   <label class="field field-wide">高级适配 JSON
                     <textarea v-model="modelEditor.extra_json" rows="5" spellcheck="false" placeholder="{}"></textarea>
@@ -476,6 +518,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { RefreshCw, Star, X } from 'lucide-vue-next'
 import { PROVIDER_PRESETS } from '../data/provider-presets'
 import { THEME_PRESETS } from '../data/theme-presets'
 import {
@@ -494,6 +537,7 @@ import CoreSubAgentEditor from './CoreSubAgentEditor.vue'
 import CoreLoadToolsEditor from './CoreLoadToolsEditor.vue'
 import CoreImageGenEditor from './CoreImageGenEditor.vue'
 import CoreWebSearchEditor from './CoreWebSearchEditor.vue'
+import UiSelect from './UiSelect.vue'
 
 export type CoreSettingsDensity = 'compact' | 'standard' | 'loose'
 
@@ -558,6 +602,7 @@ const props = defineProps<{
   contentWidth?: number
   allowEnvironmentImport?: boolean
   permissionMode?: 'read_only' | 'limited_edit' | 'full_edit'
+  allowAccessOutsideWorkdir?: boolean
   requestRpc?: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>
   workflows?: WorkflowListItem[]
   workflowListLoading?: boolean
@@ -570,6 +615,7 @@ const emit = defineEmits<{
   'import-environment': []
   'reopen-onboarding': []
   'update-permission-mode': [mode: 'read_only' | 'limited_edit' | 'full_edit']
+  'update-allow-outside-workdir': [value: boolean]
   'reset-theme': []
   'apply-preset': [preset: ThemePreset]
   'update-stops': [area: ThemeArea, stops: ThemeStop[]]
@@ -821,6 +867,10 @@ const defaultRequestRpc = async (_method: string, _params?: Record<string, unkno
 }
 
 const permissionMode = computed(() => props.permissionMode || 'full_edit')
+function toggleAllowOutsideWorkdir(event: Event) {
+  const input = event.target as HTMLInputElement
+  emit('update-allow-outside-workdir', input.checked)
+}
 const permissionTiers = [
   {
     id: 'read_only' as const, label: '只读调查',
@@ -836,6 +886,35 @@ const permissionTiers = [
   },
 ]
 const providerPresets = PROVIDER_PRESETS
+
+// ── UiSelect option lists for provider/model editors ──
+const providerPresetOptions = computed(() => [
+  { value: '', label: '自定义' },
+  ...PROVIDER_PRESETS.map(preset => ({ value: preset.id, label: preset.label })),
+])
+const apiTypeOptions = [
+  { value: 'openai', label: 'OpenAI compatible' },
+  { value: 'anthropic', label: 'Anthropic' },
+]
+const lcKindOptions = [
+  { value: 'system', label: 'system' },
+  { value: 'memory', label: 'memory' },
+]
+const capabilityOptions = [
+  { value: '', label: '自动（内置声明）' },
+  { value: 'text', label: '文本（不支持图片）' },
+  { value: 'multimodal', label: '多模态（支持图片）' },
+]
+const providerOptions = computed(() =>
+  props.providers.map(p => ({ value: p.id, label: p.name || p.id })),
+)
+
+function onProviderPresetChange(value: string) {
+  const editor = providerEditor.value
+  if (!editor) return
+  editor.preset_id = value
+  applyProviderPreset()
+}
 
 const settingsThemeStyle = computed(() => {
   const lightMain = relativeLuminance(props.theme.mainText) < 0.45
@@ -860,6 +939,8 @@ const settingsThemeStyle = computed(() => {
       props.theme.controlOpacity,
     ),
     '--settings-control-text': props.theme.controlText,
+    // control 区首停点纯色：color-mix 混透明用的实色底（渐变值不可用于 color-mix）
+    '--settings-control-solid': props.theme.controlStops[0]?.color || '#3a3834',
     // 暗色分支不重复字面量：layout.css 的 --settings-* fallback 即 :root 真值（单一来源）
     ...(lightMain ? {
       '--settings-panel-2': '#f0efeb',
@@ -969,6 +1050,10 @@ function applyProviderPreset() {
 }
 
 function startModelCreate() {
+  if (!props.providers.length) {
+    noticeText.value = '请先新增供应商，再添加模型'
+    return
+  }
   const provider = props.providers[0]
   modelEditor.value = {
     mode: 'create',
@@ -1011,6 +1096,10 @@ function startModelUpdate(model: CoreSettingsModel) {
 function submitModel() {
   const editor = modelEditor.value
   if (!editor) return
+  if (!editor.provider_id) {
+    noticeText.value = '请先选择供应商'
+    return
+  }
   const extra = parseExtraJson(editor.extra_json)
   if (!extra) return
   const { mode: _mode, extra_json: _extraJson, ...rest } = editor
@@ -1092,10 +1181,10 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
 
 .lc-input {
   padding: 4px 8px;
-  border: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 18%, transparent);
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--settings-main-text, #fff) 6%, transparent);
-  color: inherit;
+  border: 1px solid color-mix(in srgb, var(--settings-control-text, var(--settings-main-text, #fff)) 12%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--settings-control-solid, #343331) 70%, transparent);
+  color: var(--settings-control-text, var(--settings-main-text, #fff));
   font-size: 13px;
 }
 
@@ -1217,6 +1306,7 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
   border: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 14%, transparent);
   box-shadow: var(--shadow-md);
   padding: 18px 20px;
+  color: var(--settings-card-text, var(--settings-main-text, var(--text)));
 }
 .editor-popover-head {
   display: flex;
@@ -1351,15 +1441,32 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
 }
 
 .config-form input,
-.config-form select,
 .config-form textarea {
   min-width: 0;
   min-height: 36px;
-  border: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 18%, transparent);
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--settings-main-text, #fff) 6%, transparent);
-  color: inherit;
+  border: 1px solid color-mix(in srgb, var(--settings-control-text, var(--settings-main-text, #fff)) 12%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--settings-control-solid, #343331) 70%, transparent);
+  color: var(--settings-control-text, var(--settings-main-text, #fff));
   padding: 0 9px;
+}
+
+/* UiSelect 在表单内对齐上面的 control 配方 */
+.config-form :deep(.ui-select-trigger) {
+  min-height: 36px;
+  border: 1px solid color-mix(in srgb, var(--settings-control-text, var(--settings-main-text, #fff)) 12%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--settings-control-solid, #343331) 70%, transparent);
+  color: var(--settings-control-text, var(--settings-main-text, #fff));
+}
+
+.lc-row :deep(.ui-select-trigger) {
+  min-height: 28px;
+  border: 1px solid color-mix(in srgb, var(--settings-control-text, var(--settings-main-text, #fff)) 12%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--settings-control-solid, #343331) 70%, transparent);
+  color: var(--settings-control-text, var(--settings-main-text, #fff));
+  font-size: 13px;
 }
 
 .config-form textarea {
@@ -1497,9 +1604,40 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
   min-height: 36px;
 }
 
-.config-form .checkbox-field input {
-  min-width: auto;
-  min-height: auto;
+/* ── 主题化 checkbox（对齐 layout.css toggle-line 配方：绿勾选中态）── */
+.config-form .checkbox-field input[type="checkbox"],
+.dream-toggle input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 15px;
+  height: 15px;
+  min-width: 15px;
+  min-height: 15px;
+  margin: 0;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 24%, transparent);
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+  position: relative;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  transition: background .12s ease, border-color .12s ease;
+}
+.config-form .checkbox-field input[type="checkbox"]:checked,
+.dream-toggle input[type="checkbox"]:checked {
+  border-color: var(--green, #32d17d);
+  background: var(--green, #32d17d);
+}
+.config-form .checkbox-field input[type="checkbox"]:checked::after,
+.dream-toggle input[type="checkbox"]:checked::after {
+  content: "";
+  width: 7px;
+  height: 4px;
+  border-left: 2px solid color-mix(in srgb, var(--settings-main-text, #fff) 92%, transparent);
+  border-bottom: 2px solid color-mix(in srgb, var(--settings-main-text, #fff) 92%, transparent);
+  transform: rotate(-45deg) translateY(-1px);
 }
 
 .capability-badge {
@@ -1525,10 +1663,10 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
   width: 100%;
   min-height: 320px;
   margin-top: 10px;
-  border: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 18%, transparent);
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--settings-main-text, #fff) 6%, transparent);
-  color: inherit;
+  border: 1px solid color-mix(in srgb, var(--settings-control-text, var(--settings-main-text, #fff)) 12%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--settings-control-solid, #343331) 70%, transparent);
+  color: var(--settings-control-text, var(--settings-main-text, #fff));
   padding: 9px;
   font-family: var(--font-mono);
   font-size: 13px;

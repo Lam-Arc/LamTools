@@ -241,10 +241,10 @@
 .gradient-stop-row input[type="color"] {
   width: 32px;
   height: 28px;
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 14%, transparent);
   border-radius: var(--radius-sm);
   padding: 2px;
-  background: var(--panel-2);
+  background: color-mix(in srgb, var(--settings-main-text, #fff) 6%, transparent);
   cursor: pointer;
 }
 
@@ -291,9 +291,9 @@
 }
 .color-field input[type="color"] {
   width: 32px; height: 28px;
-  border: 1px solid var(--line);
+  border: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 14%, transparent);
   border-radius: var(--radius-sm);
   padding: 2px;
-  background: var(--panel-2);
+  background: color-mix(in srgb, var(--settings-main-text, #fff) 6%, transparent);
   cursor: pointer;
 }

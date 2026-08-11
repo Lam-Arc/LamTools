@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { Goal } from 'lucide-vue-next'
 import type { CoreGoal } from '../durable/types'
 
 defineProps<{ goal: CoreGoal }>()
@@ -7,7 +8,7 @@ defineEmits<{ cancel: [goal: CoreGoal] }>()
 
 <template>
   <div class="core-goal-strip" :data-status="goal.status" role="status">
-    <span aria-hidden="true">◎</span>
+    <span aria-hidden="true"><Goal :size="13" :stroke-width="1.8" /></span>
     <span class="core-goal-objective">{{ goal.objective }}</span>
     <span class="core-goal-status">{{ goal.status === 'blocked' ? '已暂停' : '进行中' }}</span>
     <button type="button" @click="$emit('cancel', goal)">取消</button>
@@ -51,7 +52,7 @@ defineEmits<{ cancel: [goal: CoreGoal] }>()
 .core-goal-status {
   flex-shrink: 0;
   font-size: 11px;
-  color: var(--muted);
+  color: color-mix(in srgb, var(--theme-composer-text) 65%, transparent);
   white-space: nowrap;
   margin-left: auto;
 }
@@ -63,7 +64,7 @@ button {
   border: 1px solid color-mix(in srgb, var(--theme-composer-text) 16%, transparent);
   border-radius: 4px;
   background: transparent;
-  color: var(--muted);
+  color: color-mix(in srgb, var(--theme-composer-text) 65%, transparent);
   font-size: 11px;
   cursor: pointer;
   line-height: 1.4;
@@ -71,7 +72,7 @@ button {
 }
 button:hover,
 button:focus-visible {
-  background: color-mix(in srgb, var(--theme-composer-text) 10%, transparent);
+  background: color-mix(in srgb, var(--theme-composer-text) var(--alpha-hover), transparent);
   color: var(--text);
   border-color: color-mix(in srgb, var(--theme-composer-text) 28%, transparent);
 }

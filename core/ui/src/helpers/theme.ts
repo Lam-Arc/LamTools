@@ -249,6 +249,7 @@ export interface ThemeCSSVars {
   '--theme-main-solid': string
   '--theme-main-soft-background': string
   '--theme-main-subtle-background': string
+  '--theme-main-sunken-background': string
   '--theme-main-border': string
   '--theme-composer-background': string
   '--theme-composer-text': string
@@ -285,6 +286,7 @@ export function themeToCSSVars(theme: ThemeData): ThemeCSSVars {
     '--theme-main-solid': theme.mainStops[0]?.color || '#111111',
     '--theme-main-soft-background': lightMain ? 'rgba(255, 254, 250, 0.78)' : 'rgba(255, 255, 255, 0.045)',
     '--theme-main-subtle-background': lightMain ? 'rgba(255, 254, 250, 0.52)' : 'rgba(255, 255, 255, 0.028)',
+    '--theme-main-sunken-background': lightMain ? 'rgba(31, 31, 31, 0.06)' : 'rgba(0, 0, 0, 0.32)',
     '--theme-main-border': lightMain ? 'rgba(31, 31, 31, 0.10)' : 'rgba(255, 255, 255, 0.10)',
     '--theme-composer-background': gradientFromStops(theme.composerAngle, theme.composerStops, theme.composerOpacity),
     '--theme-composer-text': theme.composerText,

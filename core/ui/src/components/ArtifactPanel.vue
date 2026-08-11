@@ -22,7 +22,9 @@
           >删除 ({{ selected.length }})</button>
           <button class="text-btn" type="button" @click="exitCleanup">取消</button>
         </template>
-        <button class="text-btn" type="button" title="刷新" @click="fetchArtifacts">↻</button>
+        <button class="text-btn" type="button" title="刷新" @click="fetchArtifacts">
+          <RefreshCw :size="14" :stroke-width="1.8" aria-hidden="true" />
+        </button>
       </div>
     </header>
 
@@ -49,10 +51,14 @@
             :aria-label="`选择 ${row.item.name}`"
           />
         </label>
-        <span class="artifact-kind" :title="row.item.kind">{{ kindIcon(row.item.kind) }}</span>
+        <span class="artifact-kind" :title="row.item.kind">
+          <component :is="kindIcon(row.item.kind)" :size="14" :stroke-width="1.8" aria-hidden="true" />
+        </span>
         <span class="artifact-name" :title="row.item.path">{{ row.item.name }}</span>
         <span v-if="row.item.source === 'agent_generated'" class="artifact-badge artifact-badge--agent" title="Agent 生成">AI</span>
-        <span v-else class="artifact-badge artifact-badge--user" title="用户上传">↑</span>
+        <span v-else class="artifact-badge artifact-badge--user" title="用户上传">
+          <Upload :size="10" :stroke-width="2" aria-hidden="true" />
+        </span>
       </li>
     </ul>
 
@@ -105,6 +111,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { File, FileText, Film, Image as ImageIcon, Music, Package, RefreshCw, Upload, type LucideIcon } from 'lucide-vue-next'
 
 interface ArtifactItem {
   artifact_id: string
@@ -164,8 +171,17 @@ const rows = computed<ArtifactRow[]>(() => {
 
 const selected = computed(() => Array.from(selectedSet.value))
 
-function kindIcon(kind: string): string {
-  return ({ image: '🖼', video: '🎞', audio: '🎵', pdf: '📕', document: '📄', file: '📦' } as Record<string, string>)[kind] || '📦'
+const KIND_ICONS: Record<string, LucideIcon> = {
+  image: ImageIcon,
+  video: Film,
+  audio: Music,
+  pdf: FileText,
+  document: File,
+  file: Package,
+}
+
+function kindIcon(kind: string): LucideIcon {
+  return KIND_ICONS[kind] || File
 }
 
 function previewUrl(item: ArtifactItem): string {
@@ -308,9 +324,41 @@ onMounted(fetchArtifacts)
   flex: 0 0 auto;
 }
 
+.artifact-check input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  min-width: 14px;
+  min-height: 14px;
+  margin: 0 4px 0 0;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--theme-main-text, #f2efeb) 30%, transparent);
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+  position: relative;
+  display: grid;
+  place-items: center;
+  transition: background .12s ease, border-color .12s ease;
+}
+.artifact-check input[type="checkbox"]:checked {
+  border-color: var(--green, #32d17d);
+  background: var(--green, #32d17d);
+}
+.artifact-check input[type="checkbox"]:checked::after {
+  content: "";
+  width: 7px;
+  height: 4px;
+  border-left: 2px solid color-mix(in srgb, var(--theme-main-text, #f2efeb) 92%, transparent);
+  border-bottom: 2px solid color-mix(in srgb, var(--theme-main-text, #f2efeb) 92%, transparent);
+  transform: rotate(-45deg) translateY(-1px);
+}
+
 .artifact-kind {
   flex: 0 0 auto;
-  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
 }
 
 .artifact-name {
@@ -322,6 +370,8 @@ onMounted(fetchArtifacts)
 
 .artifact-badge {
   flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
   font-size: 10px;
   padding: 0 4px;
   border-radius: var(--radius-sm, 4px);

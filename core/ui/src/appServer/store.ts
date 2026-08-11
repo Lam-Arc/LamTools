@@ -512,7 +512,7 @@ function applyCoreRunItemEvent(snapshot: CoreAppSnapshot, event: CoreAppEvent): 
     if (turnId) {
       const turn = turns[turnId] ?? { turn_id: turnId, status: 'running', items: [] }
       const usage = isRecord(value.usage) ? value.usage : {}
-      turns[turnId] = { ...turn, usage: { ...(turn.usage ?? {}), ...usage } }
+      turns[turnId] = { ...turn, usage: mergeUsageMetrics(turn.usage, usage) }
     }
     return { ...snapshot, core: { ...currentCore, seen_event_ids: seen, turns } }
   }
@@ -522,10 +522,19 @@ function applyCoreRunItemEvent(snapshot: CoreAppSnapshot, event: CoreAppEvent): 
   const existing = items[itemId] ?? { item_id: itemId, content: '', deltas: [] }
   const delta = typeof runPayload.delta === 'string' ? runPayload.delta : undefined
   const content = typeof runPayload.content === 'string' ? runPayload.content : undefined
+  // Transient stream deltas (default_agent `_persist_core_event_live`) are not
+  // persisted, so their envelope seq is 0 — a fake anchor that would sort the
+  // item BEFORE every outer user message (0 < any real seq). Treat 0 as "no
+  // anchor": keep the item's existing seq, or leave it unset (sorts last
+  // within the turn) until a real completion event lands.
+  const realSeq = typeof event.seq === 'number' && event.seq > 0 ? event.seq : undefined
   const item: CoreRuntimeItem = {
     ...existing,
     item_id: itemId,
-    turn_id: typeof value.turn_id === 'string' ? value.turn_id : existing.turn_id,
+    // Anchor on the envelope seq: the payload seq is batch-relative (0/1) and
+    // would corrupt cross-item ordering (see snapshot_store payload override).
+    seq: realSeq ?? existing.seq,
+    turn_id: turnId || existing.turn_id,
     parent_item_id: typeof value.parent_item_id === 'string' ? value.parent_item_id : existing.parent_item_id,
     kind: kind === 'tool_result' ? 'tool_result' : existing.kind || kind,
     last_kind: kind,
@@ -618,6 +627,7 @@ function applyAppEvent(snapshot: CoreAppSnapshot, event: CoreAppEvent): CoreAppS
     items[itemId] = {
       ...item,
       item_id: itemId,
+      seq: event.seq ?? item.seq,
       turn_id: turnId || item.turn_id || null,
       parent_item_id: event.parent_item_id ?? item.parent_item_id ?? null,
       type: typeof payload.type === 'string' ? payload.type : item.type ?? 'item',
@@ -751,6 +761,57 @@ function snapshotItemsChanged(current: CoreAppSnapshot, incoming: CoreAppSnapsho
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value))
+}
+
+const SUM_USAGE_FIELDS = [
+  'input_tokens',
+  'output_tokens',
+  'total_tokens',
+  'cached_tokens',
+  'cache_creation_tokens',
+  'llm_calls',
+] as const
+
+function numericField(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value)
+    if (Number.isFinite(parsed)) return parsed
+  }
+  return undefined
+}
+
+// A turn emits one usage event per model call (multi-step tool turns emit
+// several).  Sum the per-call counters instead of letting the last event
+// overwrite earlier ones, and recompute the turn-level cache hit rate.
+function mergeUsageMetrics(
+  prev: Record<string, unknown> | undefined,
+  next: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!prev) return { ...next }
+  const merged: Record<string, unknown> = { ...prev, ...next }
+  let inputTokens = 0
+  let cachedTokens: number | undefined
+  for (const field of SUM_USAGE_FIELDS) {
+    const a = numericField(prev[field])
+    const b = numericField(next[field])
+    if (a === undefined && b === undefined) continue
+    const sum = (a ?? 0) + (b ?? 0)
+    merged[field] = sum
+    if (field === 'input_tokens') inputTokens = sum
+    if (field === 'cached_tokens') cachedTokens = sum
+  }
+  if (inputTokens > 0 && cachedTokens !== undefined) {
+    merged.cache_hit_rate = cachedTokens / inputTokens
+  } else {
+    delete merged.cache_hit_rate
+  }
+  const durationA = numericField(prev.duration_ms)
+  const durationB = numericField(next.duration_ms)
+  if (durationA !== undefined || durationB !== undefined) {
+    merged.duration_ms = Math.max(durationA ?? 0, durationB ?? 0)
+  }
+  return merged
 }
 
 function isCoreAppThreadStatus(value: unknown): value is CoreAppThreadStatus {

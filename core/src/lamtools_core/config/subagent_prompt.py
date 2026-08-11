@@ -128,6 +128,27 @@ def load_subagent_settings(work_root: str | Path | None = None) -> dict[str, obj
     return dict(DEFAULT_SUBAGENT_SETTINGS)
 
 
+def resolve_default_multimodal_model(work_root: str | Path | None = None) -> str | None:
+    """Resolve the model to delegate multimodal work to.
+
+    Returns the user-configured ``default_multimodal_model`` (settings) when
+    set; otherwise the first model in the store whose jsonc declares
+    ``capability: "multimodal"`` (ModelStore ``list_sync`` model_id order).
+    ``None`` when neither exists — callers should then omit a concrete model.
+    """
+    configured = str(
+        load_subagent_settings(work_root).get("default_multimodal_model") or ""
+    ).strip()
+    if configured:
+        return configured
+    from lamtools_core.config.model_store import ModelStore
+
+    for model in ModelStore().list_sync(work_root=work_root):
+        if model.resolved_capability == "multimodal":
+            return model.model_id
+    return None
+
+
 def settings_path_for_scope(scope: str, work_root: str | Path | None) -> Path:
     """Return the writable settings path for ``scope`` ("project" or "global")."""
     if scope == "project" and work_root:
@@ -161,6 +182,7 @@ __all__ = [
     "guide_path_for_scope",
     "load_subagent_guide",
     "load_subagent_settings",
+    "resolve_default_multimodal_model",
     "resolve_subagent_guide_path",
     "resolve_subagent_settings_path",
     "settings_path_for_scope",

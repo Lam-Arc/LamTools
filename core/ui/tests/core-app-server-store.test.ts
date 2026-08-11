@@ -56,6 +56,52 @@ describe('core appServer runtime store', () => {
     expect(runtime.state?.core?.status).toBe('completed')
   })
 
+  it('aggregates multiple usage events of one turn instead of overwriting', async () => {
+    // A multi-step tool turn emits one usage event per model call; the last
+    // event must not clobber earlier per-call counters, and the turn-level
+    // cache hit rate is recomputed from the summed totals.
+    const runtime = createCoreAppServerRuntimeState()
+    const frames: Array<() => void> = []
+    let onEvent: ((event: CoreAppEvent) => void) | undefined
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: (callbacks) => {
+        onEvent = callbacks.onEvent
+        return fakeClient(async (method) => method === 'thread/resume'
+          ? { snapshot: snapshot(1, 'running') }
+          : {})
+      },
+      scheduleFrame: (callback) => frames.push(callback),
+    })
+    await controller.connect('http://127.0.0.1:6173', 'thread-1')
+
+    onEvent?.(runUsageEvent('usage-1', {
+      input_tokens: 1000,
+      output_tokens: 50,
+      total_tokens: 1050,
+      cached_tokens: 800,
+      cache_hit_rate: 0.8,
+      llm_calls: 1,
+    }))
+    onEvent?.(runUsageEvent('usage-2', {
+      input_tokens: 2000,
+      output_tokens: 100,
+      total_tokens: 2100,
+      cached_tokens: 100,
+      cache_hit_rate: 0.05,
+      llm_calls: 1,
+    }))
+    frames[0]()
+
+    expect(runtime.state?.core?.turns?.['turn-1']?.usage).toMatchObject({
+      input_tokens: 3000,
+      output_tokens: 150,
+      total_tokens: 3150,
+      cached_tokens: 900,
+      llm_calls: 2,
+      cache_hit_rate: 0.3,
+    })
+  })
+
   it('uses response snapshots as the authoritative frontend state', () => {
     const runtime = createCoreAppServerRuntimeState()
     const controller = createCoreAppServerRuntimeController(runtime, {
@@ -297,6 +343,134 @@ describe('core appServer runtime store', () => {
     expect(part?.artifacts?.[0]?.kind).toBe('image')
     expect(part?.artifacts?.[0]?.artifact_id).toBe('art-1')
   })
+
+  it('anchors incremental items on the envelope seq for chronological interleaving', async () => {
+    // Mid-turn queue guide messages must interleave between runtime items; the
+    // store saves the envelope seq (thread-global) — NOT the batch-relative
+    // payload seq — so the selector can order them chronologically.
+    const runtime = createCoreAppServerRuntimeState()
+    const frames: Array<() => void> = []
+    let onEvent: ((event: CoreAppEvent) => void) | undefined
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: (callbacks) => {
+        onEvent = callbacks.onEvent
+        return fakeClient(async (method) => method === 'thread/resume'
+          ? { snapshot: snapshot(1, 'running') }
+          : {})
+      },
+      scheduleFrame: (callback) => frames.push(callback),
+    })
+    await controller.connect('http://127.0.0.1:6173', 'thread-1')
+
+    onEvent?.({
+      event_id: 'guide-event-1',
+      thread_id: 'thread-1',
+      seq: 42,
+      method: 'item/started',
+      created_at: '2026-07-15T00:00:03Z',
+      item_id: 'turn-1:user:guide:q1',
+      turn_id: 'turn-1',
+      payload: {
+        type: 'userMessage',
+        content: [{ type: 'text', text: '先做调研' }],
+        // Deliberately misleading batch-relative seq — must NOT win.
+        seq: 0,
+      },
+    })
+    onEvent?.({
+      event_id: 'delta-1',
+      thread_id: 'thread-1',
+      seq: 43,
+      method: 'core/runItem',
+      created_at: '2026-07-15T00:00:00Z',
+      transient: true,
+      item_id: 'response-1',
+      turn_id: 'turn-1',
+      payload: {
+        event_id: 'delta-1',
+        thread_id: 'thread-1',
+        item_id: 'response-1',
+        turn_id: 'turn-1',
+        kind: 'message',
+        status: 'running',
+        payload: {
+          type: 'agentMessage',
+          delta: 'hel',
+          // Deliberately misleading batch-relative seq — must NOT become the
+          // item's ordering anchor (snapshot_store overrides it with the
+          // envelope seq for the same reason).
+          seq: 0,
+        },
+      },
+    })
+    frames[0]()
+
+    expect(runtime.state?.items?.['turn-1:user:guide:q1']?.seq).toBe(42)
+    expect(runtime.state?.core?.items?.['response-1']?.seq).toBe(43)
+    // The batch-relative payload seq stays in the payload; the envelope seq
+    // is what the selector's chronological interleaving reads.
+    expect(runtime.state?.core?.items?.['response-1']?.payload?.seq).toBe(0)
+  })
+
+  it('ignores transient envelope seq=0 so stream deltas never sort above the user message', async () => {
+    // Transient stream deltas (default_agent `_persist_core_event_live`) are
+    // published with seq=0 (no persisted anchor). A 0 anchor would sort the
+    // item BEFORE every outer userMessage (0 < any real seq) — the observed
+    // "assistant streaming above my message" bug.
+    const runtime = createCoreAppServerRuntimeState()
+    const frames: Array<() => void> = []
+    let onEvent: ((event: CoreAppEvent) => void) | undefined
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: (callbacks) => {
+        onEvent = callbacks.onEvent
+        return fakeClient(async (method) => method === 'thread/resume'
+          ? { snapshot: snapshot(1, 'running') }
+          : {})
+      },
+      scheduleFrame: (callback) => frames.push(callback),
+    })
+    await controller.connect('http://127.0.0.1:6173', 'thread-1')
+
+    // 1) First event for a new item is a transient delta (seq=0) — must NOT
+    //    anchor the item at 0.
+    onEvent?.({
+      event_id: 'stream-1', thread_id: 'thread-1', seq: 0, method: 'core/runItem',
+      created_at: '2026-07-15T00:00:00Z', transient: true, item_id: 'response-2', turn_id: 'turn-1',
+      payload: {
+        event_id: 'stream-1', thread_id: 'thread-1', item_id: 'response-2', turn_id: 'turn-1',
+        kind: 'message', status: 'running',
+        payload: { type: 'agentMessage', delta: 'hi' },
+      },
+    })
+    frames[0]()
+    expect(runtime.state?.core?.items?.['response-2']?.seq).toBeUndefined()
+
+    // 2) A later real (persisted) event anchors it with the global seq.
+    onEvent?.({
+      event_id: 'stream-2', thread_id: 'thread-1', seq: 50, method: 'core/runItem',
+      created_at: '2026-07-15T00:00:00Z', item_id: 'response-2', turn_id: 'turn-1',
+      payload: {
+        event_id: 'stream-2', thread_id: 'thread-1', item_id: 'response-2', turn_id: 'turn-1',
+        kind: 'message', status: 'completed',
+        payload: { type: 'agentMessage', content: 'hi' },
+      },
+    })
+    frames[0]()
+    expect(runtime.state?.core?.items?.['response-2']?.seq).toBe(50)
+
+    // 3) An already-anchored item receiving another transient delta keeps its seq.
+    onEvent?.({
+      event_id: 'stream-3', thread_id: 'thread-1', seq: 0, method: 'core/runItem',
+      created_at: '2026-07-15T00:00:00Z', transient: true, item_id: 'response-2', turn_id: 'turn-1',
+      payload: {
+        event_id: 'stream-3', thread_id: 'thread-1', item_id: 'response-2', turn_id: 'turn-1',
+        kind: 'message', status: 'running',
+        payload: { type: 'agentMessage', delta: '!' },
+      },
+    })
+    frames[0]()
+    expect(runtime.state?.core?.items?.['response-2']?.seq).toBe(50)
+  })
 })
 
 function fakeClient(
@@ -410,6 +584,26 @@ function runStatusEvent(eventId: string, status: string): CoreAppEvent {
       kind: 'status',
       status,
       payload: { type: 'turn', status },
+    },
+  }
+}
+
+function runUsageEvent(eventId: string, usage: Record<string, unknown>): CoreAppEvent {
+  return {
+    event_id: eventId,
+    thread_id: 'thread-1',
+    seq: 2,
+    method: 'core/runItem',
+    created_at: '2026-07-15T00:00:01Z',
+    turn_id: 'turn-1',
+    payload: {
+      event_id: eventId,
+      thread_id: 'thread-1',
+      turn_id: 'turn-1',
+      kind: 'usage',
+      status: 'running',
+      usage,
+      payload: { type: 'turn', runtime_metrics: usage },
     },
   }
 }

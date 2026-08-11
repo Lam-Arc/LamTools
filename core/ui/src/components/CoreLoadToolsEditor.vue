@@ -291,6 +291,41 @@ onMounted(fetchModes)
   font-family: var(--font-mono);
 }
 
+/* ── 主题化 checkbox（对齐 layout.css toggle-line 配方：绿勾选中态）── */
+.unlimited-row input[type="checkbox"],
+.tool-checkbox input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  min-width: 14px;
+  min-height: 14px;
+  margin: 0;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 24%, transparent);
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+  position: relative;
+  display: grid;
+  place-items: center;
+  transition: background .12s ease, border-color .12s ease;
+}
+.unlimited-row input[type="checkbox"]:checked,
+.tool-checkbox input[type="checkbox"]:checked {
+  border-color: var(--green, #32d17d);
+  background: var(--green, #32d17d);
+}
+.unlimited-row input[type="checkbox"]:checked::after,
+.tool-checkbox input[type="checkbox"]:checked::after {
+  content: "";
+  width: 7px;
+  height: 4px;
+  border-left: 2px solid color-mix(in srgb, var(--settings-main-text, #fff) 92%, transparent);
+  border-bottom: 2px solid color-mix(in srgb, var(--settings-main-text, #fff) 92%, transparent);
+  transform: rotate(-45deg) translateY(-1px);
+}
+
 .subhead-actions {
   display: flex;
   gap: 6px;

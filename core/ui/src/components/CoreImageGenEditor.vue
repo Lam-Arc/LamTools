@@ -65,13 +65,14 @@
         />
       </label>
 
-      <p v-if="saved" class="hook-meta" role="status">已保存 ✓</p>
+      <p v-if="saved" class="hook-meta" role="status"><Check :size="12" :stroke-width="2.2" aria-hidden="true" /> 已保存</p>
     </article>
   </section>
 </template>
 
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
+import { Check } from 'lucide-vue-next'
 
 const props = defineProps<{
   requestRpc: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>

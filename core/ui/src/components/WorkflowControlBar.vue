@@ -1,20 +1,33 @@
 <template>
   <div class="wf-control-bar">
     <button class="small-btn primary" type="button" :disabled="running" @click="$emit('run')" title="运行整个工作流">
-      {{ running ? '运行中…' : '▶ 运行' }}
+      <Play v-if="!running" :size="12" :stroke-width="2" aria-hidden="true" />
+      {{ running ? '运行中…' : '运行' }}
     </button>
-    <button class="small-btn" type="button" :disabled="running" @click="$emit('step')" title="单步调试">⤼ 步进</button>
-    <button class="small-btn" type="button" :disabled="running" @click="$emit('save')" title="保存">💾 保存</button>
-    <button class="small-btn quiet" type="button" @click="$emit('add-node')" title="添加节点">⊕ 节点</button>
+    <button class="small-btn" type="button" :disabled="running" @click="$emit('step')" title="单步调试">
+      <StepForward :size="12" :stroke-width="2" aria-hidden="true" /> 步进
+    </button>
+    <button class="small-btn" type="button" :disabled="running" @click="$emit('save')" title="保存">
+      <Save :size="12" :stroke-width="2" aria-hidden="true" /> 保存
+    </button>
+    <button class="small-btn quiet" type="button" @click="$emit('add-node')" title="添加节点">
+      <Plus :size="12" :stroke-width="2" aria-hidden="true" /> 节点
+    </button>
     <span class="wf-control-sep" aria-hidden="true"></span>
-    <button class="small-btn quiet" type="button" @click="$emit('zoom-out')" title="缩小">−</button>
+    <button class="small-btn quiet" type="button" @click="$emit('zoom-out')" title="缩小">
+      <ZoomOut :size="12" :stroke-width="2" aria-hidden="true" />
+    </button>
     <button class="small-btn quiet" type="button" @click="$emit('zoom-reset')" title="重置缩放">1:1</button>
-    <button class="small-btn quiet" type="button" @click="$emit('zoom-in')" title="放大">+</button>
+    <button class="small-btn quiet" type="button" @click="$emit('zoom-in')" title="放大">
+      <ZoomIn :size="12" :stroke-width="2" aria-hidden="true" />
+    </button>
     <span v-if="statusText" class="wf-control-status">{{ statusText }}</span>
   </div>
 </template>
 
 <script setup lang="ts">
+import { Play, Plus, Save, StepForward, ZoomIn, ZoomOut } from 'lucide-vue-next'
+
 defineProps<{
   running?: boolean
   statusText?: string

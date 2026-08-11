@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import TypeVar
 
 from lamtools_core.llm import LLMClient, LLMRequest, LLMResponse, LLMStreamEvent
-from lamtools_core.llm.policy import BackoffStrategy, RetryPolicy
+from lamtools_core.llm.policy import DEFAULT_DELAY_SEQUENCE_SECONDS, RetryPolicy
 
 _logger = logging.getLogger(__name__)
 
@@ -72,25 +72,8 @@ def classify_model_error(exc: Exception) -> str:
 
 
 def model_retry_delay(retry_policy: RetryPolicy, attempt: int) -> float:
-    use_staged = (
-        retry_policy.backoff_strategy == BackoffStrategy.EXPONENTIAL
-        and bool(retry_policy.staged_delay_seconds)
-    )
-    if use_staged and attempt < len(retry_policy.staged_delay_seconds):
-        return min(float(retry_policy.staged_delay_seconds[attempt]), retry_policy.max_delay_seconds)
-    base = retry_policy.initial_delay_seconds
-    effective_attempt = attempt - len(retry_policy.staged_delay_seconds) if use_staged else attempt
-    if retry_policy.backoff_strategy == BackoffStrategy.FIXED:
-        delay = base
-    elif retry_policy.backoff_strategy == BackoffStrategy.LINEAR:
-        delay = base * (effective_attempt + 1)
-    elif use_staged:
-        staged_base = max(base, float(retry_policy.staged_delay_seconds[-1]))
-        delay = staged_base * (2 ** (effective_attempt + 1))
-    else:
-        delay = base * (2 ** effective_attempt)
-    if delay > retry_policy.max_delay_seconds:
-        delay = retry_policy.max_delay_seconds
+    sequence = retry_policy.delay_sequence_seconds or DEFAULT_DELAY_SEQUENCE_SECONDS
+    delay = float(sequence[min(attempt, len(sequence) - 1)])
     if retry_policy.jitter:
         import random
 

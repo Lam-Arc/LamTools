@@ -23,7 +23,7 @@
               :stroke-width="1.8"
               aria-hidden="true"
             />
-            <template v-else>{{ section.icon || '○' }}</template>
+            <Circle v-else :size="16" :stroke-width="1.8" aria-hidden="true" />
           </span>
           <span>{{ section.label }}</span>
         </button>
@@ -31,7 +31,7 @@
 
       <footer class="settings-sidebar-footer">
         <button class="settings-entry" @click="$emit('close')">
-          <span aria-hidden="true">←</span>
+          <span aria-hidden="true"><ArrowLeft :size="16" :stroke-width="1.8" /></span>
           <span>返回主界面</span>
         </button>
       </footer>
@@ -81,13 +81,16 @@ import { ref } from 'vue'
 import {
   Activity,
   AppWindow,
+  ArrowLeft,
   Bell,
   Bot,
   Braces,
   Brush,
+  Circle,
   Database,
   Eye,
   FileCode2,
+  Folder,
   Globe,
   Image as ImageIcon,
   Layers,
@@ -120,6 +123,7 @@ const ICON_MAP: Record<string, LucideIcon> = {
   database: Database,
   eye: Eye,
   'file-code': FileCode2,
+  folder: Folder,
   globe: Globe,
   image: ImageIcon,
   layers: Layers,

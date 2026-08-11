@@ -236,7 +236,8 @@ DEFAULT_TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
         "name": "read_file",
         "description": (
             "Read file content within the workspace. DOCX, PDF, and XLSX documents are automatically normalized "
-            "to Markdown and labeled as untrusted content."
+            "to Markdown and labeled as untrusted content. "
+            "Image files (PNG/JPG/JPEG/GIF/WebP/AVIF/BMP) are returned as an image the model can view directly."
         ),
         "input_schema": _schema(
             {"path": {"type": "string", "description": "File path relative to the workspace"}},
@@ -728,6 +729,7 @@ class CoreToolbox:
         active_mode: str | None = None,
         activated_mcp_servers: set[str] | None = None,
         workflow_tool_provider: Callable[[], Any] | None = None,
+        allow_access_outside_workdir: bool = False,
     ) -> None:
         self.work_root = Path(work_root).resolve()
         self.work_root.mkdir(parents=True, exist_ok=True)
@@ -744,6 +746,7 @@ class CoreToolbox:
         self.tool_permissions = dict(DEFAULT_TOOL_PERMISSIONS)
         self.skill_registry = skill_registry or SkillRegistry(explicit_roots=self.loaded_skill_roots)
         self.workflow_tool_provider = workflow_tool_provider
+        self.allow_access_outside_workdir = allow_access_outside_workdir
         self._dynamic_mcp_tool_names = {spec.name for spec in mcp_tool_specs or [] if spec.name.startswith("mcp__")}
         for spec in mcp_tool_specs or []:
             self.tool_permissions[spec.name] = spec.permission  # type: ignore[assignment]
@@ -768,6 +771,7 @@ class CoreToolbox:
             command_policies=command_policies,
             active_tier=active_tier,
             tier_tools=tier_tools,
+            allow_access_outside_workdir=allow_access_outside_workdir,
         )
         self._specs = [*default_core_tool_specs(), *list(mcp_tool_specs or []), *durable_specs, *workflow_build_specs]
         self._handlers = self._build_handlers(
@@ -779,6 +783,7 @@ class CoreToolbox:
             operation_executor=operation_executor,
             workflow_build=workflow_build,
             imagegen_config=imagegen_config,
+            allow_access_outside_workdir=allow_access_outside_workdir,
         )
 
     def _workflow_specs(self) -> list[ToolSpec]:
@@ -973,12 +978,14 @@ class CoreToolbox:
         operation_executor: OperationExecutor | None,
         workflow_build: bool = False,
         imagegen_config: dict | None = None,
+        allow_access_outside_workdir: bool = False,
     ) -> dict[str, ToolHandler]:
         read_tools = WorkspaceReadOnlyTools(
             self.work_root,
             max_list_items=max_list_items,
             max_text_length=max_text_length,
             max_search_results=max_search_results,
+            allow_access_outside_workdir=allow_access_outside_workdir,
         )
         for root in self.loaded_skill_roots:
             read_tools.add_resource_root(root)
@@ -1190,8 +1197,8 @@ class CoreToolbox:
         handlers: dict[str, ToolHandler] = {
             **read_tools.as_dict(),
             "load_skill": load_skill,
-            "write_file": make_write_file_handler(self.work_root),
-            "edit_file": make_edit_file_handler(self.work_root),
+            "write_file": make_write_file_handler(self.work_root, allow_access_outside_workdir=allow_access_outside_workdir),
+            "edit_file": make_edit_file_handler(self.work_root, allow_access_outside_workdir=allow_access_outside_workdir),
             "run_command": command_handlers.run_command,
             "git_status": make_git_status_handler(
                 self.work_root,

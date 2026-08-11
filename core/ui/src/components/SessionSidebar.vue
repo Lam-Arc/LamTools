@@ -39,7 +39,7 @@
             :aria-expanded="openProjectMenuId === group.id"
             :data-project-menu-trigger="group.id"
             @click.stop="toggleProjectMenu(group.id)"
-          >•••</button>
+          ><MoreHorizontal :size="14" :stroke-width="1.8" aria-hidden="true" /></button>
         </div>
         <button
           type="button"
@@ -168,6 +168,7 @@
 
 <script setup lang="ts">
 import { computed, ref, reactive, onBeforeUnmount, onMounted } from 'vue'
+import { MoreHorizontal } from 'lucide-vue-next'
 
 // ---------------------------------------------------------------------------
 // Types

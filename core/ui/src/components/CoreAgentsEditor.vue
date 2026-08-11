@@ -2,7 +2,9 @@
   <form class="core-agents-editor" :aria-busy="loading" @keydown.esc.prevent="!loading && emit('close')" @submit.prevent="save">
     <div class="core-agents-editor-head">
       <strong>AGENTS.md</strong>
-      <button type="button" class="icon-btn" data-agents-close :disabled="loading" title="关闭" aria-label="关闭" @click="emit('close')">×</button>
+      <button type="button" class="icon-btn" data-agents-close :disabled="loading" title="关闭" aria-label="关闭" @click="emit('close')">
+        <X :size="13" :stroke-width="1.8" aria-hidden="true" />
+      </button>
     </div>
     <textarea
       v-model="draft"
@@ -21,6 +23,7 @@
 
 <script setup lang="ts">
 import { ref, watch } from 'vue'
+import { X } from 'lucide-vue-next'
 
 const props = withDefaults(defineProps<{
   content: string

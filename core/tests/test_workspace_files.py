@@ -15,6 +15,7 @@ from lamtools_core.tool.document_normalize import (
 from lamtools_core.tool.workspace_files import (
     WorkspaceReadOnlyTools,
     edit_file_tool,
+    resolve_read_resource_path,
     write_file_tool,
 )
 
@@ -52,6 +53,65 @@ async def test_read_file_can_use_registered_resource_root(tmp_path):
     assert result.status == "ok"
     assert "skill reference" in result.content
     assert result.metadata["path"] == "guide.md"
+
+
+@pytest.mark.asyncio
+async def test_read_file_returns_png_as_image_data_url(tmp_path):
+    work_root = tmp_path / "project"
+    work_root.mkdir()
+    png_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64  # 头部 + 填充，read_file 不校验图片真实性
+    (work_root / "shot.png").write_bytes(png_bytes)
+    tools = WorkspaceReadOnlyTools(work_root)
+
+    result = await tools.read_file(ToolCall(id="read-img", name="read_file", arguments={"path": "shot.png"}))
+
+    assert result.status == "ok"
+    assert result.metadata["image_data_url"].startswith("data:image/png;base64,")
+    expected = "data:image/png;base64," + base64.b64encode(png_bytes).decode("ascii")
+    assert result.metadata["image_data_url"] == expected
+    assert result.artifacts[0].kind == "file_read"
+    assert result.artifacts[0].metadata["image_data_url"] == expected
+    # 像素内容不进文本（避免乱码），content 为文件说明
+    assert "图片文件" in result.content
+    assert "\x89PNG" not in result.content
+
+
+@pytest.mark.parametrize(
+    ("suffix", "mime"),
+    [
+        (".jpg", "image/jpeg"),
+        (".jpeg", "image/jpeg"),
+        (".gif", "image/gif"),
+        (".webp", "image/webp"),
+        (".avif", "image/avif"),
+        (".bmp", "image/bmp"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_read_file_image_mime_mapping(tmp_path, suffix, mime):
+    work_root = tmp_path / "project"
+    work_root.mkdir()
+    (work_root / f"pic{suffix}").write_bytes(b"\x00\x01\x02\x03")
+    tools = WorkspaceReadOnlyTools(work_root)
+
+    result = await tools.read_file(ToolCall(id="read-img", name="read_file", arguments={"path": f"pic{suffix}"}))
+
+    assert result.status == "ok"
+    assert result.metadata["image_data_url"].startswith(f"data:{mime};base64,")
+
+
+@pytest.mark.asyncio
+async def test_read_file_non_image_binary_keeps_text_behavior(tmp_path):
+    work_root = tmp_path / "project"
+    work_root.mkdir()
+    (work_root / "blob.bin").write_bytes(b"\x00\x01\x02\x03")
+    tools = WorkspaceReadOnlyTools(work_root)
+
+    result = await tools.read_file(ToolCall(id="read-bin", name="read_file", arguments={"path": "blob.bin"}))
+
+    assert result.status == "ok"
+    assert "image_data_url" not in result.metadata
+    assert "图片文件" not in result.content
 
 
 @pytest.mark.asyncio
@@ -389,3 +449,73 @@ async def test_write_and_edit_file_are_bounded_to_workspace(tmp_path):
     assert (work_root / "note.txt").read_text(encoding="utf-8") == "hello world\n"
     assert escaped.status == "failed"
     assert "outside work_root" in escaped.error
+
+
+def test_resolve_read_resource_path_allow_outside_absolute(tmp_path):
+    work_root = tmp_path / "project"
+    work_root.mkdir()
+    target = tmp_path / "outside.txt"
+    target.write_text("x", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="outside work_root"):
+        resolve_read_resource_path(str(target), work_root)
+
+    resolved, access_root = resolve_read_resource_path(str(target), work_root, allow_outside=True)
+
+    assert resolved == target.resolve()
+    # Out-of-workspace targets use themselves as the access root.
+    assert access_root == target.resolve()
+
+
+@pytest.mark.asyncio
+async def test_workspace_tools_allow_access_outside_workdir(tmp_path):
+    work_root = tmp_path / "project"
+    outside = tmp_path / "outside"
+    work_root.mkdir()
+    outside.mkdir()
+    (outside / "secret.txt").write_text("top secret\n", encoding="utf-8")
+
+    restricted = WorkspaceReadOnlyTools(work_root)
+    blocked = await restricted.read_file(
+        ToolCall(id="read-blocked", name="read_file", arguments={"path": str(outside / "secret.txt")})
+    )
+    assert blocked.status == "failed"
+    assert "outside work_root" in blocked.error
+
+    allowed = WorkspaceReadOnlyTools(work_root, allow_access_outside_workdir=True)
+    ok = await allowed.read_file(
+        ToolCall(id="read-ok", name="read_file", arguments={"path": str(outside / "secret.txt")})
+    )
+    assert ok.status == "ok"
+    assert "top secret" in ok.content
+
+    written = await write_file_tool(
+        ToolCall(
+            id="write-outside",
+            name="write_file",
+            arguments={"path": str(outside / "new.txt"), "content": "new\n"},
+        ),
+        work_root=work_root,
+        allow_access_outside_workdir=True,
+    )
+    assert written.status == "ok"
+    assert (outside / "new.txt").read_text(encoding="utf-8") == "new\n"
+
+    escaped = await write_file_tool(
+        ToolCall(id="write-blocked", name="write_file", arguments={"path": str(outside / "blocked.txt"), "content": "bad"}),
+        work_root=work_root,
+    )
+    assert escaped.status == "failed"
+    assert "outside work_root" in escaped.error
+
+    edited = await edit_file_tool(
+        ToolCall(
+            id="edit-outside",
+            name="edit_file",
+            arguments={"path": str(outside / "new.txt"), "old_string": "new", "new_string": "updated"},
+        ),
+        work_root=work_root,
+        allow_access_outside_workdir=True,
+    )
+    assert edited.status == "ok"
+    assert (outside / "new.txt").read_text(encoding="utf-8") == "updated\n"

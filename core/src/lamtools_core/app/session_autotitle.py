@@ -12,6 +12,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from lamtools_core.llm import ChatMessage, LLMRequest
+from lamtools_core.llm.retry import complete_with_retry
 
 if TYPE_CHECKING:
     from lamtools_core.llm import LLMClient, LLMResponse
@@ -25,6 +26,11 @@ MAX_TITLE_LEN = 20
 #: The first message is truncated to this many characters before being sent to
 #: the model, keeping the title request cheap regardless of input length.
 MAX_MESSAGE_CHARS = 2000
+
+#: Hard ceiling on one title-generation call (retries included) so a hung
+#: model never leaves the background task lingering for the HTTP client's
+#: default (360s).
+TITLE_CALL_TIMEOUT_SECONDS = 30.0
 
 #: Session titles that count as "untouched defaults" and may be overwritten.
 _DEFAULT_TITLES = frozenset({"", "new session", "新会话", "新的研究", "untitled", "core"})
@@ -72,8 +78,16 @@ async def generate_session_title(
         max_tokens=40,
     )
 
+    # Retry a transient failure once and bound the whole call — a stuck model
+    # must not leave a background task lingering for minutes. Fatal/token
+    # errors are never retried (see classify_model_error).
     try:
-        response: "LLMResponse" = await llm_client.complete(request)
+        response: "LLMResponse" = await complete_with_retry(
+            llm_client,
+            request,
+            max_attempts=2,
+            timeout_seconds=TITLE_CALL_TIMEOUT_SECONDS,
+        )
     except Exception:  # noqa: BLE001 — title generation must never break a turn
         _logger.warning("[autotitle] llm complete failed", exc_info=True)
         return None

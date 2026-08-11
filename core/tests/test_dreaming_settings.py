@@ -1,7 +1,7 @@
-"""Tests for the dreaming settings entry point (app_settings core.dreaming).
+"""Tests for the dreaming settings entry point (settings.jsonc core.dreaming).
 
 Covers:
-- turn.start reads core.dreaming from app_settings and applies it to the
+- turn.start reads core.dreaming from settings.jsonc and applies it to the
   kernel's LoopPolicy (dynamic, no restart).
 - Settings absent → falls back to spec defaults (False / 3).
 - Catalog without settings.get → no error, spec defaults.
@@ -13,13 +13,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import pytest
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from lamtools_core.app import CoreAgentPaths, CoreAgentSpec, create_core_agent_operations
 from lamtools_core.app.core_db import open_core_app_db
 from lamtools_core.app.http_agent_app import _register_missing_operations
-from lamtools_core.config.operations import build_shared_config_operation_catalog
-from lamtools_core.config.shared_database import AppSetting, init_shared_config_schema
+from lamtools_core.config import build_config_operation_catalog
+from lamtools_core.config.settings_store import set_setting
 from lamtools_core.llm import LLMRequest, LLMResponse, LLMStreamEvent
 
 
@@ -49,16 +48,9 @@ class KernelCapture:
 
 
 @pytest.fixture
-async def config_catalog(tmp_path):
-    """A shared-config operation catalog (settings.get/update) on a temp db."""
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'shared.db'}", future=True)
-    try:
-        await init_shared_config_schema(engine)
-        session_factory = async_sessionmaker(engine, expire_on_commit=False)
-        catalog = build_shared_config_operation_catalog(session_factory)
-        yield catalog, session_factory
-    finally:
-        await engine.dispose()
+def config_catalog():
+    """A jsonc-backed config operation catalog (settings.get/update)."""
+    return build_config_operation_catalog()
 
 
 @pytest.fixture
@@ -104,21 +96,13 @@ async def _run_turn(tmp_path, *, spec: CoreAgentSpec | None = None, config_catal
         await db.close()
 
 
-async def _seed_dreaming(session_factory, *, enabled: bool, min_turns: int) -> None:
-    async with session_factory() as db:
-        db.add(
-            AppSetting(
-                namespace="core.dreaming",
-                value={"enabled": enabled, "min_turns": min_turns},
-            )
-        )
-        await db.commit()
+def _seed_dreaming(*, enabled: bool, min_turns: int) -> None:
+    set_setting("core.dreaming", {"enabled": enabled, "min_turns": min_turns})
 
 
 @pytest.mark.asyncio
-async def test_turn_start_applies_dreaming_settings_from_app_settings(tmp_path, config_catalog, capture_kernel):
-    config_catalog, session_factory = config_catalog
-    await _seed_dreaming(session_factory, enabled=True, min_turns=7)
+async def test_turn_start_applies_dreaming_settings_from_settings_jsonc(tmp_path, config_catalog, capture_kernel):
+    _seed_dreaming(enabled=True, min_turns=7)
 
     result = await _run_turn(
         tmp_path,
@@ -136,7 +120,6 @@ async def test_turn_start_applies_dreaming_settings_from_app_settings(tmp_path, 
 
 @pytest.mark.asyncio
 async def test_turn_start_falls_back_to_spec_defaults_without_settings(tmp_path, config_catalog, capture_kernel):
-    config_catalog, _ = config_catalog
     result = await _run_turn(
         tmp_path,
         spec=CoreAgentSpec(dreaming_enabled=False, dream_min_turns=3),
@@ -150,7 +133,7 @@ async def test_turn_start_falls_back_to_spec_defaults_without_settings(tmp_path,
 
 @pytest.mark.asyncio
 async def test_turn_start_without_settings_operation_uses_spec_defaults(tmp_path, capture_kernel):
-    """Catalog without settings.get (no config db) must not raise."""
+    """Catalog without settings.get (no config catalog) must not raise."""
     result = await _run_turn(
         tmp_path,
         spec=CoreAgentSpec(dreaming_enabled=True, dream_min_turns=5),
@@ -164,11 +147,8 @@ async def test_turn_start_without_settings_operation_uses_spec_defaults(tmp_path
 
 @pytest.mark.asyncio
 async def test_turn_start_ignores_corrupt_settings(tmp_path, config_catalog, capture_kernel):
-    config_catalog, session_factory = config_catalog
-    # Store a non-dict / non-numeric value — must not raise.
-    async with session_factory() as db:
-        db.add(AppSetting(namespace="core.dreaming", value="not-a-dict"))
-        await db.commit()
+    # Store a non-dict value — settings.get returns {} and must not raise.
+    set_setting("core.dreaming", "not-a-dict")
 
     result = await _run_turn(
         tmp_path,

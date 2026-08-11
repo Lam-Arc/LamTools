@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import socket
-import sqlite3
 from pathlib import Path
 
 import pytest
@@ -13,20 +12,35 @@ from lamtools_core.app.http_agent_app import CoreConfigRoutingLLMClient, create_
 from lamtools_core.llm import LLMStreamEvent, LLMToolCall
 
 
-def _write_config_db(path: Path) -> None:
-    connection = sqlite3.connect(path)
-    try:
-        connection.executescript(
-            """
-            create table llm_providers (id text primary key, name text, api_type text, base_url text, api_key text, extra text, created_at text);
-            create table llm_models (id text primary key, provider_id text, model_id text, display_name text, context_window integer, max_output_tokens integer, thinking_supported integer, thinking_budget integer, temperature real, extra text, created_at text);
-            insert into llm_providers values ('provider-1', 'Provider', 'openai', 'https://example.test/v1', 'secret', '{}', '2026-01-01');
-            insert into llm_models values ('model-record', 'provider-1', 'model-name', 'Model Name', 128000, 4096, 1, 10000, 0.2, '{}', '2026-01-01');
-            """
-        )
-        connection.commit()
-    finally:
-        connection.close()
+def _write_jsonc_config(config_root: Path) -> None:
+    """Write provider-1 + model-record jsonc (replaces the old config.db fixture)."""
+    provider_dir = config_root / "providers"
+    provider_dir.mkdir(parents=True, exist_ok=True)
+    (provider_dir / "provider-1.jsonc").write_text(
+        '{\n'
+        '  "id": "provider-1",\n'
+        '  "name": "Provider",\n'
+        '  "api_type": "openai",\n'
+        '  "base_url": "https://example.test/v1",\n'
+        '  "api_key": "secret"\n'
+        '}\n',
+        encoding="utf-8",
+    )
+    model_dir = config_root / "models"
+    model_dir.mkdir(parents=True, exist_ok=True)
+    (model_dir / "model-record.jsonc").write_text(
+        '{\n'
+        '  "model_id": "model-record",\n'
+        '  "display_name": "Model Name",\n'
+        '  "provider": "Provider",\n'
+        '  "provider_id": "provider-1",\n'
+        '  "context_window": 128000,\n'
+        '  "max_output_tokens": 4096,\n'
+        '  "temperature": 0.2,\n'
+        '  "thinking": {"supported": true, "budget": 10000}\n'
+        '}\n',
+        encoding="utf-8",
+    )
 
 
 async def _wait_for_waiting(client: CoreAppServerClient, thread_id: str) -> None:
@@ -51,9 +65,8 @@ async def _wait_for_terminal(client: CoreAppServerClient, thread_id: str, *, tim
 
 
 @pytest.mark.asyncio
-async def test_core_app_server_client_runs_live_operation_matrix_against_real_websocket_server(tmp_path, monkeypatch) -> None:
-    config_db = tmp_path / "config.db"
-    _write_config_db(config_db)
+async def test_core_app_server_client_runs_live_operation_matrix_against_real_websocket_server(tmp_path, monkeypatch, isolated_config_root) -> None:
+    _write_jsonc_config(isolated_config_root)
     release_steered_turn = asyncio.Event()
     release_cancelled_turn = asyncio.Event()
     steered_stream_started = asyncio.Event()
@@ -92,7 +105,6 @@ async def test_core_app_server_client_runs_live_operation_matrix_against_real_we
     monkeypatch.setattr(CoreConfigRoutingLLMClient, "complete", complete)
     app = create_core_agent_http_app(
         model_id="model-record",
-        config_db=config_db,
         core_db=tmp_path / "core.db",
         data_dir=tmp_path / "data",
         work_root=tmp_path / "work",

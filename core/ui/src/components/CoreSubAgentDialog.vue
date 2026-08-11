@@ -15,7 +15,9 @@
             {{ statusLabel(run.status) }}
           </span>
         </div>
-        <button ref="closeButton" type="button" class="core-sub-agent-dialog__close" aria-label="关闭 Sub Agent" @click="requestClose">×</button>
+        <button ref="closeButton" type="button" class="core-sub-agent-dialog__close" aria-label="关闭 Sub Agent" @click="requestClose">
+          <X :size="15" :stroke-width="1.8" aria-hidden="true" />
+        </button>
       </header>
 
       <section
@@ -77,6 +79,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
+import { X } from 'lucide-vue-next'
 import type { CoreSubAgentRun, MessagePartStatus } from '../types'
 import type { CoreSelectOption, CoreThinkingModeOption } from '../composer/execution'
 import { useCoreAutoFollowScroll } from '../composables/useCoreAutoFollowScroll'
@@ -158,10 +161,15 @@ function requestClose() {
 }
 
 function syncTimelineResizeObserver() {
-  timelineResizeObserver?.disconnect()
-  timelineResizeObserver = null
+  if (typeof ResizeObserver === 'undefined') return
+  // One-shot: built once per dialog lifetime. The observer callback is the
+  // single unified scroll channel — any content height change rolls through
+  // timelineScroll's autoFollow gate. Never rebuilt on timeline changes
+  // (previously every timeline update re-created the observer + forced a
+  // scroll call — the stacked-patches anti-pattern).
+  if (timelineResizeObserver) return
   const timeline = timelineElement.value
-  if (!timeline || typeof ResizeObserver === 'undefined') return
+  if (!timeline) return
   timelineResizeObserver = new ResizeObserver(() => {
     void timelineScroll.scrollToBottom()
   })
@@ -172,7 +180,6 @@ function syncTimelineResizeObserver() {
 
 async function refreshTimeline(force = false) {
   await nextTick()
-  syncTimelineResizeObserver()
   await timelineScroll.scrollToBottom(force)
 }
 
@@ -185,7 +192,7 @@ async function showDialog() {
   else dialog.setAttribute('open', '')
   await nextTick()
   closeButton.value?.focus()
-  timelineScroll.autoFollow.value = true
+  timelineScroll.reset()
   await refreshTimeline(true)
 }
 
@@ -236,13 +243,18 @@ watch(
 
 watch(() => props.run.subSessionId, () => {
   collapsedMessageIds.value = new Set()
-  timelineScroll.autoFollow.value = true
+  timelineScroll.reset() // 切会话：丢弃进行中的滚动、恢复跟随意图（易错点 8）
   void refreshTimeline(true)
 })
 
 watch(
   () => props.run.timeline,
-  () => void refreshTimeline(),
+  () => {
+    // 滚动跟随交由 syncTimelineResizeObserver 的单一通道（内容高度变化 ->
+    // autoFollow gate）。这里只做 nextTick 后的兜底 force=false 滚动，
+    // 避免每次 timeline 更新都重置 observer / 强制滚动（历史补丁堆叠）。
+    void refreshTimeline()
+  },
   { flush: 'post' },
 )
 

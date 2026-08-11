@@ -135,8 +135,9 @@ def create_kernel(
     checkpoint_coordinator: Any | None = None,
     completion_gate: CompletionGate | None = None,
     memory_store: Any | None = None,
-    model_timeout_seconds: int = 360,
+    model_timeout_seconds: float | None = None,
     model_retries: int | None = None,
+    retry_policy: Any | None = None,
     persist_steps: bool = False,
     context_window_tokens: int | None = None,
     compact_trigger_tokens: int | None = None,
@@ -155,11 +156,23 @@ def create_kernel(
     the owning thread; when set, the kernel can abort a blocked streaming
     model call cooperatively (see ``CoreLoopKernel._is_external_cancelled``).
     Pass None for sub-agent kernels — they do not respond to external Stop.
+
+    Retry knobs default to ``{config_dir}/model_retry.jsonc``
+    (``config.retry_store.load_model_retry_config``); explicitly passed
+    arguments take precedence over the config file, which in turn overrides
+    the ``LoopPolicy``/``RetryPolicy`` dataclass defaults.
     """
-    policy_kwargs: dict[str, Any] = {
-        "model_timeout_seconds": model_timeout_seconds,
-        "parallel_tool_names": parallel_tool_names,
-    }
+    from lamtools_core.config.retry_store import (
+        load_model_retry_config,
+        loop_policy_overrides,
+        retry_policy_from_config,
+    )
+
+    config = load_model_retry_config()
+    policy_kwargs: dict[str, Any] = {**loop_policy_overrides(config)}
+    if model_timeout_seconds is not None:
+        policy_kwargs["model_timeout_seconds"] = model_timeout_seconds
+    policy_kwargs["parallel_tool_names"] = parallel_tool_names
     if model_retries is not None:
         policy_kwargs["model_retries"] = model_retries
     if persist_steps:
@@ -171,12 +184,15 @@ def create_kernel(
     if compact_limit_tokens is not None:
         policy_kwargs["compact_limit_tokens"] = compact_limit_tokens
     policy_kwargs.update(extra_policy_kwargs)
+    if retry_policy is None:
+        retry_policy = retry_policy_from_config(config)
     return CoreLoopKernel(
         kit=kit,
         llm_client=llm_client,
         state_store=state_store,
         event_sink=event_sink,
         policy=LoopPolicy(**policy_kwargs),
+        retry_policy=retry_policy,
         hook_engine=hook_engine,
         checkpoint_coordinator=checkpoint_coordinator,
         completion_gate=completion_gate,
@@ -406,6 +422,7 @@ def create_core_agent_operations(
             turn_instructions = str(request.payload.get("instructions") or "").strip() or None
             allow_agent_install_skill = bool(request.payload.get("allow_agent_install_skill"))
             allow_agent_create_hooks = bool(request.payload.get("allow_agent_create_hooks"))
+            allow_access_outside_workdir = bool(request.payload.get("allow_access_outside_workdir"))
             raw_imagegen = request.payload.get("imagegen_config")
             imagegen_config = raw_imagegen if isinstance(raw_imagegen, dict) else None
             plugin_assembly = assemble_core_agent_plugins(
@@ -458,6 +475,7 @@ def create_core_agent_operations(
                 activated_mcp_servers=activated_mcp_servers,
                 attachment_service=attachment_service,
                 imagegen_config=imagegen_config,
+                allow_access_outside_workdir=allow_access_outside_workdir,
             )
             _mcp_count = len(mcp_registry._tools_by_name) if mcp_registry is not None else 0
             _logger.info("[default:turn_start] toolbox built thread_id=%s mcp_tools=%d", thread_id, _mcp_count)
@@ -644,6 +662,7 @@ def create_core_agent_operations(
         if active_tier not in ("read_only", "limited_edit", "full_edit"):
             active_tier = None
         tier_tools = request.payload.get("tier_tools") if isinstance(request.payload.get("tier_tools"), dict) else None
+        allow_access_outside_workdir = bool(request.payload.get("allow_access_outside_workdir"))
         if _is_llm_client(model_provider):
             from lamtools_core.event import CoreEvent
             from lamtools_core.tool import ToolCall
@@ -910,6 +929,7 @@ def create_core_agent_operations(
                         active_tier=active_tier,
                         tier_tools=tier_tools,
                         activated_mcp_servers=delegated_activated_mcp,
+                        allow_access_outside_workdir=allow_access_outside_workdir,
                     )
                     sub_agent_runner = toolbox.sub_agent_runner
                     if sub_agent_runner is None or not hasattr(sub_agent_runner, "resume_approved"):
@@ -1834,6 +1854,7 @@ async def _build_core_runtime_toolbox(
     enable_workflow_tool: bool = False,
     attachment_service: Any = None,
     imagegen_config: dict | None = None,
+    allow_access_outside_workdir: bool = False,
 ):
     from lamtools_core.mcp import MCPToolRegistry
     from lamtools_core.tool.sub_agent_runner import KernelSubAgentRunner
@@ -1897,6 +1918,7 @@ async def _build_core_runtime_toolbox(
             activated_mcp_servers=activated_mcp_servers,
             load_tools=load_tools,
             attachment_service=attachment_service,
+            allow_access_outside_workdir=allow_access_outside_workdir,
         )
     async def execute_operation(name: str, payload: dict[str, Any], metadata: dict[str, Any]) -> Any:
         if operation_catalog is None:
@@ -1943,6 +1965,7 @@ async def _build_core_runtime_toolbox(
         active_mode=active_mode,
         activated_mcp_servers=activated_mcp_servers,
         workflow_tool_provider=workflow_provider,
+        allow_access_outside_workdir=allow_access_outside_workdir,
     )
     return toolbox, registry
 

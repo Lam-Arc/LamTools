@@ -618,6 +618,7 @@ async def handle_turn_start_operation(
         "active_mode": resolved["active_mode"],
         "allow_agent_install_skill": resolved.get("allow_agent_install_skill", False),
         "allow_agent_create_hooks": resolved.get("allow_agent_create_hooks", False),
+        "allow_access_outside_workdir": resolved.get("allow_access_outside_workdir", False),
         "imagegen_config": imagegen_config,
         "model_id": str(params.get("model_id") or params.get("modelId") or ""),
         "thinking_enabled": params.get("thinking_enabled") if isinstance(params.get("thinking_enabled"), bool) else None,
@@ -714,6 +715,7 @@ async def _resolve_turn_approval_policy(*, context: "CoreLiveContext", params: d
         "active_mode": active_mode,
         "allow_agent_install_skill": False,
         "allow_agent_create_hooks": False,
+        "allow_access_outside_workdir": False,
     }
     if explicit is not None:
         default_result["approval_policy"] = "auto_approve" if explicit == "auto_approve" else "require"
@@ -741,6 +743,7 @@ async def _resolve_turn_approval_policy(*, context: "CoreLiveContext", params: d
     approval_policy = "auto_approve" if active_tier == "full_edit" else "require"
     allow_agent_install_skill = bool(value.get("allow_agent_install_skill"))
     allow_agent_create_hooks = bool(value.get("allow_agent_create_hooks"))
+    allow_access_outside_workdir = bool(value.get("allow_access_outside_workdir"))
     return {
         "approval_policy": approval_policy,
         "active_tier": active_tier,
@@ -748,6 +751,7 @@ async def _resolve_turn_approval_policy(*, context: "CoreLiveContext", params: d
         "active_mode": active_mode,
         "allow_agent_install_skill": allow_agent_install_skill,
         "allow_agent_create_hooks": allow_agent_create_hooks,
+        "allow_access_outside_workdir": allow_access_outside_workdir,
     }
 
 
@@ -1140,6 +1144,7 @@ async def handle_approval_respond_operation(
                 "approval_policy": resolved["approval_policy"],
                 "active_tier": resolved["active_tier"],
                 "tier_tools": resolved["tier_tools"],
+                "allow_access_outside_workdir": resolved.get("allow_access_outside_workdir", False),
             }
             result = await context.operations.execute(
                 "approval.respond",
@@ -1574,7 +1579,19 @@ async def _auto_title_session(
             return
 
         if session_store is not None:
-            await session_store.patch(thread_id, title=title)
+            # Conditional patch: the earlier guard checked the title before the
+            # LLM call, but the user may have renamed the session meanwhile.
+            # only_if_title_default makes the check atomic with the write, so a
+            # manual rename in that window is never clobbered. None means the
+            # title was no longer default (or the session is gone) — nothing to
+            # broadcast.
+            patched = await session_store.patch(
+                thread_id,
+                title=title,
+                only_if_title_default=True,
+            )
+            if patched is None:
+                return
 
         await context.hub.publish({
             "method": "session/updated",

@@ -12,10 +12,15 @@ def is_within_path(path: Path, root: Path) -> bool:
     return resolved_norm == boundary_norm or resolved_norm.startswith(boundary_norm + os.sep)
 
 
-def validate_workspace_path(path: str | Path, work_root: str | Path) -> Path:
+def validate_workspace_path(
+    path: str | Path,
+    work_root: str | Path,
+    *,
+    allow_outside: bool = False,
+) -> Path:
     root = Path(work_root).resolve()
     resolved = (root / path).resolve()
-    if not is_within_path(resolved, root):
+    if not allow_outside and not is_within_path(resolved, root):
         raise ValueError(f"Path '{path}' is outside work_root '{work_root}'")
     return resolved
 

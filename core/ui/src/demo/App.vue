@@ -15,6 +15,7 @@
     :theme="theme"
     :content-width="contentWidth"
     :permission-mode="permissionMode"
+    :allow-access-outside-workdir="allowAccessOutsideWorkdir"
     :request-rpc="requestConfigOperation"
     :workflows="settingsWorkflowList"
     :workflow-list-loading="settingsWorkflowLoading"
@@ -31,6 +32,7 @@
     @remove-stop="uiPreferences.removeStop"
     @sort-stops="uiPreferences.sortStops"
     @update-permission-mode="updatePermissionMode"
+    @update-allow-outside-workdir="updateAllowAccessOutsideWorkdir"
     @create-provider="createProvider"
     @update-provider="updateProvider"
     @delete-provider="deleteProvider"
@@ -69,6 +71,7 @@
     :content-width="contentWidth"
     :composer-disabled="composerDisabled"
     :composer-action-mode="composerActionMode"
+    :composer-active="latestStatus === 'running'"
     :error-text="workbenchErrorText"
     :notice-text="runtimeStatusText"
     v-model:stage-open="stageOpen"
@@ -139,7 +142,7 @@
 
     <template #sidebar-footer>
       <button class="sidebar-action" type="button" @click="showArrange = true">
-        <span aria-hidden="true">&#x25F7;</span><span>长期安排</span>
+        <span aria-hidden="true"><CalendarClock :size="14" :stroke-width="1.8" /></span><span>长期安排</span>
       </button>
     </template>
 
@@ -173,7 +176,10 @@
           :class="{ active: stageOpen }"
           :title="stageOpen ? '关闭视窗' : '打开视窗'"
           @click="toggleStage"
-        >{{ stageOpen ? '▾' : '▴' }}</button>
+        >
+          <ChevronDown v-if="stageOpen" :size="14" :stroke-width="1.8" aria-hidden="true" />
+          <ChevronUp v-else :size="14" :stroke-width="1.8" aria-hidden="true" />
+        </button>
       </div>
     </template>
 
@@ -214,10 +220,14 @@
           :api-base="apiBase"
           :project-id="activeProjectId ?? selectedProjectId"
           :work-root="activeProject?.workRoot"
+          :active-turn-id="activeTurnId"
+          :turn-active="activeTurnRunning"
+          :checkpoint-turn-ids="checkpointTurnIds"
           @toggle-process="toggleProcess"
           @decision-select="approvalController.handleDecision"
           @fork-message="handleForkMessage"
           @rollback-message="handleRollbackMessage"
+          @edit-message="handleEditMessage"
         />
         <div v-if="pendingPlaceholder" class="user-row">
           <div class="user-stack">
@@ -230,10 +240,10 @@
             type="button"
             class="thread-jump-latest"
             aria-label="回到最新消息"
+            title="回到最新消息"
             @click="threadScroll.scrollToBottom(true)"
           >
-            <span class="thread-jump-latest__arrow" aria-hidden="true">↓</span>
-            回到最新
+            <ArrowDown :size="16" :stroke-width="1.8" aria-hidden="true" />
           </button>
         </Transition>
       </section>
@@ -328,16 +338,9 @@
           @click="updateComposerCursor"
           @keyup="handleComposerKeyup"
           @keydown="handleComposerKeydown"
+          @paste="handleComposerPaste"
         />
       </div>
-    </template>
-
-    <template #composer-status>
-      <CoreResourceStats
-        :messages="messages"
-        :context-window="executionControls.activeModel.value?.context_window"
-        variant="composer"
-      />
     </template>
 
     <template #composer-tools>
@@ -389,7 +392,9 @@
                 :class="{ active: n.id === selectedNodeId }"
                 @click="onSelectNode(n.id)"
               >
-                <span class="wf-node-list-kind" aria-hidden="true">{{ nodeKindIcon(n.kind) }}</span>
+                <span class="wf-node-list-kind" aria-hidden="true">
+                  <component :is="nodeKindIcon(n.kind)" :size="12" :stroke-width="1.8" />
+                </span>
                 <span class="wf-node-list-title" :title="n.title || n.id">{{ n.title || n.id }}</span>
               </li>
             </ul>
@@ -400,7 +405,9 @@
             <template v-if="selectedNodeId">
               <div class="wf-right-info-head">
                 <h3>{{ selectedNode?.title || selectedNodeId }}</h3>
-                <button type="button" class="text-btn" title="返回对话" @click="onSelectNode(null)">✕</button>
+                <button type="button" class="text-btn" title="返回对话" @click="onSelectNode(null)">
+                  <ArrowLeft :size="14" :stroke-width="1.8" aria-hidden="true" />
+                </button>
               </div>
               <div v-if="selectedNode" class="wf-node-info-body">
                 <p class="wf-node-info-row"><span>类型</span><strong>{{ selectedNode.kind }}</strong></p>
@@ -430,10 +437,14 @@
                     :api-base="apiBase"
                     :project-id="activeProjectId ?? selectedProjectId"
                     :work-root="activeProject?.workRoot"
+                    :active-turn-id="activeTurnId"
+                    :turn-active="activeTurnRunning"
+                    :checkpoint-turn-ids="checkpointTurnIds"
                     @toggle-process="toggleProcess"
                     @decision-select="approvalController.handleDecision"
                     @fork-message="handleForkMessage"
                     @rollback-message="handleRollbackMessage"
+                    @edit-message="handleEditMessage"
                   />
                 </div>
               </div>
@@ -445,7 +456,9 @@
         <section class="wf-convo-float" role="dialog" aria-modal="false" aria-label="工作流对话">
           <header class="wf-convo-float-head">
             <h3>{{ activeWorkflowName || '工作流' }} · 对话</h3>
-            <button type="button" class="text-btn" title="收起" @click="conversationExpanded = false">✕</button>
+            <button type="button" class="text-btn" title="收起" @click="conversationExpanded = false">
+              <X :size="14" :stroke-width="1.8" aria-hidden="true" />
+            </button>
           </header>
           <div class="wf-convo-float-body">
             <ChatThread
@@ -453,10 +466,14 @@
               :process-expanded-ids="processExpandedIds"
               :typing-message-ids="typingMessageIds"
               :message-actions="true"
+              :active-turn-id="activeTurnId"
+              :turn-active="activeTurnRunning"
+              :checkpoint-turn-ids="checkpointTurnIds"
               @toggle-process="toggleProcess"
               @decision-select="approvalController.handleDecision"
               @fork-message="handleForkMessage"
               @rollback-message="handleRollbackMessage"
+              @edit-message="handleEditMessage"
             />
           </div>
         </section>
@@ -482,6 +499,20 @@
       </template>
     </template>
   </WorkspaceShell>
+
+  <!-- 全窗口拖拽上传遮罩：拖入文件时亮起，松开即上传到当前会话 -->
+  <div
+    v-if="dragActive"
+    class="attachment-drop-overlay"
+    @dragover.prevent
+    @drop.prevent="handleAttachmentDrop"
+  >
+    <div class="attachment-drop-card">
+      <Upload class="attachment-drop-icon" :size="28" aria-hidden="true" />
+      <p class="attachment-drop-title">松开鼠标上传附件</p>
+      <p class="attachment-drop-hint">添加到当前会话</p>
+    </div>
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -495,6 +526,7 @@ import {
   shallowRef,
   watch,
 } from 'vue'
+import { ArrowDown, ArrowLeft, Boxes, CalendarClock, ChevronDown, ChevronUp, Command, Cpu, FileCode2, FileText, Upload, X, type LucideIcon } from 'lucide-vue-next'
 import type {
   CoreAttachment,
   CoreSessionListItem,
@@ -512,6 +544,7 @@ import {
   createCoreAppServerRuntimeController,
   createCoreAppServerRuntimeState,
   hydrateSnapshot,
+  isCoreActiveTurnStatus,
   selectCoreQueuedInputs,
   selectLatestActiveTurnId,
   selectLatestTurnStatus,
@@ -717,7 +750,7 @@ const emptyWorkflow: WorkflowDef = {
 }
 
 const workflowSelectOptions = computed(() =>
-  workflows.value.map((w) => ({ value: w.name, label: w.name + (w.exposed ? ' ◇' : '') })),
+  workflows.value.map((w) => ({ value: w.name, label: w.name })),
 )
 
 // --- Stage pane state ---
@@ -823,11 +856,13 @@ const availableModels = ref<RawModel[]>([])
 const availableProviders = ref<RawProvider[]>([])
 const defaultModelId = ref('')
 const permissionMode = ref<'read_only' | 'limited_edit' | 'full_edit'>('full_edit')
+const allowAccessOutsideWorkdir = ref(false)
 const { pendingAttachments, attachmentInputItems, addUploaded, markFailed, removeAttachment, clearAttachments } = usePendingAttachments()
 const threadScrollEl = ref<HTMLElement | null>(null)
 const threadScroll = useCoreAutoFollowScroll(threadScrollEl)
 const COMPOSER_MAX_ROWS = 5
 let threadResizeObserver: ResizeObserver | null = null
+let threadResizeObserverTarget: HTMLElement | null = null
 let configClient: CoreAppServerClient | null = null
 
 async function loadEarlierMessages(): Promise<void> {
@@ -842,6 +877,9 @@ async function loadEarlierMessages(): Promise<void> {
   // cannot yank us back down.
   if (el && el.scrollHeight > prevHeight) {
     el.scrollTop = prevScrollTop + (el.scrollHeight - prevHeight)
+    // Re-sync controller state with the real landed position so the
+    // "回到最新" affordance and follow gate stay truthful after the anchor.
+    threadScroll.handleScroll()
   }
 }
 
@@ -874,6 +912,7 @@ const modeOptions = computed(() =>
 
 const latestStatus = computed(() => snapshot.value ? selectLatestTurnStatus(snapshot.value) : 'idle')
 const activeTurnId = computed(() => snapshot.value ? selectLatestActiveTurnId(snapshot.value) : '')
+const activeTurnRunning = computed(() => isCoreActiveTurnStatus(latestStatus.value))
 const rollbackActiveTurn = computed(() => ['running', 'waiting'].includes(latestStatus.value))
 
 const projectGroups = computed(() =>
@@ -963,13 +1002,13 @@ const workflowModeInstructions = computed(() => {
     '改图前先 workflow_graph 看现状，确认节点 id 和端口名后再加/连/删，避免引用不存在的 id。当前工作流名：' + (name || '（未选中）'),
   ].join('\n')
 })
-function nodeKindIcon(kind: string): string {
-  if (kind === 'ai') return '◇'
-  if (kind === 'command') return '◆'
-  if (kind === 'script') return '◳'
-  if (kind === 'content') return '□'
-  if (kind === 'subgraph') return '⬡'
-  return '◆'
+function nodeKindIcon(kind: string): LucideIcon {
+  if (kind === 'ai') return Cpu
+  if (kind === 'command') return Command
+  if (kind === 'script') return FileCode2
+  if (kind === 'content') return FileText
+  if (kind === 'subgraph') return Boxes
+  return Command
 }
 const selectedProject = computed(() => (
   projects.value.find((project) => project.id === selectedProjectId.value) || null
@@ -1395,9 +1434,11 @@ async function selectSession(id: string) {
   liveComposerController.resetForThreadChange()
   composerErrorText.value = ''
   setRuntimeStatus('', 0)
+  threadScroll.reset() // invalidate in-flight scrolls from the previous session
   await connectLive(id)
   await liveComposerController.loadCommandCatalog(id)
   await refreshGoal(id, true)
+  loadCheckpointGraph(id) // fire-and-forget: refresh turn→checkpoint map for rollback/fork
   await threadScroll.scrollToBottom(true)
 }
 
@@ -1428,6 +1469,9 @@ async function refreshAfterRollback() {
 // ── Assistant message actions: fork / roll back at a turn's checkpoint ──
 const checkpointsByTurnId = ref<Record<string, string>>({})
 
+/** Turn ids that currently have a checkpoint — rollback/fork/edit buttons hide when absent */
+const checkpointTurnIds = computed(() => new Set(Object.keys(checkpointsByTurnId.value)))
+
 function onCheckpointGraphLoaded(nodes: Array<{
   id: string
   turn_id?: string
@@ -1446,10 +1490,29 @@ function onCheckpointGraphLoaded(nodes: Array<{
   checkpointsByTurnId.value = map
 }
 
+async function loadCheckpointGraph(sessionId: string) {
+  try {
+    const result = await requestConfigOperation('session.checkpoints.graph', { session_id: sessionId })
+    onCheckpointGraphLoaded(Array.isArray(result?.nodes) ? result.nodes : [])
+  } catch {
+    // Graph load must never block the UI; rollback/fork handlers refresh
+    // on-demand before giving up, so a failure here is non-fatal.
+  }
+}
+
 async function handleForkMessage(payload: { turnId: string; content: string }) {
   const sessionId = activeSessionId.value
-  const checkpointId = checkpointsByTurnId.value[payload.turnId]
-  if (!sessionId || !checkpointId) {
+  if (!sessionId) {
+    composerErrorText.value = '该消息没有可用的分叉节点'
+    return
+  }
+  let checkpointId = checkpointsByTurnId.value[payload.turnId]
+  if (!checkpointId) {
+    // Map may be stale or not loaded yet — refresh once before giving up.
+    await loadCheckpointGraph(sessionId)
+    checkpointId = checkpointsByTurnId.value[payload.turnId]
+  }
+  if (!checkpointId) {
     composerErrorText.value = '该消息没有可用的分叉节点'
     return
   }
@@ -1472,8 +1535,17 @@ async function handleForkMessage(payload: { turnId: string; content: string }) {
 
 async function handleRollbackMessage(payload: { turnId: string; content: string }) {
   const sessionId = activeSessionId.value
-  const checkpointId = checkpointsByTurnId.value[payload.turnId]
-  if (!sessionId || !checkpointId) {
+  if (!sessionId) {
+    composerErrorText.value = '该消息没有对应的回退节点'
+    return
+  }
+  let checkpointId = checkpointsByTurnId.value[payload.turnId]
+  if (!checkpointId) {
+    // Map may be stale or not loaded yet — refresh once before giving up.
+    await loadCheckpointGraph(sessionId)
+    checkpointId = checkpointsByTurnId.value[payload.turnId]
+  }
+  if (!checkpointId) {
     composerErrorText.value = '该消息没有对应的回退节点'
     return
   }
@@ -1488,6 +1560,46 @@ async function handleRollbackMessage(payload: { turnId: string; content: string 
       scope: 'all',
     })
     await refreshAfterRollback()
+  } catch (error) {
+    composerErrorText.value = error instanceof Error ? error.message : String(error)
+  }
+}
+
+async function handleEditMessage(payload: { turnId: string; content: string; attachments?: CoreAttachment[] }) {
+  const sessionId = activeSessionId.value
+  if (!sessionId) {
+    composerErrorText.value = '该消息没有可编辑的节点'
+    return
+  }
+  let checkpointId = checkpointsByTurnId.value[payload.turnId]
+  if (!checkpointId) {
+    // Map may be stale or not loaded yet — refresh once before giving up.
+    await loadCheckpointGraph(sessionId)
+    checkpointId = checkpointsByTurnId.value[payload.turnId]
+  }
+  if (!checkpointId) {
+    composerErrorText.value = '该消息没有可编辑的节点'
+    return
+  }
+  if (rollbackActiveTurn.value) {
+    composerErrorText.value = '任务运行中，请先停止任务再编辑'
+    return
+  }
+  try {
+    // 回退到该用户消息发出前的检查点（同回退），再以编辑后的内容重新发送
+    await requestConfigOperation('session.checkpoints.restore', {
+      session_id: sessionId,
+      checkpoint_id: checkpointId,
+      scope: 'all',
+    })
+    await refreshAfterRollback()
+    // 携带原消息附件（已在后端上传，直接标记 uploaded 随发送提交，无需重新上传）
+    clearAttachments()
+    for (const attachment of payload.attachments ?? []) {
+      addUploaded({ ...attachment, status: 'uploaded' })
+    }
+    composerText.value = payload.content
+    await submitComposer()
   } catch (error) {
     composerErrorText.value = error instanceof Error ? error.message : String(error)
   }
@@ -1555,6 +1667,52 @@ function handleAttachmentInputChange(event: Event) {
 
 function handleComposerDrop(event: DragEvent) {
   if (event.dataTransfer?.files.length) void uploadFiles(event.dataTransfer.files)
+}
+
+// ── 全窗口拖拽上传：window 级 dragover 亮起遮罩，drop 统一走遮罩上传 ──
+const dragActive = ref(false)
+
+function handleWindowDragOver(event: DragEvent) {
+  // 仅拦截文件拖拽；WorkflowCanvas 节点内部拖拽、文本拖选等不干预
+  if (event.dataTransfer?.types.includes('Files')) {
+    event.preventDefault()
+    dragActive.value = true
+  }
+}
+
+function handleWindowDragLeave(event: DragEvent) {
+  // relatedTarget 为 null 表示已拖出窗口（子元素间移动不熄灭）
+  if (!event.relatedTarget) dragActive.value = false
+}
+
+function handleWindowDrop() {
+  // 兜底熄灭：drop 已由目标元素（遮罩/composer）处理上传，这里只保证遮罩收起
+  dragActive.value = false
+}
+
+function handleAttachmentDrop(event: DragEvent) {
+  dragActive.value = false
+  if (event.dataTransfer?.files.length) void uploadFiles(event.dataTransfer.files)
+}
+
+// ── 粘贴上传：输入框聚焦时 Ctrl+V 图片/文件 → 复用上传管线；纯文本不受影响 ──
+function handleComposerPaste(event: ClipboardEvent) {
+  const files: File[] = []
+  const items = event.clipboardData?.items
+  if (items) {
+    for (const item of Array.from(items)) {
+      if (item.kind === 'file') {
+        const file = item.getAsFile()
+        if (file) files.push(file)
+      }
+    }
+  }
+  // 兜底：items 拿不到时（个别 WebView）退回 files 列表
+  if (!files.length) {
+    const dropped = event.clipboardData?.files
+    if (dropped?.length) files.push(...Array.from(dropped))
+  }
+  if (files.length) void uploadFiles(files)
 }
 
 function retryPendingAttachment(id: string) {
@@ -1721,6 +1879,7 @@ async function loadPermissionMode() {
     } else {
       await updatePermissionMode(permissionMode.value)
     }
+    allowAccessOutsideWorkdir.value = Boolean(value.allow_access_outside_workdir)
   } catch {
     permissionMode.value = 'full_edit'
   }
@@ -1731,6 +1890,14 @@ async function updatePermissionMode(mode: 'read_only' | 'limited_edit' | 'full_e
   await requestConfigOperation('settings.update', {
     namespace: 'core.runtimeControls',
     value: { permission_mode: mode },
+  })
+}
+
+async function updateAllowAccessOutsideWorkdir(value: boolean) {
+  allowAccessOutsideWorkdir.value = value
+  await requestConfigOperation('settings.update', {
+    namespace: 'core.runtimeControls',
+    value: { allow_access_outside_workdir: value },
   })
 }
 
@@ -2134,18 +2301,26 @@ async function loadModelOptions() {
 
 function syncThreadResizeObserver() {
   if (typeof ResizeObserver === 'undefined') return
-  // One-shot setup: the observer callback already scrolls to bottom on every
-  // content height change, so per-message watchers no longer need to scroll.
-  // Per-frame re-observation is pointless — the observer instance and its
-  // targets persist for the lifetime of the app.
-  if (threadResizeObserver) return
+  const element = threadScrollEl.value
+  if (!element) return
+  // Rebuild only when the observed element actually changed. The .thread
+  // element is replaced when toggling workflow mode (v-if/v-else) or when
+  // the app re-mounts it — pointing the observer at a dead old element would
+  // silently kill auto-follow. Cheap guard: compare against the current
+  // observer's captured element target.
+  if (threadResizeObserver && threadResizeObserverTarget === element) return
+  threadResizeObserver?.disconnect()
+  threadResizeObserver = null
+  threadResizeObserverTarget = null
+  // Single unified channel: any content/size change near the bottom follows,
+  // anything else is ignored by the controller's autoFollow gate.
   threadResizeObserver = new ResizeObserver(() => {
     void threadScroll.scrollToBottom()
   })
-  const element = threadScrollEl.value
-  if (!element) return
+  threadResizeObserverTarget = element
   threadResizeObserver.observe(element)
-  // Ensure direct children of .thread are observed (e.g. .chat-thread).
+  // Observe direct children (e.g. .chat-thread) — content inside them grows
+  // without necessarily resizing `element` itself if the outer is the scroller.
   for (const child of Array.from(element.children)) {
     if (child instanceof HTMLElement) {
       threadResizeObserver.observe(child)
@@ -2221,7 +2396,8 @@ watch(messages, async (newVal, oldVal) => {
     typingMessageIds.value.add(msg.id)
     pendingPlaceholder.value = null
   }
-  syncThreadResizeObserver()
+  // 滚动跟随已统一由 ResizeObserver 单一通道驱动（见 syncThreadResizeObserver），
+  // 这里不再重建 observer / 隐式滚动 —— 消除历史补丁堆叠。
 }, { deep: true })
 
 watch([activeSessionId, messages, latestStatus], ([threadId]) => {
@@ -2278,11 +2454,30 @@ watch(shellRef, (shell) => {
 
 onMounted(() => {
   void uiPreferences.load()
+  // 全窗口拖拽上传：window 级监听亮起遮罩（Tauri 需 dragDropEnabled: false 才走 HTML5 事件）
+  window.addEventListener('dragover', handleWindowDragOver)
+  window.addEventListener('dragleave', handleWindowDragLeave)
+  window.addEventListener('drop', handleWindowDrop)
+  // 滚动跟随唯一通道：容器高度变化 -> 控制器 gating（易错点 5/9/10）。
+  // 线程元素在 workflow 模式切换时会被 Vue 销毁重建（v-if/v-else），
+  // 因此这里用 watch(threadScrollEl) 跟随元素生命周期重建 observer，
+  // 而不是 app 生命周期一次性建立。
+  watch(threadScrollEl, () => {
+    syncThreadResizeObserver()
+    // 元素重建后强制回到底部一次，恢复跟随意图
+    threadScroll.reset()
+    void threadScroll.scrollToBottom(true)
+  }, { immediate: true })
   void loadInitialData().then(() => checkOnboarding())
 })
 
 onUnmounted(() => {
+  window.removeEventListener('dragover', handleWindowDragOver)
+  window.removeEventListener('dragleave', handleWindowDragLeave)
+  window.removeEventListener('drop', handleWindowDrop)
   threadResizeObserver?.disconnect()
+  threadResizeObserver = null
+  threadResizeObserverTarget = null
   runtimeController.disconnect()
   configClient?.close()
   configClient = null
@@ -2297,6 +2492,40 @@ onUnmounted(() => {
 
 .core-project-header-action {
   position: relative;
+}
+
+/* ── 全窗口拖拽上传遮罩 ── */
+.attachment-drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal, 80);
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--theme-main-background) 88%, transparent);
+  backdrop-filter: blur(3px);
+}
+.attachment-drop-card {
+  display: grid;
+  place-items: center;
+  gap: 8px;
+  padding: 40px 64px;
+  border: 2px dashed color-mix(in srgb, var(--green) 55%, transparent);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--theme-main-subtle-background) 78%, transparent);
+}
+.attachment-drop-icon {
+  color: var(--green);
+}
+.attachment-drop-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--theme-main-text);
+}
+.attachment-drop-hint {
+  margin: 0;
+  font-size: 12px;
+  color: color-mix(in srgb, var(--theme-main-text) 60%, transparent);
 }
 
 .wf-create-backdrop {
@@ -2365,7 +2594,7 @@ onUnmounted(() => {
 }
 .wf-create-actions .text-btn {
   background: transparent;
-  color: var(--muted);
+  color: color-mix(in srgb, var(--theme-main-text) 65%, transparent);
 }
 .wf-create-actions .primary-btn {
   background: color-mix(in srgb, var(--blue) 80%, transparent);
@@ -2381,10 +2610,10 @@ onUnmounted(() => {
   flex: 0 0 auto;
   width: 30px;
   height: 30px;
-  border: 1px solid rgba(255,255,255,0.1);
-  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--theme-main-text) 12%, transparent);
+  border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--muted, #888);
+  color: color-mix(in srgb, var(--theme-main-text) 65%, transparent);
   cursor: pointer;
   font-size: 14px;
   display: grid;
@@ -2392,11 +2621,11 @@ onUnmounted(() => {
   transition: background 0.15s, color 0.15s;
 }
 .stage-toggle-btn:hover {
-  background: rgba(255,255,255,0.06);
+  background: color-mix(in srgb, var(--theme-main-text) var(--alpha-hover), transparent);
   color: var(--text, #f2efeb);
 }
 .stage-toggle-btn.active {
-  background: rgba(255,255,255,0.08);
+  background: color-mix(in srgb, var(--theme-main-text) var(--alpha-active), transparent);
   color: var(--text, #f2efeb);
 }
 
@@ -2659,15 +2888,14 @@ onUnmounted(() => {
   z-index: var(--z-edge-trigger, 35);
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 14px;
+  justify-content: center;
+  width: var(--space-6, 32px);
+  height: var(--space-6, 32px);
+  padding: 0;
   border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
-  border-radius: var(--radius-sm);
+  border-radius: 50%;
   background: var(--theme-control-background);
   color: var(--text);
-  font-size: 12px;
-  font-weight: 560;
-  line-height: 1;
   box-shadow: var(--shadow-sm);
   cursor: pointer;
   transition: background .18s ease, transform .18s ease;
@@ -2678,10 +2906,6 @@ onUnmounted(() => {
 .thread-jump-latest:active {
   background: color-mix(in srgb, var(--text) var(--alpha-active, 12%), var(--theme-control-background));
   transform: translateY(1px);
-}
-.thread-jump-latest__arrow {
-  font-size: 13px;
-  line-height: 1;
 }
 /* enter from just below; leave by fading. Reduced-motion drops the slide. */
 .thread-jump-latest-enter-active,

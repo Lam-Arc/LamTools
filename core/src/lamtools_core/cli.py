@@ -6,7 +6,6 @@ import hashlib
 import json
 import logging
 import os
-import sqlite3
 import sys
 import time
 import uuid
@@ -14,7 +13,6 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
 
 import httpx
 
@@ -53,21 +51,18 @@ from lamtools_core.llm.profiles import (
     resolve_adapter_profile_from_profiles,
 )
 from lamtools_core.llm.model_capabilities import resolve_capability
-from lamtools_core.config.migrate_models import migrate_models_from_db
 from lamtools_core.config.model_store import ModelConfig, ModelStore
+from lamtools_core.config.provider_store import ProviderConfig, ProviderStore
+from lamtools_core.config.settings_store import delete_setting, get_setting, set_setting
 from lamtools_core.config.root import ensure_projects_root
 from lamtools_core.runtime import RuntimeTurnInput
 from lamtools_core.tool.default_toolbox import ApprovalPolicy, build_core_toolbox
-
-SQLITE_CONFIG_READ_TIMEOUT_SECONDS = 0.2
-SQLITE_CONFIG_LOCK_RETRY_DELAYS = (0.05, 0.15)
 
 # Process-level model-store context. The HTTP app (create_core_agent_http_app)
 # configures the shared work_root so load_llm_config can resolve project-scoped
 # model jsonc files. Falls back to global-only when unset.
 _default_model_store: ModelStore | None = None
 _model_store_work_root: str | None = None
-_model_migration_done: set[Path] = set()
 
 
 def configure_model_store_context(*, work_root: str | None, store: ModelStore | None = None) -> None:
@@ -90,7 +85,6 @@ class CoreCliRunOptions:
     run_dir: Path | str | None = None
     core_db: Path | str | None = None
     thread_id: str = ""
-    config_db: Path | str | None = None
     adapter_dirs: tuple[Path | str, ...] = ()
     plugin_roots: tuple[Path | str, ...] = ()
     thinking_enabled: bool = True
@@ -101,6 +95,9 @@ class CoreCliRunOptions:
     compact_limit_tokens: int | None = None
     temperature: float = 0.2
     approval_policy: ApprovalPolicy = "require"
+    # Allow file tools to access paths outside work_root (default: read from
+    # settings core.runtimeControls.allow_access_outside_workdir).
+    allow_outside_workdir: bool | None = None
     raw: bool = False
     verbose: bool = False
     # --- Workflow mode (mirrors the frontend "工作流模式" path) ---
@@ -119,8 +116,6 @@ class CoreCliRunOptions:
             object.__setattr__(self, "run_dir", Path(self.run_dir))
         if self.core_db is not None:
             object.__setattr__(self, "core_db", Path(self.core_db))
-        if self.config_db is not None:
-            object.__setattr__(self, "config_db", Path(self.config_db))
         object.__setattr__(self, "adapter_dirs", tuple(Path(item) for item in self.adapter_dirs))
         object.__setattr__(self, "plugin_roots", tuple(Path(item) for item in self.plugin_roots))
         if self.compact_trigger_tokens is not None and self.compact_trigger_tokens <= 0:
@@ -276,8 +271,7 @@ async def run_core_cli_task(
     context_window_tokens: int | None = None
     model_context: dict[str, Any] = {"model_id": resolved_model_id}
     if llm_client is None:
-        config_db = _resolve_config_db(options.config_db)
-        config = load_llm_config(config_db, model_ref=options.model_id)
+        config = load_llm_config(model_ref=options.model_id)
         profile = _resolve_adapter_profile(config, options.adapter_dirs)
         resolved_model_id = config.model_id
         context_window_tokens = config.context_window or None
@@ -414,6 +408,15 @@ async def run_core_cli_task(
 
         workflow_provider = workflow_tool_provider(workflow_store, execute_operation, work_root=work_root)
 
+    # 显式 --allow-outside-workdir 优先，否则读 settings core.runtimeControls
+    if options.allow_outside_workdir is None:
+        _runtime_controls = get_setting("core.runtimeControls")
+        allow_outside_workdir = bool(
+            (_runtime_controls or {}).get("allow_access_outside_workdir")
+        ) if isinstance(_runtime_controls, dict) else False
+    else:
+        allow_outside_workdir = options.allow_outside_workdir
+
     toolbox = build_core_toolbox(
         work_root=work_root,
         approval_policy=options.approval_policy,
@@ -425,6 +428,7 @@ async def run_core_cli_task(
         workflow_build=workflow_store is not None,
         workflow_tool_provider=workflow_provider,
         load_tools=load_tools_obj,
+        allow_access_outside_workdir=allow_outside_workdir,
     )
     kit = CoreBaseAgentKit(
         work_root=work_root,
@@ -441,19 +445,30 @@ async def run_core_cli_task(
         toolbox=toolbox,
     )
     try:
+        from lamtools_core.config.retry_store import (
+            load_model_retry_config,
+            loop_policy_overrides,
+            retry_policy_from_config,
+        )
+
+        _retry_config = load_model_retry_config()
         kernel = CoreLoopKernel(
             kit=kit,
             llm_client=llm_client,
             state_store=core_db.runtime_state_store,
             event_sink=sink,
             policy=LoopPolicy(
-                model_timeout_seconds=360,
-                persist_steps=True,
-                context_window_tokens=context_window_tokens,
-                compact_trigger_tokens=options.compact_trigger_tokens,
-                compact_limit_tokens=options.compact_limit_tokens,
-                parallel_tool_names=("sub_agent",),
+                **{
+                    **loop_policy_overrides(_retry_config),
+                    "model_timeout_seconds": 360,
+                    "persist_steps": True,
+                    "context_window_tokens": context_window_tokens,
+                    "compact_trigger_tokens": options.compact_trigger_tokens,
+                    "compact_limit_tokens": options.compact_limit_tokens,
+                    "parallel_tool_names": ("sub_agent",),
+                }
             ),
+            retry_policy=retry_policy_from_config(_retry_config),
             hook_engine=plugin_assembly["hook_engine"],
         )
         result = await kernel.run(
@@ -505,96 +520,35 @@ async def run_core_cli_task(
     return summary
 
 
-def load_llm_config(config_db: Path, *, model_ref: str = "") -> LLMConfig:
-    if not config_db.exists():
-        raise FileNotFoundError(f"LLM config database not found: {config_db}")
+def load_llm_config(*, model_ref: str = "") -> LLMConfig:
+    """Resolve an LLM config from jsonc model + provider definitions.
 
-    # Lazy one-time migration: if the ModelStore has no files yet but the DB
-    # llm_models table has rows, export them to jsonc so the file path wins.
-    _maybe_migrate_from_db(config_db)
-
-    # Try the file-backed (jsonc) path first. Falls back to the legacy DB path
-    # when no jsonc model is resolvable, preserving backward compatibility.
-    file_config = _load_llm_config_from_files(config_db, model_ref=model_ref)
-    if file_config is not None:
-        return file_config
-
-    locked_error: sqlite3.OperationalError | None = None
-    for attempt in range(len(SQLITE_CONFIG_LOCK_RETRY_DELAYS) + 1):
-        try:
-            return _load_llm_config_from_connection(
-                _connect_config_db(config_db, nolock=False),
-                model_ref=model_ref,
-            )
-        except sqlite3.OperationalError as exc:
-            if not _is_sqlite_locked_message(exc):
-                raise
-            locked_error = exc
-            if attempt < len(SQLITE_CONFIG_LOCK_RETRY_DELAYS):
-                time.sleep(SQLITE_CONFIG_LOCK_RETRY_DELAYS[attempt])
-                continue
-            break
-
-    try:
-        return _load_llm_config_from_connection(
-            _connect_config_db(config_db, nolock=True),
-            model_ref=model_ref,
-        )
-    except sqlite3.OperationalError:
-        if locked_error is not None:
-            raise locked_error
-        raise
-
-
-def _maybe_migrate_from_db(config_db: Path) -> None:
-    """Export DB models to jsonc once per process when the ModelStore is empty."""
-    global _model_migration_done
-    config_db = config_db.resolve()
-    if config_db in _model_migration_done:
-        return
-    _model_migration_done.add(config_db)
-    try:
-        store = _get_model_store()
-        # Only migrate when nothing is loaded yet (avoid clobbering user files).
-        if store.list_sync(work_root=_model_store_work_root):
-            return
-        migrate_models_from_db(config_db, model_store=store, work_root=_model_store_work_root, scope="global")
-    except Exception:
-        # Migration is best-effort; never block config loading on it.
-        import logging
-
-        logging.getLogger(__name__).debug("model migration skipped", exc_info=True)
-
-
-def _load_llm_config_from_files(config_db: Path, *, model_ref: str) -> LLMConfig | None:
-    """Resolve a model from jsonc files + provider connection from the DB.
-
-    Returns ``None`` when the model_ref cannot be resolved from files (caller
-    falls back to the legacy DB-join path).
+    Model definitions come from the ModelStore (jsonc files); provider
+    connection info (base_url / api_key / api_type) comes from the
+    ProviderStore (jsonc files). There is no database and no fallback path —
+    an unresolvable model_ref raises ``ValueError``.
     """
     store = _get_model_store()
     ref = model_ref.strip()
     if not ref:
+        ref = _model_ref_from_routing()
+    if not ref:
         ref = store.default_model_id_sync(work_root=_model_store_work_root)
     if not ref:
-        return None
+        raise ValueError("model id is required when no routing setting is available")
     model = store.get_sync(ref, work_root=_model_store_work_root)
     if model is None:
-        return None
-    # Resolve the provider connection from the DB by name or provider_id.
-    con = _connect_config_db(config_db, nolock=True)
-    try:
-        provider_row = _read_provider_row(con, model)
-    finally:
-        con.close()
-    if provider_row is None:
-        return None
-    capability = model.resolved_capability
+        raise ValueError(f"model not found: {model_ref}")
+    provider = _resolve_provider_for_model(model)
+    if provider is None:
+        raise ValueError(
+            f"provider not found for model: {ref} (provider={model.provider or model.provider_id or '?'})"
+        )
     return LLMConfig(
-        provider_name=str(provider_row.get("name") or model.provider or ""),
-        provider_api_type=str(provider_row.get("api_type") or "openai"),
-        base_url=str(provider_row.get("base_url") or "").rstrip("/"),
-        api_key=str(provider_row.get("api_key") or ""),
+        provider_name=provider.name,
+        provider_api_type=provider.api_type or "openai",
+        base_url=(provider.base_url or "").rstrip("/"),
+        api_key=provider.api_key,
         model_record_id=model.model_id,
         model_id=model.model_id,
         display_name=model.display_name or model.model_id,
@@ -603,74 +557,72 @@ def _load_llm_config_from_files(config_db: Path, *, model_ref: str) -> LLMConfig
         temperature=model.temperature,
         thinking_supported=model.thinking_supported,
         thinking_budget=model.thinking_budget,
-        capability=capability,
-        provider_extra=_json_dict(provider_row.get("extra")),
+        capability=model.resolved_capability,
+        provider_extra=_provider_extra(provider),
         model_extra=model.to_extra(),
     )
 
 
-def _read_provider_row(con: sqlite3.Connection, model: ModelConfig) -> dict[str, Any] | None:
+def _provider_extra(provider: ProviderConfig) -> dict[str, Any]:
+    """Surface the provider's adapter_profile_id through the extra plumbing."""
+    extra = dict(provider.extra or {})
+    if provider.adapter_profile_id:
+        extra["adapter_profile_id"] = provider.adapter_profile_id
+    return extra
+
+
+def _resolve_provider_for_model(model: ModelConfig) -> ProviderConfig | None:
     """Look up a provider by the model's provider_id then by name."""
-    try:
-        if model.provider_id:
-            row = con.execute(
-                "select name, api_type, base_url, api_key, extra from llm_providers where id=? limit 1",
-                (model.provider_id,),
-            ).fetchone()
-            if row is not None:
-                return dict(row)
-        if model.provider:
-            row = con.execute(
-                "select name, api_type, base_url, api_key, extra from llm_providers where name=? limit 1",
-                (model.provider,),
-            ).fetchone()
-            if row is not None:
-                return dict(row)
-        # Last resort: the single configured provider (works for single-provider setups).
-        row = con.execute(
-            "select name, api_type, base_url, api_key, extra from llm_providers order by is_default desc, created_at asc limit 1"
-        ).fetchone()
-        return dict(row) if row is not None else None
-    except sqlite3.OperationalError:
-        return None
+    store = ProviderStore()
+    if model.provider_id:
+        provider = store.get_sync(model.provider_id, work_root=_model_store_work_root)
+        if provider is not None:
+            return provider
+    if model.provider:
+        provider = store.get_sync(model.provider, work_root=_model_store_work_root)
+        if provider is not None:
+            return provider
+    # Last resort: the single configured / default provider.
+    return store.default_sync(work_root=_model_store_work_root)
 
 
-def list_llm_model_configs(config_db: Path) -> list[dict[str, Any]]:
-    # Prefer file-backed (jsonc) model definitions when available; fall back to
-    # the legacy DB list when no jsonc models are configured yet.
+def _model_ref_from_routing() -> str:
+    """Resolve the routed model_id from settings.jsonc (lamtools.modelRouting)."""
+    data = get_setting("lamtools.modelRouting")
+    if isinstance(data, dict):
+        routes = data.get("routes") if isinstance(data.get("routes"), dict) else {}
+        for route_name in ("core", "default"):
+            route = routes.get(route_name) if isinstance(routes.get(route_name), dict) else {}
+            model_id = str(route.get("model_id") or "").strip()
+            if model_id:
+                return model_id
+    return ""
+
+
+def list_llm_model_configs(*, work_root: str | None = None) -> list[dict[str, Any]]:
+    """List all jsonc model definitions with resolved provider info.
+
+    Model definitions are authoritative (jsonc only); each entry resolves its
+    provider id / api_type through the ProviderStore so the UI can render
+    providers without any database.
+    """
+    effective_root = work_root or _model_store_work_root
     store = _get_model_store()
-    models = store.list_sync(work_root=_model_store_work_root)
-    if models:
-        # Resolve each model's provider_id (DB uuid) from the DB by matching
-        # the provider name recorded in the jsonc file. jsonc model files store
-        # ``provider`` (a name) rather than ``provider_id`` (a DB id), so we
-        # build a name → (id, api_type) map here. Also resolves the per-model
-        # api_type instead of falling back to the first provider.
-        provider_map: dict[str, tuple[str, str]] = {}
-        con = None
-        try:
-            con = _connect_config_db(config_db, nolock=True)
-            prow_rows = con.execute(
-                "select id,name,api_type from llm_providers order by created_at asc"
-            ).fetchall()
-            for prow in prow_rows:
-                name = str(prow["name"] or "").strip()
-                if name:
-                    provider_map[name] = (str(prow["id"] or ""), str(prow["api_type"] or "openai"))
-        except (sqlite3.OperationalError, FileNotFoundError):
-            pass
-        finally:
-            if con is not None:
-                con.close()
-        return [
+    models = store.list_sync(work_root=effective_root)
+    providers = ProviderStore().list_sync(work_root=effective_root)
+    provider_map: dict[str, ProviderConfig] = {}
+    for provider in providers:
+        provider_map[provider.id] = provider
+        provider_map[provider.name] = provider
+    resolved: list[dict[str, Any]] = []
+    for m in models:
+        provider = provider_map.get(m.provider_id) or provider_map.get(m.provider) or None
+        resolved.append(
             {
                 "id": m.model_id,
-                "provider_id": (
-                    m.provider_id
-                    or provider_map.get(m.provider, ("", ""))[0]
-                ),
-                "provider_name": m.provider,
-                "provider_api_type": provider_map.get(m.provider, ("", "openai"))[1],
+                "provider_id": m.provider_id or (provider.id if provider is not None else ""),
+                "provider_name": provider.name if provider is not None else m.provider,
+                "provider_api_type": provider.api_type if provider is not None else "openai",
                 "model_id": m.model_id,
                 "display_name": m.display_name,
                 "context_window": m.context_window,
@@ -683,124 +635,8 @@ def list_llm_model_configs(config_db: Path) -> list[dict[str, Any]]:
                 "is_default": m.is_default,
                 "adapter_profile_id": m.adapter_profile_id,
             }
-            for m in models
-        ]
-
-    if not config_db.exists():
-        raise FileNotFoundError(f"LLM config database not found: {config_db}")
-
-    locked_error: sqlite3.OperationalError | None = None
-    for attempt in range(len(SQLITE_CONFIG_LOCK_RETRY_DELAYS) + 1):
-        try:
-            return _list_llm_model_configs_from_connection(_connect_config_db(config_db, nolock=False))
-        except sqlite3.OperationalError as exc:
-            if not _is_sqlite_locked_message(exc):
-                raise
-            locked_error = exc
-            if attempt < len(SQLITE_CONFIG_LOCK_RETRY_DELAYS):
-                time.sleep(SQLITE_CONFIG_LOCK_RETRY_DELAYS[attempt])
-                continue
-            break
-
-    try:
-        return _list_llm_model_configs_from_connection(_connect_config_db(config_db, nolock=True))
-    except sqlite3.OperationalError:
-        if locked_error is not None:
-            raise locked_error
-        raise
-
-
-def _connect_config_db(config_db: Path, *, nolock: bool) -> sqlite3.Connection:
-    query = "mode=ro&nolock=1" if nolock else "mode=ro"
-    raw_path = str(config_db.resolve()).replace("\\", "/")
-    uri = f"file:{quote(raw_path, safe=':/')}?{query}"
-    con = sqlite3.connect(uri, timeout=SQLITE_CONFIG_READ_TIMEOUT_SECONDS, uri=True)
-    con.row_factory = sqlite3.Row
-    return con
-
-
-def _load_llm_config_from_connection(con: sqlite3.Connection, *, model_ref: str = "") -> LLMConfig:
-    try:
-        resolved_ref = model_ref.strip() or _model_ref_from_routing(con)
-        if not resolved_ref:
-            raise ValueError("model id is required when no routing setting is available")
-        row = con.execute(
-            """
-            select m.id,m.provider_id,m.model_id,m.display_name,m.context_window,m.max_output_tokens,
-                   m.thinking_supported,m.thinking_budget,m.temperature,m.extra as model_extra,
-                   p.name as provider_name,p.api_type as provider_api_type,p.base_url,p.api_key,
-                   p.extra as provider_extra
-            from llm_models m join llm_providers p on p.id=m.provider_id
-            where m.id=? or m.model_id=? or m.display_name=?
-            order by m.created_at asc
-            limit 1
-            """,
-            (resolved_ref, resolved_ref, resolved_ref),
-        ).fetchone()
-    finally:
-        con.close()
-    if row is None:
-        raise ValueError(f"model not found: {model_ref}")
-    data = dict(row)
-    model_id = str(data.get("model_id") or "")
-    model_extra = _json_dict(data.get("model_extra"))
-    # Capability: prefer the DB extra field, else resolve from the model's
-    # jsonc definition (jsonc is the single source of truth).
-    capability = ""
-    if isinstance(model_extra.get("capability"), str):
-        capability = str(model_extra["capability"]).strip().lower()
-    if capability not in ("text", "multimodal"):
-        from lamtools_core.config.model_store import resolve_model_capability
-
-        capability = resolve_model_capability(model_id)
-    return LLMConfig(
-        provider_name=str(data.get("provider_name") or ""),
-        provider_api_type=str(data.get("provider_api_type") or "openai"),
-        base_url=str(data.get("base_url") or "").rstrip("/"),
-        api_key=str(data.get("api_key") or ""),
-        model_record_id=str(data.get("id") or ""),
-        model_id=model_id,
-        display_name=str(data.get("display_name") or ""),
-        context_window=int(data.get("context_window") or 0),
-        max_output_tokens=int(data.get("max_output_tokens") or 4096),
-        temperature=float(data.get("temperature") or 0.2),
-        thinking_supported=bool(data.get("thinking_supported")),
-        thinking_budget=int(data.get("thinking_budget") or 10000),
-        capability=capability,
-        provider_extra=_json_dict(data.get("provider_extra")),
-        model_extra=model_extra,
-    )
-
-
-def _list_llm_model_configs_from_connection(con: sqlite3.Connection) -> list[dict[str, Any]]:
-    try:
-        rows = con.execute(
-            """
-            select m.id,m.provider_id,m.model_id,m.display_name,m.context_window,m.max_output_tokens,
-                   m.thinking_supported,m.thinking_budget,m.temperature,
-                   p.name as provider_name,p.api_type as provider_api_type
-            from llm_models m join llm_providers p on p.id=m.provider_id
-            order by m.created_at asc
-            """
-        ).fetchall()
-    finally:
-        con.close()
-    return [
-        {
-            "id": str(row["id"] or ""),
-            "provider_id": str(row["provider_id"] or ""),
-            "provider_name": str(row["provider_name"] or ""),
-            "provider_api_type": str(row["provider_api_type"] or ""),
-            "model_id": str(row["model_id"] or ""),
-            "display_name": str(row["display_name"] or ""),
-            "context_window": int(row["context_window"] or 0),
-            "max_output_tokens": int(row["max_output_tokens"] or 0),
-            "thinking_supported": bool(row["thinking_supported"]),
-            "thinking_budget": int(row["thinking_budget"] or 0),
-            "temperature": float(row["temperature"] or 0.0),
-        }
-        for row in rows
-    ]
+        )
+    return resolved
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -811,7 +647,6 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=5172)
     serve.add_argument("--model-id", default="")
-    serve.add_argument("--config-db", default="")
     serve.add_argument("--core-db", default="")
     serve.add_argument("--data-dir", default="")
     serve.add_argument("--work-root", "--project", dest="work_root", default="")
@@ -841,7 +676,6 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--thread-id", default="", help="Stable Core thread/session id")
     run.add_argument("--goal-id", default="", help="Durable Goal ID to verify on completion")
     run.add_argument("--work-root", "--project", dest="work_root", default="")
-    run.add_argument("--config-db", default="", help="Path to LLM config DB for resolving model context window")
     run.add_argument("--thinking-budget", type=int, default=10000)
     run.add_argument("--no-thinking", action="store_true")
     run.add_argument("--shallow-thinking", action="store_true", help="Require a prompt-based shallow thinking block")
@@ -867,11 +701,11 @@ def build_parser() -> argparse.ArgumentParser:
     run_local.add_argument("--work-root", "--project", dest="work_root", default="")
     run_local.add_argument("--run-dir", default="", help="Output directory for run artifacts (summary.json etc.)")
     run_local.add_argument("--core-db", default="", help="Path to Core agent database")
-    run_local.add_argument("--config-db", default="", help="Path to LLM config database")
     run_local.add_argument("--thinking-budget", type=int, default=10000)
     run_local.add_argument("--no-thinking", action="store_true")
     run_local.add_argument("--shallow-thinking", action="store_true", help="Require a prompt-based shallow thinking block")
     run_local.add_argument("--auto-approve", action="store_true", help="Run approval-gated tools without prompting")
+    run_local.add_argument("--allow-outside-workdir", action="store_true", help="Allow file tools to access paths outside work_root")
     run_local.add_argument("--max-tokens", type=int, default=None)
     run_local.add_argument("--compact-trigger-tokens", type=int, default=None, help="Session-only automatic compaction trigger")
     run_local.add_argument("--compact-limit-tokens", type=int, default=None, help="Session-only post-compaction upper limit")
@@ -998,7 +832,6 @@ def build_parser() -> argparse.ArgumentParser:
     imagegen = sub.add_parser("imagegen", help="Manage the generate_image tool configuration (设置 → 生图)")
     imagegen_sub = imagegen.add_subparsers(dest="imagegen_command", required=True)
     imagegen_show = imagegen_sub.add_parser("show", help="Show the current image generation configuration")
-    imagegen_show.add_argument("--config-db", default="", help="LLM config database (default: data/lamtools.db)")
     imagegen_show.set_defaults(func=cmd_imagegen_show)
     imagegen_config = imagegen_sub.add_parser("config", help="Update the image generation configuration")
     imagegen_config.add_argument(
@@ -1008,7 +841,6 @@ def build_parser() -> argparse.ArgumentParser:
     imagegen_config.add_argument("--api-url", default=None, help="Image generation API base URL")
     imagegen_config.add_argument("--api-key", default=None, help="API key (stored in plaintext in the config database)")
     imagegen_config.add_argument("--model", default=None, help="Image model id")
-    imagegen_config.add_argument("--config-db", default="", help="LLM config database (default: data/lamtools.db)")
     imagegen_config.set_defaults(func=cmd_imagegen_config)
 
     artifact = sub.add_parser("artifact", help="Manage project artifacts (.lam/artifact/)")
@@ -1260,12 +1092,6 @@ def build_parser() -> argparse.ArgumentParser:
     models_default.add_argument("--scope", choices=("project", "global"), default="global")
     models_default.add_argument("--work-root", default="")
     models_default.set_defaults(func=cmd_models_default)
-    models_import = models_sub.add_parser("import-from-db", help="Export DB llm_models rows to jsonc")
-    models_import.add_argument("--config-db", required=True)
-    models_import.add_argument("--scope", choices=("project", "global"), default="global")
-    models_import.add_argument("--work-root", default="")
-    models_import.add_argument("--force", action="store_true")
-    models_import.set_defaults(func=cmd_models_import_from_db)
 
     loadtools = sub.add_parser("loadtools", help="Manage mode tool-set configuration (loadtools.jsonc)")
     loadtools_sub = loadtools.add_subparsers(dest="loadtools_command", required=True)
@@ -1293,26 +1119,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     memory_dream_sub = memory_dream.add_subparsers(dest="memory_dream_command", required=True)
     memory_dream_show = memory_dream_sub.add_parser("show", help="Show the current dreaming configuration")
-    memory_dream_show.add_argument("--config-db", default="", help="LLM config database (default: data/lamtools.db)")
     memory_dream_show.set_defaults(func=cmd_memory_dream_show)
     memory_dream_config = memory_dream_sub.add_parser(
         "config", help="Update the dreaming configuration (enabled / min_turns)"
     )
     memory_dream_config.add_argument("--enabled", default=None, choices=["true", "false"], help="Enable/disable automatic dreaming")
     memory_dream_config.add_argument("--min-turns", default=None, type=int, help="Minimum turns between dream passes (default 3)")
-    memory_dream_config.add_argument("--config-db", default="", help="LLM config database (default: data/lamtools.db)")
     memory_dream_config.set_defaults(func=cmd_memory_dream_config)
 
     onboarding = sub.add_parser("onboarding", help="首次启动引导（Onboarding）状态：显示 / 标记完成 / 重置")
     onboarding_sub = onboarding.add_subparsers(dest="onboarding_command", required=True)
     onboarding_show = onboarding_sub.add_parser("show", help="显示当前首次引导状态（是否已完成、是否已配置供应商）")
-    onboarding_show.add_argument("--config-db", default="", help="LLM config database (default: data/lamtools.db)")
     onboarding_show.set_defaults(func=cmd_onboarding_show)
     onboarding_complete = onboarding_sub.add_parser("complete", help="标记首次引导已完成（此后启动不再弹出向导）")
-    onboarding_complete.add_argument("--config-db", default="", help="LLM config database (default: data/lamtools.db)")
     onboarding_complete.set_defaults(func=cmd_onboarding_complete)
     onboarding_reset = onboarding_sub.add_parser("reset", help="清除完成标记，下次启动重新弹出引导向导")
-    onboarding_reset.add_argument("--config-db", default="", help="LLM config database (default: data/lamtools.db)")
     onboarding_reset.set_defaults(func=cmd_onboarding_reset)
 
     load_context = sub.add_parser("load-context", help="Read or write the global load_context.jsonc (unified config dir)")
@@ -1366,7 +1187,6 @@ async def cmd_serve(args: argparse.Namespace) -> int:
 
     app = create_core_agent_http_app(
         model_id=args.model_id,
-        config_db=args.config_db or None,
         core_db=args.core_db or None,
         data_dir=args.data_dir or None,
         work_root=args.work_root or None,
@@ -1629,7 +1449,6 @@ async def cmd_run_local(args: argparse.Namespace) -> int:
         run_dir=args.run_dir or None,
         core_db=args.core_db or None,
         thread_id=args.thread_id or _resolve_thread_id(""),
-        config_db=args.config_db or None,
         adapter_dirs=(),
         plugin_roots=(),
         thinking_enabled=not bool(args.no_thinking),
@@ -1640,6 +1459,7 @@ async def cmd_run_local(args: argparse.Namespace) -> int:
         compact_limit_tokens=compact_limit_tokens,
         temperature=float(args.temperature),
         approval_policy="auto_approve" if bool(args.auto_approve) else "require",
+        allow_outside_workdir=bool(args.allow_outside_workdir) if hasattr(args, "allow_outside_workdir") else None,
         raw=bool(args.raw),
         verbose=bool(args.verbose),
     )
@@ -2280,7 +2100,7 @@ async def cmd_models_list(args: argparse.Namespace) -> int:
     store = _get_model_store()
     models = store.list_sync(work_root=args.work_root or None)
     if not models:
-        print("[models] no model definitions configured (run 'core models import-from-db' to migrate)")
+        print("[models] no model definitions configured (add models/*.jsonc under .lam/core/config/)")
         return 0
     default_id = store.default_model_id_sync(work_root=args.work_root or None)
     print(f"[models] {len(models)} configured (default: {default_id or 'none'})")
@@ -2362,21 +2182,6 @@ async def cmd_models_default(args: argparse.Namespace) -> int:
     return 0
 
 
-async def cmd_models_import_from_db(args: argparse.Namespace) -> int:
-    from lamtools_core.config.migrate_models import migrate_models_from_db
-
-    count, paths = migrate_models_from_db(
-        Path(args.config_db),
-        work_root=args.work_root or None,
-        scope=args.scope,
-        force=args.force,
-    )
-    print(f"[models] exported {count} models to {args.scope} scope")
-    for path in paths:
-        print(f"  {path}")
-    return 0
-
-
 def _loadtools_for_cli() -> tuple[LoadTools, Path, bool]:
     """Load the effective mode tool-sets: config file when present, else built-in."""
     from lamtools_core.config.root import core_config_file
@@ -2390,23 +2195,13 @@ def _loadtools_for_cli() -> tuple[LoadTools, Path, bool]:
     return default_load_tools(), path, False
 
 
-def _imagegen_db(args: argparse.Namespace) -> sqlite3.Connection | None:
-    """Open the config database (lamtools.db) where app_settings lives."""
-    try:
-        con = sqlite3.connect(_resolve_config_db(getattr(args, "config_db", "") or None))
-        con.row_factory = sqlite3.Row
-        return con
-    except (FileNotFoundError, sqlite3.OperationalError) as exc:
-        print(f"[imagegen] cannot open config database: {exc}", file=sys.stderr)
-        return None
+_IMAGEGEN_NAMESPACE = "core.imagegen"
 
 
-def _imagegen_settings(con: sqlite3.Connection) -> dict[str, Any]:
-    try:
-        row = con.execute("select value from app_settings where namespace=?", ("core.imagegen",)).fetchone()
-    except sqlite3.OperationalError:
-        return {}
-    return _json_dict(row["value"] if row is not None else None)
+def _imagegen_settings() -> dict[str, Any]:
+    """Read core.imagegen settings from settings.jsonc."""
+    value = get_setting(_IMAGEGEN_NAMESPACE)
+    return dict(value) if isinstance(value, dict) else {}
 
 
 def _mask_api_key(api_key: str) -> str:
@@ -2422,13 +2217,8 @@ def _now_iso() -> str:
 
 
 async def cmd_imagegen_show(args: argparse.Namespace) -> int:
-    con = _imagegen_db(args)
-    if con is None:
-        return 1
-    try:
-        value = _imagegen_settings(con)
-    finally:
-        con.close()
+    del args
+    value = _imagegen_settings()
     enabled = bool(value.get("enabled"))
     print(f"enabled:  {'yes' if enabled else 'no'}")
     print(f"api_url:  {value.get('api_url') or '(未配置)'}")
@@ -2439,38 +2229,24 @@ async def cmd_imagegen_show(args: argparse.Namespace) -> int:
 
 
 async def cmd_imagegen_config(args: argparse.Namespace) -> int:
-    con = _imagegen_db(args)
-    if con is None:
+    value = _imagegen_settings()
+    changed = False
+    if args.enabled is not None:
+        value["enabled"] = args.enabled == "true"
+        changed = True
+    if args.api_url is not None:
+        value["api_url"] = args.api_url.strip()
+        changed = True
+    if args.api_key is not None:
+        value["api_key"] = args.api_key.strip()
+        changed = True
+    if args.model is not None:
+        value["model"] = args.model.strip()
+        changed = True
+    if not changed:
+        print("error: nothing to change (pass --enabled / --api-url / --api-key / --model)", file=sys.stderr)
         return 1
-    try:
-        value = _imagegen_settings(con)
-        changed = False
-        if args.enabled is not None:
-            value["enabled"] = args.enabled == "true"
-            changed = True
-        if args.api_url is not None:
-            value["api_url"] = args.api_url.strip()
-            changed = True
-        if args.api_key is not None:
-            value["api_key"] = args.api_key.strip()
-            changed = True
-        if args.model is not None:
-            value["model"] = args.model.strip()
-            changed = True
-        if not changed:
-            print("error: nothing to change (pass --enabled / --api-url / --api-key / --model)", file=sys.stderr)
-            return 1
-        con.execute(
-            "insert into app_settings(namespace, value, updated_at) values(?, ?, ?) "
-            "on conflict(namespace) do update set value = excluded.value, updated_at = excluded.updated_at",
-            ("core.imagegen", json.dumps(value, ensure_ascii=False), _now_iso()),
-        )
-        con.commit()
-    except sqlite3.OperationalError as exc:
-        print(f"[imagegen] cannot update settings: {exc}", file=sys.stderr)
-        return 1
-    finally:
-        con.close()
+    set_setting(_IMAGEGEN_NAMESPACE, value)
     print(f"[imagegen] saved: enabled={bool(value.get('enabled'))} api_url={value.get('api_url') or ''} "
           f"api_key={_mask_api_key(str(value.get('api_key') or ''))} model={value.get('model') or ''}")
     return 0
@@ -2635,33 +2411,15 @@ async def cmd_memory_set(args: argparse.Namespace) -> int:
 _DREAMING_NAMESPACE = "core.dreaming"
 
 
-def _memory_dream_db(args: argparse.Namespace) -> sqlite3.Connection | None:
-    """Open the config database (lamtools.db) where app_settings lives."""
-    try:
-        con = sqlite3.connect(_resolve_config_db(getattr(args, "config_db", "") or None))
-        con.row_factory = sqlite3.Row
-        return con
-    except (FileNotFoundError, sqlite3.OperationalError) as exc:
-        print(f"[memory dream] cannot open config database: {exc}", file=sys.stderr)
-        return None
-
-
-def _memory_dream_settings(con: sqlite3.Connection) -> dict[str, Any]:
-    try:
-        row = con.execute("select value from app_settings where namespace=?", (_DREAMING_NAMESPACE,)).fetchone()
-    except sqlite3.OperationalError:
-        return {}
-    return _json_dict(row["value"] if row is not None else None)
+def _memory_dream_settings() -> dict[str, Any]:
+    """Read core.dreaming settings from settings.jsonc."""
+    value = get_setting(_DREAMING_NAMESPACE)
+    return dict(value) if isinstance(value, dict) else {}
 
 
 async def cmd_memory_dream_show(args: argparse.Namespace) -> int:
-    con = _memory_dream_db(args)
-    if con is None:
-        return 1
-    try:
-        value = _memory_dream_settings(con)
-    finally:
-        con.close()
+    del args
+    value = _memory_dream_settings()
     enabled = bool(value.get("enabled"))
     print(f"enabled:  {'yes' if enabled else 'no'}")
     print(f"min_turns: {int(value.get('min_turns') or 3)}")
@@ -2670,35 +2428,21 @@ async def cmd_memory_dream_show(args: argparse.Namespace) -> int:
 
 
 async def cmd_memory_dream_config(args: argparse.Namespace) -> int:
-    con = _memory_dream_db(args)
-    if con is None:
-        return 1
-    try:
-        value = _memory_dream_settings(con)
-        changed = False
-        if args.enabled is not None:
-            value["enabled"] = args.enabled == "true"
-            changed = True
-        if args.min_turns is not None:
-            if args.min_turns < 1:
-                print("error: --min-turns must be >= 1", file=sys.stderr)
-                return 1
-            value["min_turns"] = args.min_turns
-            changed = True
-        if not changed:
-            print("error: nothing to change (pass --enabled / --min-turns)", file=sys.stderr)
+    value = _memory_dream_settings()
+    changed = False
+    if args.enabled is not None:
+        value["enabled"] = args.enabled == "true"
+        changed = True
+    if args.min_turns is not None:
+        if args.min_turns < 1:
+            print("error: --min-turns must be >= 1", file=sys.stderr)
             return 1
-        con.execute(
-            "insert into app_settings(namespace, value, updated_at) values(?, ?, ?) "
-            "on conflict(namespace) do update set value = excluded.value, updated_at = excluded.updated_at",
-            (_DREAMING_NAMESPACE, json.dumps(value, ensure_ascii=False), _now_iso()),
-        )
-        con.commit()
-    except sqlite3.OperationalError as exc:
-        print(f"[memory dream] cannot update settings: {exc}", file=sys.stderr)
+        value["min_turns"] = args.min_turns
+        changed = True
+    if not changed:
+        print("error: nothing to change (pass --enabled / --min-turns)", file=sys.stderr)
         return 1
-    finally:
-        con.close()
+    set_setting(_DREAMING_NAMESPACE, value)
     print(f"[memory dream] saved: enabled={bool(value.get('enabled'))} min_turns={int(value.get('min_turns') or 3)}")
     return 0
 
@@ -2706,45 +2450,22 @@ async def cmd_memory_dream_config(args: argparse.Namespace) -> int:
 _ONBOARDING_NAMESPACE = "core.onboarding"
 
 
-def _onboarding_db(args: argparse.Namespace) -> sqlite3.Connection | None:
-    """Open the config database (lamtools.db) where app_settings lives."""
-    try:
-        con = sqlite3.connect(_resolve_config_db(getattr(args, "config_db", "") or None))
-        con.row_factory = sqlite3.Row
-        return con
-    except (FileNotFoundError, sqlite3.OperationalError) as exc:
-        print(f"[onboarding] cannot open config database: {exc}", file=sys.stderr)
-        return None
+def _onboarding_settings() -> dict[str, Any]:
+    """Read core.onboarding settings from settings.jsonc."""
+    value = get_setting(_ONBOARDING_NAMESPACE)
+    return dict(value) if isinstance(value, dict) else {}
 
 
-def _onboarding_settings(con: sqlite3.Connection) -> dict[str, Any]:
-    try:
-        row = con.execute("select value from app_settings where namespace=?", (_ONBOARDING_NAMESPACE,)).fetchone()
-    except sqlite3.OperationalError:
-        return {}
-    return _json_dict(row["value"] if row is not None else None)
-
-
-def _onboarding_providers_configured(con: sqlite3.Connection) -> bool:
-    """True when at least one provider has a non-empty API key."""
-    try:
-        row = con.execute(
-            "select count(*) as n from llm_providers where api_key is not null and length(api_key) > 0"
-        ).fetchone()
-    except sqlite3.OperationalError:
-        return False
-    return bool(row is not None and row["n"])
+def _onboarding_providers_configured() -> bool:
+    """True when at least one provider (jsonc) has a non-empty API key."""
+    providers = ProviderStore().list_sync()
+    return any(bool(p.api_key) for p in providers)
 
 
 async def cmd_onboarding_show(args: argparse.Namespace) -> int:
-    con = _onboarding_db(args)
-    if con is None:
-        return 1
-    try:
-        value = _onboarding_settings(con)
-        configured = _onboarding_providers_configured(con)
-    finally:
-        con.close()
+    del args
+    value = _onboarding_settings()
+    configured = _onboarding_providers_configured()
     completed = bool(value.get("completed"))
     skipped = bool(value.get("skipped"))
     print(f"completed: {'yes' if completed else 'no'}")
@@ -2757,38 +2478,16 @@ async def cmd_onboarding_show(args: argparse.Namespace) -> int:
 
 
 async def cmd_onboarding_complete(args: argparse.Namespace) -> int:
-    con = _onboarding_db(args)
-    if con is None:
-        return 1
+    del args
     value = {"completed": True, "version": 1, "completed_at": _now_iso()}
-    try:
-        con.execute(
-            "insert into app_settings(namespace, value, updated_at) values(?, ?, ?) "
-            "on conflict(namespace) do update set value = excluded.value, updated_at = excluded.updated_at",
-            (_ONBOARDING_NAMESPACE, json.dumps(value, ensure_ascii=False), _now_iso()),
-        )
-        con.commit()
-    except sqlite3.OperationalError as exc:
-        print(f"[onboarding] cannot update settings: {exc}", file=sys.stderr)
-        return 1
-    finally:
-        con.close()
+    set_setting(_ONBOARDING_NAMESPACE, value)
     print("[onboarding] marked completed; the wizard will not show on next start")
     return 0
 
 
 async def cmd_onboarding_reset(args: argparse.Namespace) -> int:
-    con = _onboarding_db(args)
-    if con is None:
-        return 1
-    try:
-        con.execute("delete from app_settings where namespace=?", (_ONBOARDING_NAMESPACE,))
-        con.commit()
-    except sqlite3.OperationalError as exc:
-        print(f"[onboarding] cannot reset settings: {exc}", file=sys.stderr)
-        return 1
-    finally:
-        con.close()
+    del args
+    delete_setting(_ONBOARDING_NAMESPACE)
     print("[onboarding] reset; the wizard will show again on next start if no provider is configured")
     return 0
 
@@ -2993,21 +2692,6 @@ def _default_adapter_dirs() -> list[Path]:
     return dirs
 
 
-def _resolve_config_db(value: Path | str | None) -> Path:
-    if value:
-        return Path(value)
-    env = os.environ.get("LAMTOOLS_LLM_CONFIG_DB")
-    if env:
-        return Path(env)
-    candidates = [
-        _repo_root() / "data" / "lamtools.db",
-    ]
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-    raise FileNotFoundError("No LLM config database found. Pass --config-db.")
-
-
 def _resolve_core_db(value: Path | str | None) -> Path:
     if value:
         return Path(value)
@@ -3018,13 +2702,11 @@ def _resolve_core_db(value: Path | str | None) -> Path:
 
 
 def _resolve_cli_context_window(args: argparse.Namespace) -> int | None:
-    config_db_str = getattr(args, "config_db", "") or os.environ.get("LAMTOOLS_LLM_CONFIG_DB") or ""
     model_id = getattr(args, "model_id", "") or ""
-    if not config_db_str and not model_id:
+    if not model_id:
         return None
     try:
-        config_db = _resolve_config_db(config_db_str if config_db_str else None)
-        config = load_llm_config(config_db, model_ref=model_id)
+        config = load_llm_config(model_ref=model_id)
         return config.context_window if config.context_window > 0 else None
     except Exception:
         return None
@@ -3038,43 +2720,6 @@ def _resolve_thread_id(value: str | None) -> str:
 def _positive_timeout_or_none(value: str) -> float | None:
     timeout = float(value)
     return timeout if timeout > 0 else None
-
-
-def _is_sqlite_locked_message(exc: BaseException) -> bool:
-    message = str(exc).lower()
-    return "database is locked" in message or "database table is locked" in message
-
-
-def _model_ref_from_routing(con: sqlite3.Connection) -> str:
-    try:
-        row = con.execute("select value from app_settings where namespace=?", ("lamtools.modelRouting",)).fetchone()
-    except sqlite3.OperationalError:
-        row = None
-    if row is not None:
-        data = _json_dict(row["value"])
-        routes = data.get("routes") if isinstance(data.get("routes"), dict) else {}
-        for route_name in ("core", "default"):
-            route = routes.get(route_name) if isinstance(routes.get(route_name), dict) else {}
-            model_id = str(route.get("model_id") or "").strip()
-            if model_id:
-                return model_id
-    try:
-        row = con.execute("select id from llm_models order by is_default desc, created_at asc limit 1").fetchone()
-    except sqlite3.OperationalError:
-        row = None
-    return str(row["id"] or "") if row is not None else ""
-
-
-def _json_dict(value: Any) -> dict[str, Any]:
-    if isinstance(value, dict):
-        return value
-    if not isinstance(value, str) or not value.strip():
-        return {}
-    try:
-        parsed = json.loads(value)
-    except json.JSONDecodeError:
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
 
 
 def _repo_root() -> Path:

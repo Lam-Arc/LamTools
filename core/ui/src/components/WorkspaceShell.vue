@@ -90,7 +90,7 @@
 
       <footer class="drawer-footer">
         <button class="settings-entry" aria-label="打开设置" @click="$emit('settings')">
-          <span aria-hidden="true">⌘</span>
+          <span aria-hidden="true"><Command :size="14" :stroke-width="1.8" /></span>
           <span>设置</span>
         </button>
         <slot name="sidebar-footer" />
@@ -131,6 +131,7 @@
       variant="floating"
       :placeholder="composerPlaceholder"
       :disabled="composerDisabled"
+      :active="composerActive"
       :action-mode="composerActionMode"
       :send-label="composerSendLabel"
       :stop-label="composerStopLabel"
@@ -208,6 +209,7 @@
  * Product provides slots for actual content.
  */
 import { ref, useId, watch } from 'vue'
+import { Command } from 'lucide-vue-next'
 import { useShellLayout } from '../composables/useShellLayout'
 import type { ThemeData } from '../composables/useShellLayout'
 import ComposerBar from './ComposerBar.vue'
@@ -233,6 +235,8 @@ const props = withDefaults(
     showRightPanel?: boolean
     stageOpen?: boolean
     hideComposer?: boolean
+    /** 透传给 ComposerBar：运行时驱动输入框背景粒子动效 */
+    composerActive?: boolean
   }>(),
   {
     storageKey: 'lamtools.ui',
@@ -251,6 +255,7 @@ const props = withDefaults(
     noticeText: '',
     showRightPanel: true,
     stageOpen: false,
+    composerActive: false,
   },
 )
 

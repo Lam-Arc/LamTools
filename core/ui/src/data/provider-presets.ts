@@ -261,14 +261,14 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     defaultApiKey: 'public',
     defaultModelId: 'deepseek-v4-flash-free',
     models: [
-      { modelId: 'deepseek-v4-flash-free', displayName: 'DeepSeek V4 Flash (Free)', contextWindow: 1048576, maxOutputTokens: 393216, thinkingSupported: true, thinkingBudget: 10000, temperature: 0.7, extra: { capability: 'text' } },
+      { modelId: 'deepseek-v4-flash-free', displayName: 'DeepSeek V4 Flash (Free)', contextWindow: 1048576, maxOutputTokens: 131072, thinkingSupported: true, thinkingBudget: 10000, temperature: 0.7, extra: { capability: 'text' } },
       { modelId: 'mimo-v2.5-free', displayName: 'MiMo V2.5 (Free)', contextWindow: 1050000, maxOutputTokens: 131072, thinkingSupported: true, thinkingBudget: 10000, temperature: 0.7, extra: { capability: 'multimodal' } },
       { modelId: 'ling-3.0-flash-free', displayName: 'Ling 3.0 Flash (Free)', contextWindow: 262144, maxOutputTokens: 32768, thinkingSupported: true, thinkingBudget: 10000, temperature: 0.7, extra: { capability: 'text' } },
       { modelId: 'ling-3.0-tiny-free', displayName: 'Ling 3.0 Tiny (Free)', contextWindow: 262144, maxOutputTokens: 32768, thinkingSupported: true, thinkingBudget: 10000, temperature: 0.7, extra: { capability: 'text' } },
       { modelId: 'nemotron-3-ultra-free', displayName: 'Nemotron 3 Ultra (Free)', contextWindow: 512288, maxOutputTokens: 16384, thinkingSupported: true, thinkingBudget: 10000, temperature: 0.7, extra: { capability: 'text' } },
       { modelId: 'north-mini-code-free', displayName: 'North Mini Code (Free)', contextWindow: 256000, maxOutputTokens: 64000, thinkingSupported: true, thinkingBudget: 10000, temperature: 0.7, extra: { capability: 'text' } },
       { modelId: 'laguna-s-2.1-free', displayName: 'Laguna S 2.1 (Free)', contextWindow: 1048576, maxOutputTokens: 131072, thinkingSupported: true, thinkingBudget: 10000, temperature: 0.7, extra: { capability: 'text' } },
-      { modelId: 'longcat-2.0-free', displayName: 'LongCat 2.0 (Free)', contextWindow: 1048756, maxOutputTokens: 262144, thinkingSupported: true, thinkingBudget: 10000, temperature: 0.7, extra: { capability: 'text' } },
+      { modelId: 'longcat-2.0-free', displayName: 'LongCat 2.0 (Free)', contextWindow: 1048756, maxOutputTokens: 131072, thinkingSupported: true, thinkingBudget: 10000, temperature: 0.7, extra: { capability: 'text' } },
     ],
   },
 ]

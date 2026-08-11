@@ -23,7 +23,7 @@ version: 0.1.0
 | area | 背景变量 | 文字变量 | 派生 | 用于 |
 |------|---------|---------|------|------|
 | backdrop | `--theme-backdrop-background` | `--theme-backdrop-text` | — | 外壳、侧栏、会话列表、项目菜单 |
-| main | `--theme-main-background` | `--theme-main-text` | `-soft-background` / `-subtle-background` / `-border` | 主卡片、内容区、设置页 |
+| main | `--theme-main-background` | `--theme-main-text` | `-soft-background` / `-subtle-background` / `-sunken-background` / `-border` | 主卡片、内容区、设置页 |
 | composer | `--theme-composer-background` | `--theme-composer-text` | `-soft-background` | 底部输入栏、composer 菜单 |
 | control | `--theme-control-background` | `--theme-control-text` | `-soft-background` | 按钮、输入框、下拉、select、徽章 |
 
@@ -47,7 +47,7 @@ version: 0.1.0
 - **任务状态**：运行中=spinner 转圈（点色=控件色）；等待=`--orange` 70% + 控件色 30%；失败=`--red` 70% + 控件色 30%；完成=静止纯控件色。状态须有非色觉指示（动画/文字），非仅靠颜色。
 - **文字层级**：`--text`（正文）> `color-mix(--text 65%)`（次要说明）> `color-mix(--text 45%)`（占位/禁用辅助）。次要/占位由当前 area 的 `--text` 派生，非静态 muted。
 - **面板层级**：`--bg`（最底）< `--panel-2`（输入/凹陷）< `--panel`（卡片）< `--panel-3`（凸起/激活）。
-- **暗色唯一**：当前仅暗色主题；不得引入未声明的浅色配色（主题预设中的浅色由 `--theme-*` 控制，非新增配色体系）。
+- **暗色唯一**：默认暗色；浅色预设（纸白/审阅灰）由 `--theme-*` 控制，不得另建配色体系。静态 token（`--bg`/`--panel-*`/`--line`/`--muted`/`--faint`）不随主题，组件背景/文字不得直接引用。
 
 ## 设计决策
 
@@ -62,7 +62,7 @@ version: 0.1.0
 每类组件只有一种配方。改组件前先查本表。
 
 ### 卡片 / 面板（main area）
-`--radius` · `--space-3` 内边距 · `1px solid var(--theme-main-border)` · `--shadow-md` · 背景 `--theme-main-background`。内部层级用派生 `--theme-main-soft-background` / `-subtle-background` 表达，**禁止嵌套实色卡**。
+`--radius` · `--space-3` 内边距 · `1px solid var(--theme-main-border)` · `--shadow-md` · 背景 `--theme-main-background`。内部层级用派生 `--theme-main-soft-background` / `-subtle-background` 表达，**禁止嵌套实色卡**；凹陷面（终端/过程详情等下沉面板）用 `--theme-main-sunken-background`（暗色 rgba(0,0,0,.32) / 浅色 rgba(31,31,31,.06)）。
 
 ### 输入框 — 三类
 1. **标题输入**（main area）：无边框纯文字。`border:0` / `outline:0` / `background:transparent`，focus 也保持无边框（光标闪动即聚焦指示）。重字重（760）、极小内边距（`2px 0`）。取自 `CoreSessionTitleEditor.vue`。

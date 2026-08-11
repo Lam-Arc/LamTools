@@ -1,148 +1,162 @@
+"""jsonc-backed config operations (providers / models / settings).
+
+Every operation here reads and writes jsonc files only — the former shared
+config DB (``llm_providers`` / ``llm_models`` / ``app_settings`` tables) is
+gone. RPC names and payload shapes are preserved so existing frontends keep
+working unchanged:
+
+* ``config.providers.list`` / ``config.provider.create|update|delete``
+* ``config.models.list`` / ``config.model.create|update|delete``
+* ``settings.get`` / ``settings.update`` / ``config.import_env``
+"""
+
 from __future__ import annotations
 
-import asyncio
 import os
-from collections.abc import Awaitable, Callable
+from dataclasses import replace
+from pathlib import Path
 from typing import Any
-
-from sqlalchemy.exc import OperationalError
-from sqlalchemy import select
 
 from lamtools_core.app.operation_catalog import OperationCatalog, OperationRequest, OperationResult
 
-from .read import list_model_configs, list_provider_configs
-from .shared_database import AppSetting, LLMModel, LLMProvider
-from .write import (
-    create_model_config,
-    create_provider_config,
-    delete_model_config,
-    delete_provider_config,
-    update_model_config,
-    update_provider_config,
-)
-
-ConfigSessionFactory = Callable[[], Any]
-ConfigWrite = Callable[[Any], Awaitable[Any]]
-
-_SQLITE_LOCK_RETRY_DELAYS = (0.05, 0.15)
+from .model_store import ModelConfig, ModelStore
+from .provider_store import MASKED_API_KEY, ProviderConfig, ProviderStore, mask_api_key, slugify
+from .settings_store import get_setting, set_setting
 
 
-def build_shared_config_operation_catalog(
-    session_factory: ConfigSessionFactory,
-    *,
-    locked_message: str = "database is busy, retry later",
-    sqlite_lock_retry_delays: tuple[float, ...] = _SQLITE_LOCK_RETRY_DELAYS,
-    list_providers: Callable[..., Awaitable[list[dict[str, Any]]]] = list_provider_configs,
-    create_provider: Callable[[Any, dict[str, Any]], Awaitable[dict[str, Any]]] = create_provider_config,
-    update_provider: Callable[[Any, str, dict[str, Any]], Awaitable[dict[str, Any]]] = update_provider_config,
-    delete_provider: Callable[[Any, str], Awaitable[None]] = delete_provider_config,
-    list_models: Callable[..., Awaitable[list[dict[str, Any]]]] = list_model_configs,
-    create_model: Callable[[Any, dict[str, Any]], Awaitable[dict[str, Any]]] = create_model_config,
-    update_model: Callable[[Any, str, dict[str, Any]], Awaitable[dict[str, Any]]] = update_model_config,
-    delete_model: Callable[[Any, str], Awaitable[None]] = delete_model_config,
-    import_environment: ConfigWrite | None = None,
-) -> OperationCatalog:
+def build_config_operation_catalog(*, work_root: str | Path | None = None) -> OperationCatalog:
+    """Build an OperationCatalog of jsonc-backed config RPCs.
+
+    ``work_root`` is the project root used for project-scoped model/provider
+    resolution; writes default to the global scope.
+    """
     catalog = OperationCatalog()
+    root = str(work_root) if work_root else None
+
+    def _providers() -> ProviderStore:
+        return ProviderStore()
+
+    def _models() -> ModelStore:
+        return ModelStore()
+
+    def _provider_response(provider: ProviderConfig) -> dict[str, Any]:
+        return {
+            "id": provider.id,
+            "name": provider.name,
+            "api_type": provider.api_type,
+            "base_url": provider.base_url,
+            "api_key": mask_api_key(provider.api_key),
+            "has_api_key": bool(provider.api_key),
+            "is_default": provider.is_default,
+            "extra": dict(provider.extra),
+        }
+
+    def _model_response(model: ModelConfig) -> dict[str, Any]:
+        return {
+            "id": model.model_id,
+            "model_record_id": model.model_id,
+            "provider_id": model.provider_id,
+            "model_id": model.model_id,
+            "display_name": model.display_name,
+            "context_window": model.context_window,
+            "max_output_tokens": model.max_output_tokens,
+            "thinking_supported": model.thinking_supported,
+            "thinking_budget": model.thinking_budget,
+            "temperature": model.temperature,
+            "capability": model.capability,
+            "notes": model.notes,
+            "extra": model.to_extra(),
+        }
+
+    def _find_provider(ref: str, *, store: ProviderStore) -> ProviderConfig | None:
+        if not ref:
+            return None
+        return store.get_sync(ref, work_root=root)
 
     async def providers_list(request: OperationRequest) -> OperationResult:
-        limit = _bounded_int(request.payload.get("limit"), default=50, minimum=1, maximum=200)
-        offset = _bounded_int(request.payload.get("offset"), default=0, minimum=0, maximum=100000)
-        async with session_factory() as db:
-            providers = await list_providers(db, limit=limit, offset=offset)
-        return OperationResult(name=request.name, payload={"providers": providers})
+        limit = _bounded_int(request.payload.get("limit"), default=200, minimum=1, maximum=500)
+        providers = _providers().list_sync(work_root=root)
+        return OperationResult(
+            name=request.name,
+            payload={"providers": [_provider_response(p) for p in providers[:limit]]},
+        )
 
     async def provider_create(request: OperationRequest) -> OperationResult:
         params = request.payload
         missing = [key for key in ("name", "base_url", "api_key") if not str(params.get(key) or "")]
         if missing:
             return _error(request, "name, base_url and api_key are required")
-        payload = {
-            "name": str(params.get("name") or ""),
-            "api_type": str(params.get("api_type") or "openai"),
-            "base_url": str(params.get("base_url") or ""),
-            "api_key": str(params.get("api_key") or ""),
-            "extra": params.get("extra") if isinstance(params.get("extra"), dict) else None,
-        }
+        name = str(params.get("name") or "").strip()
+        store = _providers()
+        provider_id = str(params.get("id") or params.get("preset_id") or "").strip() or slugify(name)
+        # Ensure a unique provider id when the slug/preset id is already taken.
+        existing = store.list_sync(work_root=root)
+        taken = {p.id for p in existing}
+        candidate, suffix = provider_id, 2
+        while candidate in taken:
+            candidate = f"{provider_id}-{suffix}"
+            suffix += 1
+        provider = ProviderConfig(
+            id=candidate,
+            name=name,
+            api_type=str(params.get("api_type") or "openai").strip(),
+            base_url=str(params.get("base_url") or "").strip(),
+            api_key=str(params.get("api_key") or "").strip(),
+            extra=dict(params["extra"]) if isinstance(params.get("extra"), dict) else {},
+        )
+        store.write(provider, scope="global", work_root=root)
+        # Nested models[] (UI preset creations) become per-model jsonc files.
         models_raw = params.get("models")
         if isinstance(models_raw, list):
-            models_data: list[dict[str, Any]] = []
+            model_store = _models()
             for raw in models_raw:
                 if not isinstance(raw, dict) or not str(raw.get("model_id") or ""):
                     continue
-                models_data.append(_model_payload(raw))
-            if models_data:
-                payload["models"] = models_data
-        try:
-            result = await _retry_sqlite_locked_write(
-                session_factory,
-                lambda db: create_provider(db, payload),
-                retry_delays=sqlite_lock_retry_delays,
-            )
-        except OperationalError as exc:
-            if _is_sqlite_locked_error(exc):
-                return _error(request, locked_message)
-            raise
-        return OperationResult(name=request.name, payload={"provider": result})
+                model = _model_config_from_payload(raw, fallback_provider=provider)
+                model_store.write(model, scope="global", work_root=root)
+        return OperationResult(name=request.name, payload={"provider": _provider_response(provider)})
 
     async def provider_update(request: OperationRequest) -> OperationResult:
         params = request.payload
         provider_id = str(params.get("provider_id") or params.get("providerId") or params.get("id") or "")
         if not provider_id:
             return _error(request, "provider_id is required")
-        update_data = {
-            key: value
-            for key, value in {
-                "name": params.get("name"),
-                "api_type": params.get("api_type"),
-                "base_url": params.get("base_url"),
-                "api_key": params.get("api_key"),
-                "extra": params.get("extra"),
-            }.items()
-            if value is not None
-        }
-        try:
-            provider = await _retry_sqlite_locked_write(
-                session_factory,
-                lambda db: update_provider(db, provider_id, update_data),
-                retry_delays=sqlite_lock_retry_delays,
-            )
-        except OperationalError as exc:
-            if _is_sqlite_locked_error(exc):
-                return _error(request, locked_message)
-            raise
-        except LookupError as exc:
-            return _error(request, str(exc))
-        return OperationResult(name=request.name, payload={"provider": provider})
+        store = _providers()
+        provider = _find_provider(provider_id, store=store)
+        if provider is None:
+            return _error(request, f"provider not found: {provider_id}")
+        update = _provider_update_fields(provider, params)
+        store.write(update, scope="project" if _is_project_scope(params, root) else "global", work_root=root)
+        return OperationResult(name=request.name, payload={"provider": _provider_response(store.get_sync(update.id, work_root=root) or update)})
 
     async def provider_delete(request: OperationRequest) -> OperationResult:
         provider_id = str(request.payload.get("provider_id") or request.payload.get("providerId") or request.payload.get("id") or "")
         if not provider_id:
             return _error(request, "provider_id is required")
-        try:
-            await _retry_sqlite_locked_write(
-                session_factory,
-                lambda db: delete_provider(db, provider_id),
-                retry_delays=sqlite_lock_retry_delays,
-            )
-        except OperationalError as exc:
-            if _is_sqlite_locked_error(exc):
-                return _error(request, locked_message)
-            raise
-        except LookupError as exc:
-            return _error(request, str(exc))
+        store = _providers()
+        provider = _find_provider(provider_id, store=store)
+        if provider is None:
+            return _error(request, f"provider not found: {provider_id}")
+        path = Path(provider.source_path) if provider.source_path else store.write_path(provider.id, scope="global", work_root=root)
+        if path.is_file():
+            path.unlink()
+        store._cached_signature = None
+        store._cached_providers = None
+        # Also remove model files referencing this provider (UI warns about this).
+        model_store = _models()
+        for model in model_store.list_sync(work_root=root):
+            if model.provider_id == provider.id or model.provider == provider.name:
+                model_path = Path(model.source_path)
+                if model_path.is_file():
+                    model_path.unlink()
+        model_store._cached_signature = None
+        model_store._cached_models = None
         return OperationResult(name=request.name, payload={"ok": True})
 
     async def models_list(request: OperationRequest) -> OperationResult:
-        limit = _bounded_int(request.payload.get("limit"), default=50, minimum=1, maximum=200)
-        offset = _bounded_int(request.payload.get("offset"), default=0, minimum=0, maximum=100000)
-        provider_id = request.payload.get("provider_id") or request.payload.get("providerId")
-        async with session_factory() as db:
-            models = await list_models(
-                db,
-                provider_id=str(provider_id) if provider_id else None,
-                limit=limit,
-                offset=offset,
-            )
+        from lamtools_core.cli import list_llm_model_configs
+
+        models = list_llm_model_configs(work_root=root)
         return OperationResult(name=request.name, payload={"models": models})
 
     async def model_create(request: OperationRequest) -> OperationResult:
@@ -150,107 +164,75 @@ def build_shared_config_operation_catalog(
         missing = [key for key in ("provider_id", "model_id") if not str(params.get(key) or "")]
         if missing:
             return _error(request, "provider_id and model_id are required")
-        payload = _model_payload(params)
-        try:
-            model = await _retry_sqlite_locked_write(
-                session_factory,
-                lambda db: create_model(db, payload),
-                retry_delays=sqlite_lock_retry_delays,
-            )
-        except OperationalError as exc:
-            if _is_sqlite_locked_error(exc):
-                return _error(request, locked_message)
-            raise
-        except LookupError as exc:
-            return _error(request, str(exc))
-        return OperationResult(name=request.name, payload={"model": model})
+        provider = _find_provider(str(params.get("provider_id") or ""), store=_providers())
+        if provider is None:
+            return _error(request, f"provider not found: {params.get('provider_id')}")
+        model = _model_config_from_payload(params, fallback_provider=provider)
+        model_store = _models()
+        if model.is_default:
+            _clear_other_defaults(model_store, model.model_id, root)
+        model_store.write(model, scope=_scope(params, root), work_root=root)
+        return OperationResult(name=request.name, payload={"model": _model_response(model)})
 
     async def model_update(request: OperationRequest) -> OperationResult:
         params = request.payload
         model_record_id = str(params.get("model_record_id") or params.get("id") or "")
         if not model_record_id:
             return _error(request, "model_record_id is required")
-        update_data = {
-            key: value
-            for key, value in {
-                "provider_id": params.get("provider_id"),
-                "model_id": params.get("model_id"),
-                "display_name": params.get("display_name"),
-                "context_window": params.get("context_window"),
-                "max_output_tokens": params.get("max_output_tokens"),
-                "thinking_supported": params.get("thinking_supported"),
-                "thinking_budget": params.get("thinking_budget"),
-                "temperature": params.get("temperature"),
-                "extra": params.get("extra"),
-                "is_default": params.get("is_default"),
-            }.items()
-            if value is not None
-        }
-        try:
-            model = await _retry_sqlite_locked_write(
-                session_factory,
-                lambda db: update_model(db, model_record_id, update_data),
-                retry_delays=sqlite_lock_retry_delays,
-            )
-        except OperationalError as exc:
-            if _is_sqlite_locked_error(exc):
-                return _error(request, locked_message)
-            raise
-        except (LookupError, ValueError) as exc:
-            return _error(request, str(exc))
-        return OperationResult(name=request.name, payload={"model": model})
+        model_store = _models()
+        model = model_store.get_sync(model_record_id, work_root=root)
+        if model is None:
+            return _error(request, f"model not found: {model_record_id}")
+        payload = {k: v for k, v in params.items() if k not in ("model_record_id", "id", "scope", "extra_json")}
+        if "extra" in payload and isinstance(payload.get("extra"), dict):
+            extra = payload.pop("extra")
+            payload.setdefault("capability", str(extra.get("capability") or "").strip())
+            payload.setdefault("adapter_profile_id", str(extra.get("adapter_profile_id") or "").strip())
+        payload.setdefault("provider", model.provider)
+        payload.setdefault("provider_id", model.provider_id)
+        updated = _model_config_from_payload(payload, fallback_provider=_fallback_provider(model))
+        if updated.model_id != model.model_id:
+            old_path = Path(model.source_path)
+            if old_path.is_file():
+                old_path.unlink()
+        if updated.is_default:
+            _clear_other_defaults(model_store, updated.model_id, root)
+        model_store.write(updated, scope=_scope(params, root), work_root=root)
+        return OperationResult(name=request.name, payload={"model": _model_response(updated)})
 
     async def model_delete(request: OperationRequest) -> OperationResult:
-        model_record_id = str(request.payload.get("model_record_id") or request.payload.get("id") or "")
+        model_record_id = str(request.payload.get("model_record_id") or request.payload.get("id") or request.payload.get("model_id") or "")
         if not model_record_id:
             return _error(request, "model_record_id is required")
-        try:
-            await _retry_sqlite_locked_write(
-                session_factory,
-                lambda db: delete_model(db, model_record_id),
-                retry_delays=sqlite_lock_retry_delays,
-            )
-        except OperationalError as exc:
-            if _is_sqlite_locked_error(exc):
-                return _error(request, locked_message)
-            raise
-        except LookupError as exc:
-            return _error(request, str(exc))
+        model_store = _models()
+        model = model_store.get_sync(model_record_id, work_root=root)
+        if model is None:
+            return _error(request, f"model not found: {model_record_id}")
+        path = Path(model.source_path) if model.source_path else model_store.write_path(model.model_id, scope="global", work_root=root)
+        if path.is_file():
+            path.unlink()
+        model_store._cached_signature = None
+        model_store._cached_models = None
         return OperationResult(name=request.name, payload={"ok": True})
 
     async def settings_get(request: OperationRequest) -> OperationResult:
         namespace = str(request.payload.get("namespace") or "").strip()
         if not namespace:
             return _error(request, "namespace is required")
-        async with session_factory() as db:
-            setting = await db.get(AppSetting, namespace)
-        return OperationResult(name=request.name, payload={"namespace": namespace, "value": setting.value if setting else {}})
+        value = get_setting(namespace)
+        return OperationResult(name=request.name, payload={"namespace": namespace, "value": value if isinstance(value, dict) else {}})
 
     async def settings_update(request: OperationRequest) -> OperationResult:
         namespace = str(request.payload.get("namespace") or "").strip()
         value = request.payload.get("value")
         if not namespace or not isinstance(value, dict):
             return _error(request, "namespace and object value are required")
-
-        async def write(db):
-            setting = await db.get(AppSetting, namespace)
-            if setting is None:
-                setting = AppSetting(namespace=namespace, value=dict(value))
-                db.add(setting)
-            else:
-                setting.value = {**(setting.value or {}), **dict(value)}
-            await db.commit()
-            return {"namespace": namespace, "value": setting.value}
-
-        result = await _retry_sqlite_locked_write(session_factory, write, retry_delays=sqlite_lock_retry_delays)
-        return OperationResult(name=request.name, payload=result)
+        current = get_setting(namespace)
+        merged = {**(current if isinstance(current, dict) else {}), **dict(value)}
+        set_setting(namespace, merged)
+        return OperationResult(name=request.name, payload={"namespace": namespace, "value": merged})
 
     async def import_environment_operation(request: OperationRequest) -> OperationResult:
-        if import_environment is not None:
-            imported = await _retry_sqlite_locked_write(
-                session_factory, import_environment, retry_delays=sqlite_lock_retry_delays,
-            )
-            return OperationResult(name=request.name, payload=imported)
         api_key = os.environ.get("LAMTOOLS_LLM_API_KEY", "").strip()
         if not api_key:
             return _error(
@@ -263,34 +245,30 @@ def build_shared_config_operation_catalog(
         model_id = os.environ.get("LAMTOOLS_LLM_MODEL_ID", "").strip()
         if not model_id:
             return _error(request, "LAMTOOLS_LLM_MODEL_ID is not configured")
-
-        async def write(db):
-            provider = (await db.execute(select(LLMProvider).where(LLMProvider.base_url == base_url).limit(1))).scalar_one_or_none()
-            if provider is None:
-                provider = LLMProvider(
-                    name=os.environ.get("LAMTOOLS_LLM_PROVIDER_NAME", "Default from environment"),
-                    api_type=os.environ.get("LAMTOOLS_LLM_API_TYPE", "openai"),
-                    base_url=base_url,
-                    api_key=api_key,
-                    is_default=False,
-                )
-                db.add(provider)
-                await db.flush()
-            else:
-                provider.api_key = api_key
-            model = (await db.execute(select(LLMModel).where(
-                LLMModel.provider_id == provider.id, LLMModel.model_id == model_id,
-            ).limit(1))).scalar_one_or_none()
-            if model is None:
-                model = LLMModel(provider_id=provider.id, model_id=model_id, display_name=model_id, is_default=False)
-                db.add(model)
-            await db.commit()
-            await db.refresh(provider)
-            await db.refresh(model)
-            return {"provider": _provider_response(provider), "model": _model_response(model)}
-
-        imported = await _retry_sqlite_locked_write(session_factory, write, retry_delays=sqlite_lock_retry_delays)
-        return OperationResult(name=request.name, payload=imported)
+        name = os.environ.get("LAMTOOLS_LLM_PROVIDER_NAME", "Default from environment").strip()
+        provider = ProviderConfig(
+            id=slugify(name),
+            name=name,
+            api_type=os.environ.get("LAMTOOLS_LLM_API_TYPE", "openai").strip(),
+            base_url=base_url,
+            api_key=api_key,
+        )
+        store = _providers()
+        existing = store.get_sync(provider.id, work_root=root)
+        if existing is not None:
+            provider = replace(existing, api_key=api_key)
+        store.write(provider, scope="global", work_root=root)
+        model = ModelConfig(
+            model_id=model_id,
+            display_name=model_id,
+            provider=provider.name,
+            provider_id=provider.id,
+        )
+        _models().write(model, scope="global", work_root=root)
+        return OperationResult(
+            name=request.name,
+            payload={"provider": _provider_response(provider), "model": _model_response(model)},
+        )
 
     for name, handler in {
         "config.providers.list": providers_list,
@@ -309,35 +287,90 @@ def build_shared_config_operation_catalog(
     return catalog
 
 
-async def _retry_sqlite_locked_write(
-    session_factory: ConfigSessionFactory,
-    write: ConfigWrite,
-    *,
-    retry_delays: tuple[float, ...],
-) -> Any:
-    for attempt in range(len(retry_delays) + 1):
-        try:
-            async with session_factory() as db:
-                return await write(db)
-        except OperationalError as exc:
-            if not _is_sqlite_locked_error(exc) or attempt >= len(retry_delays):
-                raise
-            await asyncio.sleep(retry_delays[attempt])
-    raise RuntimeError("SQLite write retry exhausted")
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _model_config_from_payload(params: dict[str, Any], *, fallback_provider: ProviderConfig | None) -> ModelConfig:
+    """Build a ModelConfig from an RPC payload (UI shape: model_id, display_name, …).
+
+    ``provider_id``/``provider_name`` in the payload are used when set; the
+    ``fallback_provider`` fills both when the payload lacks them (provider
+    create with nested models).
+    """
+    extra = params.get("extra")
+    if not isinstance(extra, dict):
+        extra = {}
+    raw_provider_id = str(params.get("provider_id") or "").strip()
+    if raw_provider_id:
+        provider_id = raw_provider_id
+    elif fallback_provider is not None:
+        provider_id = fallback_provider.id
+    else:
+        provider_id = ""
+    provider_name = str(params.get("provider_name") or params.get("provider") or "").strip()
+    if not provider_name and fallback_provider is not None:
+        provider_name = fallback_provider.name
+    thinking = params.get("thinking")
+    thinking_supported = bool(thinking.get("supported", params.get("thinking_supported") or False)) if isinstance(thinking, dict) else bool(params.get("thinking_supported") or False)
+    thinking_budget = int(thinking.get("budget", params.get("thinking_budget") or 10000)) if isinstance(thinking, dict) else int(params.get("thinking_budget") or 10000)
+    return ModelConfig(
+        model_id=str(params.get("model_id") or "").strip(),
+        display_name=str(params.get("display_name") or "").strip(),
+        provider=provider_name,
+        provider_id=provider_id,
+        context_window=int(params.get("context_window") or 0),
+        max_output_tokens=int(params.get("max_output_tokens") or 4096),
+        temperature=float(params.get("temperature") or 0.2),
+        thinking_supported=thinking_supported,
+        thinking_budget=thinking_budget,
+        reasoning_effort=str(params.get("reasoning_effort") or "").strip(),
+        adapter_profile_id=str(extra.get("adapter_profile_id") or params.get("adapter_profile_id") or "").strip(),
+        request_body=dict(extra["request_body"]) if isinstance(extra.get("request_body"), dict) else {},
+        capability=str(extra.get("capability") or params.get("capability") or "").strip().lower(),
+        notes=str(params.get("notes") or "").strip(),
+        is_default=bool(params.get("is_default") or False),
+    )
 
 
-def _model_payload(params: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "provider_id": str(params.get("provider_id") or ""),
-        "model_id": str(params.get("model_id") or ""),
-        "display_name": str(params.get("display_name") or ""),
-        "context_window": int(params.get("context_window") or 128000),
-        "max_output_tokens": int(params.get("max_output_tokens") or 16384),
-        "thinking_supported": bool(params.get("thinking_supported")),
-        "thinking_budget": int(10000 if params.get("thinking_budget") is None else params["thinking_budget"]),
-        "temperature": float(0.7 if params.get("temperature") is None else params["temperature"]),
-        "extra": params.get("extra") if isinstance(params.get("extra"), dict) else None,
-    }
+def _provider_update_fields(provider: ProviderConfig, params: dict[str, Any]) -> ProviderConfig:
+    """Apply an update payload to a provider; masked/empty api keys keep the old value."""
+    updates: dict[str, Any] = {}
+    for key in ("name", "api_type", "base_url"):
+        value = params.get(key)
+        if value is not None:
+            updates[key] = str(value).strip()
+    api_key = params.get("api_key")
+    if isinstance(api_key, str) and api_key.strip() and api_key.strip() != MASKED_API_KEY:
+        updates["api_key"] = api_key.strip()
+    if isinstance(params.get("extra"), dict):
+        updates["extra"] = dict(params["extra"])
+    if isinstance(params.get("is_default"), bool):
+        updates["is_default"] = params["is_default"]
+    return replace(provider, **updates)
+
+
+def _fallback_provider(model: ModelConfig) -> ProviderConfig | None:
+    if not (model.provider or model.provider_id):
+        return None
+    return ProviderStore().get_sync(model.provider_id or model.provider)
+
+
+def _clear_other_defaults(model_store: ModelStore, model_id: str, work_root: str | None) -> None:
+    for existing in model_store.list_sync(work_root=work_root):
+        if existing.model_id != model_id and existing.is_default:
+            model_store.write(replace(existing, is_default=False), scope="global", work_root=work_root)
+
+
+def _scope(params: dict[str, Any], work_root: str | None) -> str:
+    scope = str(params.get("scope") or "global").strip()
+    if scope not in ("project", "global"):
+        scope = "global"
+    return scope
+
+
+def _is_project_scope(params: dict[str, Any], work_root: str | None) -> bool:
+    return _scope(params, work_root) == "project" and bool(work_root)
 
 
 def _bounded_int(value: object, *, default: int, minimum: int, maximum: int) -> int:
@@ -348,31 +381,8 @@ def _bounded_int(value: object, *, default: int, minimum: int, maximum: int) -> 
     return max(minimum, min(maximum, number))
 
 
-def _is_sqlite_locked_error(exc: BaseException) -> bool:
-    if not isinstance(exc, OperationalError):
-        return False
-    message = str(exc).lower()
-    return "database is locked" in message or "database table is locked" in message
-
-
 def _error(request: OperationRequest, message: str) -> OperationResult:
     return OperationResult(name=request.name, status="error", payload={"error": message})
 
 
-def _provider_response(provider: LLMProvider) -> dict[str, Any]:
-    return {
-        "id": provider.id, "name": provider.name, "api_type": provider.api_type,
-        "base_url": provider.base_url, "has_api_key": bool(provider.api_key), "extra": provider.extra,
-    }
-
-
-def _model_response(model: LLMModel) -> dict[str, Any]:
-    return {
-        "id": model.id, "provider_id": model.provider_id, "model_id": model.model_id,
-        "display_name": model.display_name, "context_window": model.context_window,
-        "max_output_tokens": model.max_output_tokens, "thinking_supported": model.thinking_supported,
-        "thinking_budget": model.thinking_budget, "temperature": model.temperature, "extra": model.extra,
-    }
-
-
-__all__ = ["build_shared_config_operation_catalog"]
+__all__ = ["build_config_operation_catalog"]

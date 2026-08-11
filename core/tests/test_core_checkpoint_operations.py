@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sqlite3
 from pathlib import Path
 
 import pytest
@@ -18,34 +17,35 @@ from lamtools_core.runtime import RuntimeState
 from lamtools_core.session import SessionRecord
 
 
-def _write_config_db(path: Path) -> None:
-    connection = sqlite3.connect(path)
-    try:
-        connection.executescript(
-            """
-            create table llm_providers (
-                id text primary key, name text, api_type text, base_url text,
-                api_key text, extra text, created_at text
-            );
-            create table llm_models (
-                id text primary key, provider_id text, model_id text, display_name text,
-                context_window integer, max_output_tokens integer,
-                thinking_supported integer, thinking_budget integer,
-                temperature real, extra text, created_at text
-            );
-            insert into llm_providers values (
-                'provider-1', 'Provider', 'openai', 'https://example.test/v1',
-                'secret', '{}', '2026-01-01'
-            );
-            insert into llm_models values (
-                'model-record', 'provider-1', 'model-name', 'Model Name',
-                128000, 4096, 0, 0, 0.2, '{}', '2026-01-01'
-            );
-            """
-        )
-        connection.commit()
-    finally:
-        connection.close()
+def _write_jsonc_config(config_root: Path) -> None:
+    """Write provider-1 + model-record jsonc (replaces the old config.db fixture)."""
+    provider_dir = config_root / "providers"
+    provider_dir.mkdir(parents=True, exist_ok=True)
+    (provider_dir / "provider-1.jsonc").write_text(
+        '{\n'
+        '  "id": "provider-1",\n'
+        '  "name": "Provider",\n'
+        '  "api_type": "openai",\n'
+        '  "base_url": "https://example.test/v1",\n'
+        '  "api_key": "secret"\n'
+        '}\n',
+        encoding="utf-8",
+    )
+    model_dir = config_root / "models"
+    model_dir.mkdir(parents=True, exist_ok=True)
+    (model_dir / "model-record.jsonc").write_text(
+        '{\n'
+        '  "model_id": "model-record",\n'
+        '  "display_name": "Model Name",\n'
+        '  "provider": "Provider",\n'
+        '  "provider_id": "provider-1",\n'
+        '  "context_window": 128000,\n'
+        '  "max_output_tokens": 4096,\n'
+        '  "temperature": 0.2,\n'
+        '  "thinking": {"supported": true, "budget": 10000}\n'
+        '}\n',
+        encoding="utf-8",
+    )
 
 
 async def _seed_checkpoint(
@@ -105,12 +105,12 @@ def _request(websocket, request_id: int, method: str, params: dict) -> dict:
 
 def test_core_app_server_uses_one_operation_contract_for_list_and_rollback(
     tmp_path: Path,
+    isolated_config_root: Path,
 ) -> None:
-    config_db = tmp_path / "config.db"
     core_db = tmp_path / "core.db"
     work_root = tmp_path / "workspace"
     work_root.mkdir()
-    _write_config_db(config_db)
+    _write_jsonc_config(isolated_config_root)
     target = work_root / "state.txt"
     target.write_text("before\n", encoding="utf-8")
     checkpoint = asyncio.run(_seed_checkpoint(
@@ -123,7 +123,6 @@ def test_core_app_server_uses_one_operation_contract_for_list_and_rollback(
 
     app = create_core_agent_http_app(
         model_id="model-record",
-        config_db=config_db,
         core_db=core_db,
         data_dir=tmp_path / "core-data",
         work_root=work_root,
@@ -161,12 +160,11 @@ def test_core_app_server_uses_one_operation_contract_for_list_and_rollback(
     assert target.read_text(encoding="utf-8") == "after\n"
 
 
-def test_core_app_server_rejects_missing_foreign_and_active_turn_checkpoints(tmp_path: Path) -> None:
-    config_db = tmp_path / "config.db"
+def test_core_app_server_rejects_missing_foreign_and_active_turn_checkpoints(tmp_path: Path, isolated_config_root: Path) -> None:
     core_db = tmp_path / "core.db"
     work_root = tmp_path / "workspace"
     work_root.mkdir()
-    _write_config_db(config_db)
+    _write_jsonc_config(isolated_config_root)
     idle_checkpoint = asyncio.run(_seed_checkpoint(
         core_db=core_db,
         work_root=work_root,
@@ -182,7 +180,6 @@ def test_core_app_server_rejects_missing_foreign_and_active_turn_checkpoints(tmp
     ))
     app = create_core_agent_http_app(
         model_id="model-record",
-        config_db=config_db,
         core_db=core_db,
         data_dir=tmp_path / "core-data",
         work_root=work_root,

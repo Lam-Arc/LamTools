@@ -88,7 +88,9 @@
                 <div class="subhead">
                   <h3>已创建的工作流</h3>
                   <div class="subhead-actions">
-                    <button class="small-btn" type="button" @click="emit('refresh-workflows')">↻ 刷新</button>
+                    <button class="small-btn" type="button" @click="emit('refresh-workflows')">
+                      <RefreshCw :size="13" :stroke-width="1.8" aria-hidden="true" /> 刷新
+                    </button>
                   </div>
                 </div>
                 <div v-if="workflowListLoading" class="model-empty">加载中…</div>
@@ -129,6 +131,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { RefreshCw } from 'lucide-vue-next'
 import {
   gradientFromStops,
   relativeLuminance,
@@ -170,9 +173,9 @@ const emit = defineEmits<{
 }>()
 
 const sections: SettingsSection[] = [
-  { id: 'project', label: '项目', icon: '◇' },
-  { id: 'subagent', label: 'Sub agent', icon: '✷' },
-  { id: 'workflow', label: '工作流', icon: '◆' },
+  { id: 'project', label: '项目', icon: 'folder' },
+  { id: 'subagent', label: 'Sub agent', icon: 'bot' },
+  { id: 'workflow', label: '工作流', icon: 'workflow' },
 ]
 
 const workflowList = computed(() => props.workflows ?? [])
@@ -212,6 +215,8 @@ const settingsThemeStyle = computed(() => {
       props.theme.controlOpacity,
     ),
     '--settings-control-text': props.theme.controlText,
+    // control 区首停点纯色：color-mix 混透明用的实色底（渐变值不可用于 color-mix）
+    '--settings-control-solid': props.theme.controlStops[0]?.color || '#3a3834',
     // 暗色分支不重复字面量：layout.css 的 --settings-* fallback 即 :root 真值（单一来源）
     ...(lightMain ? {
       '--settings-panel-2': '#f0efeb',
@@ -279,10 +284,10 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
 
 .field-input {
   min-height: 36px;
-  border: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 18%, transparent);
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--settings-main-text, #fff) 6%, transparent);
-  color: inherit;
+  border: 1px solid color-mix(in srgb, var(--settings-control-text, var(--settings-main-text, #fff)) 12%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--settings-control-solid, #343331) 70%, transparent);
+  color: var(--settings-control-text, var(--settings-main-text, #fff));
   padding: 0 9px;
 }
 
@@ -302,10 +307,10 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
   width: 100%;
   min-height: 220px;
   margin-top: 10px;
-  border: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 18%, transparent);
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--settings-main-text, #fff) 6%, transparent);
-  color: inherit;
+  border: 1px solid color-mix(in srgb, var(--settings-control-text, var(--settings-main-text, #fff)) 12%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--settings-control-solid, #343331) 70%, transparent);
+  color: var(--settings-control-text, var(--settings-main-text, #fff));
   padding: 9px;
   font-family: var(--font-mono);
   font-size: 13px;

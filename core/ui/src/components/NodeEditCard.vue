@@ -2,7 +2,9 @@
   <div v-if="node" class="wf-edit-card" :style="cardStyle" @pointerdown.stop @click.stop>
     <header class="wf-edit-head">
       <span class="wf-edit-title">编辑节点</span>
-      <button class="text-btn" type="button" aria-label="关闭" @click="$emit('close')">✕</button>
+      <button class="text-btn" type="button" aria-label="关闭" @click="$emit('close')">
+        <X :size="14" :stroke-width="1.8" aria-hidden="true" />
+      </button>
     </header>
     <div class="wf-edit-body">
       <label class="field">
@@ -20,10 +22,16 @@
           <span class="field-label">输入端口</span>
           <div v-for="(p, i) in inputPorts" :key="'in'+i" class="port-row">
             <input v-model="p.name" type="text" placeholder="名称" class="port-name" />
-            <select v-model="p.type" class="port-type">
-              <option v-for="t in typeOptions" :key="t" :value="t">{{ t }}</option>
-            </select>
-            <button class="port-del" type="button" @click="inputPorts.splice(i, 1)">✕</button>
+            <UiSelect
+              class="port-type"
+              :model-value="p.type"
+              :options="portTypeOptions"
+              aria-label="输入端口类型"
+              @update:model-value="p.type = $event"
+            />
+            <button class="port-del" type="button" @click="inputPorts.splice(i, 1)">
+              <X :size="11" :stroke-width="2" aria-hidden="true" />
+            </button>
           </div>
           <button class="port-add" type="button" @click="inputPorts.push({ name: '', type: 'string' })">+ 添加输入</button>
         </div>
@@ -31,11 +39,18 @@
           <span class="field-label">输出端口</span>
           <div v-for="(p, i) in outputPorts" :key="'out'+i" class="port-row">
             <input v-model="p.name" type="text" placeholder="名称" class="port-name" />
-            <select v-model="p.type" class="port-type">
-              <option v-for="t in typeOptions" :key="t" :value="t">{{ t }}</option>
-            </select>
+            <UiSelect
+              class="port-type"
+              :model-value="p.type"
+              :options="portTypeOptions"
+              direction="up"
+              aria-label="输出端口类型"
+              @update:model-value="p.type = $event"
+            />
             <AutoTextarea v-if="node.kind === 'content'" v-model="p.value" :min-rows="2" :max-rows="4" placeholder="常量值" />
-            <button class="port-del" type="button" @click="outputPorts.splice(i, 1)">✕</button>
+            <button class="port-del" type="button" @click="outputPorts.splice(i, 1)">
+              <X :size="11" :stroke-width="2" aria-hidden="true" />
+            </button>
           </div>
           <button class="port-add" type="button" @click="outputPorts.push({ name: '', type: 'string', value: '' })">+ 添加输出</button>
         </div>
@@ -151,6 +166,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { X } from 'lucide-vue-next'
 import UiSelect from './UiSelect.vue'
 import AutoTextarea from './AutoTextarea.vue'
 import type { WorkflowNode, WorkflowNodeKind, WorkflowPort } from '../workflow/types'
@@ -200,6 +216,7 @@ const effortOptions: SelectOption[] = [
 
 // ---- local editable copies ----
 const typeOptions = ['string', 'number', 'boolean', 'object', 'array', 'any']
+const portTypeOptions = typeOptions.map(t => ({ value: t, label: t }))
 const opOptions = ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'contains', 'regex', 'exists']
 const onErrorOptions: SelectOption[] = [
   { value: 'abort', label: '中止（默认）' },
@@ -428,11 +445,25 @@ function apply() {
 .port-row { display: flex; align-items: center; gap: 4px; }
 .port-name { flex: 1 1 auto; min-width: 0; }
 .port-type {
-  width: auto; min-width: 64px;
+  flex: 0 0 auto;
+  width: 82px;
+  min-width: 0;
+}
+.port-type :deep(.ui-select-trigger) {
+  min-height: 24px;
   background: var(--theme-main-subtle-background);
   border: 1px solid var(--theme-main-border);
   border-radius: var(--radius-sm, 6px);
-  color: inherit; padding: 4px 6px; font-size: 11px;
+  color: inherit;
+  padding: 0 16px 0 6px;
+  font-size: 11px;
+}
+/* 菜单右对齐触发器的右缘，避免被 320px 卡片的 overflow:hidden 裁剪 */
+.port-type :deep(.ui-select-menu) {
+  left: auto;
+  right: 0;
+  width: 132px;
+  max-height: 260px;
 }
 .port-value { flex: 1 1 auto; min-width: 0; background: var(--theme-main-subtle-background); border: 1px solid var(--theme-main-border); border-radius: var(--radius-sm, 6px); color: inherit; padding: 4px 6px; font-size: 11px; }
 .port-del {

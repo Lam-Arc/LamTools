@@ -12,7 +12,7 @@
         <section v-if="step === 0" class="onboarding-step">
           <!-- PS 插画占位槽：后续插画放 core/ui/src/assets/welcome-art.png 并替换此容器内容 -->
           <div class="welcome-art" aria-hidden="true">
-            <span class="welcome-art-mark">✦</span>
+            <span class="welcome-art-mark" aria-hidden="true"><Sparkles :size="36" :stroke-width="1.2" /></span>
           </div>
           <h1 class="onboarding-title">欢迎使用 LamTools Core</h1>
           <p class="onboarding-subtitle">
@@ -21,7 +21,7 @@
           </p>
           <p class="onboarding-hint">开始前需要配置一个模型供应商，让 Agent 能思考与回复。</p>
           <div class="onboarding-actions">
-            <button class="btn primary" type="button" data-onboarding-start @click="step = 1">开始配置</button>
+            <button class="btn primary" type="button" data-onboarding-start @click="step = 1">开始配置 <ArrowRight :size="14" :stroke-width="2" aria-hidden="true" /></button>
             <button class="btn quiet" type="button" data-onboarding-skip @click="emit('skip')">跳过</button>
           </div>
         </section>
@@ -30,15 +30,27 @@
         <section v-else-if="step === 1" class="onboarding-step">
           <h2 class="onboarding-title">配置模型供应商</h2>
           <p class="onboarding-subtitle">选择官方模板，或手动填写服务信息。</p>
+          <p class="onboarding-hint">
+            目前如果你没有 api key 可以选择 OpenCode Free 并添加，它由 opencode 团队免费提供，但有限额，如有需要可以前往
+            <a
+              class="onboarding-link"
+              href="https://opencode.ai/docs/zh-cn/go/"
+              target="_blank"
+              rel="noopener noreferrer"
+            >https://opencode.ai/docs/zh-cn/go/</a>
+            详细了解并购买进阶订阅
+          </p>
 
           <form class="onboarding-form" @submit.prevent="submitProvider">
             <label class="field">官方模板
-              <select v-model="presetId" data-onboarding-preset @change="applyPreset">
-                <option value="">自定义</option>
-                <option v-for="preset in providerPresets" :key="preset.id" :value="preset.id">
-                  {{ preset.label }}
-                </option>
-              </select>
+              <UiSelect
+                :model-value="presetId"
+                :options="onboardingPresetOptions"
+                data-onboarding-preset
+                placeholder="自定义"
+                aria-label="官方模板"
+                @update:model-value="onPresetChange"
+              />
             </label>
 
             <div v-if="presetId" class="preset-summary">
@@ -69,9 +81,9 @@
             <p v-if="error" class="onboarding-error" role="alert">{{ error }}</p>
 
             <div class="onboarding-actions">
-              <button class="btn quiet" type="button" :disabled="loading" @click="step = 0">上一步</button>
+              <button class="btn quiet" type="button" :disabled="loading" @click="step = 0"><ArrowLeft :size="14" :stroke-width="2" aria-hidden="true" /> 上一步</button>
               <button class="btn primary" type="submit" data-onboarding-submit :disabled="loading || !canSubmit">
-                {{ loading ? '保存中…' : '保存并继续' }}
+                {{ loading ? '保存中…' : '保存并继续' }} <ArrowRight :size="14" :stroke-width="2" aria-hidden="true" />
               </button>
             </div>
           </form>
@@ -79,7 +91,7 @@
 
         <!-- Step 2: 完成 -->
         <section v-else class="onboarding-step">
-          <div class="done-mark" aria-hidden="true">✓</div>
+          <div class="done-mark" aria-hidden="true"><Check :size="28" :stroke-width="2.2" /></div>
           <h2 class="onboarding-title">配置完成</h2>
           <ul class="done-summary">
             <li><span>供应商</span><strong>{{ createdProviderName || primaryProviderName }}</strong></li>
@@ -88,7 +100,7 @@
           </ul>
           <p class="onboarding-hint">之后可在 Core 设置中继续添加供应商、模型或调整权限模式。</p>
           <div class="onboarding-actions">
-            <button class="btn primary" type="button" data-onboarding-finish @click="emit('finish')">开始使用</button>
+            <button class="btn primary" type="button" data-onboarding-finish @click="emit('finish')">开始使用 <ArrowRight :size="14" :stroke-width="2" aria-hidden="true" /></button>
           </div>
         </section>
 
@@ -111,8 +123,10 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { ArrowLeft, ArrowRight, Check, Sparkles } from 'lucide-vue-next'
 import { PROVIDER_PRESETS } from '../data/provider-presets'
 import { themeToCSSVars, type ThemeData } from '../helpers/theme'
+import UiSelect from './UiSelect.vue'
 import type { CoreSettingsProvider, CoreSettingsModel, CoreSettingsProviderPayload } from './CoreSettings.vue'
 
 const props = defineProps<{
@@ -140,6 +154,16 @@ const createdProviderName = ref('')
 
 const providerPresets = PROVIDER_PRESETS
 
+const onboardingPresetOptions = computed(() => [
+  { value: '', label: '自定义' },
+  ...PROVIDER_PRESETS.map(preset => ({ value: preset.id, label: preset.label })),
+])
+
+function onPresetChange(value: string) {
+  presetId.value = value
+  applyPreset()
+}
+
 const overlayStyle = computed(() => ({ ...themeToCSSVars(props.theme) }))
 
 const canSubmit = computed(() => {
@@ -161,6 +185,8 @@ function applyPreset() {
   providerName.value = preset.name
   providerBaseUrl.value = preset.baseUrl
   providerApiType.value = preset.apiType
+  // 模板可预置 API Key（如 OpenCode Free 的 public），用户可覆盖
+  apiKey.value = preset.defaultApiKey || ''
 }
 
 function submitProvider() {
@@ -281,6 +307,15 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
   color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 45%, transparent);
 }
 
+.onboarding-link {
+  color: inherit;
+  text-decoration: underline;
+}
+
+.onboarding-link:hover {
+  color: var(--theme-main-text, #f2efeb);
+}
+
 .onboarding-actions {
   display: flex;
   justify-content: center;
@@ -299,11 +334,19 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
   font-size: 13px;
 }
 
-.onboarding-form input,
-.onboarding-form select {
+.onboarding-form input {
   width: 100%;
   min-height: 34px;
   padding: 0 var(--space-2);
+  border: 1px solid color-mix(in srgb, var(--theme-control-text, #f2efeb) 12%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--theme-control-background, #343331) 70%, transparent);
+  color: var(--theme-control-text, #f2efeb);
+  font: inherit;
+}
+
+.onboarding-form :deep(.ui-select-trigger) {
+  min-height: 34px;
   border: 1px solid color-mix(in srgb, var(--theme-control-text, #f2efeb) 12%, transparent);
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--theme-control-background, #343331) 70%, transparent);

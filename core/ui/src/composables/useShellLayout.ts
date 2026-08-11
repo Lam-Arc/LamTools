@@ -66,15 +66,18 @@ export function useShellLayout(options: ShellLayoutOptions) {
     } as Record<string, string>
   })
 
-  // Sync title bar color to :root and meta tag for Edge app window.
+  // Sync all theme CSS variables to :root — title bar & meta tag for the Edge
+  // app window, and everything teleported to body (modals/onboarding) inherits
+  // the theme instead of falling back to hardcoded dark values.
   watch(
-    () => [shellStyle.value['--theme-titlebar-bg'], shellStyle.value['--theme-main-solid']] as const,
-    ([titlebarBg, mainSolid]) => {
+    () => shellStyle.value,
+    (style) => {
       if (typeof document === 'undefined') return
-      if (titlebarBg) document.documentElement.style.setProperty('--theme-titlebar-bg', titlebarBg)
-      if (mainSolid) document.documentElement.style.setProperty('--theme-main-solid', mainSolid)
+      for (const [key, value] of Object.entries(style)) {
+        if (key.startsWith('--theme-')) document.documentElement.style.setProperty(key, value)
+      }
       const meta = document.querySelector('meta[name="theme-color"]')
-      if (meta && titlebarBg) meta.setAttribute('content', titlebarBg)
+      if (meta && style['--theme-titlebar-bg']) meta.setAttribute('content', style['--theme-titlebar-bg'])
     },
     { immediate: true },
   )

@@ -43,7 +43,7 @@
         :aria-label="`移除 ${item.label || item.filename}`"
         @click="$emit('remove', item.id)"
       >
-        ×
+        <X :size="11" :stroke-width="2" aria-hidden="true" />
       </button>
     </div>
   </div>
@@ -51,6 +51,7 @@
 
 <script setup lang="ts">
 import type { CoreAttachment } from '../types';
+import { X } from 'lucide-vue-next';
 
 defineProps<{
   attachments: CoreAttachment[];

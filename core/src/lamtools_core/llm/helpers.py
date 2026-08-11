@@ -147,8 +147,14 @@ def _usage_int(raw: Any, *keys: str) -> int:
 
 def _cached_tokens_from_usage(raw: Any) -> int:
     """Extract cache-read token count across provider shapes."""
-    # Anthropic / OpenAI-compatible top-level aliases
-    direct = _usage_int(raw, "cache_read_input_tokens", "cached_tokens")
+    # Anthropic / OpenAI-compatible top-level aliases; DeepSeek reports
+    # prompt_cache_hit_tokens / prompt_cache_miss_tokens at the top level.
+    direct = _usage_int(
+        raw,
+        "cache_read_input_tokens",
+        "cached_tokens",
+        "prompt_cache_hit_tokens",
+    )
     if direct:
         return direct
     # OpenAI nested detail dicts

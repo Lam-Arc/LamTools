@@ -8,11 +8,12 @@ Environment variables (set by the Tauri shell):
     LAMCORE_PORT              – port to listen on (default 5172)
     LAMTOOLS_HOME             – portable user-home (app dir's .lam/) — keeps
                                 every data file beside the app (green mode)
-    LAMTOOLS_LLM_CONFIG_DB    – path to config.db
     LAMTOOLS_CORE_DB          – path to core.db
     LAMTOOLS_CORE_DATA_DIR    – user data directory (exact override)
     LAMTOOLS_CORE_WORK_ROOT   – workspace root
     LAMTOOLS_FRONTEND_DIR     – optional: serve built SPA from here
+
+Models/providers/settings are jsonc-only (no config DB, no LAMTOOLS_LLM_CONFIG_DB).
 """
 
 from __future__ import annotations
@@ -28,26 +29,6 @@ logging.basicConfig(
     format="%(levelname)s [%(name)s] %(message)s",
 )
 _log = logging.getLogger("lamcore.backend")
-
-
-# ---------------------------------------------------------------------------
-# Config DB schema bootstrap
-# ---------------------------------------------------------------------------
-
-def _ensure_config_db(config_db: Path) -> None:
-    """Create the shared config DB schema (no built-in default rows).
-
-    A blank ``default`` provider/model was never a real API — it only masked
-    the unconfigured state and crashed startup when missing. Now nothing is
-    seeded: the desktop app boots unconfigured (http_agent_app falls back to a
-    placeholder) and the UI creates real providers/models.
-    """
-    from lamtools_core.config.shared_database import SharedConfigBase
-    from sqlalchemy import create_engine
-
-    engine = create_engine(f"sqlite:///{config_db}")
-    SharedConfigBase.metadata.create_all(engine)
-    engine.dispose()
 
 
 # ---------------------------------------------------------------------------
@@ -79,10 +60,10 @@ def _run() -> None:
     port = int(os.environ.get("LAMCORE_PORT", "5172"))
     host = os.environ.get("LAMCORE_HOST", "127.0.0.1")
 
-    # --- data directory & DB seeding ----------------------------------------
+    # --- data directory ------------------------------------------------
     # Green/portable mode: LAMTOOLS_HOME (set by the Tauri shell to the app
-    # directory's .lam/) keeps config.db/core.db/workspace/logs beside the app,
-    # so nothing is written outside the install root. LAMTOOLS_CORE_DATA_DIR is
+    # directory's .lam/) keeps core.db/workspace/logs beside the app, so
+    # nothing is written outside the install root. LAMTOOLS_CORE_DATA_DIR is
     # an exact override; otherwise fall back to %APPDATA%\LamCore.
     data_dir_env = os.environ.get("LAMTOOLS_CORE_DATA_DIR")
     lam_home_env = os.environ.get("LAMTOOLS_HOME")
@@ -94,10 +75,6 @@ def _run() -> None:
         data_dir = Path(os.environ.get("APPDATA", "") or Path.home()) / "LamCore"
     data_dir.mkdir(parents=True, exist_ok=True)
 
-    config_db = Path(
-        os.environ.get("LAMTOOLS_LLM_CONFIG_DB")
-        or (data_dir / "config.db")
-    )
     core_db = Path(
         os.environ.get("LAMTOOLS_CORE_DB")
         or (data_dir / "core.db")
@@ -117,15 +94,11 @@ def _run() -> None:
 
     ensure_default_config_files()
 
-    os.environ.setdefault("LAMTOOLS_LLM_CONFIG_DB", str(config_db))
     os.environ.setdefault("LAMTOOLS_CORE_DB", str(core_db))
     os.environ.setdefault("LAMTOOLS_CORE_DATA_DIR", str(data_dir))
     os.environ.setdefault("LAMTOOLS_CORE_WORK_ROOT", str(work_root))
 
-    _log.info("config_db=%s  core_db=%s  data_dir=%s", config_db, core_db, data_dir)
-    _log.info("env LAMTOOLS_LLM_CONFIG_DB=%s", os.environ.get("LAMTOOLS_LLM_CONFIG_DB"))
-
-    _ensure_config_db(config_db)
+    _log.info("core_db=%s  data_dir=%s", core_db, data_dir)
 
     # --- attach file logger now that data_dir is known ---
     log_file = data_dir / "backend.log"

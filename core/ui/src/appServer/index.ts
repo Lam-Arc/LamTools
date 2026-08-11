@@ -31,6 +31,7 @@ export {
 export { hydrateSnapshot } from './snapshot.ts'
 
 export {
+  assistantSegmentTurnId,
   selectApprovalCards,
   selectChatMessages,
   selectLatestTurnStatus,

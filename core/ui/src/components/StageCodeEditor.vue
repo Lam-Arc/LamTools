@@ -1,7 +1,7 @@
 <template>
   <div class="stage-code-editor-wrap">
     <div ref="containerEl" class="stage-code-editor"></div>
-    <div v-if="dirty" class="stage-code-dirty" aria-hidden="true">●</div>
+    <div v-if="dirty" class="stage-code-dirty" aria-hidden="true"></div>
   </div>
 </template>
 
@@ -181,8 +181,10 @@ watch(() => props.language, (newLang) => {
   position: absolute;
   top: 6px;
   right: 10px;
-  font-size: 10px;
-  color: var(--orange, #ff9142);
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--orange, #ff9142);
   pointer-events: none;
   z-index: 10;
 }

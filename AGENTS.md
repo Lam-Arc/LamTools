@@ -10,20 +10,32 @@
 - 当前聚焦 Core 建设，所有改动在 `core/` 内进行。
 - 任何 GUI 能力必须有对应的 CLI。
 - PowerShell 涉及中文必须使用 UTF-8。
+- **观测环境只有 Tauri**（`core/desktop`），一切 UI 验证以 Tauri 窗口为准，不折腾浏览器/dev.ps1 体系。
 
 ## 开发启动
 
 ```powershell
 .\scripts\dev.ps1 core              # Core 前后端 (5172 / 5173)
 .\scripts\dev.ps1 all               # 同上（Core-only）
-.\scripts\restart.ps1               # 重启 Core 前后端
+.\scripts\restart.ps1               # 重启 Core 前后端（仅 dev.ps1 体系）
 ```
 
-## 数据库
+## Tauri（唯一观测环境）
+
+- **不要用 `restart.ps1` / dev.ps1 管 Tauri**：`restart.ps1` 杀 5173 会误杀 Tauri dev 的 vite，破坏其加载链（Tauri 窗口 devUrl 写死 `127.0.0.1:5173`，前端由 `core/desktop` 的 vite 服务）。
+- Tauri dev 是独立体系：Rust 自己选随机空闲端口拉起后端（`py -3.14 -m lamtools_core.cli serve --port 随机 --reload`，cwd=`core/`，同一份 `data/core.db`），前端 `__LAMTOOLS_API_BASE__` 由 Rust `get_api_base` 下发，不走 5172/代理。
+- **Tauri 前后端重启 = 完全退出后在 `core/desktop` 下重新 `npm run tauri dev`**。重启前先确认 5173 没有别的 vite 占着（否则 desktop vite 抢不到端口挪到 5174，窗口仍加载 5173 会拿到错误页面）。
+- UI 改动经 HMR 即时生效（desktop 入口 `src/main.ts` 直接 import `../../ui/src/demo/App.vue`，`core/ui/src` 全部在依赖链上）；打包产物（`tauri build`）无热更新。
+
+## 数据库与配置
 
 | 组件 | 路径 |
 |------|------|
-| Core | `data/core.db` |
+| Core 会话/运行时 | `data/core.db` |
+
+- **模型 / 供应商 / 设置只有 jsonc，无 config DB**：模型 `models/<model_id>.jsonc`、供应商 `providers/<id>.jsonc`、设置 `settings.jsonc`、模型重试 `model_retry.jsonc`，统一在 `.lam/core/config/`（`LAMTOOLS_CORE_CONFIG_ROOT` 可覆盖）。禁止再引入 `llm_providers` / `llm_models` / `app_settings` 表或 `LAMTOOLS_LLM_CONFIG_DB` 环境变量。
+- 模型重试参数（次数/单次超时/流式空闲超时/空响应重试/每次重试间隔 `retry_delays_seconds`/抖动）读 `model_retry.jsonc`，缺省即代码内默认值；装配点 `default_agent.create_kernel`、`cli.py`、`tool/sub_agent_runner.py` 读取，显式传参优先于配置文件。
+- 供应商 api_key 明文存于 `providers/*.jsonc`；RPC 列表接口返回打码 `********`，写回时打码/空值不覆盖原 key。
 
 ## 持续事项
 

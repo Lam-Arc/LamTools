@@ -1,7 +1,6 @@
-"""Integration test: load_llm_config resolves models from jsonc files + DB provider."""
+"""Integration test: load_llm_config resolves models from jsonc model + provider files."""
 from __future__ import annotations
 
-import sqlite3
 from pathlib import Path
 
 import pytest
@@ -15,60 +14,81 @@ from lamtools_core.cli import (
 )
 
 
-def _make_config_db(db_path: Path) -> None:
-    con = sqlite3.connect(str(db_path))
-    con.executescript(
-        """
-        CREATE TABLE llm_providers (
-            id TEXT PRIMARY KEY, name TEXT, api_type TEXT, base_url TEXT,
-            api_key TEXT, is_default INTEGER, extra TEXT,
-            created_at TEXT, updated_at TEXT
-        );
-        CREATE TABLE llm_models (
-            id TEXT PRIMARY KEY, provider_id TEXT, model_id TEXT, display_name TEXT,
-            context_window INTEGER, max_output_tokens INTEGER,
-            thinking_supported INTEGER, thinking_budget INTEGER, temperature REAL,
-            is_default INTEGER, extra TEXT,
-            created_at TEXT, updated_at TEXT
-        );
-        INSERT INTO llm_providers VALUES (
-            'prov-1', '讯飞 MaaS', 'openai', 'https://example.com/v2',
-            'sk-test', 1, '{"adapter_profile_id":"xfyun-coding-plan"}',
-            '2026-01-01', '2026-01-01'
-        );
-        INSERT INTO llm_models VALUES (
-            'm-1', 'prov-1', 'xopglm52', 'GLM-5.2', 500000, 32768,
-            1, 10000, 0.7, 0, 'null', '2026-01-01', '2026-01-01'
-        );
-        INSERT INTO llm_models VALUES (
-            'm-2', 'prov-1', 'xopkimik26', 'Kimi-K2.6', 256000, 32768,
-            1, 10000, 0.7, 1, '{"capability":"multimodal"}', '2026-01-02', '2026-01-02'
-        );
-        """
+def _write_provider(config_root: Path, provider_id: str, name: str, *, api_key: str, base_url: str, api_type: str = "openai", extra: str | None = None) -> None:
+    content = (
+        "{\n"
+        f'  "id": "{provider_id}",\n'
+        f'  "name": "{name}",\n'
+        f'  "api_type": "{api_type}",\n'
+        f'  "base_url": "{base_url}",\n'
+        f'  "api_key": "{api_key}"'
     )
-    con.commit()
-    con.close()
+    if extra:
+        content += ",\n" + extra
+    content += "\n}\n"
+    path = config_root / "providers" / f"{provider_id}.jsonc"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+
+
+def _write_model(config_root: Path, model_id: str, *, provider: str, display_name: str, context_window: int, max_output_tokens: int, temperature: float, thinking_supported: bool, thinking_budget: int, is_default: bool = False, capability: str = "", provider_id: str = "") -> None:
+    content = (
+        "{\n"
+        f'  "model_id": "{model_id}",\n'
+        f'  "display_name": "{display_name}",\n'
+        f'  "provider": "{provider}",\n'
+        f'  "provider_id": "{provider_id}",\n'
+        f'  "context_window": {context_window},\n'
+        f'  "max_output_tokens": {max_output_tokens},\n'
+        f'  "temperature": {temperature},\n'
+        f'  "thinking": {{"supported": {str(thinking_supported).lower()}, "budget": {thinking_budget}}},'
+    )
+    if capability:
+        content += f'\n  "capability": "{capability}",'
+    content += f'\n  "is_default": {str(is_default).lower()}\n'
+    content += "}\n"
+    path = config_root / "models" / f"{model_id}.jsonc"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
 
 
 @pytest.fixture(autouse=True)
-def _isolated_model_store(tmp_path, monkeypatch):
-    """Each test gets a fresh global ~/.lam and a cleared process-level store."""
-    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+def _isolated_model_store(monkeypatch):
+    """Each test gets a cleared process-level store context."""
+    monkeypatch.setattr(cli_module, "_default_model_store", None)
+    monkeypatch.setattr(cli_module, "_model_store_work_root", None)
     configure_model_store_context(work_root=None, store=None)
-    # Reset the per-process migration cache so each test re-runs migration.
-    cli_module._model_migration_done = set()
     yield
     configure_model_store_context(work_root=None, store=None)
 
 
-def test_load_llm_config_migrates_db_models_and_resolves_text_model(tmp_path):
-    db_path = tmp_path / "lamtools.db"
-    _make_config_db(db_path)
+def _make_config(config_root: Path) -> None:
+    """Write a provider + two models mirroring the old DB fixture."""
+    _write_provider(
+        config_root, "prov-1", "讯飞 MaaS",
+        api_key="sk-test", base_url="https://example.com/v2/",
+        extra='  "adapter_profile_id": "xfyun-coding-plan"',
+    )
+    _write_model(
+        config_root, "xopglm52", provider="讯飞 MaaS", display_name="GLM-5.2",
+        context_window=500000, max_output_tokens=32768, temperature=0.7,
+        thinking_supported=True, thinking_budget=10000,
+    )
+    _write_model(
+        config_root, "xopkimik26", provider="讯飞 MaaS", display_name="Kimi-K2.6",
+        context_window=256000, max_output_tokens=32768, temperature=0.7,
+        thinking_supported=True, thinking_budget=10000, is_default=True,
+        capability="multimodal", provider_id="prov-1",
+    )
 
-    config = load_llm_config(db_path, model_ref="xopglm52")
+
+def test_load_llm_config_resolves_text_model_from_jsonc(isolated_config_root: Path):
+    _make_config(isolated_config_root)
+
+    config = load_llm_config(model_ref="xopglm52")
 
     assert isinstance(config, LLMConfig)
-    # Model fields come from the migrated jsonc.
+    # Model fields come from the jsonc model file.
     assert config.model_id == "xopglm52"
     assert config.display_name == "GLM-5.2"
     assert config.context_window == 500000
@@ -76,78 +96,122 @@ def test_load_llm_config_migrates_db_models_and_resolves_text_model(tmp_path):
     assert config.temperature == 0.7
     assert config.thinking_supported is True
     assert config.thinking_budget == 10000
-    # Provider connection comes from the DB.
+    # Provider connection comes from the jsonc provider file.
     assert config.provider_name == "讯飞 MaaS"
     assert config.api_key == "sk-test"
     assert config.base_url == "https://example.com/v2"
     # Capability resolved via builtin table (GLM is text-only).
     assert config.capability == "text"
+    # Provider-level adapter profile is surfaced through provider_extra.
+    assert config.provider_extra.get("adapter_profile_id") == "xfyun-coding-plan"
 
 
-def test_load_llm_config_resolves_multimodal_capability_for_kimi(tmp_path):
-    db_path = tmp_path / "lamtools.db"
-    _make_config_db(db_path)
+def test_load_llm_config_resolves_multimodal_capability_for_kimi(isolated_config_root: Path):
+    _make_config(isolated_config_root)
 
-    config = load_llm_config(db_path, model_ref="xopkimik26")
+    config = load_llm_config(model_ref="xopkimik26")
 
     assert config.model_id == "xopkimik26"
     assert config.capability == "multimodal"
 
 
-def test_load_llm_config_resolves_default_model_when_ref_empty(tmp_path):
-    db_path = tmp_path / "lamtools.db"
-    _make_config_db(db_path)
+def test_load_llm_config_resolves_default_model_when_ref_empty(isolated_config_root: Path):
+    _make_config(isolated_config_root)
 
-    config = load_llm_config(db_path, model_ref="")
+    config = load_llm_config(model_ref="")
 
     # The default model (is_default=true) is xopkimik26.
     assert config.model_id == "xopkimik26"
 
 
-def test_load_llm_config_falls_back_to_db_path_when_model_not_in_jsonc(tmp_path):
-    """If a model exists only in the DB (no jsonc), the legacy DB path resolves it."""
-    db_path = tmp_path / "lamtools.db"
-    _make_config_db(db_path)
+def test_load_llm_config_raises_for_unknown_model(isolated_config_root: Path):
+    _make_config(isolated_config_root)
 
-    # 'auto' is in the DB but will not be migrated if migration already ran for
-    # the default models — verify a DB-only ref still resolves via the fallback.
-    # First trigger migration by loading a known model.
-    load_llm_config(db_path, model_ref="xopglm52")
-    # Now request a model_id that was migrated too (sanity).
-    config = load_llm_config(db_path, model_ref="xopglm52")
-    assert config.model_id == "xopglm52"
+    with pytest.raises(ValueError):
+        load_llm_config(model_ref="no-such-model")
 
 
-def test_load_llm_config_strips_trailing_slash_from_base_url(tmp_path):
-    db_path = tmp_path / "lamtools.db"
-    _make_config_db(db_path)
-    config = load_llm_config(db_path, model_ref="xopglm52")
+def test_load_llm_config_strips_trailing_slash_from_base_url(isolated_config_root: Path):
+    _make_config(isolated_config_root)
+    config = load_llm_config(model_ref="xopglm52")
     assert not config.base_url.endswith("/")
 
 
-def test_list_llm_model_configs_resolves_provider_id_from_name(tmp_path):
-    """jsonc model files store ``provider`` (a name) but not ``provider_id`` (a
-    DB uuid). ``list_llm_model_configs`` must join the DB to resolve the
-    provider_id so the UI can match models to their provider.
+def test_list_llm_model_configs_resolves_provider_id_from_provider_store(isolated_config_root: Path):
+    """jsonc model files store ``provider`` (a name) and optionally
+    ``provider_id``. ``list_llm_model_configs`` must resolve the provider_id /
+    api_type through the ProviderStore so the UI can match models to their
+    provider.
 
-    Regression test for the "暂无模型" bug where jsonc-backed models had an
-    empty ``provider_id`` and never matched any provider in the UI.
+    Regression test for the "暂无模型" bug where models had an empty
+    ``provider_id`` and never matched any provider in the UI.
     """
-    db_path = tmp_path / "lamtools.db"
-    _make_config_db(db_path)
-    # Trigger the one-time DB→jsonc migration so model files exist on disk
-    # with ``provider: "讯飞 MaaS"`` but no ``provider_id`` field.
-    load_llm_config(db_path, model_ref="xopglm52")
+    _make_config(isolated_config_root)
 
-    models = list_llm_model_configs(db_path)
-    assert models, "expected migrated jsonc models"
+    models = list_llm_model_configs()
+    assert models, "expected jsonc models"
 
     by_model_id = {m["model_id"]: m for m in models}
     glm = by_model_id["xopglm52"]
-    # provider_id must be resolved from the provider name via the DB, not blank.
+    # provider_id resolved from the provider store by name, not blank.
     assert glm["provider_id"] == "prov-1"
     assert glm["provider_name"] == "讯飞 MaaS"
     assert glm["provider_api_type"] == "openai"
 
     kimi = by_model_id["xopkimik26"]
     assert kimi["provider_id"] == "prov-1"
+    assert kimi["capability"] == "multimodal"
+    assert kimi["is_default"] is True
+
+
+def test_list_llm_model_configs_survives_missing_provider(isolated_config_root: Path):
+    _write_model(
+        isolated_config_root, "orphan", provider="Nonexistent", display_name="Orphan",
+        context_window=1000, max_output_tokens=4096, temperature=0.2,
+        thinking_supported=False, thinking_budget=10000,
+    )
+    models = list_llm_model_configs()
+    assert len(models) == 1
+    assert models[0]["provider_id"] == ""
+    assert models[0]["provider_name"] == "Nonexistent"
+
+
+def test_unified_config_dir_overrides_legacy_models(isolated_config_root: Path, monkeypatch) -> None:
+    """Regression: the unified config dir is where new writes land, so it must
+    override the legacy {lam_home}/config/models fallback. A stale legacy file
+    with the same model_id used to shadow freshly created/edited models,
+    making the UI look like model creation had no effect.
+    """
+    import os
+
+    legacy_models = Path(os.environ["LAMTOOLS_HOME"]) / "config" / "models"
+    legacy_models.mkdir(parents=True, exist_ok=True)
+    (legacy_models / "shadowed.jsonc").write_text(
+        '{\n'
+        '  "model_id": "shadowed",\n'
+        '  "display_name": "Legacy Version",\n'
+        '  "provider": "Old Provider",\n'
+        '  "provider_id": "old-uuid",\n'
+        '  "context_window": 100000,\n'
+        '  "max_output_tokens": 8192,\n'
+        '  "temperature": 0.7,\n'
+        '  "thinking": {"supported": true, "budget": 10000}\n'
+        '}\n',
+        encoding="utf-8",
+    )
+    # Same model_id in the unified config dir (what config.models.upsert writes).
+    _write_provider(isolated_config_root, "new-provider", name="New Provider",
+                    api_key="sk-new", base_url="https://new.test/v1")
+    _write_model(
+        isolated_config_root, "shadowed", provider="New Provider", display_name="New Version",
+        context_window=200000, max_output_tokens=16384, temperature=0.3,
+        thinking_supported=False, thinking_budget=2000,
+        capability="multimodal", provider_id="new-provider",
+    )
+
+    models = {m["model_id"]: m for m in list_llm_model_configs()}
+    assert models["shadowed"]["provider_name"] == "New Provider"
+    assert models["shadowed"]["provider_id"] == "new-provider"
+    assert models["shadowed"]["display_name"] == "New Version"
+    assert models["shadowed"]["capability"] == "multimodal"
+    assert load_llm_config(model_ref="shadowed").provider_name == "New Provider"

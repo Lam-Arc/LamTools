@@ -243,6 +243,57 @@ async def test_core_toolbox_blocks_path_escape_before_execution(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_core_toolbox_allow_access_outside_workdir(tmp_path):
+    root = tmp_path / "root"
+    workspace = root / "project"
+    outside = root / "outside"
+    workspace.mkdir(parents=True)
+    outside.mkdir()
+    (outside / "secret.txt").write_text("top secret\n", encoding="utf-8")
+
+    async def run(toolbox, call):
+        return await toolbox.execute(toolbox.prepare_call(call))
+
+    # Default (restricted): the approval gate blocks out-of-workspace reads
+    # before the handler ever runs.
+    restricted = build_core_toolbox(work_root=workspace, approval_policy="auto_approve")
+    result = await run(
+        restricted,
+        ToolCall(id="read-blocked", name="read_file", arguments={"path": str(outside / "secret.txt")}),
+    )
+    assert result.status == "blocked"
+    assert "outside work_root" in result.error
+
+    allowed = build_core_toolbox(
+        work_root=workspace,
+        approval_policy="auto_approve",
+        allow_access_outside_workdir=True,
+    )
+    result = await run(
+        allowed,
+        ToolCall(id="read-ok", name="read_file", arguments={"path": str(outside / "secret.txt")}),
+    )
+    assert result.status == "ok"
+    assert "top secret" in result.content
+
+    result = await run(
+        allowed,
+        ToolCall(id="write-ok", name="write_file", arguments={"path": str(outside / "new.txt"), "content": "new\n"}),
+    )
+    assert result.status == "ok"
+    assert (outside / "new.txt").read_text(encoding="utf-8") == "new\n"
+
+    # Sensitive-pattern hard blocks still apply even when out-of-workspace
+    # access is allowed.
+    result = await run(
+        allowed,
+        ToolCall(id="env-blocked", name="write_file", arguments={"path": str(outside / ".env"), "content": "KEY=1"}),
+    )
+    assert result.status == "blocked"
+    assert "sensitive pattern" in result.error
+
+
+@pytest.mark.asyncio
 async def test_core_toolbox_executes_injected_mcp_caller(tmp_path):
     caller = FakeMCPCaller()
     toolbox = build_core_toolbox(work_root=tmp_path, mcp_caller=caller, approval_policy="auto_approve")

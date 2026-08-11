@@ -905,10 +905,15 @@ def _extract_cached_tokens(usage: dict[str, Any]) -> int:
     """Extract cache-read token count across provider shapes.
 
     Handles Anthropic top-level (``cache_read_input_tokens``), the flattened
-    ``cached_tokens`` key emitted by ``LLMUsage.to_dict()``, and OpenAI nested
-    detail dicts (``prompt_tokens_details.cached_tokens``).
+    ``cached_tokens`` key emitted by ``LLMUsage.to_dict()``, DeepSeek top-level
+    (``prompt_cache_hit_tokens``), and OpenAI nested detail dicts
+    (``prompt_tokens_details.cached_tokens``).
     """
-    direct = usage.get("cached_tokens") or usage.get("cache_read_input_tokens")
+    direct = (
+        usage.get("cached_tokens")
+        or usage.get("cache_read_input_tokens")
+        or usage.get("prompt_cache_hit_tokens")
+    )
     if direct:
         try:
             return int(direct)

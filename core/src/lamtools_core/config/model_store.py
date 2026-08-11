@@ -104,19 +104,24 @@ class ModelStore:
     # -- discovery --------------------------------------------------------
 
     def _candidate_dirs(self, work_root: str | None) -> list[Path]:
-        """Return model dirs in ascending precedence (built-in → global → project)."""
+        """Return model dirs in ascending precedence (built-in → legacy → unified → project).
+
+        The unified config directory is where new writes land, so it must
+        override the legacy ``{lam_home}/config/models`` read fallback — a
+        model edited/created in the unified directory would otherwise be
+        shadowed by a stale legacy file with the same ``model_id``.
+        """
         dirs: list[Path] = []
         builtin = _repo_resource_models_dir()
         if builtin.is_dir():
             dirs.append(builtin)
-        # Unified config directory (user-modifiable after packaging) — the
-        # legacy {lam_home}/config/models/ keeps working as a read fallback.
+        legacy = legacy_user_config_dir() / MODELS_SUBDIR
+        if legacy.is_dir() and legacy != core_config_dir() / MODELS_SUBDIR:
+            dirs.append(legacy)
+        # Unified config directory (user-modifiable after packaging).
         unified = core_config_dir() / MODELS_SUBDIR
         if unified.is_dir():
             dirs.append(unified)
-        legacy = legacy_user_config_dir() / MODELS_SUBDIR
-        if legacy.is_dir() and legacy != unified:
-            dirs.append(legacy)
         for root in self._explicit_roots:
             candidate = root / "config" / MODELS_SUBDIR
             if candidate.is_dir():

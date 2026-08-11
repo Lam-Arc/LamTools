@@ -129,9 +129,9 @@ _hiddenimports = [
 
     # === config/ submodules ===
     "lamtools_core.config.operations",
-    "lamtools_core.config.read",
-    "lamtools_core.config.shared_database",
-    "lamtools_core.config.write",
+    "lamtools_core.config.provider_store",
+    "lamtools_core.config.settings_store",
+    "lamtools_core.config.model_store",
     "lamtools_core.config.root",
     "lamtools_core.config.defaults",
 

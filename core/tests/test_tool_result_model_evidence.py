@@ -136,6 +136,59 @@ async def test_tool_evidence_is_redacted_and_truncated(tmp_path):
     assert len(content) < 20_000
 
 
+def _image_tool_result(call: ToolCall) -> ToolResult:
+    data_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+    return ToolResult(
+        call_id=call.id,
+        name=call.name,
+        status="ok",
+        content="图片文件: shot.png（68 B）。像素内容以图片形式随本工具结果返回，支持图片输入的模型可直接查看。",
+        artifacts=[ToolArtifact(kind="file_read", uri="shot.png", metadata={"image_data_url": data_url})],
+        metadata={"path": "shot.png", "size_bytes": 68},
+    )
+
+
+@pytest.mark.asyncio
+async def test_multimodal_agent_formats_image_tool_result_with_image_url_block(tmp_path):
+    kit = CoreBaseAgentKit(
+        work_root=tmp_path,
+        config=CoreBaseAgentConfig(capability="multimodal"),
+    )
+    call = ToolCall(id="call-img", name="read_file", arguments={"path": "shot.png"})
+    result = _image_tool_result(call)
+
+    message = await kit.format_tool_result_for_model(RuntimeState(session_id="s3"), call, result)
+
+    assert isinstance(message.content, list)
+    text_block = message.content[0]
+    image_block = message.content[1]
+    assert text_block["type"] == "text"
+    assert "status: ok" in text_block["text"]
+    assert "图片文件: shot.png" in text_block["text"]
+    # 文本块不含 base64 像素，图片只走 image_url 块
+    assert "iVBORw0KGgo" not in text_block["text"]
+    expected_data_url = _image_tool_result(call).artifacts[0].metadata["image_data_url"]
+    assert image_block == {
+        "type": "image_url",
+        "image_url": {"url": expected_data_url, "detail": "auto"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_text_agent_formats_image_tool_result_as_plain_text(tmp_path):
+    kit = CoreBaseAgentKit(work_root=tmp_path)  # 默认 capability="" → text
+    call = ToolCall(id="call-img", name="read_file", arguments={"path": "shot.png"})
+    result = _image_tool_result(call)
+
+    message = await kit.format_tool_result_for_model(RuntimeState(session_id="s4"), call, result)
+
+    assert isinstance(message.content, str)
+    assert "status: ok" in message.content
+    assert "图片文件: shot.png" in message.content
+    assert "image_url" not in message.content
+    assert "iVBORw0KGgo" not in message.content
+
+
 @pytest.mark.asyncio
 async def test_base_agent_returns_delegated_no_progress_to_parent_loop(tmp_path):
     kit = CoreBaseAgentKit(work_root=tmp_path)

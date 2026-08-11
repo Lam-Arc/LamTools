@@ -12,7 +12,9 @@
     <div class="wf-node-body" @pointerdown.stop>
       <header class="wf-node-head">
         <input v-model="localTitle" class="wf-title-input" type="text" placeholder="标题" @blur="pushTitle" />
-        <span class="wf-node-state">{{ stateDot }}</span>
+        <span class="wf-node-state">
+          <component :is="stateDot" :size="11" :stroke-width="2" aria-hidden="true" />
+        </span>
       </header>
 
       <!-- AI -->
@@ -60,6 +62,7 @@
 
 <script setup lang="ts">
 import { computed, inject, ref, watch } from 'vue'
+import { Circle, CircleCheck, CircleDot, CircleX, type LucideIcon } from 'lucide-vue-next'
 import { Handle, Position } from '@vue-flow/core'
 import WfSelect from './WfSelect.vue'
 import AutoTextarea from './AutoTextarea.vue'
@@ -75,12 +78,12 @@ const inputPorts = computed(() => node.value.ports.filter((p) => p.direction ===
 const outputPorts = computed(() => node.value.ports.filter((p) => p.direction === 'out'))
 const state = computed<NodeStateStatus>(() => props.data.state ?? 'idle')
 
-const stateDot = computed(() => {
+const stateDot = computed<LucideIcon>(() => {
   switch (state.value) {
-    case 'running': return '◐'
-    case 'done': return '●'
-    case 'error': return '✕'
-    default: return '○'
+    case 'running': return CircleDot
+    case 'done': return CircleCheck
+    case 'error': return CircleX
+    default: return Circle
   }
 })
 

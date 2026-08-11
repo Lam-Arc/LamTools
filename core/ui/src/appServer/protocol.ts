@@ -140,6 +140,8 @@ export interface CoreRuntimeItem {
   status?: string
   content?: string
   deltas?: unknown[]
+  /** Thread-global event seq anchor (envelope seq, NOT the batch-relative payload seq). */
+  seq?: number
   payload?: Record<string, unknown>
   artifacts?: Record<string, unknown>[]
   usage?: Record<string, unknown>

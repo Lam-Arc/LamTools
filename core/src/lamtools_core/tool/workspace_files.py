@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import datetime
 import difflib
 import os
@@ -23,6 +24,19 @@ DEFAULT_MAX_LIST_ITEMS = 100
 DEFAULT_MAX_TEXT_LENGTH = 50_000
 DEFAULT_MAX_SEARCH_RESULTS = 50
 
+# read_file 对图片文件以 base64 data URL 返回（不设体积上限），
+# 多模态模型可直接查看；文本模型由 base_agent 丢弃图片块、仅保留说明文字。
+IMAGE_MIME_TYPES: dict[str, str] = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".avif": "image/avif",
+    ".bmp": "image/bmp",
+}
+IMAGE_DATA_URL_METADATA_KEY = "image_data_url"
+
 SKIP_SEARCH_DIRS = frozenset({
     ".git",
     "node_modules",
@@ -40,6 +54,8 @@ def resolve_read_resource_path(
     path: str | Path,
     work_root: str | Path,
     resource_roots: tuple[Path, ...] = (),
+    *,
+    allow_outside: bool = False,
 ) -> tuple[Path, Path]:
     root = Path(work_root).resolve()
     raw = Path(path)
@@ -50,10 +66,16 @@ def resolve_read_resource_path(
         for candidate_root in (root, *roots):
             if is_within_path(resolved, candidate_root):
                 return resolved, candidate_root
+        if allow_outside:
+            # Out-of-workspace absolute path: treat the target itself as the
+            # access root so search/read relative URIs stay consistent.
+            return resolved, resolved
         raise ValueError(f"Path '{path}' is outside work_root '{work_root}'")
 
     primary = (root / raw).resolve()
     if not is_within_path(primary, root):
+        if allow_outside:
+            return primary, primary
         raise ValueError(f"Path '{path}' is outside work_root '{work_root}'")
     if primary.exists() or not roots:
         return primary, root
@@ -85,11 +107,13 @@ class WorkspaceReadOnlyTools:
         max_list_items: int = DEFAULT_MAX_LIST_ITEMS,
         max_text_length: int = DEFAULT_MAX_TEXT_LENGTH,
         max_search_results: int = DEFAULT_MAX_SEARCH_RESULTS,
+        allow_access_outside_workdir: bool = False,
     ) -> None:
         self._work_root = Path(work_root).resolve()
         self._max_list_items = max_list_items
         self._max_text_length = max_text_length
         self._max_search_results = max_search_results
+        self._allow_access_outside_workdir = allow_access_outside_workdir
         self._resource_roots: set[Path] = set()
 
     def add_resource_root(self, path: str | Path) -> None:
@@ -112,7 +136,9 @@ class WorkspaceReadOnlyTools:
             return ToolResult(call_id=call.id, name=call.name, status="failed", error="Missing 'path' argument")
 
         try:
-            resolved, access_root = resolve_read_resource_path(path_str, self._work_root, self.resource_roots())
+            resolved, access_root = resolve_read_resource_path(
+                path_str, self._work_root, self.resource_roots(), allow_outside=self._allow_access_outside_workdir
+            )
         except ValueError as exc:
             return ToolResult(call_id=call.id, name=call.name, status="failed", error=str(exc))
 
@@ -120,6 +146,7 @@ class WorkspaceReadOnlyTools:
             return ToolResult(call_id=call.id, name=call.name, status="failed", error=f"File not found: {path_str}")
 
         document_metadata: dict[str, Any] = {}
+        image_data_url: str | None = None
         try:
             normalized = normalize_document(
                 resolved,
@@ -141,6 +168,20 @@ class WorkspaceReadOnlyTools:
                 "warnings": list(normalized.warnings),
                 "assets": list(normalized.asset_paths),
             }
+        elif resolved.suffix.lower() in IMAGE_MIME_TYPES:
+            # 图片：二进制读取 + base64 data URL。像素内容不放进文本（会变乱码），
+            # 而是以 image_url 块随工具结果返回，由 base_agent 按模型 capability 决定是否发送。
+            try:
+                raw_bytes = resolved.read_bytes()
+            except OSError as exc:
+                return ToolResult(call_id=call.id, name=call.name, status="failed", error=f"Read error: {exc}")
+            mime = IMAGE_MIME_TYPES[resolved.suffix.lower()]
+            image_data_url = f"data:{mime};base64,{base64.b64encode(raw_bytes).decode('ascii')}"
+            rel_preview = relative_workspace_uri(resolved, access_root)
+            content = (
+                f"图片文件: {rel_preview}（{format_file_size(len(raw_bytes))}）。"
+                "像素内容以图片形式随本工具结果返回，支持图片输入的模型可直接查看。"
+            )
         else:
             try:
                 content = resolved.read_text(encoding="utf-8", errors="replace")
@@ -164,6 +205,20 @@ class WorkspaceReadOnlyTools:
         meta_suffix = f"\n[file: {total_lines} lines, {format_file_size(file_size)}, modified {mtime}]"
         suffix = ("\n[... truncated]" if truncated else "") + meta_suffix
         rel = relative_workspace_uri(resolved, access_root)
+        artifact_metadata = {
+            "path": rel,
+            "line_count": total_lines,
+            "size_bytes": file_size,
+            "modified": mtime,
+            "truncated": truncated,
+            **document_metadata,
+        }
+        result_metadata = dict(artifact_metadata)
+        if image_data_url:
+            # 图片数据 URL 进 metadata：LLM 侧 base_agent 读取组装 image_url 块，
+            # UI 侧 MessageView.imageSrc 直接渲染缩略图。
+            artifact_metadata[IMAGE_DATA_URL_METADATA_KEY] = image_data_url
+            result_metadata[IMAGE_DATA_URL_METADATA_KEY] = image_data_url
         return ToolResult(
             call_id=call.id,
             name=call.name,
@@ -174,24 +229,10 @@ class WorkspaceReadOnlyTools:
                     kind="file_read",
                     uri=rel,
                     content=content,
-                    metadata={
-                        "path": rel,
-                        "line_count": total_lines,
-                        "size_bytes": file_size,
-                        "modified": mtime,
-                        "truncated": truncated,
-                        **document_metadata,
-                    },
+                    metadata=artifact_metadata,
                 )
             ],
-            metadata={
-                "path": rel,
-                "line_count": total_lines,
-                "size_bytes": file_size,
-                "modified": mtime,
-                "truncated": truncated,
-                **document_metadata,
-            },
+            metadata=result_metadata,
         )
 
     async def list_dir(self, call: ToolCall) -> ToolResult:
@@ -199,7 +240,9 @@ class WorkspaceReadOnlyTools:
         raw_path = args.get("path")
         path_str = raw_path if isinstance(raw_path, str) and raw_path.strip() else "."
         try:
-            resolved, _access_root = resolve_read_resource_path(path_str, self._work_root, self.resource_roots())
+            resolved, _access_root = resolve_read_resource_path(
+                path_str, self._work_root, self.resource_roots(), allow_outside=self._allow_access_outside_workdir
+            )
         except ValueError as exc:
             return ToolResult(call_id=call.id, name=call.name, status="failed", error=str(exc))
 
@@ -238,7 +281,9 @@ class WorkspaceReadOnlyTools:
         raw_path = args.get("path")
         path_str = raw_path if isinstance(raw_path, str) and raw_path.strip() else "."
         try:
-            search_root, access_root = resolve_read_resource_path(path_str, self._work_root, self.resource_roots())
+            search_root, access_root = resolve_read_resource_path(
+                path_str, self._work_root, self.resource_roots(), allow_outside=self._allow_access_outside_workdir
+            )
         except ValueError as exc:
             return ToolResult(call_id=call.id, name=call.name, status="failed", error=str(exc))
         if not search_root.is_dir():
@@ -283,7 +328,9 @@ class WorkspaceReadOnlyTools:
         raw_path = call.arguments.get("path") if isinstance(call.arguments, dict) else None
         path_str = raw_path if isinstance(raw_path, str) and raw_path.strip() else "."
         try:
-            search_root, access_root = resolve_read_resource_path(path_str, self._work_root, self.resource_roots())
+            search_root, access_root = resolve_read_resource_path(
+                path_str, self._work_root, self.resource_roots(), allow_outside=self._allow_access_outside_workdir
+            )
         except ValueError as exc:
             return ToolResult(call_id=call.id, name=call.name, status="failed", error=str(exc))
         if not search_root.is_file() and not search_root.is_dir():
@@ -338,18 +385,30 @@ class WorkspaceReadOnlyTools:
 
 def make_write_file_handler(
     work_root: Path,
+    *,
+    allow_access_outside_workdir: bool = False,
 ) -> Callable[[ToolCall], Awaitable[ToolResult]]:
     async def write_file(call: ToolCall) -> ToolResult:
-        return await write_file_tool(call, work_root=work_root)
+        return await write_file_tool(
+            call,
+            work_root=work_root,
+            allow_access_outside_workdir=allow_access_outside_workdir,
+        )
 
     return write_file
 
 
 def make_edit_file_handler(
     work_root: Path,
+    *,
+    allow_access_outside_workdir: bool = False,
 ) -> Callable[[ToolCall], Awaitable[ToolResult]]:
     async def edit_file(call: ToolCall) -> ToolResult:
-        return await edit_file_tool(call, work_root=work_root)
+        return await edit_file_tool(
+            call,
+            work_root=work_root,
+            allow_access_outside_workdir=allow_access_outside_workdir,
+        )
 
     return edit_file
 
@@ -358,6 +417,7 @@ async def write_file_tool(
     call: ToolCall,
     *,
     work_root: Path,
+    allow_access_outside_workdir: bool = False,
 ) -> ToolResult:
     args = call.arguments if isinstance(call.arguments, dict) else {}
     path_str = args.get("path", "")
@@ -371,7 +431,7 @@ async def write_file_tool(
         return ToolResult(call_id=call.id, name=call.name, status="failed", error="'content' must be a string")
 
     try:
-        resolved = validate_workspace_path(path_str, work_root)
+        resolved = validate_workspace_path(path_str, work_root, allow_outside=allow_access_outside_workdir)
     except ValueError as exc:
         return ToolResult(call_id=call.id, name=call.name, status="failed", error=str(exc))
 
@@ -450,6 +510,7 @@ async def edit_file_tool(
     call: ToolCall,
     *,
     work_root: Path,
+    allow_access_outside_workdir: bool = False,
 ) -> ToolResult:
     args = call.arguments if isinstance(call.arguments, dict) else {}
     path_str = args.get("path", "")
@@ -468,7 +529,7 @@ async def edit_file_tool(
         return ToolResult(call_id=call.id, name=call.name, status="failed", error="'new_string' must be a string")
 
     try:
-        resolved = validate_workspace_path(path_str, work_root)
+        resolved = validate_workspace_path(path_str, work_root, allow_outside=allow_access_outside_workdir)
     except ValueError as exc:
         return ToolResult(call_id=call.id, name=call.name, status="failed", error=str(exc))
 

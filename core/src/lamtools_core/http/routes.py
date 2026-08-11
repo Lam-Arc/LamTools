@@ -6,7 +6,7 @@ import json
 import inspect
 import os
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -132,6 +132,7 @@ def create_core_router(
     usage_ledger: InMemoryUsageLedger | UsageLedger | None = None,
     operations: OperationCatalog | None = None,
     project_store: CoreProjectStore | Callable[[], CoreProjectStore] | None = None,
+    publish_event: Callable[[dict[str, Any]], Awaitable[None] | None] | None = None,
 ) -> APIRouter:
     """Create an APIRouter with all core LamTools routes.
 
@@ -219,15 +220,26 @@ def create_core_router(
             )
             if record is None:
                 raise HTTPException(status_code=404, detail="Session not found")
-            return record.to_dict()
-        record = existing
-        if body.title is not None:
-            record.title = body.title
-        if body.status is not None:
-            record.status = body.status
-        if metadata is not None:
-            record.metadata = metadata
-        await _store_call(_session_store.update, record)
+        else:
+            record = existing
+            if body.title is not None:
+                record.title = body.title
+            if body.status is not None:
+                record.status = body.status
+            if metadata is not None:
+                record.metadata = metadata
+            await _store_call(_session_store.update, record)
+        # Mirror the autotitle session/updated broadcast so every live client
+        # refreshes its sidebar when a session is renamed through REST.
+        if publish_event is not None and body.title is not None:
+            await _store_call(
+                publish_event,
+                {
+                    "method": "session/updated",
+                    "thread_id": session_id,
+                    "payload": {"session": {"title": record.title}},
+                },
+            )
         return record.to_dict()
 
     @router.delete("/sessions/{session_id}", status_code=204)
@@ -279,7 +291,11 @@ def create_core_router(
             content=body.message,
         )
         await _store_call(_session_store.add_message, user_message)
-        await _update_session_status(session, _session_store, "running", title_fallback=body.message)
+        # Note: the session title is left to the live autotitle path (first
+        # message -> LLM-generated title inside the turn.start operation). No
+        # text fallback here — a pre-set fallback would trip the autotitle
+        # guard and permanently block the LLM title.
+        await _update_session_status(session, _session_store, "running")
 
         try:
             result = await _operations.execute(
@@ -707,12 +723,8 @@ async def _update_session_status(
     session: SessionRecord,
     store: SessionStore,
     status: str,
-    *,
-    title_fallback: str = "",
 ) -> None:
     session.status = status
-    if title_fallback and (not session.title or session.title.lower() in {"new session", "untitled", "core"}):
-        session.title = title_fallback[:60]
     await _store_call(store.update, session)
 
 

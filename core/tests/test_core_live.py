@@ -151,6 +151,7 @@ async def test_approval_respond_uses_operation_catalog_without_member_lifecycle_
             "approval_policy": "require",
             "active_tier": None,
             "tier_tools": None,
+            "allow_access_outside_workdir": False,
         }]
         assert not hasattr(context.host.member_hooks, "continue_approval")
     finally:

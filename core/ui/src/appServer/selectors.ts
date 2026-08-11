@@ -78,6 +78,11 @@ export function selectChatMessages(
     [...subAgentChildren.values()].flatMap(items => items.map(item => item.item_id)),
   )
   const suppressedItemIds = duplicateSubAgentChildItemIds(state, itemOrder, itemCache)
+  // Mid-turn user messages (queue guide) split a turn's runtime items into
+  // several assistant segments; each segment needs a unique message id
+  // (ChatThread keys on msg.id). The first segment keeps the legacy
+  // `assistant:<turn>` id, later ones append `:<n>`.
+  const assistantSegments = new Map<string, number>()
   for (const itemId of itemOrder) {
     if (suppressedItemIds.has(itemId) || nestedChildItemIds.has(itemId)) continue
     const rawItem = canonicalItemForId(state, itemId, itemCache) ?? outerProductItemForId(state, itemId)
@@ -97,12 +102,17 @@ export function selectChatMessages(
       })
       continue
     }
+    const turnId = item.turn_id ?? 'none'
     const last = messages[messages.length - 1]
-    if (!last || last.role !== 'assistant' || last.id !== `assistant:${item.turn_id ?? 'none'}`) {
+    if (!last || last.role !== 'assistant' || assistantSegmentTurnId(last.id) !== turnId) {
+      const segment = (assistantSegments.get(turnId) ?? 0) + 1
+      assistantSegments.set(turnId, segment)
       const coreTurn = typeof item.turn_id === 'string' ? state.core?.turns?.[item.turn_id] : null
       const runtimeMetrics = coreTurn && typeof coreTurn.usage === 'object' && coreTurn.usage ? coreTurn.usage : null
       messages.push({
-        id: `assistant:${item.turn_id ?? 'none'}`,
+        // Real turn ids contain colons (`<session>:turn:<run>`), so segments
+        // are separated with `#` — never a colon.
+        id: segment === 1 ? `assistant:${turnId}` : `assistant:${turnId}#${segment}`,
         role: 'assistant',
         content: '',
         parts: [],
@@ -235,6 +245,18 @@ function maybeAppendInitialAssistantWaiting(state: CoreAppSnapshot, messages: Co
   })
 }
 
+/**
+ * Extract the turn id from an `assistant:<turn>` or `assistant:<turn>#<n>`
+ * message id. Turn ids themselves contain colons, so the segment marker is
+ * `#` — everything before it (including colons) is the turn id.
+ */
+export function assistantSegmentTurnId(messageId: string): string {
+  if (!messageId.startsWith('assistant:') || messageId.startsWith('assistant:waiting:')) return ''
+  const rest = messageId.slice('assistant:'.length)
+  const hash = rest.indexOf('#')
+  return hash >= 0 ? rest.slice(0, hash) : rest
+}
+
 function mergedItemOrder(state: CoreAppSnapshot): string[] {
   const order: string[] = []
   const seen = new Set<string>()
@@ -254,6 +276,7 @@ function mergedItemOrder(state: CoreAppSnapshot): string[] {
     const turnId = typeof item?.turn_id === 'string' ? item.turn_id : ''
     if (!turnId) {
       looseOuter.push(itemId)
+      if (import.meta.env.DEV) console.warn('[order] looseOuter:', itemId, 'seq:', (item as any)?.seq, 'turn_id:', (item as any)?.turn_id)
       continue
     }
     const group = turnItems.get(turnId) ?? { outer: [], core: [] }
@@ -270,6 +293,7 @@ function mergedItemOrder(state: CoreAppSnapshot): string[] {
     const turnId = typeof item?.turn_id === 'string' ? item.turn_id : ''
     if (!turnId) {
       looseCore.push(itemId)
+      if (import.meta.env.DEV) console.warn('[order] looseCore:', itemId, 'seq:', (item as any)?.seq, 'turn_id:', (item as any)?.turn_id)
       continue
     }
     const group = turnItems.get(turnId) ?? { outer: [], core: [] }
@@ -300,7 +324,26 @@ function mergedItemOrder(state: CoreAppSnapshot): string[] {
   for (const turnId of outerTurnOrder) {
     const group = turnItems.get(turnId)
     if (!group) continue
-    for (const itemId of [...group.outer, ...group.core]) {
+    // DEV diagnostic: a core item sequenced BEFORE this turn's outer items
+    // would render the assistant segment above the user message.
+    if (import.meta.env.DEV && group.outer.length > 0 && group.core.length > 0) {
+      const outerMin = Math.min(...group.outer.map(id => outerSeqAnchor(outerItems[id])))
+      const coreMin = Math.min(...group.core.map(id => coreSeqAnchor(coreItems[id])))
+      if (coreMin < outerMin) {
+        console.warn(
+          '[order] core-before-outer turn:', turnId,
+          'outerMin:', outerMin,
+          'coreMin:', coreMin,
+          'outer:', group.outer.map(id => `${id}@${(outerItems[id] as any)?.seq}`).join(', '),
+          'core:', group.core.map(id => `${id}@${(coreItems[id] as any)?.seq}`).join(', '),
+        )
+      }
+    }
+    // Outer (user-side) and core (runtime) items share the thread-global seq
+    // timeline. Mid-turn user messages (e.g. queue guide: `turn:user:guide:*`)
+    // must appear between the runtime items they chronologically follow, so
+    // the two lists are interleaved by seq instead of outer-first concatenation.
+    for (const itemId of mergeOuterCoreBySeq(group.outer, group.core, outerItems, coreItems)) {
       pushOnce(order, seen, itemId)
     }
     for (const continuationTurnId of continuationsByOuterTurn.get(turnId) ?? []) {
@@ -321,6 +364,49 @@ function pushOnce(order: string[], seen: Set<string>, itemId: string) {
   if (!itemId || seen.has(itemId)) return
   seen.add(itemId)
   order.push(itemId)
+}
+
+/**
+ * Interleave a turn's outer (user-side) and core (runtime) item ids by their
+ * thread-global seq anchors. Both lists are individually seq-ascending, so a
+ * two-pointer merge stays O(n) (hot path: runs on every stream frame).
+ * Items without a seq anchor keep the legacy concatenation position: missing
+ * outer seq sorts first (outer-first), missing core seq sorts last (core-last).
+ */
+function mergeOuterCoreBySeq(
+  outer: string[],
+  core: string[],
+  outerItems: Record<string, CoreAppItem>,
+  coreItems: Record<string, CoreRuntimeItem>,
+): string[] {
+  const result: string[] = []
+  let i = 0
+  let j = 0
+  while (i < outer.length || j < core.length) {
+    const outerNext = i < outer.length ? outerSeqAnchor(outerItems[outer[i]]) : Number.POSITIVE_INFINITY
+    const coreNext = j < core.length ? coreSeqAnchor(coreItems[core[j]]) : Number.POSITIVE_INFINITY
+    if (i < outer.length && outerNext <= coreNext) {
+      result.push(outer[i])
+      i += 1
+    } else if (j < core.length) {
+      result.push(core[j])
+      j += 1
+    } else {
+      result.push(outer[i])
+      i += 1
+    }
+  }
+  return result
+}
+
+function outerSeqAnchor(item: CoreAppItem | undefined): number {
+  const seq = typeof item?.seq === 'number' ? item.seq : Number.NaN
+  return Number.isFinite(seq) ? seq : Number.NEGATIVE_INFINITY
+}
+
+function coreSeqAnchor(item: CoreRuntimeItem | undefined): number {
+  const seq = typeof item?.seq === 'number' ? item.seq : Number.NaN
+  return Number.isFinite(seq) ? seq : Number.POSITIVE_INFINITY
 }
 
 function isFinalAssistantContentItem(
