@@ -153,6 +153,7 @@ _hiddenimports = [
     "lamtools_core.kernel.state",
     "lamtools_core.kernel.summary",
     "lamtools_core.kernel.tracing",
+    "lamtools_core.kernel.hooks",
 
     # === llm/ submodules ===
     "lamtools_core.llm.adapter",
@@ -214,6 +215,7 @@ _hiddenimports = [
     "lamtools_core.tool.web_tools",
     "lamtools_core.tool.workspace",
     "lamtools_core.tool.workspace_files",
+    "lamtools_core.tool.verification",
 ]
 
 # ---------------------------------------------------------------------------
