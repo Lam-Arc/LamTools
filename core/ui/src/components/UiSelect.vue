@@ -172,8 +172,10 @@ onUnmounted(() => {
   overflow: auto;
   border: 1px solid color-mix(in srgb, currentColor 12%, transparent);
   border-radius: var(--radius);
-  background: var(--settings-card-background, var(--theme-composer-background, #242424));
-  color: var(--settings-card-text, var(--theme-composer-text, #f4f1ec));
+  /* 菜单 = control area 实色面板：settings 上下文用 --settings-control-solid（实色），
+     工作区保持原 composer 兜底不变。文字须配 control 文字，避免深底深字/浅底浅字。 */
+  background: var(--settings-control-solid, var(--theme-composer-background, #242424));
+  color: var(--settings-control-text, var(--settings-card-text, var(--theme-composer-text, #f4f1ec)));
   box-shadow: var(--shadow-md);
   padding: 6px;
   display: grid;

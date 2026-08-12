@@ -69,7 +69,7 @@ def load_adapter_profiles_from_dirs(profile_dirs: list[Path]) -> dict[str, dict[
     for directory in profile_dirs:
         if not directory.exists():
             continue
-        for path in sorted([*directory.glob("*.json"), *directory.glob("*.jsonc")]):
+        for path in sorted(directory.glob("*.jsonc")):
             try:
                 profile = load_jsonc(path)
             except (OSError, json.JSONDecodeError):

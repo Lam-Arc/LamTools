@@ -3,6 +3,7 @@
 ## 项目结构
 
 - **Core** (`core/`)：Agent 基座，一个基础独立可用的 Agent。当前唯一活跃产品。
+- **Website** (`website/`)：官网（Vue 3 + Vite + anime.js），独立构建，不参与 core 开发链路。
 - **Archive** (`archive/members/`)：已归档的 member 产品（Writer / Sage / Imager），保留历史可追溯，不再维护。
 
 ## 核心规则
@@ -11,6 +12,15 @@
 - 任何 GUI 能力必须有对应的 CLI。
 - PowerShell 涉及中文必须使用 UTF-8。
 - **观测环境只有 Tauri**（`core/desktop`），一切 UI 验证以 Tauri 窗口为准，不折腾浏览器/dev.ps1 体系。
+
+## 官网（website/）
+
+- 技术栈：Vue 3.5 + Vite 8 + TS 6 + anime.js v4（动效）+ lucide-vue-next（图标）。
+- **产品展示区 = 真实 UI 直挂**：`Showcase.vue` 直接 import `core/ui/src` 的真实组件（WorkspaceShell/SessionSidebar/ChatThread/CoreExecutionControls/CoreResourceStats/CoreSessionTitleEditor/TitleBar）与真实 CSS（variables/base/layout），用 `transform: translateZ(0)` 把 position:fixed 的 shell 装进窗口卡片，模拟数据按真实 `CoreMessage/MessagePart` 形状驱动。改 UI 前先看这里，勿手写仿造。
+- 关键坑：① vue 必须 alias 到 website 自己的单例（否则 core/ui 组件加载第二份 vue 白屏）；② ChatThread 消息列表 `v-memo` 依赖消息对象引用——原地改 parts 不重渲染，每次变更要提交**新消息对象**（`commitMsg`）；③ 答案 part 用 `model_text`，`msg.content` 存最终全文（真实数据模型）；④ 覆盖真实组件 DOM 的样式要放全局（如 `.mock-window .thread { align-content: end }` 贴底呈现——scoped 属性选择器匹配不到 WorkspaceShell 渲染的节点）。
+- 开发：`cd website && npm run dev`（5199，不碰 5172/5173）；构建 `npm run build`（纯 vite build，因 core/ui 跨项目类型检查噪音大未挂 vue-tsc）；产物 `website/dist/`。
+- 注意：本仓库 headless 验证环境里 IntersectionObserver 只在 observe 时回调一次——入场动效统一走 `utils/inView.ts` 的 scroll+rAF 检测（`useScrollReveal` / Architecture 均用它），新增动效不要依赖 IO。
+- 全部文案是占位，标 `TODO(文案)`；下载区安装包路径待发布后替换。
 
 ## 开发启动
 

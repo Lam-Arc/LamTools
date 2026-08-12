@@ -199,9 +199,9 @@ fn prod_backend_command(
         .ok_or("cannot locate backend directory")?
         .to_path_buf();
 
-    // Green/portable mode: keep every user data file (config.db, core.db,
-    // workspace, logs, ~/.lam configs) beside the app under {app}/.lam so
-    // nothing is written outside the install root (no %APPDATA%, no ~).
+    // Green/portable mode: keep every user data file (core.db, workspace,
+    // logs, ~/.lam jsonc configs) beside the app under {app}/.lam so nothing
+    // is written outside the install root (no %APPDATA%, no ~).
     let app_dir = env::current_exe()?
         .parent()
         .ok_or("cannot locate app directory")?

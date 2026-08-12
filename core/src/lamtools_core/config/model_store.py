@@ -138,7 +138,7 @@ class ModelStore:
         for directory in self._candidate_dirs(work_root):
             if not directory.is_dir():
                 continue
-            for path in sorted([*directory.glob("*.json"), *directory.glob("*.jsonc")]):
+            for path in sorted(directory.glob("*.jsonc")):
                 resolved = path.resolve()
                 if resolved not in seen and resolved.is_file():
                     seen.add(resolved)

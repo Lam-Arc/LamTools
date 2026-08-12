@@ -7,7 +7,9 @@
   <style>
     :root { --titlebar-offset: 36px; }
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { background: #202020; color: #e0e0e0; font-family: system-ui, sans-serif; }
+    /* 挂载前静态底色：对齐 helpers/theme.ts DEFAULT_THEME（backdrop #202020 / text #f2efeb）。
+       浅色主题下启动瞬间仍会闪一帧深色 —— 主题变量要等 JS 注入 :root 后才生效，属固有帧。 */
+    body { background: #202020; color: #f2efeb; font-family: system-ui, sans-serif; }
   </style>
   <script>
     // Desktop: the backend port is chosen dynamically by Tauri (random free port).
