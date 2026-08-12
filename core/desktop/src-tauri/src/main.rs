@@ -62,6 +62,20 @@ fn ping() -> String {
     "pong".to_string()
 }
 
+/// Report the packaged app name and version (from tauri.conf.json).
+///
+/// The frontend injects this into `window.__LAMTOOLS_APP_VERSION__` so the
+/// settings UI can show the real version without hardcoding a string — the
+/// update check compares it against the backend's `__version__`.
+#[tauri::command]
+fn get_app_info(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    let info = app.package_info();
+    Ok(serde_json::json!({
+        "name": info.name,
+        "version": info.version.to_string(),
+    }))
+}
+
 #[tauri::command]
 fn pick_directory() -> Option<String> {
     rfd::FileDialog::new()
@@ -125,7 +139,7 @@ fn main() {
                 }
             }
         })
-        .invoke_handler(tauri::generate_handler![get_api_base, minimize_window, toggle_maximize_window, close_window, ping, pick_directory, open_external_url])
+        .invoke_handler(tauri::generate_handler![get_api_base, minimize_window, toggle_maximize_window, close_window, ping, get_app_info, pick_directory, open_external_url])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {
                 let state = window.state::<BackendState>();

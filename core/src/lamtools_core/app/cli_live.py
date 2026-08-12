@@ -232,6 +232,10 @@ class CliLiveFormatter:
             detail = shorten(str(artifact.get("title") or artifact.get("path") or artifact.get("artifact_id") or "artifact"), 180)
             return [self.line("file", detail)]
         if kind == "usage":
+            # `runtime.metrics` items (`replace: true`) are session-cumulative
+            # context snapshots, not per-call usage — never count them as calls.
+            if payload.get("replace") is True:
+                return [self.line("debug", json.dumps(run_item.get("usage") or payload, ensure_ascii=False))] if self.verbose else []
             usage_event_id = str(run_item.get("event_id") or run_item.get("item_id") or id(run_item))
             if usage_event_id not in self._counted_usage_event_ids:
                 self.llm_call_count += 1

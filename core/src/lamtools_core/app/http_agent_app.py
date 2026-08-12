@@ -26,6 +26,7 @@ from lamtools_core.llm import LLMRequest
 from lamtools_core.config import build_config_operation_catalog
 from lamtools_core.config.provider_store import ProviderConfig, ProviderStore, mask_api_key
 from lamtools_core.config.root import ensure_projects_root
+from lamtools_core.update.operations import build_update_operation_catalog
 from lamtools_core.attachment import CoreAttachmentStore
 from lamtools_core.runtime import RuntimeTaskRegistry
 from lamtools_core.runtime.arrange import ArrangeManager, ArrangeRunner, arranged_operation_payload
@@ -333,6 +334,7 @@ def create_core_agent_http_app(
             work_root=resolved_work_root,
         )
         _register_missing_operations(agent_operations, build_config_operation_catalog(work_root=resolved_work_root))
+        _register_missing_operations(agent_operations, build_update_operation_catalog())
 
         async def execute_arranged_job(job: Any) -> OperationResult:
             payload = arranged_operation_payload(job)

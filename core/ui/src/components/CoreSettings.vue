@@ -377,6 +377,52 @@
       <section v-else-if="activeSection === 'subagent'" class="settings-panel">
         <CoreSubAgentEditor :request-rpc="requestRpc || defaultRequestRpc" :models="models" />
       </section>
+
+      <section v-else-if="activeSection === 'about'" class="settings-panel">
+        <header class="settings-title">
+          <h1>关于与更新</h1>
+          <p>当前版本与软件更新（更新源：GitHub Releases）。</p>
+        </header>
+        <article class="setting-card">
+          <h3>版本信息</h3>
+          <div class="about-version-row">
+            <span>当前版本 <strong data-current-version>{{ updateCurrentVersion }}</strong></span>
+            <button class="small-btn quiet" type="button" data-check-updates :disabled="updateStatus === 'checking'" @click="checkForUpdates()">
+              {{ updateStatus === 'checking' ? '正在检查…' : '检查更新' }}
+            </button>
+          </div>
+          <p v-if="updateStatus === 'up_to_date'" class="about-status" data-update-up-to-date>
+            已是最新版本（v{{ updateLatestVersion }}）
+          </p>
+          <p v-else-if="updateStatus === 'check_failed'" class="about-status error" data-update-error>
+            检查失败：{{ updateError }}（检查网络后重试）
+          </p>
+        </article>
+        <article v-if="updateStatus === 'update_available'" class="setting-card" data-update-available>
+          <h3>发现新版本 v{{ updateLatestVersion }}</h3>
+          <p v-if="updateReleaseNotes" class="about-notes">{{ updateReleaseNotes }}</p>
+          <div class="about-actions">
+            <button class="small-btn primary" type="button" data-download-update @click="downloadUpdate()">下载安装包</button>
+            <button class="small-btn quiet" type="button" data-open-release-page @click="openUpdateReleasePage">查看发布说明</button>
+          </div>
+          <p class="muted">下载完成后请先退出 LamCore，再运行安装包完成升级。</p>
+        </article>
+        <article class="setting-card">
+          <h3>自动检查</h3>
+          <div class="dream-row">
+            <label class="dream-toggle">
+              <input
+                type="checkbox"
+                data-update-auto-check
+                :checked="updateAutoCheck"
+                @change="toggleUpdateAutoCheck"
+              />
+              <span class="dream-toggle-label">启动时自动检查更新</span>
+            </label>
+            <span class="muted">发现新版本时会在顶部显示提示条</span>
+          </div>
+        </article>
+      </section>
     </template>
   </SettingsShell>
 
@@ -538,6 +584,12 @@ import CoreLoadToolsEditor from './CoreLoadToolsEditor.vue'
 import CoreImageGenEditor from './CoreImageGenEditor.vue'
 import CoreWebSearchEditor from './CoreWebSearchEditor.vue'
 import UiSelect from './UiSelect.vue'
+import {
+  readUpdateAutoCheck,
+  setUpdateAutoCheck,
+  useCoreUpdateState,
+  type CoreUpdateState,
+} from '../composables'
 
 export type CoreSettingsDensity = 'compact' | 'standard' | 'loose'
 
@@ -606,6 +658,7 @@ const props = defineProps<{
   requestRpc?: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>
   workflows?: WorkflowListItem[]
   workflowListLoading?: boolean
+  updateState?: CoreUpdateState
 }>()
 
 const emit = defineEmits<{
@@ -662,7 +715,22 @@ const sections: SettingsSection[] = [
   { id: 'agents', label: '上下文与记忆', icon: 'file-code' },
   { id: 'workflow', label: '工作流', icon: 'workflow' },
   { id: 'subagent', label: 'Sub agent', icon: 'bot' },
+  { id: 'about', label: '关于与更新', icon: 'info' },
 ]
+
+// ── Update check state (共享实例由 App.vue 传入以便启动时自动检查；缺省自建) ──
+const updateAutoCheck = ref(readUpdateAutoCheck())
+function toggleUpdateAutoCheck(event: Event) {
+  const input = event.target as HTMLInputElement
+  updateAutoCheck.value = input.checked
+  setUpdateAutoCheck(input.checked)
+}
+async function openUpdateReleasePage() {
+  if (updateReleaseUrl.value) {
+    const { openUpdatePage } = await import('../helpers/update')
+    await openUpdatePage(updateReleaseUrl.value)
+  }
+}
 
 const densityOptions: Array<{ value: CoreSettingsDensity; label: string }> = [
   { value: 'compact', label: '紧凑' },
@@ -865,6 +933,21 @@ function closeEditors() {
 const defaultRequestRpc = async (_method: string, _params?: Record<string, unknown>) => {
   throw new Error('requestRpc not provided — connect CoreSettings to a CoreAppServerClient')
 }
+
+// 放在 defaultRequestRpc 之后实例化（const TDZ：setup 顶层立即求值）
+const update = props.updateState ?? useCoreUpdateState(props.requestRpc || defaultRequestRpc)
+// 解构到 setup 顶层：模板中的嵌套 ref 不会自动解包（普通对象属性），
+// 顶层 ref 才会被 Vue 模板解包并得到正确的类型推断。
+const {
+  status: updateStatus,
+  currentVersion: updateCurrentVersion,
+  latestVersion: updateLatestVersion,
+  releaseNotes: updateReleaseNotes,
+  releaseUrl: updateReleaseUrl,
+  error: updateError,
+  check: checkForUpdates,
+  download: downloadUpdate,
+} = update
 
 const permissionMode = computed(() => props.permissionMode || 'full_edit')
 function toggleAllowOutsideWorkdir(event: Event) {
@@ -1706,5 +1789,35 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
   color: var(--red);
   font-size: 12px;
   line-height: 1.35;
+}
+
+/* ── 关于与更新 ── */
+.about-version-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.about-status {
+  margin: 10px 0 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+.about-status.error {
+  color: var(--red);
+}
+.about-notes {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: pre-wrap;
+  line-height: 1.5;
+  max-height: 160px;
+  overflow: auto;
+}
+.about-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
 }
 </style>

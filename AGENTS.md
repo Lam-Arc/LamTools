@@ -46,6 +46,8 @@
 - **模型 / 供应商 / 设置只有 jsonc，无 config DB**：模型 `models/<model_id>.jsonc`、供应商 `providers/<id>.jsonc`、设置 `settings.jsonc`、模型重试 `model_retry.jsonc`，统一在 `.lam/core/config/`（`LAMTOOLS_CORE_CONFIG_ROOT` 可覆盖）。禁止再引入 `llm_providers` / `llm_models` / `app_settings` 表或 `LAMTOOLS_LLM_CONFIG_DB` 环境变量。
 - 模型重试参数（次数/单次超时/流式空闲超时/空响应重试/每次重试间隔 `retry_delays_seconds`/抖动）读 `model_retry.jsonc`，缺省即代码内默认值；装配点 `default_agent.create_kernel`、`cli.py`、`tool/sub_agent_runner.py` 读取，显式传参优先于配置文件。
 - 供应商 api_key 明文存于 `providers/*.jsonc`；RPC 列表接口返回打码 `********`，写回时打码/空值不覆盖原 key。
+- **默认配置播种**（`config/defaults.py` 的 `ensure_default_config_files`，幂等不覆盖）：loadtools/access_tools/hooks/mcp/README 从 `core/config/resources/` 复制，AGENTS.md/load_context/memory/model_retry/subagent 由代码内默认写入。安装器**不打包 `.lam`**（曾打包过，NSIS 覆盖语义会抹掉用户配置——已移除），新增默认文件一律放 `core/config/resources/` 并注册到播种清单。
+- **软件更新 = 检测 + 引导下载**（非静默安装）：`update.check` RPC / CLI `lamtools_core.cli update check` → 后端 `update/checker.py` 调 GitHub API `releases/latest` 与 `lamtools_core.__version__` 比较；前端「设置 → 关于与更新」展示并引导下载（`__LAMTOOLS_OPEN_URL__` 打开浏览器）。**版本号 5 处必须同步**（tauri.conf.json / Cargo.toml / desktop package.json / pyproject.toml / `__init__.py`），统一用 `scripts/bump-version.ps1`，打 tag `vX.Y.Z` 后 `release.yml` 自动出包。不做 updater 插件/签名（详见 `core/desktop/PACKAGING.md`）。
 
 ## 持续事项
 

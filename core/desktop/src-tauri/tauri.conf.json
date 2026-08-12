@@ -46,7 +46,7 @@
     "active": true,
     "targets": ["nsis"],
     "icon": ["icons/icon.ico"],
-    "resources": ["lamcore-backend", ".lam"],
+    "resources": ["lamcore-backend"],
     "windows": {
       "nsis": {
         "template": "installer.nsi",

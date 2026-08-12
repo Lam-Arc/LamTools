@@ -9,6 +9,16 @@ async function init() {
     console.log('[Main] Not running in Tauri, using default API base');
   }
 
+  // Packaged app version (from tauri.conf.json). The settings "关于与更新"
+  // section reads this instead of hardcoding a string; it stays undefined in
+  // plain-browser dev so the UI falls back to its own placeholder.
+  try {
+    const info = await invoke<{ name: string; version: string }>('get_app_info');
+    (window as any).__LAMTOOLS_APP_VERSION__ = info.version;
+  } catch {
+    console.log('[Main] get_app_info unavailable, version stays undefined');
+  }
+
   // Local file URL resolver (asset protocol): artifact previews read files
   // straight from disk (.lam/artifacts/...) instead of round-tripping HTTP.
   // Falls back to undefined in plain browsers (dev via vite).

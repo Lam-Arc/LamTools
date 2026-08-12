@@ -36,10 +36,14 @@ def test_ensure_default_config_files_creates_every_default(tmp_path, isolated_co
 
 
 def _bundled_copied(config_dir: Path) -> set[Path]:
+    """Every file in core/config/resources is copied into the config dir on
+    first run (the seeding loop mirrors this list)."""
     copied: set[Path] = set()
-    for name in ("loadtools.jsonc", "access_tools.jsonc"):
-        if (bundled_resources_dir() / name).is_file():
-            copied.add(config_dir / name)
+    resources = bundled_resources_dir()
+    if resources.is_dir():
+        for path in resources.iterdir():
+            if path.is_file():
+                copied.add(config_dir / path.name)
     return copied
 
 

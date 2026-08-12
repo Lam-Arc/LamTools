@@ -37,3 +37,48 @@
 ```powershell
 .\scripts\dev.ps1 core    # Core 前后端 dev server (5172 / 5173)
 ```
+
+## 版本号与发布
+
+**版本号只有 5 处且必须同步**（更新检查 `update.check` 用后端 `__version__` 与
+GitHub Releases 比较，版本不一致会误报/漏报）：
+
+1. `core/desktop/src-tauri/tauri.conf.json`
+2. `core/desktop/src-tauri/Cargo.toml`
+3. `core/desktop/package.json`
+4. `core/pyproject.toml`
+5. `core/src/lamtools_core/__init__.py` 的 `__version__`
+
+统一用脚本改，不要手改：
+
+```powershell
+.\scripts\bump-version.ps1 0.3.0
+```
+
+### 发布流程（自动化）
+
+```powershell
+.\scripts\bump-version.ps1 0.3.0   # 1. 升版本（5 处同步）
+git commit -am "chore: bump version to 0.3.0"   # 2. 提交
+git tag v0.3.0                                    # 3. 打 tag
+git push origin main --tags                       # 4. 推送
+```
+
+推送 tag 后 `.github/workflows/release.yml` 自动完成：前端构建 → PyInstaller →
+Tauri 打包 → 上传 `LamCore_*_x64-setup.exe` 到 GitHub Releases。应用内
+「设置 → 关于与更新」即会检测到新版本并引导下载。
+
+手动打包发布（不走 CI）时：跑 `.\scripts\package.ps1`，然后手动把
+`core/desktop/src-tauri/target/release/bundle/nsis/LamCore_*_x64-setup.exe`
+上传到 GitHub Releases（tag `vX.Y.Z`，命名与版本一致）。
+
+## 更新检查机制（检测 + 引导下载）
+
+- 检测链：前端 RPC `update.check` → 后端 `lamtools_core.update.checker`（httpx 调
+  GitHub API `releases/latest`，semver 与 `__version__` 比较）。
+- 下载引导：应用内「下载安装包」通过 `__LAMTOOLS_OPEN_URL__` 在系统浏览器打开
+  安装包直链，由用户手动运行安装（未签名安装包不做静默安装）。
+- CLI 等价能力：`py -3.14 -m lamtools_core.cli update check [--json]`。
+- 不做：tauri-plugin-updater / minisign 签名 / latest.json（如未来升级全自动静默
+  更新，开 `bundle.createUpdaterArtifacts` 并补 `latest.json` 上传即可，release.yml
+  已预留 `.sig` 上传）。

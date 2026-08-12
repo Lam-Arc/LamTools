@@ -104,14 +104,16 @@ def ensure_default_config_files() -> list[Path]:
         _log.warning("Could not create unified config directory %s", config_dir)
         return created
 
-    # Tool policies — bundled resources are the canonical defaults.
-    for bundled_name in ("loadtools.jsonc", "access_tools.jsonc"):
+    # Tool policies + hook/MCP templates + user guide — bundled resources are
+    # the canonical defaults (existing files are never overwritten, so
+    # upgrades/reinstalls never clobber user edits).
+    for bundled_name in ("loadtools.jsonc", "access_tools.jsonc", "hooks.json", "mcp.json", "README.md"):
         target = config_dir / bundled_name
         if not target.exists() and _copy_if_missing(target, bundled_name):
             created.append(target)
 
-    # Hooks — an empty hook set is the safe default.
-    if _write_if_missing(config_dir / "hooks.json", DEFAULT_HOOKS_JSON):
+    # Hooks — fall back to an empty hook set if the bundled template is missing.
+    if not (config_dir / "hooks.json").exists() and _write_if_missing(config_dir / "hooks.json", DEFAULT_HOOKS_JSON):
         created.append(config_dir / "hooks.json")
 
     # Instruction / context / memory files.

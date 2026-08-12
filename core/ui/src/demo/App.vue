@@ -7,6 +7,11 @@
     @toggle-right-pinned="toggleRightPinned"
     @toggle-workflow-mode="toggleWorkflowMode"
   />
+  <div v-if="updateBannerVisible" class="core-update-banner" data-update-banner>
+    <span class="core-update-banner-text">发现新版本 v{{ updateLatestVersion }}，是否立即下载？</span>
+    <button class="core-update-banner-action" type="button" data-update-banner-download @click="downloadUpdate()">下载更新</button>
+    <button class="core-update-banner-close" type="button" aria-label="关闭提示" @click="dismissUpdateBanner">✕</button>
+  </div>
   <CoreSettings
     v-if="showSettings"
     :models="availableModels"
@@ -19,6 +24,7 @@
     :request-rpc="requestConfigOperation"
     :workflows="settingsWorkflowList"
     :workflow-list-loading="settingsWorkflowLoading"
+    :update-state="updateState"
     @close="showSettings = false"
     @update:density="uiPreferences.setDensity"
     @update:content-width="uiPreferences.setContentWidth"
@@ -567,6 +573,7 @@ import {
 } from '../workflow/api'
 import type { WorkflowDef, WorkflowNodeData, NodeStateStatus } from '../workflow/types'
 import {
+  readUpdateAutoCheck,
   useCoreApprovalController,
   useCoreAutoFollowScroll,
   useCoreExecutionControlsState,
@@ -575,6 +582,7 @@ import {
   usePendingAttachments,
   useCoreQueuedInputController,
   useCoreUiPreferences,
+  useCoreUpdateState,
   useCoreWorkbenchProjectionController,
 } from '../composables'
 
@@ -1976,6 +1984,18 @@ async function requestConfigOperation(method: string, params: Record<string, unk
   throw lastError ?? new Error('Core App Server 连接失败')
 }
 
+// ── 软件更新（设置 → 关于与更新；启动时静默自动检查）──
+const updateState = useCoreUpdateState(requestConfigOperation)
+// 解构到 setup 顶层供模板使用（嵌套 ref 在模板中不会自动解包）
+const { status: updateStatus, latestVersion: updateLatestVersion, download: downloadUpdate } = updateState
+const updateBannerDismissed = ref(false)
+const updateBannerVisible = computed(
+  () => updateStatus.value === 'update_available' && !updateBannerDismissed.value,
+)
+function dismissUpdateBanner() {
+  updateBannerDismissed.value = true
+}
+
 function currentWorkRoot(): string {
   if (workflowMode.value) {
     // Workflow mode has no sessions — derive work_root from the selected project.
@@ -2492,6 +2512,10 @@ onMounted(() => {
     void threadScroll.scrollToBottom(true)
   }, { immediate: true })
   void loadInitialData().then(() => checkOnboarding())
+  // 启动时静默检查更新（仅 Tauri 桌面环境，且用户未关闭「启动时自动检查更新」）
+  if ((window as any).__TAURI_INTERNALS__ && readUpdateAutoCheck()) {
+    void updateState.check()
+  }
 })
 
 onUnmounted(() => {
@@ -2515,6 +2539,42 @@ onUnmounted(() => {
 
 .core-project-header-action {
   position: relative;
+}
+
+/* ── 新版本提示条（fixed 在标题栏下方，36px = --titlebar-offset） ── */
+.core-update-banner {
+  position: fixed;
+  top: 36px;
+  left: 0;
+  right: 0;
+  z-index: var(--z-modal, 80);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line, rgba(128, 128, 128, 0.25));
+  font-size: 13px;
+}
+.core-update-banner-text {
+  flex: 1;
+  color: var(--text);
+}
+.core-update-banner-action {
+  border: 1px solid var(--line, rgba(128, 128, 128, 0.25));
+  border-radius: 6px;
+  padding: 4px 12px;
+  background: var(--accent, rgba(255, 255, 255, 0.08));
+  color: var(--text);
+  cursor: pointer;
+}
+.core-update-banner-close {
+  border: none;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 2px 6px;
 }
 
 /* ── 全窗口拖拽上传遮罩 ── */

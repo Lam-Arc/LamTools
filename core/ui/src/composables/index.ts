@@ -85,3 +85,13 @@ export {
   useCoreGoals,
   type UseCoreGoalsOptions,
 } from './useCoreGoals'
+
+export {
+  readUpdateAutoCheck,
+  setUpdateAutoCheck,
+  useCoreUpdateState,
+  type CoreUpdateCheckPayload,
+  type CoreUpdateRequestRpc,
+  type CoreUpdateState,
+  type CoreUpdateStatus,
+} from './useCoreUpdateState'

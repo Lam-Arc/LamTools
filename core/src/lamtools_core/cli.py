@@ -843,6 +843,12 @@ def build_parser() -> argparse.ArgumentParser:
     imagegen_config.add_argument("--model", default=None, help="Image model id")
     imagegen_config.set_defaults(func=cmd_imagegen_config)
 
+    update = sub.add_parser("update", help="Check for a newer LamCore release (设置 → 关于与更新)")
+    update_sub = update.add_subparsers(dest="update_command", required=True)
+    update_check = update_sub.add_parser("check", help="Check GitHub Releases for a newer version")
+    update_check.add_argument("--json", action="store_true", help="Print the raw check result as JSON")
+    update_check.set_defaults(func=cmd_update_check)
+
     artifact = sub.add_parser("artifact", help="Manage project artifacts (.lam/artifact/)")
     artifact_sub = artifact.add_subparsers(dest="artifact_command", required=True)
     artifact_list = artifact_sub.add_parser("list", help="List artifacts of a project workspace")
@@ -2250,6 +2256,31 @@ async def cmd_imagegen_config(args: argparse.Namespace) -> int:
     print(f"[imagegen] saved: enabled={bool(value.get('enabled'))} api_url={value.get('api_url') or ''} "
           f"api_key={_mask_api_key(str(value.get('api_key') or ''))} model={value.get('model') or ''}")
     return 0
+
+
+async def cmd_update_check(args: argparse.Namespace) -> int:
+    """Check GitHub Releases for a newer LamCore (--json for scripting)."""
+    from lamtools_core.update.checker import check_update
+
+    result = check_update()
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result.get("status") != "check_failed" else 1
+    status = result.get("status")
+    print(f"current:   {result.get('current_version') or '?'}")
+    if status == "update_available":
+        print(f"latest:    {result.get('latest_version')}（有更新可用）")
+        if result.get("release_notes"):
+            print(f"notes:     {result.get('release_notes')}")
+        print(f"download:  {result.get('download_url')}")
+        print(f"release:   {result.get('release_url')}")
+        print("提示: 下载安装包后关闭 LamCore 再运行安装。")
+        return 0
+    if status == "up_to_date":
+        print(f"latest:    {result.get('latest_version')}（已是最新）")
+        return 0
+    print(f"error:     检查失败 — {result.get('error') or 'unknown error'}", file=sys.stderr)
+    return 1
 
 
 def _artifact_registry_for_cli(work_root: str) -> ArtifactRegistry:
