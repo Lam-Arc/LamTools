@@ -4,8 +4,8 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.14-blue.svg)](https://www.python.org/)
-[![Version](https://img.shields.io/badge/version-0.2.2-green.svg)](https://github.com/Laaaaaaaam/LamTools/releases)
-[![Stars](https://img.shields.io/github/stars/Laaaaaaaam/LamTools.svg?style=social)](https://github.com/Laaaaaaaam/LamTools)
+[![Version](https://img.shields.io/badge/version-0.2.2-green.svg)](https://github.com/Lam-Arc/LamTools/releases)
+[![Stars](https://img.shields.io/github/stars/Lam-Arc/LamTools.svg?style=social)](https://github.com/Lam-Arc/LamTools)
 
 **LamTools** 是一个 **local-first（本地优先）的 AI Agent 框架**：你的对话、会话、任务、工具调用全部跑在**你自己的电脑**上，数据不出本地，模型随便换。
 
@@ -118,13 +118,13 @@ LamTools 检测到主模型不支持多模态
 
 ### 方式一：桌面安装包（推荐）
 
-从 [Releases](https://github.com/Laaaaaaaam/LamTools/releases) 下载 `LamCore_*-setup.exe`，双击安装，**免装 Python / Node 环境**。
+从 [Releases](https://github.com/Lam-Arc/LamTools/releases) 下载 `LamCore_*-setup.exe`，双击安装，**免装 Python / Node 环境**。
 
 ### 方式二：从源码运行
 
 ```bash
 # 1. 克隆
-git clone https://github.com/Laaaaaaaam/LamTools.git
+git clone https://github.com/Lam-Arc/LamTools.git
 cd LamTools
 
 # 2. 安装依赖（Python 3.14+ / Node 20+）
