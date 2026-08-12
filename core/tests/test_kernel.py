@@ -1247,6 +1247,49 @@ class TestKernelEvents:
         assert done_deltas[0].payload.get("usage", {}).get("cached_tokens") == 800
 
     @pytest.mark.asyncio
+    async def test_usage_survives_when_stream_ends_without_done(self):
+        """Some providers end the stream with a usage-only chunk and never
+        send a done event (e.g. the plain adapter path where a DeepSeek-style
+        final usage chunk used to be misread as a usage event). The captured
+        usage must still reach the LLMResponse so the turn keeps its token /
+        cache-hit metrics."""
+
+        class UsageOnlyStreamLLM:
+            async def stream(self, request: LLMRequest):
+                _ = request
+                yield LLMStreamEvent(kind="content_delta", content="hi")
+                yield LLMStreamEvent(
+                    kind="usage",
+                    usage=normalize_usage({
+                        "prompt_tokens": 1000,
+                        "completion_tokens": 50,
+                        "prompt_cache_hit_tokens": 800,
+                        "prompt_cache_miss_tokens": 200,
+                    }),
+                )
+
+            async def complete(self, request: LLMRequest) -> LLMResponse:
+                raise AssertionError("streaming fixture must not fall back to complete()")
+
+        sink = CollectingEventSink()
+        kernel = _make_kernel(
+            MockRuntimeKit(),
+            llm_client=UsageOnlyStreamLLM(),
+            event_sink=sink,
+        )
+
+        response = await kernel._stream_model(
+            LLMRequest(messages=[ChatMessage(role="user", content="hi")]),
+            RuntimeState(session_id="stream-session", run_id="stream-run"),
+            response_index=0,
+        )
+
+        assert response is not None
+        assert response.usage is not None
+        assert response.usage.cached_tokens == 800
+        assert response.usage.prompt_tokens == 1000
+
+    @pytest.mark.asyncio
     async def test_truncated_streamed_tool_arguments_are_not_executed(self):
         """An output-limit cutoff must not turn partial JSON into an empty tool call."""
 
@@ -3205,7 +3248,7 @@ class TestKernelContextCompaction:
         done = next(event for event in sink.events if event.name == "runtime.done")
         assert done.payload["runtime_metrics"]["context_window_tokens"] == 10_000
         assert done.payload["runtime_metrics"]["estimated_prompt_tokens"] > 0
-        assert done.payload["runtime_metrics"]["llm_calls"] == 1
+        assert done.payload["runtime_metrics"]["steps_total"] == 1
 
     @pytest.mark.asyncio
     async def test_next_run_after_compaction_loads_summary_plus_retained_span(self):

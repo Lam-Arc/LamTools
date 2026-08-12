@@ -9,6 +9,10 @@ from pathlib import Path
 from typing import Any
 
 from lamtools_core.event.run_item import RunItemEvent
+from lamtools_core.llm.helpers import (
+    _cache_creation_tokens_from_usage,
+    _cached_tokens_from_usage,
+)
 
 TERMINAL_STATUSES = {"completed", "done", "ok", "failed", "error", "cancelled"}
 DEFAULT_RUNTIME_PREVIEW_CHARS = 25565
@@ -890,44 +894,17 @@ def _usage_metrics(payload: dict[str, Any]) -> dict[str, int | float]:
     input_tokens = int(usage.get("input_tokens") or usage.get("prompt_tokens") or 0)
     output_tokens = int(usage.get("output_tokens") or usage.get("completion_tokens") or 0)
     total_tokens = int(usage.get("total_tokens") or input_tokens + output_tokens or 0)
-    cached_tokens = _extract_cached_tokens(usage)
+    cached_tokens = _cached_tokens_from_usage(usage)
+    cache_creation_tokens = _cache_creation_tokens_from_usage(usage)
     return {
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "total_tokens": total_tokens,
         "cached_tokens": cached_tokens,
+        "cache_creation_tokens": cache_creation_tokens,
         "cache_hit_rate": round(cached_tokens / input_tokens, 4) if input_tokens > 0 else 0,
         "llm_calls": 1,
     }
-
-
-def _extract_cached_tokens(usage: dict[str, Any]) -> int:
-    """Extract cache-read token count across provider shapes.
-
-    Handles Anthropic top-level (``cache_read_input_tokens``), the flattened
-    ``cached_tokens`` key emitted by ``LLMUsage.to_dict()``, DeepSeek top-level
-    (``prompt_cache_hit_tokens``), and OpenAI nested detail dicts
-    (``prompt_tokens_details.cached_tokens``).
-    """
-    direct = (
-        usage.get("cached_tokens")
-        or usage.get("cache_read_input_tokens")
-        or usage.get("prompt_cache_hit_tokens")
-    )
-    if direct:
-        try:
-            return int(direct)
-        except (TypeError, ValueError):
-            pass
-    details = usage.get("input_tokens_details") or usage.get("prompt_tokens_details")
-    if isinstance(details, dict):
-        nested = details.get("cached_tokens") or details.get("cache_read_input_tokens")
-        if nested:
-            try:
-                return int(nested)
-            except (TypeError, ValueError):
-                pass
-    return 0
 
 
 def _created_at_ms(fact: RuntimeProjectionInput) -> int:

@@ -102,6 +102,51 @@ describe('core appServer runtime store', () => {
     })
   })
 
+  it('skips replace-flagged metrics items when aggregating turn usage', async () => {
+    // `runtime.metrics` items (`replace: true`) carry session-cumulative
+    // context state (steps_total), not per-call usage deltas — merging them
+    // would inflate llm_calls to a quadratic sum and wipe token accumulations.
+    const runtime = createCoreAppServerRuntimeState()
+    const frames: Array<() => void> = []
+    let onEvent: ((event: CoreAppEvent) => void) | undefined
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: (callbacks) => {
+        onEvent = callbacks.onEvent
+        return fakeClient(async (method) => method === 'thread/resume'
+          ? { snapshot: snapshot(1, 'running') }
+          : {})
+      },
+      scheduleFrame: (callback) => frames.push(callback),
+    })
+    await controller.connect('http://127.0.0.1:6173', 'thread-1')
+
+    onEvent?.(runUsageEvent('usage-1', {
+      input_tokens: 1000,
+      output_tokens: 50,
+      total_tokens: 1050,
+      llm_calls: 1,
+    }))
+    onEvent?.(runMetricsEvent('metrics-1', {
+      steps_total: 1,
+      context_window_tokens: 128_000,
+    }))
+    onEvent?.(runUsageEvent('usage-2', {
+      input_tokens: 2000,
+      output_tokens: 100,
+      total_tokens: 2100,
+      llm_calls: 1,
+    }))
+    frames[0]()
+
+    expect(runtime.state?.core?.turns?.['turn-1']?.usage).toMatchObject({
+      input_tokens: 3000,
+      output_tokens: 150,
+      total_tokens: 3150,
+      llm_calls: 2,
+    })
+    expect(runtime.state?.core?.turns?.['turn-1']?.usage).not.toHaveProperty('steps_total')
+  })
+
   it('uses response snapshots as the authoritative frontend state', () => {
     const runtime = createCoreAppServerRuntimeState()
     const controller = createCoreAppServerRuntimeController(runtime, {
@@ -604,6 +649,26 @@ function runUsageEvent(eventId: string, usage: Record<string, unknown>): CoreApp
       status: 'running',
       usage,
       payload: { type: 'turn', runtime_metrics: usage },
+    },
+  }
+}
+
+function runMetricsEvent(eventId: string, usage: Record<string, unknown>): CoreAppEvent {
+  return {
+    event_id: eventId,
+    thread_id: 'thread-1',
+    seq: 2,
+    method: 'core/runItem',
+    created_at: '2026-07-15T00:00:01Z',
+    turn_id: 'turn-1',
+    payload: {
+      event_id: eventId,
+      thread_id: 'thread-1',
+      turn_id: 'turn-1',
+      kind: 'usage',
+      status: 'running',
+      usage,
+      payload: { type: 'turn', runtime_metrics: usage, replace: true },
     },
   }
 }

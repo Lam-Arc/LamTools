@@ -69,11 +69,12 @@ export function selectApprovalCards(state: CoreAppSnapshot): CoreAppRequestState
 export function selectChatMessages(
   state: CoreAppSnapshot,
   itemCache?: Map<CoreRuntimeItem, CoreAppItem>,
+  subAgentChildrenCache?: Map<string, CoreAppItem[]>,
 ): CoreAppServerChatMessage[] {
   const messages: CoreAppServerChatMessage[] = []
   const itemOrder = mergedItemOrder(state)
   const artifactsByItem = artifactsGroupedByItem(state)
-  const subAgentChildren = subAgentChildrenByParentId(state, itemOrder, artifactsByItem, itemCache)
+  const subAgentChildren = subAgentChildrenByParentId(state, itemOrder, artifactsByItem, itemCache, subAgentChildrenCache)
   const nestedChildItemIds = new Set(
     [...subAgentChildren.values()].flatMap(items => items.map(item => item.item_id)),
   )
@@ -143,6 +144,7 @@ function subAgentChildrenByParentId(
   itemOrder: string[],
   artifactsByItem: Map<string, Array<Record<string, unknown>>>,
   cache?: Map<CoreRuntimeItem, CoreAppItem>,
+  childrenCache?: Map<string, CoreAppItem[]>,
 ): Map<string, CoreAppItem[]> {
   const subAgentParentIds = new Set<string>()
   const orderedItems: CoreAppItem[] = []
@@ -160,9 +162,26 @@ function subAgentChildrenByParentId(
   for (const item of orderedItems) {
     const parentId = typeof item.parent_item_id === 'string' ? item.parent_item_id : ''
     if (!parentId || !subAgentParentIds.has(parentId)) continue
+    // Stable-identity children arrays: reuse the previous frame's array when
+    // every child reference is identical (nothing changed). The sub-agent card
+    // part in workbenchProjection is cache-keyed on the parent item's own
+    // reference, which is stable while the child streams — the children array
+    // identity is the only signal that a rebuild is needed. A fresh array per
+    // frame would freeze the card: the cached part (empty sub-line body) would
+    // be returned until the parent tool finishes and its reference changes.
     const siblings = children.get(parentId) ?? []
     siblings.push(item)
     children.set(parentId, siblings)
+  }
+  if (childrenCache) {
+    for (const [parentId, siblings] of children) {
+      const prev = childrenCache.get(parentId)
+      if (prev && prev.length === siblings.length && prev.every((child, index) => child === siblings[index])) {
+        children.set(parentId, prev)
+      } else {
+        childrenCache.set(parentId, siblings)
+      }
+    }
   }
   return children
 }

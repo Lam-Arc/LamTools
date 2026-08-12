@@ -625,6 +625,7 @@ def test_runtime_projection_maps_usage_metrics():
         "output_tokens": 5,
         "total_tokens": 15,
         "cached_tokens": 4,
+        "cache_creation_tokens": 0,
         "cache_hit_rate": 0.4,
         "llm_calls": 1,
     }
@@ -695,6 +696,76 @@ def test_runtime_projection_maps_deepseek_prompt_cache_hit_tokens():
     assert event.kind == "usage"
     assert event.usage["cached_tokens"] == 800
     assert event.usage["cache_hit_rate"] == 0.8
+
+
+def test_runtime_projection_maps_nested_deepseek_cache_hit_tokens():
+    """Some OpenAI-compatible gateways (opencode zen included) fold DeepSeek's
+    ``prompt_cache_hit_tokens`` into ``prompt_tokens_details`` — the projection
+    must still count them."""
+    events = runtime_fact_to_run_item_events(
+        thread_id="thread-1",
+        event_id="event-1",
+        group="usage",
+        source="core",
+        phase="runtime.usage",
+        status="completed",
+        sequence=3,
+        metadata={
+            "payload": {
+                "turn_id": "turn-1",
+                "usage": {
+                    "prompt_tokens": 1000,
+                    "completion_tokens": 50,
+                    "prompt_tokens_details": {"prompt_cache_hit_tokens": 800},
+                },
+            }
+        },
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+
+    assert events is not None
+    assert len(events) == 1
+    event = events[0]
+    assert event.kind == "usage"
+    assert event.usage["cached_tokens"] == 800
+    assert event.usage["cache_hit_rate"] == 0.8
+
+
+def test_runtime_projection_maps_opencode_style_nested_cache_tokens():
+    """opencode-style usage carries cache reads/writes under
+    ``tokens.cache.read`` / ``tokens.cache.write``."""
+    events = runtime_fact_to_run_item_events(
+        thread_id="thread-1",
+        event_id="event-1",
+        group="usage",
+        source="core",
+        phase="runtime.usage",
+        status="completed",
+        sequence=3,
+        metadata={
+            "payload": {
+                "turn_id": "turn-1",
+                "usage": {
+                    "prompt_tokens": 1000,
+                    "completion_tokens": 50,
+                    "tokens": {
+                        "input": 1000,
+                        "output": 50,
+                        "cache": {"read": 700, "write": 200},
+                    },
+                },
+            }
+        },
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+
+    assert events is not None
+    assert len(events) == 1
+    event = events[0]
+    assert event.kind == "usage"
+    assert event.usage["cached_tokens"] == 700
+    assert event.usage["cache_creation_tokens"] == 200
+    assert event.usage["cache_hit_rate"] == 0.7
 
 
 def test_runtime_projection_keeps_stream_terminal_usage_without_text():

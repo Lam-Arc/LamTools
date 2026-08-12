@@ -108,9 +108,11 @@ def normalize_usage(raw: Any) -> LLMUsage | None:
     Accepts dict-like OpenAI fields, input/output token aliases, existing
     ``LLMUsage`` instances, and simple objects with token attributes.
 
-    Extracts cached-token counts from both OpenAI-style nested detail dicts
-    (``prompt_tokens_details.cached_tokens``) and Anthropic-style top-level
-    fields (``cache_read_input_tokens`` / ``cache_creation_input_tokens``).
+    Extracts cached-token counts across provider shapes: OpenAI-style nested
+    detail dicts (``prompt_tokens_details.cached_tokens``), Anthropic-style
+    top-level fields (``cache_read_input_tokens`` / ``cache_creation_input_tokens``),
+    DeepSeek/Moonshot top-level or nested ``prompt_cache_hit_tokens``, and
+    opencode-style ``tokens.cache.read`` / ``tokens.cache.write``.
     """
     if raw is None:
         return None
@@ -146,28 +148,71 @@ def _usage_int(raw: Any, *keys: str) -> int:
 
 
 def _cached_tokens_from_usage(raw: Any) -> int:
-    """Extract cache-read token count across provider shapes."""
-    # Anthropic / OpenAI-compatible top-level aliases; DeepSeek reports
-    # prompt_cache_hit_tokens / prompt_cache_miss_tokens at the top level.
+    """Extract cache-read token count across provider shapes.
+
+    Handles the common provider families:
+
+    - OpenAI / flattened: ``cached_tokens`` (top level, or nested inside
+      ``prompt_tokens_details`` / ``input_tokens_details``)
+    - Anthropic / litellm: ``cache_read_input_tokens``
+    - DeepSeek / Moonshot / Kimi / opencode zen passthrough:
+      ``prompt_cache_hit_tokens`` (top level, or nested inside the details
+      dict — some OpenAI-compatible gateways map it there)
+    - opencode-style SDK shapes: ``tokens.cache.read`` / ``cache.read``
+    """
     direct = _usage_int(
         raw,
         "cache_read_input_tokens",
         "cached_tokens",
         "prompt_cache_hit_tokens",
+        "cache_read_tokens",
     )
     if direct:
         return direct
-    # OpenAI nested detail dicts
     if isinstance(raw, dict):
         details = raw.get("prompt_tokens_details") or raw.get("input_tokens_details")
         if isinstance(details, dict):
-            return _usage_int(details, "cached_tokens", "cache_read_input_tokens")
+            nested = _usage_int(
+                details,
+                "cached_tokens",
+                "cache_read_input_tokens",
+                "prompt_cache_hit_tokens",
+                "cache_read_tokens",
+            )
+            if nested:
+                return nested
+        # opencode-style nested shapes: usage.tokens.cache.read / usage.cache.read
+        for container in (raw.get("tokens"), raw):
+            if isinstance(container, dict):
+                cache = container.get("cache")
+                if isinstance(cache, dict):
+                    nested = _usage_int(cache, "read", "cache_read_input_tokens")
+                    if nested:
+                        return nested
     return 0
 
 
 def _cache_creation_tokens_from_usage(raw: Any) -> int:
-    """Extract cache-creation token count (Anthropic / compatible)."""
-    return _usage_int(raw, "cache_creation_input_tokens")
+    """Extract cache-creation token count (Anthropic / litellm / compatible).
+
+    Handles ``cache_creation_input_tokens`` (Anthropic), ``cache_write_input_tokens``
+    (litellm) and opencode-style ``tokens.cache.write`` / ``cache.write``.
+    """
+    creation = _usage_int(
+        raw,
+        "cache_creation_input_tokens",
+        "cache_write_input_tokens",
+        "cache_creation_tokens",
+    )
+    if creation:
+        return creation
+    if isinstance(raw, dict):
+        for container in (raw.get("tokens"), raw):
+            if isinstance(container, dict):
+                cache = container.get("cache")
+                if isinstance(cache, dict):
+                    return _usage_int(cache, "write", "cache_creation_input_tokens")
+    return 0
 
 
 # -- thinking content extraction --------------------------------------------
@@ -400,9 +445,15 @@ def normalize_stream_chunk(chunk: dict[str, Any]) -> LLMStreamEvent | None:
     delta: dict[str, Any] = choice.get("delta", {})
     finish_reason = choice.get("finish_reason")
 
-    # Usage event
+    # Usage event — but only for standalone usage chunks. Providers that fold
+    # usage into the FINAL chunk (DeepSeek / Moonshot / opencode zen gateways
+    # send usage together with finish_reason) must fall through to the done
+    # branch below, which carries the same usage. Emitting a standalone usage
+    # event here would swallow the done event; the kernel loop would then hit
+    # its "stream ended without done" fallback, which drops the usage entirely
+    # and the UI cache-hit rate would always read 0.
     usage_raw = chunk.get("usage")
-    if usage_raw:
+    if usage_raw and not finish_reason and not delta:
         usage = normalize_usage(usage_raw)
         if usage is None:
             return None

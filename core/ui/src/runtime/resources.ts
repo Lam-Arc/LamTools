@@ -1,4 +1,5 @@
 import type { CoreMessage, MessagePart } from '../types'
+import { assistantSegmentTurnId } from '../appServer/selectors'
 
 export const CORE_CONTEXT_COMPACTION_TRIGGER_RATIO = 0.8
 
@@ -15,12 +16,25 @@ export interface CoreResourceSummary {
 }
 
 export function buildCoreResourceSummary(
-  messages: Array<Pick<CoreMessage, 'metadata'> & Partial<Pick<CoreMessage, 'parts'>>>,
+  messages: Array<Pick<CoreMessage, 'metadata' | 'id'> & Partial<Pick<CoreMessage, 'parts'>>>,
   modelContextWindow?: number | null,
 ): CoreResourceSummary | null {
-  const records = messages
-    .map(message => message.metadata?.processMetrics)
-    .filter((metrics): metrics is Record<string, unknown> => Boolean(metrics && typeof metrics === 'object'))
+  // A turn attaches its usage record to EVERY assistant segment (mid-turn
+  // user messages split a turn into several segments sharing the same
+  // processMetrics object). Summing per message would count one turn's
+  // tokens / calls multiple times — dedupe by turn id first.
+  const records: Array<Record<string, unknown>> = []
+  const countedTurns = new Set<string>()
+  for (const message of messages) {
+    const metrics = message.metadata?.processMetrics
+    if (!metrics || typeof metrics !== 'object') continue
+    const turnId = typeof message.id === 'string' ? assistantSegmentTurnId(message.id) : ''
+    if (turnId) {
+      if (countedTurns.has(turnId)) continue
+      countedTurns.add(turnId)
+    }
+    records.push(metrics as Record<string, unknown>)
+  }
   let current = -1
   let max = firstNumber(modelContextWindow)
   let threshold = -1
@@ -72,19 +86,21 @@ export function buildCoreResourceSummary(
     const callCount = firstNumber(metrics.llm_calls, metrics.llmCalls, metrics.model_calls, metrics.modelCalls)
     const input = firstNumber(metrics.input_tokens, metrics.inputTokens, metrics.prompt_tokens, metrics.promptTokens)
     const output = firstNumber(metrics.output_tokens, metrics.outputTokens, metrics.completion_tokens, metrics.completionTokens)
-    const cached = firstNumber(metrics.cached_tokens, metrics.cachedTokens)
+    const cached = cacheReadTokens(metrics)
     if (callCount >= 0) { calls += callCount; hasCalls = true }
     if (input >= 0) { inputTokens += input; hasInput = true }
     if (output >= 0) { outputTokens += output; hasOutput = true }
     if (cached >= 0) { cachedTokens += cached; hasCache = true }
   }
-  // Prefer the backend-computed rate when present; otherwise derive from totals.
-  const directRate = latestNumber(-1,
-    ...records.map(r => firstNumber(r.cache_hit_rate, r.cacheHitRate)))
-  const cacheHitRate = directRate >= 0
-    ? directRate
-    : hasCache && inputTokens > 0
-      ? cachedTokens / inputTokens
+  // Aggregate rate over the whole window: Σ cached / Σ input. The
+  // per-record backend rate only describes one turn — showing the last turn's
+  // rate for a multi-turn thread would be misleading. Falls back to a
+  // backend-computed rate when the cache token counts are unavailable.
+  const directRate = firstNumber(...records.map(r => firstNumber(r.cache_hit_rate, r.cacheHitRate)))
+  const cacheHitRate = hasCache && inputTokens > 0
+    ? cachedTokens / inputTokens
+    : directRate >= 0
+      ? directRate
       : -1
   if (!hasContext && !hasCalls && !hasInput && !hasOutput) return null
 
@@ -125,6 +141,31 @@ function firstNumber(...values: unknown[]): number {
     if (Number.isFinite(metric) && metric >= 0) return metric
   }
   return -1
+}
+
+// Cache-read token count across provider shapes: OpenAI flattened
+// `cached_tokens`, Anthropic `cache_read_input_tokens`, DeepSeek / Moonshot /
+// opencode zen `prompt_cache_hit_tokens` (top level or nested inside
+// `prompt_tokens_details` / `input_tokens_details`), plus camelCase aliases.
+function cacheReadTokens(metrics: Record<string, unknown>): number {
+  const nested = metrics.prompt_tokens_details && typeof metrics.prompt_tokens_details === 'object'
+    && !Array.isArray(metrics.prompt_tokens_details)
+    ? metrics.prompt_tokens_details as Record<string, unknown>
+    : metrics.input_tokens_details && typeof metrics.input_tokens_details === 'object'
+      && !Array.isArray(metrics.input_tokens_details)
+      ? metrics.input_tokens_details as Record<string, unknown>
+      : undefined
+  if (nested) {
+    const nestedCount = firstNumber(nested.cached_tokens, nested.prompt_cache_hit_tokens, nested.cache_read_input_tokens)
+    if (nestedCount >= 0) return nestedCount
+  }
+  return firstNumber(
+    metrics.cached_tokens,
+    metrics.cachedTokens,
+    metrics.prompt_cache_hit_tokens,
+    metrics.cache_read_input_tokens,
+    metrics.cache_read_tokens,
+  )
 }
 
 function latestNumber(current: number, ...values: unknown[]): number {

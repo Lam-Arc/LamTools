@@ -1,6 +1,7 @@
 import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 import CoreResourceStats from '../src/components/CoreResourceStats.vue'
+import { buildCoreResourceSummary } from '../src/runtime/resources'
 
 const messages = [{ metadata: { processMetrics: {
   estimated_prompt_tokens: 25_000,
@@ -82,5 +83,48 @@ describe('CoreResourceStats', () => {
     expect(stats.length).toBe(4)
     expect(stats[3].text()).toContain('缓存')
     expect(stats[3].text()).toContain('--')
+  })
+
+  it('counts one turn usage once across its assistant segments', () => {
+    // Mid-turn user messages split a turn into several assistant segments
+    // that share the SAME processMetrics object — summing per message would
+    // double-count one turn's tokens / calls.
+    const turnUsage = {
+      llm_calls: 1,
+      input_tokens: 10_000,
+      output_tokens: 500,
+      cached_tokens: 8_000,
+    }
+    const multi = [
+      { id: 'assistant:thread-1:turn:1', metadata: { processMetrics: turnUsage } },
+      { id: 'assistant:thread-1:turn:1#2', metadata: { processMetrics: turnUsage } },
+    ]
+    const summary = buildCoreResourceSummary(multi)
+    expect(summary).not.toBeNull()
+    expect(summary!.callItems[1].value).toBe('10k') // input counted once, not 20k
+    expect(summary!.callItems[0].value).toBe('1')
+    expect(summary!.callItems[3].value).toBe('80%')
+  })
+
+  it('sums usage across distinct turns', () => {
+    const messages = [
+      { id: 'assistant:thread-1:turn:1', metadata: { processMetrics: { llm_calls: 1, input_tokens: 10_000, output_tokens: 500 } } },
+      { id: 'assistant:thread-1:turn:2', metadata: { processMetrics: { llm_calls: 2, input_tokens: 5_000, output_tokens: 250 } } },
+    ]
+    const summary = buildCoreResourceSummary(messages)
+    expect(summary).not.toBeNull()
+    expect(summary!.callItems[1].value).toBe('15k')
+    expect(summary!.callItems[0].value).toBe('3')
+  })
+
+  it('reads DeepSeek prompt_cache_hit_tokens and nested details shapes', () => {
+    // DeepSeek reports cache reads as top-level prompt_cache_hit_tokens;
+    // OpenAI-compatible gateways may fold them into prompt_tokens_details.
+    const cachedMessages = [
+      { id: 'assistant:thread-1:turn:1', metadata: { processMetrics: { llm_calls: 1, input_tokens: 1_000, output_tokens: 50, prompt_cache_hit_tokens: 700 } } },
+      { id: 'assistant:thread-1:turn:2', metadata: { processMetrics: { llm_calls: 1, input_tokens: 1_000, output_tokens: 50, prompt_tokens_details: { cached_tokens: 300 } } } },
+    ]
+    const wrapper = mount(CoreResourceStats, { props: { messages: cachedMessages } })
+    expect(wrapper.text()).toContain('50%') // (700 + 300) / 2000
   })
 })

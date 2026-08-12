@@ -40,6 +40,12 @@ interface ProjectionPartCacheEntry {
   sourceCoreItem: CoreRuntimeItem | undefined
   sourceRequest: CoreAppRequestState | null | undefined
   sourceSubmitting: boolean
+  /** Identity of the sub-agent children array attached to the item. The
+   * parent card's core item reference is stable while its sub-agent streams,
+   * so without this the cached part (with frozen sub-line children) would be
+   * returned every frame and the sub-agent output would only appear once the
+   * parent tool finishes. */
+  sourceSubLineItems: CoreAppItem[] | undefined
   part: MessagePart
 }
 
@@ -54,6 +60,9 @@ export interface CoreWorkbenchProjectionCache {
   messagesById: Map<string, ProjectionMessageCacheEntry>
   /** Expanded CoreAppItem cache keyed by the underlying CoreRuntimeItem reference. */
   itemsApp: Map<CoreRuntimeItem, CoreAppItem>
+  /** Stable per-parent sub-agent children arrays (identity-reused across
+   * frames while no child changed — see selectors.ts). */
+  subAgentChildren: Map<string, CoreAppItem[]>
   /** splitShallowThinking results keyed by content value (stable for history). */
   shallowByContent: Map<string, { thinking: string; content: string }>
 }
@@ -64,11 +73,13 @@ export function createCoreWorkbenchProjectionCache(): CoreWorkbenchProjectionCac
       this.partsByItemId.clear()
       this.messagesById.clear()
       this.itemsApp.clear()
+      this.subAgentChildren.clear()
       this.shallowByContent.clear()
     },
     partsByItemId: new Map<string, ProjectionPartCacheEntry>(),
     messagesById: new Map<string, ProjectionMessageCacheEntry>(),
     itemsApp: new Map<CoreRuntimeItem, CoreAppItem>(),
+    subAgentChildren: new Map<string, CoreAppItem[]>(),
     shallowByContent: new Map<string, { thinking: string; content: string }>(),
   }
 }
@@ -103,7 +114,7 @@ export function selectCoreWorkbenchMessagesWindow(
   options: CoreWorkbenchMessageOptions = {},
   cache?: CoreWorkbenchProjectionCache | null,
 ): CoreWorkbenchMessageProjection {
-  const sourceMessages = selectChatMessages(snapshot, cache?.itemsApp)
+  const sourceMessages = selectChatMessages(snapshot, cache?.itemsApp, cache?.subAgentChildren)
   const tail = (
     typeof options.tailWindow === 'number' && options.tailWindow > 0
       ? Math.min(options.tailWindow, sourceMessages.length)
@@ -246,6 +257,10 @@ function buildOrGetPart(
     ? options.submittingApprovalRequestIds?.has(requestId) === true
     : false
   const sourceCoreItem = snapshot.core?.items?.[item.item_id]
+  const itemMetadata = isRecord(item.metadata) ? item.metadata : {}
+  // Raw reference identity (not a filtered copy — a fresh array every frame
+  // would defeat the cache check below).
+  const rawSubLineItems = Array.isArray(itemMetadata.subLineItems) ? itemMetadata.subLineItems : undefined
   if (cache) {
     const entry = cache.partsByItemId.get(item.item_id)
     if (
@@ -253,6 +268,7 @@ function buildOrGetPart(
       && entry.sourceCoreItem === sourceCoreItem
       && entry.sourceRequest === requestState
       && entry.sourceSubmitting === sourceSubmitting
+      && entry.sourceSubLineItems === rawSubLineItems
     ) {
       return entry.part
     }
@@ -263,6 +279,7 @@ function buildOrGetPart(
       sourceCoreItem,
       sourceRequest: requestState,
       sourceSubmitting,
+      sourceSubLineItems: rawSubLineItems,
       part,
     })
   }

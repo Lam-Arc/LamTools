@@ -3792,12 +3792,46 @@ function processMetricSegments(msg: CoreMessage): string[] {
   return segments.length > 0 ? segments : processFallbackSegments(msg)
 }
 
+// Cache-hit rate for the message's token usage. Prefers the backend-computed
+// rate; otherwise derives hit / input from whatever cache count the usage
+// carries (OpenAI cached_tokens, Anthropic cache_read_input_tokens, DeepSeek
+// prompt_cache_hit_tokens, nested prompt_tokens_details, ...). Returns -1
+// when there is NO cache information at all — the caller hides the segment
+// instead of printing a misleading "命中率 0%".
 function cacheHitRateMetric(metrics: Record<string, unknown>, inputTokens: number): number {
   const direct = numberMetric(metrics.cache_hit_rate ?? metrics.cacheHitRate)
   if (direct >= 0) return direct
-  const cachedTokens = numberMetric(metrics.cached_tokens ?? metrics.cachedTokens)
+  const cachedTokens = cacheReadTokens(metrics)
   if (cachedTokens >= 0 && inputTokens > 0) return cachedTokens / inputTokens
-  if (inputTokens >= 0) return 0
+  return -1
+}
+
+function cacheReadTokens(metrics: Record<string, unknown>): number {
+  const nested = metrics.prompt_tokens_details && typeof metrics.prompt_tokens_details === 'object'
+    && !Array.isArray(metrics.prompt_tokens_details)
+    ? metrics.prompt_tokens_details as Record<string, unknown>
+    : metrics.input_tokens_details && typeof metrics.input_tokens_details === 'object'
+      && !Array.isArray(metrics.input_tokens_details)
+      ? metrics.input_tokens_details as Record<string, unknown>
+      : undefined
+  if (nested) {
+    const nestedCount = firstMetric(nested.cached_tokens, nested.prompt_cache_hit_tokens, nested.cache_read_input_tokens)
+    if (nestedCount >= 0) return nestedCount
+  }
+  return firstMetric(
+    metrics.cached_tokens,
+    metrics.cachedTokens,
+    metrics.prompt_cache_hit_tokens,
+    metrics.cache_read_input_tokens,
+    metrics.cache_read_tokens,
+  )
+}
+
+function firstMetric(...values: unknown[]): number {
+  for (const value of values) {
+    const metric = numberMetric(value)
+    if (metric >= 0) return metric
+  }
   return -1
 }
 

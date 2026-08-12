@@ -147,7 +147,7 @@ def test_terminal_status_metrics_preserve_exact_usage_without_double_counting_ca
         seq=2,
         status="completed",
         payload={"status": "completed"},
-        usage={"estimated_prompt_tokens": 30, "context_window_tokens": 128_000, "llm_calls": 1},
+        usage={"estimated_prompt_tokens": 30, "context_window_tokens": 128_000, "steps_total": 1},
     )
 
     snapshot = reduce_run_item_events("thread-1", [usage, terminal])
@@ -158,6 +158,7 @@ def test_terminal_status_metrics_preserve_exact_usage_without_double_counting_ca
         "estimated_prompt_tokens": 30,
         "context_window_tokens": 128_000,
         "llm_calls": 1,
+        "steps_total": 1,
     }
 
 
@@ -563,7 +564,10 @@ def test_snapshot_indexes_artifacts_and_merges_usage():
     }
 
 
-def test_snapshot_replaces_usage_when_requested():
+def test_replace_flagged_usage_item_is_skipped_from_turn_usage():
+    # `runtime.metrics` items (`replace: true`) carry session-cumulative
+    # context state — they are not per-call usage deltas, so they must not
+    # wipe the accumulated per-call aggregation or overwrite `llm_calls`.
     events = [
         RunItemEvent(
             kind="usage",
@@ -571,7 +575,7 @@ def test_snapshot_replaces_usage_when_requested():
             event_id="event-1",
             turn_id="turn-1",
             seq=1,
-            usage={"input_tokens": 10, "total_tokens": 13},
+            usage={"input_tokens": 10, "total_tokens": 13, "llm_calls": 1},
         ),
         RunItemEvent(
             kind="usage",
@@ -580,15 +584,16 @@ def test_snapshot_replaces_usage_when_requested():
             turn_id="turn-1",
             seq=2,
             payload={"replace": True},
-            usage={"duration_ms": 12_300, "total_tokens": 42},
+            usage={"steps_total": 1, "estimated_prompt_tokens": 30},
         ),
     ]
 
     snapshot = reduce_run_item_events("thread-1", events)
 
     assert snapshot["turns"]["turn-1"]["usage"] == {
-        "duration_ms": 12_300,
-        "total_tokens": 42,
+        "input_tokens": 10,
+        "total_tokens": 13,
+        "llm_calls": 1,
     }
 
 

@@ -1825,6 +1825,77 @@ describe('ChatThread process cards', () => {
     expect(wrapper.find('.process-toggle-text').text()).toBe('1 个工具 · 1 段思考 · 1 个失败');
   });
 
+  it('does not print a fake 0% cache hit when usage carries no cache info', () => {
+    // Regression: metrics with input tokens but no cache fields used to force
+    // "命中率 0%" — that's a claim the data cannot support. The segment must
+    // be hidden instead.
+    const messages: CoreMessage[] = [{
+      id: 'm-no-cache',
+      role: 'assistant',
+      content: 'Done.',
+      timestamp: '2026-06-18T00:00:00.000Z',
+      metadata: {
+        timeline: true,
+        processMetrics: {
+          duration_ms: 1_000,
+          input_tokens: 120,
+          output_tokens: 45,
+          total_tokens: 165,
+          llm_calls: 1,
+        },
+      },
+      parts: [{
+        id: 'p-reasoning',
+        partType: 'reasoning',
+        status: 'completed',
+        label: '思考',
+        content: 'Inspecting files.',
+      }],
+    }];
+
+    const wrapper = mount(ChatThread, {
+      props: { messages },
+    });
+
+    const text = wrapper.find('.process-toggle-text').text();
+    expect(text).toContain('模型调用 1 次');
+    expect(text).not.toContain('命中率');
+  });
+
+  it('computes cache-hit rate from DeepSeek prompt_cache_hit_tokens', () => {
+    // Raw provider shapes (without backend normalization) must still drive
+    // the cache-hit segment: DeepSeek reports prompt_cache_hit_tokens at the
+    // top level of usage.
+    const messages: CoreMessage[] = [{
+      id: 'm-deepseek-cache',
+      role: 'assistant',
+      content: 'Done.',
+      timestamp: '2026-06-18T00:00:00.000Z',
+      metadata: {
+        timeline: true,
+        processMetrics: {
+          input_tokens: 1_000,
+          output_tokens: 50,
+          prompt_cache_hit_tokens: 800,
+          llm_calls: 1,
+        },
+      },
+      parts: [{
+        id: 'p-reasoning',
+        partType: 'reasoning',
+        status: 'completed',
+        label: '思考',
+        content: 'Inspecting files.',
+      }],
+    }];
+
+    const wrapper = mount(ChatThread, {
+      props: { messages },
+    });
+
+    expect(wrapper.find('.process-toggle-text').text()).toContain('命中率 80%');
+  });
+
   it('renders live process above live answer text', () => {
     const messages: CoreMessage[] = [{
       id: 'm-live-order',

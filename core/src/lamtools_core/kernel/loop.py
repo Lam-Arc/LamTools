@@ -1769,10 +1769,14 @@ class CoreLoopKernel:
             emitted_text=emitted_text,
             emitted_thinking=emitted_thinking,
         )
+        # Some providers end the stream with a usage-only chunk (no done
+        # event) — carry the captured usage so the turn still gets its token /
+        # cache-hit metrics instead of silently dropping them.
         return LLMResponse(
             content=accumulated,
             thinking=thinking,
             tool_calls=merged_tool_calls,
+            usage=pending_usage,
         )
 
     async def _consume_guidance(
@@ -2715,7 +2719,12 @@ class CoreLoopKernel:
         previous_window = int(metrics.get("context_window_tokens") or 0)
         current_model = str(request.model or "").strip()
         model_switched = bool(previous_model and current_model and previous_model != current_model)
-        metrics["llm_calls"] = int(metrics.get("llm_calls") or 0) + 1
+        # Session-cumulative kernel step counter. This is NOT a per-call usage
+        # counter — per-call usage events carry `llm_calls: 1` for each model
+        # call. Keep the names distinct so aggregators never treat cumulative
+        # steps as calls (the legacy `llm_calls` key is dropped, not migrated).
+        metrics.pop("llm_calls", None)
+        metrics["steps_total"] = int(metrics.get("steps_total") or 0) + 1
         state.metadata["runtime_context_metrics"] = metrics
         window = self.policy.context_window_tokens
         if window is None or window <= 0:

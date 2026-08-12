@@ -92,12 +92,16 @@ def apply_run_item_event_in_place(state: dict[str, Any], event: RunItemEvent) ->
         return state
 
     if event.kind == "usage":
+        # `runtime.metrics` items carry session-cumulative context state and
+        # flag `replace: true` — they are NOT per-call usage deltas. Skipping
+        # them keeps turn usage as the pure per-call aggregation: replacing
+        # would wipe accumulated token sums and overwrite `llm_calls` with a
+        # cumulative step counter.
+        if event.payload.get("replace") is True:
+            return state
         turn = _upsert_turn(state, event)
         if event.usage:
-            if event.payload.get("replace") is True:
-                turn["usage"] = dict(event.usage)
-            else:
-                turn["usage"] = _merge_dict_values(turn.get("usage"), event.usage)
+            turn["usage"] = _merge_dict_values(turn.get("usage"), event.usage)
         return state
 
     if event.kind == "artifact" or event.artifacts:

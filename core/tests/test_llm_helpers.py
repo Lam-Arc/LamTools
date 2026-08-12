@@ -210,6 +210,49 @@ class TestNormalizeUsage:
         assert usage is not None
         assert usage.cached_tokens == 800
 
+    def test_nested_deepseek_cache_hit_tokens_in_details(self):
+        """Some OpenAI-compatible gateways (opencode zen included) fold
+        DeepSeek's prompt_cache_hit_tokens into prompt_tokens_details."""
+        usage = normalize_usage({
+            "prompt_tokens": 1000,
+            "completion_tokens": 50,
+            "prompt_tokens_details": {"prompt_cache_hit_tokens": 800},
+        })
+        assert usage is not None
+        assert usage.cached_tokens == 800
+
+    def test_opencode_style_nested_cache_tokens(self):
+        """opencode's usage schema nests cache reads/writes under
+        usage.tokens.cache.read / usage.tokens.cache.write."""
+        usage = normalize_usage({
+            "tokens": {
+                "input": 1000,
+                "output": 50,
+                "cache": {"read": 700, "write": 200},
+            },
+        })
+        assert usage is not None
+        assert usage.cached_tokens == 700
+        assert usage.cache_creation_tokens == 200
+
+    def test_cache_read_tokens_alias(self):
+        usage = normalize_usage({
+            "prompt_tokens": 1000,
+            "completion_tokens": 50,
+            "cache_read_tokens": 750,
+        })
+        assert usage is not None
+        assert usage.cached_tokens == 750
+
+    def test_cache_write_input_tokens_alias(self):
+        usage = normalize_usage({
+            "input_tokens": 1000,
+            "output_tokens": 50,
+            "cache_write_input_tokens": 300,
+        })
+        assert usage is not None
+        assert usage.cache_creation_tokens == 300
+
     def test_deepseek_prompt_cache_hit_tokens_round_trip(self):
         """normalize_usage(to_dict(normalize_usage(raw))) keeps the DeepSeek
         cache count across the kernel → projection boundary."""
@@ -659,7 +702,22 @@ class TestNormalizeStreamChunk:
         assert event is None
 
     def test_usage_takes_priority_over_delta(self):
-        """Usage chunks may also have a delta (empty), usage should win."""
+        """A standalone usage chunk (empty delta, no finish_reason) is emitted
+        as a usage event."""
+        chunk = {
+            "choices": [
+                {"index": 0, "delta": {}, "finish_reason": None}
+            ],
+            "usage": {"total_tokens": 100},
+        }
+        event = normalize_stream_chunk(chunk)
+        assert event is not None
+        assert event.kind == "usage"
+
+    def test_content_delta_wins_when_usage_and_content_share_a_chunk(self):
+        """A chunk carrying real content must not lose it to usage — reply
+        text takes priority (matches the profile normalizer). The authoritative
+        usage still arrives in the done chunk."""
         chunk = {
             "choices": [
                 {"index": 0, "delta": {"content": "x"}, "finish_reason": None}
@@ -668,7 +726,32 @@ class TestNormalizeStreamChunk:
         }
         event = normalize_stream_chunk(chunk)
         assert event is not None
-        assert event.kind == "usage"
+        assert event.kind == "content_delta"
+        assert event.content == "x"
+
+    def test_final_chunk_with_usage_and_finish_reason_is_done(self):
+        """DeepSeek / Moonshot / opencode zen gateways fold usage into the
+        FINAL chunk together with finish_reason. That chunk must produce a
+        done event carrying the usage — a standalone usage event here would
+        swallow the done event and the kernel would drop the token metrics."""
+        chunk = {
+            "choices": [
+                {"index": 0, "delta": {"content": ""}, "finish_reason": "stop"}
+            ],
+            "usage": {
+                "prompt_tokens": 1000,
+                "completion_tokens": 50,
+                "total_tokens": 1050,
+                "prompt_cache_hit_tokens": 800,
+                "prompt_cache_miss_tokens": 200,
+            },
+        }
+        event = normalize_stream_chunk(chunk)
+        assert event is not None
+        assert event.kind == "done"
+        assert event.usage is not None
+        assert event.usage.cached_tokens == 800
+        assert event.usage.prompt_tokens == 1000
 
 
 # ---------------------------------------------------------------------------

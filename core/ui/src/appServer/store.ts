@@ -511,8 +511,15 @@ function applyCoreRunItemEvent(snapshot: CoreAppSnapshot, event: CoreAppEvent): 
     const turns = { ...(currentCore.turns ?? {}) }
     if (turnId) {
       const turn = turns[turnId] ?? { turn_id: turnId, status: 'running', items: [] }
-      const usage = isRecord(value.usage) ? value.usage : {}
-      turns[turnId] = { ...turn, usage: mergeUsageMetrics(turn.usage, usage) }
+      // `runtime.metrics` items (`payload.replace === true`) carry
+      // session-cumulative context state, not per-call usage deltas — merging
+      // them sums cumulative counters (llm_calls/steps_total) into the turn's
+      // usage and inflates the displayed call count. Skip them entirely (the
+      // backend canonical reducer treats them the same way).
+      if (runPayload.replace !== true) {
+        const usage = isRecord(value.usage) ? value.usage : {}
+        turns[turnId] = { ...turn, usage: mergeUsageMetrics(turn.usage, usage) }
+      }
     }
     return { ...snapshot, core: { ...currentCore, seen_event_ids: seen, turns } }
   }
