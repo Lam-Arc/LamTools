@@ -77,4 +77,6 @@ jobs:
             core/desktop/src-tauri/target/release/bundle/nsis/*-setup.exe
             core/desktop/src-tauri/target/release/bundle/nsis/*-setup.exe.sig
           generate_release_notes: true
+          # 同一 tag 重复构建时更新已有 Release 而非追加重复 notes
+          update_release_body: false
           fail_on_unmatched_files: false
