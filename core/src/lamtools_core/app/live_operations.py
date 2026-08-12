@@ -601,6 +601,7 @@ async def handle_turn_start_operation(
             context=context,
             thread_id=thread_id,
             first_message=prepared.runtime_text,
+            model_id=str(params.get("model_id") or params.get("modelId") or "").strip(),
         ))
 
     resolved = await _resolve_turn_approval_policy(context=context, params=params)
@@ -1553,6 +1554,7 @@ async def _auto_title_session(
     context: CoreLiveContext,
     thread_id: str,
     first_message: str,
+    model_id: str = "",
 ) -> None:
     """Background task: derive a short title from the first user message.
 
@@ -1561,20 +1563,31 @@ async def _auto_title_session(
     and broadcasts ``session/updated`` so frontends refresh their sidebar.
     """
     llm_client = context.host.llm_client
-    model_id = context.host.default_model_id
     session_store = context.host.session_store
     if llm_client is None:
         return
     try:
         # Don't clobber a title the user already set manually.
         existing_title: str | None = None
+        existing: Any = None
         if session_store is not None:
             existing = await session_store.get(thread_id)
             existing_title = getattr(existing, "title", None) if existing else None
         if not is_default_title(existing_title, session_id=thread_id):
             return
 
-        title = await generate_session_title(llm_client, model_id, first_message)
+        # Resolve the model the same way the kernel does: explicit turn model
+        # > session-chosen model (metadata.model_id) > host default. The host
+        # default is empty when no model is marked ``is_default`` at boot, so
+        # the session-chosen model is what makes title generation work there.
+        resolved_model = model_id
+        if not resolved_model and existing is not None:
+            metadata = getattr(existing, "metadata", None)
+            if isinstance(metadata, dict):
+                resolved_model = str(metadata.get("model_id") or "").strip()
+        resolved_model = resolved_model or context.host.default_model_id
+
+        title = await generate_session_title(llm_client, resolved_model, first_message)
         if not title:
             return
 

@@ -42,13 +42,14 @@ class FakeHub:
 
 
 class FakeSessionStore:
-    def __init__(self, existing_title: str | None = None, patch_result: object = "patched"):
+    def __init__(self, existing_title: str | None = None, patch_result: object = "patched", metadata: dict | None = None):
         self.existing_title = existing_title
         self.patch_result = patch_result
+        self.metadata = metadata or {}
         self.patch_calls: list[dict] = []
 
     async def get(self, session_id: str):
-        return SimpleNamespace(title=self.existing_title)
+        return SimpleNamespace(title=self.existing_title, metadata=self.metadata)
 
     async def patch(self, session_id: str, *, title=None, status=None, metadata=None, only_if_title_default=False):
         self.patch_calls.append(
@@ -194,6 +195,39 @@ class TestAutoTitleSession:
 
         assert store.patch_calls == []
         assert hub.events == []
+
+    def test_turn_model_id_wins_over_session_and_host(self):
+        hub = FakeHub()
+        llm = FakeLLMClient(response=LLMResponse(content="生成的标题"))
+        store = FakeSessionStore(existing_title="t1", metadata={"model_id": "session-model"})
+        asyncio.run(_auto_title_session(
+            context=_context(llm=llm, store=store, hub=hub),
+            thread_id="t1",
+            first_message="你好",
+            model_id="turn-model",
+        ))
+        assert llm.calls[0].model == "turn-model"
+
+    def test_session_metadata_model_used_when_host_default_empty(self):
+        """Regression: no model is marked is_default at boot, so the host
+        default is empty — the session-chosen model (metadata.model_id, the
+        same source the kernel uses) must be used instead."""
+        hub = FakeHub()
+        llm = FakeLLMClient(response=LLMResponse(content="生成的标题"))
+        store = FakeSessionStore(existing_title="t1", metadata={"model_id": "session-model"})
+        context = _context(llm=llm, store=store, hub=hub)
+        context.host.default_model_id = ""
+        asyncio.run(_auto_title_session(context=context, thread_id="t1", first_message="你好"))
+        assert len(llm.calls) == 1
+        assert llm.calls[0].model == "session-model"
+        assert store.patch_calls[0]["title"] == "生成的标题"
+
+    def test_falls_back_to_host_default_model(self):
+        hub = FakeHub()
+        llm = FakeLLMClient(response=LLMResponse(content="生成的标题"))
+        store = FakeSessionStore(existing_title="t1", metadata={})
+        asyncio.run(_auto_title_session(context=_context(llm=llm, store=store, hub=hub), thread_id="t1", first_message="你好"))
+        assert llm.calls[0].model == "model-x"
 
 
 class _PatchRecordingStore:
