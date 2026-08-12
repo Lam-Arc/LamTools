@@ -22,7 +22,14 @@ jobs:
         with:
           node-version: '24'
           cache: 'npm'
-          cache-dependency-path: core/desktop/package-lock.json
+          cache-dependency-path: |
+            core/ui/package-lock.json
+            core/desktop/package-lock.json
+
+      - name: Install core/ui dependencies (desktop imports ui sources)
+        run: |
+          cd core/ui
+          npm ci
 
       - name: Build Core Desktop frontend
         run: |
