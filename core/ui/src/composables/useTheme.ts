@@ -42,13 +42,12 @@ export function useTheme(storageKey: string) {
         theme.value.mainOpacity,
       ),
       '--settings-main-text': theme.value.mainText,
+      // main 区首停点纯色：卡片实色底（渐变值不可用于 color-mix）
+      '--settings-main-solid': theme.value.mainStops[0]?.color || '#111111',
+      // 卡片/浮层面板：main 实色 + 文字色 4% 微调，不透明、与内容区有层级
+      '--settings-card-background': 'color-mix(in srgb, var(--settings-main-solid) 96%, var(--settings-main-text) 4%)',
+      '--settings-card-text': theme.value.mainText,
       '--settings-control-solid': theme.value.controlStops[0]?.color || '#3a3834',
-      '--settings-card-background': gradientFromStops(
-        theme.value.composerAngle,
-        theme.value.composerStops,
-        theme.value.composerOpacity,
-      ),
-      '--settings-card-text': theme.value.composerText,
       '--settings-panel-2': lightMain ? '#f0efeb' : '#1d1e1e',
       '--settings-line': lightMain ? '#d4d0cc' : '#3b3a38',
       '--settings-muted': lightMain ? '#8a8580' : '#a7a29b',

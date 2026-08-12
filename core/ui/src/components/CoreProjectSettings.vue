@@ -207,7 +207,10 @@ const settingsThemeStyle = computed(() => {
       props.theme.mainOpacity,
     ),
     '--settings-main-text': props.theme.mainText,
-    '--settings-card-background': 'color-mix(in srgb, var(--settings-main-text) 4%, transparent)',
+    // main 区首停点纯色：卡片实色底（渐变值不可用于 color-mix）
+    '--settings-main-solid': props.theme.mainStops[0]?.color || '#111111',
+    // 卡片/浮层面板：main 实色 + 文字色 4% 微调，不透明、与内容区有层级
+    '--settings-card-background': 'color-mix(in srgb, var(--settings-main-solid) 96%, var(--settings-main-text) 4%)',
     '--settings-card-text': props.theme.mainText,
     '--settings-control-background': gradientFromStops(
       props.theme.controlAngle,

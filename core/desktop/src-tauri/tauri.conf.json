@@ -49,6 +49,7 @@
     "resources": ["lamcore-backend", ".lam"],
     "windows": {
       "nsis": {
+        "template": "installer.nsi",
         "languages": ["SimpChinese"],
         "displayLanguageSelector": false,
         "installMode": "currentUser"

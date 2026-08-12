@@ -73,12 +73,10 @@ if (-not $SkipTauri) {
         Pop-Location
     }
 
-    Write-Host "`n=== Step 4/4: NSIS installer (Chinese UI) ===" -ForegroundColor Cyan
-    & "$Root\scripts\patch-nsis.ps1"
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "[FAIL] NSIS patch failed." -ForegroundColor Red
-        exit 1
-    }
+    Write-Host "`n=== Step 4/4: NSIS installer ===" -ForegroundColor Cyan
+    # NSIS 安装器 UI 由自定义模板 src-tauri/installer.nsi 直接产出（tauri build
+    # 内已渲染并调用 makensis），无需再跑 patch-nsis.ps1 做字符串手术。
+    Write-Host "  Installer UI from custom template (src-tauri/installer.nsi)." -ForegroundColor Green
 }
 
 # ------------------------------------------------------------------
