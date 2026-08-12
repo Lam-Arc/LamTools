@@ -1,3 +1,10 @@
+from .imagegen_store import (
+    IMAGEGEN_FILENAME,
+    IMAGEGEN_NAMESPACE,
+    imagegen_config_path,
+    load_imagegen_config,
+    save_imagegen_config,
+)
 from .model_store import (
     MODEL_FILENAME_SUFFIX,
     MODELS_SUBDIR,
@@ -34,6 +41,8 @@ from .settings_store import (
 __all__ = [
     "DEFAULT_MODEL_RETRY_CONFIG",
     "DEFAULT_MODEL_RETRY_JSONC",
+    "IMAGEGEN_FILENAME",
+    "IMAGEGEN_NAMESPACE",
     "MASKED_API_KEY",
     "MODEL_FILENAME_SUFFIX",
     "MODEL_RETRY_FILENAME",
@@ -47,12 +56,15 @@ __all__ = [
     "build_config_operation_catalog",
     "delete_setting",
     "get_setting",
+    "imagegen_config_path",
+    "load_imagegen_config",
     "load_model_retry_config",
     "loop_policy_overrides",
     "mask_api_key",
     "model_retry_path",
     "resolve_model_capability",
     "retry_policy_from_config",
+    "save_imagegen_config",
     "set_setting",
     "settings_path",
     "slugify",

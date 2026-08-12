@@ -58,7 +58,7 @@
     :loading="wizardLoading"
     :error="wizardError"
     @create-provider="onboardingCreateProvider"
-    @skip="showOnboarding = false"
+    @skip="skipOnboarding"
     @finish="finishOnboarding"
   />
   <WorkspaceShell
@@ -1802,6 +1802,29 @@ async function checkOnboarding() {
   }
   if (availableProviders.value.some((provider) => provider.has_api_key)) return
   showOnboarding.value = true
+  // 弹过一次就算“谈过”：立即标记 completed，下次不再自动弹出
+  // （除非用户通过“再次显示引导”主动清除标记）。
+  try {
+    await requestConfigOperation('settings.update', {
+      namespace: 'core.onboarding',
+      value: { completed: true, version: 1, completed_at: new Date().toISOString() },
+    })
+  } catch {
+    // 标记失败不阻塞引导展示
+  }
+}
+
+async function skipOnboarding() {
+  showOnboarding.value = false
+  // 跳过也算谈过：与 checkOnboarding 的自动标记保持一致。
+  try {
+    await requestConfigOperation('settings.update', {
+      namespace: 'core.onboarding',
+      value: { completed: true, version: 1, completed_at: new Date().toISOString() },
+    })
+  } catch {
+    // 标记失败不阻塞进入主界面
+  }
 }
 
 async function onboardingCreateProvider(payload: CoreSettingsProviderPayload) {

@@ -19,6 +19,7 @@ from typing import Any
 
 from lamtools_core.app.operation_catalog import OperationCatalog, OperationRequest, OperationResult
 
+from .imagegen_store import IMAGEGEN_NAMESPACE, load_imagegen_config, save_imagegen_config
 from .model_store import ModelConfig, ModelStore
 from .provider_store import MASKED_API_KEY, ProviderConfig, ProviderStore, mask_api_key, slugify
 from .settings_store import get_setting, set_setting
@@ -219,7 +220,11 @@ def build_config_operation_catalog(*, work_root: str | Path | None = None) -> Op
         namespace = str(request.payload.get("namespace") or "").strip()
         if not namespace:
             return _error(request, "namespace is required")
-        value = get_setting(namespace)
+        # core.imagegen lives in its own imagegen.jsonc (frontend contract kept).
+        if namespace == IMAGEGEN_NAMESPACE:
+            value = load_imagegen_config()
+        else:
+            value = get_setting(namespace)
         return OperationResult(name=request.name, payload={"namespace": namespace, "value": value if isinstance(value, dict) else {}})
 
     async def settings_update(request: OperationRequest) -> OperationResult:
@@ -227,9 +232,14 @@ def build_config_operation_catalog(*, work_root: str | Path | None = None) -> Op
         value = request.payload.get("value")
         if not namespace or not isinstance(value, dict):
             return _error(request, "namespace and object value are required")
-        current = get_setting(namespace)
-        merged = {**(current if isinstance(current, dict) else {}), **dict(value)}
-        set_setting(namespace, merged)
+        if namespace == IMAGEGEN_NAMESPACE:
+            current = load_imagegen_config()
+            merged = {**current, **dict(value)}
+            save_imagegen_config(merged)
+        else:
+            current = get_setting(namespace)
+            merged = {**(current if isinstance(current, dict) else {}), **dict(value)}
+            set_setting(namespace, merged)
         return OperationResult(name=request.name, payload={"namespace": namespace, "value": merged})
 
     async def import_environment_operation(request: OperationRequest) -> OperationResult:

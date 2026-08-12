@@ -839,7 +839,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Enable or disable the generate_image tool (disabled tools are hidden from the model)",
     )
     imagegen_config.add_argument("--api-url", default=None, help="Image generation API base URL")
-    imagegen_config.add_argument("--api-key", default=None, help="API key (stored in plaintext in the config database)")
+    imagegen_config.add_argument("--api-key", default=None, help="API key (stored in plaintext in imagegen.jsonc)")
     imagegen_config.add_argument("--model", default=None, help="Image model id")
     imagegen_config.set_defaults(func=cmd_imagegen_config)
 
@@ -2195,13 +2195,11 @@ def _loadtools_for_cli() -> tuple[LoadTools, Path, bool]:
     return default_load_tools(), path, False
 
 
-_IMAGEGEN_NAMESPACE = "core.imagegen"
-
-
 def _imagegen_settings() -> dict[str, Any]:
-    """Read core.imagegen settings from settings.jsonc."""
-    value = get_setting(_IMAGEGEN_NAMESPACE)
-    return dict(value) if isinstance(value, dict) else {}
+    """Read imagegen settings from imagegen.jsonc."""
+    from lamtools_core.config.imagegen_store import load_imagegen_config
+
+    return load_imagegen_config()
 
 
 def _mask_api_key(api_key: str) -> str:
@@ -2246,7 +2244,9 @@ async def cmd_imagegen_config(args: argparse.Namespace) -> int:
     if not changed:
         print("error: nothing to change (pass --enabled / --api-url / --api-key / --model)", file=sys.stderr)
         return 1
-    set_setting(_IMAGEGEN_NAMESPACE, value)
+    from lamtools_core.config.imagegen_store import save_imagegen_config
+
+    save_imagegen_config(value)
     print(f"[imagegen] saved: enabled={bool(value.get('enabled'))} api_url={value.get('api_url') or ''} "
           f"api_key={_mask_api_key(str(value.get('api_key') or ''))} model={value.get('model') or ''}")
     return 0
