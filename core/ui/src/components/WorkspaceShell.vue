@@ -5,6 +5,7 @@
     <div v-if="noticeText" class="notice-toast" role="status" aria-atomic="true">{{ noticeText }}</div>
 
     <nav class="mobile-shell-nav" aria-label="工作区面板">
+      <span class="mobile-shell-title">{{ productName }}</span>
       <button
         ref="leftToggleButton"
         class="mobile-shell-button"

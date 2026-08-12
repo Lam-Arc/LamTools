@@ -31,11 +31,13 @@ describe('SessionSidebar sections', () => {
   it('groups unpinned projects by activity and sorts newest first', () => {
     const wrapper = mount(SessionSidebar, { props: { projectGroups: groups } })
 
-    expect(wrapper.get('[data-sidebar-section="recent"]').text()).toContain('Recent new')
-    expect(wrapper.get('[data-sidebar-section="recent"]').text()).toContain('Recent old')
-    expect(wrapper.get('[data-sidebar-section="recent"]').findAll('.project-block').map((node) => node.text()))
-      .toEqual([expect.stringContaining('Recent new'), expect.stringContaining('Recent old')])
-    expect(wrapper.get('[data-sidebar-section="earlier"]').text()).toContain('Earlier')
+    const section = wrapper.get('[data-sidebar-section="default"]')
+    expect(section.findAll('.project-block').map((node) => node.text()))
+      .toEqual([
+        expect.stringContaining('Recent new'),
+        expect.stringContaining('Recent old'),
+        expect.stringContaining('Earlier'),
+      ])
     expect(wrapper.find('[data-sidebar-section="pinned"]').exists()).toBe(false)
   })
 
@@ -58,7 +60,7 @@ describe('SessionSidebar sections', () => {
     await restored.get('[data-project-menu-trigger="earlier"]').trigger('click')
     await restored.get('[data-project-pin="earlier"]').trigger('click')
     expect(restored.find('[data-sidebar-section="pinned"]').exists()).toBe(false)
-    expect(restored.get('[data-sidebar-section="earlier"]').text()).toContain('Earlier')
+    expect(restored.get('[data-sidebar-section="default"]').text()).toContain('Earlier')
   })
 
   it('opens a restrained project menu with project actions', async () => {
@@ -135,7 +137,7 @@ describe('SessionSidebar sections', () => {
 
     const sessions = wrapper.findAll('.conversation')
     expect(sessions[0].text()).toContain('Newer')
-    expect(sessions[0].get('.conversation-dot').text()).toBe('2')
+    expect(sessions[0].get('.status.conversation-status.running').exists()).toBe(true)
     expect(localStorage.getItem('test.sidebar.pins.sessions')).toBe('["newer"]')
     expect(wrapper.get('[data-session-pin="newer"]').attributes('aria-pressed')).toBe('true')
   })

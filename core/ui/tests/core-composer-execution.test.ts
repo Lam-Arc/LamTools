@@ -37,12 +37,12 @@ describe('core composer execution helpers', () => {
 
   it('limits thinking options from model and provider capabilities', () => {
     expect(coreThinkingModeOptions({ model: { thinking_supported: false } })).toEqual([
-      { value: 'none', label: 'No thinking' },
+      { value: 'none', label: 'No' },
     ])
     expect(coreThinkingModeOptions({
       model: { thinking_supported: true },
       provider: { name: '讯飞 max', base_url: 'https://maas-coding.example.test' },
-    }).map((option) => option.value)).toEqual(['max', 'none'])
+    }).map((option) => option.value)).toEqual(['high', 'medium', 'low', 'none'])
     expect(coreThinkingModeOptions({ model: { thinking_supported: true } }).map((option) => option.value)).toEqual([
       'max',
       'high',
@@ -59,7 +59,7 @@ describe('core composer execution helpers', () => {
       shallow: true,
     })).toEqual({
       thinking_enabled: true,
-      thinking_budget: 10_000,
+      thinking_budget: 8_192,
       shallow_thinking_enabled: true,
     })
     expect(coreThinkingPayload({
@@ -70,6 +70,7 @@ describe('core composer execution helpers', () => {
       thinking_enabled: true,
       thinking_budget: 12_000,
       shallow_thinking_enabled: false,
+      reasoning_effort: 'high',
     })
     expect(coreThinkingPayload({
       mode: 'max',

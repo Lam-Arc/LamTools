@@ -40,7 +40,7 @@ describe('Core UI package boundary', () => {
     expect(demoApp).not.toMatch(/allow-rename/)
     expect(demoApp).not.toMatch(/@rename-session=/)
     expect(demoApp).toMatch(/@delete-session="deleteSession"/)
-    expect(demoApp).toMatch(/:allow-session-delete="true"/)
+    expect(demoApp).toMatch(/:allow-session-delete="!workflowMode"/)
     expect(demoApp).not.toMatch(/coreAppItemToMessagePart/)
   })
 
@@ -52,10 +52,13 @@ describe('Core UI package boundary', () => {
 
   it('keeps the right runtime toolbar reachable below 640px', () => {
     const mobileCss = layoutCss.match(/@media \(max-width: 640px\) \{([\s\S]*?)@media \(max-width: 480px\)/)?.[1] || ''
+    const shellSource = readFileSync(resolve(packageRoot, 'src/components/WorkspaceShell.vue'), 'utf8')
 
     expect(mobileCss).toContain('--right-drawer-width: 100vw')
     expect(mobileCss).not.toMatch(/\.drawer-right \{[^}]*display: none/)
-    expect(mobileCss).toMatch(/\.drawer-right \{[\s\S]*?width: 100vw;[\s\S]*?transform: translateX\(100%\);/)
-    expect(mobileCss).toMatch(/\.edge-right \{[\s\S]*?min-width: 44px;[\s\S]*?height: 44px;/)
+    // The drawer hides through opacity/pointer-events, and the mobile nav keeps
+    // a dedicated right-panel toggle so the runtime toolbar stays reachable
+    expect(layoutCss).toMatch(/\.drawer-right:not\(\.open\) \{ opacity: 0; pointer-events: none; \}/)
+    expect(shellSource).toMatch(/data-mobile-right-toggle/)
   })
 })

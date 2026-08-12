@@ -47,6 +47,8 @@ describe('CoreQueuedInputTray', () => {
       },
     })
 
-    expect(wrapper.findAll('button').every(button => button.attributes('disabled') !== undefined)).toBe(true)
+    // Every mutating action button is disabled while the item is guided; the
+    // decorative ellipsis (aria-hidden, tabindex=-1) intentionally stays enabled
+    expect(wrapper.findAll('button.core-queued-input-action').every(button => button.attributes('disabled') !== undefined)).toBe(true)
   })
 })

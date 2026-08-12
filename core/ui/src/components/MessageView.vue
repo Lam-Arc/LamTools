@@ -1,5 +1,7 @@
 ﻿<template>
-  <div class="message-view">
+  <!-- inheritAttrs: false — 模板根节点是 div + Teleport 双根，自动继承会把 class/attrs 丢掉；
+       显式把 $attrs 绑到消息根节点，保证 class（如 sub-line-chat）能落到 DOM 上 -->
+  <div class="message-view" v-bind="$attrs">
       <!-- Per-message override: product provides full rendering -->
       <slot
         v-if="$slots['message-product']"
@@ -316,7 +318,7 @@
                             <img :src="imageSrc(artifact)" :alt="imageAlt(artifact)" loading="lazy" />
                           </figure>
                         </div>
-                        <pre v-else-if="readableProcessDetail(part)" v-auto-follow-scroll="readableProcessDetail(part)" class="tool-output">{{ readableProcessDetail(part) }}</pre>
+                        <pre v-else-if="!displayToolInputPreview(part) && readableProcessDetail(part)" v-auto-follow-scroll="readableProcessDetail(part)" class="tool-output">{{ readableProcessDetail(part) }}</pre>
                       </div>
                     </div>
 
@@ -455,7 +457,7 @@
                                   <img :src="imageSrc(artifact)" :alt="imageAlt(artifact)" loading="lazy" />
                                 </figure>
                               </div>
-                              <pre v-else-if="readableProcessDetail(part)" v-auto-follow-scroll="readableProcessDetail(part)" class="tool-output">{{ readableProcessDetail(part) }}</pre>
+                              <pre v-else-if="!displayToolInputPreview(part) && readableProcessDetail(part)" v-auto-follow-scroll="readableProcessDetail(part)" class="tool-output">{{ readableProcessDetail(part) }}</pre>
                             </div>
                           </div>
                         </div>
@@ -537,6 +539,34 @@
                               </button>
                               <div v-if="shouldShowToolBody(part, false)" class="tool-card-body" :class="{ 'tool-card-body--row': !isCommandTool(part) }">
                                 <pre v-if="displayToolError(part)" class="tool-output tool-output--error">{{ displayToolError(part) }}</pre>
+                                <div v-else-if="displayToolResult(part) && isFileTool(part)" class="diff-block" :class="[fileDiffClass(part), { 'diff-block--wrap': isToolWrapEnabled(part.id) }]">
+                                  <div class="diff-header">
+                                    <span class="diff-file">{{ diffHeaderText(part) }}</span>
+                                    <button type="button" class="wrap-toggle" @click.stop="toggleToolWrap(part.id)">{{ isToolWrapEnabled(part.id) ? 'wrap' : 'scroll' }}</button>
+                                  </div>
+                                  <div class="diff-lines">
+                                    <div v-for="(line, li) in diffDisplayLines(part)" :key="li" class="diff-line" :class="diffLineClass(line, part)">
+                                      <span class="diff-line-num">{{ diffLineGutter(line, li, part) }}</span>
+                                      <span class="diff-line-content">{{ diffLineContent(line, part) }}</span>
+                                    </div>
+                                  </div>
+                                </div>
+                                <div v-else-if="testArtifact(part)" class="test-result-card" :class="testResultClass(part)">
+                                  <div class="test-result-head">
+                                    <span class="test-result-state">{{ testResultTitle(part) }}</span>
+                                    <span class="test-result-command">{{ testResultCommand(part) }}</span>
+                                  </div>
+                                  <div class="test-result-meta">
+                                    <span v-for="item in testResultMeta(part)" :key="item">{{ item }}</span>
+                                  </div>
+                                  <pre v-if="testResultOutput(part)" class="test-result-output">{{ testResultOutput(part) }}</pre>
+                                </div>
+                                <div v-else-if="displayToolInputPreview(part)" class="tool-output tool-input-preview">
+                                  <div class="tool-output-meta">
+                                    <span>{{ toolInputPreviewMeta(part) }}</span>
+                                  </div>
+                                  <pre class="tool-output-content" :class="{ 'tool-output-content--wrap': isToolWrapEnabled(part.id) }" @click="toggleToolWrap(part.id)">{{ displayToolInputPreview(part) }}</pre>
+                                </div>
                                 <div v-else-if="displayToolResult(part) && isCommandTool(part)" class="command-output">
                                   <div class="command-terminal-chrome" aria-hidden="true">
                                     <span class="command-terminal-light command-terminal-light--close" />
@@ -555,6 +585,12 @@
                                   </div>
                                   <pre class="tool-output-content">{{ toolOutputContent(part) }}</pre>
                                 </div>
+                                <div v-if="imageArtifacts(part).length" class="tool-image-row">
+                                  <figure v-for="artifact in imageArtifacts(part)" :key="artifact.artifact_id || artifact.uri" class="tool-image-card" @click="openImagePreview(artifact)">
+                                    <img :src="imageSrc(artifact)" :alt="imageAlt(artifact)" loading="lazy" />
+                                  </figure>
+                                </div>
+                                <pre v-else-if="!displayToolInputPreview(part) && readableProcessDetail(part)" class="tool-output">{{ readableProcessDetail(part) }}</pre>
                               </div>
                             </div>
                           </div>
@@ -643,7 +679,7 @@
                               <img :src="imageSrc(artifact)" :alt="imageAlt(artifact)" loading="lazy" />
                             </figure>
                           </div>
-                          <pre v-else-if="readableProcessDetail(group.part)" class="tool-output">{{ readableProcessDetail(group.part) }}</pre>
+                          <pre v-else-if="!displayToolInputPreview(group.part) && readableProcessDetail(group.part)" class="tool-output">{{ readableProcessDetail(group.part) }}</pre>
                         </div>
                       </div>
 
@@ -1072,6 +1108,34 @@
                           </button>
                           <div v-if="shouldShowToolBody(part, false)" class="tool-card-body" :class="{ 'tool-card-body--row': !isCommandTool(part) }">
                             <pre v-if="displayToolError(part)" class="tool-output tool-output--error">{{ displayToolError(part) }}</pre>
+                            <div v-else-if="displayToolResult(part) && isFileTool(part)" class="diff-block" :class="[fileDiffClass(part), { 'diff-block--wrap': isToolWrapEnabled(part.id) }]">
+                              <div class="diff-header">
+                                <span class="diff-file">{{ diffHeaderText(part) }}</span>
+                                <button type="button" class="wrap-toggle" @click.stop="toggleToolWrap(part.id)">{{ isToolWrapEnabled(part.id) ? 'wrap' : 'scroll' }}</button>
+                              </div>
+                              <div class="diff-lines">
+                                <div v-for="(line, li) in diffDisplayLines(part)" :key="li" class="diff-line" :class="diffLineClass(line, part)">
+                                  <span class="diff-line-num">{{ diffLineGutter(line, li, part) }}</span>
+                                  <span class="diff-line-content">{{ diffLineContent(line, part) }}</span>
+                                </div>
+                              </div>
+                            </div>
+                            <div v-else-if="testArtifact(part)" class="test-result-card" :class="testResultClass(part)">
+                              <div class="test-result-head">
+                                <span class="test-result-state">{{ testResultTitle(part) }}</span>
+                                <span class="test-result-command">{{ testResultCommand(part) }}</span>
+                              </div>
+                              <div class="test-result-meta">
+                                <span v-for="item in testResultMeta(part)" :key="item">{{ item }}</span>
+                              </div>
+                              <pre v-if="testResultOutput(part)" class="test-result-output">{{ testResultOutput(part) }}</pre>
+                            </div>
+                            <div v-else-if="displayToolInputPreview(part)" class="tool-output tool-input-preview">
+                              <div class="tool-output-meta">
+                                <span>{{ toolInputPreviewMeta(part) }}</span>
+                              </div>
+                              <pre class="tool-output-content" :class="{ 'tool-output-content--wrap': isToolWrapEnabled(part.id) }" @click="toggleToolWrap(part.id)">{{ displayToolInputPreview(part) }}</pre>
+                            </div>
                             <div v-else-if="displayToolResult(part) && isCommandTool(part)" class="command-output">
                               <div class="command-terminal-chrome" aria-hidden="true">
                                 <span class="command-terminal-light command-terminal-light--close" />
@@ -1090,6 +1154,12 @@
                               </div>
                               <pre class="tool-output-content">{{ toolOutputContent(part) }}</pre>
                             </div>
+                            <div v-if="imageArtifacts(part).length" class="tool-image-row">
+                              <figure v-for="artifact in imageArtifacts(part)" :key="artifact.artifact_id || artifact.uri" class="tool-image-card" @click="openImagePreview(artifact)">
+                                <img :src="imageSrc(artifact)" :alt="imageAlt(artifact)" loading="lazy" />
+                              </figure>
+                            </div>
+                            <pre v-else-if="!displayToolInputPreview(part) && readableProcessDetail(part)" class="tool-output">{{ readableProcessDetail(part) }}</pre>
                           </div>
                         </div>
                       </div>
@@ -1583,7 +1653,7 @@ const vBeam = {
   },
 }
 
-defineOptions({ name: 'MessageView' })
+defineOptions({ name: 'MessageView', inheritAttrs: false })
 
 defineSlots<{
   'message-product'?: (props: { message: CoreMessage }) => unknown

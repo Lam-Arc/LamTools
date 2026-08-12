@@ -34,7 +34,9 @@ describe('ChatThread assistant message actions', () => {
   })
 
   it('shows copy/fork/rollback actions only for assistant turns with content', async () => {
-    const wrapper = mount(ChatThread, { props: { messages, messageActions: true } })
+    const wrapper = mount(ChatThread, {
+      props: { messages, messageActions: true, checkpointTurnIds: new Set(['turn-1']) },
+    })
 
     // Only assistant:turn-1 is actionable; the waiting placeholder is excluded.
     expect(wrapper.findAll('[data-assistant-actions]')).toHaveLength(1)
@@ -44,7 +46,9 @@ describe('ChatThread assistant message actions', () => {
   })
 
   it('emits the turn payload for fork and rollback', async () => {
-    const wrapper = mount(ChatThread, { props: { messages, messageActions: true } })
+    const wrapper = mount(ChatThread, {
+      props: { messages, messageActions: true, checkpointTurnIds: new Set(['turn-1']) },
+    })
 
     await wrapper.get('[data-message-rollback]').trigger('click')
     expect(wrapper.emitted('rollback-message')).toEqual([[{ turnId: 'turn-1', content: '第一条回复' }]])

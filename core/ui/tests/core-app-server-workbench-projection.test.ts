@@ -398,7 +398,9 @@ describe('core appServer workbench projection', () => {
 
     expect(messages).toHaveLength(1)
     expect(messages[0]?.content).toBe('Main received the child result.')
-    expect(messages[0]?.parts).toHaveLength(1)
+    // All agentMessages stay in parts for inline chronological rendering; the
+    // last one also folds into content for backward compat
+    expect(messages[0]?.parts).toHaveLength(2)
     expect(messages[0]?.parts[0]).toMatchObject({
       id: parentId,
       partType: 'agent_summary',
@@ -410,6 +412,11 @@ describe('core appServer workbench projection', () => {
           { id: 'child-text', partType: 'model_text', content: 'Child saved story.txt.' },
         ],
       },
+    })
+    expect(messages[0]?.parts[1]).toMatchObject({
+      id: 'main-text',
+      partType: 'model_text',
+      content: 'Main received the child result.',
     })
   })
 

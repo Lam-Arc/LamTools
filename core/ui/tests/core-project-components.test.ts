@@ -1,4 +1,4 @@
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -48,16 +48,14 @@ describe('CoreProjectCreate', () => {
   })
 
   it('owns the directory action and writes the selected path into the shared field', async () => {
-    const defaultWrapper = mount(CoreProjectCreate, { global: { stubs: { Teleport: true } } })
-    const wrapper = mount(CoreProjectCreate, {
-      props: { selectWorkRoot: async () => 'E:\\selected' },
-      global: { stubs: { Teleport: true } },
-    })
+    const wrapper = mount(CoreProjectCreate, { global: { stubs: { Teleport: true } } })
 
-    expect(defaultWrapper.find('[data-project-browse]').exists()).toBe(false)
+    // The browse button is always available; without a native picker it opens
+    // the in-browser folder dialog
+    expect(wrapper.find('[data-project-browse]').exists()).toBe(true)
     await wrapper.get('[data-project-browse]').trigger('click')
-    await Promise.resolve()
-    expect((wrapper.get('[data-project-root]').element as HTMLInputElement).value).toBe('E:\\selected')
+    await flushPromises()
+    expect(wrapper.find('.fb-dialog').exists()).toBe(true)
   })
 
   it('uses a modal backdrop and blocks dismissal while creation is running', async () => {
@@ -74,14 +72,10 @@ describe('CoreProjectCreate', () => {
     expect(loadingWrapper.emitted('cancel')).toBeUndefined()
   })
 
-  it('can cancel the project dialog while the native directory picker is pending', async () => {
-    const wrapper = mount(CoreProjectCreate, {
-      props: { selectWorkRoot: () => new Promise(() => undefined) },
-      global: { stubs: { Teleport: true } },
-    })
+  it('can cancel the project dialog while the directory browser is open', async () => {
+    const wrapper = mount(CoreProjectCreate, { global: { stubs: { Teleport: true } } })
 
     await wrapper.get('[data-project-browse]').trigger('click')
-    expect(wrapper.get('[data-project-browse]').attributes('disabled')).toBeDefined()
     await wrapper.get('[data-project-cancel]').trigger('click')
 
     expect(wrapper.emitted('cancel')).toEqual([[]])

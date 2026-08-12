@@ -30,6 +30,9 @@ function mountSettings() {
       density: 'standard',
       theme: structuredClone(DEFAULT_THEME),
     },
+    // CoreSettings teleports its whole content to body; stub Teleport so
+    // wrapper queries hit the rendered tree (see core-project-components.test.ts)
+    global: { stubs: { Teleport: true } },
   })
 }
 
@@ -127,17 +130,18 @@ describe('CoreSettings', () => {
     expect(wrapper.emitted('update:density')).toEqual([['loose']])
   })
 
-  it('owns writable command permission policy controls', async () => {
+  it('owns writable permission mode controls', async () => {
     const wrapper = mountSettings()
 
     await wrapper.get('[data-settings-section="permissions"]').trigger('click')
 
     expect(wrapper.text()).toContain('权限策略')
-    expect(wrapper.text()).toContain('常规命令')
+    expect(wrapper.text()).toContain('放行模式')
     expect(wrapper.findAll('input, select, textarea').length).toBe(1)
-    const askButtons = wrapper.findAll('button').filter(button => button.text() === '需要审批')
-    await askButtons[0].trigger('click')
-    expect(wrapper.emitted('update-command-policy')).toEqual([['regular', 'ask_user']])
+    await wrapper.get('[aria-label="选择完全编辑"]').trigger('click')
+    expect(wrapper.emitted('update-permission-mode')).toEqual([['full_edit']])
+    await wrapper.get('[data-allow-outside-workdir]').setValue(true)
+    expect(wrapper.emitted('update-allow-outside-workdir')).toEqual([[true]])
   })
 })
 
@@ -166,7 +170,7 @@ describe('Core demo settings entry', () => {
   it('connects the WorkspaceShell settings action to Core config operations', () => {
     const source = readFileSync(resolve(process.cwd(), 'src/demo/App.vue'), 'utf8')
 
-    expect(source).toContain('@settings="showSettings = true"')
+    expect(source).toContain('@settings="openSettings"')
     expect(source).toContain('<CoreSettings')
     expect(source).toContain('useCoreUiPreferences(settingsStorageKey)')
     expect(source).toContain(':content-width="contentWidth"')
@@ -175,8 +179,8 @@ describe('Core demo settings entry', () => {
     expect(source).toContain("'config.provider.create'")
     expect(source).toContain("'config.provider.update'")
     expect(source).toContain("'config.provider.delete'")
-    expect(source).toContain("'config.model.create'")
-    expect(source).toContain("'config.model.update'")
-    expect(source).toContain("'config.model.delete'")
+    expect(source).toContain("'config.models.upsert'")
+    expect(source).toContain("'config.models.delete'")
+    expect(source).toContain("'config.models.set_default'")
   })
 })

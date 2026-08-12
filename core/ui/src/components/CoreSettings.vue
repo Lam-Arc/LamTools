@@ -4,7 +4,7 @@
       class="settings-overlay"
       @click.self="$emit('close')"
     >
-      <div ref="overlayTarget" class="settings-card" :style="settingsThemeStyle">
+      <div class="settings-card" :style="settingsThemeStyle">
         <SettingsShell
           :sections="sections"
           title="Core 设置"
@@ -426,9 +426,10 @@
     </template>
   </SettingsShell>
 
-      <!-- Floating editor overlay for provider/model edit forms -->
-      <Teleport :to="overlayTarget" :disabled="!overlayTarget">
-        <div v-if="providerEditor || modelEditor" class="editor-overlay" @click.self="closeEditors">
+      <!-- Floating editor overlay for provider/model edit forms.
+           内联渲染即可：Teleport 目标是自身祖先（settings-card），传送等同原地；
+           且 ref+Teleport 组合在测试环境（Teleport stub）会触发渲染递归。 -->
+      <div v-if="providerEditor || modelEditor" class="editor-overlay" @click.self="closeEditors">
           <div class="editor-popover">
             <!-- Provider editor -->
             <form v-if="providerEditor" :data-provider-form="providerEditor.mode" class="config-form" @submit.prevent="submitProvider">
@@ -556,7 +557,6 @@
             </form>
           </div>
         </div>
-      </Teleport>
       </div>
     </div>
   </Teleport>
@@ -923,8 +923,6 @@ async function saveDreamingSettings() {
   }
 }
 
-// Editor overlay: teleport into the settings card so the popover layers above content.
-const overlayTarget = ref<HTMLElement | null>(null)
 function closeEditors() {
   providerEditor.value = null
   modelEditor.value = null

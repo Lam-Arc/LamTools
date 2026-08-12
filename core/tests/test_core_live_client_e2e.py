@@ -5,7 +5,8 @@ import socket
 from pathlib import Path
 
 import pytest
-import uvicorn
+
+uvicorn = pytest.importorskip("uvicorn")  # e2e 需要真实 uvicorn 服务；dev 最小环境缺席时跳过
 
 from lamtools_core.app import CoreAppServerClient
 from lamtools_core.app.http_agent_app import CoreConfigRoutingLLMClient, create_core_agent_http_app

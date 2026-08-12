@@ -351,7 +351,7 @@ describe('useCoreLiveComposerController', () => {
 
     text.value = 'stop now'
     status.value = 'running'
-    await controller.submit({ clearComposer: true })
+    await controller.submit({ clearComposer: true, forceGuide: true })
     expect(calls).toContain('steer:thread-1:turn-1:[{"type":"text","text":"stop now"}]')
     expect(statusText.value).toBe('Guided by member')
     expect(clearedTexts).toContain('stop now')

@@ -148,8 +148,8 @@ describe('useCoreExecutionControlsState', () => {
     selectedProviders.value = [{ id: 'provider-1', name: 'xfyun', base_url: 'https://maas-coding.example.test' }]
     await nextTick()
 
-    expect(state.thinkingModeOptions.value.map((option) => option.value)).toEqual(['max', 'none'])
-    expect(state.selectedThinkingMode.value).toBe('max')
+    expect(state.thinkingModeOptions.value.map((option) => option.value)).toEqual(['high', 'medium', 'low', 'none'])
+    expect(state.selectedThinkingMode.value).toBe('high')
   })
 
   it('builds turn payloads and keeps the newest local model after quick changes', async () => {
@@ -177,9 +177,10 @@ describe('useCoreExecutionControlsState', () => {
     expect(state.turnOptions()).toEqual({
       model_id: 'model-1',
       thinking_enabled: true,
-      thinking_budget: 10_000,
+      thinking_budget: 8_192,
       shallow_thinking_enabled: true,
       context_window_tokens: 128_000,
+      active_mode: 'execute',
     })
 
     state.selectModel('model-1')

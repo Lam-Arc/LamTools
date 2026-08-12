@@ -188,6 +188,7 @@ describe('core appServer workbench actions', () => {
       activeTurnId: 'turn-1',
       text: '请 /reviewer 看看',
       status: 'running',
+      forceGuide: true,
       commandCatalog: commands,
       steerTurn: async (_threadId, _turnId, inputItems) => {
         guided.push(inputItems)

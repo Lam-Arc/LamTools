@@ -11,7 +11,7 @@ from lamtools_core.plugins import HookDecision, HookEvent
 from lamtools_core.runtime import InMemoryRuntimeStateStore, RuntimeState, RuntimeTurnInput
 from lamtools_core.tool import ToolCall, ToolResult
 
-from core.tests.test_kernel import MockKitStep, MockLLMClient, MockRuntimeKit
+from tests.test_kernel import MockKitStep, MockLLMClient, MockRuntimeKit
 
 
 # ── Fake hook engines for kernel-level tests ──────────────────

@@ -2472,7 +2472,6 @@
   }
   .provider-head { padding: 10px 0; }
   .model-row { padding-left: 12px; }
-  .drawer-right { display: none; }
   .floating-composer { width: calc(100vw - 28px); left: 50%; }
   .floating-composer textarea { font-size: 14px; }
 }
