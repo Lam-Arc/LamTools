@@ -115,3 +115,25 @@ core/ui/dist-core-app/
 .go_models.json
 .openrouter_models.json
 .zen_models.json
+
+# UI / animation demos (experiments, not product code)
+core/ui/demo-*.html
+core/desktop/public/
+
+# Dev-injection / debug script (local-only tooling)
+core/scripts/
+
+# Root-level verify scripts & screenshots (one-off artifacts)
+/probe-api.mjs
+/verify-beam*.mjs
+/dev-verify-*.png
+/frame-*.png
+/hero*.png
+/shimmer-*.png
+/workflow-canvas-state.png
+
+# Website — not ready, not uploaded
+/website/
+
+# Legacy playwright test workspace (archived test fixtures, not e2e/)
+.playwright-test/

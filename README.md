@@ -34,3 +34,7 @@ Core 的细分命令见 `core/README.md`。
 ## 迁移记录
 
 早期成员曾通过 `git subtree add` 从独立仓库迁入，完整提交历史仍保留在 Git 中。Member 产品已于 2026-08 归档至 `archive/members/`，工作树只维护 Core。详见 [docs/monorepo-migration.md](docs/monorepo-migration.md)。
+
+## License
+
+[MIT](LICENSE) © 2026 Lam (Laaaaaaaam)
