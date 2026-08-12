@@ -51,6 +51,8 @@ _hiddenimports = [
     "uvicorn.protocols.http.auto",
     "uvicorn.protocols.websockets.auto",
     "uvicorn.logging",
+    # Form/multipart parsing (FastAPI requires python-multipart at import time)
+    "python_multipart",
     # Misc
     "multiprocessing",
     "asyncio",
