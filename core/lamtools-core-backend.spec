@@ -20,12 +20,12 @@ _PROJECT_ROOT = Path(".").resolve()
 # ---------------------------------------------------------------------------
 _datas: list[tuple[str, str]] = [
     # Frontend SPA (built by Vite) — optional, for SPA fallback
-    ("core/desktop/dist", "frontend"),
+    ("desktop/dist", "frontend"),
     # Bundled default resources — seeded into the user config directory on
     # first run (config/defaults.py) and read as fallbacks at runtime.
-    ("core/config/resources", "config/resources"),
-    ("core/config/command", "config/command"),
-    ("core/config/llm_adapters", "config/llm_adapters"),
+    ("config/resources", "config/resources"),
+    ("config/command", "config/command"),
+    ("config/llm_adapters", "config/llm_adapters"),
 ]
 
 # ---------------------------------------------------------------------------
@@ -218,8 +218,8 @@ _hiddenimports = [
 # Analysis
 # ---------------------------------------------------------------------------
 a = Analysis(
-    ["core/desktop_backend.py"],
-    pathex=["core/src"],
+    ["desktop_backend.py"],
+    pathex=["src"],
     binaries=[],
     datas=_datas,
     hiddenimports=_hiddenimports,
@@ -249,7 +249,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon="core/desktop/app-icon.ico",
+    icon="desktop/app-icon.ico",
 )
 
 coll = COLLECT(

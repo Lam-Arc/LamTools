@@ -49,9 +49,10 @@ jobs:
           pip install pyinstaller
 
       - name: Bundle backend with PyInstaller
-        # spec 使用仓库根相对路径（core/desktop/dist 等 datas），必须在根目录跑
+        # spec 位于 core/ 下，路径为相对 spec 所在目录（desktop_backend.py 等），cd core 后执行
         run: |
-          python -m PyInstaller core/lamtools-core-backend.spec --clean --noconfirm
+          cd core
+          python -m PyInstaller lamtools-core-backend.spec --clean --noconfirm
 
       # ---------- 3. 后端资源复制进 Tauri ----------
       - name: Copy backend into src-tauri resources
@@ -59,7 +60,7 @@ jobs:
         run: |
           $ResourceDir = "core/desktop/src-tauri/lamcore-backend"
           if (Test-Path $ResourceDir) { Remove-Item -Recurse -Force $ResourceDir }
-          Copy-Item -Recurse "dist/LamCore" $ResourceDir
+          Copy-Item -Recurse "core/dist/LamCore" $ResourceDir
           Write-Host "Backend copied to $ResourceDir"
 
       # ---------- 4. Tauri 打包 NSIS 安装包 ----------
