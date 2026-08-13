@@ -61,16 +61,23 @@ GitHub Releases 比较，版本不一致会误报/漏报）：
 .\scripts\bump-version.ps1 0.3.0   # 1. 升版本（5 处同步）
 git commit -am "chore: bump version to 0.3.0"   # 2. 提交
 git tag v0.3.0                                    # 3. 打 tag
-git push origin main --tags                       # 4. 推送
+git push origin v0.3.0                            # 4. 推送（单独推 tag，不要用 --tags 批量推）
 ```
 
 推送 tag 后 `.github/workflows/release.yml` 自动完成：前端构建 → PyInstaller →
-Tauri 打包 → 上传 `LamCore_*_x64-setup.exe` 到 GitHub Releases。应用内
-「设置 → 关于与更新」即会检测到新版本并引导下载。
+后端二进制冒烟测试 → Tauri 打包 → 产物校验 → 上传 `LamCore_*_x64-setup.exe`
+到 GitHub Releases。应用内「设置 → 关于与更新」即会检测到新版本并引导下载。
+
+**手动触发构建**（不打 tag 验证构建链路）：仓库 Actions 页对 `Build & Release`
+选 `Run workflow`（workflow_dispatch）——产物上传为 Actions artifact 而非 Release。
 
 手动打包发布（不走 CI）时：跑 `.\scripts\package.ps1`，然后手动把
 `core/desktop/src-tauri/target/release/bundle/nsis/LamCore_*_x64-setup.exe`
 上传到 GitHub Releases（tag `vX.Y.Z`，命名与版本一致）。
+
+**spec 单一事实源**：PyInstaller spec 只有一份 `core/lamtools-core-backend.spec`
+（路径相对 spec 所在目录），本地 `package.ps1` 与 CI `release.yml` 都 cd 到
+`core/` 后使用它——不要另建 spec。
 
 ## 更新检查机制（检测 + 引导下载）
 

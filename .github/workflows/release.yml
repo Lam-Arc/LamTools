@@ -1,11 +1,14 @@
 name: Build & Release
 
-# 自动打包发布：推一个 v*.*.* 标签即可触发
-# 用法：git tag v0.2.2 && git push origin v0.2.2
+# 自动打包发布：
+#   - 推 tag v*（如 v0.2.4）：构建并发布到 GitHub Releases
+#   - 手动触发（workflow_dispatch）：仅构建验证，产物上传为 Actions artifact，
+#     不上传 Release（避免分支 ref 被当成 tag 名）
 on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -49,10 +52,40 @@ jobs:
           pip install pyinstaller
 
       - name: Bundle backend with PyInstaller
-        # spec 位于 core/ 下，路径为相对 spec 所在目录（desktop_backend.py 等），cd core 后执行
+        # spec: core/lamtools-core-backend.spec（路径相对 spec 所在目录，cd core 后执行；
+        # 与本地 scripts/package.ps1 使用同一份 spec，杜绝双 spec 漂移）
         run: |
           cd core
           python -m PyInstaller lamtools-core-backend.spec --clean --noconfirm
+
+      - name: Smoke-test backend binary
+        # desktop_backend.py 不解析参数（--help 会被忽略直接起 uvicorn），所以
+        # 用「启动 + 轮询 /api/health」真冒烟：FastAPI 装配、hiddenimports、
+        # 默认配置播种（LAMTOOLS_HOME）任一缺失都会导致 health 不通 → 失败。
+        shell: pwsh
+        run: |
+          $port = Get-Random -Minimum 5300 -Maximum 5900
+          $env:LAMCORE_PORT = "$port"
+          $env:LAMTOOLS_HOME = "$env:TEMP\lamcore-smoke-$PID"
+          $p = Start-Process -FilePath "core/dist/LamCore/LamCore.exe" -PassThru
+          $ok = $false
+          try {
+            for ($i = 0; $i -lt 90; $i++) {
+              Start-Sleep -Seconds 1
+              if ($p.HasExited) { Write-Host "Backend exited early (code $($p.ExitCode))"; break }
+              try {
+                $r = Invoke-WebRequest -Uri "http://127.0.0.1:$port/api/health" -TimeoutSec 2 -UseBasicParsing
+                if ($r.StatusCode -eq 200) { $ok = $true; break }
+              } catch { }
+            }
+            if (-not $ok) {
+              Write-Error "Backend smoke test failed — binary cannot boot (deps / hiddenimports / data missing)"
+              exit 1
+            }
+            Write-Host "Backend smoke test OK (health 200 after $($i + 1)s)"
+          } finally {
+            if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
+          }
 
       # ---------- 3. 后端资源复制进 Tauri ----------
       - name: Copy backend into src-tauri resources
@@ -69,14 +102,29 @@ jobs:
           cd core/desktop
           npx tauri build
 
-      # ---------- 5. 上传安装包到 Release ----------
-      - name: Upload installer to Release
+      - name: Verify installer produced
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem "core/desktop/src-tauri/target/release/bundle/nsis/*-setup.exe" -ErrorAction SilentlyContinue
+          if (-not $installer) {
+            Write-Error "NSIS installer was not produced — tauri build failed silently?"
+            exit 1
+          }
+          Write-Host "Installer: $($installer.FullName) ($([math]::Round($installer.Length / 1MB, 1)) MB)"
+
+      # ---------- 5. 上传 ----------
+      # tag 触发 → 发布到 GitHub Releases；手动触发 → 仅作为构建产物保留
+      - name: Upload installer to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            core/desktop/src-tauri/target/release/bundle/nsis/*-setup.exe
-            core/desktop/src-tauri/target/release/bundle/nsis/*-setup.exe.sig
+          files: core/desktop/src-tauri/target/release/bundle/nsis/*-setup.exe
           generate_release_notes: true
-          # 同一 tag 重复构建时更新已有 Release 而非追加重复 notes
-          update_release_body: false
-          fail_on_unmatched_files: false
+          fail_on_unmatched_files: true
+
+      - name: Upload installer as build artifact (manual run)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: lamcore-installer
+          path: core/desktop/src-tauri/target/release/bundle/nsis/*-setup.exe

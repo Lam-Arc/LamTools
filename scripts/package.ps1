@@ -37,14 +37,16 @@ try {
 # ------------------------------------------------------------------
 Write-Host "`n=== Step 2/3: PyInstaller backend bundle ===" -ForegroundColor Cyan
 
-Push-Location $Root
+# 唯一受支持的 spec 是 core/lamtools-core-backend.spec（路径相对 spec 所在目录，
+# 与 CI release.yml 完全一致）。不要用仓库根遗留的旧 spec（已删除）。
+Push-Location "$Root\core"
 try {
     & py -3.14 -m PyInstaller lamtools-core-backend.spec --clean --noconfirm
     if ($LASTEXITCODE -ne 0) {
         Write-Host "[FAIL] PyInstaller build failed." -ForegroundColor Red
         exit 1
     }
-    Write-Host "  Backend -> dist/LamCore/" -ForegroundColor Green
+    Write-Host "  Backend -> core/dist/LamCore/" -ForegroundColor Green
 } finally {
     Pop-Location
 }
@@ -58,7 +60,7 @@ if (-not $SkipTauri) {
     # Copy backend into src-tauri as flat resource (avoids _up_ nesting)
     $ResourceDir = "$Root\core\desktop\src-tauri\lamcore-backend"
     if (Test-Path $ResourceDir) { Remove-Item -Recurse -Force $ResourceDir }
-    Copy-Item -Recurse "$Root\dist\LamCore" $ResourceDir
+    Copy-Item -Recurse "$Root\core\dist\LamCore" $ResourceDir
     Write-Host "  Backend copied to src-tauri/lamcore-backend/" -ForegroundColor Green
 
     Push-Location "$Root\core\desktop"
@@ -85,7 +87,7 @@ if (-not $SkipTauri) {
 Write-Host "`n=== Package complete ===" -ForegroundColor Green
 Write-Host ""
 Write-Host "Artifacts:"
-Write-Host "  Backend:      $Root\dist\LamCore\LamCore.exe"
+Write-Host "  Backend:      $Root\core\dist\LamCore\LamCore.exe"
 Write-Host "  Tauri binary: $Root\core\desktop\src-tauri\target\release\lamcore.exe"
 Write-Host "  Installer:    $Root\core\desktop\src-tauri\target\release\bundle\nsis\LamCore_*_x64-setup.exe"
 Write-Host ""
