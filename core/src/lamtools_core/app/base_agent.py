@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import sys
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -904,6 +905,14 @@ def assemble_core_agent_plugins(
     state_store = PluginStateStore(Path(data_dir) / "plugins.jsonc")
     plugins = PluginRegistry(plugin_roots=roots, state_store=state_store).discover()
     enabled_plugins = [plugin for plugin in plugins if plugin.enabled]
+    # Plugin code must be importable: handler entries (module:function) are
+    # resolved via importlib at toolbox build time, before any plugin code
+    # runs — so the enabled plugin roots go on sys.path here (append to the
+    # end to avoid shadowing stdlib; plugins are trusted, install = trust).
+    for plugin in enabled_plugins:
+        root = str(plugin.root)
+        if root not in sys.path:
+            sys.path.append(root)
     skill_roots = [
         root
         for plugin in enabled_plugins

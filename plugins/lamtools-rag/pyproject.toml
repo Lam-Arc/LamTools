@@ -1,0 +1,17 @@
+# lamtools-rag 引擎包（开发用：py -3.14 -m pip install -e .）
+# 运行时依赖由插件系统 plugin.install 按 manifest dependencies 装入 core 环境；
+# 本 pyproject 用于让 rag_engine 可被 importlib 动态导入（sys.path 补丁的备选路径）。
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lamtools-rag-engine"
+version = "0.1.0"
+description = "LamTools RAG plugin engine (rag_engine package)"
+requires-python = ">=3.14"
+dependencies = ["sqlite-vec>=0.1.9"]
+
+[tool.setuptools]
+packages = ["rag_engine"]

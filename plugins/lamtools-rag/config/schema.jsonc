@@ -1,0 +1,24 @@
+{
+  "type": "object",
+  "properties": {
+    "autoRoots": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "自动索引的工作区子目录白名单（会话启动增量扫描仅限这些目录）"
+    },
+    "indexDir": {
+      "type": "string",
+      "description": "索引库目录（缺省 {work_root}/.lamtools/rag-index）"
+    },
+    "embeddingSource": {
+      "type": "string",
+      "enum": ["local", "api", "none"],
+      "default": "local",
+      "description": "embedding 来源：local=fastembed(bge-small-zh)；api=provider /embeddings（P3）；none=仅 BM25"
+    },
+    "vlmModel": {
+      "type": "string",
+      "description": "VLM 页面图理解模型（P3；缺省复用 default_multimodal_model）"
+    }
+  }
+}

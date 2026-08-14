@@ -1,0 +1,114 @@
+{
+  "tools": [
+    {
+      "name": "rag_index",
+      "description": "对工作区文档建立/增量更新 RAG 索引（解析→分片→入库，FTS5+向量）。参数 paths 为工作区相对路径列表（缺省用配置 autoRoots 白名单）；full=true 强制全量重建。索引是重活，执行前会请求确认。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "paths": { "type": "array", "items": { "type": "string" }, "description": "工作区相对路径列表（文件或目录）" },
+          "full": { "type": "boolean", "description": "强制全量重建（默认增量）" }
+        }
+      },
+      "permission": "ask_user",
+      "category": "rag",
+      "visibility": "on_load",
+      "skill": "rag-indexer",
+      "handler": "rag_engine.tools:rag_index",
+      "timeout": 3600
+    },
+    {
+      "name": "rag_search",
+      "description": "在工作区已索引文档中检索（FTS5 BM25 + 向量混合）。返回 Top-N 命中（文档、页码、标题链、原文片段）。scope=docs 搜文档；scope=artifact 搜附件/产物元数据。查询涉及历史会话时改用 rag_search_sessions。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string", "description": "检索词/问题" },
+          "top": { "type": "integer", "description": "返回条数（默认 10）" },
+          "scope": { "type": "string", "enum": ["docs", "artifact"], "description": "检索范围（默认 docs）" },
+          "filters": { "type": "object", "description": "元数据过滤：{page, document_format}" }
+        },
+        "required": ["query"]
+      },
+      "permission": "auto_allow",
+      "category": "rag",
+      "visibility": "on_load",
+      "skill": "rag-for-agent",
+      "handler": "rag_engine.tools:rag_search",
+      "timeout": 30
+    },
+    {
+      "name": "rag_read",
+      "description": "读取指定文档的指定页原文（带页码定位）。参数 doc_id 为 rag_search 返回的文档标识。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "doc_id": { "type": "string" },
+          "page": { "type": "integer" }
+        },
+        "required": ["doc_id", "page"]
+      },
+      "permission": "auto_allow",
+      "category": "rag",
+      "visibility": "on_load",
+      "skill": "rag-for-agent",
+      "handler": "rag_engine.tools:rag_read",
+      "timeout": 30
+    },
+    {
+      "name": "rag_search_sessions",
+      "description": "在历史会话记录中检索（用户消息与助手回答，消息级索引）。当问题涉及历史会话/之前讨论过/上次说过/以前做过什么时使用。支持 filters: session_id, role(user|assistant), time_range。返回命中消息（会话标题、时间、角色、原文片段、message_id 定位）。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string" },
+          "top": { "type": "integer", "description": "返回条数（默认 10）" },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "session_id": { "type": "string" },
+              "role": { "type": "string", "enum": ["user", "assistant"] },
+              "time_range": { "type": "array", "items": { "type": "number" }, "description": "[start_ts, end_ts]" }
+            }
+          }
+        },
+        "required": ["query"]
+      },
+      "permission": "auto_allow",
+      "category": "rag",
+      "visibility": "on_load",
+      "skill": "rag-for-agent",
+      "handler": "rag_engine.tools:rag_search_sessions",
+      "timeout": 30
+    },
+    {
+      "name": "submit_answer",
+      "description": "提交带引用的最终答案（答案闸门）。所有基于 RAG 检索的回答必须经此工具提交：答案文本 + 引用列表（文档引用: doc_id/page/原文片段；会话引用: message_id/原文片段）。校验失败会返回原因，需修正后重新提交。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "answer": { "type": "string" },
+          "citations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "doc_id": { "type": "string" },
+                "page": { "type": "integer" },
+                "message_id": { "type": "string" },
+                "text": { "type": "string", "description": "引用的原文精确片段" }
+              }
+            }
+          }
+        },
+        "required": ["answer"]
+      },
+      "permission": "auto_allow",
+      "category": "rag",
+      "visibility": "on_load",
+      "skill": "rag-for-agent",
+      "handler": "rag_engine.tools:submit_answer",
+      "timeout": 30
+    }
+  ]
+}

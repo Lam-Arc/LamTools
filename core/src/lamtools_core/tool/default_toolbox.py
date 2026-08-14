@@ -1006,6 +1006,11 @@ class CoreToolbox:
         )
 
     def prepare_call(self, call: ToolCall) -> ToolCall:
+        # Plugin handlers have no closure-injected workspace context (core
+        # tools receive work_root/data_dir via factory closures); inject it
+        # into call.metadata so plugin tools are first-class citizens.
+        call.metadata.setdefault("work_root", str(self.work_root))
+        call.metadata.setdefault("data_dir", str(self.data_dir))
         # Mode enforcement runs first: the toolset advertised to the model is
         # mode-filtered, and the same filter must hold at execution time — a
         # model with stale context (e.g. the mode changed between turns) must

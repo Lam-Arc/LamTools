@@ -1,0 +1,6 @@
+# 必装（manifest dependencies 同源）
+sqlite-vec>=0.1.9
+
+# 可选：local embedding（缺失自动降级 BM25-only，v2 §7）
+fastembed>=0.4
+onnxruntime>=1.20

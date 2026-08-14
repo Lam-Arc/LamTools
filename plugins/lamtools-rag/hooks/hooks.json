@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "py -3.14 \"${PLUGIN_ROOT}/hooks/on_stop.py\"",
+            "timeout": 60,
+            "required": false
+          }
+        ]
+      }
+    ]
+  }
+}
