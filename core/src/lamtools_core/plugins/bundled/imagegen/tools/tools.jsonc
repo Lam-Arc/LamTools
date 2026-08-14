@@ -1,0 +1,9 @@
+{
+  "tools": [
+    {
+      "name": "generate_image",
+      "permission": "ask_user",
+      "handler": "lamtools_core.tool.image_tools:make_generate_image_handler"
+    }
+  ]
+}

@@ -121,10 +121,6 @@
         />
       </section>
 
-      <section v-if="activeSection === 'skills'" class="settings-panel">
-        <CoreSkillsEditor :request-rpc="requestRpc || defaultRequestRpc" />
-      </section>
-
       <section v-if="activeSection === 'loadtools'" class="settings-panel">
         <!-- KeepAlive: switching sections must not destroy editor draft
              state (audit 17 S3 — the SettingsShell :key remount used to
@@ -134,22 +130,8 @@
         </KeepAlive>
       </section>
 
-      <section v-if="activeSection === 'imagegen'" class="settings-panel">
-        <KeepAlive>
-          <CoreImageGenEditor :request-rpc="requestRpc || defaultRequestRpc" />
-        </KeepAlive>
-      </section>
-
-      <section v-if="activeSection === 'websearch'" class="settings-panel">
-        <KeepAlive>
-          <CoreWebSearchEditor :request-rpc="requestRpc || defaultRequestRpc" />
-        </KeepAlive>
-      </section>
-
-      <section v-if="activeSection === 'hooks'" class="settings-panel">
-        <KeepAlive>
-          <CoreHooksEditor :request-rpc="requestRpc || defaultRequestRpc" />
-        </KeepAlive>
+      <section v-if="activeSection === 'plugins'" class="settings-panel">
+        <CorePluginsEditor :request-rpc="requestRpc || defaultRequestRpc" />
       </section>
 
       <section v-if="activeSection === 'permissions'" class="settings-panel">
@@ -595,12 +577,9 @@ import {
 } from '../helpers/theme'
 import SettingsShell, { type SettingsSection } from './SettingsShell.vue'
 import ThemeEditor from './ThemeEditor.vue'
-import CoreSkillsEditor from './CoreSkillsEditor.vue'
-import CoreHooksEditor from './CoreHooksEditor.vue'
+import CorePluginsEditor from './CorePluginsEditor.vue'
 import CoreSubAgentEditor from './CoreSubAgentEditor.vue'
 import CoreLoadToolsEditor from './CoreLoadToolsEditor.vue'
-import CoreImageGenEditor from './CoreImageGenEditor.vue'
-import CoreWebSearchEditor from './CoreWebSearchEditor.vue'
 import UiSelect from './UiSelect.vue'
 import {
   readUpdateAutoCheck,
@@ -725,10 +704,7 @@ const sections: SettingsSection[] = [
   { id: 'models', label: '模型与供应商', icon: 'database' },
   { id: 'appearance', label: '界面', icon: 'palette' },
   { id: 'loadtools', label: '工具模式', icon: 'list-checks' },
-  { id: 'imagegen', label: '生图', icon: 'image' },
-  { id: 'websearch', label: '搜索', icon: 'search' },
-  { id: 'skills', label: 'Skills', icon: 'sparkles' },
-  { id: 'hooks', label: 'Hooks', icon: 'plug' },
+  { id: 'plugins', label: '插件', icon: 'puzzle' },
   { id: 'permissions', label: '权限', icon: 'lock' },
   { id: 'agents', label: '上下文与记忆', icon: 'file-code' },
   { id: 'workflow', label: '工作流', icon: 'workflow' },
@@ -1443,6 +1419,9 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
   box-shadow: var(--shadow-md);
   padding: 18px 20px;
   color: var(--settings-card-text, var(--settings-main-text, var(--text)));
+  /* 弹层在 .settings-main 的 --muted 重映射作用域之外（layout.css），
+     自行跟随主题：亮色分支注入 --settings-muted，暗色 fallback 与全局一致 */
+  --muted: var(--settings-muted, #a7a29b);
 }
 .editor-popover-head {
   display: flex;
@@ -1540,7 +1519,17 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
   color: var(--settings-control-text, var(--text));
 }
 
-.small-btn.quiet { background: transparent; }
+/* quiet = 文本式按钮（透明底，文字跟随所在 main 面板——不能用 control 文字色，
+   否则「亮 main + 暗 control」主题下白字压在浅色面板上不可见） */
+.small-btn.quiet {
+  background: transparent;
+  color: var(--settings-main-text, var(--muted));
+}
+.small-btn.quiet:hover {
+  background: color-mix(in srgb, var(--settings-main-text, var(--text)) var(--alpha-hover), transparent);
+  color: var(--settings-main-text, var(--text));
+  filter: none;
+}
 
 .density-options {
   display: inline-flex;

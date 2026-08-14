@@ -1,0 +1,14 @@
+{
+  "tools": [
+    {
+      "name": "git_status",
+      "permission": "auto_allow",
+      "handler": "lamtools_core.tool.git_tools:make_git_status_handler"
+    },
+    {
+      "name": "git_diff",
+      "permission": "auto_allow",
+      "handler": "lamtools_core.tool.git_tools:make_git_diff_handler"
+    }
+  ]
+}

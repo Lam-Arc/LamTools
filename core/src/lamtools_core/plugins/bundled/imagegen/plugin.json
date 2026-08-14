@@ -1,0 +1,7 @@
+{
+  "name": "imagegen",
+  "version": "0.1.0",
+  "description": "生图工具（内置插件：generate_image；配置从 core 设置层迁入插件配置）",
+  "tools": ["./tools/tools.jsonc"],
+  "configSchema": "./config/schema.jsonc"
+}

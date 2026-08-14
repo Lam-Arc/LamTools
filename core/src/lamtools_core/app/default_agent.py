@@ -1846,6 +1846,7 @@ async def _build_core_runtime_toolbox(
     operation_catalog: OperationCatalog | None = None,
     enable_goal_tool: bool = False,
     enable_arrange_tool: bool = False,
+    enable_plugin_manager: bool = True,
     active_tier: str | None = None,
     tier_tools: dict | None = None,
     active_mode: str | None = None,
@@ -1946,6 +1947,61 @@ async def _build_core_runtime_toolbox(
             runtime_imagegen_config.pop("artifact_registry", None)
     if not imagegen_enabled:
         disabled_tools.add("generate_image")
+    # 插件原生工具（S1 §2/§3）：声明 → ToolSpec 补全。半声明式——
+    # 内置插件 tools.jsonc 只列 name/handler，其余字段从 core 常量按名补全。
+    from lamtools_core.tool.default_toolbox import bundled_core_tool_specs, default_core_tool_specs
+    from lamtools_core.plugins.tools import complete_plugin_tool_specs
+
+    plugin_tool_specs: list[ToolSpec] = []
+    plugin_groups = plugin_assembly.get("plugin_tool_groups") or []
+    if plugin_groups:
+        # 半声明式补全源 = 基础集 15 + 内置插件常量 4（S3：内置插件的
+        # description/input_schema 从 core 常量按名补全）
+        base_specs = {
+            spec.name: spec
+            for spec in [*default_core_tool_specs(), *bundled_core_tool_specs()]
+        }
+        for group in plugin_groups:
+            plugin_tool_specs.extend(
+                complete_plugin_tool_specs(
+                    group.get("tools") or [],
+                    plugin_name=str(group.get("name") or ""),
+                    plugin_root=group.get("root"),
+                    base_specs_by_name=base_specs,
+                    dependencies=group.get("dependencies") or None,
+                )
+            )
+    # 插件 skill 禁用状态（缺口 #1）：load_skill 查 SkillStateStore
+    skill_state_store = None
+    data_dir = plugin_assembly.get("data_dir")
+    if data_dir:
+        from lamtools_core.skills import SkillStateStore
+
+        skill_state_store = SkillStateStore(Path(data_dir) / "skill_state.json")
+    # 用户权限覆盖（E3 共识）：{data_dir}/tool_permissions.jsonc，
+    # 形如 {"permissions": {"rag_search": "ask_user"}}；覆盖优先于
+    # manifest 声明（disabled_tools 仍优先，见 CoreToolbox）。
+    permission_overrides: dict[str, str] | None = None
+    if data_dir:
+        overrides_path = Path(data_dir) / "tool_permissions.jsonc"
+        if overrides_path.exists():
+            try:
+                from lamtools_core.plugins._jsonc import load_jsonc_text
+
+                raw = load_jsonc_text(overrides_path)
+                perms = raw.get("permissions") if isinstance(raw, dict) else None
+                if isinstance(perms, dict):
+                    permission_overrides = {
+                        str(key): str(value)
+                        for key, value in perms.items()
+                        if isinstance(value, str)
+                    }
+            except (OSError, ValueError) as exc:
+                _logger.warning(
+                    "[plugins:permissions] unreadable overrides %s: %s",
+                    overrides_path,
+                    exc,
+                )
     toolbox = build_core_toolbox(
         work_root=work_root,
         approval_policy=normalized_policy,
@@ -1966,6 +2022,11 @@ async def _build_core_runtime_toolbox(
         activated_mcp_servers=activated_mcp_servers,
         workflow_tool_provider=workflow_provider,
         allow_access_outside_workdir=allow_access_outside_workdir,
+        plugin_tool_specs=plugin_tool_specs,
+        skill_state_store=skill_state_store,
+        permission_overrides=permission_overrides,
+        enable_plugin_manager=enable_plugin_manager,
+        data_dir=data_dir,
     )
     return toolbox, registry
 

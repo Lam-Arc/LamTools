@@ -1,0 +1,6 @@
+{
+  "name": "git",
+  "version": "0.1.0",
+  "description": "Git 工具（内置插件：git_status / git_diff，handler 由 core 显式装配）",
+  "tools": ["./tools/tools.jsonc"]
+}

@@ -1,0 +1,21 @@
+{
+  "type": "object",
+  "properties": {
+    "provider": {
+      "type": "string",
+      "enum": ["baidu", "bing", "duckduckgo", "custom"],
+      "description": "搜索提供方",
+      "default": "baidu"
+    },
+    "limit": {
+      "type": "integer",
+      "description": "每次搜索返回结果上限",
+      "default": 5
+    },
+    "timeout": {
+      "type": "number",
+      "description": "搜索超时（秒）",
+      "default": 15
+    }
+  }
+}

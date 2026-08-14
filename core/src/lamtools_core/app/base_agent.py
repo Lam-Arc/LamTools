@@ -531,6 +531,14 @@ class CoreBaseAgentKit:
         result: ToolResult,
     ) -> ChatMessage:
         evidence = _format_model_tool_evidence(result)
+        # C2 共识：hook additional_context 消费链——PreToolUse/PostToolUse
+        # hook 写入 call.metadata 的注入内容拼接进模型证据（复用脱敏/截断
+        # 渲染器上一步的输出；不再扩展 _MODEL_EVIDENCE_KEYS 以免污染
+        # metadata 直通语义）。
+        call_metadata = call.metadata if isinstance(call.metadata, dict) else {}
+        hook_additional = str(call_metadata.get("hook_additional_context") or "").strip()
+        if hook_additional:
+            evidence = f"{evidence}\n\n{hook_additional}"
         image_data_url = _find_image_data_url(result)
         if image_data_url and (self.config.capability or "").strip().lower() == "multimodal":
             # 多模态模型：图片以 image_url 块随文本 evidence 一起发送（text 块不含 base64，
@@ -878,16 +886,22 @@ def assemble_core_agent_plugins(
     from lamtools_core.plugins.registry import PluginRegistry, PluginStateStore
     from lamtools_core.plugins.trust import HookTrustStore
 
-    from lamtools_core.config.root import core_plugins_root
-
     roots: list[Path] = (
         [Path(item) for item in plugin_roots]
         if plugin_roots is not None
         else default_core_agent_plugin_roots(work_root, include_user_plugins=include_user_plugins)
     )
     # Unified config directory — user-modifiable after packaging
-    roots.insert(0, core_plugins_root())
-    state_store = PluginStateStore(Path(data_dir) / "plugins.json")
+    # (default_core_agent_plugin_roots 已含内置根；传了自定义 plugin_roots
+    # 时这里兜底补上，保证内置根永远在扫描链路里 — 缺口 #3 + D3)。
+    from lamtools_core.config.root import core_plugins_root
+    from lamtools_core.plugins.registry import bundled_plugins_dir
+
+    if core_plugins_root() not in roots:
+        roots.insert(0, core_plugins_root())
+    if bundled_plugins_dir() not in roots:
+        roots.append(bundled_plugins_dir())
+    state_store = PluginStateStore(Path(data_dir) / "plugins.jsonc")
     plugins = PluginRegistry(plugin_roots=roots, state_store=state_store).discover()
     enabled_plugins = [plugin for plugin in plugins if plugin.enabled]
     skill_roots = [
@@ -896,6 +910,42 @@ def assemble_core_agent_plugins(
         for root in plugin.skill_roots
         if root.exists()
     ]
+    # 原生工具声明（manifest tools 字段 → PluginToolSpec 列表，按插件
+    # 分组保留归属，供装配层补全 spec 时标注 plugin 来源）；
+    # 清单解析失败不阻断其他插件，错误随装配结果返回（plugin.list 报状态）。
+    plugin_tool_groups: list[dict[str, Any]] = []
+    plugin_tool_errors: list[dict[str, Any]] = []
+    from lamtools_core.plugins.tools import load_plugin_tools
+
+    for plugin in enabled_plugins:
+        declared: list[Any] = []
+        for tool_file in plugin.tool_files:
+            if not tool_file.exists():
+                plugin_tool_errors.append(
+                    {"plugin": plugin.name, "path": str(tool_file), "error": "tool file not found"}
+                )
+                continue
+            try:
+                declared.extend(load_plugin_tools([tool_file], plugin_root=plugin.root))
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                _logger.warning(
+                    "[plugins:tools] plugin %s tool manifest unreadable: %s",
+                    plugin.name,
+                    tool_file,
+                    exc_info=True,
+                )
+                plugin_tool_errors.append(
+                    {"plugin": plugin.name, "path": str(tool_file), "error": str(exc)}
+                )
+        if declared:
+            plugin_tool_groups.append(
+                {
+                    "name": plugin.name,
+                    "root": plugin.root,
+                    "tools": declared,
+                    "dependencies": list(plugin.dependencies),
+                }
+            )
     hook_registry = HookRegistry(
         project_root=work_root,
         plugins=enabled_plugins,
@@ -904,7 +954,11 @@ def assemble_core_agent_plugins(
     hooks = hook_registry.load()
     return {
         "plugins": enabled_plugins,
+        "plugin_roots": roots,
+        "data_dir": str(data_dir),
         "skill_roots": skill_roots,
+        "plugin_tool_groups": plugin_tool_groups,
+        "plugin_tool_errors": plugin_tool_errors,
         "mcp_files": [
             path
             for plugin in enabled_plugins
@@ -920,12 +974,20 @@ def default_core_agent_plugin_roots(
     *,
     include_user_plugins: bool = False,
 ) -> list[Path]:
-    from lamtools_core.plugins.registry import default_project_plugin_root, default_user_plugin_root
+    from lamtools_core.plugins.registry import (
+        bundled_plugins_dir,
+        default_project_plugin_root,
+        default_user_plugin_root,
+    )
+    from lamtools_core.config.root import core_plugins_root
 
     roots: list[Path] = []
     if include_user_plugins:
         roots.append(default_user_plugin_root())
     roots.append(default_project_plugin_root(work_root))
+    # 内置插件根统一纳入扫描（缺口 #3 + D3：包内 bundled 插件）
+    roots.append(core_plugins_root())
+    roots.append(bundled_plugins_dir())
     return roots
 
 
@@ -938,7 +1000,7 @@ def build_core_plugin_operation_catalog(
 ):
     from lamtools_core.plugins.hook_config import HookRegistry
     from lamtools_core.plugins.operations import build_plugin_operation_catalog
-    from lamtools_core.plugins.registry import PluginRegistry, PluginStateStore
+    from lamtools_core.plugins.registry import PluginRegistry, PluginStateStore, default_user_plugin_root
     from lamtools_core.plugins.trust import HookTrustStore
     from lamtools_core.skills import SkillRegistry, SkillStateStore
     from lamtools_core.config.root import core_skills_root
@@ -949,8 +1011,16 @@ def build_core_plugin_operation_catalog(
         if plugin_roots is not None
         else default_core_agent_plugin_roots(work_root, include_user_plugins=include_user_plugins)
     )
+    # 与 assemble_core_agent_plugins 同款兜底：内置根永远在扫描链路里
+    from lamtools_core.config.root import core_plugins_root
+    from lamtools_core.plugins.registry import bundled_plugins_dir
+
+    if core_plugins_root() not in roots:
+        roots.insert(0, core_plugins_root())
+    if bundled_plugins_dir() not in roots:
+        roots.append(bundled_plugins_dir())
     data_path = Path(data_dir)
-    plugin_state_store = PluginStateStore(data_path / "plugins.json")
+    plugin_state_store = PluginStateStore(data_path / "plugins.jsonc")
     hook_trust_store = HookTrustStore(data_path / "hook_trust.json")
     skill_state_store = SkillStateStore(data_path / "skill_state.json")
     plugin_registry = PluginRegistry(plugin_roots=roots, state_store=plugin_state_store)
@@ -978,6 +1048,8 @@ def build_core_plugin_operation_catalog(
         skill_state_store=skill_state_store,
         skill_registry_factory=skill_registry_factory,
         work_root=work_root,
+        data_dir=data_path,
+        install_root=default_user_plugin_root(),
     )
 
 

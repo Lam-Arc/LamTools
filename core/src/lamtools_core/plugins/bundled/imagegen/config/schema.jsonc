@@ -1,0 +1,22 @@
+{
+  "type": "object",
+  "properties": {
+    "enabled": {
+      "type": "boolean",
+      "description": "是否启用生图工具",
+      "default": false
+    },
+    "api_url": {
+      "type": "string",
+      "description": "生图 API 地址"
+    },
+    "api_key": {
+      "type": "string",
+      "description": "生图 API 密钥（明文存于本机配置）"
+    },
+    "model": {
+      "type": "string",
+      "description": "生图模型名"
+    }
+  }
+}

@@ -136,7 +136,11 @@ def test_core_toolbox_exposes_generic_tool_specs(tmp_path):
     assert "browser_check" not in names
     assert "write_file" in names
     assert "run_command" in names
-    assert "git_diff" in names
+    # S3：git/web_search/generate_image 已外移为内置插件（基础集 15）
+    assert "git_diff" not in names
+    assert "git_status" not in names
+    assert "web_search" not in names
+    assert "generate_image" not in names
     assert "web_fetch" in names
     assert "mcp_tool" in names
     assert "load_skill" in names
@@ -744,7 +748,24 @@ IMAGE_CONFIG = {
 
 
 def test_core_toolbox_exposes_generate_image_spec(tmp_path):
-    toolbox = build_core_toolbox(work_root=tmp_path, imagegen_config=IMAGE_CONFIG)
+    # S3：generate_image 经内置插件装配（半声明式：spec 从 core 常量按名补全）
+    from lamtools_core.plugins.models import PluginToolSpec
+    from lamtools_core.plugins.tools import complete_plugin_tool_specs
+    from lamtools_core.tool.default_toolbox import bundled_core_tool_specs
+
+    base_specs = {spec.name: spec for spec in bundled_core_tool_specs()}
+    plugin_specs = complete_plugin_tool_specs(
+        [PluginToolSpec(name="generate_image", permission="ask_user", handler="x:y")],
+        plugin_name="imagegen",
+        plugin_root=tmp_path,
+        base_specs_by_name=base_specs,
+    )
+    assert plugin_specs[0].metadata["category"] == "image"  # 半声明式从 core 常量补全
+    toolbox = build_core_toolbox(
+        work_root=tmp_path,
+        imagegen_config=IMAGE_CONFIG,
+        plugin_tool_specs=plugin_specs,
+    )
 
     specs = {spec.name: spec for spec in toolbox.tool_specs()}
     assert "generate_image" in specs

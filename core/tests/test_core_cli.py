@@ -990,3 +990,95 @@ def test_core_cli_memory_dream_show_defaults_when_absent(capsys) -> None:
 def test_core_cli_memory_dream_config_validates_min_turns(capsys) -> None:
     rc = core_cli.main(["memory", "dream", "config", "--min-turns", "0"])
     assert rc == 1
+
+
+@pytest.mark.asyncio
+async def test_core_cli_plugin_commands_call_operations(monkeypatch, capsys, tmp_path: Path) -> None:
+    calls: list[tuple[str, dict]] = []
+
+    class FakeClient:
+        def __init__(self, base_url: str, *, path: str, token: str) -> None:
+            pass
+
+        async def connect(self) -> None:
+            pass
+
+        async def close(self) -> None:
+            pass
+
+        async def request(self, method: str, params: dict):
+            calls.append((method, params))
+            if method == "plugin.list":
+                return {
+                    "plugins": [
+                        {"name": "git", "version": "0.1.0", "enabled": True, "root": "C:/bundled/git",
+                         "dependencies": [], "tools": [{"path": "tools.jsonc", "tools": [{"name": "git_status"}]}]}
+                    ],
+                    "errors": [],
+                }
+            if method == "plugin.deps-status":
+                return {
+                    "status": "missing", "items": [{"raw": "sqlite-vec>=0.1.9", "installed": "", "ok": False}],
+                    "missing": ["sqlite-vec>=0.1.9"], "install_hint": "py -3.14 -m pip install sqlite-vec>=0.1.9",
+                }
+            if method == "plugin.config.get":
+                return {"name": "imagegen", "config": {"enabled": True}, "schema": {}}
+            return {"name": params.get("name", ""), "ok": True}
+
+    monkeypatch.setattr(core_cli, "CoreAppServerClient", FakeClient)
+    parser = build_parser()
+    for argv in [
+        ["plugin", "list", "--raw"],
+        ["plugin", "enable", "websearch", "--raw"],
+        ["plugin", "disable", "git", "--raw"],
+        ["plugin", "install", "local", str(tmp_path / "demo"), "-y", "--raw"],
+        ["plugin", "install", "url", "https://github.com/a/b/releases/download/v1/x.zip", "--sha256", "abc", "--no-deps", "-y", "--raw"],
+        ["plugin", "uninstall", "demo", "--deps", "--raw"],
+        ["plugin", "deps-status", "demo", "--raw"],
+        ["plugin", "config", "get", "imagegen", "--raw"],
+        ["plugin", "config", "set", "imagegen", '{"enabled": true}', "--raw"],
+    ]:
+        args = parser.parse_args(argv)
+        assert await args.func(args) == 0
+
+    assert ("plugin.list", {}) in calls
+    assert ("plugin.enable", {"name": "websearch"}) in calls
+    assert ("plugin.disable", {"name": "git"}) in calls
+    assert ("plugin.install", {"source": "local", "target": "user", "path": str(tmp_path / "demo")}) in calls
+    assert ("plugin.install", {
+        "source": "url", "target": "user",
+        "url": "https://github.com/a/b/releases/download/v1/x.zip",
+        "sha256": "abc", "install_deps": False,
+    }) in calls
+    assert ("plugin.uninstall", {"name": "demo", "uninstall_deps": True}) in calls
+    assert ("plugin.deps-status", {"name": "demo"}) in calls
+    assert ("plugin.config.get", {"name": "imagegen"}) in calls
+    assert ("plugin.config.update", {"name": "imagegen", "config": {"enabled": True}}) in calls
+    out = capsys.readouterr().out
+    assert "git" in out  # 人性化 list 输出含插件名
+
+
+@pytest.mark.asyncio
+async def test_core_cli_plugin_install_requires_confirmation_without_yes(monkeypatch, tmp_path: Path) -> None:
+    calls: list[tuple[str, dict]] = []
+
+    class FakeClient:
+        def __init__(self, base_url: str, *, path: str, token: str) -> None:
+            pass
+
+        async def connect(self) -> None:
+            pass
+
+        async def close(self) -> None:
+            pass
+
+        async def request(self, method: str, params: dict):
+            calls.append((method, params))
+            return {"name": "demo", "installed": True}
+
+    monkeypatch.setattr(core_cli, "CoreAppServerClient", FakeClient)
+    monkeypatch.setattr("builtins.input", lambda _prompt: "n")
+    parser = build_parser()
+    args = parser.parse_args(["plugin", "install", "local", str(tmp_path / "demo")])
+    assert await args.func(args) == 1  # 用户拒绝 → 退出码 1，未调用 operation
+    assert calls == []

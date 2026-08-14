@@ -25,11 +25,17 @@ from .provider_store import MASKED_API_KEY, ProviderConfig, ProviderStore, mask_
 from .settings_store import get_setting, set_setting
 
 
-def build_config_operation_catalog(*, work_root: str | Path | None = None) -> OperationCatalog:
+def build_config_operation_catalog(
+    *,
+    work_root: str | Path | None = None,
+    data_dir: str | Path | None = None,
+) -> OperationCatalog:
     """Build an OperationCatalog of jsonc-backed config RPCs.
 
     ``work_root`` is the project root used for project-scoped model/provider
     resolution; writes default to the global scope.
+    ``data_dir`` routes the imagegen namespace to the plugin config location
+    (D5 共识：配置迁入插件配置，旧位置自动迁移)。
     """
     catalog = OperationCatalog()
     root = str(work_root) if work_root else None
@@ -231,7 +237,7 @@ def build_config_operation_catalog(*, work_root: str | Path | None = None) -> Op
             return _error(request, "namespace is required")
         # core.imagegen lives in its own imagegen.jsonc (frontend contract kept).
         if namespace == IMAGEGEN_NAMESPACE:
-            value = dict(load_imagegen_config())
+            value = dict(load_imagegen_config(data_dir))
             if value.get("api_key"):
                 # Mirror the provider contract: never echo the real key back
                 # to the client; an empty/masked submission keeps the old one
@@ -248,14 +254,14 @@ def build_config_operation_catalog(*, work_root: str | Path | None = None) -> Op
         if not namespace or not isinstance(value, dict):
             return _error(request, "namespace and object value are required")
         if namespace == IMAGEGEN_NAMESPACE:
-            current = load_imagegen_config()
+            current = load_imagegen_config(data_dir)
             incoming = dict(value)
             # Empty or masked api_key keeps the stored key (audit 17 S3).
             submitted_key = incoming.get("api_key")
             if isinstance(submitted_key, str) and submitted_key.strip() in {"", MASKED_API_KEY}:
                 incoming.pop("api_key", None)
             merged = {**current, **incoming}
-            save_imagegen_config(merged)
+            save_imagegen_config(merged, data_dir)
         elif namespace == "core.runtimeControls":
             # Safety-critical namespace: validate the value domain server-side
             # so a caller cannot smuggle arbitrary permission settings

@@ -1,0 +1,7 @@
+{
+  "name": "websearch",
+  "version": "0.1.0",
+  "description": "网页搜索（内置插件：web_search；配置从 core 设置层迁入插件配置）",
+  "tools": ["./tools/tools.jsonc"],
+  "configSchema": "./config/schema.jsonc"
+}

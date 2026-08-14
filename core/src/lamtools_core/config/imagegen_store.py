@@ -25,8 +25,8 @@ def imagegen_config_path() -> Path:
     return core_config_file(IMAGEGEN_FILENAME)
 
 
-def load_imagegen_config() -> dict[str, Any]:
-    """Read the imagegen settings; missing/corrupt file yields {}."""
+def _load_legacy() -> dict[str, Any]:
+    """读旧位置（.lam/core/config/imagegen.jsonc）。"""
     try:
         data = load_jsonc(imagegen_config_path())
     except (OSError, ValueError):
@@ -34,8 +34,41 @@ def load_imagegen_config() -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def save_imagegen_config(value: dict[str, Any]) -> Path:
-    """Write the imagegen settings (atomic-ish, plaintext api_key)."""
+def load_imagegen_config(data_dir: Path | str | None = None) -> dict[str, Any]:
+    """Read the imagegen settings.
+
+    D5 共识：配置迁入插件配置位置 ``{data_dir}/plugins/imagegen.jsonc``。
+    - ``data_dir`` 给定时优先读插件配置；旧位置（.lam/core/config/
+      imagegen.jsonc）有数据则自动迁移（读旧写新，幂等，不删旧文件）。
+    - ``data_dir`` 为 None 时保持旧行为（兼容未接 data_dir 的调用方）。
+    """
+    if data_dir is not None:
+        from lamtools_core.plugins.config_store import read_plugin_config, write_plugin_config
+
+        config = read_plugin_config(data_dir, "imagegen")
+        if config:
+            return config
+        legacy = _load_legacy()
+        if legacy:
+            try:
+                write_plugin_config(data_dir, "imagegen", legacy)
+            except OSError:
+                pass  # 迁移失败不阻断——下次仍会尝试
+            return legacy
+        return {}
+    return _load_legacy()
+
+
+def save_imagegen_config(value: dict[str, Any], data_dir: Path | str | None = None) -> Path:
+    """Write the imagegen settings (atomic-ish, plaintext api_key).
+
+    D5：data_dir 给定时写插件配置位置（配置迁入插件），否则写旧位置。
+    """
+    if data_dir is not None:
+        from lamtools_core.plugins.config_store import write_plugin_config
+
+        write_plugin_config(data_dir, "imagegen", value)
+        return imagegen_config_path()
     path = imagegen_config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     import json

@@ -27,6 +27,7 @@ packages = ["src/lamtools_core"]
 [tool.hatch.build.targets.wheel.force-include]
 "config/command" = "lamtools_core/resources/config/command"
 "skills" = "lamtools_core/resources/skills"
+"src/lamtools_core/plugins/bundled" = "lamtools_core/resources/plugins/bundled"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

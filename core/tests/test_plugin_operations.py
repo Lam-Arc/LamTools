@@ -72,6 +72,7 @@ async def test_websearch_config_save_preserves_urls_in_strings(tmp_path: Path, m
         plugin_state_store=PluginStateStore(tmp_path / "plugin-state.json"),
         hook_registry_factory=lambda: HookRegistry(),
         hook_trust_store=HookTrustStore(tmp_path / "hook-trust.json"),
+        data_dir=tmp_path,
     )
 
     content = (
@@ -84,7 +85,10 @@ async def test_websearch_config_save_preserves_urls_in_strings(tmp_path: Path, m
     result = await catalog.execute("websearch.config.update", {"content": content})
     assert result.status != "error", result.payload
 
-    saved = core_config_file("websearch.jsonc").read_text(encoding="utf-8")
+    # D5：配置迁入插件配置位置 {data_dir}/plugins/websearch.jsonc
+    from lamtools_core.plugins.config_store import plugin_config_path
+
+    saved = plugin_config_path(tmp_path, "websearch").read_text(encoding="utf-8")
     assert 'https://example.com/search?q={query}' in saved
 
     # Round-trip: read back and validate as JSON after comment stripping.

@@ -458,6 +458,13 @@ class CoreLoopKernel:
             if turn_input.user_content is not None
             else turn_input.user_message
         )
+        # 4b. UserPromptSubmit hook（先于消息入历史——hook 的
+        # additional_context 注入用户消息并随历史持久化，C2 共识）。
+        hook_user_content = await self._apply_user_prompt_submit_hook(
+            state, turn_input, current_user_content
+        )
+        if hook_user_content:
+            current_user_content = hook_user_content
         new_messages: list[ChatMessage] = []
         if current_user_content:
             user_msg = ChatMessage(role="user", content=current_user_content)
@@ -465,9 +472,6 @@ class CoreLoopKernel:
             new_messages.append(user_msg)
         await self._append_history_checkpoint(state, new_messages)
         _logger.info("[kernel:_run] checkpoint saved sid=%s", state.session_id)
-
-        # 4b. UserPromptSubmit hook
-        await self._apply_user_prompt_submit_hook(state, turn_input, current_user_content)
 
         steps: list[KernelStep] = []
         latest_message = ""
@@ -2553,9 +2557,11 @@ class CoreLoopKernel:
         state: RuntimeState,
         turn_input: RuntimeTurnInput,
         user_content: str,
-    ) -> None:
+    ) -> str | None:
+        """运行 UserPromptSubmit hook；返回注入 additional_context 后的
+        用户消息（无注入返回 None）。"""
         if self.hook_engine is None:
-            return
+            return None
         cwd = str(turn_input.metadata.get("cwd") or "")
         project_root = str(turn_input.metadata.get("work_root") or turn_input.metadata.get("project_root") or "")
         decision = await self.hook_engine.run(HookEvent(
@@ -2569,6 +2575,12 @@ class CoreLoopKernel:
         ))
         if decision.status_message:
             await self._emit_hook_status(state, "", decision.status_message)
+        # C2 共识：此前 additional_context 被整体丢弃（只消费 status_message），
+        # 现在拼入用户消息，随历史持久化后由 build_model_request 带给模型。
+        additional = str(decision.additional_context or "").strip()
+        if additional:
+            return f"{user_content}\n\n{additional}" if user_content else additional
+        return None
 
     # ── PermissionRequest hook ───────────────────────────────────
 

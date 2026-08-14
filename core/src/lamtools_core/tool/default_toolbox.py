@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
@@ -46,6 +47,24 @@ from lamtools_core.runtime.plan import (
 
 ToolHandler = Callable[[ToolCall], Awaitable[ToolResult]]
 ApprovalPolicy = Literal["require", "auto_approve"]
+
+_logger = logging.getLogger(__name__)
+
+
+def _missing_dependency_handler(tool_name: str, error: str) -> ToolHandler:
+    """依赖缺失占位 handler：返回明确错误（附安装命令），不静默降级。"""
+
+    async def handler(call: ToolCall) -> ToolResult:
+        return ToolResult(
+            call_id=call.id,
+            name=call.name,
+            status="failed",
+            error=error,
+            content=f"MISSING DEPENDENCIES: {error}",
+            metadata={"error_type": "missing_plugin_dependencies"},
+        )
+
+    return handler
 
 
 @runtime_checkable
@@ -507,30 +526,48 @@ DEFAULT_TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
 )
 
 
+# S3 共识（D2）：git/websearch/imagegen 三个内置插件的工具声明外移，
+# handler 留在 core、按名由 core 显式装配。以下 4 个工具不再由
+# default_core_tool_specs() 输出（基础集 = 15），常量定义保留——
+# 内置插件 tools.jsonc 半声明式引用（bundled_core_tool_specs 补全）。
+_BUNDLED_PLUGIN_TOOL_NAMES = frozenset({"git_status", "git_diff", "web_search", "generate_image"})
+
+
+def _core_spec_for(name: str) -> ToolSpec:
+    item = {str(i["name"]): i for i in DEFAULT_TOOL_DEFINITIONS}[name]
+    category = DEFAULT_TOOL_CATEGORIES[name]
+    return ToolSpec(
+        name=name,
+        description=str(item["description"]),
+        input_schema=strict_tool_schema(item["input_schema"]),
+        output_schema=deepcopy(DEFAULT_OUTPUT_SCHEMA),
+        permission=DEFAULT_TOOL_PERMISSIONS[name],
+        metadata={
+            "category": category,
+            "display": _default_display(category),
+            "failure_modes": deepcopy(
+                item.get("failure_modes", DEFAULT_TOOL_FAILURE_MODES.get(name, []))
+            ),
+            "recovery": str(item.get("recovery", DEFAULT_TOOL_RECOVERY.get(name, ""))),
+        },
+    )
+
+
 def default_core_tool_specs() -> list[ToolSpec]:
-    specs_by_name = {str(item["name"]): item for item in DEFAULT_TOOL_DEFINITIONS}
-    specs: list[ToolSpec] = []
-    for name in DEFAULT_TOOL_ORDER:
-        item = specs_by_name[name]
-        category = DEFAULT_TOOL_CATEGORIES[name]
-        specs.append(
-            ToolSpec(
-                name=name,
-                description=str(item["description"]),
-                input_schema=strict_tool_schema(item["input_schema"]),
-                output_schema=deepcopy(DEFAULT_OUTPUT_SCHEMA),
-                permission=DEFAULT_TOOL_PERMISSIONS[name],
-                metadata={
-                    "category": category,
-                    "display": _default_display(category),
-                    "failure_modes": deepcopy(
-                        item.get("failure_modes", DEFAULT_TOOL_FAILURE_MODES.get(name, []))
-                    ),
-                    "recovery": str(item.get("recovery", DEFAULT_TOOL_RECOVERY.get(name, ""))),
-                },
-            )
-        )
-    return specs
+    return [
+        _core_spec_for(name)
+        for name in DEFAULT_TOOL_ORDER
+        if name not in _BUNDLED_PLUGIN_TOOL_NAMES
+    ]
+
+
+def bundled_core_tool_specs() -> list[ToolSpec]:
+    """内置插件（git/websearch/imagegen）的 core 侧 spec 常量。
+
+    供内置插件 tools.jsonc 半声明式补全（description/input_schema 按名
+    引用）；基础集装配不含它们。
+    """
+    return [_core_spec_for(name) for name in DEFAULT_TOOL_ORDER if name in _BUNDLED_PLUGIN_TOOL_NAMES]
 
 
 def core_model_tools(
@@ -730,10 +767,16 @@ class CoreToolbox:
         activated_mcp_servers: set[str] | None = None,
         workflow_tool_provider: Callable[[], Any] | None = None,
         allow_access_outside_workdir: bool = False,
+        plugin_tool_specs: list[ToolSpec] | None = None,
+        skill_state_store: Any | None = None,
+        permission_overrides: dict[str, str] | None = None,
+        enable_plugin_manager: bool = False,
+        data_dir: str | Path | None = None,
     ) -> None:
         self.work_root = Path(work_root).resolve()
         self.work_root.mkdir(parents=True, exist_ok=True)
         self.loaded_skill_roots = {Path(item).resolve() for item in loaded_skill_roots or set()}
+        self.loaded_skill_names: set[str] = set()
         self.mcp_caller = mcp_caller
         self.sub_agent_runner = sub_agent_runner
         self._failed_sub_agent_calls: dict[tuple[str, str], dict[str, Any]] = {}
@@ -745,8 +788,56 @@ class CoreToolbox:
         self.imagegen_config = imagegen_config
         self.tool_permissions = dict(DEFAULT_TOOL_PERMISSIONS)
         self.skill_registry = skill_registry or SkillRegistry(explicit_roots=self.loaded_skill_roots)
+        self.skill_state_store = skill_state_store
+        self.data_dir = Path(data_dir) if data_dir else None
         self.workflow_tool_provider = workflow_tool_provider
         self.allow_access_outside_workdir = allow_access_outside_workdir
+        # B8 共识：工具名全局唯一——与已注入工具（基础 15/MCP/durable/
+        # workflow）同名的插件工具报不可用；插件之间同名同样互斥
+        # （先声明的保留，后者报冲突）。bundled_core_tool_specs 是内置
+        # 插件自己的补全源，不算冲突（内置插件工具经装配注入）。
+        self.plugin_tool_specs = list(plugin_tool_specs or [])
+        self._plugin_handler_errors: dict[str, str] = {}
+        self._plugin_conflicts: dict[str, str] = {}
+        core_spec_names = {
+            spec.name for spec in default_core_tool_specs()
+        } | {spec.name for spec in mcp_tool_specs or []} | {
+            spec.name for spec in durable_tool_specs(
+                goal=enable_goal_tool and operation_executor is not None,
+                arrange=enable_arrange_tool and operation_executor is not None,
+            )
+        } | {
+            spec.name for spec in (
+                workflow_build_tool_specs() if (workflow_build and operation_executor is not None) else []
+            )
+        }
+        resolved_plugin_specs: list[ToolSpec] = []
+        plugin_seen: dict[str, str] = {}
+        for spec in self.plugin_tool_specs:
+            if spec.name in core_spec_names:
+                self._plugin_conflicts[spec.name] = (
+                    f"tool name '{spec.name}' conflicts with a core tool"
+                )
+                continue
+            if spec.name in plugin_seen:
+                self._plugin_conflicts[spec.name] = (
+                    f"tool name '{spec.name}' also declared by plugin "
+                    f"'{plugin_seen[spec.name]}'"
+                )
+                continue
+            plugin_seen[spec.name] = str(spec.metadata.get("plugin", ""))
+            if spec.permission == HARD_BLOCK:
+                # 与 MCP 先例同语义：hard_block 工具不注入 spec（模型不可见、
+                # 执行走 Unknown tool），权限映射仍记录供 ApprovalGate 兜底。
+                self._plugin_conflicts[spec.name] = "tool is hard_blocked by manifest"
+                continue
+            resolved_plugin_specs.append(spec)
+        self.plugin_tool_specs = resolved_plugin_specs
+        self._plugin_timeouts: dict[str, float] = {
+            spec.name: float(spec.metadata["timeout"])
+            for spec in self.plugin_tool_specs
+            if spec.metadata.get("timeout") is not None
+        }
         self._dynamic_mcp_tool_names = {spec.name for spec in mcp_tool_specs or [] if spec.name.startswith("mcp__")}
         for spec in mcp_tool_specs or []:
             self.tool_permissions[spec.name] = spec.permission  # type: ignore[assignment]
@@ -759,8 +850,23 @@ class CoreToolbox:
         workflow_build_specs = workflow_build_tool_specs() if (workflow_build and operation_executor is not None) else []
         for spec in workflow_build_specs:
             self.tool_permissions[spec.name] = spec.permission  # type: ignore[assignment]
+        for spec in self.plugin_tool_specs:
+            self.tool_permissions[spec.name] = spec.permission  # type: ignore[assignment]
+        from lamtools_core.plugins.manager_tools import plugin_manager_tool_specs
+
+        plugin_manager_specs = (
+            plugin_manager_tool_specs() if (enable_plugin_manager and operation_executor is not None) else []
+        )
+        for spec in plugin_manager_specs:
+            self.tool_permissions[spec.name] = spec.permission  # type: ignore[assignment]
         for name in self.disabled_tools:
             self.tool_permissions[name] = HARD_BLOCK
+        # 用户权限覆盖（E3 共识：用户可升降级插件工具 permission）。
+        # 不覆盖显式 disabled 的工具——禁用语义优先于覆盖。
+        for name, tier in (permission_overrides or {}).items():
+            if name in self.disabled_tools:
+                continue
+            self.tool_permissions[name] = tier  # type: ignore[assignment]
         # Dynamic (exposed-workflow) specs declare their own permission; prime
         # the permission map BEFORE the approval gate snapshots it, so those
         # tools are gated per declaration instead of defaulting to HARD_BLOCK.
@@ -773,7 +879,14 @@ class CoreToolbox:
             tier_tools=tier_tools,
             allow_access_outside_workdir=allow_access_outside_workdir,
         )
-        self._specs = [*default_core_tool_specs(), *list(mcp_tool_specs or []), *durable_specs, *workflow_build_specs]
+        self._specs = [
+            *default_core_tool_specs(),
+            *list(mcp_tool_specs or []),
+            *durable_specs,
+            *workflow_build_specs,
+            *plugin_manager_specs,
+            *self.plugin_tool_specs,
+        ]
         self._handlers = self._build_handlers(
             command_timeout=command_timeout,
             max_list_items=max_list_items,
@@ -784,6 +897,8 @@ class CoreToolbox:
             workflow_build=workflow_build,
             imagegen_config=imagegen_config,
             allow_access_outside_workdir=allow_access_outside_workdir,
+            plugin_tool_specs=self.plugin_tool_specs,
+            plugin_manager_specs=plugin_manager_specs,
         )
 
     def _workflow_specs(self) -> list[ToolSpec]:
@@ -851,6 +966,15 @@ class CoreToolbox:
                 server = parts[1]
                 if server not in self.activated_mcp_servers:
                     effective_exclude.add(name)
+        # Lazy exposure（惰性暴露，§4 共识）：visibility=on_load 的工具在
+        # 对应 skill 加载前不进入模型可见列表（loaded_skill_roots 追踪
+        # 同款语义；加载后全套生效）。只影响模型侧，执行时权限照常。
+        for spec in self.tool_specs():
+            if str(spec.metadata.get("visibility")) != "on_load":
+                continue
+            skill_name = str(spec.metadata.get("skill") or "")
+            if skill_name not in self.loaded_skill_names:
+                effective_exclude.add(spec.name)
         return core_model_tools(self.tool_specs(), include_tools=include_tools, exclude_tools=effective_exclude or None)
 
     def skill_index(self) -> str:
@@ -965,7 +1089,22 @@ class CoreToolbox:
                 handler = None
         if handler is None:
             return ToolResult(call_id=call.id, name=call.name, status="blocked", error=f"Unknown tool: {call.name}")
-        return await handler(call)
+        timeout = self._plugin_timeouts.get(call.name)
+        if timeout is None:
+            return await handler(call)
+        # 插件工具可选执行超时（E2 共识：不声明 = 长任务不限）
+        import asyncio
+
+        try:
+            return await asyncio.wait_for(handler(call), timeout=timeout)
+        except asyncio.TimeoutError:
+            return ToolResult(
+                call_id=call.id,
+                name=call.name,
+                status="failed",
+                error=f"Plugin tool timed out after {timeout}s",
+                metadata={"error_type": "plugin_timeout", "timed_out": True},
+            )
 
     def _build_handlers(
         self,
@@ -979,6 +1118,8 @@ class CoreToolbox:
         workflow_build: bool = False,
         imagegen_config: dict | None = None,
         allow_access_outside_workdir: bool = False,
+        plugin_tool_specs: list[ToolSpec] | None = None,
+        plugin_manager_specs: list[ToolSpec] | None = None,
     ) -> dict[str, ToolHandler]:
         read_tools = WorkspaceReadOnlyTools(
             self.work_root,
@@ -1040,6 +1181,17 @@ class CoreToolbox:
             if not isinstance(name, str) or not name.strip():
                 return ToolResult(call_id=call.id, name=call.name, status="failed", error="Missing 'name' argument")
 
+            # 缺口 #1：已禁用 skill 不加载（SkillStateStore 只在 skill.list
+            # 显示层生效的时代结束——load_skill 直接查禁用状态）。
+            if self.skill_state_store is not None and not self.skill_state_store.is_enabled(name):
+                return ToolResult(
+                    call_id=call.id,
+                    name=call.name,
+                    status="failed",
+                    error=f'Skill "{name}" is disabled',
+                    content=f'Skill "{name}" is disabled. Enable it in settings (skills) before loading.',
+                )
+
             content = self.skill_registry.load_prompt_content(self.work_root, name)
             found = not content.startswith(f'Skill "{name}" not found.')
             if found:
@@ -1047,6 +1199,8 @@ class CoreToolbox:
                 if skill is not None:
                     base = skill.location.parent.resolve()
                     self.loaded_skill_roots.add(base)
+                    # 惰性暴露的关联追踪：on_load 工具按 skill 名过滤
+                    self.loaded_skill_names.add(name.strip())
                     read_tools.add_resource_root(base)
             return ToolResult(
                 call_id=call.id,
@@ -1229,7 +1383,114 @@ class CoreToolbox:
             handlers.update(durable_tool_handlers(operation_executor, work_root=self.work_root))
             if workflow_build:
                 handlers.update(workflow_build_tool_handlers(operation_executor, work_root=self.work_root))
+        # 插件原生工具 handler：动态导入 module:function（§3 定点 #4）。
+        # 导入失败 = 该工具不可用（不注册，执行走 Unknown tool；错误记录
+        # 供 plugin.list 报状态与诊断）。
+        # 依赖缺失（§5：不静默降级）→ 注册占位 handler 返回明确错误附
+        # 安装命令，让模型/用户知道怎么修，而不是 Unknown tool 黑盒。
+        from lamtools_core.plugins.deps import check_dependencies, install_command_hint
+
+        for spec in plugin_tool_specs or []:
+            dependencies = [
+                str(item)
+                for item in (spec.metadata.get("dependencies") or [])
+                if isinstance(item, str)
+            ]
+            if dependencies:
+                dep_result = check_dependencies(dependencies)
+                if dep_result["status"] != "ok":
+                    missing = " ".join(dep_result["missing"])
+                    hint = install_command_hint(dep_result["missing"])
+                    error = (
+                        f"plugin '{spec.metadata.get('plugin', '')}' is missing dependencies: "
+                        f"{missing}. Install them with: {hint}"
+                    )
+                    self._plugin_handler_errors[spec.name] = error
+                    handlers[spec.name] = _missing_dependency_handler(spec.name, error)
+                    continue
+            handler = self._bundled_plugin_handler(
+                spec,
+                command_timeout=command_timeout,
+                max_text_length=max_text_length,
+                imagegen_config=imagegen_config,
+            )
+            if handler is None:
+                handler = self._import_plugin_handler(spec)
+            if handler is not None:
+                handlers[spec.name] = handler
+        # 模型可调插件管理工具（F2：skill 引导安装的调用通道）
+        if plugin_manager_specs and operation_executor is not None:
+            from lamtools_core.plugins.manager_tools import plugin_manager_tool_handlers
+
+            handlers.update(
+                plugin_manager_tool_handlers(operation_executor, work_root=self.work_root)
+            )
         return handlers
+
+    def _bundled_plugin_handler(
+        self,
+        spec: ToolSpec,
+        *,
+        command_timeout: int,
+        max_text_length: int,
+        imagegen_config: dict | None,
+    ) -> ToolHandler | None:
+        """内置插件工具（D2 共识）由 core 显式装配——handler 工厂留在
+        core 包内，按工具名解析（不走通用动态导入，工厂需要 work_root/
+        timeout 等装配参数）。未命中（第三方插件）返回 None 走动态导入。
+        """
+        name = spec.name
+        if name == "git_status":
+            return make_git_status_handler(
+                self.work_root,
+                command_timeout=command_timeout,
+                run_subprocess=run_subprocess,
+            )
+        if name == "git_diff":
+            return make_git_diff_handler(
+                self.work_root,
+                command_timeout=command_timeout,
+                max_text_length=max_text_length,
+                run_subprocess=run_subprocess,
+            )
+        if name == "web_search":
+            return build_web_search_handler(
+                str(self.work_root),
+                data_dir=self.data_dir,
+            )
+        if name == "generate_image":
+            return make_generate_image_handler(
+                imagegen_config,
+                str(self.work_root),
+                artifact_registry=(
+                    self.imagegen_config.get("artifact_registry")
+                    if isinstance(self.imagegen_config, dict)
+                    else None
+                ),
+            )
+        return None
+
+    def _import_plugin_handler(self, spec: ToolSpec) -> ToolHandler | None:
+        import importlib
+
+        entry = str(spec.metadata.get("handler") or "")
+        if ":" not in entry:
+            self._plugin_handler_errors[spec.name] = f"invalid handler entry (expected module:function): {entry!r}"
+            return None
+        module_name, func_name = entry.split(":", 1)
+        try:
+            module = importlib.import_module(module_name)
+            func = getattr(module, func_name)
+        except Exception as exc:  # noqa: BLE001 — plugin code must never break the toolbox
+            self._plugin_handler_errors[spec.name] = f"{type(exc).__name__}: {exc}"
+            _logger.warning(
+                "[plugins:handler] import failed for %s: %s", spec.name, exc, exc_info=True
+            )
+            return None
+        if not callable(func):
+            self._plugin_handler_errors[spec.name] = f"handler '{func_name}' is not callable"
+            return None
+        return func
 
 
 def build_core_toolbox(**kwargs: Any) -> CoreToolbox:

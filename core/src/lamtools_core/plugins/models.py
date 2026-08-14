@@ -34,12 +34,38 @@ class PluginManifest:
     name: str
     version: str
     description: str = ""
+    manifest_version: str = "1"
     root: Path = Path()
     enabled: bool = True
     skill_roots: list[Path] = field(default_factory=list)
     hook_files: list[Path] = field(default_factory=list)
     mcp_files: list[Path] = field(default_factory=list)
-    permissions: dict[str, Any] = field(default_factory=dict)
+    # ── 原生工具 / 依赖 / 配置（插件系统改造新增）──────────────
+    tool_files: list[Path] = field(default_factory=list)
+    dependencies: list[str] = field(default_factory=list)
+    config_schema: Path | None = None
+    raw: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class PluginToolSpec:
+    """tools.jsonc 中的单个工具声明（manifest 原生工具通道）。
+
+    permission 缺省 ``ask_user``（安全默认，与 ApprovalGate 未知工具
+    默认 HARD_BLOCK 的保守语义对齐）；visibility=on_load 时 ``skill``
+    指明该工具随哪个 skill 加载暴露。
+    """
+
+    name: str
+    description: str = ""
+    input_schema: dict[str, Any] = field(default_factory=dict)
+    output_schema: dict[str, Any] = field(default_factory=dict)
+    permission: str = "ask_user"  # auto_allow | ask_user | hard_block
+    category: str = "plugin"
+    visibility: str = "always"  # always | on_load
+    skill: str = ""
+    handler: str = ""  # module:function 动态导入入口
+    timeout: float | None = None
     raw: dict[str, Any] = field(default_factory=dict)
 
 

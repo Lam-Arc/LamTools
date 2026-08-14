@@ -30,9 +30,16 @@ def _strip_jsonc_comments(text: str) -> str:
     return re.sub(r"/\*.*?\*/|//[^\n]*", "", text, flags=re.DOTALL)
 
 
-def _load_config(work_root: str | None = None) -> dict:
-    """读取 websearch.jsonc（可选）。文件缺失返回空 dict。"""
+def _load_config(work_root: str | None = None, data_dir: str | Path | None = None) -> dict:
+    """读取 websearch 配置（可选）。文件缺失返回空 dict。
+
+    D5 共识：优先读插件配置位置 ``{data_dir}/plugins/websearch.jsonc``，
+    回退旧位置（.lam/core/config/websearch.jsonc）——迁移后新旧并存期
+    也能读到数据。
+    """
     candidates: list[Path] = []
+    if data_dir:
+        candidates.append(Path(data_dir) / "plugins" / "websearch.jsonc")
     if work_root:
         candidates.append(Path(work_root).resolve() / ".lam" / "core" / "config" / "websearch.jsonc")
     candidates.append(Path(".lam/core/config/websearch.jsonc"))
@@ -53,8 +60,8 @@ def _load_config(work_root: str | None = None) -> dict:
     return {}
 
 
-def _default_config(work_root: str | None = None) -> dict:
-    cfg = _load_config(work_root)
+def _default_config(work_root: str | None = None, data_dir: str | Path | None = None) -> dict:
+    cfg = _load_config(work_root, data_dir=data_dir)
     provider = str(cfg.get("provider") or os.environ.get("WEBSEARCH_PROVIDER") or DEFAULT_PROVIDER)
     # 顶层通用字段（limit/timeout 等）作为默认，provider 内联配置可覆盖
     merged: dict = {
@@ -113,9 +120,15 @@ def get_provider(name: str | None = None, config: dict | None = None) -> SearchP
     raise ValueError(f"未知搜索内核: {provider}（可选: baidu/bing/ddg 或配置 external transport）")
 
 
-def build_web_search_handler(work_root: str) -> Callable[[ToolCall], Awaitable[ToolResult]]:
-    """构造 web_search 工具 handler（与 default_toolbox 现有接线形式一致）。"""
-    cfg = _default_config(work_root)
+def build_web_search_handler(
+    work_root: str,
+    data_dir: str | Path | None = None,
+) -> Callable[[ToolCall], Awaitable[ToolResult]]:
+    """构造 web_search 工具 handler（与 default_toolbox 现有接线形式一致）。
+
+    ``data_dir``（可选）指向插件配置位置（D5 配置迁入后读取新位置）。
+    """
+    cfg = _default_config(work_root, data_dir=data_dir)
     default_provider = get_provider(cfg.get("provider"), cfg)
 
     async def web_search(call: ToolCall) -> ToolResult:

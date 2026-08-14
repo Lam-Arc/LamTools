@@ -339,7 +339,7 @@ def create_core_agent_http_app(
             default_model_id=config.model_record_id,
             work_root=resolved_work_root,
         )
-        _register_missing_operations(agent_operations, build_config_operation_catalog(work_root=resolved_work_root))
+        _register_missing_operations(agent_operations, build_config_operation_catalog(work_root=resolved_work_root, data_dir=resolved_data_dir))
         _register_missing_operations(agent_operations, build_update_operation_catalog())
 
         async def execute_arranged_job(job: Any) -> OperationResult:

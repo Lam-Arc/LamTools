@@ -1,0 +1,9 @@
+{
+  "tools": [
+    {
+      "name": "web_search",
+      "permission": "auto_allow",
+      "handler": "lamtools_core.tool.search.factory:build_web_search_handler"
+    }
+  ]
+}

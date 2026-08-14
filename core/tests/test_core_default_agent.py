@@ -847,8 +847,11 @@ async def test_core_plugin_operation_catalog_uses_user_and_project_roots(tmp_pat
     listed = await catalog.execute("plugin.list")
     await catalog.execute("plugin.disable", {"name": "user-policy"})
 
-    assert {item["name"] for item in listed.payload["plugins"]} == {"user-policy", "project-policy"}
-    assert (data_dir / "plugins.json").exists()
+    # 缺口 #3/D3：catalog 统一扫内置根——bundled 插件也在列表中
+    names = {item["name"] for item in listed.payload["plugins"]}
+    assert {"user-policy", "project-policy"} <= names
+    assert {"git", "websearch", "imagegen"} <= names
+    assert (data_dir / "plugins.jsonc").exists()
     assert not (data_dir / "core-plugin-state.json").exists()
 
 

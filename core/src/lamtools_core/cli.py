@@ -840,6 +840,58 @@ def build_parser() -> argparse.ArgumentParser:
     approval_respond.add_argument("--raw", action="store_true")
     approval_respond.set_defaults(func=cmd_approval_respond)
 
+    plugin = sub.add_parser("plugin", help="Manage LamTools plugins (list/install/uninstall/enable/disable/deps/config)")
+    plugin_sub = plugin.add_subparsers(dest="plugin_command", required=True)
+    plugin_list = plugin_sub.add_parser("list", help="List plugins")
+    _add_live_connection_arguments(plugin_list)
+    plugin_list.add_argument("--raw", action="store_true")
+    plugin_list.set_defaults(func=cmd_plugin_list)
+    plugin_enable = plugin_sub.add_parser("enable", help="Enable a plugin")
+    plugin_enable.add_argument("name")
+    _add_live_connection_arguments(plugin_enable)
+    plugin_enable.add_argument("--raw", action="store_true")
+    plugin_enable.set_defaults(func=cmd_plugin_enable)
+    plugin_disable = plugin_sub.add_parser("disable", help="Disable a plugin (tools disappear next turn)")
+    plugin_disable.add_argument("name")
+    _add_live_connection_arguments(plugin_disable)
+    plugin_disable.add_argument("--raw", action="store_true")
+    plugin_disable.set_defaults(func=cmd_plugin_disable)
+    plugin_install = plugin_sub.add_parser("install", help="Install a plugin from local directory / zip / GitHub Release URL")
+    plugin_install.add_argument("source", choices=("local", "zip", "url", "cc", "claude-code", "codex"),
+                         help="local dir / zip / GitHub Release URL / Claude Code plugin / Codex plugin")
+    plugin_install.add_argument("path_or_url", help="Local dir/zip path, GitHub Release .zip asset URL, or community plugin directory")
+    plugin_install.add_argument("--target", choices=("user", "project"), default="user")
+    plugin_install.add_argument("--sha256", default="", help="Expected sha256 of a URL-downloaded asset")
+    plugin_install.add_argument("--no-deps", action="store_true", help="Skip installing declared pip dependencies")
+    plugin_install.add_argument("-y", "--yes", action="store_true", help="Skip the interactive confirmation")
+    _add_live_connection_arguments(plugin_install)
+    plugin_install.add_argument("--raw", action="store_true")
+    plugin_install.set_defaults(func=cmd_plugin_install)
+    plugin_uninstall = plugin_sub.add_parser("uninstall", help="Uninstall a plugin (removes its directory)")
+    plugin_uninstall.add_argument("name")
+    plugin_uninstall.add_argument("--deps", action="store_true", help="Also uninstall its recorded dependencies (shared deps kept)")
+    _add_live_connection_arguments(plugin_uninstall)
+    plugin_uninstall.add_argument("--raw", action="store_true")
+    plugin_uninstall.set_defaults(func=cmd_plugin_uninstall)
+    plugin_deps = plugin_sub.add_parser("deps-status", help="Check a plugin's pip dependency status")
+    plugin_deps.add_argument("name")
+    _add_live_connection_arguments(plugin_deps)
+    plugin_deps.add_argument("--raw", action="store_true")
+    plugin_deps.set_defaults(func=cmd_plugin_deps)
+    plugin_config = plugin_sub.add_parser("config", help="Read/write plugin configuration")
+    plugin_config_sub = plugin_config.add_subparsers(dest="plugin_config_command", required=True)
+    plugin_config_get = plugin_config_sub.add_parser("get", help="Get plugin configuration")
+    plugin_config_get.add_argument("name")
+    _add_live_connection_arguments(plugin_config_get)
+    plugin_config_get.add_argument("--raw", action="store_true")
+    plugin_config_get.set_defaults(func=cmd_plugin_config_get)
+    plugin_config_set = plugin_config_sub.add_parser("set", help="Set plugin configuration (JSON object)")
+    plugin_config_set.add_argument("name")
+    plugin_config_set.add_argument("value", help="JSON object, e.g. '{\"embeddingSource\": \"api\"}'")
+    _add_live_connection_arguments(plugin_config_set)
+    plugin_config_set.add_argument("--raw", action="store_true")
+    plugin_config_set.set_defaults(func=cmd_plugin_config_set)
+
     command = sub.add_parser("command", help="Use the Core command system")
     command_sub = command.add_subparsers(dest="command_action", required=True)
     command_catalog = command_sub.add_parser("catalog", help="List commands and skills")
@@ -1371,6 +1423,145 @@ async def cmd_approval_respond(args: argparse.Namespace) -> int:
         ),
     )
     _print_live_result(args, result, f"approval {args.action} sent")
+    return 0
+
+
+async def cmd_plugin_list(args: argparse.Namespace) -> int:
+    result = await _invoke_live(args, lambda client: client.request("plugin.list", {}))
+    if args.raw:
+        print(json.dumps(result, ensure_ascii=False), flush=True)
+        return 0
+    plugins = result.get("plugins") if isinstance(result, dict) else []
+    if not plugins:
+        print("No plugins installed.", flush=True)
+        return 0
+    for item in plugins:
+        deps = item.get("dependencies") or []
+        tools = [
+            tool["name"]
+            for tool_file in (item.get("tools") or [])
+            for tool in tool_file.get("tools", [])
+        ]
+        state = "enabled" if item.get("enabled") else "disabled"
+        line = (
+            f"{item.get('name')} {item.get('version')} [{state}]"
+            f" ({item.get('root')})"
+        )
+        if tools:
+            line += f"\n  tools: {', '.join(tools)}"
+        if deps:
+            line += f"\n  deps: {', '.join(deps)}"
+        print(line, flush=True)
+    for error in result.get("errors") or []:
+        print(f"[error] {error.get('name')}: {error.get('error')}", flush=True)
+    return 0
+
+
+async def cmd_plugin_enable(args: argparse.Namespace) -> int:
+    result = await _invoke_live(
+        args, lambda client: client.request("plugin.enable", {"name": args.name})
+    )
+    _print_live_result(args, result, f"plugin '{args.name}' enabled")
+    return 0
+
+
+async def cmd_plugin_disable(args: argparse.Namespace) -> int:
+    result = await _invoke_live(
+        args, lambda client: client.request("plugin.disable", {"name": args.name})
+    )
+    _print_live_result(args, result, f"plugin '{args.name}' disabled")
+    return 0
+
+
+async def cmd_plugin_install(args: argparse.Namespace) -> int:
+    payload: dict[str, Any] = {
+        "source": args.source,
+        "target": args.target,
+    }
+    if args.source == "url":
+        payload["url"] = args.path_or_url
+        if args.sha256:
+            payload["sha256"] = args.sha256
+    else:
+        payload["path"] = args.path_or_url
+    if args.no_deps:
+        payload["install_deps"] = False
+    if not args.yes and not args.raw:
+        try:
+            reply = input(
+                f"Install plugin from {args.path_or_url}? This may run pip for dependencies. [y/N] "
+            ).strip().lower()
+        except EOFError:
+            reply = ""
+        if reply not in ("y", "yes", "ok"):
+            print("Install cancelled.", flush=True)
+            return 1
+    result = await _invoke_live(
+        args, lambda client: client.request("plugin.install", payload)
+    )
+    _print_live_result(args, result, f"plugin '{result.get('name', '')}' installed")
+    return 0
+
+
+async def cmd_plugin_uninstall(args: argparse.Namespace) -> int:
+    payload: dict[str, Any] = {"name": args.name}
+    if args.deps:
+        payload["uninstall_deps"] = True
+    result = await _invoke_live(
+        args, lambda client: client.request("plugin.uninstall", payload)
+    )
+    _print_live_result(args, result, f"plugin '{args.name}' uninstalled")
+    return 0
+
+
+async def cmd_plugin_deps(args: argparse.Namespace) -> int:
+    result = await _invoke_live(
+        args, lambda client: client.request("plugin.deps-status", {"name": args.name})
+    )
+    if args.raw:
+        print(json.dumps(result, ensure_ascii=False), flush=True)
+        return 0
+    items = result.get("items") or []
+    if not items:
+        print(f"plugin '{args.name}' declares no pip dependencies", flush=True)
+        return 0
+    for item in items:
+        mark = "ok" if item.get("ok") else "MISSING" if not item.get("installed") else "MISMATCH"
+        print(
+            f"{item.get('raw')}: {mark}"
+            + (f" (installed {item.get('installed')})" if item.get("installed") else ""),
+            flush=True,
+        )
+    if result.get("install_hint"):
+        print(f"install: {result['install_hint']}", flush=True)
+    return 0
+
+
+async def cmd_plugin_config_get(args: argparse.Namespace) -> int:
+    result = await _invoke_live(
+        args, lambda client: client.request("plugin.config.get", {"name": args.name})
+    )
+    if args.raw:
+        print(json.dumps(result, ensure_ascii=False), flush=True)
+        return 0
+    print(json.dumps(result.get("config") or {}, ensure_ascii=False, indent=2), flush=True)
+    return 0
+
+
+async def cmd_plugin_config_set(args: argparse.Namespace) -> int:
+    try:
+        value = json.loads(args.value)
+    except json.JSONDecodeError as exc:
+        print(f"error: invalid JSON value: {exc}", flush=True)
+        return 1
+    if not isinstance(value, dict):
+        print("error: config value must be a JSON object", flush=True)
+        return 1
+    result = await _invoke_live(
+        args,
+        lambda client: client.request("plugin.config.update", {"name": args.name, "config": value}),
+    )
+    _print_live_result(args, result, f"plugin '{args.name}' config saved")
     return 0
 
 
