@@ -67,7 +67,7 @@ describe('useCoreWorkbenchController', () => {
   })
 
   it('shows optimistic user and assistant waiting messages while a Core turn is running', async () => {
-    let resolveTurn: ((value?: unknown) => void) | null = null
+    let resolveTurn!: (value?: unknown) => void
     const api: CoreWorkbenchApi = {
       async listSessions() {
         return [{

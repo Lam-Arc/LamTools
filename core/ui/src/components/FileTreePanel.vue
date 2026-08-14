@@ -43,17 +43,21 @@ const emit = defineEmits<{
 const rootEntries = ref<CoreFileEntry[]>([])
 const loading = ref(false)
 const error = ref('')
+// Generation guard: switching projects fast must not let a stale earlier
+// response overwrite the current project's root (audit 19 S3).
+let loadGeneration = 0
 
 async function loadRoot() {
+  const generation = ++loadGeneration
   loading.value = true
   error.value = ''
   try {
     const result = await props.client.listFiles(props.projectId, '')
-    rootEntries.value = result.entries
+    if (generation === loadGeneration) rootEntries.value = result.entries
   } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e)
+    if (generation === loadGeneration) error.value = e instanceof Error ? e.message : String(e)
   } finally {
-    loading.value = false
+    if (generation === loadGeneration) loading.value = false
   }
 }
 

@@ -187,7 +187,7 @@ describe('WorkspaceShell rendering', () => {
     expect(wrapper.get('.workspace-main').attributes('inert')).toBeDefined();
     expect(wrapper.get('.composer-root').attributes('inert')).toBeDefined();
 
-    trigger.element.focus();
+    (trigger.element as HTMLElement).focus();
     await trigger.trigger('click');
     await nextTick();
     expect(drawer.classes()).not.toContain('open');

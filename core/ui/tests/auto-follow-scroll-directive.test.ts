@@ -83,11 +83,11 @@ function makeScrollable(scrollHeight = 1000, clientHeight = 300): HTMLElement & 
 
 function mount(el: HTMLElement) {
   document.body.appendChild(el)
-  autoFollowScrollDirective.mounted?.(el, { value: 'x', oldValue: '', modifiers: {}, arg: '' } as never)
+  autoFollowScrollDirective.mounted?.(el, { value: 'x', oldValue: '', modifiers: {}, arg: '' } as never, null as never, null as never)
 }
 
 function unmount(el: HTMLElement) {
-  autoFollowScrollDirective.unmounted?.(el, {} as never)
+  autoFollowScrollDirective.unmounted?.(el, {} as never, null as never, null as never)
   document.body.removeChild(el)
 }
 
@@ -171,7 +171,7 @@ describe('v-auto-follow-scroll directive', () => {
     document.body.appendChild(outer)
     attached.push(outer)
 
-    autoFollowScrollDirective.mounted?.(inner, { value: 'x', oldValue: '', modifiers: {}, arg: '' } as never)
+    autoFollowScrollDirective.mounted?.(inner, { value: 'x', oldValue: '', modifiers: {}, arg: '' } as never, null as never, null as never)
     await nextTick()
 
     // Target resolved to outer (nearest scrollable ancestor) — outer scrolled.
@@ -182,7 +182,7 @@ describe('v-auto-follow-scroll directive', () => {
     const el = makeScrollable()
     document.body.appendChild(el)
     attached.push(el)
-    autoFollowScrollDirective.mounted?.(el, { value: 'x', oldValue: '', modifiers: {}, arg: '' } as never)
+    autoFollowScrollDirective.mounted?.(el, { value: 'x', oldValue: '', modifiers: {}, arg: '' } as never, null as never, null as never)
     await nextTick()
 
     const inst = fakeRO.last()!
@@ -192,7 +192,7 @@ describe('v-auto-follow-scroll directive', () => {
     const child = document.createElement('div')
     el.appendChild(child)
     // 模拟 Vue updated 钩子补 observe
-    autoFollowScrollDirective.updated?.(el, { value: 'x', oldValue: 'x', modifiers: {}, arg: '' } as never)
+    autoFollowScrollDirective.updated?.(el, { value: 'x', oldValue: 'x', modifiers: {}, arg: '' } as never, null as never, null as never)
     expect(inst.targets.has(child)).toBe(true)
 
     // Child growth triggers follow.
@@ -210,7 +210,7 @@ describe('v-auto-follow-scroll directive', () => {
     const settled = el.scrollTop
 
     // 绑定值不变：updated 不滚（仅补 observe），避免逐帧滚动。
-    autoFollowScrollDirective.updated?.(el, { value: 'x', oldValue: 'x', modifiers: {}, arg: '' } as never)
+    autoFollowScrollDirective.updated?.(el, { value: 'x', oldValue: 'x', modifiers: {}, arg: '' } as never, null as never, null as never)
     await nextTick()
     // 没有 RO 触发、没有绑定值变化 → scrollTop 不应被再次修改
     expect(el.scrollTop).toBe(settled)
@@ -223,7 +223,7 @@ describe('v-auto-follow-scroll directive', () => {
     await nextTick()
     expect(el.scrollTop).toBe(1000)
 
-    autoFollowScrollDirective.updated?.(el, { value: 'y', oldValue: 'x', modifiers: {}, arg: '' } as never)
+    autoFollowScrollDirective.updated?.(el, { value: 'y', oldValue: 'x', modifiers: {}, arg: '' } as never, null as never, null as never)
     await nextTick()
     expect(el.scrollTop).toBe(1000) // target 已达底，无需移动
   })
@@ -231,13 +231,13 @@ describe('v-auto-follow-scroll directive', () => {
   it('cleans up listeners and observer on unmount', async () => {
     const el = makeScrollable()
     document.body.appendChild(el)
-    autoFollowScrollDirective.mounted?.(el, { value: 'x', oldValue: '', modifiers: {}, arg: '' } as never)
+    autoFollowScrollDirective.mounted?.(el, { value: 'x', oldValue: '', modifiers: {}, arg: '' } as never, null as never, null as never)
     await nextTick()
 
     const inst = fakeRO.last()!
     const scrollSpy = vi.spyOn(el, 'removeEventListener')
 
-    autoFollowScrollDirective.unmounted?.(el, {} as never)
+    autoFollowScrollDirective.unmounted?.(el, {} as never, null as never, null as never)
     expect(inst.targets.size).toBe(0)
     expect(scrollSpy).toHaveBeenCalledWith('scroll', expect.any(Function))
     expect(scrollSpy).toHaveBeenCalledWith('wheel', expect.any(Function))

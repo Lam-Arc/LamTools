@@ -17,15 +17,28 @@ export function useCoreConfigState<Provider extends CoreConfigEntity, Model exte
 ) {
   const providers = shallowRef<Provider[]>([])
   const models = shallowRef<Model[]>([])
+  // Pending-count loading: two overlapping fetches must not let the earlier
+  // completion clear the indicator while the later one is still in flight
+  // (audit 19 S3).
   const loading = ref(false)
+  let pendingRequests = 0
+
+  function beginRequest() {
+    pendingRequests += 1
+    loading.value = true
+  }
+  function endRequest() {
+    pendingRequests = Math.max(0, pendingRequests - 1)
+    loading.value = pendingRequests === 0
+  }
 
   async function fetchProviders() {
-    loading.value = true
-    try { providers.value = await adapter.listProviders() } finally { loading.value = false }
+    beginRequest()
+    try { providers.value = await adapter.listProviders() } finally { endRequest() }
   }
   async function fetchModels(providerId?: string) {
-    loading.value = true
-    try { models.value = await adapter.listModels(providerId) } finally { loading.value = false }
+    beginRequest()
+    try { models.value = await adapter.listModels(providerId) } finally { endRequest() }
   }
   async function createProvider(data: ProviderCreate) {
     const provider = await adapter.createProvider(data)

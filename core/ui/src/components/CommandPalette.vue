@@ -28,9 +28,10 @@
 </template>
 
 <script setup lang="ts">
+import { watch, nextTick } from 'vue'
 import type { CoreCommandCatalogItem } from '../types'
 
-defineProps<{
+const props = defineProps<{
   commands: CoreCommandCatalogItem[]
   activeIndex: number
 }>()
@@ -38,6 +39,19 @@ defineProps<{
 defineEmits<{
   select: [command: CoreCommandCatalogItem]
 }>()
+
+// Keep the keyboard-selected item visible inside the scrollable list
+// (audit 19 S4).
+watch(
+  () => props.activeIndex,
+  () => {
+    void nextTick(() => {
+      const list = document.querySelector('.command-palette .command-list')
+      const active = list?.querySelector('.command-item.active')
+      active?.scrollIntoView({ block: 'nearest' })
+    })
+  },
+)
 
 function commandLabel(command: CoreCommandCatalogItem): string {
   const detail = command.description || command.title || command.name

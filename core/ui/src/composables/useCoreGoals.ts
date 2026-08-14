@@ -18,6 +18,9 @@ export function useCoreGoals(options: UseCoreGoalsOptions) {
 
   async function refreshGoal(threadId?: string | null, force = false) {
     const tid = threadId ?? activeSessionId.value
+    // No session selected: nothing to refresh — return before touching the
+    // throttle window so an idle UI never burns the 2s budget (audit 19 S4).
+    if (!tid) return
     // Throttle the per-stream-tick refresh: goal strip still updates at most
     // every GOAL_REFRESH_THROTTLE_MS during a long stream, while force
     // (turn finished / session switch) refreshes immediately.
@@ -26,7 +29,6 @@ export function useCoreGoals(options: UseCoreGoalsOptions) {
     throttledUntil = now + GOAL_REFRESH_THROTTLE_MS
     const generation = ++goalRequestGeneration
     goalError.value = ''
-    if (!tid) return
     try {
       const goals = await listGoals(tid)
       if (generation !== goalRequestGeneration || activeSessionId.value !== tid) return

@@ -18,11 +18,12 @@ describe('useCoreLiveTurnController', () => {
         connectionState.value = 'open'
       },
       startTurn: async (threadId, input, workRoot, options) => {
-        calls.push(`start:${threadId}:${JSON.stringify(input)}:${workRoot}:${String(options.thinking_enabled)}`)
+        calls.push(`start:${threadId}:${JSON.stringify(input)}:${workRoot}:${String(options?.thinking_enabled)}`)
       },
       interruptTurn: async () => {
         throw new Error('not used')
       },
+      forceResetTurn: async () => undefined,
     })
 
     const started = await controller.startActiveTurn(
@@ -55,6 +56,7 @@ describe('useCoreLiveTurnController', () => {
       interruptTurn: async (threadId, turnId) => {
         calls.push(`interrupt:${threadId}:${turnId}`)
       },
+      forceResetTurn: async () => undefined,
     })
 
     expect(await controller.interruptActiveTurn()).toBe(true)
@@ -67,11 +69,14 @@ describe('useCoreLiveTurnController', () => {
       activeThreadId: ref<string | null>('thread-b'),
       connectedThreadId: ref('thread-a'),
       connectionState: ref<'connecting' | 'open' | 'closed' | 'error'>('open'),
-      connect: async (threadId) => calls.push(`connect:${threadId}`),
+      connect: async (threadId) => {
+        calls.push(`connect:${threadId}`)
+      },
       startTurn: async (threadId, _input, workRoot, options) => {
-        calls.push(`start:${threadId}:${workRoot}:${String(options.model_id)}`)
+        calls.push(`start:${threadId}:${workRoot}:${String(options?.model_id)}`)
       },
       interruptTurn: async () => undefined,
+      forceResetTurn: async () => undefined,
     })
 
     expect(await controller.startThreadTurn([{ type: 'text', text: 'from A' }], 'thread-a', 'E:\\A', { model_id: 'model-a' })).toBe(true)

@@ -1,5 +1,7 @@
 <template>
-  <Teleport defer to=".workspace-shell">
+  <!-- Default mount point is document.body; hosts without a workspace shell
+       still render the dialog (audit 19 S3). -->
+  <Teleport :to="teleportTarget">
     <div class="core-project-dialog-backdrop" data-project-backdrop @mousedown.self="cancel">
       <section
         class="core-project-dialog"
@@ -85,10 +87,12 @@ const props = withDefaults(defineProps<{
   loading?: boolean
   error?: string
   apiBase?: string
+  teleportTarget?: string
 }>(), {
   loading: false,
   error: '',
   apiBase: '/api/core',
+  teleportTarget: 'body',
 })
 
 const emit = defineEmits<{

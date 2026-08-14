@@ -1,8 +1,10 @@
 <template>
   <div class="workspace-shell" :class="shellClass" :style="shellStyle">
-    <!-- Notifications -->
-    <div v-if="errorText" class="error-toast" role="alert" aria-atomic="true">{{ errorText }}</div>
-    <div v-if="noticeText" class="notice-toast" role="status" aria-atomic="true">{{ noticeText }}</div>
+    <!-- Notifications: single global host fed by the useCoreToast service.
+         errorText/noticeText props are bridged into the service for legacy
+         hosts (audit: previously two fixed slots, no dismissal, no
+         auto-expiry for several error sources). -->
+    <CoreToastHost />
 
     <nav class="mobile-shell-nav" aria-label="工作区面板">
       <span class="mobile-shell-title">{{ productName }}</span>
@@ -154,7 +156,7 @@
             :aria-label="composerPlaceholder"
             :disabled="composerDisabled"
             rows="1"
-            @keydown.enter.exact.prevent="$emit('composer-submit')"
+            @keydown.enter.exact="onComposerEnter"
           ></textarea>
         </slot>
       </template>
@@ -213,7 +215,9 @@ import { ref, useId, watch } from 'vue'
 import { Command } from 'lucide-vue-next'
 import { useShellLayout } from '../composables/useShellLayout'
 import type { ThemeData } from '../composables/useShellLayout'
+import { dismissToast, showToast } from '../composables/useCoreToast'
 import ComposerBar from './ComposerBar.vue'
+import CoreToastHost from './CoreToastHost.vue'
 
 const props = withDefaults(
   defineProps<{
@@ -268,11 +272,41 @@ const emit = defineEmits<{
   'update:stageOpen': [value: boolean]
 }>()
 
+// IME guard for the fallback textarea: composition-confirm Enter must not
+// submit the message (audit 19 S3).
+function onComposerEnter(event: KeyboardEvent) {
+  if (event.isComposing) return
+  event.preventDefault()
+  emit('composer-submit')
+}
+
 const drawerId = useId()
 const leftDrawerId = `${drawerId}-left-drawer`
 const rightDrawerId = `${drawerId}-right-drawer`
 const leftToggleButton = ref<HTMLButtonElement | null>(null)
 const rightToggleButton = ref<HTMLButtonElement | null>(null)
+
+// Legacy props bridge: hosts that still pass errorText/noticeText get them
+// routed through the global toast service (auto-expiry + manual dismiss)
+// instead of the removed fixed two-slot render. Clearing the prop dismisses
+// the toast it opened.
+const propToastIds: Record<'error' | 'notice', number | null> = { error: null, notice: null }
+watch(() => props.errorText, (value) => {
+  if (value) {
+    propToastIds.error = showToast('error', value)
+  } else if (propToastIds.error !== null) {
+    dismissToast(propToastIds.error)
+    propToastIds.error = null
+  }
+}, { immediate: true })
+watch(() => props.noticeText, (value) => {
+  if (value) {
+    propToastIds.notice = showToast('notice', value)
+  } else if (propToastIds.notice !== null) {
+    dismissToast(propToastIds.notice)
+    propToastIds.notice = null
+  }
+}, { immediate: true })
 
 const {
   leftOpen,

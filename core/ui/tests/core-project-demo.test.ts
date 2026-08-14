@@ -3,17 +3,19 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { createCoreProjectWorkspaceActions } from '../src/projects/workspace'
 import type { CoreProjectClient } from '../src/projects/client'
-import { buildCoreProjectGroups, type CoreProject, type CoreProjectSession } from '../src/projects/types'
+import type { CoreSessionListItem } from '../src/types'
+import { buildCoreProjectGroups, type CoreProject } from '../src/projects/types'
 
 const project: CoreProject = { id: 'project-1', name: 'Docs', workRoot: 'E:\\docs' }
-const initialSession: CoreProjectSession = {
+const initialSession: CoreSessionListItem = {
   id: 'session-1',
   title: 'Docs',
+  createdAt: '',
   metadata: { project_id: 'project-1', work_root: 'E:\\docs' },
 }
 
 function createWorkspace() {
-  const client: CoreProjectClient = {
+  const client = {
     list: vi.fn(),
     create: vi.fn().mockResolvedValue({ project, session: initialSession }),
     get: vi.fn(),
@@ -27,9 +29,14 @@ function createWorkspace() {
     listSessions: vi.fn(),
     readAgents: vi.fn().mockResolvedValue({ content: '# Existing', exists: true }),
     writeAgents: vi.fn().mockResolvedValue({ content: '# Updated', exists: true }),
-  }
+    listFiles: vi.fn().mockResolvedValue({ entries: [], path: '' }),
+    readFile: vi.fn().mockResolvedValue({ content: '', path: '' }),
+    writeFile: vi.fn().mockResolvedValue({ content: '', path: '' }),
+    fileRawUrl: vi.fn(() => ''),
+    browseDirectory: vi.fn().mockResolvedValue({ entries: [], path: '' }),
+  } satisfies CoreProjectClient
   const projects = ref<CoreProject[]>([])
-  const sessions = ref<CoreProjectSession[]>([])
+  const sessions = ref<CoreSessionListItem[]>([])
   const activeSessionId = ref<string | null>(null)
   const selectSession = vi.fn().mockResolvedValue(undefined)
   return {

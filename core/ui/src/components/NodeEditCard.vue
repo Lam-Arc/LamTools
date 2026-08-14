@@ -105,7 +105,7 @@
         <label class="field"><span class="field-label">工作目录</span><AutoTextarea v-model="cwd" :min-rows="1" :max-rows="4" placeholder="（默认 work_root）" /></label>
         <details class="settings-advanced">
           <summary>高级设置</summary>
-          <label class="field"><span class="field-label">超时（秒）</span><input v-model.number="temperature" type="number" /></label>
+          <label class="field"><span class="field-label">超时（秒）</span><input v-model.number="timeout" type="number" min="0" /></label>
           <label class="field"><span class="field-label">重试次数</span><input v-model.number="retries" type="number" min="0" /></label>
         </details>
       </template>
@@ -117,7 +117,7 @@
         <p class="field-hint">{{ scriptContractHint }}</p>
         <details class="settings-advanced">
           <summary>高级设置</summary>
-          <label class="field"><span class="field-label">超时（秒）</span><input v-model.number="temperature" type="number" /></label>
+          <label class="field"><span class="field-label">超时（秒）</span><input v-model.number="timeout" type="number" min="0" /></label>
           <label class="field"><span class="field-label">重试次数</span><input v-model.number="retries" type="number" min="0" /></label>
         </details>
       </template>
@@ -265,6 +265,7 @@ function toggleTool(name: string) {
 }
 const modelId = ref(String(props.node.config.model_id ?? ''))
 const temperature = ref<number | ''>(props.node.config.temperature === undefined ? '' : Number(props.node.config.temperature))
+const timeout = ref<number | ''>(props.node.config.timeout === undefined ? '' : Number(props.node.config.timeout))
 const reasoningEffort = ref(String(props.node.config.reasoning_effort ?? ''))
 const maxTokens = ref<number | ''>(props.node.config.max_tokens === undefined ? '' : Number(props.node.config.max_tokens))
 const topP = ref<number | ''>(props.node.config.top_p === undefined ? '' : Number(props.node.config.top_p))
@@ -334,6 +335,7 @@ function apply() {
   } else if (props.node.kind === 'command') {
     cfg.command = command.value
     if (cwd.value) cfg.cwd = cwd.value
+    if (timeout.value !== '') cfg.timeout = timeout.value
     cfg.retries = retries.value
   } else if (props.node.kind === 'script') {
     // Auto-extend the scaffold when ports were added/renamed: for each output
@@ -357,6 +359,7 @@ function apply() {
     }
     cfg.script = script
     command.value = script
+    if (timeout.value !== '') cfg.timeout = timeout.value
     cfg.retries = retries.value
   } else if (props.node.kind === 'subgraph') {
     cfg.workflow_name = subworkflowName.value

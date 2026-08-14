@@ -139,7 +139,10 @@ export interface MessagePart {
   id: string;
   partType: MessagePartType;
   status: MessagePartStatus;
-  content: string;
+  /** Text content — absent for tool_call/tool_result/status parts whose
+   *  payload lives in toolArgs/toolResult (audit 21: the type required it
+   *  while the protocol omits it). Renderers already guard with `|| ''`. */
+  content?: string;
   /** Short label for collapsed display */
   label?: string;
   /** Extra detail shown inline */
@@ -151,6 +154,24 @@ export interface MessagePart {
   toolError?: string;
   inputPreview?: ToolInputPreview;
   artifacts?: ToolArtifact[];
+  /** Compaction bookkeeping carried by the backend projection
+   *  (audit 21: tests exercised these fields the type did not declare). */
+  before_tokens?: number;
+  after_tokens?: number;
+  compaction_status?: string;
+  limit_tokens?: number;
+  /** reason/phase/message: decision & status parts' payload fields. */
+  reason?: string;
+  phase?: string;
+  message?: string;
+  /** Compaction segment bookkeeping carried by the backend projection
+   *  (audit 21: tests exercised these fields the type did not declare).
+   *  segment = current segment index, segments = total segment count,
+   *  compacted_messages/removed_messages = message counts. */
+  segment?: number;
+  segments?: number;
+  compacted_messages?: number;
+  removed_messages?: number;
   /** Timing */
   runId?: string;
   startedAt?: string;

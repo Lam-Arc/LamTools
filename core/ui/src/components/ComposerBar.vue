@@ -22,7 +22,7 @@
             :disabled="disabled"
             rows="1"
             @input="$emit('update:modelValue', ($event.target as HTMLTextAreaElement).value)"
-            @keydown.enter.exact.prevent="$emit('submit')"
+            @keydown.enter.exact="onEnterKey"
           />
         </slot>
         <div class="composer-bottom">
@@ -83,13 +83,22 @@ withDefaults(defineProps<{
   active: false,
 })
 
-defineEmits<{
+const emit = defineEmits<{
   'update:modelValue': [value: string]
   submit: []
   drop: [event: DragEvent]
 }>()
 
 const dragOver = ref(false)
+
+// IME guard: the composition-confirm Enter must not submit the message
+// (audit 19 S3 — the default textarea previously emitted submit on any
+// plain Enter, which misfired for CJK users).
+function onEnterKey(event: KeyboardEvent) {
+  if (event.isComposing) return
+  event.preventDefault()
+  emit('submit')
+}
 </script>
 
 <style scoped>

@@ -48,7 +48,7 @@ describe('core appServer workbench projection', () => {
       },
     } satisfies CoreAppSnapshot)
 
-    const part = selectCoreWorkbenchMessages(snapshot)[0]?.parts[0]
+    const part = selectCoreWorkbenchMessages(snapshot)[0]?.parts?.[0]
 
     expect(part).toMatchObject({
       id: 'compact-1',
@@ -99,7 +99,7 @@ describe('core appServer workbench projection', () => {
         },
         requests: {},
       },
-    } satisfies CoreAppSnapshot))[0]?.parts[0]
+    } satisfies CoreAppSnapshot))[0]?.parts?.[0]
 
     const running = project('running', '')
     const streamed = project('running', '[Compacted Context]\n1. Current Goal')
@@ -316,7 +316,7 @@ describe('core appServer workbench projection', () => {
       },
     } satisfies CoreAppSnapshot)
 
-    expect(selectCoreWorkbenchMessages(snapshot)[0]?.parts[0]).toMatchObject({
+    expect(selectCoreWorkbenchMessages(snapshot)[0]?.parts?.[0]).toMatchObject({
       partType: 'status',
       status: 'error',
       content: 'Invalid tool message sequence',
@@ -401,7 +401,7 @@ describe('core appServer workbench projection', () => {
     // All agentMessages stay in parts for inline chronological rendering; the
     // last one also folds into content for backward compat
     expect(messages[0]?.parts).toHaveLength(2)
-    expect(messages[0]?.parts[0]).toMatchObject({
+    expect(messages[0]?.parts?.[0]).toMatchObject({
       id: parentId,
       partType: 'agent_summary',
       toolName: 'sub_agent',
@@ -413,7 +413,7 @@ describe('core appServer workbench projection', () => {
         ],
       },
     })
-    expect(messages[0]?.parts[1]).toMatchObject({
+    expect(messages[0]?.parts?.[1]).toMatchObject({
       id: 'main-text',
       partType: 'model_text',
       content: 'Main received the child result.',
@@ -475,7 +475,7 @@ describe('core appServer workbench projection', () => {
     expect(messages).toHaveLength(1)
     expect(messages[0]?.content).toBe('')
     expect(messages[0]?.parts).toHaveLength(1)
-    expect(messages[0]?.parts[0]).toMatchObject({
+    expect(messages[0]?.parts?.[0]).toMatchObject({
       id: parentId,
       metadata: {
         subLineParts: [

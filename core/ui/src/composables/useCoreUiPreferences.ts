@@ -23,11 +23,19 @@ export function useCoreUiPreferences(storageKey: string, adapter: CoreUiPreferen
   const contentWidth = ref(780)
   const theme = ref<ThemeData>(normalizeTheme({ ...DEFAULT_THEME }))
 
+  // Legacy key: before the shell/preferences keys were split, both wrote
+  // 'lamtools.core.ui' with different schemas (audit 19 S3). We still read
+  // it as a fallback so existing users keep their density/theme.
+  const LEGACY_KEY = 'lamtools.core.ui'
+
   async function load() {
     let value: Partial<CoreUiPreferencesValue> | null = null
     try { value = await adapter.read?.() || null } catch { value = null }
     if (!value) {
       try { value = JSON.parse(localStorage.getItem(storageKey) || 'null') } catch { value = null }
+    }
+    if (!value && storageKey !== LEGACY_KEY) {
+      try { value = JSON.parse(localStorage.getItem(LEGACY_KEY) || 'null') } catch { value = null }
     }
     if (!value) return
     if (value.density === 'compact' || value.density === 'standard' || value.density === 'loose') density.value = value.density
@@ -37,7 +45,11 @@ export function useCoreUiPreferences(storageKey: string, adapter: CoreUiPreferen
 
   async function save() {
     const value = snapshot()
-    localStorage.setItem(storageKey, JSON.stringify(value))
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(value))
+    } catch {
+      /* storage unavailable (private mode / quota) — persistence is best-effort */
+    }
     await adapter.write?.(value)
   }
 

@@ -2,14 +2,14 @@
   <Teleport to="body">
     <div
       class="settings-overlay"
-      @click.self="$emit('close')"
+      @click.self="requestCloseSettings"
     >
       <div class="settings-card" :style="settingsThemeStyle">
         <SettingsShell
           :sections="sections"
           title="Core 设置"
           :settings-theme-style="settingsThemeStyle"
-          @close="$emit('close')"
+          @close="requestCloseSettings"
         >
           <template #default="{ activeSection }">
       <section v-if="activeSection === 'models'" class="settings-panel">
@@ -66,7 +66,7 @@
         </div>
       </section>
 
-      <section v-else-if="activeSection === 'appearance'" class="settings-panel">
+      <section v-if="activeSection === 'appearance'" class="settings-panel">
         <header class="settings-title">
           <h1>界面</h1>
           <p>主题和密度只影响当前 Core 界面。</p>
@@ -121,27 +121,38 @@
         />
       </section>
 
-      <section v-else-if="activeSection === 'skills'" class="settings-panel">
+      <section v-if="activeSection === 'skills'" class="settings-panel">
         <CoreSkillsEditor :request-rpc="requestRpc || defaultRequestRpc" />
       </section>
 
-      <section v-else-if="activeSection === 'loadtools'" class="settings-panel">
-        <CoreLoadToolsEditor :request-rpc="requestRpc || defaultRequestRpc" />
+      <section v-if="activeSection === 'loadtools'" class="settings-panel">
+        <!-- KeepAlive: switching sections must not destroy editor draft
+             state (audit 17 S3 — the SettingsShell :key remount used to
+             wipe every unsaved draft). -->
+        <KeepAlive>
+          <CoreLoadToolsEditor :request-rpc="requestRpc || defaultRequestRpc" />
+        </KeepAlive>
       </section>
 
-      <section v-else-if="activeSection === 'imagegen'" class="settings-panel">
-        <CoreImageGenEditor :request-rpc="requestRpc || defaultRequestRpc" />
+      <section v-if="activeSection === 'imagegen'" class="settings-panel">
+        <KeepAlive>
+          <CoreImageGenEditor :request-rpc="requestRpc || defaultRequestRpc" />
+        </KeepAlive>
       </section>
 
-      <section v-else-if="activeSection === 'websearch'" class="settings-panel">
-        <CoreWebSearchEditor :request-rpc="requestRpc || defaultRequestRpc" />
+      <section v-if="activeSection === 'websearch'" class="settings-panel">
+        <KeepAlive>
+          <CoreWebSearchEditor :request-rpc="requestRpc || defaultRequestRpc" />
+        </KeepAlive>
       </section>
 
-      <section v-else-if="activeSection === 'hooks'" class="settings-panel">
-        <CoreHooksEditor :request-rpc="requestRpc || defaultRequestRpc" />
+      <section v-if="activeSection === 'hooks'" class="settings-panel">
+        <KeepAlive>
+          <CoreHooksEditor :request-rpc="requestRpc || defaultRequestRpc" />
+        </KeepAlive>
       </section>
 
-      <section v-else-if="activeSection === 'permissions'" class="settings-panel">
+      <section v-if="activeSection === 'permissions'" class="settings-panel">
         <header class="settings-title">
           <h1>权限策略</h1>
         </header>
@@ -185,7 +196,7 @@
         </article>
       </section>
 
-      <section v-else-if="activeSection === 'agents'" class="settings-panel">
+      <section v-if="activeSection === 'agents'" class="settings-panel">
         <header class="settings-title">
           <h1>上下文与记忆</h1>
           <p>全局上下文三件套，对所有项目生效。注入顺序：全局 AGENTS.md（优先级 5）→ 全局 memory.md（15）→ 项目 AGENTS.md / MEMORY.md（10 / 20）；load_context 的 addition/except 全局叠加到每个工作区。</p>
@@ -322,6 +333,7 @@
               min="1"
               max="20"
               :disabled="dreamingLoading"
+              @input="markSettingsDirty"
             />
             <button class="small-btn quiet" type="button" :disabled="dreamingLoading || dreamingSaving" @click="saveDreamingSettings">保存</button>
           </div>
@@ -330,7 +342,7 @@
         </article>
       </section>
 
-      <section v-else-if="activeSection === 'workflow'" class="settings-panel">
+      <section v-if="activeSection === 'workflow'" class="settings-panel">
         <header class="settings-title">
           <h1>工作流</h1>
           <p class="settings-subhead">管理与创建 Workflow，并控制是否暴露为 Agent 工具。</p>
@@ -374,11 +386,13 @@
         </article>
       </section>
 
-      <section v-else-if="activeSection === 'subagent'" class="settings-panel">
-        <CoreSubAgentEditor :request-rpc="requestRpc || defaultRequestRpc" :models="models" />
+      <section v-if="activeSection === 'subagent'" class="settings-panel">
+        <KeepAlive>
+          <CoreSubAgentEditor :request-rpc="requestRpc || defaultRequestRpc" :models="models" />
+        </KeepAlive>
       </section>
 
-      <section v-else-if="activeSection === 'about'" class="settings-panel">
+      <section v-if="activeSection === 'about'" class="settings-panel">
         <header class="settings-title">
           <h1>关于与更新</h1>
           <p>当前版本与软件更新（更新源：GitHub Releases）。</p>
@@ -431,8 +445,12 @@
            且 ref+Teleport 组合在测试环境（Teleport stub）会触发渲染递归。 -->
       <div v-if="providerEditor || modelEditor" class="editor-overlay" @click.self="closeEditors">
           <div class="editor-popover">
+            <!-- Validation errors must render INSIDE the popover — the outer
+                 noticeText sits behind the overlay's dim/blur and was
+                 invisible to the user (audit 17 S3). -->
+            <p v-if="editorError" class="skill-error editor-error" role="alert">{{ editorError }}</p>
             <!-- Provider editor -->
-            <form v-if="providerEditor" :data-provider-form="providerEditor.mode" class="config-form" @submit.prevent="submitProvider">
+            <form v-if="providerEditor" :data-provider-form="providerEditor.mode" class="config-form" @submit.prevent="submitProvider" @input="markSettingsDirty">
               <div class="editor-popover-head">
                 <h3>{{ providerEditor.mode === 'create' ? '新增供应商' : '编辑供应商' }}</h3>
                 <button type="button" class="editor-popover-close" @click="providerEditor = null">
@@ -493,7 +511,7 @@
             </form>
 
             <!-- Model editor -->
-            <form v-if="modelEditor" :data-model-form="modelEditor.mode" class="config-form" @submit.prevent="submitModel">
+            <form v-if="modelEditor" :data-model-form="modelEditor.mode" class="config-form" @submit.prevent="submitModel" @input="markSettingsDirty">
               <div class="editor-popover-head">
                 <h3>{{ modelEditor.mode === 'create' ? '新增模型' : '编辑模型' }}</h3>
                 <button type="button" class="editor-popover-close" @click="modelEditor = null">
@@ -750,6 +768,9 @@ type ModelEditor = CoreSettingsModelPayload & { mode: 'create' | 'update'; extra
 const providerEditor = ref<ProviderEditor | null>(null)
 const modelEditor = ref<ModelEditor | null>(null)
 const noticeText = ref('')
+// Validation feedback shown INSIDE the editor overlay — noticeText renders
+// behind the overlay and was invisible while editing (audit 17 S3).
+const editorError = ref('')
 const expandedTier = ref<string | null>(null)
 
 // ── Global AGENTS.md (项目规则) editor state ──
@@ -912,10 +933,16 @@ async function saveDreamingSettings() {
   dreamingSaving.value = true
   dreamingError.value = ''
   try {
+    // The input is not inside a <form>, so native min/max never fire —
+    // enforce the domain here (audit 17 S3).
+    const rawTurns = Math.floor(Number(dreamingMinTurns.value))
+    const minTurns = Number.isFinite(rawTurns) ? Math.min(20, Math.max(1, rawTurns)) : 3
+    dreamingMinTurns.value = minTurns
     await rpc('settings.update', {
       namespace: 'core.dreaming',
-      value: { enabled: dreamingEnabled.value, min_turns: dreamingMinTurns.value || 3 },
+      value: { enabled: dreamingEnabled.value, min_turns: minTurns },
     })
+    settingsDirty.value = false
   } catch (e) {
     dreamingError.value = e instanceof Error ? e.message : String(e)
   } finally {
@@ -926,6 +953,7 @@ async function saveDreamingSettings() {
 function closeEditors() {
   providerEditor.value = null
   modelEditor.value = null
+  editorError.value = ''
 }
 
 const defaultRequestRpc = async (_method: string, _params?: Record<string, unknown>) => {
@@ -1117,6 +1145,9 @@ function submitProvider() {
   if (editor.mode === 'create') emit('create-provider', payload)
   else emit('update-provider', payload)
   providerEditor.value = null
+  // The parent handles persistence; a submitted editor counts as saved so
+  // the close guard does not nag on a clean state (audit 17 S3).
+  settingsDirty.value = false
 }
 
 function applyProviderPreset() {
@@ -1165,10 +1196,13 @@ function startModelUpdate(model: CoreSettingsModel) {
     provider_name: model.provider_name || '',
     model_id: model.model_id || '',
     display_name: model.display_name || '',
-    context_window: model.context_window || 128000,
-    max_output_tokens: model.max_output_tokens || 16384,
+    // `??` — a legitimate 0 (e.g. thinking_budget=0 disables the reasoning
+    // budget) must round-trip instead of silently becoming the default
+    // (audit 17 S3).
+    context_window: model.context_window ?? 128000,
+    max_output_tokens: model.max_output_tokens ?? 16384,
     thinking_supported: model.thinking_supported === true,
-    thinking_budget: model.thinking_budget || 10000,
+    thinking_budget: model.thinking_budget ?? 10000,
     temperature: model.temperature ?? 0.7,
     capability: model.capability || '',
     notes: model.notes || '',
@@ -1180,8 +1214,9 @@ function startModelUpdate(model: CoreSettingsModel) {
 function submitModel() {
   const editor = modelEditor.value
   if (!editor) return
+  editorError.value = ''
   if (!editor.provider_id) {
-    noticeText.value = '请先选择供应商'
+    editorError.value = '请先选择供应商'
     return
   }
   const extra = parseExtraJson(editor.extra_json)
@@ -1191,6 +1226,7 @@ function submitModel() {
   if (editor.mode === 'create') emit('create-model', payload)
   else emit('update-model', payload)
   modelEditor.value = null
+  settingsDirty.value = false
 }
 
 function parseExtraJson(value: string): Record<string, unknown> | null {
@@ -1198,9 +1234,10 @@ function parseExtraJson(value: string): Record<string, unknown> | null {
     const parsed = JSON.parse(value || '{}')
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error()
     noticeText.value = ''
+    editorError.value = ''
     return parsed as Record<string, unknown>
   } catch {
-    noticeText.value = '高级适配 JSON 必须是对象'
+    editorError.value = '高级适配 JSON 必须是对象'
     return null
   }
 }
@@ -1227,9 +1264,24 @@ function presetsByGroup(group: ThemePreset['group']): ThemePreset[] {
 
 const presets = THEME_PRESETS
 
+// ── Unsaved-changes guard (audit 17 S3) ─────────────────────────
+// Any open editor, or a dreaming form that was touched after the last
+// save, makes a close without confirmation risky (Esc / backdrop click /
+// header close all discard silently today).
+const settingsDirty = ref(false)
+
+function markSettingsDirty() {
+  settingsDirty.value = true
+}
+
+function requestCloseSettings() {
+  if (settingsDirty.value && !window.confirm('有未保存的修改，确定关闭设置吗？')) return
+  emit('close')
+}
+
 function onKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape') {
-    emit('close')
+    requestCloseSettings()
   }
 }
 

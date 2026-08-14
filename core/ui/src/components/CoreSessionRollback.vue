@@ -525,7 +525,10 @@ function normalizeRestoreResult(value: Record<string, unknown>): CoreSessionRoll
 
 function normalizeRestoreScope(value: unknown): RestoreScope {
   if (value === 'conversation' || value === 'workspace' || value === 'all') return value
-  return 'all'
+  // Fail-safe: an unexpected scope must abort the operation instead of
+  // silently escalating to the most destructive "all" (files + conversation
+  // overwrite) (audit 17 S3).
+  throw new Error(`未知的恢复范围：${String(value)}，已取消读档`)
 }
 
 function restoreNotice(result: CoreSessionRollbackResult): string {

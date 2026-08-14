@@ -172,7 +172,10 @@ describe('Core demo settings entry', () => {
 
     expect(source).toContain('@settings="openSettings"')
     expect(source).toContain('<CoreSettings')
-    expect(source).toContain('useCoreUiPreferences(settingsStorageKey)')
+    // Preferences persist under a key split from the shell's (which also
+    // stores stageOpen/stageHeight) so neither schema clobbers the other
+    // (audit 19 S3).
+    expect(source).toContain("useCoreUiPreferences('lamtools.core.ui.preferences')")
     expect(source).toContain(':content-width="contentWidth"')
     expect(source).toContain('@update:content-width="uiPreferences.setContentWidth"')
     expect(source).toContain("@import '../styles/theme-editor.css';")

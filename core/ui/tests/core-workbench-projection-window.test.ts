@@ -4,12 +4,14 @@ import {
   hydrateSnapshot,
   selectCoreWorkbenchMessagesWindow,
   type CoreAppSnapshot,
+  type CoreRuntimeItem,
+  type CoreRuntimeTurn,
 } from '../src/appServer'
 
 function snapshotWithTurns(count: number): CoreAppSnapshot {
   const itemOrder: string[] = []
-  const turns: Record<string, Record<string, unknown>> = {}
-  const items: Record<string, Record<string, unknown>> = {}
+  const turns: Record<string, CoreRuntimeTurn> = {}
+  const items: Record<string, CoreRuntimeItem> = {}
   for (let i = 1; i <= count; i += 1) {
     itemOrder.push(`item-${i}`)
     turns[`turn-${i}`] = { turn_id: `turn-${i}`, status: 'completed', items: [`item-${i}`] }

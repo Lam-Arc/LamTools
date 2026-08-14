@@ -137,7 +137,7 @@ describe('SessionSidebar sections', () => {
 
     const sessions = wrapper.findAll('.conversation')
     expect(sessions[0].text()).toContain('Newer')
-    expect(sessions[0].get('.status.conversation-status.running').exists()).toBe(true)
+    expect(sessions[0].find('.status.conversation-status.running').exists()).toBe(true)
     expect(localStorage.getItem('test.sidebar.pins.sessions')).toBe('["newer"]')
     expect(wrapper.get('[data-session-pin="newer"]').attributes('aria-pressed')).toBe('true')
   })

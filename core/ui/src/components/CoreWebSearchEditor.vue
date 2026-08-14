@@ -156,8 +156,41 @@ interface ParsedConfig {
 }
 
 function stripJsoncComments(text: string): string {
-  // simplistic JSONC comment strip (no string-literal awareness needed for our configs)
-  return text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1')
+  // String-literal-aware JSONC comment strip. A regex-based strip corrupts
+  // the `//` inside quoted URLs ("https://…") (audit 17 S3).
+  let out = ''
+  let inString = false
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]
+    const next = text[i + 1]
+    if (inString) {
+      out += ch
+      if (ch === '\\' && i + 1 < text.length) {
+        out += next
+        i += 1
+        continue
+      }
+      if (ch === '"') inString = false
+      continue
+    }
+    if (ch === '"') {
+      inString = true
+      out += ch
+      continue
+    }
+    if (ch === '/' && next === '/') {
+      while (i < text.length && text[i] !== '\n') i += 1
+      continue
+    }
+    if (ch === '/' && next === '*') {
+      i += 2
+      while (i + 1 < text.length && !(text[i] === '*' && text[i + 1] === '/')) i += 1
+      i += 1
+      continue
+    }
+    out += ch
+  }
+  return out
 }
 
 function parseConfig(content: string): ParsedConfig {
@@ -195,9 +228,15 @@ async function fetchConfig() {
 }
 
 function toJsoncContent(): string {
-  const data: Record<string, unknown> = { provider: form.provider.trim() || 'baidu' }
+  // Merge onto the original config so custom extension fields (transport,
+  // url, command, …) survive a form save instead of being silently wiped
+  // (audit 17 S3).
+  const data: Record<string, unknown> = { ...parseConfig(configOriginal.value || '') }
+  data.provider = form.provider.trim() || 'baidu'
   if (form.limit > 0) data.limit = form.limit
+  else delete data.limit
   if (form.timeout > 0) data.timeout = form.timeout
+  else delete data.timeout
   return JSON.stringify(data, null, 2)
 }
 

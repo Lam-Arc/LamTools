@@ -132,7 +132,7 @@ describe('useCoreApprovalController', () => {
     const nestedApproval = {
       id: 'child-approval-1',
       partType: 'decision' as const,
-      status: 'pending' as const,
+      status: 'pending' as string,
       content: 'Allow child write',
       metadata: { waitingRequest: { request_id: 'child-request-1' } },
     }

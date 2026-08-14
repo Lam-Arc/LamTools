@@ -51,6 +51,9 @@ export function useCoreQueuedInputController(options: UseCoreQueuedInputControll
       cancelEdit()
       return false
     }
+    // Claim the item for the whole save: Enter + blur can otherwise fire two
+    // concurrent updates (audit 19 S3 — guide() already uses this pattern).
+    submittingItemIds.value = new Set([...submittingItemIds.value, item.id])
     try {
       await options.ensureConnected(item.thread_id)
       if (text !== item.text) {
@@ -61,6 +64,9 @@ export function useCoreQueuedInputController(options: UseCoreQueuedInputControll
       reportError(error)
       return false
     } finally {
+      const next = new Set(submittingItemIds.value)
+      next.delete(item.id)
+      submittingItemIds.value = next
       cancelEdit()
     }
   }

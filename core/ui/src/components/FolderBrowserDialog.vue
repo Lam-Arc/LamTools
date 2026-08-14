@@ -1,17 +1,22 @@
 <template>
-  <Teleport defer to=".workspace-shell">
+  <!-- Default mount point is document.body; a workspace-shell host may pass
+       its own target (audit 19 S3 — hardcoding ".workspace-shell" silently
+       broke rendering in hosts without the shell). -->
+  <Teleport :to="teleportTarget">
     <div
       v-if="visible"
       class="fb-dialog-backdrop"
       @mousedown.self="cancel"
-      @keydown.escape="cancel"
     >
       <section
+        ref="dialogRef"
         class="fb-dialog"
         role="dialog"
         aria-modal="true"
         aria-labelledby="fb-dialog-title"
         :aria-busy="loading"
+        tabindex="-1"
+        @keydown.escape="cancel"
       >
         <header class="fb-dialog-header">
           <h2 id="fb-dialog-title">选择目录</h2>
@@ -87,12 +92,15 @@ interface Props {
   modelValue?: boolean
   initialPath?: string
   apiBase?: string
+  /** Teleport target selector; defaults to document.body (audit 19 S3). */
+  teleportTarget?: string
 }
 
 const props = withDefaults(defineProps<Props>(), {
   modelValue: false,
   initialPath: '',
   apiBase: '/api/core',
+  teleportTarget: 'body',
 })
 
 const emit = defineEmits<{
@@ -106,6 +114,10 @@ const selectedPath = ref('')
 const entries = ref<FbEntry[]>([])
 const loading = ref(false)
 const error = ref('')
+const dialogRef = ref<HTMLElement | null>(null)
+// Focus management (audit 19 S3): remember who opened us so we can return
+// focus on close; move focus into the dialog on open.
+let previouslyFocused: HTMLElement | null = null
 
 interface FbEntry {
   name: string
@@ -123,6 +135,8 @@ watch(() => props.modelValue, (val) => {
     entries.value = []
     error.value = ''
     loadEntries()
+    previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    requestAnimationFrame(() => dialogRef.value?.focus())
   }
 })
 
@@ -183,8 +197,16 @@ function goUp() {
   loadEntries()
 }
 
+function restoreFocus() {
+  if (previouslyFocused && typeof previouslyFocused.focus === 'function') {
+    previouslyFocused.focus()
+  }
+  previouslyFocused = null
+}
+
 function cancel() {
   visible.value = false
+  restoreFocus()
 }
 
 function confirm() {
@@ -192,6 +214,7 @@ function confirm() {
     emit('selected', selectedPath.value)
   }
   visible.value = false
+  restoreFocus()
 }
 </script>
 

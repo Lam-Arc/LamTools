@@ -66,6 +66,15 @@
 .workspace-shell.stage-open { --main-left: var(--left-reveal); }
 .workspace-shell.stage-open { --main-right: var(--right-reveal); }
 
+/* Mobile nav bar + drawer backdrop are desktop-hidden here; their ≤640px
+   rules live in the responsive section at the bottom (audit 19: the whole
+   mobile block was accidentally dropped, leaving an unstyled floating bar
+   on desktop and a zero-width drawer on mobile). */
+.mobile-shell-nav,
+.mobile-drawer-backdrop {
+  display: none;
+}
+
 .workspace-shell.density-compact {
   --left-card-width: 244px;
   --right-drawer-width: 272px;
@@ -129,7 +138,14 @@
 .drawer-left.open {
   transform: none;
 }
-.drawer-left:not(.open) { pointer-events: auto; }
+/* Closed left drawer must be inert to clicks (mirrors .drawer-right) — the
+   old `pointer-events: auto` made it swallow the left ~244px of clicks
+   whenever a consumer rendered the drawer without the template `inert`
+   (audit 19). */
+.drawer-left:not(.open) {
+  opacity: 0;
+  pointer-events: none;
+}
 
 .drawer-right {
   top: var(--titlebar-offset, 0); bottom: 0; right: 0;
@@ -2375,28 +2391,85 @@
 }
 
 /* =========================================================================
-   Toast / notification
+   Toast / notification — single host fed by the global useCoreToast service
+   (composables/useCoreToast.ts). Toasts stack top-center, auto-dismiss after
+   a kind-dependent duration, and are individually closable. They never cover
+   interactive content (fixed strip, no overlay) and never overwrite each
+   other the way the old two-slot .error-toast/.notice-toast did.
    ========================================================================= */
-.error-toast, .notice-toast {
+.core-toast-host {
   position: fixed;
   top: calc(var(--titlebar-offset, 0) + 18px);
   left: 50%;
   transform: translateX(-50%);
   z-index: var(--z-toast, 90);
-  padding: 10px 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none; /* the strip itself never blocks clicks beneath */
+  max-width: min(90vw, 640px);
+}
+.core-toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 100%;
+  padding: 10px 14px;
   border-radius: 12px;
   font-size: 13px;
   font-weight: 600;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
 }
-.error-toast {
+.core-toast--error {
   background: color-mix(in srgb, var(--red) 16%, transparent);
   border: 1px solid color-mix(in srgb, var(--red) 35%, transparent);
   color: color-mix(in srgb, var(--red) 58%, var(--theme-main-text, #f2efeb));
 }
-.notice-toast {
+.core-toast--notice {
   background: color-mix(in srgb, var(--green) 14%, transparent);
   border: 1px solid color-mix(in srgb, var(--green) 28%, transparent);
   color: color-mix(in srgb, var(--green) 64%, var(--theme-main-text, #f2efeb));
+}
+.core-toast--success {
+  background: color-mix(in srgb, var(--green) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--green) 28%, transparent);
+  color: color-mix(in srgb, var(--green) 64%, var(--theme-main-text, #f2efeb));
+}
+.core-toast__text {
+  overflow-wrap: anywhere;
+}
+.core-toast__dismiss {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  opacity: 0.65;
+  cursor: pointer;
+}
+.core-toast__dismiss:hover {
+  opacity: 1;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
+.core-toast__dismiss svg {
+  width: 12px;
+  height: 12px;
+}
+.core-toast-enter-active,
+.core-toast-leave-active {
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+.core-toast-enter-from,
+.core-toast-leave-to {
+  opacity: 0;
+  transform: translateY(-6px);
 }
 
 /* =========================================================================
@@ -2421,9 +2494,84 @@
   }
 }
 @media (max-width: 640px) {
-  .workspace-shell { --left-card-width: 0px; }
+  .workspace-shell { --left-card-width: min(86vw, 320px); }
   .workspace-shell { --right-drawer-width: 100vw; }
   .workspace-shell { --main-x-padding: 14px; }
+  /* Drawers become bottom-sheet-style slide-overs with a dimmed backdrop
+     (restored from the dropped mobile block — audit 19). */
+  .workspace-main { padding-top: 58px; border-radius: 0; }
+  .edge { display: none; }
+  .workspace-drawer {
+    z-index: var(--z-popover, 60);
+    max-width: min(86vw, 320px);
+    background: var(--theme-backdrop-background);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, .22);
+    opacity: 0;
+    pointer-events: none;
+  }
+  .drawer-left { transform: translateX(-102%); }
+  .drawer-right { display: flex; transform: translateX(102%); }
+  .drawer-left.open,
+  .drawer-right.open {
+    transform: translateX(0);
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .mobile-shell-nav {
+    position: fixed;
+    inset: 8px 10px auto;
+    z-index: calc(var(--z-edge-trigger, 35) + 1);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    pointer-events: none;
+  }
+  .mobile-shell-button {
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    border: 1px solid color-mix(in srgb, var(--theme-main-text) 14%, transparent);
+    border-radius: 10px;
+    background: var(--theme-main-background);
+    color: var(--theme-main-text);
+    display: grid;
+    place-items: center;
+    pointer-events: auto;
+  }
+  .mobile-shell-button svg {
+    width: 20px;
+    height: 20px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.7;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .mobile-shell-button:focus-visible {
+    outline: 2px solid var(--blue);
+    outline-offset: 2px;
+  }
+  .mobile-drawer-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: calc(var(--z-popover, 60) - 1);
+    display: block;
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    border: 0;
+    background: rgba(0, 0, 0, .48);
+  }
+  .pin-plain { display: none; }
+  .icon-btn,
+  .drawer-footer .settings-entry,
+  .conversation-action,
+  .send {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .floating-composer { width: calc(100vw - 28px); left: 50%; }
+  .floating-composer textarea { font-size: 14px; }
   .settings-page {
     display: flex;
     flex-direction: column;
@@ -2476,7 +2624,7 @@
   .floating-composer textarea { font-size: 14px; }
 }
 @media (max-width: 480px) {
-  .workspace-shell { --left-card-width: 0px; }
+  .workspace-shell { --left-card-width: min(86vw, 320px); }
   .floating-composer { width: calc(100vw - 20px); border-radius: 18px; }
 }
 

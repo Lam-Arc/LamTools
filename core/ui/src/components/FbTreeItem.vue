@@ -15,6 +15,7 @@
     </button>
     <template v-if="expanded && entry.type === 'directory'">
       <div v-if="loadingChildren" class="fb-tree-item-loading" :style="{ paddingLeft: `${(depth + 1) * varIndent + 6}px` }">...</div>
+      <div v-else-if="loadError" class="fb-tree-item-loading" :style="{ paddingLeft: `${(depth + 1) * varIndent + 6}px` }" role="alert">加载失败：{{ loadError }}</div>
       <template v-else>
         <FbTreeItem
           v-for="child in children"
@@ -51,6 +52,8 @@ const emit = defineEmits<{
 
 const expanded = ref(false)
 const loadingChildren = ref(false)
+const loadError = ref('')
+let loadGeneration = 0
 const children = ref<Array<{ name: string; type: 'directory' | 'file'; size: number; ext: string; path?: string }>>([])
 
 const varIndent = 18
@@ -110,16 +113,25 @@ async function onClick() {
 }
 
 async function loadChildren() {
+  const generation = ++loadGeneration
   loadingChildren.value = true
+  loadError.value = ''
   try {
     const res = await fetch(`${props.apiBase}/browse-directory?path=${encodeURIComponent(childBase.value)}`)
     if (!res.ok) throw new Error(`${res.status}`)
     const data = await res.json()
-    children.value = (data.entries || []).filter((e: { type: string }) => e.type === 'directory')
-  } catch {
-    children.value = []
+    if (generation === loadGeneration) {
+      children.value = (data.entries || []).filter((e: { type: string }) => e.type === 'directory')
+    }
+  } catch (e) {
+    // Surface the failure instead of silently showing an empty directory
+    // (audit 19 S3).
+    if (generation === loadGeneration) {
+      children.value = []
+      loadError.value = e instanceof Error ? e.message : String(e)
+    }
   } finally {
-    loadingChildren.value = false
+    if (generation === loadGeneration) loadingChildren.value = false
   }
 }
 

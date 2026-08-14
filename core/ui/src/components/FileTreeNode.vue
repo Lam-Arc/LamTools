@@ -14,6 +14,7 @@
     </button>
     <template v-if="entry.type === 'directory' && expanded">
       <div v-if="loading" class="file-tree-loading" :style="{ paddingLeft: `${(depth + 1) * 14 + 4}px` }">...</div>
+      <div v-else-if="loadError" class="file-tree-loading" :style="{ paddingLeft: `${(depth + 1) * 14 + 4}px` }" role="alert">加载失败：{{ loadError }}</div>
       <template v-else>
         <FileTreeNode
           v-for="child in children"
@@ -51,6 +52,8 @@ const emit = defineEmits<{
 const expanded = ref(false)
 const loading = ref(false)
 const children = ref<CoreFileEntry[]>([])
+const loadError = ref('')
+let loadGeneration = 0
 
 const childPath = computed(() => {
   if (props.basePath) return `${props.basePath}/${props.entry.name}`
@@ -92,14 +95,21 @@ async function onClick() {
 }
 
 async function loadChildren() {
+  const generation = ++loadGeneration
   loading.value = true
+  loadError.value = ''
   try {
     const result = await props.client.listFiles(props.projectId, childPath.value)
-    children.value = result.entries
-  } catch {
-    children.value = []
+    if (generation === loadGeneration) children.value = result.entries
+  } catch (e) {
+    // Surface the failure instead of silently showing an empty directory
+    // (audit 19 S3).
+    if (generation === loadGeneration) {
+      children.value = []
+      loadError.value = e instanceof Error ? e.message : String(e)
+    }
   } finally {
-    loading.value = false
+    if (generation === loadGeneration) loading.value = false
   }
 }
 

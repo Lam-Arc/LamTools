@@ -2,8 +2,9 @@ import { mount } from '@vue/test-utils'
 import { describe, expect, it, vi } from 'vitest'
 
 import ChatThread from '../src/components/ChatThread.vue'
+import type { CoreMessage } from '../src/types'
 
-const messages = [
+const messages: CoreMessage[] = [
   {
     id: 'assistant:turn-1',
     role: 'assistant',

@@ -28,6 +28,10 @@ export function useCoreProjectSessionState<Project extends CoreOwnedProject, Ses
   const sessionsLoading = ref(false)
   const activeProjectId = computed(() => activeProject.value?.id ?? null)
   const activeSessionId = computed(() => activeSession.value?.id ?? null)
+  // Generation guards: a slow earlier response must never overwrite data
+  // fetched later (e.g. rapid project switching) (audit 19 S3).
+  let projectsGeneration = 0
+  let sessionsGeneration = 0
   const sessionsByProject = computed(() => {
     const result = new Map<string, Session[]>()
     for (const session of sessions.value) {
@@ -38,8 +42,14 @@ export function useCoreProjectSessionState<Project extends CoreOwnedProject, Ses
   })
 
   async function fetchProjects() {
+    const generation = ++projectsGeneration
     projectsLoading.value = true
-    try { projects.value = await adapter.listProjects() } finally { projectsLoading.value = false }
+    try {
+      const result = await adapter.listProjects()
+      if (generation === projectsGeneration) projects.value = result
+    } finally {
+      if (generation === projectsGeneration) projectsLoading.value = false
+    }
   }
   async function createProject(data: ProjectCreate) {
     const result = await adapter.createProject(data)
@@ -65,8 +75,14 @@ export function useCoreProjectSessionState<Project extends CoreOwnedProject, Ses
     return session
   }
   async function fetchSessions(projectId?: string) {
+    const generation = ++sessionsGeneration
     sessionsLoading.value = true
-    try { sessions.value = await adapter.listSessions(projectId) } finally { sessionsLoading.value = false }
+    try {
+      const result = await adapter.listSessions(projectId)
+      if (generation === sessionsGeneration) sessions.value = result
+    } finally {
+      if (generation === sessionsGeneration) sessionsLoading.value = false
+    }
   }
   async function createSession(data: SessionCreate) {
     const session = await adapter.createSession(data)

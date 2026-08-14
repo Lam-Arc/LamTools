@@ -69,12 +69,20 @@ export function useShellLayout(options: ShellLayoutOptions) {
   // Sync all theme CSS variables to :root — title bar & meta tag for the Edge
   // app window, and everything teleported to body (modals/onboarding) inherits
   // the theme instead of falling back to hardcoded dark values.
+  let appliedThemeKeys: string[] = []
   watch(
     () => shellStyle.value,
     (style) => {
       if (typeof document === 'undefined') return
+      // Remove previously-applied keys first so unmounting / hot-swapping a
+      // shell never leaves stale theme vars on :root (audit 19 S3).
+      for (const key of appliedThemeKeys) document.documentElement.style.removeProperty(key)
+      appliedThemeKeys = []
       for (const [key, value] of Object.entries(style)) {
-        if (key.startsWith('--theme-')) document.documentElement.style.setProperty(key, value)
+        if (key.startsWith('--theme-')) {
+          document.documentElement.style.setProperty(key, value)
+          appliedThemeKeys.push(key)
+        }
       }
       const meta = document.querySelector('meta[name="theme-color"]')
       if (meta && style['--theme-titlebar-bg']) meta.setAttribute('content', style['--theme-titlebar-bg'])
@@ -157,13 +165,10 @@ export function useShellLayout(options: ShellLayoutOptions) {
   function onPointerDown(event: PointerEvent) {
     const target = event.target as HTMLElement | null
     if (!target) return
-    // Close composer menus
-    if (!target.closest('.composer-menu') && !target.closest('.composer-pill')) {
-      document.querySelectorAll('.composer-menu').forEach((el) => {
-        ;(el as HTMLElement).style.display = 'none'
-      })
-    }
-    // Close drawers when clicking outside
+    // Close drawers when clicking outside (composer menus are closed by the
+    // menu components themselves — reaching into .composer-menu from here
+    // bypassed their open state and coupled this composable to their DOM,
+    // audit 19 S3).
     if (
       !leftPinned.value &&
       leftOpen.value &&
@@ -183,7 +188,15 @@ export function useShellLayout(options: ShellLayoutOptions) {
   }
 
   // --- keyboard shortcuts ---
+  const EDITABLE_SELECTOR = 'input, textarea, select, [contenteditable]'
+  function isTypingTarget(target: EventTarget | null): boolean {
+    return target instanceof HTMLElement && Boolean(target.closest(EDITABLE_SELECTOR))
+  }
+
   function onKeydown(event: KeyboardEvent) {
+    // Never hijack keys while the user is typing (IME composition, input
+    // fields) or when a repeat is held (audit 19 S3).
+    if (event.repeat || isTypingTarget(event.target)) return
     // Ctrl+Tab → toggle left drawer
     if (event.ctrlKey && event.key.toLowerCase() === 'tab') {
       event.preventDefault()
@@ -234,7 +247,12 @@ export function useShellLayout(options: ShellLayoutOptions) {
     narrowMediaQuery = window.matchMedia?.('(max-width: 640px)')
     if (narrowMediaQuery) {
       syncViewportMode(narrowMediaQuery)
-      narrowMediaQuery.addEventListener('change', syncViewportMode)
+      // Old Safari/WebViews only implement the deprecated addListener API.
+      if (typeof narrowMediaQuery.addEventListener === 'function') {
+        narrowMediaQuery.addEventListener('change', syncViewportMode)
+      } else {
+        narrowMediaQuery.addListener(syncViewportMode)
+      }
     }
     loadSettings()
   })
@@ -242,7 +260,18 @@ export function useShellLayout(options: ShellLayoutOptions) {
   onUnmounted(() => {
     document.removeEventListener('pointerdown', onPointerDown)
     document.removeEventListener('keydown', onKeydown)
-    narrowMediaQuery?.removeEventListener('change', syncViewportMode)
+    if (narrowMediaQuery) {
+      if (typeof narrowMediaQuery.removeEventListener === 'function') {
+        narrowMediaQuery.removeEventListener('change', syncViewportMode)
+      } else {
+        narrowMediaQuery.removeListener(syncViewportMode)
+      }
+    }
+    // Restore :root theme vars we wrote (audit 19 S3).
+    if (typeof document !== 'undefined') {
+      for (const key of appliedThemeKeys) document.documentElement.style.removeProperty(key)
+      appliedThemeKeys = []
+    }
     clearTimeout(saveTimer)
   })
 
@@ -263,16 +292,20 @@ export function useShellLayout(options: ShellLayoutOptions) {
   }
 
   function saveSettings() {
-    localStorage.setItem(
-      options.storageKey,
-      JSON.stringify({
-        density: density.value,
-        contentWidth: contentWidth.value,
-        theme: theme.value,
-        stageOpen: stageOpen.value,
-        stageHeight: stageHeight.value,
-      }),
-    )
+    try {
+      localStorage.setItem(
+        options.storageKey,
+        JSON.stringify({
+          density: density.value,
+          contentWidth: contentWidth.value,
+          theme: theme.value,
+          stageOpen: stageOpen.value,
+          stageHeight: stageHeight.value,
+        }),
+      )
+    } catch {
+      /* storage unavailable (private mode / quota) — persistence is best-effort */
+    }
   }
 
   return {

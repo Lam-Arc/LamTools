@@ -149,7 +149,9 @@ describe('Core project narrow layout contract', () => {
     const createSource = readFileSync(resolve(process.cwd(), 'src/components/CoreProjectCreate.vue'), 'utf8')
     const demoSource = readFileSync(resolve(process.cwd(), 'src/demo/App.vue'), 'utf8')
 
-    expect(createSource).toMatch(/<Teleport defer to="\.workspace-shell">/)
+    // Mounts to a configurable target (defaults to body) so hosts without a
+    // workspace shell still render the dialog (audit 19 S3).
+    expect(createSource).toMatch(/<Teleport :to="teleportTarget">/)
     expect(createSource).toMatch(/\.core-project-dialog-backdrop\s*\{[\s\S]*?position:\s*fixed;[\s\S]*?place-items:\s*center;/)
     expect(createSource).toMatch(/\.core-project-dialog\s*\{[\s\S]*?width:\s*min\(520px,\s*100%\);[\s\S]*?max-height:\s*calc\(100dvh\s*-\s*48px\);/)
     expect(demoSource).not.toContain('core-project-create-popover')

@@ -32,6 +32,7 @@ describe('useCoreLiveComposerController', () => {
         started.push({ threadId, workRoot, options })
       },
       interruptTurn: async () => undefined,
+      forceResetTurn: async () => undefined,
       queueInput: async () => undefined,
       listCommands: async () => [],
       getWorkRoot: () => activeThreadId.value === 'thread-a' ? 'E:\\A' : 'E:\\B',
@@ -65,6 +66,7 @@ describe('useCoreLiveComposerController', () => {
       connect: async () => undefined,
       startTurn: async () => undefined,
       interruptTurn: async () => undefined,
+      forceResetTurn: async () => undefined,
       queueInput: async () => undefined,
       listCommands: async () => [],
       getWorkRoot: () => 'E:\\LamTools',
@@ -121,6 +123,7 @@ describe('useCoreLiveComposerController', () => {
       },
       startTurn: async () => undefined,
       interruptTurn: async () => undefined,
+      forceResetTurn: async () => undefined,
       queueInput: async () => undefined,
       listCommands: async () => {
         catalogRequestCount += 1
@@ -167,9 +170,12 @@ describe('useCoreLiveComposerController', () => {
       cursor: ref(0),
       status: ref('idle'),
       attachments: ref<CoreInputItem[]>([]),
-      connect: async (threadId) => calls.push(`connect:${threadId}`),
+      connect: async (threadId) => {
+        calls.push(`connect:${threadId}`)
+      },
       startTurn: async () => undefined,
       interruptTurn: async () => undefined,
+      forceResetTurn: async () => undefined,
       queueInput: async () => undefined,
       listCommands: async () => {
         calls.push('list')
@@ -211,6 +217,7 @@ describe('useCoreLiveComposerController', () => {
       },
       startTurn: async () => undefined,
       interruptTurn: async () => undefined,
+      forceResetTurn: async () => undefined,
       queueInput: async () => undefined,
       listCommands: async () => [],
       getWorkRoot: () => activeThreadId.value === 'thread-a' ? 'E:\\A' : 'E:\\B',
@@ -245,8 +252,9 @@ describe('useCoreLiveComposerController', () => {
       connect: async () => undefined,
       startTurn: async () => undefined,
       interruptTurn: async () => undefined,
+      forceResetTurn: async () => undefined,
       queueInput: async () => undefined,
-      listCommands: async () => commands,
+      listCommands: async () => [...commands],
       getWorkRoot: () => 'E:\\LamTools',
       executeCommand: async () => commandResult,
       clearComposer: (submittedText) => {
@@ -303,13 +311,14 @@ describe('useCoreLiveComposerController', () => {
       interruptTurn: async (threadId) => {
         calls.push(`stop:${threadId}`)
       },
+      forceResetTurn: async () => undefined,
       steerTurn: async (threadId, turnId, input) => {
         calls.push(`steer:${threadId}:${turnId}:${JSON.stringify(input)}`)
       },
       queueInput: async (threadId, input) => {
         calls.push(`queue:${threadId}:${JSON.stringify(input)}`)
       },
-      listCommands: async () => commands,
+      listCommands: async () => [...commands],
       getWorkRoot: () => 'E:\\LamTools',
       executeCommand: async (threadId, command, workRoot) => {
         calls.push(`command:${threadId}:${command}:${workRoot}`)
@@ -385,6 +394,7 @@ describe('useCoreLiveComposerController', () => {
       connect: async () => undefined,
       startTurn: async () => undefined,
       interruptTurn: async () => undefined,
+      forceResetTurn: async () => undefined,
       queueInput: async () => undefined,
       listCommands: async () => {
         throw new Error('catalog unavailable')

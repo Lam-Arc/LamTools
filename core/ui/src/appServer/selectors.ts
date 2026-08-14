@@ -117,7 +117,13 @@ export function selectChatMessages(
         role: 'assistant',
         content: '',
         parts: [],
-        metadata: runtimeMetrics ? { processMetrics: runtimeMetrics } : undefined,
+        // Carry the item metadata through (audit 15 S1: the source item's
+        // ``metadata.live`` flag was dropped here, so the projection could
+        // never see it for main-line messages).
+        metadata: {
+          ...(runtimeMetrics ? { processMetrics: runtimeMetrics } : {}),
+          ...(isRecord(item.metadata) ? item.metadata : {}),
+        },
       })
     }
     const assistant = messages[messages.length - 1]
@@ -498,6 +504,10 @@ function coreItemToAppItem(item: CoreRuntimeItem): CoreAppItem {
     usage: item.usage,
     core_kind: item.kind,
     core_last_kind: item.last_kind,
+    // Carry the source item's metadata through (audit 15 S1: it was dropped
+    // here, so message-level flags like ``metadata.live`` never reached the
+    // projection).
+    metadata: isRecord(item.metadata) ? item.metadata : payload.metadata,
   }
 }
 

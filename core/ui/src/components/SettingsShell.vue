@@ -40,7 +40,10 @@
     <!-- Main content -->
     <main class="settings-main">
       <slot name="notice" />
-      <div class="settings-content" :key="activeSection">
+      <!-- No :key remount here — sections are kept alive (v-show in the
+           parent slot) so draft state in child editors survives switching
+           back and forth (audit 17 S3). -->
+      <div class="settings-content">
         <slot :activeSection="activeSection" />
       </div>
     </main>

@@ -87,6 +87,15 @@ export {
 } from './useCoreGoals'
 
 export {
+  useCoreToast,
+  showToast,
+  dismissToast,
+  dismissAllToasts,
+  type CoreToast,
+  type CoreToastKind,
+} from './useCoreToast'
+
+export {
   readUpdateAutoCheck,
   setUpdateAutoCheck,
   useCoreUpdateState,

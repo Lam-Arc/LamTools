@@ -5,6 +5,7 @@ import {
   selectCoreWorkbenchMessages,
   type CoreAppSnapshot,
 } from '../src/appServer'
+import type { CoreMessage } from '../src/types'
 
 /**
  * Incremental projection cache contract:
@@ -88,7 +89,7 @@ function withResolvedRequest(snapshot: CoreAppSnapshot): CoreAppSnapshot {
   }
 }
 
-function messageById(messages: { id: string }[], id: string) {
+function messageById(messages: CoreMessage[], id: string) {
   const message = messages.find(m => m.id === id)
   expect(message, `message ${id} present`).toBeDefined()
   return message!
@@ -188,5 +189,46 @@ describe('incremental workbench projection cache', () => {
 
     expect(messageById(two, 'assistant:turn-1')).not.toBe(messageById(one, 'assistant:turn-1'))
     expect(messageById(two, 'assistant:turn-1').content).toBe(messageById(one, 'assistant:turn-1').content)
+  })
+})
+
+describe('live-streaming marker (audit 15 S1)', () => {
+  it('marks the running turn\'s last assistant message as live', () => {
+    const cache = createCoreWorkbenchProjectionCache()
+    const snapshot = baseSnapshot()
+    const messages = selectCoreWorkbenchMessages(snapshot, { source: 'core_app_server', active: true }, cache)
+    const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant')
+    expect(lastAssistant).toBeDefined()
+    expect(lastAssistant!.metadata?.live).toBe(true)
+  })
+
+  it('does not mark messages as live when the turn is not running', () => {
+    const cache = createCoreWorkbenchProjectionCache()
+    const snapshot = baseSnapshot()
+    const messages = selectCoreWorkbenchMessages(snapshot, { source: 'core_app_server', active: false }, cache)
+    for (const message of messages) {
+      expect(message.metadata?.live).toBeUndefined()
+    }
+  })
+
+  it('keeps an explicit live flag from the source message', () => {
+    const cache = createCoreWorkbenchProjectionCache()
+    const snapshot = baseSnapshot()
+    const withLive = {
+      ...snapshot,
+      core: {
+        ...snapshot.core!,
+        items: {
+          ...snapshot.core!.items,
+          'item-2': {
+            ...snapshot.core!.items!['item-2'],
+            metadata: { live: true },
+          },
+        },
+      },
+    }
+    const messages = selectCoreWorkbenchMessages(withLive, { source: 'core_app_server', active: false }, cache)
+    const live = messages.find((m) => m.id === 'assistant:turn-2')
+    expect(live?.metadata?.live).toBe(true)
   })
 })

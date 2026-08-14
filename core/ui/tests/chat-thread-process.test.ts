@@ -15,7 +15,9 @@ describe('ChatThread process cards', () => {
     const source = readFileSync(resolve(__dirname, '../src/components/MessageView.vue'), 'utf8');
     expect(source).not.toContain('AnimatedStreamText');
     expect(source).not.toContain('STREAM_BASE_CHARS_PER_SECOND');
-    expect(source).toContain(':content="part.content"');
+    // content 改为可选后模板用 ?? '' 兜底直传（audit 21）——断言仍验证
+    // "直传、无字符速率队列"的意图。
+    expect(source).toContain(":content=\"part.content ?? ''\"");
   });
 
   it('shows a terminal failure without requiring the process panel to be expanded', () => {
@@ -90,7 +92,7 @@ describe('ChatThread process cards', () => {
     expect(wrapper.findAll('.process-step--info')).toHaveLength(0);
     expect(wrapper.find('.tool-card-header--command').text()).toContain('已运行命令');
     expect(wrapper.find('.command-output').exists()).toBe(false);
-    expect(messages[0].parts[0].toolArgs?.command).toBe('echo ok');
+    expect(messages[0].parts![0].toolArgs?.command).toBe('echo ok');
     expect(wrapper.find('.process-tool-row').exists()).toBe(false);
   });
 
@@ -1667,7 +1669,7 @@ describe('ChatThread process cards', () => {
     const wrapper = mount(ChatThread, {
       props: {
         messages,
-        processExpandedIds: new Set(),
+        processExpandedIds: new Set<string>(),
       },
     });
 

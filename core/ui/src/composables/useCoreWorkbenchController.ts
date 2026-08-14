@@ -142,7 +142,11 @@ export function useCoreWorkbenchController(options: UseCoreWorkbenchControllerOp
       if (activeSessionId.value !== sessionId) return
       messages.value = await (api.getMessages?.(sessionId) ?? Promise.resolve([]))
     } catch (err) {
-      console.error('Failed to send message:', err)
+      // Roll back the optimistic placeholder so a failed send does not leave
+      // a ghost "sent but unanswered" message, and surface the error
+      // (audit 19 S3).
+      messages.value = messages.value.filter(message => !message.metadata?.optimistic || !String(message.id).startsWith(optimisticId))
+      loadError.value = err instanceof Error ? err.message : String(err)
     } finally {
       if (activeSessionId.value === sessionId) {
         loading.value = false

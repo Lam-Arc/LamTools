@@ -41,9 +41,14 @@ input, select, textarea {
   padding: var(--space-2);
   outline: none;
 }
-/* 输入框不做聚焦态：光标闪动即聚焦指示 */
-input:focus, select:focus, textarea:focus { outline: none; }
-input:focus-visible, select:focus-visible, textarea:focus-visible { outline: none; }
+/* 输入框不做聚焦态：光标闪动即聚焦指示（select 例外——无光标，键盘用户
+   需要可见聚焦指示，audit 19 S4） */
+input:focus, textarea:focus { outline: none; }
+input:focus-visible, textarea:focus-visible { outline: none; }
+select:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
 button:focus-visible,
 [role="button"]:focus-visible,
 a:focus-visible {

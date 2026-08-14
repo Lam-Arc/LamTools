@@ -5,7 +5,7 @@ import { useCoreQueuedInputController } from '../src/composables'
 describe('useCoreQueuedInputController', () => {
   it('saves an edited queued input before steering it into the active turn', async () => {
     const calls: string[] = []
-    let resolveGuidance: ((value: { applied: boolean; reason: string }) => void) | null = null
+    let resolveGuidance!: (value: { applied: boolean; reason: string }) => void
     const activeTurnId = ref('turn-1')
     const controller = useCoreQueuedInputController({
       activeTurnId,

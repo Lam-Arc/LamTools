@@ -74,7 +74,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 
 interface CatalogTool {
   name: string
@@ -120,6 +120,15 @@ const loading = ref(true)
 const saving = ref(false)
 const dirty = ref(false)
 const error = ref('')
+// Guards the deep watch below: fetchModes/saveModes rebuild the array and
+// must not mark the freshly-loaded server state as dirty (audit 17).
+const hydrating = ref(false)
+
+// Any edit to a mode — name, description, tool selection, unlimited toggle —
+// must enable the save button; previously only add/remove did (audit 17 S2).
+watch(modes, () => {
+  if (!loading.value && !saving.value && !hydrating.value) dirty.value = true
+}, { deep: true })
 
 const sourceLabel = computed(() =>
   source.value === 'config'
@@ -145,6 +154,7 @@ const orderedModes = computed(() => [...modes].sort((a, b) => a.name.localeCompa
 
 async function fetchModes() {
   loading.value = true
+  hydrating.value = true
   error.value = ''
   try {
     const result = await props.requestRpc('config.loadtools.get')
@@ -166,6 +176,7 @@ async function fetchModes() {
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
   } finally {
+    hydrating.value = false
     loading.value = false
   }
 }
@@ -191,13 +202,28 @@ function removeMode(mode: ModeDraft) {
 
 async function saveModes() {
   saving.value = true
+  hydrating.value = true
   error.value = ''
   try {
-    const payload: Record<string, { description: string; tools: string[] }> = {}
+    // Validate before touching the payload: empty or duplicate mode names
+    // must abort with a visible error instead of silently dropping modes
+    // (audit 17 S3).
+    const seen = new Set<string>()
     for (const mode of modes) {
       const name = mode.name.trim()
-      if (!name) continue
-      payload[name] = {
+      if (!name) {
+        error.value = '模式名不能为空，已取消保存'
+        return
+      }
+      if (seen.has(name)) {
+        error.value = `模式名重复：${name}，已取消保存`
+        return
+      }
+      seen.add(name)
+    }
+    const payload: Record<string, { description: string; tools: string[] }> = {}
+    for (const mode of modes) {
+      payload[mode.name.trim()] = {
         description: mode.description.trim(),
         tools: mode.unlimited ? [] : [...mode.selected],
       }
@@ -221,6 +247,7 @@ async function saveModes() {
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
   } finally {
+    hydrating.value = false
     saving.value = false
   }
 }

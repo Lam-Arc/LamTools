@@ -2,8 +2,9 @@ import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 import CoreResourceStats from '../src/components/CoreResourceStats.vue'
 import { buildCoreResourceSummary } from '../src/runtime/resources'
+import type { CoreMessage } from '../src/types'
 
-const messages = [{ metadata: { processMetrics: {
+const messages = [{ id: 'msg-1', metadata: { processMetrics: {
   estimated_prompt_tokens: 25_000,
   context_window_tokens: 100_000,
   context_compaction_trigger_tokens: 80_000,
@@ -32,11 +33,13 @@ describe('CoreResourceStats', () => {
   })
 
   it('uses a completed compaction result as the current context size', () => {
-    const compactedMessages = [
+    const compactedMessages: Array<Pick<CoreMessage, 'id' | 'metadata'> & Partial<Pick<CoreMessage, 'parts'>>> = [
       ...messages,
       {
+        id: 'msg-2',
         metadata: {},
         parts: [{
+          id: 'compaction-1',
           partType: 'compaction',
           status: 'completed',
           metadata: {
@@ -55,7 +58,7 @@ describe('CoreResourceStats', () => {
   })
 
   it('renders cache hit rate from backend cache_hit_rate when present', () => {
-    const cachedMessages = [{ metadata: { processMetrics: {
+    const cachedMessages = [{ id: 'msg-cached-1', metadata: { processMetrics: {
       llm_calls: 1,
       input_tokens: 10_000,
       output_tokens: 500,
@@ -67,7 +70,7 @@ describe('CoreResourceStats', () => {
   })
 
   it('derives cache hit rate from cached_tokens / input_tokens when rate is absent', () => {
-    const cachedMessages = [{ metadata: { processMetrics: {
+    const cachedMessages = [{ id: 'msg-cached-2', metadata: { processMetrics: {
       llm_calls: 1,
       input_tokens: 10_000,
       output_tokens: 500,

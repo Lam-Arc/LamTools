@@ -160,7 +160,7 @@ function userTimelineMessage(
     timelinePart.completedAt || timelinePart.startedAt || timestamp,
     'user',
     segment,
-    timelinePart.content,
+    timelinePart.content || '',
     [],
   )
 }

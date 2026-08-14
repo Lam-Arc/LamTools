@@ -156,14 +156,14 @@
                       class="part-wrap"
                     >
                   <div v-if="part.partType === 'text' && part.content" class="assistant-answer">
-                    <slot name="assistant-content" :content="part.content">
-                      <MarkdownRenderer class="part-text-content part-text-content--streaming" :content="part.content" :streaming="true" />
+                    <slot name="assistant-content" :content="part.content ?? ''">
+                      <MarkdownRenderer class="part-text-content part-text-content--streaming" :content="part.content ?? ''" :streaming="true" />
                     </slot>
                   </div>
 
                   <div v-else-if="part.partType === 'model_text' && part.content" class="assistant-answer assistant-answer--process">
-                    <slot name="assistant-content" :content="part.content">
-                      <MarkdownRenderer class="part-text-content part-text-content--streaming" :content="part.content" :streaming="true" />
+                    <slot name="assistant-content" :content="part.content ?? ''">
+                      <MarkdownRenderer class="part-text-content part-text-content--streaming" :content="part.content ?? ''" :streaming="true" />
                     </slot>
                   </div>
 
@@ -180,9 +180,9 @@
                       <span v-beam class="process-step-title">{{ reasoningTitle(part.status) }}</span>
                       <span v-if="reasoningDuration(part, true)" class="reasoning-duration">{{ reasoningDuration(part, true) }}</span>
                     </button>
-                    <div v-if="isPartExpanded(part, true)" v-auto-follow-scroll="part.content" class="reasoning-body">
-                      <slot name="reasoning-content" :content="part.content" :live="true">
-                        <MarkdownRenderer class="process-step-detail part-text-content--streaming" :content="part.content" :streaming="true" />
+                    <div v-if="isPartExpanded(part, true)" v-auto-follow-scroll="part.content ?? ''" class="reasoning-body">
+                      <slot name="reasoning-content" :content="part.content ?? ''" :live="true">
+                        <MarkdownRenderer class="process-step-detail part-text-content--streaming" :content="part.content ?? ''" :streaming="true" />
                       </slot>
                     </div>
                   </div>
@@ -371,9 +371,9 @@
                               <span v-beam class="process-step-title">{{ reasoningTitle(part.status) }}</span>
                               <span v-if="reasoningDuration(part, true)" class="reasoning-duration">{{ reasoningDuration(part, true) }}</span>
                             </button>
-                            <div v-if="isPartExpanded(part, true)" v-auto-follow-scroll="part.content" class="reasoning-body">
-                              <slot name="reasoning-content" :content="part.content" :live="true">
-                                <MarkdownRenderer class="process-step-detail part-text-content--streaming" :content="part.content" :streaming="true" />
+                            <div v-if="isPartExpanded(part, true)" v-auto-follow-scroll="part.content ?? ''" class="reasoning-body">
+                              <slot name="reasoning-content" :content="part.content ?? ''" :live="true">
+                                <MarkdownRenderer class="process-step-detail part-text-content--streaming" :content="part.content ?? ''" :streaming="true" />
                               </slot>
                             </div>
                           </div>
@@ -510,8 +510,8 @@
                                 <span v-if="reasoningDuration(part)" class="reasoning-duration">{{ reasoningDuration(part) }}</span>
                               </button>
                               <div v-if="isPartExpanded(part, false)" class="reasoning-body">
-                                <slot name="reasoning-content" :content="part.content" :live="false">
-                                  <MarkdownRenderer class="process-step-detail" :content="part.content" />
+                                <slot name="reasoning-content" :content="part.content ?? ''" :live="false">
+                                  <MarkdownRenderer class="process-step-detail" :content="part.content ?? ''" />
                                 </slot>
                               </div>
                             </div>
@@ -697,8 +697,8 @@
                           <span v-if="reasoningDuration(group.part)" class="reasoning-duration">{{ reasoningDuration(group.part) }}</span>
                         </button>
                         <div v-if="isPartExpanded(group.part, false)" class="reasoning-body">
-                          <slot name="reasoning-content" :content="group.part.content" :live="false">
-                            <MarkdownRenderer class="process-step-detail" :content="group.part.content" />
+                          <slot name="reasoning-content" :content="group.part.content ?? ''" :live="false">
+                            <MarkdownRenderer class="process-step-detail" :content="group.part.content ?? ''" />
                           </slot>
                         </div>
                       </div>
@@ -706,8 +706,8 @@
                       <div
                         v-else-if="group.part.partType === 'model_text' && group.part.content"
                       >
-                        <slot name="assistant-content" :content="group.part.content">
-                          <MarkdownRenderer class="part-text-content" :content="group.part.content" />
+                        <slot name="assistant-content" :content="group.part.content ?? ''">
+                          <MarkdownRenderer class="part-text-content" :content="group.part.content ?? ''" />
                         </slot>
                       </div>
 
@@ -935,7 +935,7 @@
                 <div v-if="group.kind === 'process' && group.part.partType === 'model_text' && group.part.content">
                   <MarkdownRenderer
                     class="part-text-content part-text-content--streaming"
-                    :content="group.part.content"
+                    :content="group.part.content ?? ''"
                     :streaming="true"
                   />
                 </div>
@@ -949,9 +949,9 @@
                     <span v-if="group.part.status === 'error'" class="process-step-marker process-step-marker--error" />
                     <span v-beam class="process-step-title">{{ reasoningTitle(group.part.status) }}</span>
                   </button>
-                  <div v-if="isPartExpanded(group.part, true)" v-auto-follow-scroll="group.part.content" class="reasoning-body">
-                    <slot name="reasoning-content" :content="group.part.content" :live="true">
-                      <MarkdownRenderer class="process-step-detail" :content="group.part.content" />
+                  <div v-if="isPartExpanded(group.part, true)" v-auto-follow-scroll="group.part.content ?? ''" class="reasoning-body">
+                    <slot name="reasoning-content" :content="group.part.content ?? ''" :live="true">
+                      <MarkdownRenderer class="process-step-detail" :content="group.part.content ?? ''" />
                     </slot>
                   </div>
                 </div>
@@ -1001,9 +1001,9 @@
                             <span v-if="part.status === 'error'" class="process-step-marker process-step-marker--error" />
                             <span v-beam class="process-step-title">{{ reasoningTitle(part.status) }}</span>
                           </button>
-                          <div v-if="isPartExpanded(part, true)" v-auto-follow-scroll="part.content" class="reasoning-body">
-                            <slot name="reasoning-content" :content="part.content" :live="true">
-                              <MarkdownRenderer class="process-step-detail" :content="part.content" />
+                          <div v-if="isPartExpanded(part, true)" v-auto-follow-scroll="part.content ?? ''" class="reasoning-body">
+                            <slot name="reasoning-content" :content="part.content ?? ''" :live="true">
+                              <MarkdownRenderer class="process-step-detail" :content="part.content ?? ''" />
                             </slot>
                           </div>
                         </div>
@@ -1079,8 +1079,8 @@
                             <span v-if="reasoningDuration(part)" class="reasoning-duration">{{ reasoningDuration(part) }}</span>
                           </button>
                           <div v-if="isPartExpanded(part, false)" class="reasoning-body">
-                            <slot name="reasoning-content" :content="part.content" :live="false">
-                              <MarkdownRenderer class="process-step-detail" :content="part.content" />
+                            <slot name="reasoning-content" :content="part.content ?? ''" :live="false">
+                              <MarkdownRenderer class="process-step-detail" :content="part.content ?? ''" />
                             </slot>
                           </div>
                         </div>
@@ -1182,8 +1182,8 @@
                       <span v-if="reasoningDuration(group.part)" class="reasoning-duration">{{ reasoningDuration(group.part) }}</span>
                     </button>
                     <div v-if="isPartExpanded(group.part, false)" class="reasoning-body">
-                      <slot name="reasoning-content" :content="group.part.content" :live="false">
-                        <MarkdownRenderer class="process-step-detail" :content="group.part.content" />
+                      <slot name="reasoning-content" :content="group.part.content ?? ''" :live="false">
+                        <MarkdownRenderer class="process-step-detail" :content="group.part.content ?? ''" />
                       </slot>
                     </div>
                   </div>
@@ -1280,7 +1280,7 @@
                   >
                     <MarkdownRenderer
                       class="part-text-content"
-                      :content="group.part.content"
+                      :content="group.part.content ?? ''"
                     />
                   </div>
 
@@ -2481,6 +2481,10 @@ async function copyAssistantMessage(msg: CoreMessage) {
 
 onBeforeUnmount(() => {
   if (copiedActionTimer) clearTimeout(copiedActionTimer)
+  // Pending auto-collapse timers must not fire on an unmounted instance
+  // (audit 21 S2 — module-level timer map had no teardown).
+  for (const timer of partCompletionTimers.values()) clearTimeout(timer)
+  partCompletionTimers.clear()
 })
 
 function liveProcessItems(msg: CoreMessage): LiveProcessItem[] {

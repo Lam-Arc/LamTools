@@ -8,6 +8,7 @@ import {
   type CoreAppEvent,
   type CoreAppSnapshot,
 } from '../src/appServer'
+import type { MessagePart } from '../src/types'
 
 const THREAD = 'thread-1'
 const TURN = 'turn-1'
@@ -56,7 +57,9 @@ function runItemEvent(
   kind: string,
   itemId: string,
   payload: Record<string, unknown>,
-  extra: Partial<CoreAppEvent> = {},
+  // extra fields (status, parent_item_id, seq, …) are spread into the event
+  // payload, which is what the store reads — not the CoreAppEvent envelope.
+  extra: Partial<CoreAppEvent> & Record<string, unknown> = {},
 ): CoreAppEvent {
   return {
     event_id: eventId,
@@ -85,12 +88,12 @@ function findSubLinePart(message: { parts?: Array<Record<string, unknown>> }) {
   })
 }
 
-function isSubLinePart(part: Record<string, unknown>): boolean {
+function isSubLinePart(part: MessagePart): boolean {
   const type = part.partType as string
   return type === 'agent_summary' || type === 'sub_line'
 }
 
-function subLineTexts(part: Record<string, unknown> | undefined): string[] {
+function subLineTexts(part: MessagePart | undefined): string[] {
   const metadata = (part?.metadata || {}) as Record<string, unknown>
   const parts = Array.isArray(metadata.subLineParts) ? metadata.subLineParts as Array<Record<string, unknown>> : []
   const texts: string[] = []

@@ -3,12 +3,13 @@ import { ref } from 'vue'
 import { describe, expect, it } from 'vitest'
 import CommandPalette from '../src/components/CommandPalette.vue'
 import { useComposerCommandPalette } from '../src/composables/useComposerCommandPalette'
+import type { CoreCommandCatalogItem } from '../src/types'
 
 const commands = [
   { name: 'compact', title: '压缩上下文', description: '压缩当前会话上下文', icon: 'archive', source: 'core', action: 'run_action' },
   { name: 'fork', title: '分叉', description: '从当前会话分叉', icon: 'git-branch', source: 'core', action: 'run_action' },
   { name: 'brainstorming', title: 'brainstorming', description: '梳理需求', icon: 'sparkles', source: 'core', action: 'insert_token' },
-]
+] satisfies CoreCommandCatalogItem[]
 
 describe('CommandPalette', () => {
   it('renders commands and emits select', async () => {

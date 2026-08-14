@@ -205,7 +205,12 @@ function buildWorkbenchMessage(
     metadata: {
       ...(options.source ? { source: options.source } : {}),
       ...(message.metadata || {}),
-      live: message.metadata?.live,
+      // The running turn's last assistant message is the live-streaming one:
+      // mark it so MessageView takes the incremental streaming render path,
+      // auto-expands tool parts and shows the live status bar (audit 15 S1 —
+      // the main-thread live path was never wired because nothing set
+      // metadata.live for main-line messages).
+      live: activeAssistant || message.metadata?.live,
       shallowThinkingPending: activeAssistant && options.shallowThinkingPending ? true : undefined,
     },
   } satisfies CoreMessage

@@ -5,6 +5,7 @@ import { mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import WorkspaceShell from '../src/components/WorkspaceShell.vue'
+import { __resetCoreToastStoreForTests } from '../src/composables/useCoreToast'
 
 type MediaListener = (event: MediaQueryListEvent) => void
 
@@ -31,6 +32,7 @@ describe('WorkspaceShell responsive drawers', () => {
   beforeEach(() => {
     localStorage.clear()
     installMatchMedia(true)
+    __resetCoreToastStoreForTests()
   })
 
   afterEach(() => {
@@ -82,9 +84,12 @@ describe('WorkspaceShell responsive drawers', () => {
     expect(rightDrawer.attributes('inert')).toBeDefined()
     expect(document.activeElement).toBe(rightToggle.element)
 
-    const error = wrapper.get('.error-toast')
+    // Legacy errorText prop is bridged into the global toast service and
+    // rendered by CoreToastHost with a dismiss button.
+    const error = wrapper.get('.core-toast--error')
     expect(error.attributes('role')).toBe('alert')
     expect(error.attributes('aria-atomic')).toBe('true')
+    expect(error.text()).toContain('连接失败')
 
     wrapper.unmount()
   })

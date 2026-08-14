@@ -199,27 +199,48 @@ export function createCoreAppServerRuntimeController<
       pendingEvents.push(event)
       if (eventFrameScheduled) return
       eventFrameScheduled = true
-      scheduleFrame(() => {
-        eventFrameScheduled = false
-        const events = pendingEvents.splice(0)
-        if (!runtime.state) return
-        let next = runtime.state as CoreAppSnapshot
-        // Coalesce same-frame deltas for the same item. On very large threads
-        // (thousands of items) each apply() copies the whole items map — doing
-        // that once per frame instead of once per incoming chunk keeps the
-        // frame budget flat. (A/B: removing it made big-thread streaming worse.)
-        for (const pending of coalesceRunItemEvents(events)) {
-          next = applyCoreRunItemEvent(next, pending)
-        }
-        runtime.state = next as Snapshot
-      })
+      scheduleFrame(flushFrame)
       return
     }
     // Apply turn/accepted and item/started directly to the top-level snapshot
     if (event.method === 'turn/accepted' || event.method === 'item/started') {
-      if (!runtime.state) return
+      if (!runtime.state) {
+        // Same hold-and-replay rule as flushFrame: never drop events that
+        // arrived before the first snapshot (audit 16 S2).
+        pendingEvents.push(event)
+        if (!eventFrameScheduled) {
+          eventFrameScheduled = true
+          scheduleFrame(flushFrame)
+        }
+        return
+      }
       runtime.state = applyAppEvent(runtime.state as CoreAppSnapshot, event) as Snapshot
     }
+  }
+
+  function flushFrame() {
+    eventFrameScheduled = false
+    if (!runtime.state) {
+      // Snapshot not hydrated yet (first connect / reconnect): hold the
+      // pending events and retry next frame instead of dropping them.  Events
+      // arriving in this window — transient stream deltas especially — are
+      // not part of any snapshot, so dropping them permanently truncated the
+      // running turn and the hydrate skip check could not heal it
+      // (audit 16 S2).
+      eventFrameScheduled = true
+      scheduleFrame(flushFrame)
+      return
+    }
+    const events = pendingEvents.splice(0)
+    let next = runtime.state as CoreAppSnapshot
+    // Coalesce same-frame deltas for the same item. On very large threads
+    // (thousands of items) each apply() copies the whole items map — doing
+    // that once per frame instead of once per incoming chunk keeps the
+    // frame budget flat. (A/B: removing it made big-thread streaming worse.)
+    for (const pending of coalesceRunItemEvents(events)) {
+      next = applyCoreRunItemEvent(next, pending)
+    }
+    runtime.state = next as Snapshot
   }
 
   function applyResponse(response: Record<string, unknown>) {
@@ -358,8 +379,12 @@ export function createCoreAppServerRuntimeController<
 
   async function respondApproval(requestId: string, decision: string, guidance?: string) {
     await ensureClient()
+    // The backend binds an approval response to the subscribed thread, so the
+    // responding thread must be explicit (audit 03 S1: untrusted pages could
+    // otherwise answer approvals for other threads).
     const response = await runtime.client!.request('approval/respond', {
       request_id: requestId,
+      thread_id: runtime.activeThreadId,
       decision,
       guidance,
     })
@@ -486,10 +511,15 @@ function applyCoreRunItemEvent(snapshot: CoreAppSnapshot, event: CoreAppEvent): 
       : []
   const currentCore = snapshot.core ?? emptyCoreSnapshot(snapshot.thread_id)
   const seenEventSet = new Set(currentCore.seen_event_ids ?? [])
-  if (coalescedEventIds.some((id) => seenEventSet.has(id))) return snapshot
+  // Filter the coalesced batch by id instead of dropping it wholesale when any
+  // id is already seen: a replayed persisted event and a live transient delta
+  // can share one coalesced batch, and "all or nothing" killed the unseen
+  // delta (audit 16 S3).
+  const unseenEventIds = coalescedEventIds.filter((id) => !seenEventSet.has(id))
+  if (unseenEventIds.length === 0) return snapshot
   const runPayload = isRecord(value.payload) ? value.payload : {}
   const turnId = typeof value.turn_id === 'string' ? value.turn_id : event.turn_id || ''
-  const seen = [...(currentCore.seen_event_ids ?? []), ...coalescedEventIds].slice(-2000)
+  const seen = [...(currentCore.seen_event_ids ?? []), ...unseenEventIds].slice(-2000)
   if (kind === 'status') {
     const rawStatus = typeof runPayload.status === 'string'
       ? runPayload.status
@@ -698,6 +728,12 @@ function shouldHydrateSnapshot(
   if (String(current.status ?? '') !== String(incoming.status ?? '')) return true
   if (String(current.core?.status ?? '') !== String(incoming.core?.status ?? '')) return true
   if (snapshotItemsChanged(current, incoming)) return true
+  // The event-derived core.items can diverge from the canonical snapshot
+  // (dropped/reordered events, pre-snapshot windows).  Compare item content
+  // fingerprints so a divergence forces a hydrate instead of being skipped
+  // forever (audit 16 S2 — the missing comparison kept truncated turns
+  // un-healable).
+  if (snapshotCoreItemsChanged(current, incoming)) return true
   return false
 }
 
@@ -762,6 +798,28 @@ function snapshotItemsChanged(current: CoreAppSnapshot, incoming: CoreAppSnapsho
     if (!x || !y) return true
     if (String(x.status ?? '') !== String(y.status ?? '')) return true
     if (String(x.content ?? '') !== String(y.content ?? '')) return true
+  }
+  return false
+}
+
+// Content fingerprint of the runtime core.items.  The event-derived state
+// applies deltas incrementally while snapshots carry canonical full content;
+// if the two diverge (e.g. events were dropped before the first snapshot),
+// the divergence must force a hydrate — the old check only compared the
+// top-level ``items``, never ``core.items`` (audit 16 S2).
+function snapshotCoreItemsChanged(current: CoreAppSnapshot, incoming: CoreAppSnapshot): boolean {
+  const a = current.core?.items ?? {}
+  const b = incoming.core?.items ?? {}
+  const aIds = Object.keys(a)
+  const bIds = Object.keys(b)
+  if (aIds.length !== bIds.length) return true
+  for (const id of aIds) {
+    const x = a[id] as { content?: unknown; status?: unknown; turn_id?: unknown } | undefined
+    const y = b[id] as { content?: unknown; status?: unknown; turn_id?: unknown } | undefined
+    if (!x || !y) return true
+    if (String(x.content ?? '') !== String(y.content ?? '')) return true
+    if (String(x.status ?? '') !== String(y.status ?? '')) return true
+    if (String(x.turn_id ?? '') !== String(y.turn_id ?? '')) return true
   }
   return false
 }

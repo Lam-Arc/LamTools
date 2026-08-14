@@ -32,12 +32,6 @@
           @click="openHookForm"
         >新增 Hook</button>
         <button
-          v-if="trustableCount > 0"
-          class="small-btn"
-          type="button"
-          @click="trustAll"
-        >全部信任</button>
-        <button
           class="text-btn"
           type="button"
           @click="toggleConfigView"
@@ -386,22 +380,12 @@ async function untrustHook(id: string) {
   }
 }
 
-async function trustAll() {
-  try {
-    await props.requestRpc('hook.trust_all')
-    hooks.value = hooks.value.map((h) => ({
-      ...h,
-      trusted: true,
-      status: h.status === 'pending_review' ? 'trusted' : h.status,
-    }))
-    trustedCount.value = hooks.value.length
-    trustableCount.value = 0
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e)
-  }
-}
-
 async function deleteHook(id: string) {
+  const hook = hooks.value.find((h) => h.id === id)
+  const label = hook ? `${hook.event} · ${hook.handler_type || ''}` : id
+  // A hook (command hooks can execute arbitrary shell) is deleted
+  // irreversibly — require confirmation (audit 17 S3).
+  if (!window.confirm(`确定删除 Hook「${label}」？此操作不可撤销。`)) return
   try {
     await props.requestRpc('hook.delete', { hook_id: id })
     hooks.value = hooks.value.filter((h) => h.id !== id)
@@ -452,7 +436,10 @@ async function saveHookForm() {
     try {
       config = JSON.parse(rawContent) || {}
     } catch {
-      config = {}
+      // Never fall back to {} — saving that would silently wipe every
+      // existing hook (audit 17 S2). Abort and surface the corruption.
+      error.value = 'hooks.json 当前无法解析（不是合法 JSON），已取消保存。请先到「原始配置」视图修复后再添加 Hook。'
+      return
     }
     // 2. Merge the new hook
     const hooksSection = (config.hooks as Record<string, unknown[]>) || {}

@@ -48,7 +48,7 @@
           v-model="form.api_key"
           type="password"
           spellcheck="false"
-          placeholder="sk-..."
+          :placeholder="hasApiKey ? '已配置（留空保持原密钥）' : 'sk-...'"
           autocomplete="off"
           :disabled="loading || saving"
         />
@@ -86,6 +86,7 @@ const form = reactive({
   api_key: '',
   model: '',
 })
+const hasApiKey = ref(false)
 const loading = ref(true)
 const saving = ref(false)
 const saved = ref(false)
@@ -99,7 +100,10 @@ async function fetchConfig() {
     const value = result.value as Record<string, unknown> | undefined
     form.enabled = value ? !!value.enabled : false
     form.api_url = value ? String(value.api_url || '') : ''
-    form.api_key = value ? String(value.api_key || '') : ''
+    // The backend returns a masked key + has_api_key flag — never echo the
+    // real key into the DOM (audit 17 S3).
+    form.api_key = ''
+    hasApiKey.value = value ? !!value.has_api_key : false
     form.model = value ? String(value.model || '') : ''
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
@@ -129,15 +133,20 @@ async function saveConfig() {
   error.value = ''
   saved.value = false
   try {
+    const payload: Record<string, unknown> = {
+      enabled: form.enabled,
+      api_url: form.api_url.trim(),
+      model: form.model.trim(),
+    }
+    // Empty key field keeps the stored key (backend contract); only a
+    // non-empty value replaces it (audit 17 S3).
+    const key = form.api_key.trim()
+    if (key) payload.api_key = key
     await props.requestRpc('settings.update', {
       namespace: NAMESPACE,
-      value: {
-        enabled: form.enabled,
-        api_url: form.api_url.trim(),
-        api_key: form.api_key.trim(),
-        model: form.model.trim(),
-      },
+      value: payload,
     })
+    form.api_key = ''
     saved.value = true
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)

@@ -218,7 +218,10 @@ describe('core appServer runtime store', () => {
     expect(calls).toEqual([
       {
         method: 'approval/respond',
+        // thread_id is sent explicitly since P0-3 (backend binds approval
+        // responses to the subscribed thread).
         params: {
+          thread_id: runtime.activeThreadId,
           request_id: 'functions.write_file:0',
           decision: 'approve_once',
           guidance: '',
@@ -249,6 +252,34 @@ describe('core appServer runtime store', () => {
         include_snapshot: false,
       },
     }])
+  })
+
+  it('force-resets a stuck turn with a fresh snapshot applied', async () => {
+    // Audit 21 S2: the force-reset escape hatch had zero coverage. It must
+    // send turn/force_reset (with include_snapshot) and apply the returned
+    // snapshot to the runtime state.
+    const runtime = createCoreAppServerRuntimeState()
+    const calls: Array<{ method: string; params: Record<string, unknown> }> = []
+    runtime.client = fakeClient(async (method, params) => {
+      calls.push({ method, params })
+      return { snapshot: snapshot(7, 'idle') }
+    })
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: () => fakeClient(),
+    })
+
+    await controller.forceResetTurn('thread-stuck', 'turn-stuck')
+
+    expect(calls).toEqual([{
+      method: 'turn/force_reset',
+      params: {
+        thread_id: 'thread-stuck',
+        turn_id: 'turn-stuck',
+        include_snapshot: true,
+      },
+    }])
+    expect(runtime.state?.core?.status).toBe('idle')
+    expect(runtime.state?.snapshot_seq).toBe(7)
   })
 
   it('reconnects after socket close and resumes from last snapshot sequence', async () => {
@@ -383,7 +414,13 @@ describe('core appServer runtime store', () => {
 
     // Chat parts carry artifacts (image preview rendering prerequisite).
     const messages = selectChatMessages(runtime.state!)
-    const part = messages.flatMap((message) => message.parts).find((p) => p.artifacts?.length)
+    // CoreAppItem's index signature types artifacts as unknown; cast to the
+    // artifact-array shape for the predicate and the assertions below.
+    const part = messages
+      .flatMap((message) => message.parts)
+      .find((p) => (p.artifacts as Array<Record<string, unknown>> | undefined)?.length) as
+      | { artifacts?: Array<Record<string, unknown>> }
+      | undefined
     expect(part?.artifacts).toHaveLength(1)
     expect(part?.artifacts?.[0]?.kind).toBe('image')
     expect(part?.artifacts?.[0]?.artifact_id).toBe('art-1')
@@ -706,3 +743,107 @@ function runItemToolResult(eventId: string, itemId: string): CoreAppEvent {
     },
   }
 }
+
+  it('holds events arriving before the first snapshot and replays them after hydrate (audit 16 S2)', async () => {
+    const runtime = createCoreAppServerRuntimeState()
+    const frames: Array<() => void> = []
+    let onEvent: ((event: CoreAppEvent) => void) | undefined
+    let resolveResume!: (value: Record<string, unknown>) => void
+    const resumePromise = new Promise<Record<string, unknown>>((resolve) => { resolveResume = resolve })
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: (callbacks) => {
+        onEvent = callbacks.onEvent
+        return fakeClient(async (method) => (method === 'thread/resume' ? await resumePromise : {}))
+      },
+      scheduleFrame: (callback) => frames.push(callback),
+    })
+
+    const connecting = controller.connect('http://127.0.0.1:6173', 'thread-1')
+    // A transient delta arrives while the resume snapshot is still in flight.
+    onEvent?.(runItemDelta('delta-1', 'hel'))
+
+    // First flush: no state yet — events must be held, not dropped.
+    expect(frames).toHaveLength(1)
+    frames[0]()
+    expect(frames).toHaveLength(2) // re-scheduled, not dropped
+    expect(runtime.state?.core?.items?.['response-1']).toBeUndefined()
+
+    resolveResume({ snapshot: snapshot(1, 'running') })
+    await connecting
+    frames[1]()
+    expect(runtime.state?.core?.items?.['response-1']?.content).toBe('hel')
+  })
+
+  it('filters coalesced batches by id instead of dropping unseen events (audit 16 S3)', async () => {
+    const runtime = createCoreAppServerRuntimeState()
+    const frames: Array<() => void> = []
+    let onEvent: ((event: CoreAppEvent) => void) | undefined
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: (callbacks) => {
+        onEvent = callbacks.onEvent
+        return fakeClient(async (method) => method === 'thread/resume'
+          ? { snapshot: { ...snapshot(1, 'running'), core: { ...coreState(1, 'running'), seen_event_ids: ['seen-1'] } } }
+          : {})
+      },
+      scheduleFrame: (callback) => frames.push(callback),
+    })
+    await controller.connect('http://127.0.0.1:6173', 'thread-1')
+
+    // One coalesced batch mixing an already-seen id and a fresh delta.
+    onEvent?.({
+      ...runItemDelta('new-1', 'tail'),
+      payload: {
+        ...runItemDelta('new-1', 'tail').payload,
+        _coalesced_event_ids: ['seen-1', 'new-1'],
+      },
+    })
+    frames[0]()
+    expect(runtime.state?.core?.items?.['response-1']?.content).toBe('tail')
+  })
+
+  it('hydrates when core.items content diverges from the event-derived state (audit 16 S2)', async () => {
+    const runtime = createCoreAppServerRuntimeState()
+    const frames: Array<() => void> = []
+    let onEvent: ((event: CoreAppEvent) => void) | undefined
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: (callbacks) => {
+        onEvent = callbacks.onEvent
+        return fakeClient(async (method) => method === 'thread/resume'
+          ? { snapshot: snapshot(1, 'running') }
+          : {})
+      },
+      scheduleFrame: (callback) => frames.push(callback),
+    })
+    await controller.connect('http://127.0.0.1:6173', 'thread-1')
+
+    // Event-derived state with a truncated content.
+    onEvent?.(runItemDelta('delta-1', 'part'))
+    frames[0]()
+    expect(runtime.state?.core?.items?.['response-1']?.content).toBe('part')
+
+    // A boundary snapshot with canonical full content and only seen ids:
+    // only the new core.items fingerprint comparison can force the hydrate.
+    const fullSnapshot: CoreAppSnapshot = {
+      ...snapshot(2, 'completed'),
+      core: {
+        ...coreState(2, 'completed'),
+        seen_event_ids: ['delta-1'],
+        item_order: ['response-1'],
+        turns: { 'turn-1': { turn_id: 'turn-1', status: 'completed', items: ['response-1'] } },
+        items: {
+          'response-1': {
+            item_id: 'response-1',
+            turn_id: 'turn-1',
+            kind: 'message',
+            type: 'agentMessage',
+            status: 'completed',
+            content: 'part full canonical content',
+            payload: { type: 'agentMessage' },
+          },
+        },
+      },
+    }
+    controller.hydrate(fullSnapshot)
+    expect(runtime.state?.core?.items?.['response-1']?.content).toBe('part full canonical content')
+    expect(runtime.state?.core?.status).toBe('completed')
+  })

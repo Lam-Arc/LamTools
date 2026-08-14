@@ -7,6 +7,9 @@
     @toggle-right-pinned="toggleRightPinned"
     @toggle-workflow-mode="toggleWorkflowMode"
   />
+  <div v-if="backendCrashed" class="core-update-banner" role="alert" data-backend-crashed-banner>
+    <span class="core-update-banner-text">后端进程已停止响应（可能已崩溃）。请重启应用以恢复。</span>
+  </div>
   <div v-if="updateBannerVisible" class="core-update-banner" data-update-banner>
     <span class="core-update-banner-text">发现新版本 v{{ updateLatestVersion }}，是否立即下载？</span>
     <button class="core-update-banner-action" type="button" data-update-banner-download @click="downloadUpdate()">下载更新</button>
@@ -78,8 +81,6 @@
     :composer-disabled="composerDisabled"
     :composer-action-mode="composerActionMode"
     :composer-active="latestStatus === 'running'"
-    :error-text="workbenchErrorText"
-    :notice-text="runtimeStatusText"
     v-model:stage-open="stageOpen"
     @new-session="openProjectCreate"
     @settings="openSettings"
@@ -584,6 +585,7 @@ import {
   useCoreUiPreferences,
   useCoreUpdateState,
   useCoreWorkbenchProjectionController,
+  showToast,
 } from '../composables'
 
 import AttachmentTray from '../components/AttachmentTray.vue'
@@ -658,25 +660,18 @@ const composerCursor = ref(0)
 const composerTextareaEl = ref<HTMLTextAreaElement | null>(null)
 const attachmentFileInput = ref<HTMLInputElement | null>(null)
 const composerErrorText = ref('')
-const runtimeStatusText = ref('')
-let runtimeStatusTimer: ReturnType<typeof setTimeout> | null = null
 
+// Status/error notifications go through the global toast service (single
+// queue, auto-expiry per kind, dismissible) instead of the shell's two fixed
+// slots — the old path left several error sources pinned forever.
 function setRuntimeStatus(text: string, duration = 3000) {
-  if (runtimeStatusTimer) { clearTimeout(runtimeStatusTimer); runtimeStatusTimer = null }
-  runtimeStatusText.value = text
-  if (text) { runtimeStatusTimer = window.setTimeout(() => { runtimeStatusText.value = '' }, duration) }
+  showToast('notice', text, duration)
 }
 
 const loadError = ref<string | null>(null)
-let loadErrorTimer: ReturnType<typeof setTimeout> | null = null
 
 function setLoadError(text: string) {
   loadError.value = text
-  if (loadErrorTimer) { clearTimeout(loadErrorTimer); loadErrorTimer = null }
-  if (text) {
-    // 错误横幅不自动消失会永久挂在主界面顶部，误导用户以为"一打开就有"问题。
-    loadErrorTimer = window.setTimeout(() => { loadError.value = null }, 8000)
-  }
 }
 const showProjectCreate = ref(false)
 const projectCreateLoading = ref(false)
@@ -717,6 +712,8 @@ const showOnboarding = ref(false)
 const wizardLoading = ref(false)
 const wizardError = ref('')
 const workflowMode = ref(false)
+// Rust 监视线程发现后端进程退出时置位，顶部横幅提示（audit 20 S3）。
+const backendCrashed = ref(false)
 const canvasLocked = ref(false)
 const workflows = ref<WorkflowDef[]>([])
 const workflowGroups = ref<Record<string, WorkflowDef[]>>({})
@@ -858,7 +855,10 @@ async function openFileInStage(entry: { path: string; name: string; ext: string 
   stageActiveId.value = tabId
   if (!stageOpen.value) stageOpen.value = true
 }
-const uiPreferences = useCoreUiPreferences(settingsStorageKey)
+// Split key from the shell's — useShellLayout persists stageOpen/stageHeight
+// under 'lamtools.core.ui'; writing the same key from here with a different
+// schema silently dropped those fields on every preference save (audit 19 S3).
+const uiPreferences = useCoreUiPreferences('lamtools.core.ui.preferences')
 const { density, contentWidth, theme } = uiPreferences
 const availableModels = ref<RawModel[]>([])
 const availableProviders = ref<RawProvider[]>([])
@@ -1189,9 +1189,12 @@ const approvalController = useCoreApprovalController({
   },
 })
 approvalControllerRef.value = approvalController
-const workbenchErrorText = computed(() => (
-  loadError.value || composerErrorText.value || approvalController.lastError.value || goalError.value
-))
+// Each error source feeds the toast service via watch; the service handles
+// auto-expiry (8s for errors) and de-duplication, so nothing stays pinned.
+watch(loadError, (value) => { if (value) showToast('error', value, 8000) })
+watch(composerErrorText, (value) => { if (value) showToast('error', value, 8000) })
+watch(() => approvalController.lastError.value, (value) => { if (value) showToast('error', value, 8000) })
+watch(goalError, (value) => { if (value) showToast('error', value, 8000) })
 
 const queuedInputs = computed<CoreQueuedInput[]>(() => {
   if (!snapshot.value || snapshot.value.thread_id !== activeSessionId.value) return []
@@ -1917,19 +1920,35 @@ async function loadPermissionMode() {
 }
 
 async function updatePermissionMode(mode: 'read_only' | 'limited_edit' | 'full_edit') {
+  const previous = permissionMode.value
   permissionMode.value = mode
-  await requestConfigOperation('settings.update', {
-    namespace: 'core.runtimeControls',
-    value: { permission_mode: mode },
-  })
+  try {
+    await requestConfigOperation('settings.update', {
+      namespace: 'core.runtimeControls',
+      value: { permission_mode: mode },
+    })
+  } catch (e) {
+    // Roll back on failure — the UI must never show a security-relevant
+    // mode that the backend did not persist (audit 17 S3).
+    permissionMode.value = previous
+    const message = e instanceof Error ? e.message : String(e)
+    window.alert(`权限模式保存失败，已回滚：${message}`)
+  }
 }
 
 async function updateAllowAccessOutsideWorkdir(value: boolean) {
+  const previous = allowAccessOutsideWorkdir.value
   allowAccessOutsideWorkdir.value = value
-  await requestConfigOperation('settings.update', {
-    namespace: 'core.runtimeControls',
-    value: { allow_access_outside_workdir: value },
-  })
+  try {
+    await requestConfigOperation('settings.update', {
+      namespace: 'core.runtimeControls',
+      value: { allow_access_outside_workdir: value },
+    })
+  } catch (e) {
+    allowAccessOutsideWorkdir.value = previous
+    const message = e instanceof Error ? e.message : String(e)
+    window.alert(`工作目录外访问设置保存失败，已回滚：${message}`)
+  }
 }
 
 async function mutateConfig(method: string, params: object, successText: string) {
@@ -2515,6 +2534,15 @@ onMounted(() => {
   // 启动时静默检查更新（仅 Tauri 桌面环境，且用户未关闭「启动时自动检查更新」）
   if ((window as any).__TAURI_INTERNALS__ && readUpdateAutoCheck()) {
     void updateState.check()
+  }
+  // 后端进程崩溃检测（Rust 侧监视线程发 backend-crashed）→ 显示恢复横幅
+  // （audit 20 S3）。浏览器环境无 Tauri API，动态 import 静默跳过。
+  if ((window as any).__TAURI_INTERNALS__) {
+    void import('@tauri-apps/api/event').then(({ listen }) => {
+      void listen('backend-crashed', () => {
+        backendCrashed.value = true
+      })
+    }).catch(() => {})
   }
 })
 

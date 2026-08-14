@@ -55,4 +55,60 @@ describe('buildCurrentTurnChecklistGroups', () => {
     expect(groups[0]?.id).toBe('assistant:tool:checklist')
     expect(groups[0]?.steps).toHaveLength(2)
   })
+
+  it('maps todo_update parts into runtime steps', () => {
+    // Audit 21 S3: the todo_update branch of isChecklistPart had zero
+    // coverage. A live todo_update part carries its steps in part.toolArgs.
+    const todoUpdatePart = {
+      id: 'todo-1',
+      partType: 'todo_update' as const,
+      status: 'running' as const,
+      content: '',
+      toolName: 'update_checklist',
+      toolArgs: {
+        steps: [
+          { id: 't1', description: '第一步', status: 'completed' },
+          { id: 't2', description: '第二步', status: 'in_progress' },
+          { id: 't3', description: '第三步', status: 'pending' },
+        ],
+      },
+    }
+    const groups = buildCurrentTurnChecklistGroups([
+      { id: 'assistant:todo', role: 'assistant', content: '', timestamp: '', parts: [todoUpdatePart] },
+    ])
+
+    expect(groups).toMatchObject([{
+      id: 'assistant:todo:checklist',
+      status: 'running',
+      steps: [
+        { id: 't1', title: '第一步', status: 'completed' },
+        { id: 't2', title: '第二步', status: 'running' },
+        { id: 't3', title: '第三步', status: 'pending' },
+      ],
+    }])
+  })
+
+  it('reads plan_steps metadata as an alternative todo_update source', () => {
+    const planPart = {
+      id: 'plan-1',
+      partType: 'todo_update' as const,
+      status: 'completed' as const,
+      content: '',
+      metadata: {
+        plan_steps: [
+          { id: 'p1', text: '只写标题', status: 'done' },
+          { id: 'p2', text: '跳过项', status: 'skipped' },
+        ],
+      },
+    }
+    const groups = buildCurrentTurnChecklistGroups([
+      { id: 'assistant:plan', role: 'assistant', content: '', timestamp: '', parts: [planPart] },
+    ])
+
+    expect(groups[0]?.steps).toEqual([
+      { id: 'p1', title: '只写标题', status: 'completed' },
+      { id: 'p2', title: '跳过项', status: 'skipped' },
+    ])
+    expect(groups[0]?.status).toBe('completed')
+  })
 })

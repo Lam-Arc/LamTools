@@ -1,4 +1,4 @@
-import { nextTick, type Directive } from 'vue'
+import { nextTick, type ObjectDirective } from 'vue'
 import { coreIsScrollNearBottom } from '../composables/useCoreAutoFollowScroll'
 
 /**
@@ -83,7 +83,7 @@ function scrollToBottom(element: HTMLElement, target: HTMLElement, state: AutoFo
   })
 }
 
-export const autoFollowScrollDirective: Directive<HTMLElement, string> = {
+export const autoFollowScrollDirective: ObjectDirective<HTMLElement, string> = {
   mounted(element, binding) {
     const target = resolveScrollTarget(element)
     const state: AutoFollowState = {

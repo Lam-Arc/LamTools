@@ -206,9 +206,13 @@ function closeForm() {
 function buildTrigger(): Record<string, unknown> {
   switch (formScheduleType.value) {
     case 'once':
+      // Backend (runtime/arrange.py _normalize_trigger) parses once triggers
+      // from date/time/timezone; the old local_at-only payload always fell
+      // into the date branch with an empty date and failed (audit 18 S2).
       return {
         type: 'once',
-        local_at: formDate.value ? `${formDate.value}T${formTime.value}:00` : '',
+        date: formDate.value,
+        time: formTime.value ? `${formTime.value}:00` : '',
         timezone: formTimezone.value,
       }
     case 'daily':

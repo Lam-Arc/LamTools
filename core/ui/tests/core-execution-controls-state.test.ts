@@ -137,7 +137,7 @@ describe('useCoreExecutionControlsState', () => {
 
   it('falls back to the provider-compatible mode when the previous mode disappears', async () => {
     const models = ref([{ id: 'model-1', provider_id: 'provider-1', thinking_supported: true }])
-    const selectedProviders = ref([{ id: 'provider-1', name: 'Provider One' }])
+    const selectedProviders = ref<Array<{ id: string; name: string; base_url?: string }>>([{ id: 'provider-1', name: 'Provider One' }])
     const state = useCoreExecutionControlsState({
       models,
       providers: selectedProviders,
