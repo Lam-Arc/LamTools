@@ -81,3 +81,23 @@ async def test_settings_rpc_other_namespaces_still_use_settings_jsonc(isolated_c
     await catalog.execute("settings.update", {"namespace": "core.dreaming", "value": {"enabled": True}}, metadata={})
     assert (isolated_config_root / "settings.jsonc").is_file()
     assert not (isolated_config_root / "imagegen.jsonc").exists()
+
+
+def test_dev_mode_config_root_points_at_repo_core_lam(monkeypatch):
+    """Dev mode (no LAMTOOLS_HOME / CONFIG_ROOT env) must resolve the config
+    root to the repository's core/.lam — the earlier dev fallback landed on
+    the repo root's .lam and silently forked the config tree, making saved
+    settings invisible to the next dev run (imagegen 读空 bug)."""
+    monkeypatch.delenv("LAMTOOLS_CORE_CONFIG_ROOT", raising=False)
+    monkeypatch.delenv("LAMTOOLS_HOME", raising=False)
+
+    from lamtools_core.config.root import core_config_root
+
+    root = core_config_root()
+    assert root.name == "core" and root.parent.name == ".lam"
+    assert (root / "config").is_dir()
+    # The dev root is the repository's core/.lam — where the user's real
+    # imagegen.jsonc lives — not <repo>/.lam.
+    # 层级：repo/core/.lam/core → 第 3 级是仓库的 core/ 目录（而非 repo 根的 .lam）。
+    assert root.parent.parent.name == "core"
+    assert root.parent.parent.parent.name != ".lam"

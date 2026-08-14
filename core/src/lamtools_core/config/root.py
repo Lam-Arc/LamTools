@@ -37,6 +37,16 @@ def core_config_root() -> Path:
     if lam:
         return (Path(lam) / "core").resolve()
 
+    if not getattr(sys, "frozen", False):
+        # Dev mode (cli serve / Tauri dev / dev.ps1): config lives in the
+        # repository's core/.lam/ so dev and repo-managed data share one
+        # root. Do NOT fall through to _exe_dir() — that is the repo root in
+        # dev, which would silently fork the config tree to <repo>/.lam and
+        # make everything configured in dev invisible to the next dev run
+        # (audit 20: dev/prod config-root divergence).
+        # config/root.py → lamtools_core → src → core/
+        return (Path(__file__).resolve().parent.parent.parent.parent / ".lam" / "core").resolve()
+
     exe_dir = _exe_dir()
     return (exe_dir / ".lam" / "core").resolve()
 
