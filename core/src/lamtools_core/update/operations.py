@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from lamtools_core.app.operation_catalog import (
@@ -23,7 +24,9 @@ def build_update_operation_catalog() -> OperationCatalog:
 
     async def update_check(request: OperationRequest) -> OperationResult:
         del request  # no payload expected
-        payload: dict[str, Any] = check_update()
+        # The sync HTTP check can block for up to ~10s on a slow network —
+        # never let it stall the event loop (audit 11).
+        payload: dict[str, Any] = await asyncio.to_thread(check_update)
         return OperationResult(name="update.check", payload=payload)
 
     catalog.register("update.check", update_check)

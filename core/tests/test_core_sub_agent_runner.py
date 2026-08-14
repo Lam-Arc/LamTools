@@ -898,3 +898,25 @@ async def test_sub_agent_runner_no_attachment_service_falls_back_to_text(tmp_pat
     user_msg = llm.requests[0].messages[-1]
     assert isinstance(user_msg.content, str)
 
+
+
+@pytest.mark.asyncio
+async def test_kernel_sub_agent_runner_honors_allowed_tools(tmp_path):
+    """Audit 18 S2: the workflow AI-node tool allow-list must actually reach
+    the sub-agent kernel (cfg.tools/allowed_tools were written by the UI but
+    never read by the runner)."""
+    llm = ScriptedSubAgentOnlyLLM()
+    runner = KernelSubAgentRunner(work_root=tmp_path, llm_client=llm, model_id="fake-model")
+
+    result = await runner.run(task="inspect the project", agent="worker", allowed_tools=["read_file"])
+
+    assert result.succeeded is True
+    assert len(llm.requests) == 1
+    tool_names = {tool["function"]["name"] for tool in llm.requests[0].tools or []}
+    assert tool_names == {"read_file"}, f"expected only read_file, got {tool_names}"
+
+    # Empty/None allow-list keeps the default toolbox.
+    llm2 = ScriptedSubAgentOnlyLLM()
+    runner2 = KernelSubAgentRunner(work_root=tmp_path, llm_client=llm2, model_id="fake-model")
+    await runner2.run(task="inspect the project", agent="worker", allowed_tools=[])
+    assert "read_file" in {tool["function"]["name"] for tool in llm2.requests[0].tools or []}

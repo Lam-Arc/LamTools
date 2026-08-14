@@ -311,6 +311,11 @@ class InMemoryArrangeStore:
     ) -> list[ArrangeJob]:
         claimed: list[ArrangeJob] = []
         async with self._lock:
+            # Jobs whose lease just expired are reset to scheduled but must
+            # NOT be re-claimed in the same poll round: their previous owner
+            # may still be finishing (audit 07 S2 — same-round re-claim ran
+            # the job twice).  They become claimable on the next round.
+            reset_ids: set[str] = set()
             for job_id, current in list(self._jobs.items()):
                 if (
                     current.status == "running"
@@ -334,10 +339,13 @@ class InMemoryArrangeStore:
                         revision=current.revision + 1,
                         updated_at=now,
                     )
+                    reset_ids.add(job_id)
             due = sorted(
                 (
                     job for job in self._jobs.values()
-                    if job.status == "scheduled" and job.next_run_at is not None and job.next_run_at <= now
+                    if job.status == "scheduled"
+                    and job.id not in reset_ids
+                    and job.next_run_at is not None and job.next_run_at <= now
                 ),
                 key=lambda job: (job.next_run_at or now, job.created_at, job.id),
             )[: max(1, limit)]
@@ -461,10 +469,16 @@ class InMemoryArrangeStore:
             return deepcopy(updated)
 
     async def recover_running(self, *, now: datetime) -> int:
+        # Only reclaim jobs whose lease has actually expired — resetting every
+        # running job would steal live work from another worker instance
+        # sharing the store (audit 07 S2: instance B startup double-ran
+        # instance A's in-flight jobs).
         recovered = 0
         async with self._lock:
             for job_id, current in list(self._jobs.items()):
                 if current.status != "running":
+                    continue
+                if current.lease_expires_at is None or current.lease_expires_at > now:
                     continue
                 occurrence = self._occurrences.get(current.occurrence_id)
                 if occurrence is not None and occurrence.status == "running":
@@ -966,6 +980,25 @@ class ArrangeRunner:
             return False
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+        # Persist the cancellation: without this the job stays ``running`` in
+        # the store and gets re-claimed (and re-executed) once its lease
+        # expires (audit 07 S2 — cancelled jobs were silently re-run).
+        try:
+            current = await self.store.get(str(job_id or ""))
+            if current is not None and current.status == "running":
+                await self.store.replace(
+                    replace(
+                        current,
+                        status="cancelled",
+                        lease_owner="",
+                        lease_expires_at=None,
+                        revision=current.revision + 1,
+                        updated_at=self.clock(),
+                    ),
+                    expected_revision=current.revision,
+                )
+        except Exception:
+            pass
         return True
 
     def wake(self) -> None:
@@ -979,16 +1012,15 @@ class ArrangeRunner:
             lease_seconds=self.lease_seconds,
             limit=self.claim_limit,
         )
-        tasks: list[tuple[str, asyncio.Task[None]]] = []
+        # Do NOT await the spawned tasks here: a long-running job would block
+        # the poll loop and newly due jobs could not be claimed until it
+        # finished (audit 07 S3).  Done-callbacks clean up _active_tasks.
         for job in jobs:
             task = asyncio.create_task(self._execute(job), name=f"arrange-job:{job.id}")
             self._active_tasks[job.id] = task
-            tasks.append((job.id, task))
-        if tasks:
-            await asyncio.gather(*(task for _, task in tasks), return_exceptions=True)
-            for job_id, task in tasks:
-                if self._active_tasks.get(job_id) is task:
-                    self._active_tasks.pop(job_id, None)
+            task.add_done_callback(
+                lambda _task, job_id=job.id: self._active_tasks.pop(job_id, None)
+            )
         return len(jobs)
 
     async def _run(self) -> None:
@@ -1016,7 +1048,12 @@ class ArrangeRunner:
                 pass  # fall through with original thread_id
         renewer = asyncio.create_task(self._renew(effective_job.id))
         try:
-            result = self.executor(effective_job)
+            # Run the executor off the event loop: a blocking executor would
+            # starve the lease renewer, the lease would expire mid-run and the
+            # job would be re-claimed (and re-executed) by this or another
+            # worker (audit 07 S2).  Async executors still work — their
+            # coroutine is awaited here on the loop.
+            result = await asyncio.to_thread(self.executor, effective_job)
             if inspect.isawaitable(result):
                 result = await result
             status = (

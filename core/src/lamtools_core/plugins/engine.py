@@ -4,6 +4,7 @@ import asyncio
 import ipaddress
 import json
 import os
+import shlex
 from dataclasses import replace
 from typing import Any, Protocol
 from urllib.parse import urlparse
@@ -99,8 +100,34 @@ class HookEngine:
             "LAMTOOLS_HOOK_EVENT": event.event_name,
             "LAMTOOLS_PLUGIN_ROOT": str(hook.plugin_root or ""),
         })
-        proc = await asyncio.create_subprocess_shell(
-            self._expanded_command(hook, event),
+        # Run the hook as an argv list, never through a shell: template
+        # placeholders (${TOOL_CALL_ID} etc.) are model-controlled, and a
+        # shell would expand them (audit 12 S2 — command injection via
+        # ``;``/``$(...)``/backticks in a placeholder).  Hooks that need shell
+        # features must invoke one explicitly (e.g. ``bash -c "..."``).
+        try:
+            raw_argv = shlex.split(self._expanded_command(hook, event), posix=False)
+        except ValueError as exc:
+            audit = {"hook_id": hook.id, "status": "failed", "error": f"invalid command syntax: {exc}"}
+            if hook.handler.required:
+                return HookDecision(decision="block", reason="required hook has invalid command"), audit
+            return HookDecision(), audit
+        # shlex(..., posix=False) keeps quotes; strip balanced outer quotes so
+        # ``python -c "print('hi')"`` reaches python as the code it is, while
+        # backslash-heavy Windows paths stay untouched.
+        argv = [
+            token[1:-1]
+            if len(token) >= 2 and token[0] == token[-1] and token[0] in "\"'"
+            else token
+            for token in raw_argv
+        ]
+        if not argv:
+            audit = {"hook_id": hook.id, "status": "failed", "error": "empty command"}
+            if hook.handler.required:
+                return HookDecision(decision="block", reason="required hook has empty command"), audit
+            return HookDecision(), audit
+        proc = await asyncio.create_subprocess_exec(
+            *argv,
             cwd=event.project_root or event.cwd or None,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
@@ -130,7 +157,12 @@ class HookEngine:
         text = stdout.decode("utf-8", errors="replace").strip()
         if not text:
             return HookDecision(), audit
-        return self._decision_from_text(text), audit
+        decision, parse_error = self._decision_from_text(text)
+        if parse_error:
+            audit = {**audit, "status": "failed", "error": parse_error}
+            if hook.handler.required:
+                return HookDecision(decision="block", reason="required hook returned invalid JSON"), audit
+        return decision, audit
 
     async def _run_http_hook(self, hook: HookDefinition, event: HookEvent) -> tuple[HookDecision, dict[str, Any]]:
         if not hook.handler.url:
@@ -160,7 +192,14 @@ class HookEngine:
                     return HookDecision(decision="block", reason="required http hook failed"), audit
                 return HookDecision(), audit
             text = response.text.strip()
-            return (self._decision_from_text(text) if text else HookDecision()), audit
+            if not text:
+                return HookDecision(), audit
+            decision, parse_error = self._decision_from_text(text)
+            if parse_error:
+                audit = {**audit, "status": "failed", "error": parse_error}
+                if hook.handler.required:
+                    return HookDecision(decision="block", reason="required hook returned invalid JSON"), audit
+            return decision, audit
         except Exception as exc:
             audit = {"hook_id": hook.id, "status": "failed", "error": str(exc)[:200]}
             if hook.handler.required:
@@ -192,26 +231,49 @@ class HookEngine:
                 return HookDecision(decision="block", reason="required mcp hook failed"), audit
             return HookDecision(), audit
         audit = {"hook_id": hook.id, "status": "completed"}
-        return self._decision_from_text(str(text)) if text else HookDecision(), audit
+        if not text:
+            return HookDecision(), audit
+        decision, parse_error = self._decision_from_text(str(text))
+        if parse_error:
+            audit = {**audit, "status": "failed", "error": parse_error}
+            if hook.handler.required:
+                return HookDecision(decision="block", reason="required hook returned invalid JSON"), audit
+        return decision, audit
 
     def _run_prompt_hook(self, hook: HookDefinition, event: HookEvent) -> tuple[HookDecision, dict[str, Any]]:
         prompt = self._expanded_prompt(hook, event)
         audit = {"hook_id": hook.id, "status": "completed"}
         return HookDecision(additional_context=prompt), audit
 
-    def _decision_from_text(self, text: str) -> HookDecision:
-        data = json.loads(text)
-        return HookDecision(
-            decision="block" if data.get("decision") == "block" else "allow",
-            reason=str(data.get("reason") or ""),
-            additional_context=str(data.get("additionalContext") or data.get("additional_context") or ""),
-            updated_input=data.get("updatedInput") if isinstance(data.get("updatedInput"), dict) else None,
-            permission_decision=str(data.get("permissionDecision") or data.get("permission_decision") or ""),
-            permission_decision_reason=str(
-                data.get("permissionDecisionReason") or data.get("permission_decision_reason") or ""
+    def _decision_from_text(self, text: str) -> tuple[HookDecision, str | None]:
+        """Parse a hook's JSON decision output.
+
+        Returns ``(decision, error)``: on malformed JSON the decision degrades
+        to allow and the error is reported in the audit trail, so a hook that
+        exits 0 with junk output can never kill the run (audit 05 S2 — the
+        uncaught ``json.loads`` escaped the hook engine and failed the whole
+        turn; required hooks still block via the caller).
+        """
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as exc:
+            return HookDecision(), f"hook returned invalid JSON: {exc}"
+        if not isinstance(data, dict):
+            return HookDecision(), "hook returned non-object JSON"
+        return (
+            HookDecision(
+                decision="block" if data.get("decision") == "block" else "allow",
+                reason=str(data.get("reason") or ""),
+                additional_context=str(data.get("additionalContext") or data.get("additional_context") or ""),
+                updated_input=data.get("updatedInput") if isinstance(data.get("updatedInput"), dict) else None,
+                permission_decision=str(data.get("permissionDecision") or data.get("permission_decision") or ""),
+                permission_decision_reason=str(
+                    data.get("permissionDecisionReason") or data.get("permission_decision_reason") or ""
+                ),
+                updated_output=data.get("updatedOutput") if isinstance(data.get("updatedOutput"), dict) else None,
+                status_message=str(data.get("statusMessage") or data.get("status_message") or ""),
             ),
-            updated_output=data.get("updatedOutput") if isinstance(data.get("updatedOutput"), dict) else None,
-            status_message=str(data.get("statusMessage") or data.get("status_message") or ""),
+            None,
         )
 
     def _payload(self, hook: HookDefinition, event: HookEvent) -> dict[str, Any]:

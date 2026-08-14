@@ -90,13 +90,55 @@ def test_hook_registry_marks_trusted_hooks(tmp_path: Path):
     assert second.status == "trusted"
 
 
-def test_hook_registry_rejects_unsupported_handler_type(tmp_path: Path):
+def test_hook_registry_skips_unsupported_handler_type(tmp_path: Path):
+    """A broken handler must be skipped, not raise — one bad entry must not
+    take the whole hook registry down (audit 11)."""
     project = tmp_path / "project"
     write_json(project / ".lamtools" / "hooks.json", {
-        "hooks": {"PreToolUse": [{"matcher": "*", "hooks": [{"type": "socket", "command": "x"}]}]}
+        "hooks": {
+            "PreToolUse": [
+                {
+                    "matcher": "*",
+                    "hooks": [
+                        {"type": "socket", "command": "x"},
+                        {"type": "command", "command": "echo ok"},
+                    ],
+                }
+            ]
+        }
     })
 
     registry = HookRegistry(project_root=project)
 
-    with pytest.raises(ValueError, match="unsupported hook handler type"):
-        registry.load()
+    hooks = registry.load()
+    assert len(hooks) == 1
+    assert hooks[0].handler.type == "command"
+
+
+def test_hook_registry_skips_structurally_broken_groups(tmp_path: Path):
+    project = tmp_path / "project"
+    write_json(project / ".lamtools" / "hooks.json", {
+        "hooks": {
+            "PreToolUse": "not-a-list",
+            "PostToolUse": [{"matcher": "not-a-dict"}],
+            "Stop": [{"matcher": "*", "hooks": [{"command": "echo fine"}]}],
+        }
+    })
+
+    registry = HookRegistry(project_root=project)
+
+    hooks = registry.load()
+    assert len(hooks) == 1
+    assert hooks[0].event == "Stop"
+
+
+def test_hook_registry_tolerates_non_numeric_timeout(tmp_path: Path):
+    project = tmp_path / "project"
+    write_json(project / ".lamtools" / "hooks.json", {
+        "hooks": {"PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": "x", "timeout": "abc"}]}]}
+    })
+
+    hooks = HookRegistry(project_root=project).load()
+
+    assert len(hooks) == 1
+    assert hooks[0].handler.timeout == 10.0

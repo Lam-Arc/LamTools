@@ -127,7 +127,12 @@ def build_config_operation_catalog(*, work_root: str | Path | None = None) -> Op
         if provider is None:
             return _error(request, f"provider not found: {provider_id}")
         update = _provider_update_fields(provider, params)
-        store.write(update, scope="project" if _is_project_scope(params, root) else "global", work_root=root)
+        scope = _scope(params, root)
+        if scope == "global" and _is_project_source(provider.source_path, root):
+            # Writing a global copy would be shadowed by the project file —
+            # the update would "succeed" without effect (audit 09 S3).
+            scope = "project"
+        store.write(update, scope=scope, work_root=root)
         return OperationResult(name=request.name, payload={"provider": _provider_response(store.get_sync(update.id, work_root=root) or update)})
 
     async def provider_delete(request: OperationRequest) -> OperationResult:
@@ -198,7 +203,11 @@ def build_config_operation_catalog(*, work_root: str | Path | None = None) -> Op
                 old_path.unlink()
         if updated.is_default:
             _clear_other_defaults(model_store, updated.model_id, root)
-        model_store.write(updated, scope=_scope(params, root), work_root=root)
+        scope = _scope(params, root)
+        if scope == "global" and _is_project_source(model.source_path, root):
+            # Same shadow trap as provider_update (audit 09 S3).
+            scope = "project"
+        model_store.write(updated, scope=scope, work_root=root)
         return OperationResult(name=request.name, payload={"model": _model_response(updated)})
 
     async def model_delete(request: OperationRequest) -> OperationResult:
@@ -222,7 +231,13 @@ def build_config_operation_catalog(*, work_root: str | Path | None = None) -> Op
             return _error(request, "namespace is required")
         # core.imagegen lives in its own imagegen.jsonc (frontend contract kept).
         if namespace == IMAGEGEN_NAMESPACE:
-            value = load_imagegen_config()
+            value = dict(load_imagegen_config())
+            if value.get("api_key"):
+                # Mirror the provider contract: never echo the real key back
+                # to the client; an empty/masked submission keeps the old one
+                # (audit 17 S3).
+                value["api_key"] = MASKED_API_KEY
+                value["has_api_key"] = True
         else:
             value = get_setting(namespace)
         return OperationResult(name=request.name, payload={"namespace": namespace, "value": value if isinstance(value, dict) else {}})
@@ -234,8 +249,21 @@ def build_config_operation_catalog(*, work_root: str | Path | None = None) -> Op
             return _error(request, "namespace and object value are required")
         if namespace == IMAGEGEN_NAMESPACE:
             current = load_imagegen_config()
-            merged = {**current, **dict(value)}
+            incoming = dict(value)
+            # Empty or masked api_key keeps the stored key (audit 17 S3).
+            submitted_key = incoming.get("api_key")
+            if isinstance(submitted_key, str) and submitted_key.strip() in {"", MASKED_API_KEY}:
+                incoming.pop("api_key", None)
+            merged = {**current, **incoming}
             save_imagegen_config(merged)
+        elif namespace == "core.runtimeControls":
+            # Safety-critical namespace: validate the value domain server-side
+            # so a caller cannot smuggle arbitrary permission settings
+            # (audit 03 S3 / 12 S2 — this namespace gates auto-approval).
+            merged = _merge_runtime_controls(request, get_setting(namespace), dict(value))
+            if merged is None:
+                return _error(request, "invalid core.runtimeControls value")
+            set_setting(namespace, merged)
         else:
             current = get_setting(namespace)
             merged = {**(current if isinstance(current, dict) else {}), **dict(value)}
@@ -379,8 +407,19 @@ def _scope(params: dict[str, Any], work_root: str | None) -> str:
     return scope
 
 
-def _is_project_scope(params: dict[str, Any], work_root: str | None) -> bool:
-    return _scope(params, work_root) == "project" and bool(work_root)
+def _is_project_source(source_path: str | None, work_root: str | None) -> bool:
+    """True when the entity's source file lives under the project scope.
+
+    An update whose source is project-scoped must write back to the project
+    (not a global copy that the project file shadows — the audit 09 S3
+    "silent no-op update" trap).
+    """
+    if not work_root or not source_path:
+        return False
+    try:
+        return Path(source_path).resolve().is_relative_to(Path(work_root).resolve())
+    except (OSError, ValueError):
+        return False
 
 
 def _bounded_int(value: object, *, default: int, minimum: int, maximum: int) -> int:
@@ -393,6 +432,38 @@ def _bounded_int(value: object, *, default: int, minimum: int, maximum: int) -> 
 
 def _error(request: OperationRequest, message: str) -> OperationResult:
     return OperationResult(name=request.name, status="error", payload={"error": message})
+
+
+_PERMISSION_MODES = ("read_only", "limited_edit", "full_edit")
+_RUNTIME_CONTROL_BOOLS = (
+    "allow_agent_install_skill",
+    "allow_agent_create_hooks",
+    "allow_access_outside_workdir",
+)
+
+
+def _merge_runtime_controls(request: OperationRequest, current: Any, incoming: dict[str, Any]) -> dict[str, Any] | None:
+    """Merge a ``core.runtimeControls`` update with server-side validation.
+
+    This namespace gates auto-approval and out-of-workdir access, so values
+    are validated rather than blindly merged (audit 03 S3 / 12 S2).  Unknown
+    keys are ignored; a known key with an out-of-domain value rejects the
+    whole update.
+    """
+    merged = {**(current if isinstance(current, dict) else {})}
+    for key, raw in incoming.items():
+        if key == "permission_mode":
+            if raw not in _PERMISSION_MODES:
+                return None
+            merged[key] = raw
+        elif key in _RUNTIME_CONTROL_BOOLS:
+            if not isinstance(raw, bool):
+                return None
+            merged[key] = raw
+        else:
+            # Unknown keys are dropped rather than persisted.
+            pass
+    return merged
 
 
 __all__ = ["build_config_operation_catalog"]

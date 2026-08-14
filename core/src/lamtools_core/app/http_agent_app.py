@@ -28,6 +28,7 @@ from lamtools_core.config.provider_store import ProviderConfig, ProviderStore, m
 from lamtools_core.config.root import ensure_projects_root
 from lamtools_core.update.operations import build_update_operation_catalog
 from lamtools_core.attachment import CoreAttachmentStore
+from lamtools_core.attachment.service import MAX_ATTACHMENT_BYTES
 from lamtools_core.runtime import RuntimeTaskRegistry
 from lamtools_core.runtime.arrange import ArrangeManager, ArrangeRunner, arranged_operation_payload
 from lamtools_core.runtime.goal import GoalManager
@@ -226,6 +227,11 @@ def create_core_agent_http_app(
     )
 
     core_db_path = _resolve_core_db(core_db)
+    # Single work-root contract (audit 20 S4): unless explicitly overridden,
+    # the agent work root is always projects_root/default — the Tauri shell
+    # sets LAMTOOLS_PROJECTS_ROOT (prod: app_dir\lam_projects, dev/CLI:
+    # repo\lam_projects), and desktop_backend.py no longer pre-sets a
+    # divergent LAMTOOLS_CORE_WORK_ROOT, so dev/prod/CLI all converge here.
     resolved_work_root = Path(
         work_root
         or os.environ.get("LAMTOOLS_CORE_WORK_ROOT")
@@ -586,8 +592,9 @@ def create_core_agent_http_app(
             "agent_id": runtime_spec.id,
             "agent_name": runtime_spec.name,
             "model": config.display_name or config.model_id,
-            "work_root": str(resolved_work_root),
-            "core_db": str(core_db_path),
+            # Internal absolute paths (work_root / core_db) were previously
+            # exposed to any loopback caller — auxiliary info for targeted
+            # attacks (audit 03 S4). Nothing depends on those fields.
         },
         on_startup=[startup_core_agent],
         on_shutdown=[shutdown_core_agent],
@@ -623,6 +630,13 @@ def create_core_agent_http_app(
         file: UploadFile = File(...),
         project_id: str | None = Query(default=None),
     ) -> dict[str, Any]:
+        # Reject oversized uploads before reading them into memory (the
+        # service layer re-checks the actual byte count).
+        if file.size is not None and file.size > MAX_ATTACHMENT_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Attachment exceeds the {MAX_ATTACHMENT_BYTES // (1024 * 1024)} MB size limit",
+            )
         record = await attachment_store().create(session_id, file.filename or "attachment", await file.read(), file.content_type)
         await register_uploaded_artifact(record, project_id)
         return record

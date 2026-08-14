@@ -91,20 +91,33 @@ class HookRegistry:
             return []
         hooks_section = raw.get("hooks", {}) if isinstance(raw, dict) else {}
         if not isinstance(hooks_section, dict):
-            raise ValueError(f"hooks must be an object: {path}")
+            # A structurally broken hooks file must never take the whole app
+            # down (audit 11) — skip the whole file.
+            logging.getLogger(__name__).warning("Skipping hooks file with invalid 'hooks' section: %s", path)
+            return []
         loaded: list[HookDefinition] = []
         for event, groups in hooks_section.items():
             if not isinstance(groups, list):
-                raise ValueError(f"hook event groups must be a list: {path}:{event}")
+                logging.getLogger(__name__).warning("Skipping non-list hook groups: %s:%s", path, event)
+                continue
             for group_index, group in enumerate(groups):
                 if not isinstance(group, dict):
-                    raise ValueError(f"hook group must be an object: {path}:{event}:{group_index}")
+                    logging.getLogger(__name__).warning("Skipping non-object hook group: %s:%s:%s", path, event, group_index)
+                    continue
                 matcher = str(group.get("matcher") or "*")
                 handlers = group.get("hooks", [])
                 if not isinstance(handlers, list):
-                    raise ValueError(f"hook handlers must be a list: {path}:{event}:{group_index}")
+                    logging.getLogger(__name__).warning("Skipping non-list hook handlers: %s:%s:%s", path, event, group_index)
+                    continue
                 for handler_index, raw_handler in enumerate(handlers):
-                    handler = self._handler(raw_handler)
+                    try:
+                        handler = self._handler(raw_handler)
+                    except ValueError:
+                        logging.getLogger(__name__).warning(
+                            "Skipping invalid hook handler: %s:%s:%s:%s",
+                            path, event, group_index, handler_index,
+                        )
+                        continue
                     stable = {
                         "config_path": str(path),
                         "event": str(event),
@@ -142,13 +155,18 @@ class HookRegistry:
         handler_type = str(raw.get("type") or "command")
         if handler_type not in SUPPORTED_HANDLER_TYPES:
             raise ValueError(f"unsupported hook handler type: {handler_type}")
+        try:
+            timeout = float(raw.get("timeout") or 10)
+        except (TypeError, ValueError):
+            # A non-numeric timeout must not take the app down (audit 11).
+            timeout = 10.0
         return HookHandler(
             type=handler_type,  # type: ignore[arg-type]
             command=str(raw.get("command") or ""),
             url=str(raw.get("url") or ""),
             tool=str(raw.get("tool") or ""),
             prompt=str(raw.get("prompt") or ""),
-            timeout=float(raw.get("timeout") or 10),
+            timeout=timeout,
             required=bool(raw.get("required") or False),
             status_message=str(raw.get("statusMessage") or raw.get("status_message") or ""),
             raw=dict(raw),

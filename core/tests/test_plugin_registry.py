@@ -49,18 +49,20 @@ def test_registry_uses_default_hook_and_mcp_paths(tmp_path: Path):
     assert item.mcp_files == [plugin.resolve() / ".mcp.json"]
 
 
-def test_registry_rejects_paths_outside_plugin_root(tmp_path: Path):
-    plugin = tmp_path / "plugins" / "bad"
-    write_json(plugin / "plugin.json", {
+def test_registry_skips_plugin_with_paths_outside_plugin_root(tmp_path: Path):
+    """A plugin whose manifest escapes its root is skipped — one corrupt
+    plugin must never hide every other plugin (audit 11)."""
+    write_json(tmp_path / "plugins" / "bad" / "plugin.json", {
         "name": "bad",
         "version": "1.0.0",
         "hooks": ["./../outside.json"],
     })
+    write_json(tmp_path / "plugins" / "good" / "plugin.json", {"name": "good", "version": "1.0.0"})
 
     registry = PluginRegistry(plugin_roots=[tmp_path / "plugins"])
 
-    with pytest.raises(ValueError, match="outside plugin root"):
-        registry.discover()
+    names = [item.name for item in registry.discover()]
+    assert names == ["good"]
 
 
 def test_plugin_state_store_controls_enabled_flag(tmp_path: Path):

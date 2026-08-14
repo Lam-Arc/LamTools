@@ -24,6 +24,7 @@ from lamtools_core.app.event_store import SqlAlchemyAppEventStore
 from lamtools_core.app.live_hub import CoreAppEventHub
 from lamtools_core.app.live_operations import (
     CoreLiveContext,
+    _ensure_turn_terminal,
     handle_queue_create_operation,
     handle_queue_delete_operation,
     handle_queue_guidance_operation,
@@ -2320,3 +2321,46 @@ async def test_completed_turn_does_not_block_next_turn_start(tmp_path):
     finally:
         context.runtime_task_registry.clear()
         await engine.dispose()
+
+
+async def test_ensure_turn_terminal_does_not_complete_waiting_turn(tmp_path):
+    """Audit 01 S1 regression: a turn waiting for approval must not be
+    backfilled as completed, or the queue would dispatch the next item
+    without approval and two kernels would run concurrently."""
+    llm = BlockingCoreLLM()
+    engine, context = await _live_core_context(tmp_path, llm)
+    thread_id = "thread-waiting-approval"
+    turn_id = "turn-waiting-1"
+
+    async def write_initial(db):
+        envelopes = []
+        envelopes.append(await live_operations_module._append_run_item(db, context=context, event=RunItemEvent(
+            kind="queue", thread_id=thread_id, event_id="q1-accept", item_id="q1",
+            payload={"queue_item_id": "q1", "status": "queued", "mode": "next_turn",
+                     "input": [{"type": "text", "text": "next"}]},
+        )))
+        envelopes.append(await live_operations_module._append_run_item(db, context=context, event=RunItemEvent(
+            kind="status", thread_id=thread_id, event_id="t-running", turn_id=turn_id,
+            item_id=f"{turn_id}:running", status="running", payload={"type": "turn"},
+        )))
+        envelopes.append(await live_operations_module._append_run_item(db, context=context, event=RunItemEvent(
+            kind="status", thread_id=thread_id, event_id="t-waiting", turn_id=turn_id,
+            item_id=f"{turn_id}:waiting", status="waiting", payload={"type": "turn"},
+        )))
+        return envelopes
+
+    await context.persistence.write(write_initial)
+
+    await _ensure_turn_terminal(context=context, thread_id=thread_id, turn_id=turn_id)
+
+    async with context.session_factory() as db:
+        snapshot = await context.persistence.load(db, thread_id)
+        events = await context.persistence.list_after(db, thread_id=thread_id, after_seq=0)
+    assert snapshot["core"]["turns"][turn_id]["status"] == "waiting"
+    # Thread-level status must not be flipped to completed either.
+    assert snapshot["core"]["status"] != "completed"
+    assert not any(
+        env.payload.get("event_id") == f"{turn_id}:terminal"
+        for env in events
+    ), "waiting turn was wrongly marked completed"
+    await engine.dispose()

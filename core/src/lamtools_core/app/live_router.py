@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -12,7 +13,6 @@ from pydantic import ValidationError
 
 from .event_store import CORE_RUN_ITEM_METHOD
 from .live_hub import CoreAppEventGap
-from .live_approval import normalize_approval_request
 from .live_operations import (
     CoreLiveContext,
     CoreLiveOperationOutcome,
@@ -30,6 +30,7 @@ from .live_protocol import (
     snapshot_notification,
 )
 from .operation_catalog import OperationCatalog
+from .security import is_allowed_origin
 
 
 logger = logging.getLogger(__name__)
@@ -91,59 +92,30 @@ def create_core_live_router(context_factory: CoreLiveContextFactory) -> APIRoute
 
     @router.websocket("/app-server")
     async def app_server(websocket: WebSocket) -> None:
+        # Browsers always send an Origin header on WebSocket handshakes; reject
+        # anything not on the local allow-list (a malicious page could
+        # otherwise open a raw WS to 127.0.0.1 and drive the agent, since WS
+        # is not subject to CORS).  Non-browser clients omit Origin and pass.
+        origin = websocket.headers.get("origin")
+        if origin is not None and not is_allowed_origin(origin):
+            await websocket.close(code=1008, reason="origin not allowed")
+            return
         context = context_factory()
         if inspect.isawaitable(context):
             context = await context
         connection = CoreLiveConnection(
             websocket,
             context=context,
-            adapter=CoreLiveConnectionAdapter(handle_client_response=_handle_core_client_response),
+            adapter=CoreLiveConnectionAdapter(),
+            browser_origin=origin,
+            # Bound the receive buffer so a hostile/leaky peer cannot balloon
+            # memory with one oversized frame (audit 12). 4 MB comfortably
+            # covers every legitimate RPC payload.
+            max_message_bytes=4 * 1024 * 1024,
         )
         await connection.run()
 
     return router
-
-
-async def _handle_core_client_response(connection: "CoreLiveConnection", raw: dict[str, Any]) -> bool:
-    if "method" in raw or "id" not in raw or not isinstance(raw.get("result"), dict):
-        return False
-    result_payload = raw["result"]
-    params = dict(result_payload)
-    params.setdefault("request_id", str(raw.get("id") or ""))
-    host = getattr(connection.context, "host", None)
-    if host is not None:
-        outcome = await host.execute(
-            "approval.respond",
-            request_id=raw.get("id"),
-            params=params,
-            context=connection.context,
-        )
-        await connection.send_operation_outcome(outcome, send_response=False, publish_events=False, send_snapshot=True)
-        return True
-    try:
-        normalized = await normalize_approval_request(params)
-    except ValueError:
-        return False
-    result = await connection.context.operations.execute(
-        "approval.respond",
-        normalized.to_dict(),
-        metadata={"source": "core_live_client_response"},
-    )
-    payload = dict(result.payload or {})
-    if result.status != "ok":
-        await connection.send(
-            rpc_error(
-                raw.get("id"),
-                code=connection.adapter.operation_error_code,
-                message=str(payload.get("error") or result.status),
-                data=payload,
-            )
-        )
-        return True
-    snapshot = payload.get("snapshot")
-    if isinstance(snapshot, dict):
-        await connection.send(snapshot_notification(snapshot))
-    return True
 
 
 class CoreLiveConnection:
@@ -154,10 +126,17 @@ class CoreLiveConnection:
         context: Any,
         outbound_limit: int = 256,
         adapter: CoreLiveConnectionAdapter | None = None,
+        browser_origin: str | None = None,
+        max_message_bytes: int = 4 * 1024 * 1024,
     ) -> None:
         self.websocket = websocket
         self.context = context
         self.adapter = adapter or CoreLiveConnectionAdapter()
+        self.max_message_bytes = max_message_bytes
+        # Set when the handshake carried an Origin header (i.e. the peer is a
+        # browser page, not a local CLI process).  Browser connections cannot
+        # self-grant auto-approval (see _dispatch).
+        self.browser_origin = browser_origin
         self.initialized = False
         self.thread_id: str | None = None
         self.subscription: asyncio.Queue[Any | None] | None = None
@@ -186,10 +165,25 @@ class CoreLiveConnection:
         try:
             while True:
                 try:
-                    raw = await self.websocket.receive_json()
+                    raw_text = await self.websocket.receive_text()
                 except WebSocketDisconnect as exc:
                     logger.info("core-app-server ws disconnected: code=%s reason=%r", exc.code, exc.reason)
                     break
+                except Exception as exc:
+                    logger.warning("core-app-server ws receive failed: %s", exc)
+                    break
+                if len(raw_text) > self.max_message_bytes:
+                    # A hostile/leaky peer must not balloon memory with one
+                    # oversized frame (audit 12); close with the standard
+                    # "message too big" code.
+                    logger.warning("core-app-server ws frame too large (%d bytes)", len(raw_text))
+                    await self.websocket.close(code=1009, reason="message too big")
+                    break
+                try:
+                    raw = json.loads(raw_text)
+                except (json.JSONDecodeError, TypeError):
+                    logger.warning("core-app-server ws invalid JSON frame")
+                    continue
                 if not self.initialized:
                     await self._handle_raw(raw)
                     continue
@@ -574,11 +568,33 @@ class CoreLiveConnection:
             thread_id = _thread_id_from_params(request.params)
             if thread_id:
                 self.switch_thread_subscription(thread_id)
+        params = request.params
+        if method == "turn.start" and self.browser_origin is not None:
+            # A browser page must not self-grant auto-approval: strip any
+            # client-declared policy so the server-side runtimeControls
+            # settings decide.  Non-browser callers (CLI / local processes)
+            # keep their explicit policy.
+            if params.get("approval_policy") is not None or params.get("approvalPolicy") is not None:
+                params = {**params}
+                params.pop("approval_policy", None)
+                params.pop("approvalPolicy", None)
+        if method == "approval.respond":
+            # Bind the response to the subscribed thread: a connection may
+            # only answer an approval request for the thread it is watching.
+            thread_id = _thread_id_from_params(params)
+            if not thread_id or self.thread_id != thread_id:
+                return CoreLiveOperationOutcome(
+                    response=rpc_error(
+                        request.id,
+                        code=INVALID_REQUEST,
+                        message="approval.respond must target the subscribed thread",
+                    )
+                )
         if method in self.context.host.operation_handlers() or self.context.operations.has(method):
             return await self.context.host.execute(
                 method,
                 request_id=request.id,
-                params=request.params,
+                params=params,
                 context=self.context,
             )
         return CoreLiveOperationOutcome(

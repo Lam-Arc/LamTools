@@ -687,6 +687,10 @@ class SqlAlchemyArrangeStore:
                         )
                         .values(status="pending", started_at=None, updated_at=claim_time)
                     )
+            # Jobs whose lease just expired must not be re-claimed in this
+            # same round — their previous owner may still be finishing
+            # (audit 07 S2: same-round re-claim executed the job twice).
+            expired_ids = {row.id for row in expired}
             await db.execute(
                 update(CoreArrangeJob)
                 .execution_options(synchronize_session=False)
@@ -711,6 +715,7 @@ class SqlAlchemyArrangeStore:
                         CoreArrangeJob.status == "scheduled",
                         CoreArrangeJob.next_run_at.is_not(None),
                         CoreArrangeJob.next_run_at <= claim_time,
+                        CoreArrangeJob.id.not_in(expired_ids),
                     )
                     .order_by(CoreArrangeJob.next_run_at, CoreArrangeJob.created_at, CoreArrangeJob.id)
                     .limit(max(1, limit))
@@ -932,11 +937,21 @@ class SqlAlchemyArrangeStore:
         return await self.write_coordinator.run(write)
 
     async def recover_running(self, *, now: datetime) -> int:
+        # Only reclaim jobs whose lease has actually expired — resetting every
+        # running job would steal live work from another worker instance
+        # sharing the DB (audit 07 S2: instance B startup double-ran instance
+        # A's in-flight jobs).
         when = _utc_datetime(now)
 
         async def write(db):
             running_rows = (
-                await db.execute(select(CoreArrangeJob).where(CoreArrangeJob.status == "running"))
+                await db.execute(
+                    select(CoreArrangeJob).where(
+                        CoreArrangeJob.status == "running",
+                        CoreArrangeJob.lease_expires_at.is_not(None),
+                        CoreArrangeJob.lease_expires_at <= when,
+                    )
+                )
             ).scalars().all()
             for row in running_rows:
                 if row.occurrence_id:
@@ -950,7 +965,11 @@ class SqlAlchemyArrangeStore:
                     )
             result = await db.execute(
                 update(CoreArrangeJob)
-                .where(CoreArrangeJob.status == "running")
+                .where(
+                    CoreArrangeJob.status == "running",
+                    CoreArrangeJob.lease_expires_at.is_not(None),
+                    CoreArrangeJob.lease_expires_at <= when,
+                )
                 .values(
                     status="scheduled",
                     next_run_at=when,
@@ -959,6 +978,11 @@ class SqlAlchemyArrangeStore:
                     revision=CoreArrangeJob.revision + 1,
                     updated_at=when,
                 )
+                # Skip ORM session synchronization: the WHERE would be
+                # Python-evaluated against the naive SQLite-read lease column
+                # vs the aware `when` (TypeError) once rows are loaded in this
+                # session (e.g. a test seeding an expired lease).
+                .execution_options(synchronize_session=False)
             )
             return int(result.rowcount or 0)
 
@@ -1206,6 +1230,10 @@ async def _migrate_core_app_schema(connection: Any) -> None:
             "ALTER TABLE core_arrange_jobs DROP COLUMN goal_id"
         ))
     if "project_id" in arrange_columns:
+        # SQLite refuses to drop an indexed column — the historical model
+        # declared project_id with index=True (audit 04 S2: old databases
+        # failed to open after upgrade).
+        await connection.execute(text("DROP INDEX IF EXISTS ix_core_arrange_jobs_project_id"))
         await connection.execute(text(
             "ALTER TABLE core_arrange_jobs DROP COLUMN project_id"
         ))

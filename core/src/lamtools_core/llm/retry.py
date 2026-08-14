@@ -13,6 +13,9 @@ from lamtools_core.llm.policy import DEFAULT_DELAY_SEQUENCE_SECONDS, RetryPolicy
 
 _logger = logging.getLogger(__name__)
 
+#: Upper bound for honoring a provider Retry-After header.
+MAX_RETRY_AFTER_SECONDS = 120.0
+
 T = TypeVar("T")
 
 
@@ -44,12 +47,27 @@ def classify_model_error(exc: Exception) -> str:
       - ``"token_overflow"`` — context window exceeded, never retry
       - ``"rate_limit"``  — transient, retry with backoff + retry-after
       - ``"retryable"``   — unknown transient, retry with backoff
+
+    Structured providers (``LLMProviderError`` / ``RateLimitError``) are
+    classified by HTTP status code first: 4xx (except 429/408) is a client
+    error that retrying cannot fix, 5xx is transient. Message-text matching
+    remains only as a fallback for untyped errors (audit 10 S2).
     """
     name = type(exc).__name__
     if name == "TokenOverflowError":
         return "token_overflow"
     if name == "RateLimitError":
         return "rate_limit"
+    status_code = getattr(exc, "status_code", None)
+    if isinstance(status_code, int):
+        if status_code == 429:
+            return "rate_limit"
+        if status_code in (408, 409, 425, 500, 502, 503, 504):
+            return "retryable"
+        if 400 <= status_code < 500:
+            return "fatal"
+        if status_code >= 500:
+            return "retryable"
     msg = str(exc).lower()
     if any(
         marker in msg
@@ -128,27 +146,20 @@ async def stream_with_retry(
         emitted = False
         try:
             stream = llm_client.stream(request)
-            timeout = request.timeout if request.timeout is not None else timeout_seconds
             if inspect.isawaitable(stream):
-                if timeout is not None and timeout > 0:
-                    stream = await asyncio.wait_for(stream, timeout=timeout)
-                else:
-                    stream = await stream
+                stream = await stream
             if not hasattr(stream, "__aiter__"):
                 raise NotImplementedError
-            if timeout is not None and timeout > 0:
-                async with asyncio.timeout(timeout):
-                    async for event in stream:
-                        if event.kind == "error":
-                            raise RuntimeError(event.error or "model stream failed")
-                        emitted = True
-                        yield event
-            else:
-                async for event in stream:
-                    if event.kind == "error":
-                        raise RuntimeError(event.error or "model stream failed")
-                    emitted = True
-                    yield event
+            # No wall-clock timeout around the whole stream: that would kill a
+            # still-live stream whenever event handling is slow, and it
+            # contradicts the per-event idle semantics of
+            # model_stream_idle_timeout_seconds (audit 10 S3). Idle detection
+            # is the caller's job (kernel._next_stream_event).
+            async for event in stream:
+                if event.kind == "error":
+                    raise RuntimeError(event.error or "model stream failed")
+                emitted = True
+                yield event
             return
         except (AttributeError, NotImplementedError):
             raise
@@ -227,8 +238,15 @@ async def run_with_model_retry(
 def _delay_for_error(policy: RetryPolicy, attempt: int, kind: str, exc: Exception) -> float:
     if kind == "rate_limit":
         retry_after = getattr(exc, "retry_after", None)
-        if retry_after is not None and retry_after > 0:
-            return float(retry_after)
+        try:
+            value = float(retry_after) if retry_after is not None else None
+        except (TypeError, ValueError):
+            # Non-numeric (e.g. an unparsed HTTP-date slipped through) — fall
+            # back to the fixed sequence rather than crashing the retry path
+            # (audit 10 S3).
+            value = None
+        if value is not None and value > 0:
+            return min(value, MAX_RETRY_AFTER_SECONDS)
     return model_retry_delay(policy, attempt)
 
 

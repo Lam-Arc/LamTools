@@ -12,6 +12,10 @@ from .schemas import MCPServerConfig, MCPTool
 
 logger = logging.getLogger(__name__)
 
+# Upper bound for a single MCP message body — a malicious/broken server must
+# not be able to exhaust process memory via a huge Content-Length or line.
+MAX_MESSAGE_BYTES = 32 * 1024 * 1024
+
 
 def subprocess_start_kwargs(*, env: dict[str, str]) -> dict[str, Any]:
     kwargs: dict[str, Any] = {
@@ -181,6 +185,9 @@ async def read_message(reader: asyncio.StreamReader, *, transport: str = "header
             line = await reader.readline()
             if not line:
                 return None
+            if len(line) > MAX_MESSAGE_BYTES:
+                logger.warning("Dropping oversized MCP line (%d bytes)", len(line))
+                return None
             text = line.decode("utf-8", errors="replace").strip()
             if not text:
                 continue
@@ -207,6 +214,11 @@ async def read_message(reader: asyncio.StreamReader, *, transport: str = "header
         logger.warning("Skipping message with invalid Content-Length: %s", headers.get("content-length"))
         return None
     if length <= 0:
+        return None
+    # A malicious/broken server advertising a huge body must not exhaust
+    # process memory (audit 11) — cap single-message size.
+    if length > MAX_MESSAGE_BYTES:
+        logger.warning("Dropping MCP message with oversized Content-Length: %d", length)
         return None
     body = await reader.readexactly(length)
     try:

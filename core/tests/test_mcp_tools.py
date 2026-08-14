@@ -67,3 +67,30 @@ def test_clean_mcp_arguments_removes_runtime_keys():
 def test_format_mcp_result_formats_text_and_error_content():
     assert format_mcp_result({"content": [{"type": "text", "text": "hello"}]}) == "hello"
     assert format_mcp_result({"isError": True, "content": [{"type": "text", "text": "bad"}]}) == "MCP TOOL ERROR: bad"
+
+
+class TestMCPSchemas:
+    def test_server_config_defaults_and_validation(self):
+        from pydantic import ValidationError
+
+        from lamtools_core.mcp.schemas import MCPServerConfig
+
+        config = MCPServerConfig(name="srv", command="python mcp.py")
+        assert config.args == []
+        assert config.timeout_seconds == 30.0
+        assert config.permission == "ask_user"
+        assert config.enabled is True
+        assert config.transport == "headers"
+
+        with pytest.raises(ValidationError):
+            MCPServerConfig(name="srv", command="python mcp.py", transport="udp")
+        with pytest.raises(ValidationError):
+            MCPServerConfig(name="srv", command="python mcp.py", permission="always")
+
+    def test_tool_schema_shape(self):
+        from lamtools_core.mcp.schemas import MCPTool
+
+        tool = MCPTool(server="srv", name="read_file", function_name="mcp__srv__read_file")
+        assert tool.description == ""
+        assert tool.input_schema == {}
+        assert tool.permission == "ask_user"

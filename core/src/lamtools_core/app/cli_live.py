@@ -368,7 +368,7 @@ async def watch_live_events(
                     if request_id:
                         reply = await resolve_approval(approval)
                         decision = approval_decision(reply) if approval_decision else approval_decision_from_reply(reply)
-                        await client.respond_approval(request_id=request_id, decision=decision, guidance=reply)
+                        await client.respond_approval(thread_id=thread_id, request_id=request_id, decision=decision, guidance=reply)
                         approval_prompted = True
                 elif raw and is_waiting_event(event):
                     message = "approval decision is required for raw watch"

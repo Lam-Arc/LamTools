@@ -30,7 +30,7 @@ _datas: list[tuple[str, str]] = [
 
 # ---------------------------------------------------------------------------
 # Hidden imports — every submodule reachable in lamtools_core
-# (122 Core modules + 3rd-party runtime deps)
+# (133 Core modules + 3rd-party runtime deps)
 # ---------------------------------------------------------------------------
 _hiddenimports = [
     # === 3rd-party runtime dependencies ===
@@ -71,29 +71,9 @@ _hiddenimports = [
     "lamtools_core.tokens",
 
     # === lamtools_core top-level packages ===
-    "lamtools_core.app",
-    "lamtools_core.attachment",
-    "lamtools_core.config",
-    "lamtools_core.event",
-    "lamtools_core.http",
-    "lamtools_core.kernel",
-    "lamtools_core.llm",
-    "lamtools_core.mcp",
-    "lamtools_core.member",
-    "lamtools_core.plugins",
-    "lamtools_core.project",
-    "lamtools_core.prompt",
-    "lamtools_core.provider",
-    "lamtools_core.runtime",
-    "lamtools_core.run_event",
-    "lamtools_core.session",
-    "lamtools_core.snapshot",
-    "lamtools_core.tool",
-    "lamtools_core.usage",
 
     # === app/ submodules ===
     "lamtools_core.app.agent_app",
-    "lamtools_core.app.approval_continuation",
     "lamtools_core.app.approval_resolution",
     "lamtools_core.app.base_agent",
     "lamtools_core.app.cli_live",
@@ -151,7 +131,6 @@ _hiddenimports = [
     "lamtools_core.kernel.loop",
     "lamtools_core.kernel.policy",
     "lamtools_core.kernel.state",
-    "lamtools_core.kernel.summary",
     "lamtools_core.kernel.tracing",
     "lamtools_core.kernel.hooks",
 
@@ -183,7 +162,6 @@ _hiddenimports = [
     "lamtools_core.plugins.trust",
 
     # === project/ submodules ===
-    "lamtools_core.project.directory_picker",
 
     # === run_event/ submodules ===
     "lamtools_core.run_event.hub",
@@ -216,6 +194,53 @@ _hiddenimports = [
     "lamtools_core.tool.workspace",
     "lamtools_core.tool.workspace_files",
     "lamtools_core.tool.verification",
+    "lamtools_core.app.security",
+    "lamtools_core.app.session_autotitle",
+    "lamtools_core.app.workflow_operations",
+    "lamtools_core.artifact.registry",
+    "lamtools_core.config.agents_md",
+    "lamtools_core.config.id_validation",
+    "lamtools_core.config.imagegen_store",
+    "lamtools_core.config.migrate_projects",
+    "lamtools_core.config.retry_store",
+    "lamtools_core.config.subagent_prompt",
+    "lamtools_core.llm.model_capabilities",
+    "lamtools_core.mem.dreaming",
+    "lamtools_core.mem.memory_file",
+    "lamtools_core.mem.store",
+    "lamtools_core.project.workflow_store",
+    "lamtools_core.runtime.workflow",
+    "lamtools_core.runtime.workflow_watcher",
+    "lamtools_core.tool.image_tools",
+    "lamtools_core.tool.search.baidu",
+    "lamtools_core.tool.search.bing",
+    "lamtools_core.tool.search.duckduckgo",
+    "lamtools_core.tool.search.external",
+    "lamtools_core.tool.search.factory",
+    "lamtools_core.tool.search.protocol",
+    "lamtools_core.tool.workflow_build_tools",
+    "lamtools_core.tool.workflow_tools",
+    "lamtools_core.update.checker",
+    "lamtools_core.update.operations",
+    "lamtools_core.app",
+    "lamtools_core.attachment",
+    "lamtools_core.config",
+    "lamtools_core.event",
+    "lamtools_core.http",
+    "lamtools_core.kernel",
+    "lamtools_core.llm",
+    "lamtools_core.mcp",
+    "lamtools_core.member",
+    "lamtools_core.plugins",
+    "lamtools_core.project",
+    "lamtools_core.prompt",
+    "lamtools_core.provider",
+    "lamtools_core.run_event",
+    "lamtools_core.runtime",
+    "lamtools_core.session",
+    "lamtools_core.snapshot",
+    "lamtools_core.tool",
+    "lamtools_core.usage",
 ]
 
 # ---------------------------------------------------------------------------

@@ -48,32 +48,6 @@ class RuntimeProjectionInput:
     created_at: datetime | None = None
 
 
-class RuntimeProjectionBuffer:
-    def __init__(self) -> None:
-        self._pending_parts: dict[str, RuntimeProjectionInput] = {}
-
-    def merge_part_growth(self, fact: RuntimeProjectionInput) -> RuntimeProjectionInput:
-        payload = (fact.metadata or {}).get("payload")
-        part_id = ""
-        if fact.phase == "runtime.part" and isinstance(payload, dict):
-            part_id = str(payload.get("part_id") or "")
-        if not part_id:
-            return fact
-
-        existing = self._pending_parts.get(part_id)
-        if existing is None:
-            self._pending_parts[part_id] = fact
-            return fact
-
-        existing.status = fact.status
-        existing.summary = fact.summary
-        existing.preview = fact.preview
-        existing.full_text = fact.full_text
-        existing.metadata = fact.metadata
-        existing.created_at = fact.created_at
-        return existing
-
-
 def runtime_group_from_event_name(event_name: str) -> str:
     if event_name.startswith("runtime.tool"):
         return "tool"
@@ -924,7 +898,6 @@ def _canonical_status(status: str) -> str:
 
 __all__ = [
     "DEFAULT_RUNTIME_PREVIEW_CHARS",
-    "RuntimeProjectionBuffer",
     "RuntimeProjectionInput",
     "extract_tool_input_preview",
     "event_model_call_id",

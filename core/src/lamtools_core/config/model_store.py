@@ -26,6 +26,8 @@ import sys
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from .id_validation import validate_config_id
 from typing import Any
 
 from lamtools_core.llm.model_capabilities import Capability, resolve_capability
@@ -256,6 +258,7 @@ class ModelStore:
 
     @staticmethod
     def write_path(model_id: str, *, scope: str, work_root: str | None) -> Path:
+        validate_config_id("model", model_id)
         if scope == "project" and work_root:
             return Path(work_root).resolve() / ".lam" / "config" / MODELS_SUBDIR / f"{model_id}{MODEL_FILENAME_SUFFIX}"
         return core_config_dir() / MODELS_SUBDIR / f"{model_id}{MODEL_FILENAME_SUFFIX}"
@@ -263,7 +266,9 @@ class ModelStore:
     def write(self, model: ModelConfig, *, scope: str, work_root: str | None) -> Path:
         path = self.write_path(model.model_id, scope=scope, work_root=work_root)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(self._serialize(model), encoding="utf-8")
+        from lamtools_core.config.root import atomic_write_text
+
+        atomic_write_text(path, self._serialize(model))
         self._cached_signature = None  # invalidate cache
         self._cached_models = None
         return path

@@ -63,9 +63,15 @@ _MARKDOWN_FENCE_RE = re.compile(r"^```(?:json)?\s*\n(.*?)\n```\s*$", re.DOTALL)
 def parse_tool_call_arguments(args_str: str) -> dict[str, Any]:
     """Parse JSON arguments string, return {} on failure.
 
-    Strips markdown code fences (```json ... ```) if present.
+    Strips markdown code fences (```json ... ```) if present. Some providers
+    pass an already-parsed dict instead of a string — pass it through rather
+    than crashing on ``.strip()`` (audit 10 S3).
     """
-    if not args_str or not args_str.strip():
+    if args_str is None:
+        return {}
+    if isinstance(args_str, dict):
+        return args_str
+    if not isinstance(args_str, str) or not args_str.strip():
         return {}
 
     # Strip markdown fences
@@ -143,7 +149,9 @@ def _usage_int(raw: Any, *keys: str) -> int:
         try:
             return int(value)
         except (TypeError, ValueError):
-            return 0
+            # Unparseable value — try the next alias instead of silently
+            # zeroing the metric (audit 10 S4).
+            continue
     return 0
 
 
@@ -221,7 +229,9 @@ def _cache_creation_tokens_from_usage(raw: Any) -> int:
 def extract_thinking_content(message: dict[str, Any]) -> str:
     """Extract thinking/reasoning content from a message dict.
 
-    Checks fields in order: thinking, reasoning_content, delta.reasoning_content.
+    Checks fields in order: thinking, reasoning_content, delta.reasoning_content,
+    message.thinking, message.reasoning (audit 10 S4: the docstring promised
+    delta.reasoning_content support that the implementation lacked).
     """
     thinking = message.get("thinking")
     if thinking:
@@ -230,6 +240,19 @@ def extract_thinking_content(message: dict[str, Any]) -> str:
     reasoning = message.get("reasoning_content")
     if reasoning:
         return str(reasoning) if not isinstance(reasoning, str) else reasoning
+
+    delta = message.get("delta")
+    if isinstance(delta, dict):
+        delta_thinking = delta.get("reasoning_content") or delta.get("thinking")
+        if delta_thinking:
+            return str(delta_thinking) if not isinstance(delta_thinking, str) else delta_thinking
+
+    for key in ("message", "reasoning"):
+        nested = message.get(key)
+        if isinstance(nested, dict):
+            nested_thinking = nested.get("thinking") or nested.get("reasoning_content")
+            if nested_thinking:
+                return str(nested_thinking) if not isinstance(nested_thinking, str) else nested_thinking
 
     return ""
 
@@ -463,14 +486,17 @@ def normalize_stream_chunk(chunk: dict[str, Any]) -> LLMStreamEvent | None:
             raw=chunk,
         )
 
-    # Tool call delta
+    # Tool call delta — may arrive together with finish_reason on the final
+    # chunk (DeepSeek-style providers); the kernel uses the metadata flag to
+    # terminate the stream instead of waiting for a done event that never
+    # comes (audit 10 S3).
     tool_calls_delta = delta.get("tool_calls")
     if tool_calls_delta:
         return LLMStreamEvent(
             kind="tool_call_delta",
             content="",  # tool call deltas carry structured data in raw
             raw=chunk,
-            metadata={"tool_calls_delta": tool_calls_delta},
+            metadata={"tool_calls_delta": tool_calls_delta, **({"finish_reason": finish_reason} if finish_reason is not None else {})},
         )
 
     # Thinking delta (reasoning_content)
@@ -481,6 +507,7 @@ def normalize_stream_chunk(chunk: dict[str, Any]) -> LLMStreamEvent | None:
             kind="thinking_delta",
             content=thinking_str,
             raw=chunk,
+            metadata={"finish_reason": finish_reason} if finish_reason is not None else {},
         )
 
     # Refusal delta (content_filter scenarios)
@@ -493,7 +520,7 @@ def normalize_stream_chunk(chunk: dict[str, Any]) -> LLMStreamEvent | None:
             raw=chunk,
         )
 
-    # Content delta
+    # Content delta — same finish_reason carry-over as above.
     content = delta.get("content")
     if content:
         content_str = content if isinstance(content, str) else str(content)
@@ -501,6 +528,7 @@ def normalize_stream_chunk(chunk: dict[str, Any]) -> LLMStreamEvent | None:
             kind="content_delta",
             content=content_str,
             raw=chunk,
+            metadata={"finish_reason": finish_reason} if finish_reason is not None else {},
         )
 
     # Done: finish_reason is set — also carry tool_calls and usage if present

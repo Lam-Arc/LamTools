@@ -18,7 +18,7 @@ from datetime import datetime
 from typing import Any
 import uuid
 
-from sqlalchemy import delete, or_, select
+from sqlalchemy import and_, delete, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from lamtools_core.app.core_db import CoreMemory
@@ -130,13 +130,16 @@ class SqlAlchemyMemoryStore(MemoryStoreProtocol):
             statement = statement.where(CoreMemory.confidence >= query.min_confidence)
 
         # Content matching: split the query into whitespace terms and AND
-        # them with LIKE %term% over content. This is intentionally simple —
-        # good enough for de-duplication lookups during dreaming. FTS5 can
-        # replace this later without touching the protocol.
+        # them with LIKE %term% over content — every term must be present,
+        # so a dreaming dedupe lookup cannot false-positive on a single
+        # shared word (audit 11: the implementation was OR, silently
+        # widening recall). This is intentionally simple — good enough for
+        # de-duplication lookups during dreaming. FTS5 can replace this
+        # later without touching the protocol.
         terms = [t for t in (query.query or "").split() if t]
         if terms:
             conditions = [CoreMemory.content.ilike(f"%{term}%") for term in terms]
-            statement = statement.where(or_(*conditions))
+            statement = statement.where(and_(*conditions))
 
         statement = statement.order_by(
             CoreMemory.confidence.desc(),
@@ -215,7 +218,7 @@ class InMemoryMemoryStore(MemoryStoreProtocol):
         terms = [t for t in (query.query or "").split() if t]
         if terms:
             ql = query.query.lower()
-            candidates = [e for e in candidates if any(t.lower() in e.content.lower() for t in terms) or ql == ""]
+            candidates = [e for e in candidates if all(t.lower() in e.content.lower() for t in terms)]
 
         candidates.sort(key=lambda e: (e.confidence, e.accessed_at), reverse=True)
         candidates = candidates[: max(1, query.limit)]

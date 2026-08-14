@@ -69,6 +69,11 @@ if TYPE_CHECKING:
 
 _TOOL_INPUT_PROGRESS_CHARS = 512
 _STREAM_TEXT_PROGRESS_CHARS = 128
+# Bound on how many rounds the tool-progress gate may force a continuation
+# while the model keeps emitting text+tools without the required structure —
+# after this the gate yields to the Kit's verdict (audit 05 S3: unbounded
+# forced continue was an infinite-loop entry).
+TOOL_PROGRESS_INCOMPLETE_ROUND_LIMIT = 3
 
 
 def _message_reference_ids(messages: list[ChatMessage]) -> list[str]:
@@ -245,6 +250,11 @@ class CoreLoopKernel:
     tracer: Tracer = field(default_factory=NoopTracer)
     hook_engine: Any | None = None
     checkpoint_coordinator: Any | None = None
+    # Tool names whose file writes get backed up before execution. Kept as a
+    # configurable field rather than a hardcoded branch so products with
+    # differently-named writer tools can opt in at the assembly point
+    # (audit 05 S4: "Kernel 不按产品分支").
+    backup_tool_names: tuple[str, ...] = ("write_file", "edit_file")
     completion_gate: CompletionGate | None = None
     memory_store: Any | None = None  # MemoryStoreProtocol; Any to avoid import cycle
     _cancel_event: asyncio.Event = field(default_factory=asyncio.Event, init=False, repr=False)
@@ -388,9 +398,14 @@ class CoreLoopKernel:
                 state.metadata.pop("goal_id", None)
         state.metadata.pop("no_progress", None)
         state.metadata.pop("failure_diagnosis", None)
-        prior_waiting = state.metadata.get("pending_waiting_request")
-        if isinstance(prior_waiting, dict) and prior_waiting.get("request_kind") == "no_progress":
-            state.metadata.pop("pending_waiting_request", None)
+        # Stale per-turn waiting state from a crashed/failed prior run must not
+        # leak into the new run: both the no_progress pause and the permission
+        # approval gate persist this metadata across checkpoints, and a stale
+        # entry would shadow the fresh gate state set later in this run
+        # (audit 05 S4). The approval resume path is guidance-driven, so
+        # dropping these keys here cannot break pending-approval recovery.
+        state.metadata.pop("pending_approval", None)
+        state.metadata.pop("pending_waiting_request", None)
         state.metadata["runtime_audit"] = build_kernel_audit(
             policy=self.policy,
             kernel_module_path=__file__,
@@ -411,10 +426,14 @@ class CoreLoopKernel:
                 actor_kind=actor_kind,
             )
 
-        # Start root trace span for this run (after state is loaded so we have ids)
+        # Start root trace span for this run (after state is loaded so we have ids).
+        # Keep a self reference so the external-cancellation path (which unwinds
+        # through run()'s CancelledError handler, past this local) can still close
+        # the span inside _finalize_run.
         run_span = self.tracer.start_span(
             "kernel.run", session_id=state.session_id, run_id=state.run_id
         )
+        self._run_span = run_span
 
         # 2. Mark running
         state.status = "running"
@@ -461,6 +480,7 @@ class CoreLoopKernel:
         tool_only_rounds = 0
         tool_progress_pending = False
         tool_progress_blocked_rounds = 0
+        tool_progress_incomplete_rounds = 0
 
         # Emit runtime.started event
         await self._emit_state_event(state, "runtime.started", "run started")
@@ -531,6 +551,11 @@ class CoreLoopKernel:
                     len(response.content or ""), len(response.tool_calls or []),
                     _step_elapsed,
                 )
+                # A turn is one processed model response; count it exactly once
+                # per loop iteration here (not in each decision branch) so the
+                # approval-wait / progress-gate / no-progress / normal exits and
+                # later error paths all share one consistent 口径 (audit 05 S4).
+                state.turn_count += 1
                 if response.usage is not None and not streamed_response:
                     await self.event_sink.emit(CoreEvent(
                         name="runtime.usage",
@@ -562,11 +587,20 @@ class CoreLoopKernel:
                     )
                 turn = await self.kit.parse_model_output(state, response)
                 invalid_tool_argument_errors: dict[str, str] = {}
-                for call_index, response_call in enumerate(response.tool_calls or []):
+                # Match response calls to turn calls by id so the error is
+                # attributed correctly even if the Kit reorders or filters
+                # calls; index alignment is only a fallback for id-less calls
+                # (audit 05 S4).
+                turn_calls_by_id = {call.id: call for call in (turn.tool_calls or [])}
+                for response_index, response_call in enumerate(response.tool_calls or []):
                     metadata = response_call.metadata if isinstance(response_call.metadata, dict) else {}
-                    if not metadata.get("arguments_parse_error") or call_index >= len(turn.tool_calls):
+                    if not metadata.get("arguments_parse_error"):
                         continue
-                    turn_call = turn.tool_calls[call_index]
+                    turn_call = turn_calls_by_id.get(response_call.id)
+                    if turn_call is None and response_index < len(turn.tool_calls):
+                        turn_call = turn.tool_calls[response_index]
+                    if turn_call is None:
+                        continue
                     raw_chars = int(metadata.get("raw_arguments_chars") or 0)
                     finish_reason = str(response.finish_reason or "unknown")
                     invalid_tool_argument_errors[turn_call.id] = (
@@ -750,7 +784,6 @@ class CoreLoopKernel:
                         final_decision = decision
                         await self.kit.writeback(state, turn, tool_results, VerificationResult(passed=True), decision)
                         state.loop_state = decision
-                        state.turn_count += 1
                         if self.policy.persist_steps:
                             steps_log = state.metadata.setdefault("kernel_steps", [])
                             steps_log.append(self._summarize_step(step))
@@ -899,7 +932,6 @@ class CoreLoopKernel:
                         }
                         final_decision = "wait"
                         state.loop_state = "wait"
-                        state.turn_count += 1
                         await self.kit.writeback(
                             state,
                             turn,
@@ -941,7 +973,6 @@ class CoreLoopKernel:
                     }
                     final_decision = "wait"
                     state.loop_state = "wait"
-                    state.turn_count += 1
                     await self.kit.writeback(
                         state,
                         turn,
@@ -971,6 +1002,7 @@ class CoreLoopKernel:
                     tool_progress_pending = False
                     tool_only_rounds = 0
                     tool_progress_blocked_rounds = 0
+                    tool_progress_incomplete_rounds = 0
                     step.metadata["tool_progress_completed"] = True
                     state.metadata["tool_progress"] = {
                         "status": "completed",
@@ -1064,9 +1096,24 @@ class CoreLoopKernel:
                 # 5.11 Decide next
                 decision = await self.kit.decide_next(state, turn, verification, step)
                 if tool_progress_incomplete or (tool_progress_completed and tool_progress_structured):
-                    decision = "continue"
+                    # The progress gate may only force a continuation while the
+                    # Kit itself wants to keep going (continue/done); overriding
+                    # a terminal Kit verdict (wait/failed) would defeat it
+                    # (audit 05 S3).  A model that keeps replying text+tools
+                    # without the required structure gets a bounded number of
+                    # forced rounds, then we stop forcing and surface a wait.
                     if tool_progress_incomplete:
-                        step.metadata["tool_progress_retry_required"] = True
+                        if decision in {"continue", "done"}:
+                            tool_progress_incomplete_rounds += 1
+                            if tool_progress_incomplete_rounds >= TOOL_PROGRESS_INCOMPLETE_ROUND_LIMIT:
+                                decision = "wait"
+                                step.metadata["tool_progress_no_progress"] = True
+                                state.metadata["tool_progress_no_progress"] = True
+                            else:
+                                decision = "continue"
+                                step.metadata["tool_progress_retry_required"] = True
+                    elif decision in {"continue", "done"}:
+                        decision = "continue"
                 elif turn.tool_calls and decision == "done":
                     # OpenAI/Claude-style loop contract: tool use is not a
                     # terminal answer. A run may only complete after the model
@@ -1130,7 +1177,6 @@ class CoreLoopKernel:
 
                 # Update state
                 state.loop_state = decision
-                state.turn_count += 1
 
                 # 5.12b Persist step summary (OpenAI Rollout-style audit trail)
                 if self.policy.persist_steps:
@@ -1199,24 +1245,49 @@ class CoreLoopKernel:
         if all_artifacts:
             result.metadata["artifacts"] = all_artifacts
 
-        # 7. Kit on_run_end
-        await self.kit.on_run_end(state, result)
-
-        # 7b. Stop hook — emit before on_run_end so downstream can still use state
-        await self._apply_session_stop_hook(state, result)
-
-        # 8. Emit final event
-        await self._emit_terminal_event(state, result)
-
-        # End root trace span
-        self.tracer.end_span(
-            run_span,
-            status="error" if final_decision == "failed" else "ok",
-            decision=final_decision,
-            steps=len(steps),
-        )
+        # 7-8. Converge the terminal tail: Kit on_run_end, Stop hook, terminal
+        # event, and trace span close — shared with the cancel path so a
+        # cancelled run notifies observers identically (audit 02).
+        await self._finalize_run(state, result, run_span)
+        self._run_span = None
 
         return result
+
+    async def _finalize_run(
+        self, state: RuntimeState, result: KernelResult, run_span: Any | None = None
+    ) -> None:
+        """Run the terminal convergence sequence for a kernel run.
+
+        Shared by the normal finish path and the external-cancellation path:
+        Kit ``on_run_end``, Stop hook, terminal event, and trace span close.
+        Each step is individually guarded so a hook failure can never swallow
+        the result or strand the span (audit 02 / 05).
+        """
+        try:
+            await self.kit.on_run_end(state, result)
+        except Exception:
+            _logger.exception(
+                "[kernel:_finalize_run] on_run_end failed sid=%s", state.session_id
+            )
+        try:
+            await self._apply_session_stop_hook(state, result)
+        except Exception:
+            _logger.exception(
+                "[kernel:_finalize_run] Stop hook failed sid=%s", state.session_id
+            )
+        try:
+            await self._emit_terminal_event(state, result)
+        except Exception:
+            _logger.exception(
+                "[kernel:_finalize_run] terminal event failed sid=%s", state.session_id
+            )
+        if run_span is not None:
+            self.tracer.end_span(
+                run_span,
+                status="error" if result.decision == "failed" else "ok",
+                decision=result.decision,
+                steps=len(result.steps),
+            )
 
     async def _persist_external_cancellation(self, turn_input: RuntimeTurnInput) -> None:
         state = turn_input.state
@@ -1233,7 +1304,22 @@ class CoreLoopKernel:
         state.metadata.pop("pending_approval", None)
         state.metadata.pop("pending_waiting_request", None)
         history = await self._load_history(state.session_id)
-        await self._save_checkpoint(state)
+        await self._replace_history_checkpoint(state, history)
+
+        # Converge the same terminal tail as the normal finish path (audit 02:
+        # the cancel path previously skipped on_run_end / Stop hook / terminal
+        # event and leaked the run span).
+        result = KernelResult(
+            session_id=state.session_id,
+            run_id=state.run_id,
+            decision="failed",
+            message="",
+            steps=[],
+            state=state,
+            error="cancelled",
+        )
+        await self._finalize_run(state, result, getattr(self, "_run_span", None))
+        self._run_span = None
 
     @staticmethod
     def _tool_call_fingerprint(call: ToolCall) -> str:
@@ -1544,6 +1630,11 @@ class CoreLoopKernel:
         # Some providers send usage in a standalone chunk (usage present but no
         # delta / finish_reason); keep it so the done event can carry it.
         pending_usage = None
+        # Some providers (DeepSeek-style) fold finish_reason into the same
+        # chunk as the last content/thinking delta instead of emitting a
+        # separate done chunk (audit 10 S3). Track it so the stream-ended
+        # fallback below still reports the real finish reason + usage.
+        stream_finish_reason: str | None = None
         try:
             stream_iterator = stream.__aiter__()
             while True:
@@ -1558,6 +1649,8 @@ class CoreLoopKernel:
                 # nothing (the 2b34c636 "stop 无效" symptom).
                 if self._is_external_cancelled():
                     raise asyncio.CancelledError()
+                if event.metadata and event.metadata.get("finish_reason"):
+                    stream_finish_reason = str(event.metadata["finish_reason"])
                 if event.kind == "content_delta" and event.content:
                     accumulated += event.content
                     await self.event_sink.emit(CoreEvent(
@@ -1771,12 +1864,14 @@ class CoreLoopKernel:
         )
         # Some providers end the stream with a usage-only chunk (no done
         # event) — carry the captured usage so the turn still gets its token /
-        # cache-hit metrics instead of silently dropping them.
+        # cache-hit metrics instead of silently dropping them. Same for a
+        # finish_reason folded into the final delta chunk (audit 10 S3).
         return LLMResponse(
             content=accumulated,
             thinking=thinking,
             tool_calls=merged_tool_calls,
             usage=pending_usage,
+            finish_reason=stream_finish_reason or "stop",
         )
 
     async def _consume_guidance(
@@ -2151,7 +2246,7 @@ class CoreLoopKernel:
         """Back up file before a write_file / edit_file tool executes."""
         if self.checkpoint_coordinator is None:
             return
-        if call.name not in ("write_file", "edit_file"):
+        if call.name not in self.backup_tool_names:
             return
         file_path = (
             call.arguments.get("path")
@@ -3350,6 +3445,23 @@ class CoreLoopKernel:
                 session_id=state.session_id,
                 run_id=state.run_id,
                 tags=["done"],
+            )
+        elif state.status == "cancelled":
+            # Both the in-loop cancel break (error == "cancelled") and the
+            # external-cancellation path converge here (audit 02). Emitting
+            # runtime.cancelled instead of runtime.failed keeps the projected
+            # turn status "cancelled" rather than "failed".
+            event = CoreEvent(
+                name="runtime.cancelled",
+                category="lifecycle",
+                payload={
+                    "error": result.error or "cancelled",
+                    "message": result.message,
+                    **({"runtime_metrics": runtime_metrics} if runtime_metrics else {}),
+                },
+                session_id=state.session_id,
+                run_id=state.run_id,
+                tags=["cancel"],
             )
         elif result.decision == "failed":
             event = CoreEvent(

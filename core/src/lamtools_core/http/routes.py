@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -277,6 +277,7 @@ def create_core_router(
     async def start_turn(
         session_id: str,
         body: TurnStartRequest,
+        request: Request,
     ) -> dict[str, Any]:
         session = await _store_call(_session_store.get, session_id)
         if session is None:
@@ -297,6 +298,10 @@ def create_core_router(
         # guard and permanently block the LLM title.
         await _update_session_status(session, _session_store, "running")
 
+        # A browser request (carrying an Origin header) cannot self-grant
+        # auto-approval; only local non-browser callers may pass an explicit
+        # policy (audit 03 S1).
+        approval_policy = "require" if request.headers.get("origin") is not None else body.approval_policy
         try:
             result = await _operations.execute(
                 "turn.start",
@@ -304,7 +309,7 @@ def create_core_router(
                     "thread_id": session_id,
                     "session_id": session_id,
                     "message": body.message,
-                    "approval_policy": body.approval_policy,
+                    "approval_policy": approval_policy,
                     **({"model_id": body.model_id} if body.model_id else {}),
                     **({"work_root": body.work_root} if body.work_root else {}),
                     "metadata": body.metadata,

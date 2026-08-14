@@ -361,3 +361,97 @@ print(json.dumps({"updatedOutput": updated}))
         "call_id": "call-1", "name": "run_command", "status": "ok",
         "content": "orig [step1] [step2]",
     }
+
+
+@pytest.mark.asyncio
+async def test_command_hook_placeholders_are_not_shell_expanded(tmp_path: Path):
+    """Audit 12 S2 regression: hook commands run as argv, never through a
+    shell, so model-controlled placeholders cannot inject shell operators.
+    The payload here would have executed ``touch PWNED`` under the old
+    ``create_subprocess_shell``."""
+    marker = tmp_path / "PWNED"
+    hook = HookDefinition(
+        id="hook-inject",
+        event="PreToolUse",
+        matcher="run_command",
+        source="project",
+        source_name="project",
+        config_path=tmp_path / "hooks.json",
+        handler=HookHandler(
+            type="command",
+            command="python -c \"print('${TOOL_CALL_ID}')\"",
+            timeout=5,
+        ),
+        trusted=True,
+        status="trusted",
+    )
+    payload = "x'; os.system('touch PWNED') #"
+    decision = await HookEngine([hook]).run(HookEvent(
+        event_name="PreToolUse",
+        project_root=str(tmp_path),
+        tool_name="run_command",
+        tool_call_id=payload,
+        tool_input={"command": "echo hi"},
+    ))
+    # The hook ran as one argv list; the injected payload stays inside the
+    # ``-c`` argument where python rejects it as a syntax error.
+    assert not marker.exists()
+    assert decision.decision == "allow"
+    assert decision.audit_events[0]["status"] == "failed"  # python syntax error
+
+
+@pytest.mark.asyncio
+async def test_command_hook_with_invalid_json_does_not_kill_run(tmp_path):
+    """Audit 05 S2: a hook exiting 0 with junk stdout must degrade to allow
+    (with a failed audit), never raise out of the hook engine."""
+    script = tmp_path / "junk.py"
+    make_script(script, "print('this is not json')")
+    hook = HookDefinition(
+        id="hook-junk",
+        event="PreToolUse",
+        matcher="run_command",
+        source="project",
+        source_name="project",
+        config_path=tmp_path / "hooks.json",
+        handler=HookHandler(type="command", command=f"python {script}", timeout=5),
+        trusted=True,
+        status="trusted",
+    )
+
+    decision = await HookEngine([hook]).run(HookEvent(
+        event_name="PreToolUse",
+        project_root=str(tmp_path),
+        tool_name="run_command",
+        tool_input={"command": "echo hi"},
+    ))
+
+    assert decision.decision == "allow"
+    assert decision.audit_events[0]["status"] == "failed"
+    assert "invalid JSON" in decision.audit_events[0]["error"]
+
+
+@pytest.mark.asyncio
+async def test_required_hook_with_invalid_json_blocks(tmp_path):
+    """A required hook returning junk still blocks (fail-closed)."""
+    script = tmp_path / "junk2.py"
+    make_script(script, "print('not json at all')")
+    hook = HookDefinition(
+        id="hook-junk-required",
+        event="PreToolUse",
+        matcher="run_command",
+        source="project",
+        source_name="project",
+        config_path=tmp_path / "hooks.json",
+        handler=HookHandler(type="command", command=f"python {script}", timeout=5, required=True),
+        trusted=True,
+        status="trusted",
+    )
+
+    decision = await HookEngine([hook]).run(HookEvent(
+        event_name="PreToolUse",
+        project_root=str(tmp_path),
+        tool_name="run_command",
+        tool_input={"command": "echo hi"},
+    ))
+
+    assert decision.decision == "block"

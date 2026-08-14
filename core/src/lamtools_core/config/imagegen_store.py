@@ -40,7 +40,9 @@ def save_imagegen_config(value: dict[str, Any]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     import json
 
-    path.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
+    from lamtools_core.config.root import atomic_write_text
+
+    atomic_write_text(path, json.dumps(value, ensure_ascii=False, indent=2))
     return path
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from urllib.parse import quote
 import asyncio
 import hashlib
 import json
@@ -149,6 +150,38 @@ class LLMConfig:
     model_extra: dict[str, Any] = field(default_factory=dict)
 
 
+def _parse_retry_after(value: object) -> float | None:
+    """Parse a Retry-After header (seconds or HTTP-date) into seconds."""
+    if not value:
+        return None
+    try:
+        return max(0.0, float(value))
+    except (TypeError, ValueError):
+        pass
+    try:
+        from email.utils import parsedate_to_datetime
+        import datetime
+
+        when = parsedate_to_datetime(str(value))
+        now = datetime.datetime.now(when.tzinfo)
+        return max(0.0, (when - now).total_seconds())
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _http_provider_error(status_code: int, text: str, headers: object) -> Exception:
+    """Build a structured provider error so retry classification can key on
+    the status code instead of message text (audit 10 S2: 401/403/400 were
+    classified "retryable" and retried ~10 times)."""
+    from lamtools_core.kernel.errors import LLMProviderError, RateLimitError
+
+    message = f"LLM API error {status_code}: {text[:300]}"
+    if status_code == 429:
+        retry_after = _parse_retry_after(getattr(headers, "get", lambda _k: None)("retry-after"))
+        return RateLimitError(message, retry_after=retry_after)
+    return LLMProviderError(message, status_code=status_code)
+
+
 class CoreHttpLLMClient:
     def __init__(
         self,
@@ -185,7 +218,7 @@ class CoreHttpLLMClient:
                 headers=self._headers(),
             )
         if response.status_code >= 400:
-            raise RuntimeError(f"LLM API error {response.status_code}: {response.text[:300]}")
+            raise _http_provider_error(response.status_code, response.text[:300], response.headers)
         normalized = normalize_response_with_profile(response.json(), self.adapter_profile)
         return LLMResponse(
             content=str(normalized.get("content") or ""),
@@ -215,8 +248,10 @@ class CoreHttpLLMClient:
             ) as response:
                 if response.status_code >= 400:
                     text = await response.aread()
-                    raise RuntimeError(
-                        f"LLM API error {response.status_code}: {text.decode('utf-8', errors='replace')[:300]}"
+                    raise _http_provider_error(
+                        response.status_code,
+                        text.decode("utf-8", errors="replace")[:300],
+                        response.headers,
                     )
                 async for line in response.aiter_lines():
                     if not line or not line.startswith("data: "):
@@ -927,7 +962,7 @@ def build_parser() -> argparse.ArgumentParser:
     project_agents_set.set_defaults(func=cmd_project_agents_set)
 
     goal = sub.add_parser("goal", help="Manage durable goals")
-    goal_sub = goal.add_subparsers(dest="goal_command")
+    goal_sub = goal.add_subparsers(dest="goal_command", required=True)
     goal_create = goal_sub.add_parser("new", help="Create a new goal")
     goal_create.add_argument("thread_id", help="Thread ID")
     goal_create.add_argument("objective", nargs="+", help="Goal objective text")
@@ -955,7 +990,7 @@ def build_parser() -> argparse.ArgumentParser:
     goal_update.set_defaults(func=cmd_goal_update, thread_id="", raw=False)
 
     arrange = sub.add_parser("arrange", help="Manage durable arrangements")
-    arrange_sub = arrange.add_subparsers(dest="arrange_command")
+    arrange_sub = arrange.add_subparsers(dest="arrange_command", required=True)
     arrange_create = arrange_sub.add_parser("new", help="Create a new arrangement")
     arrange_create.add_argument("message", nargs="+", help="Arrangement instruction text")
     arrange_create.add_argument("--work-root", required=True, default="", help="Project work root absolute path (required)")
@@ -1010,7 +1045,7 @@ def build_parser() -> argparse.ArgumentParser:
     arrange_edit.set_defaults(func=cmd_arrange_edit, raw=False)
 
     workflow = sub.add_parser("workflow", help="Manage workflow node graphs")
-    workflow_sub = workflow.add_subparsers(dest="workflow_command")
+    workflow_sub = workflow.add_subparsers(dest="workflow_command", required=True)
     wf_new = workflow_sub.add_parser("new", help="Create a workflow from a JSON definition file")
     wf_new.add_argument("--name", default="", help="Workflow name (overrides the name in --from-file)")
     wf_new.add_argument("--from-file", required=True, help="Path to a JSON workflow definition")
@@ -1211,12 +1246,17 @@ async def cmd_serve(args: argparse.Namespace) -> int:
 
 async def cmd_setup(args: argparse.Namespace) -> int:
     del args
+    from lamtools_core.config.root import default_projects_root
+
+    # created 报告根目录是否刚建立（此前恒为 True，audit 08 S4）
+    root = default_projects_root()
+    created = not root.exists()
     root = ensure_projects_root()
     # Seed the unified config directory with built-in defaults (idempotent).
     from lamtools_core.config.defaults import ensure_default_config_files
 
     ensure_default_config_files()
-    print(json.dumps({"lam_projects": str(root), "created": True}, ensure_ascii=False), flush=True)
+    print(json.dumps({"lam_projects": str(root), "created": created}, ensure_ascii=False), flush=True)
     return 0
 
 
@@ -2101,7 +2141,6 @@ async def cmd_subagent_guide_edit(args: argparse.Namespace) -> int:
 
 
 async def cmd_models_list(args: argparse.Namespace) -> int:
-    from lamtools_core.cli import _get_model_store
 
     store = _get_model_store()
     models = store.list_sync(work_root=args.work_root or None)
@@ -2117,7 +2156,6 @@ async def cmd_models_list(args: argparse.Namespace) -> int:
 
 
 async def cmd_models_show(args: argparse.Namespace) -> int:
-    from lamtools_core.cli import _get_model_store
 
     store = _get_model_store()
     model = store.get_sync(args.model_id, work_root=args.work_root or None)
@@ -2139,7 +2177,6 @@ async def cmd_models_show(args: argparse.Namespace) -> int:
 
 
 async def cmd_models_set(args: argparse.Namespace) -> int:
-    from lamtools_core.cli import _get_model_store
 
     store = _get_model_store()
     model = store.get_sync(args.model_id, work_root=args.work_root or None)
@@ -2172,7 +2209,6 @@ async def cmd_models_set(args: argparse.Namespace) -> int:
 
 
 async def cmd_models_default(args: argparse.Namespace) -> int:
-    from lamtools_core.cli import _get_model_store
 
     store = _get_model_store()
     model = store.get_sync(args.model_id, work_root=args.work_root or None)
@@ -2593,6 +2629,12 @@ def main(argv: list[str] | None = None) -> int:
     except (ImportError, OSError, RuntimeError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
+    except Exception as exc:  # network-level failures (httpx.ConnectError etc.)
+        # Failures that do not subclass the four above (e.g. httpx transport
+        # errors) used to print a raw traceback — fold them into the same
+        # one-line error (audit 08 S3).
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
 
 
 def _build_summary(
@@ -2763,22 +2805,6 @@ def _default_run_dir() -> Path:
 
 def _default_work_root() -> Path:
     return ensure_projects_root() / "default"
-
-
-def _safe_relative_path(value: str) -> Path:
-    clean = value.replace("\\", "/").lstrip("/").strip()
-    path = Path(clean or "core-agent-proof.md")
-    if not path.parts or any(part in {"", ".", ".."} for part in path.parts):
-        return Path("core-agent-proof.md")
-    return path
-
-
-def _non_empty_line_count(text: str) -> int:
-    return len([line for line in text.splitlines() if line.strip()])
-
-
-def _fallback_document() -> str:
-    return "\n".join(f"Line {index}: Core Agent proof document." for index in range(1, 12)) + "\n"
 
 
 if __name__ == "__main__":

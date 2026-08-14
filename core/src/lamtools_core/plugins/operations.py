@@ -41,6 +41,50 @@ def _skill_source(location: Path, work_root: str | Path | None) -> str:
     return "core"
 
 
+def _strip_jsonc_comments(text: str) -> str:
+    """Strip JSONC comments without touching ``//`` inside string literals.
+
+    A plain regex would also remove the ``//`` of a URL inside a quoted
+    value, corrupting valid configs (audit 11). This scans line by line
+    and only treats ``//`` / ``/* */`` outside strings as comments.
+    """
+    out: list[str] = []
+    i = 0
+    n = len(text)
+    in_string = False
+    while i < n:
+        ch = text[i]
+        nxt = text[i + 1] if i + 1 < n else ""
+        if in_string:
+            out.append(ch)
+            if ch == "\\" and i + 1 < n:
+                out.append(nxt)
+                i += 2
+                continue
+            if ch == '"':
+                in_string = False
+            i += 1
+            continue
+        if ch == '"':
+            in_string = True
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "/" and nxt == "/":
+            while i < n and text[i] != "\n":
+                i += 1
+            continue
+        if ch == "/" and nxt == "*":
+            i += 2
+            while i + 1 < n and not (text[i] == "*" and text[i + 1] == "/"):
+                i += 1
+            i += 2
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
 def build_plugin_operation_catalog(
     *,
     plugin_registry: PluginRegistry,
@@ -119,15 +163,10 @@ def build_plugin_operation_catalog(
         hook_trust_store.trust(hook.definition_hash)
         return OperationResult(name=request.name, payload={"hook_id": hook_id, "trusted": True})
 
-    async def hook_trust_all(request: OperationRequest) -> OperationResult:
-        hooks = hook_registry_factory().load()
-        pending = [h for h in hooks if h.status == "pending_review"]
-        for hook in pending:
-            hook_trust_store.trust(hook.definition_hash)
-        return OperationResult(name=request.name, payload={
-            "trusted_count": len(pending),
-            "trusted_ids": [h.id for h in pending],
-        })
+    # NOTE: there is deliberately no ``hook.trust_all`` operation.  Trusting a
+    # hook grants it arbitrary command execution on every matching event, so
+    # trust must stay a deliberate per-hook decision (audit 12 S2: a page could
+    # one-shot trust every repository-delivered hook and then trigger them).
 
     async def hook_untrust(request: OperationRequest) -> OperationResult:
         hook_id = str(request.payload.get("hook_id") or request.payload.get("hookId") or "").strip()
@@ -222,11 +261,6 @@ def build_plugin_operation_catalog(
 
     # ── websearch config read / write (websearch.jsonc) ───────────────────
 
-    def _strip_jsonc_comments(text: str) -> str:
-        import re
-
-        return re.sub(r"/\*.*?\*/|//[^\n]*", "", text, flags=re.DOTALL)
-
     async def websearch_config_get(request: OperationRequest) -> OperationResult:
         config_path = core_config_file("websearch.jsonc")
         if config_path.exists():
@@ -296,7 +330,6 @@ def build_plugin_operation_catalog(
     catalog.register("plugin.disable", plugin_disable)
     catalog.register("hook.list", hook_list)
     catalog.register("hook.trust", hook_trust)
-    catalog.register("hook.trust_all", hook_trust_all)
     catalog.register("hook.untrust", hook_untrust)
     catalog.register("hook.delete", hook_delete)
     catalog.register("hook.config.get", hook_config_get)

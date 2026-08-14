@@ -2,15 +2,21 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from datetime import datetime
 from typing import Any, Callable
 from uuid import uuid4
 
 from . import InMemoryRuntimeEventStore, RuntimeEventRecord, RuntimeEventStore
 
+_logger = logging.getLogger(__name__)
+
 
 class RuntimeEventHub:
     """In-memory runtime event log plus SSE subscriber fan-out."""
+
+    #: A subscriber that goes quiet for this long is dropped as stale.
+    QUEUE_STALE_SECONDS = 300.0
 
     def __init__(
         self,
@@ -21,10 +27,13 @@ class RuntimeEventHub:
     ) -> None:
         self._max_events = max_events
         self._event_store = event_store or InMemoryRuntimeEventStore()
-        self._queue_registry: dict[str, tuple[asyncio.Queue, str | None]] = {}
+        self._queue_registry: dict[str, tuple[asyncio.Queue, str | None, float]] = {}
         self._session_queues: dict[str, list[str]] = {}
         self._queue_counter = 0
         self._max_queue_size = max_queue_size
+        # Queue ids that already logged a drop warning; used to warn once per
+        # stuck subscriber instead of once per dropped event (audit 07 S4).
+        self._drop_warned: set[str] = set()
 
     @property
     def queue_count(self) -> int:
@@ -57,6 +66,7 @@ class RuntimeEventHub:
         run_id: str = "",
         data: dict[str, Any] | None = None,
     ) -> tuple[str, int]:
+        self._sweep_stale_queues()
         record = self._append_runtime_record(
             name=name,
             session_id=session_id,
@@ -87,21 +97,34 @@ class RuntimeEventHub:
         last_event_id: str | None = None,
         tail: int | None = None,
         replay_skip_types: set[str] | None = None,
-    ) -> tuple[str, asyncio.Queue]:
+    ) -> tuple[str, asyncio.Queue, bool]:
+        """Register a subscriber queue.
+
+        Returns ``(queue_id, queue, replay_gap)``. ``replay_gap`` is True
+        when ``last_event_id`` was requested but is no longer in the store
+        (trimmed or never existed) — the caller should treat the replay as
+        incomplete and re-fetch the full state instead of silently missing
+        events (audit 11).
+        """
         self._queue_counter += 1
         queue_id = f"q_{self._queue_counter}"
         queue = asyncio.Queue(maxsize=self._max_queue_size)
-        self._queue_registry[queue_id] = (queue, session_id)
+        self._queue_registry[queue_id] = (queue, session_id, self._now())
         if session_id:
             self._session_queues.setdefault(session_id, []).append(queue_id)
+
+        replay_gap = False
+        if last_event_id:
+            known_ids = {record.id for record in self._event_store.list(session_id=session_id)}
+            replay_gap = last_event_id not in known_ids
 
         replay_tail = (0 if last_event_id else 50) if tail is None else tail
         skip_types = replay_skip_types or set()
         for record in self._replay_records(session_id=session_id, last_event_id=last_event_id, tail=replay_tail):
             if record.name in skip_types:
                 continue
-            self._try_put(queue, self.serialize_sse(record))
-        return queue_id, queue
+            self._try_put(queue_id, queue, self.serialize_sse(record))
+        return queue_id, queue, replay_gap
 
     def unsubscribe(self, queue_id: str) -> None:
         q_info = self._queue_registry.pop(queue_id, None)
@@ -118,26 +141,59 @@ class RuntimeEventHub:
         delivered = 0
         for queue_id in self._session_queues.get(session_id, []):
             q_info = self._queue_registry.get(queue_id)
-            if q_info and self._try_put(q_info[0], sse_line):
+            if q_info and self._try_put(queue_id, q_info[0], sse_line):
                 delivered += 1
         return delivered
 
     def _put_to_matching_queues(self, sse_line: str, *, include: Callable[[str, str | None], bool]) -> int:
         delivered = 0
-        for queue_id, (queue, q_session_id) in self._queue_registry.items():
+        for queue_id, (queue, q_session_id, _ts) in self._queue_registry.items():
             if not include(queue_id, q_session_id):
                 continue
-            if self._try_put(queue, sse_line):
+            if self._try_put(queue_id, queue, sse_line):
                 delivered += 1
         return delivered
 
-    @staticmethod
-    def _try_put(queue: asyncio.Queue, sse_line: str) -> bool:
+    def _try_put(self, queue_id: str, queue: asyncio.Queue, sse_line: str) -> bool:
         try:
             queue.put_nowait(sse_line)
-            return True
         except asyncio.QueueFull:
+            # A slow consumer losing events silently is worse than a noisy
+            # log: its cursor drifts and the gap is only detected via replay
+            # much later (audit 07 S4). Warn once until the queue drains so a
+            # single stuck subscriber does not spam per-event.
+            if queue_id not in self._drop_warned:
+                self._drop_warned.add(queue_id)
+                _logger.warning(
+                    "[run_event:hub] subscriber %s full (maxsize=%d) — dropping events; "
+                    "client should re-sync via last_event_id replay",
+                    queue_id,
+                    queue.maxsize,
+                )
             return False
+        self._drop_warned.discard(queue_id)
+        # Any successful delivery counts as liveness for the stale sweep.
+        info = self._queue_registry.get(queue_id)
+        if info is not None:
+            self._queue_registry[queue_id] = (info[0], info[1], self._now())
+        return True
+
+    def _sweep_stale_queues(self) -> None:
+        """Drop subscribers that have gone quiet past the staleness TTL.
+
+        Subscribers that disconnect without calling ``unsubscribe`` otherwise
+        leak their queue forever and keep consuming fan-out work (audit 11).
+        """
+        cutoff = self._now() - self.QUEUE_STALE_SECONDS
+        stale = [qid for qid, (_q, _sid, ts) in self._queue_registry.items() if ts < cutoff]
+        for queue_id in stale:
+            self.unsubscribe(queue_id)
+
+    @staticmethod
+    def _now() -> float:
+        import time
+
+        return time.monotonic()
 
     def _append_runtime_record(
         self,

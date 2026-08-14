@@ -148,8 +148,8 @@ class FakeClient:
     async def close(self) -> None:
         self.closed = True
 
-    async def respond_approval(self, *, request_id: str, decision: str, guidance: str = "") -> None:
-        self.approval_responses.append((request_id, decision, guidance))
+    async def respond_approval(self, *, thread_id: str, request_id: str, decision: str, guidance: str = "") -> None:
+        self.approval_responses.append((thread_id, request_id, decision, guidance))
 
 
 @pytest.mark.asyncio
@@ -263,7 +263,7 @@ async def test_watch_uses_injected_approval_callback_and_resets_after_resume() -
     )
 
     assert result.exit_code == 0
-    assert client.approval_responses == [("req-1", "approve_once", "yes")]
+    assert client.approval_responses == [("thread-1", "req-1", "approve_once", "yes")]
     assert output == ["[00:00] waiting_for_user Approve?", "[00:00] resumed", "[00:00] done"]
 
 
@@ -311,7 +311,7 @@ async def test_raw_watch_still_responds_to_approval_through_injected_callback() 
     )
 
     assert result.exit_code == 0
-    assert client.approval_responses == [("req-1", "approve_once", "approve_once")]
+    assert client.approval_responses == [("thread-1", "req-1", "approve_once", "approve_once")]
     assert [json.loads(value)["data"]["payload"]["kind"] for value in output] == ["status"]
 
 

@@ -4065,3 +4065,81 @@ async def test_empty_stop_fails_after_max_retries(tmp_path):
     assert result.decision == "failed"
     # _resolve_empty_stop allows attempts <= 2 (3 retries), then fails on the 4th
     assert llm.calls == 4
+
+
+@pytest.mark.asyncio
+async def test_tool_progress_incomplete_gate_is_bounded():
+    """Audit 05 S3 + 13 S1: the tool-progress gate may force a bounded number
+    of continue rounds while the model keeps emitting text+tools without the
+    required three-section structure, then yields to wait.  Previously the
+    forced continue had no round limit (infinite loop entry) and overrode
+    terminal Kit verdicts."""
+    big_text = "\n".join(f"line-{index:03d} content" for index in range(60))  # >=512 chars, >=3 lines
+
+    class ProgressGateKit(MockRuntimeKit):
+        async def parse_model_output(self, state: RuntimeState, response: LLMResponse) -> KernelTurn:
+            return KernelTurn(
+                reply="working on it",
+                tool_calls=[ToolCall(id="c1", name="read_file", arguments={"path": "big.txt", "content": big_text})],
+            )
+
+        async def execute_tool(self, state: RuntimeState, call: ToolCall) -> ToolResult:
+            return ToolResult(call_id=call.id, name=call.name, content="ok")
+
+        async def decide_next(self, state: RuntimeState, turn: KernelTurn, verification, step) -> str:
+            return "continue"
+
+    kit = ProgressGateKit(steps=[MockKitStep()])
+    kernel = _make_kernel(kit)
+
+    result = await kernel.run(_make_turn_input())
+
+    # The gate gave up after TOOL_PROGRESS_INCOMPLETE_ROUND_LIMIT forced
+    # rounds and surfaced a wait instead of looping forever.
+    assert result.decision == "wait"
+    assert any(step.metadata.get("tool_progress_retry_required") for step in result.steps)
+    assert result.steps[-1].metadata.get("tool_progress_no_progress") is True
+    assert result.error == ""
+
+
+class TestHistoryCompactedEvent:
+    """The pre-sampling trim must report trimmed/remaining counts consistent
+    with the actual history (audit 13 S3 — a count mismatch was flagged in
+    audit 05 and never covered by a test)."""
+
+    async def test_emits_trimmed_and_remaining_counts(self):
+        kit = MockRuntimeKit([
+            MockKitStep(reply="step-1", decision="continue"),
+            MockKitStep(reply="step-2", decision="continue"),
+            MockKitStep(reply="step-3", decision="continue"),
+            MockKitStep(reply="done", decision="done"),
+        ])
+        sink = CollectingEventSink()
+        policy = LoopPolicy(max_history_messages=3)
+        kernel = _make_kernel(kit, event_sink=sink, policy=policy)
+
+        await kernel.run(_make_turn_input(user_message="start"))
+
+        compacted = [e for e in sink.events if e.name == "runtime.history_compacted"]
+        assert compacted, "expected at least one history_compacted event"
+        last = compacted[-1]
+        trimmed = int(last.payload["trimmed"])
+        remaining = int(last.payload["remaining"])
+        # The trim cut the history down to max_history_messages; the event
+        # must agree with the history the kit observed afterwards.
+        assert remaining == policy.max_history_messages
+        assert trimmed > 0
+        # The kit's build_context saw a history of exactly `remaining` entries.
+        assert kit.context_histories
+        assert len(kit.context_histories[-1]) == remaining
+
+    async def test_no_event_when_under_limit(self):
+        kit = MockRuntimeKit([MockKitStep(reply="done", decision="done")])
+        sink = CollectingEventSink()
+        policy = LoopPolicy(max_history_messages=50)
+        kernel = _make_kernel(kit, event_sink=sink, policy=policy)
+
+        await kernel.run(_make_turn_input(user_message="start"))
+
+        compacted = [e for e in sink.events if e.name == "runtime.history_compacted"]
+        assert compacted == []

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -20,7 +21,7 @@ from lamtools_core.sub_agent import SubAgentEventForwardingSink
 from lamtools_core.sub_session import normalize_sub_session_agent_name
 from lamtools_core.tool import ToolCall, ToolSpec
 from lamtools_core.tool.approval_continuation import ApprovedToolExecution, approved_tool_continuation_prompt
-from lamtools_core.tool.default_toolbox import ApprovalPolicy, build_core_toolbox
+from lamtools_core.tool.default_toolbox import ApprovalPolicy, CoreToolbox, build_core_toolbox
 from lamtools_core.tool.loadtools import LoadTools, mode_names
 from lamtools_core.tool.mcp_tools import MCPToolCaller
 
@@ -111,6 +112,11 @@ class KernelSubAgentRunner:
         self.attachment_service = attachment_service
         self.imagegen_config = imagegen_config
         self.allow_access_outside_workdir = allow_access_outside_workdir
+        # Per-session serialization: parallel sub_agent calls with the same
+        # agent name share one child session id, so concurrent runs would
+        # interleave history writes (audit 02 S2).  Keyed by session id, which
+        # keeps the dict bounded by the number of distinct agent names.
+        self._session_locks: dict[str, asyncio.Lock] = {}
 
     def _disabled_tools(self) -> set[str]:
         """Sub-agent disabled set: never sub_agent itself; generate_image only
@@ -119,6 +125,21 @@ class KernelSubAgentRunner:
         if not bool((self.imagegen_config or {}).get("enabled")):
             disabled.add("generate_image")
         return disabled
+
+    def _build_toolbox(self, disabled_tools: set[str], *, active_mode: str | None) -> CoreToolbox:
+        return build_core_toolbox(
+            work_root=self.work_root,
+            approval_policy=self.approval_policy,
+            loaded_skill_roots=self.loaded_skill_roots,
+            mcp_caller=self.mcp_caller,
+            mcp_tool_specs=self.mcp_tool_specs,
+            disabled_tools=disabled_tools,
+            imagegen_config=self.imagegen_config,
+            activated_mcp_servers=self.activated_mcp_servers,
+            load_tools=self.load_tools,
+            active_mode=active_mode,
+            allow_access_outside_workdir=self.allow_access_outside_workdir,
+        )
 
     def _resolve_mode(self, mode: str) -> str | None:
         """Resolve a per-call mode override against the configured loadtools.
@@ -183,6 +204,37 @@ class KernelSubAgentRunner:
         parent_call_id: str = "",
         parent_run_id: str = "",
         parent_turn_id: str = "",
+        allowed_tools: list[str] | None = None,
+    ) -> SubAgentRunResult:
+        agent_name = normalize_sub_session_agent_name(agent)
+        lock = self._session_locks.setdefault(
+            f"{self.session_prefix}:sub:{agent_name}", asyncio.Lock()
+        )
+        async with lock:
+            return await self._run_locked(
+                task=task,
+                agent=agent,
+                model=model,
+                mode=mode,
+                attachments=attachments,
+                parent_call_id=parent_call_id,
+                parent_run_id=parent_run_id,
+                parent_turn_id=parent_turn_id,
+                allowed_tools=allowed_tools,
+            )
+
+    async def _run_locked(
+        self,
+        *,
+        task: str,
+        agent: str = "",
+        model: str = "",
+        mode: str = "",
+        attachments: list[str] | None = None,
+        parent_call_id: str = "",
+        parent_run_id: str = "",
+        parent_turn_id: str = "",
+        allowed_tools: list[str] | None = None,
     ) -> SubAgentRunResult:
         # Resolve model early: the LLM may pass a display_name (e.g. "Kimi-K2.6")
         # instead of a model_id (e.g. "xopkimik26"). Translate to canonical
@@ -194,19 +246,17 @@ class KernelSubAgentRunner:
         effective_mode = self._resolve_mode(mode)
         user_content = await self._fetch_attachment_content(task, list(attachments or []), model_id=effective_model)
         disabled_tools = self._disabled_tools()
-        toolbox = build_core_toolbox(
-            work_root=self.work_root,
-            approval_policy=self.approval_policy,
-            loaded_skill_roots=self.loaded_skill_roots,
-            mcp_caller=self.mcp_caller,
-            mcp_tool_specs=self.mcp_tool_specs,
-            disabled_tools=disabled_tools,
-            imagegen_config=self.imagegen_config,
-            activated_mcp_servers=self.activated_mcp_servers,
-            load_tools=self.load_tools,
-            active_mode=effective_mode,
-            allow_access_outside_workdir=self.allow_access_outside_workdir,
-        )
+        if allowed_tools:
+            allowed = {str(name).strip() for name in allowed_tools if str(name).strip()}
+            if allowed:
+                # An explicit tool allow-list: disable everything else.  The
+                # full name set is the toolbox's own spec set (audit 18 S2 —
+                # cfg.tools/allowed_tools from the workflow UI was written but
+                # never read by the runner).
+                probe = self._build_toolbox(disabled_tools, active_mode=effective_mode)
+                full_names = {spec.name for spec in probe.tool_specs()}
+                disabled_tools |= full_names - allowed
+        toolbox = self._build_toolbox(disabled_tools, active_mode=effective_mode)
         agent_name = normalize_sub_session_agent_name(agent)
         child_sink = SubAgentEventForwardingSink(
             parent_sink=self.parent_event_sink,

@@ -24,6 +24,8 @@ import sys
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from .id_validation import validate_config_id
 from typing import Any
 
 from lamtools_core.config.root import core_config_dir, legacy_user_config_dir
@@ -233,6 +235,7 @@ class ProviderStore:
 
     @staticmethod
     def write_path(provider_id: str, *, scope: str, work_root: str | None) -> Path:
+        validate_config_id("provider", provider_id)
         if scope == "project" and work_root:
             return Path(work_root).resolve() / ".lam" / "config" / PROVIDERS_SUBDIR / f"{provider_id}{PROVIDER_FILENAME_SUFFIX}"
         return core_config_dir() / PROVIDERS_SUBDIR / f"{provider_id}{PROVIDER_FILENAME_SUFFIX}"
@@ -240,7 +243,9 @@ class ProviderStore:
     def write(self, provider: ProviderConfig, *, scope: str, work_root: str | None) -> Path:
         path = self.write_path(provider.id, scope=scope, work_root=work_root)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(self._serialize(provider), encoding="utf-8")
+        from lamtools_core.config.root import atomic_write_text
+
+        atomic_write_text(path, self._serialize(provider))
         self._cached_signature = None  # invalidate cache
         self._cached_providers = None
         return path

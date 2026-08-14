@@ -46,6 +46,34 @@ def core_config_file(name: str) -> Path:
     return core_config_root() / "config" / name
 
 
+def atomic_write_text(path: Path, text: str, *, encoding: str = "utf-8") -> None:
+    """Write ``text`` to ``path`` atomically (tmp file + rename).
+
+    A crash mid-write must never leave a truncated config file that the next
+    read silently treats as empty and then overwrites wholesale — the
+    settings-loss chain from audit 09 S3. Callers with no existing file get
+    plain creation; the tmp is written next to the target so ``os.replace``
+    stays on the same volume.
+    """
+    import os
+    import tempfile
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f"{path.name}.", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding=encoding, newline="") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_name, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+
 def core_config_dir() -> Path:
     """Return the unified user config directory: .lam/core/config/.
 

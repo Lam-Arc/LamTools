@@ -38,6 +38,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+import os
 from pathlib import Path
 import re
 from typing import Literal
@@ -113,6 +114,7 @@ class ParsedEntry:
     is_todo_done: bool = False
     is_deprecated: bool = False
     note: str = ""  # parenthetical reason for deprecated entries
+    line_index: int = -1  # index into MemorySnapshot.raw_lines (-1 => new entry)
 
     @property
     def is_human(self) -> bool:
@@ -125,6 +127,10 @@ class MemorySnapshot:
 
     entries: list[ParsedEntry] = field(default_factory=list)
     raw: str = ""
+    # Full original file split into lines. Unrecognised lines (human prose,
+    # custom sections, comments) are carried back verbatim on rewrite so a
+    # dreaming merge never silently deletes hand-edited content (audit 11).
+    raw_lines: list[str] = field(default_factory=list)
 
     def section(self, name: MemorySection) -> list[ParsedEntry]:
         return [e for e in self.entries if e.section == name]
@@ -134,9 +140,10 @@ def parse_memory_md(path: Path | str) -> MemorySnapshot:
     """Parse a MEMORY.md file into a :class:`MemorySnapshot`.
 
     Returns an empty snapshot if the file does not exist or cannot be read.
-    Lines that are not recognised as section headers or list entries are
-    dropped from the structured result (they are not needed for merging;
-    human prose lives in AGENTS.md / CONTEXT.md instead).
+    Lines that are not recognised as section headers or list entries are kept
+    in ``raw_lines`` (and thus preserved on rewrite); they are only excluded
+    from the structured result (human prose lives in AGENTS.md / CONTEXT.md
+    but custom sections in MEMORY.md must survive merges).
     """
     p = Path(path)
     if not p.is_file():
@@ -146,10 +153,11 @@ def parse_memory_md(path: Path | str) -> MemorySnapshot:
     except (OSError, UnicodeDecodeError):
         return MemorySnapshot()
 
-    snapshot = MemorySnapshot(raw=text)
+    raw_lines = text.splitlines()
+    snapshot = MemorySnapshot(raw=text, raw_lines=raw_lines)
     current: MemorySection | None = None
 
-    for line in text.splitlines():
+    for index, line in enumerate(raw_lines):
         stripped = line.strip()
         if not stripped:
             continue
@@ -169,6 +177,7 @@ def parse_memory_md(path: Path | str) -> MemorySnapshot:
         if stripped.startswith("-"):
             entry = _parse_line(stripped, current)
             if entry is not None:
+                entry.line_index = index
                 snapshot.entries.append(entry)
 
     return snapshot
@@ -206,23 +215,105 @@ def _parse_line(line: str, section: MemorySection) -> ParsedEntry | None:
 
 
 def write_memory_md(path: Path | str, snapshot: MemorySnapshot) -> None:
-    """Write a snapshot back to ``MEMORY.md`` (full rewrite)."""
-    lines: list[str] = [_MEMORY_HEADER.rstrip(), ""]
+    """Write a snapshot back to ``MEMORY.md``.
 
-    for section in SECTION_ORDER:
-        entries = snapshot.section(section)
-        if not entries:
-            continue
-        lines.append(f"## {section.capitalize()}")
-        lines.append("")
-        for entry in entries:
-            lines.append(_format_line(entry))
-        lines.append("")
+    Preserves every line that was not parsed as a machine entry — human prose,
+    custom sections, comments — verbatim, then replaces the parsed entry lines
+    in place and appends new entries at the tail of their section. The write
+    is atomic (tmp file + rename) so a crash mid-write cannot corrupt the
+    long-term memory file (audit 11).
+    """
+    text = _render(snapshot)
+    _atomic_write(Path(path), text)
 
-    text = "\n".join(lines).rstrip() + "\n"
+
+def _render(snapshot: MemorySnapshot) -> str:
+    text = _render_lines(snapshot)
     if len(text) > MAX_MEMORY_MD_CHARS:
         text = _trim_to_budget(snapshot, text)
-    Path(path).write_text(text, encoding="utf-8")
+    return text
+
+
+def _render_lines(snapshot: MemorySnapshot) -> str:
+    """Render the snapshot without the budget trim."""
+    raw_lines = snapshot.raw_lines or []
+    if not raw_lines:
+        # Brand-new file: emit the standard five sections.
+        lines: list[str] = [_MEMORY_HEADER.rstrip(), ""]
+        for section in SECTION_ORDER:
+            entries = snapshot.section(section)
+            if not entries:
+                continue
+            lines.append(f"## {section.capitalize()}")
+            lines.append("")
+            for entry in entries:
+                lines.append(_format_line(entry))
+            lines.append("")
+        return "\n".join(lines).rstrip() + "\n"
+
+    # Preserve unrecognised lines verbatim; replace only parsed entry lines.
+    by_index = {entry.line_index: entry for entry in snapshot.entries if entry.line_index >= 0}
+    output: list[str] = []
+    for index, line in enumerate(raw_lines):
+        entry = by_index.get(index)
+        output.append(_format_line(entry) if entry is not None else line)
+    _append_new_entries(output, snapshot)
+    return "\n".join(output).rstrip() + "\n"
+
+
+def _append_new_entries(lines: list[str], snapshot: MemorySnapshot) -> None:
+    """Insert entries without an original line at the tail of their section."""
+    pending: dict[MemorySection, list[ParsedEntry]] = {}
+    for entry in snapshot.entries:
+        if entry.line_index < 0:
+            pending.setdefault(entry.section, []).append(entry)
+    if not pending:
+        return
+
+    # Locate existing section headers in the output.
+    header_index: dict[MemorySection, int] = {}
+    for index, line in enumerate(lines):
+        match = re.match(r"^#{1,6}\s+(.+)$", line.strip())
+        if match:
+            section = SECTION_HEADERS.get(match.group(1).strip().lower())
+            if section is not None and section not in header_index:
+                header_index[section] = index
+
+    for section in SECTION_ORDER:
+        entries = pending.get(section)
+        if not entries:
+            continue
+        formatted = [_format_line(entry) for entry in entries]
+        if section in header_index:
+            insert_at = _section_tail(lines, header_index[section])
+            lines[insert_at:insert_at] = ["", *formatted]
+        else:
+            # No such section in the file yet — append a new one at the end.
+            if lines and lines[-1].strip():
+                lines.append("")
+            lines.append(f"## {section.capitalize()}")
+            lines.append("")
+            lines.extend(formatted)
+
+
+def _section_tail(lines: list[str], header_index: int) -> int:
+    """Index just after the last non-empty line of the section at header_index."""
+    end = len(lines)
+    for index in range(header_index + 1, len(lines)):
+        if re.match(r"^#{1,6}\s+", lines[index].strip()):
+            end = index
+            break
+    last_content = header_index
+    for index in range(header_index + 1, end):
+        if lines[index].strip():
+            last_content = index
+    return last_content + 1
+
+
+def _atomic_write(path: Path, text: str) -> None:
+    tmp = path.with_name(f"{path.name}.tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def _format_line(entry: ParsedEntry) -> str:
@@ -247,7 +338,9 @@ def _trim_to_budget(snapshot: MemorySnapshot, text: str) -> str:
     """When over the char budget, drop lowest-value machine entries first.
 
     Priority for keeping: human entries > higher confidence machine entries.
-    Deprecated entries are dropped before anything else.
+    Deprecated entries are dropped before anything else. Dropped entries are
+    removed from the snapshot's raw lines as well, so unrecognised human
+    content is still preserved verbatim.
     """
     # Rank machine entries: deprecated first to drop, then by source recency
     # (older sources dropped first — we approximate with content length as a
@@ -257,18 +350,13 @@ def _trim_to_budget(snapshot: MemorySnapshot, text: str) -> str:
         key=lambda e: (e.is_deprecated, e.date, len(e.content)),
     )
     for entry in drop_order:
+        if 0 <= entry.line_index < len(snapshot.raw_lines):
+            del snapshot.raw_lines[entry.line_index]
+            for other in snapshot.entries:
+                if other.line_index > entry.line_index:
+                    other.line_index -= 1
         snapshot.entries.remove(entry)
-        lines: list[str] = [_MEMORY_HEADER.rstrip(), ""]
-        for section in SECTION_ORDER:
-            entries = snapshot.section(section)
-            if not entries:
-                continue
-            lines.append(f"## {section.capitalize()}")
-            lines.append("")
-            for e in entries:
-                lines.append(_format_line(e))
-            lines.append("")
-        text = "\n".join(lines).rstrip() + "\n"
+        text = _render_lines(snapshot)
         if len(text) <= MAX_MEMORY_MD_CHARS:
             break
     return text

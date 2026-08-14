@@ -62,3 +62,71 @@ def test_approval_gate_applies_command_policy(tmp_path: Path):
     assert regular.reason == "Auto-approved regular command"
     assert dangerous.allowed is False
     assert dangerous.requires_approval is True
+
+
+def test_shell_structure_bypasses_are_never_auto_allowed():
+    """Audit 06 S1 regression: shell structure features must stay ask_user.
+
+    The old heuristics were beaten by ``\rm -rf /``, ``$(rm -rf /)``,
+    backticks, quoted command names, ``~``/``$VAR`` expansion and
+    interpreter ``-c`` code.
+    """
+    bypasses = [
+        r"\rm -rf /",
+        "$(rm -rf /)",
+        "`rm -rf /`",
+        '"rm" -rf /',
+        "cat ~/.ssh/id_rsa",
+        "cat $HOME/.ssh/id_rsa",
+        "echo x > ~/.bashrc",
+        'python -c "import os; os.system(\'rm -rf /\')"',
+        "bash -c 'rm -rf /'",
+    ]
+    for command in bypasses:
+        decision = command_permission_decision(command)
+        assert decision.requires_approval is True, f"bypass not caught: {command!r}"
+
+    # Even with the dangerous group configured to auto_allow, shell structure
+    # features must stay ask_user.
+    decision = command_permission_decision("cat ~/.ssh/id_rsa", {"dangerous": "auto_allow"})
+    assert decision.requires_approval is True
+
+
+def test_shell_structure_does_not_flag_plain_commands():
+    plain = [
+        "ls -la",
+        "git status",
+        "npm test",
+        "py -m pytest",
+        "python script.py",
+        "cat file.txt",
+        "mkdir -p build",
+    ]
+    for command in plain:
+        decision = command_permission_decision(command)
+        assert decision.requires_approval is False, f"false positive: {command!r}"
+
+
+def test_approval_gate_tier_list_does_not_short_circuit_dangerous_commands(tmp_path: Path):
+    """Audit 06 S2: tier access lists must not bypass command classification."""
+    gate = ApprovalGate(
+        work_root=tmp_path,
+        tool_permissions={"run_command": ASK_USER},
+        active_tier="full_edit",
+        tier_tools={"full_edit": {"run_command"}},
+    )
+    decision = gate.check("run_command", {"command": "rm -rf /"})
+    assert decision.allowed is False
+    assert decision.requires_approval is True
+
+    allowed = gate.check("run_command", {"command": "echo ok"})
+    assert allowed.allowed is True
+
+
+def test_hard_block_patterns_are_case_insensitive(tmp_path: Path):
+    """Audit 06 S2: Windows paths are case-insensitive; .ENV must be blocked."""
+    gate = ApprovalGate(work_root=tmp_path, tool_permissions={"write_file": ASK_USER})
+    decision = gate.check("write_file", {"path": ".ENV"})
+    assert decision.blocked is True
+    decision = gate.check("write_file", {"path": "config/.Env"})
+    assert decision.blocked is True

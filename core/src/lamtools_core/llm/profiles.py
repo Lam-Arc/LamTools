@@ -58,9 +58,56 @@ def strip_jsonc(text: str) -> str:
     return "".join(result)
 
 
+def strip_trailing_commas(text: str) -> str:
+    """Remove JSON trailing commas without touching string literals.
+
+    A plain regex like ``,(\\s*[}\\]])`` also rewrites ``",}"`` inside quoted
+    values (audit 10 S3 — a URL or prompt ending in ``,}`` was silently
+    corrupted). Only commas *outside* strings followed by a closing bracket
+    are removed.
+    """
+    result: list[str] = []
+    i = 0
+    n = len(text)
+    in_string = False
+    quote = ""
+    escaped = False
+    while i < n:
+        char = text[i]
+        if in_string:
+            result.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                in_string = False
+            i += 1
+            continue
+        if char in {'"', "'"}:
+            in_string = True
+            quote = char
+            result.append(char)
+            i += 1
+            continue
+        if char == ",":
+            j = i + 1
+            while j < n and text[j] in " \t\r\n":
+                j += 1
+            if j < n and text[j] in "}]":
+                i = j
+                continue
+        result.append(char)
+        i += 1
+    return "".join(result)
+
+
 def load_jsonc(path: Path) -> dict[str, Any]:
-    text = path.read_text(encoding="utf-8")
-    clean = re.sub(r",(\s*[}\]])", r"\1", strip_jsonc(text))
+    # utf-8-sig: a BOM (common from old Notepad saves on Chinese Windows)
+    # silently broke every config read — json.loads('\ufeff{...}') raises and
+    # the stores fell back to {} / defaults (audit 09 S3).
+    text = path.read_text(encoding="utf-8-sig")
+    clean = strip_trailing_commas(strip_jsonc(text))
     return json.loads(clean)
 
 
@@ -232,7 +279,12 @@ def build_profiled_openai_request(
         # 讯飞 GLM 系列在携带 tools + 低 temperature 时会概率性静默禁用思考
         # (enable_thinking / reasoning_content 失效)。thinking 开启时不传
         # temperature，让模型按自身默认温度思考，显著提升 reasoning 命中率。
-        payload.pop("temperature", None)
+        # A temperature explicitly set by the profile body is preserved
+        # (audit 10 S4 — the old code popped even the explicit profile value).
+        profile_body = profile.get("request", {})
+        profile_body = profile_body.get("body") or profile_body.get("extra_body") or {}
+        if not (isinstance(profile_body, dict) and profile_body.get("temperature") is not None):
+            payload.pop("temperature", None)
     if reasoning_effort:
         payload["reasoning_effort"] = reasoning_effort
     return {
@@ -465,7 +517,10 @@ def _matches_base_url(profile: dict[str, Any], base_url: str) -> bool:
         patterns = [patterns]
     for pattern in patterns:
         text = str(pattern).lower()
-        if text and re.search(text, lowered):
+        # Literal substring match — treating the configured value as a regex
+        # made "." and other metacharacters behave unexpectedly and let a
+        # malformed pattern raise re.error (audit 10 S3).
+        if text and text in lowered:
             return True
     return False
 

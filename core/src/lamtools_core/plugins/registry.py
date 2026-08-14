@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any
 
 from .models import PluginManifest
+
+_logger = logging.getLogger(__name__)
 
 
 def _appdata_root() -> Path:
@@ -82,7 +85,16 @@ class PluginRegistry:
             if not root.exists():
                 continue
             for manifest_path in sorted(root.glob("*/plugin.json")):
-                items.append(self._read_manifest(manifest_path))
+                try:
+                    items.append(self._read_manifest(manifest_path))
+                except (OSError, ValueError, json.JSONDecodeError):
+                    # One corrupt plugin must never hide every other plugin
+                    # (audit 11) — skip it and keep going.
+                    _logger.warning(
+                        "[plugins:discover] skipping unreadable manifest %s",
+                        manifest_path,
+                        exc_info=True,
+                    )
         return sorted(items, key=lambda item: item.name)
 
     def _read_manifest(self, manifest_path: Path) -> PluginManifest:

@@ -424,6 +424,16 @@ def validate_command_paths(args: list[str], work_root: Path, resource_roots: tup
             or "/" in value
             or "\\" in value
         ):
+            # Tilde / parameter / command expansion cannot be statically
+            # resolved — the shell would expand the token outside work_root
+            # (``cat ~/.ssh/id_rsa``, ``cat $HOME/.ssh/id_rsa``,
+            # ``echo x > ~/.bashrc``).  Reject instead of letting the literal
+            # path pass the bounds check (audit 06 S1).
+            if value.startswith("~") or any(ch in value for ch in "$`"):
+                raise ValueError(
+                    f"Path argument '{arg}' (position {i}) uses shell expansion "
+                    "that cannot be validated against the workspace"
+                )
             resolved = (work_root / value).resolve()
             allowed_roots = (work_root.resolve(), *(root.resolve() for root in resource_roots))
             if not any(is_within_path(resolved, root) for root in allowed_roots):

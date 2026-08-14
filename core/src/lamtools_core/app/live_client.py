@@ -211,10 +211,13 @@ class CoreAppServerClient:
             {"thread_id": thread_id, "queue_item_id": queue_item_id},
         )
 
-    async def respond_approval(self, *, request_id: str, decision: str, guidance: str = "") -> None:
+    async def respond_approval(self, *, thread_id: str, request_id: str, decision: str, guidance: str = "") -> None:
         response = await self.request(
             "approval.respond",
             {
+                # thread_id is required: the backend only answers approvals
+                # for the subscribed thread (audit 03 S1).
+                "thread_id": thread_id,
                 "request_id": request_id,
                 "decision": decision,
                 "guidance": guidance,

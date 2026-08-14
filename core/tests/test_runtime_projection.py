@@ -3,7 +3,6 @@
 from datetime import datetime, timezone
 
 from lamtools_core.event.runtime_projection import (
-    RuntimeProjectionBuffer,
     RuntimeProjectionInput,
     extract_tool_input_preview,
     event_model_call_id,
@@ -18,30 +17,6 @@ from lamtools_core.event.runtime_projection import (
     usage_tokens,
     visible_runtime_part_content,
 )
-
-
-def _part_fact(event_id: str, content: str) -> RuntimeProjectionInput:
-    return RuntimeProjectionInput(
-        id=event_id,
-        thread_id="thread-1",
-        group="runtime",
-        source="core",
-        phase="runtime.part",
-        status="running",
-        sequence=1,
-        summary=content,
-        preview=content,
-        full_text=content,
-        metadata={
-            "payload": {
-                "turn_id": "turn-1",
-                "part_id": "reasoning-1",
-                "part_type": "reasoning",
-                "content": content,
-            }
-        },
-        created_at=datetime.now(timezone.utc),
-    )
 
 
 def test_runtime_projection_accumulates_tool_input_delta_preview():
@@ -95,63 +70,6 @@ def test_runtime_projection_accumulates_tool_input_delta_preview():
     assert "arguments" not in second[0].payload
     assert second[0].payload["input_preview"]["field"] == "content"
     assert second[0].payload["input_preview"]["content"] == "<html>"
-
-
-def test_runtime_projection_gives_tool_input_growth_unique_event_ids():
-    buffer = RuntimeProjectionBuffer()
-    first = buffer.merge_part_growth(RuntimeProjectionInput(
-        id="fact-1",
-        thread_id="thread-1",
-        group="runtime",
-        source="core",
-        phase="runtime.part",
-        status="running",
-        sequence=1,
-        metadata={
-            "payload": {
-                "part_type": "tool_input_delta",
-                "status": "running",
-                "tool_name": "write_file",
-                "call_id": "call-1",
-                "part_id": "run-1:response-0:tool-call-0:input",
-                "arguments_text": '{"path":"README.md","content":"#',
-                "run_id": "run-1",
-                "turn_id": "turn-1",
-            }
-        },
-        created_at=datetime.now(timezone.utc),
-    ))
-    first_events = runtime_projection_to_run_item_events(first)
-
-    second = buffer.merge_part_growth(RuntimeProjectionInput(
-        id="fact-2",
-        thread_id="thread-1",
-        group="runtime",
-        source="core",
-        phase="runtime.part",
-        status="running",
-        sequence=2,
-        metadata={
-            "payload": {
-                "part_type": "tool_input_delta",
-                "status": "running",
-                "tool_name": "write_file",
-                "call_id": "call-1",
-                "part_id": "run-1:response-0:tool-call-0:input",
-                "arguments_text": '{"path":"README.md","content":"# Title',
-                "run_id": "run-1",
-                "turn_id": "turn-1",
-            }
-        },
-        created_at=datetime.now(timezone.utc),
-    ))
-    second_events = runtime_projection_to_run_item_events(second)
-
-    assert first_events is not None
-    assert second_events is not None
-    assert first_events[0].item_id == second_events[0].item_id
-    assert first_events[0].event_id != second_events[0].event_id
-    assert second_events[0].payload["input_preview"]["content"] == "# Title"
 
 
 def test_extract_tool_input_preview_write_file_content():
@@ -792,20 +710,6 @@ def test_runtime_projection_keeps_stream_terminal_usage_without_text():
     assert events[0].kind == "usage"
     assert events[0].usage["input_tokens"] == 12
     assert events[0].usage["output_tokens"] == 3
-
-
-def test_runtime_projection_buffer_reuses_first_fact_id_and_updates_content():
-    buffer = RuntimeProjectionBuffer()
-
-    first = buffer.merge_part_growth(_part_fact("event-1", "用"))
-    grown = buffer.merge_part_growth(_part_fact("event-2", "用户提供的视频里，思考块不应该只剩两个字。"))
-
-    assert first is grown
-    assert grown.id == "event-1"
-    run_items = runtime_projection_to_run_item_events(grown)
-    assert len(run_items) == 1
-    assert run_items[0].item_id == "reasoning-1"
-    assert run_items[0].payload["content"] == "用户提供的视频里，思考块不应该只剩两个字。"
 
 
 def test_runtime_projection_preserves_compaction_display_metadata():

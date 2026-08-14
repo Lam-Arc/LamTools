@@ -16,11 +16,10 @@ from lamtools_core.app.event_store import SqlAlchemyAppEventStore
 from lamtools_core.app.live_hub import CoreAppEventGap, CoreAppEventHub
 from lamtools_core.app.live_operations import CoreLiveContext, CoreLiveOperationOutcome
 from lamtools_core.app.live_operations import handle_thread_resume_operation
-from lamtools_core.app.live_protocol import rpc_result
+from lamtools_core.app.live_protocol import JsonRpcRequest, rpc_result
 from lamtools_core.app.live_router import (
     CoreLiveConnection,
     CoreLiveConnectionAdapter,
-    _handle_core_client_response,
     create_core_live_router,
 )
 from lamtools_core.app.snapshot_store import SqlAlchemyThreadSnapshotStore
@@ -91,10 +90,18 @@ def test_core_live_connection_processes_interrupt_while_long_command_is_running(
                 self.sent: list[dict] = []
 
             async def receive_json(self):
+                import json
+
+                message = await self.receive_text()
+                return json.loads(message)
+
+            async def receive_text(self):
                 message = await self.incoming.get()
                 if message is None:
                     raise WebSocketDisconnect()
-                return message
+                import json
+
+                return json.dumps(message)
 
             async def send_json(self, message):
                 self.sent.append(message)
@@ -151,40 +158,6 @@ def test_core_live_connection_processes_interrupt_while_long_command_is_running(
 
         await websocket.incoming.put(None)
         await serving
-
-    asyncio.run(run())
-
-
-def test_core_live_client_response_uses_approval_operation_and_sends_snapshot() -> None:
-    async def run() -> None:
-        catalog = OperationCatalog()
-
-        async def respond(request: OperationRequest) -> OperationResult:
-            assert request.payload == {
-                "request_id": "request-1",
-                "thread_id": "",
-                "decision": "approve",
-                "guidance": "yes",
-            }
-            return OperationResult(
-                name=request.name,
-                payload={"snapshot": {"thread_id": "thread-1", "snapshot_seq": 7}},
-            )
-
-        catalog.register("approval.respond", respond)
-        connection = CoreLiveConnection(
-            DummyWebSocket(),
-            context=SimpleNamespace(operations=catalog),
-            adapter=CoreLiveConnectionAdapter(handle_client_response=_handle_core_client_response),
-        )
-
-        await connection.handle_raw(
-            {"id": "request-1", "result": {"decision": "approve_once", "guidance": "yes"}}
-        )
-
-        notification = await connection.outbound.get()
-        assert notification["method"] == "thread/snapshot"
-        assert notification["params"]["snapshot_seq"] == 7
 
     asyncio.run(run())
 
@@ -1043,5 +1016,108 @@ def test_core_live_subscribes_before_running_a_thread_operation(tmp_path):
         release.set()
         await operation
         await engine.dispose()
+
+    asyncio.run(run())
+
+
+def test_browser_connection_strips_explicit_auto_approve() -> None:
+    """A browser page cannot self-grant auto-approval on turn.start.
+
+    Audit 03 S1: the wire policy was adopted verbatim, so any page could
+    declare ``approval_policy=auto_approve``.  Browser connections (those with
+    an Origin header) now have the explicit policy stripped in _dispatch, so
+    the server-side settings decide.  Non-browser callers keep it.
+    """
+
+    async def run() -> None:
+        seen: dict[str, Any] = {}
+
+        async def fake_execute(method, *, request_id, params, context):
+            seen["params"] = params
+            return CoreLiveOperationOutcome(response=rpc_result(request_id, {"ok": True}))
+
+        host = SimpleNamespace(
+            operation_handlers=lambda: {"turn.start"},
+            execute=fake_execute,
+        )
+        context = SimpleNamespace(operations=OperationCatalog(), host=host)
+        connection = CoreLiveConnection(
+            DummyWebSocket(),
+            context=context,
+            browser_origin="http://localhost:5173",
+        )
+        connection.initialized = True
+        await connection._dispatch(JsonRpcRequest.model_validate({
+            "id": 1,
+            "method": "turn.start",
+            "params": {"thread_id": "thread-1", "message": "hi", "approval_policy": "auto_approve"},
+        }))
+        assert "approval_policy" not in seen["params"]
+        assert "approvalPolicy" not in seen["params"]
+
+        # Non-browser (CLI) callers keep their explicit policy.
+        seen.clear()
+        connection2 = CoreLiveConnection(DummyWebSocket(), context=context, browser_origin=None)
+        connection2.initialized = True
+        await connection2._dispatch(JsonRpcRequest.model_validate({
+            "id": 2,
+            "method": "turn.start",
+            "params": {"thread_id": "thread-1", "message": "hi", "approval_policy": "auto_approve"},
+        }))
+        assert seen["params"].get("approval_policy") == "auto_approve"
+
+    asyncio.run(run())
+
+
+def test_approval_respond_binds_to_subscribed_thread() -> None:
+    """approval.respond is only accepted for the subscribed thread.
+
+    Audit 03 S1: a connection could answer any pending approval.  Now the
+    response must name the thread the connection is watching.
+    """
+
+    async def run() -> None:
+        seen: dict[str, Any] = {}
+
+        async def fake_execute(method, *, request_id, params, context):
+            seen["params"] = params
+            return CoreLiveOperationOutcome(response=rpc_result(request_id, {"ok": True}))
+
+        host = SimpleNamespace(
+            operation_handlers=lambda: {"approval.respond"},
+            execute=fake_execute,
+        )
+        context = SimpleNamespace(operations=OperationCatalog(), host=host)
+        connection = CoreLiveConnection(DummyWebSocket(), context=context)
+        connection.initialized = True
+
+        # Unsubscribed connection -> rejected.
+        outcome = await connection._dispatch(JsonRpcRequest.model_validate({
+            "id": 1,
+            "method": "approval.respond",
+            "params": {"thread_id": "thread-1", "request_id": "req-1", "decision": "approve"},
+        }))
+        assert outcome.response.get("error") is not None
+        assert seen == {}
+
+        # Subscribed to a different thread -> rejected.
+        connection.thread_id = "thread-2"
+        outcome = await connection._dispatch(JsonRpcRequest.model_validate({
+            "id": 2,
+            "method": "approval.respond",
+            "params": {"thread_id": "thread-1", "request_id": "req-1", "decision": "approve"},
+        }))
+        assert outcome.response.get("error") is not None
+        assert seen == {}
+
+        # Subscribed to the target thread -> accepted.
+        connection.thread_id = "thread-1"
+        outcome = await connection._dispatch(JsonRpcRequest.model_validate({
+            "id": 3,
+            "method": "approval.respond",
+            "params": {"thread_id": "thread-1", "request_id": "req-1", "decision": "approve"},
+        }))
+        assert outcome.response.get("result") == {"ok": True}
+        assert seen["params"]["request_id"] == "req-1"
 
     asyncio.run(run())

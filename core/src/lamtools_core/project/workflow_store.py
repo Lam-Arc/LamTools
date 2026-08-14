@@ -93,6 +93,42 @@ class WorkflowStore:
                 if not (p.parent / "config.json").is_file():
                     _add(p)
 
+    def _scoped_workflow_entries(self, work_root: str | None) -> list[Path]:
+        """Return workflow entry paths confined to a single scope.
+
+        ``work_root=None`` yields only the global roots (home + explicit);
+        a project root yields only that project's ``.lam/workflows`` trees.
+        Unlike ``_workflow_entries`` this never mixes scopes, so destructive
+        operations (delete) cannot reach a same-named workflow elsewhere.
+        """
+        seen: set[Path] = set()
+        results: list[Path] = []
+
+        def _add(path: Path) -> None:
+            resolved = path.resolve()
+            if resolved not in seen:
+                seen.add(resolved)
+                results.append(resolved)
+
+        if work_root:
+            lam_dir = Path(work_root).resolve() / ".lam"
+            if lam_dir.is_dir():
+                for workflows_dir in [lam_dir / "workflows", *lam_dir.rglob("workflows")]:
+                    if workflows_dir.is_dir():
+                        self._scan_workflows_dir(workflows_dir, _add)
+            return results
+
+        home_lam = lam_home()
+        if home_lam.is_dir():
+            workflows_dir = home_lam / "workflows"
+            if workflows_dir.is_dir():
+                self._scan_workflows_dir(workflows_dir, _add)
+        for root in self._explicit_roots:
+            workflows_dir = root / "workflows"
+            if workflows_dir.is_dir():
+                self._scan_workflows_dir(workflows_dir, _add)
+        return results
+
     def _signature(self, work_root: str | None) -> tuple[tuple[str, int, int], ...]:
         """Stat every file inside every workflow folder + legacy files."""
         entries: list[tuple[str, int, int]] = []
@@ -195,29 +231,46 @@ class WorkflowStore:
         target = name.strip()
         if not target:
             return None
-        for definition in await self.list(work_root=work_root):
-            if _name_matches(definition.name, target):
+        # Scoped lookup (matching delete): a project-scoped get must not
+        # return the same-named global workflow (audit 11).
+        candidates: list[WorkflowDef] = []
+        for path in self._scoped_workflow_entries(work_root):
+            definition = await self._read_entry_async(path)
+            if definition is not None:
+                candidates.append(definition)
+        for definition in candidates:
+            if definition.name == target:
                 return definition
-        return None
+        slug = _ascii_slug(target)
+        slug_matches = [d for d in candidates if _ascii_slug(d.name) == slug]
+        return slug_matches[0] if len(slug_matches) == 1 else None
 
     def get_sync(self, name: str, *, work_root: str | None = None) -> WorkflowDef | None:
         target = name.strip()
         if not target:
             return None
-        for definition in self.list_sync(work_root=work_root):
-            if _name_matches(definition.name, target):
+        candidates: list[WorkflowDef] = []
+        for path in self._scoped_workflow_entries(work_root):
+            definition = self._read_entry(path)
+            if definition is not None:
+                candidates.append(definition)
+        for definition in candidates:
+            if definition.name == target:
                 return definition
-        return None
+        slug = _ascii_slug(target)
+        slug_matches = [d for d in candidates if _ascii_slug(d.name) == slug]
+        return slug_matches[0] if len(slug_matches) == 1 else None
 
     async def save(self, definition: WorkflowDef) -> WorkflowDef:
         if not definition.name:
             raise ValueError("workflow name is required")
         self._cached.clear()
         definition.updated_at = _now()
-        target_dir = self._writable_dir(definition.work_root) / _safe_filename(definition.name)
+        workflows_dir = self._writable_dir(definition.work_root)
+        target_dir = workflows_dir / self._unique_writable_name(workflows_dir, definition.name)
         await asyncio.to_thread(self._write_folder, target_dir, definition)
         # Remove a legacy single-JSON if it lingers from a pre-folder version.
-        legacy = self._writable_dir(definition.work_root) / (_safe_filename(definition.name) + ".json")
+        legacy = workflows_dir / (_safe_filename(definition.name) + ".json")
         if legacy.is_file():
             try:
                 legacy.unlink()
@@ -225,23 +278,64 @@ class WorkflowStore:
                 pass
         return definition
 
+    def _unique_writable_name(self, workflows_dir: Path, name: str) -> str:
+        """Resolve a collision-free folder name for ``name``.
+
+        Two names that fold to the same ``_safe_filename`` (e.g. ``lam的小实验``
+        and ``lam的小实验！`` both folding to ``lam``) must not silently
+        overwrite each other's folder — the second one gets a ``-2`` suffix
+        (audit 11). Updates to the *same* workflow reuse its existing folder.
+        """
+        base = _safe_filename(name)
+        candidate = base
+        index = 2
+        while (workflows_dir / candidate).exists():
+            existing = self._read_entry(workflows_dir / candidate)
+            if existing is not None and existing.name == name:
+                break
+            candidate = f"{base}-{index}"
+            index += 1
+        return candidate
+
     async def delete(self, name: str, *, work_root: str | None = None) -> bool:
         target = name.strip()
         if not target:
             return False
-        removed = False
-        for path in self._workflow_entries(work_root):
+        # Delete only within the requested scope: a project work_root must
+        # never remove a same-named workflow from the global roots (and vice
+        # versa) — the mixed-scope traversal of _workflow_entries would
+        # silently rmtree the wrong copy (audit 11).
+        candidates: list[tuple[Path, Any]] = []
+        for path in self._scoped_workflow_entries(work_root):
             definition = await self._read_entry_async(path)
-            if definition is not None and _name_matches(definition.name, target):
-                if path.is_dir():
-                    await asyncio.to_thread(shutil.rmtree, path, True)
-                    removed = True
-                else:
-                    try:
-                        await asyncio.to_thread(path.unlink, True)
-                        removed = True
-                    except OSError:
-                        pass
+            if definition is not None:
+                candidates.append((path, definition))
+
+        # Exact name first — unambiguous by construction.
+        for path, definition in candidates:
+            if definition.name == target:
+                return await self._remove_entry(path)
+        # Slug fallback (unixy thread ids like ``wf_lam____``) only when the
+        # slug is unique in scope; two names folding to one slug (e.g.
+        # ``lam的小实验`` vs ``lam____``) must never let a delete hit the
+        # wrong one (audit 11).
+        slug = _ascii_slug(target)
+        slug_matches = [(path, d) for path, d in candidates if _ascii_slug(d.name) == slug]
+        if len(slug_matches) == 1:
+            return await self._remove_entry(slug_matches[0][0])
+        return False
+
+    async def _remove_entry(self, path: Path) -> bool:
+        removed = False
+        if path.is_dir():
+            await asyncio.to_thread(shutil.rmtree, path, True)
+            removed = True
+        else:
+            try:
+                await asyncio.to_thread(path.unlink, True)
+                removed = True
+            except OSError:
+                pass
         if removed:
             self._cached.clear()
         return removed
@@ -396,13 +490,6 @@ def _ascii_slug(name: str) -> str:
 
     safe = re.sub(r"[^a-zA-Z0-9_-]", "_", name or "").strip("_")
     return safe or "workflow"
-
-
-def _name_matches(definition_name: str, target: str) -> bool:
-    """Exact name match, then ASCII-slug fallback (handles unicode display names)."""
-    if definition_name == target:
-        return True
-    return _ascii_slug(definition_name) == _ascii_slug(target)
 
 
 def _now():

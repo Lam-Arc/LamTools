@@ -164,3 +164,34 @@ class TestMergeIntoMemoryMd:
         assert p.exists()
         snap = parse_memory_md(p)
         assert len(snap.entries) == 1
+
+    def test_merge_preserves_unrecognised_lines(self, memory_file: Path):
+        """Hand-edited prose, custom sections and comment lines must survive a merge."""
+        memory_file.write_text(
+            SAMPLE_MEMORY_MD
+            + "\n## Links\n- https://example.com/memory\n\n<!-- 人工备注 -->\n",
+            encoding="utf-8",
+        )
+        merge_into_memory_md(
+            memory_file,
+            [MemoryEntry(id="m1", kind="fact", content="new fact", source="session#x", confidence=0.9)],
+        )
+        text = memory_file.read_text(encoding="utf-8")
+        assert "## Links" in text
+        assert "- https://example.com/memory" in text
+        assert "<!-- 人工备注 -->" in text
+        # The machine entry replaced its own line in place — nothing else lost.
+        snap = parse_memory_md(memory_file)
+        assert any(e.content == "new fact" and e.source == "session#x" for e in snap.entries)
+        assert any(e.content == "这是我手动写的偏好" for e in snap.entries)
+
+    def test_merge_appends_new_section_when_missing(self, memory_file: Path):
+        result = merge_into_memory_md(
+            memory_file,
+            [MemoryEntry(id="m1", kind="decision", content="决定 A", source="session#d", confidence=0.9)],
+            today="2026-08-05",
+        )
+        assert result["added"] == 1
+        text = memory_file.read_text(encoding="utf-8")
+        assert "## Decisions" in text
+        assert "- [2026-08-05] 决定 A — source: session#d" in text

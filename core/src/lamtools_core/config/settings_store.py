@@ -49,6 +49,14 @@ def _read_map(path: Path | None = None) -> dict[str, Any]:
     try:
         data = load_jsonc(target)
     except (OSError, ValueError):
+        # Corrupt file: keep a .bak instead of silently returning {} — the
+        # next set_setting would otherwise rewrite the whole file from the
+        # empty map and wipe every namespace (audit 09 S3 settings-loss chain).
+        try:
+            if target.is_file():
+                target.rename(target.with_name(target.name + ".bak"))
+        except OSError:
+            pass
         return {}
     return data if isinstance(data, dict) else {}
 
@@ -66,7 +74,7 @@ def get_setting(namespace: str, *, path: Path | None = None) -> Any:
 
 
 def set_setting(namespace: str, value: Any, *, path: Path | None = None) -> Path:
-    """Write a two-level namespace value to settings.jsonc (atomic-ish)."""
+    """Write a two-level namespace value to settings.jsonc (atomic)."""
     group, key = _split_namespace(namespace)
     target = path or settings_path()
     data = _read_map(target)
@@ -78,10 +86,11 @@ def set_setting(namespace: str, value: Any, *, path: Path | None = None) -> Path
     else:
         group_value = value if isinstance(value, dict) else {}
     data[group] = group_value
-    target.parent.mkdir(parents=True, exist_ok=True)
     import json
 
-    target.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    from lamtools_core.config.root import atomic_write_text
+
+    atomic_write_text(target, json.dumps(data, ensure_ascii=False, indent=2))
     return target
 
 
@@ -103,8 +112,9 @@ def delete_setting(namespace: str, *, path: Path | None = None) -> bool:
         del data[group]
     import json
 
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    from lamtools_core.config.root import atomic_write_text
+
+    atomic_write_text(target, json.dumps(data, ensure_ascii=False, indent=2))
     return True
 
 

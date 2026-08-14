@@ -9,7 +9,6 @@ from typing import Any, Literal, Protocol, runtime_checkable
 from lamtools_core.event.run_item import RunItemEvent, RunItemKind, RunItemStatus
 from lamtools_core.event.runtime_projection import (
     DEFAULT_RUNTIME_PREVIEW_CHARS,
-    RuntimeProjectionBuffer,
     RuntimeProjectionInput,
     event_model_call_id,
     event_response_index,
@@ -182,7 +181,6 @@ __all__ = [
     "RunItemKind",
     "RunItemStatus",
     "DEFAULT_RUNTIME_PREVIEW_CHARS",
-    "RuntimeProjectionBuffer",
     "RuntimeProjectionInput",
     "event_model_call_id",
     "event_response_index",

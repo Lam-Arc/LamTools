@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -268,18 +268,22 @@ def test_core_agent_http_restart_reclaims_running_arrange_occurrence(tmp_path: P
     async def seed_abandoned_job() -> tuple[str, str]:
         db = await open_core_app_db(core_db)
         try:
-            now = datetime.now(timezone.utc)
+            # Seed the job from a minute ago so the lease claimed by the dead
+            # "stopped-process" worker has already expired — the new app must
+            # only reclaim jobs whose lease expired (audit 07: fencing), not
+            # steal live work.
+            seed_now = datetime.now(timezone.utc) - timedelta(minutes=1)
             job = await ArrangeManager(db.arrange_store).create(
                 thread_id="thread-restart",
                 work_root="test-proj",
                 kind="routine",
                 operation="goal.list",
                 payload={"thread_id": "thread-restart"},
-                trigger={"type": "once", "run_at": now.isoformat()},
-                now=now,
+                trigger={"type": "once", "run_at": seed_now.isoformat()},
+                now=seed_now,
             )
             claimed = await db.arrange_store.claim_due(
-                now=now,
+                now=seed_now,
                 worker_id="stopped-process",
                 lease_seconds=30,
                 limit=1,

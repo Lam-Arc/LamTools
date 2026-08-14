@@ -26,6 +26,25 @@ DANGEROUS_COMMAND_RE = re.compile(
     r")\b"
 )
 
+# Shell structure features that defeat static path validation.  ``~`` and
+# ``$VAR`` expand outside the work root, command substitution / backticks run
+# nested commands, escaped/quoted command names hide the real binary, and
+# interpreter ``-c`` arguments are opaque code.  Commands containing any of
+# these are classified dangerous and are never auto-allowed, regardless of
+# configured command policies (audit 06 S1: ``\rm``, ``$(rm -rf /)``,
+# ``cat ~/.ssh/id_rsa``, ``python -c ...`` all bypassed the old heuristic).
+SHELL_STRUCTURE_RE = re.compile(
+    r"(?ix)"
+    r"((^|[;&|]\s*|\s)~[\w./\\-]*)"            # tilde expansion
+    r"|(\$\()"                                 # command substitution $(
+    r"|(\$\{)"                                 # parameter expansion ${
+    r"|(\$[A-Za-z_][A-Za-z0-9_]*)"             # parameter expansion $VAR
+    r"|(`)"                                    # backtick substitution
+    r"|((^|[;&|]\s*)\\(rm|rmdir|del|erase|format|mkfs|dd|shutdown|reboot|remove-item|move-item|rename-item|clear-item)\b)"  # escaped dangerous name
+    r"|((^|[;&|]\s*)[\"'](rm|rmdir|del|erase|format|mkfs|dd|shutdown|reboot|remove-item|move-item|rename-item|clear-item)[\"'])"  # quoted dangerous name
+    r"|(\b(python|python3|py|bash|sh|pwsh|powershell|cmd)(\s+(-c|/c))\b)"  # interpreter -c code argument
+)
+
 DEFAULT_COMMAND_POLICIES: dict[CommandPermissionGroup, CommandApprovalPolicy] = {
     "regular": "auto_allow",
     "dangerous": "ask_user",
@@ -100,7 +119,7 @@ def classify_command(command: str) -> CommandPermissionGroup:
     command_lower = command.lower().strip()
     if not command_lower:
         return "regular"
-    if DANGEROUS_COMMAND_RE.search(command_lower):
+    if DANGEROUS_COMMAND_RE.search(command_lower) or SHELL_STRUCTURE_RE.search(command_lower):
         return "dangerous"
     return "regular"
 
@@ -112,6 +131,11 @@ def command_permission_decision(
     group = classify_command(command)
     policies = normalize_command_policies(raw_policies)
     policy = policies[group]
+    if group == "dangerous" and SHELL_STRUCTURE_RE.search(command.lower()):
+        # Shell structure features (expansion, substitution, ``-c`` code)
+        # cannot be statically validated — never auto-allowed even when the
+        # dangerous-group policy is configured to ``auto_allow``.
+        policy = "ask_user"
     return CommandPermissionDecision(
         group=group,
         policy=policy,
@@ -162,6 +186,20 @@ class ApprovalGate:
         if self.active_tier is not None:
             access_set = self.tier_tools.get(self.active_tier, set())
             if tool_name in access_set:
+                if tool_name == "run_command":
+                    # The tier list must not short-circuit command-level
+                    # classification (audit 06 S2): a dangerous command stays
+                    # ask_user even when run_command is in the tier access list.
+                    command = params.get("command", "")
+                    if isinstance(command, str) and command.strip():
+                        decision = command_permission_decision(command, self.command_policies)
+                        if decision.requires_approval:
+                            return ToolApprovalDecision(
+                                False,
+                                decision.reason or "Command requires user confirmation",
+                                base_tier,
+                                requires_approval=True,
+                            )
                 return ToolApprovalDecision(True, f"Auto-approved ({self.active_tier})", base_tier)
             elif len(access_set) > 0:
                 # Non-empty access list: tools not in list require approval
@@ -201,9 +239,9 @@ class ApprovalGate:
 
     def _check_hard_blocks(self, tool_name: str, params: dict[str, Any]) -> str:
         if tool_name in {"write_file", "edit_file"}:
-            path = str(params.get("path", ""))
+            path = str(params.get("path", "")).casefold()
             for pattern in self.blocked_file_patterns:
-                if pattern in path:
+                if pattern.casefold() in path:
                     return f"Blocked: path contains sensitive pattern '{pattern}'"
         return ""
 

@@ -15,6 +15,7 @@ durable jobs — there is no leasing or polling loop.
 from __future__ import annotations
 
 import asyncio
+import ast
 import json
 import os
 import re
@@ -52,6 +53,11 @@ _CONDITION_BUILTINS = {
     "abs": abs, "round": round, "isinstance": isinstance, "True": True,
     "False": False, "None": None,
 }
+
+# Whole-token matcher for ``$VAR`` / ``${VAR}`` substitution. Matching the
+# complete identifier (not a string prefix) prevents ``$INPUT_A`` from being
+# rewritten when ``$INPUT_ABC`` is in the command (audit 07 S4).
+_VAR_TOKEN_RE = re.compile(r"\$(?:\{(?P<braced>\w+)\}|(?P<plain>\w+))")
 
 
 def _utcnow() -> datetime:
@@ -818,11 +824,18 @@ class WorkflowRunner:
             )
         if self.sub_agent_runner is None:
             raise RuntimeError("AI agent mode requires a sub_agent_runner (none configured)")
+        raw_allowed = cfg.get("tools") or cfg.get("allowed_tools")
+        allowed_tools = (
+            [str(item) for item in raw_allowed if str(item).strip()]
+            if isinstance(raw_allowed, list)
+            else None
+        )
         result = await self.sub_agent_runner.run(
             task=task,
             agent=str(cfg.get("agent") or ""),
             model=str(cfg.get("model_id") or ""),
             mode=str(cfg.get("mode") or ""),
+            allowed_tools=allowed_tools,
         )
         content = getattr(result, "message", None) or ""
         return self._split_or_fallback(node, content)
@@ -1480,15 +1493,17 @@ def _substitute_env_vars(command: str, substitutions: dict[str, str]) -> str:
     the known INPUT_<PORT> variables ourselves before handing the command to the
     shell. Unknown ``$tokens`` are left untouched.
     """
-    if not substitutions:
+    if not substitutions or not command:
         return command
-    result = command
-    # ${VAR} form first (longer token), then $VAR form.
-    for var, value in substitutions.items():
-        result = result.replace("${" + var + "}", value)
-    for var, value in substitutions.items():
-        result = result.replace("$" + var, value)
-    return result
+
+    def _replace(match: re.Match[str]) -> str:
+        name = match.group("braced") or match.group("plain")
+        value = substitutions.get(name)
+        if value is None:
+            return match.group(0)
+        return value
+
+    return _VAR_TOKEN_RE.sub(_replace, command)
 
 
 _PYTHON3_SHIM_DIR: str | None = None
@@ -1686,11 +1701,23 @@ def _eval_condition(expr: str, bound_inputs: dict[str, Any]) -> bool:
     ``int``, ``float``, ``bool``, ``any``, ``all``, ``min``, ``max``, ``sum``,
     ``abs``, ``round``, ``isinstance``) is available. Empty/missing condition →
     always True (execute). Evaluation errors → False (skip).
+
+    Trust boundary: conditions are written by the workflow author, who can
+    already run arbitrary shell/Python nodes, so ``eval`` here is not a
+    security boundary (audit 07 S4). As defensive hardening, any attribute
+    access on a name starting with ``_`` is rejected, which blocks the classic
+    ``x.__class__.__mro__...`` sandbox-escape chain while allowing benign
+    method calls like ``text.strip()``.
     """
     if not expr or not str(expr).strip():
         return True
+    source = str(expr).strip()
     try:
-        return bool(eval(str(expr).strip(), {"__builtins__": _CONDITION_BUILTINS}, dict(bound_inputs)))  # noqa: S307 — trusted user-authored workflow condition
+        tree = ast.parse(source, mode="eval")
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Attribute) and node.attr.startswith("_"):
+                return False
+        return bool(eval(source, {"__builtins__": _CONDITION_BUILTINS}, dict(bound_inputs)))  # noqa: S307 — trusted user-authored workflow condition
     except Exception:
         return False
 

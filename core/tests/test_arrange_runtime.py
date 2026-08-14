@@ -11,6 +11,16 @@ from lamtools_core.runtime.arrange import ArrangeManager, ArrangeRunner, InMemor
 NOW = datetime(2026, 7, 16, 8, 0, tzinfo=timezone.utc)
 
 
+async def _wait_idle(runner: ArrangeRunner, timeout: float = 5.0) -> None:
+    """run_due_once no longer awaits its spawned tasks (audit 07 S3 — the
+    poll loop must stay responsive); wait for them before asserting side
+    effects."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while runner._active_tasks and loop.time() < deadline:
+        await asyncio.sleep(0.01)
+
+
 @pytest.mark.asyncio
 async def test_once_job_runs_and_completes() -> None:
     store = InMemoryArrangeStore()
@@ -28,6 +38,7 @@ async def test_once_job_runs_and_completes() -> None:
     runner = ArrangeRunner(store, lambda claimed: seen.append(claimed.to_dict()), clock=lambda: NOW)
 
     assert await runner.run_due_once() == 1
+    await _wait_idle(runner)
 
     saved = await manager.get(job.id)
     assert saved is not None
@@ -53,6 +64,7 @@ async def test_interval_job_reschedules_until_max_runs() -> None:
     runner = ArrangeRunner(store, lambda _job: None, clock=lambda: current)
 
     assert await runner.run_due_once() == 1
+    await _wait_idle(runner)
     first = await manager.get(job.id)
     assert first is not None
     assert first.status == "scheduled"
@@ -60,6 +72,7 @@ async def test_interval_job_reschedules_until_max_runs() -> None:
 
     current = NOW + timedelta(seconds=60)
     assert await runner.run_due_once() == 1
+    await _wait_idle(runner)
     finished = await manager.get(job.id)
     assert finished is not None
     assert finished.status == "completed"
@@ -83,10 +96,12 @@ async def test_event_job_waits_until_signalled() -> None:
     assert await runner.run_due_once() == 0
     assert await manager.signal("project.released", now=NOW) == 1
     assert await runner.run_due_once() == 1
+    await _wait_idle(runner)
     assert (await manager.get(job.id)).status == "waiting"  # type: ignore[union-attr]
 
     assert await manager.signal("project.released", now=NOW) == 1
     assert await runner.run_due_once() == 1
+    await _wait_idle(runner)
     assert (await manager.get(job.id)).run_count == 2  # type: ignore[union-attr]
 
 
@@ -152,10 +167,14 @@ async def test_event_signal_keeps_payload_and_queues_while_job_is_busy() -> None
 
     release.set()
     await running
+    # run_due_once no longer awaits its spawned tasks (audit 07 S3); wait for
+    # the busy job to actually finish before the next claim round.
+    await _wait_idle(runner)
     assert seen[0]["event_id"] == "evt-1"
     assert seen[0]["data"]["revision"] == "abc123"
 
     assert await runner.run_due_once() == 1
+    await _wait_idle(runner)
     assert [item["event_id"] for item in seen] == ["evt-1", "evt-2"]
     occurrences = await manager.list_occurrences(job_id=job.id)
     assert [item.status for item in occurrences] == ["completed", "completed"]
@@ -205,15 +224,20 @@ async def test_runner_recovers_abandoned_job_from_same_occurrence() -> None:
     claimed = await store.claim_due(now=NOW, worker_id="dead-worker", lease_seconds=30, limit=1)
     assert claimed[0].occurrence_id
 
-    await store.recover_running(now=NOW + timedelta(seconds=1))
+    # Lease (30s) has not expired yet: recover must NOT steal the job from a
+    # possibly-alive worker (audit 07 S2).  Only after the lease expires does
+    # the job become reclaimable.
+    assert await store.recover_running(now=NOW + timedelta(seconds=1)) == 0
     seen_occurrences: list[str] = []
     runner = ArrangeRunner(
         store,
         lambda item: seen_occurrences.append(item.occurrence_id),
-        clock=lambda: NOW + timedelta(seconds=1),
+        clock=lambda: NOW + timedelta(seconds=31),
     )
 
+    assert await store.recover_running(now=NOW + timedelta(seconds=31)) == 1
     assert await runner.run_due_once() == 1
+    await _wait_idle(runner)
     assert seen_occurrences == [claimed[0].occurrence_id]
     assert (await manager.get(job.id)).status == "completed"  # type: ignore[union-attr]
 
@@ -324,6 +348,7 @@ async def test_runner_records_operation_result_on_occurrence() -> None:
     )
 
     assert await runner.run_due_once() == 1
+    await _wait_idle(runner)
     saved = await manager.get(job.id)
     occurrence = await manager.get_occurrence(saved.occurrence_id)  # type: ignore[union-attr]
 
@@ -376,6 +401,18 @@ async def test_expired_lease_is_reclaimed_with_same_occurrence() -> None:
         now=NOW,
     )
     first = await store.claim_due(now=NOW, worker_id="worker-1", lease_seconds=5, limit=1)
+
+    # Lease expired: the job is reset to scheduled but must NOT be re-claimed
+    # in the same round (its previous owner may still be finishing — audit
+    # 07 S2).  The next poll round claims it.
+    first_reset = await store.claim_due(
+        now=NOW + timedelta(seconds=6),
+        worker_id="worker-2",
+        lease_seconds=5,
+        limit=1,
+    )
+    assert first_reset == []
+    assert (await manager.get(job.id)).status == "scheduled"  # type: ignore[union-attr]
 
     reclaimed = await store.claim_due(
         now=NOW + timedelta(seconds=6),
@@ -432,6 +469,7 @@ async def test_daily_calendar_job_keeps_local_wall_clock_time() -> None:
 
     runner = ArrangeRunner(store, lambda _job: None, clock=lambda: job.next_run_at)  # type: ignore[arg-type]
     assert await runner.run_due_once() == 1
+    await _wait_idle(runner)
     repeated = await manager.get(job.id)
     assert repeated is not None
     assert repeated.status == "scheduled"
@@ -494,3 +532,35 @@ async def test_once_job_accepts_local_date_time_and_rejects_past_time() -> None:
             trigger={"type": "once", "run_at": "2025-12-12T01:00:00+00:00"},
             now=now,
         )
+
+
+@pytest.mark.asyncio
+async def test_runner_cancel_persists_cancelled_status() -> None:
+    """Audit 07 S2: cancel must persist the cancelled status so the job is
+    not re-claimed (and re-executed) after its lease expires."""
+    store = InMemoryArrangeStore()
+    manager = ArrangeManager(store)
+    job = await manager.create(
+        thread_id="thread-1",
+        work_root="test-proj",
+        kind="routine",
+        operation="turn.start",
+        payload={"message": "slow"},
+        trigger={"type": "once", "run_at": NOW.isoformat()},
+        now=NOW,
+    )
+    started = asyncio.Event()
+
+    async def blocking_executor(item) -> dict[str, Any]:
+        started.set()
+        await asyncio.sleep(10)
+
+    runner = ArrangeRunner(store, blocking_executor, clock=lambda: NOW)
+    assert await runner.run_due_once() == 1
+    await _wait_idle(runner)
+    await asyncio.wait_for(started.wait(), timeout=1)
+
+    assert await runner.cancel(job.id) is True
+    cancelled = await manager.get(job.id)
+    assert cancelled is not None
+    assert cancelled.status == "cancelled"

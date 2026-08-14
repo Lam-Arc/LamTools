@@ -76,7 +76,7 @@ def load_subagent_guide(work_root: str | Path | None = None) -> str:
     path = resolve_subagent_guide_path(work_root)
     if path is not None:
         try:
-            text = path.read_text(encoding="utf-8")
+            text = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             text = ""
         if text.strip():
@@ -95,7 +95,9 @@ def write_subagent_guide(content: str, *, scope: str, work_root: str | Path | No
     """Persist ``content`` to the guide file for ``scope`` and return its path."""
     path = guide_path_for_scope(scope, work_root)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
+    from lamtools_core.config.root import atomic_write_text
+
+    atomic_write_text(path, content)
     return path
 
 
@@ -120,7 +122,7 @@ def load_subagent_settings(work_root: str | Path | None = None) -> dict[str, obj
     path = resolve_subagent_settings_path(work_root)
     if path is not None:
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
             if isinstance(data, dict):
                 return {**DEFAULT_SUBAGENT_SETTINGS, **data}
         except (OSError, json.JSONDecodeError):
@@ -163,13 +165,15 @@ def write_subagent_settings(updates: dict[str, object], *, scope: str, work_root
     existing: dict[str, object] = dict(DEFAULT_SUBAGENT_SETTINGS)
     if path.is_file():
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
             if isinstance(data, dict):
                 existing.update(data)
         except (OSError, json.JSONDecodeError):
             pass
     existing.update(updates)
-    path.write_text(json.dumps(existing, indent=2, ensure_ascii=False), encoding="utf-8")
+    from lamtools_core.config.root import atomic_write_text
+
+    atomic_write_text(path, json.dumps(existing, indent=2, ensure_ascii=False))
     return path
 
 

@@ -1847,12 +1847,19 @@ async def _ensure_turn_terminal(
     queue = snapshot.get("queue")
     if not isinstance(queue, list) or not queue:
         return
-    if effective_thread_status(snapshot) in {"completed", "idle"}:
+    if effective_thread_status(snapshot) in {"completed", "idle", "waiting"}:
         return
     # Check if the current turn is the last active turn
     core_state = snapshot.get("core") if isinstance(snapshot.get("core"), dict) else {}
     latest_active = latest_active_turn_id({"core": core_state, "turns": snapshot.get("turns", {})})
     if latest_active is not None and latest_active != turn_id:
+        return
+    # The turn itself must already be terminal before we backfill a completed
+    # status — a turn still waiting for approval (or otherwise non-terminal)
+    # must never be marked completed, or the queue would dispatch the next
+    # item without approval and two kernels would run concurrently
+    # (audit 01 S1).
+    if _turn_is_terminal(snapshot, turn_id):
         return
     # Write a completed terminal status event
     terminal = RunItemEvent(

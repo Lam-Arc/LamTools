@@ -145,12 +145,14 @@ async def dream_session(
     candidates: list[DreamCandidate] = []
     if llm_client is None:
         # Without an LLM we can still settle any existing compaction summary
-        # as a single low-confidence fact, but true extraction is impossible.
+        # as a single fact. Seeded at the MEMORY.md threshold (0.6) so it
+        # actually lands in the long-term file — the previous 0.4 was below
+        # both the candidate filter and the settle gate, a dead path
+        # (audit 11).
         if compaction_summary:
             candidates.append(
-                DreamCandidate(kind="fact", content=compaction_summary[:500], confidence=0.4)
+                DreamCandidate(kind="fact", content=compaction_summary[:500], confidence=0.6)
             )
-        result = DreamResult(status="no_llm", extracted=len(candidates), candidates=candidates)
     else:
         try:
             candidates = await _extract_candidates(
@@ -200,7 +202,12 @@ async def dream_session(
             if len(candidate.content) > len(hit.entry.content):
                 hit.entry.content = candidate.content
             hit.entry.accessed_at = datetime.now()
-            hit.entry.metadata.setdefault("sessions", []).append(session_id)
+            # De-duplicate the session trace and cap it so a high-frequency
+            # memory's metadata cannot grow without bound (audit 11).
+            sessions = hit.entry.metadata.setdefault("sessions", [])
+            if session_id not in sessions:
+                sessions.append(session_id)
+            del sessions[:-20]
             await memory_store.add(hit.entry)
             updated += 1
             settled.append(hit.entry)

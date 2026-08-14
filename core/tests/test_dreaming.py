@@ -229,9 +229,13 @@ class TestDreamSession:
             memory_store=store,
             llm_client=None,
         )
-        # Without LLM, the compaction summary becomes a low-confidence candidate
-        # that gets filtered by the default min_confidence=0.5.
+        # Without LLM the compaction summary becomes a single fact seeded at
+        # the MEMORY.md threshold (0.6) — it must actually settle instead of
+        # being filtered out by the confidence gates (audit 11).
         assert result.status in ("no_llm", "dreamed")
+        assert result.added == 1
+        memory_md = (tmp_path / "MEMORY.md").read_text(encoding="utf-8")
+        assert "讨论了数据库架构" in memory_md
 
     async def test_failing_llm_returns_failed(self, tmp_path: Path):
         store = InMemoryMemoryStore()

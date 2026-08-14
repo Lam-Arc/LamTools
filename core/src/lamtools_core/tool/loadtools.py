@@ -14,6 +14,8 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from lamtools_core.llm.profiles import strip_jsonc
+
 type ModeName = str
 
 
@@ -42,15 +44,18 @@ def load_loadtools(path: Path | str) -> LoadTools:
 
     Returns an empty dict when the file is missing, unreadable, or invalid.
     Comment lines are stripped so files with a human-readable header (see
-    :func:`serialize_loadtools`) parse cleanly.
+    :func:`serialize_loadtools`) parse cleanly. Uses the shared
+    string-context-aware stripper so ``//`` inside quoted values (URLs)
+    survives (audit 09 S3).
     """
     result: LoadTools = {}
     try:
-        raw = Path(path).read_text(encoding="utf-8")
-    except (FileNotFoundError, OSError):
+        # utf-8-sig: a BOM must not silently void the whole file (audit 09 S3).
+        raw = Path(path).read_text(encoding="utf-8-sig")
+    except (FileNotFoundError, OSError, UnicodeDecodeError):
         return result
     try:
-        data = json.loads(_strip_jsonc_comments(raw))
+        data = json.loads(strip_jsonc(raw))
     except json.JSONDecodeError:
         return result
     if not isinstance(data, dict):
@@ -70,13 +75,6 @@ def load_loadtools(path: Path | str) -> LoadTools:
             tools = [str(t) for t in tools_raw if isinstance(t, str) and str(t).strip()]
         result[name.strip()] = LoadToolMode(description=description, tools=tools)
     return result
-
-
-def _strip_jsonc_comments(text: str) -> str:
-    """Remove // and /* */ comments from a JSONC document (strings preserved)."""
-    import re
-
-    return re.sub(r"/\*.*?\*/|//[^\n]*", "", text, flags=re.DOTALL)
 
 
 def mode_tool_set(

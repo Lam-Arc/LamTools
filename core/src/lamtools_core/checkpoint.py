@@ -259,7 +259,20 @@ class CoreCheckpointCoordinator:
         file_path = Path(path).resolve()
         if not file_path.is_file():
             return
-        relative = str(file_path.relative_to(self.work_root).as_posix()) if _is_within(file_path, self.work_root) else file_path.as_posix()
+        if not _is_within(file_path, self.work_root):
+            # Outside the workspace (allow_access_outside_workdir or a symlink
+            # escape): skip backing up instead of recording an absolute-path
+            # manifest key — _apply_manifest rejects absolute paths, so one
+            # such entry would permanently break every later rollback
+            # (audit 08 S2).
+            _logger.warning("checkpoint backup skipped (outside workspace): %s", file_path)
+            return
+        relative = str(file_path.relative_to(self.work_root).as_posix())
+        # No checkpoint yet — writing a blob now would create an unreferenced
+        # orphan (audit 08 S3). Skip before any storage I/O.
+        async with self._workspace_lock:
+            if self._latest_checkpoint is None:
+                return
         try:
             size = file_path.stat().st_size
         except OSError:
@@ -274,6 +287,24 @@ class CoreCheckpointCoordinator:
             return
         data = file_path.read_bytes()
         digest = hashlib.sha256(data).hexdigest()
+        blob_path = await self._write_blob(digest, data)
+        mode = stat.S_IMODE(file_path.stat().st_mode)
+        entry = {"hash": digest, "size": len(data), "mode": mode}
+        async with self._workspace_lock:
+            ref = self._latest_checkpoint
+            if ref is None:
+                return
+            await self._append_file_to_manifest(
+                checkpoint_id=ref.id,
+                relative=relative,
+                entry=entry,
+                digest=digest,
+                blob_path=blob_path,
+                size=len(data),
+            )
+
+    async def _write_blob(self, digest: str, data: bytes) -> Path:
+        """Persist a content-addressed blob, returning its storage path."""
         blob_root = self.storage_root / "blobs"
         blob_path = blob_root / digest[:2] / digest
         if not blob_path.exists():
@@ -294,14 +325,37 @@ class CoreCheckpointCoordinator:
                 except OSError:
                     pass
                 raise
-        mode = stat.S_IMODE(file_path.stat().st_mode)
-        entry = {"hash": digest, "size": len(data), "mode": mode}
-        async with self._workspace_lock:
-            ref = self._latest_checkpoint
-            if ref is None:
-                return
+        return blob_path
+
+    async def _backup_manifest_files(self, checkpoint_id: str, manifest_hash: str) -> None:
+        """Back up the *current* content of every file the target manifest
+        touches, appended to the given (undo) checkpoint's manifest.
+
+        A rollback replaces files with target content; if it fails mid-way,
+        the already-replaced files must be reversible. The undo node is a
+        lazy capture with an empty manifest, so without this real backup a
+        failed rollback leaves the workspace in a mixed state with no way to
+        compensate (audit 08 S3).
+        """
+        target = await self._manifest(manifest_hash)
+        if not target:
+            return
+        for relative in sorted(target):
+            destination = _safe_workspace_path(self.work_root, relative)
+            if not destination.is_file():
+                continue
+            try:
+                size = destination.stat().st_size
+                if size > MAX_BACKUP_FILE_BYTES:
+                    continue
+                data = destination.read_bytes()
+            except OSError:
+                continue
+            digest = hashlib.sha256(data).hexdigest()
+            blob_path = await self._write_blob(digest, data)
+            entry = {"hash": digest, "size": len(data), "mode": stat.S_IMODE(destination.stat().st_mode)}
             await self._append_file_to_manifest(
-                checkpoint_id=ref.id,
+                checkpoint_id=checkpoint_id,
                 relative=relative,
                 entry=entry,
                 digest=digest,
@@ -435,6 +489,9 @@ class CoreCheckpointCoordinator:
             try:
                 if restore_scope in {"workspace", "all"}:
                     workspace_touched = True
+                    # Real backup of every file the rollback will touch, so a
+                    # mid-rollback failure stays fully reversible (audit 08 S3).
+                    await self._backup_manifest_files(undo.id, target.manifest_hash)
                     restored_paths = tuple(await self._apply_manifest(target.manifest_hash))
                 if restore_scope in {"conversation", "all"}:
                     conversation_touched = True

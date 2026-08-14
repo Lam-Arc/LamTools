@@ -2,6 +2,8 @@ from pathlib import Path
 
 import pytest
 
+import pytest
+
 from lamtools_core.attachment import (
     AttachmentRecord,
     AttachmentService,
@@ -129,3 +131,45 @@ def test_capability_split_empty_when_no_current_attachments(tmp_path):
     # Historical attachments are never sent as content blocks.
     assert blocks == []
     assert deferred == []
+
+
+
+
+@pytest.mark.asyncio
+async def test_repository_rejects_path_traversal_session_id(tmp_path):
+    """Audit 11 S2: session_id becomes a directory name; separators/``..``
+    must be rejected instead of writing outside the storage root."""
+    from lamtools_core.attachment.store import _CoreAttachmentRepository
+
+    repo = _CoreAttachmentRepository(None, tmp_path / "data")
+    for bad in ("../escape", "a/b", "a\b", "..", "", "x" * 65):
+        with pytest.raises(LookupError):
+            await repo.session(bad)
+    ok = await repo.session("session-abc_1.2")
+    assert ok.storage_root == tmp_path / "data" / "attachments" / "session-abc_1.2"
+
+
+@pytest.mark.asyncio
+async def test_upload_rejects_oversized_content(tmp_path):
+    """Audit 03/11 S2: uploads are size-bounded."""
+    from lamtools_core.attachment.service import MAX_ATTACHMENT_BYTES
+
+    repository = MemoryAttachmentRepository(tmp_path)
+    service = AttachmentService(repository)
+    with pytest.raises(ValueError):
+        await service.create("session-ok", "big.bin", b"x" * (MAX_ATTACHMENT_BYTES + 1))
+
+
+@pytest.mark.asyncio
+async def test_open_refuses_executable_types(tmp_path, monkeypatch):
+    """Audit 03 S2: the /open endpoint must not launch scripts/executables."""
+    repository = MemoryAttachmentRepository(tmp_path)
+    service = AttachmentService(repository)
+    monkeypatch.setattr("lamtools_core.attachment.service.open_with_default_app", lambda path: None)
+    for name in ("evil.bat", "evil.ps1", "evil.EXE", "evil.lnk", "evil.sh"):
+        record = await service.create("session-ok", name, b"payload")
+        with pytest.raises(ValueError):
+            await service.open(record["id"])
+    record = await service.create("session-ok", "notes.txt", b"hello")
+    result = await service.open(record["id"])
+    assert result["status"] == "opened"

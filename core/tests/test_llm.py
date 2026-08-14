@@ -158,3 +158,27 @@ class TestClassifyModelError:
     def test_generic_error_is_retryable(self):
         exc = RuntimeError("connection reset")
         assert classify_model_error(exc) == "retryable"
+
+    def test_structured_4xx_is_fatal(self):
+        """4xx client errors must never be retried (audit 10 S2) — a bad API
+        key or malformed request will not fix itself."""
+        from lamtools_core.kernel.errors import LLMProviderError
+
+        for status in (400, 401, 403, 404, 405, 422):
+            assert classify_model_error(LLMProviderError(f"LLM API error {status}: boom", status)) == "fatal"
+
+    def test_structured_5xx_is_retryable(self):
+        from lamtools_core.kernel.errors import LLMProviderError
+
+        for status in (500, 502, 503, 504):
+            assert classify_model_error(LLMProviderError(f"LLM API error {status}: boom", status)) == "retryable"
+
+    def test_structured_429_is_rate_limit_with_retry_after(self):
+        from lamtools_core.kernel.errors import RateLimitError
+
+        assert classify_model_error(RateLimitError("LLM API error 429: slow down", retry_after=5)) == "rate_limit"
+
+    def test_structured_408_is_retryable(self):
+        from lamtools_core.kernel.errors import LLMProviderError
+
+        assert classify_model_error(LLMProviderError("LLM API error 408: timeout", 408)) == "retryable"

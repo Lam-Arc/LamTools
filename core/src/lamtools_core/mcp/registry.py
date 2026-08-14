@@ -59,6 +59,10 @@ class MCPToolRegistry:
             self.work_root,
             config_files=self.config_files,
         )
+        # Reload semantics: close any previously started clients first so a
+        # hot-reload never leaks MCP server subprocesses / reader tasks
+        # (audit 11).
+        await self.close()
         for config in configs:
             client = MCPClient(config)
             try:

@@ -67,13 +67,22 @@ class InMemoryRuntimeEventStore:
 
     def __init__(self) -> None:
         self._events: list[RuntimeEventRecord] = []
+        # Monotonic high-water mark for sequence allocation. Deriving the next
+        # sequence from len(self._events) alone is wrong after the hub trims
+        # old events: kept records retain their original (high) sequences while
+        # the list shrinks, so the next append would collide with a kept
+        # record's sequence and go backwards (audit 07: replay/cursor
+        # consumers break on non-monotonic sequences).
+        self._max_sequence = 0
 
     def _next_sequence(self) -> int:
-        return len(self._events) + 1
+        return self._max_sequence + 1
 
     def append(self, event: RuntimeEventRecord) -> str:
         if event.sequence == 0:
             event.sequence = self._next_sequence()
+        if event.sequence > self._max_sequence:
+            self._max_sequence = event.sequence
         self._events.append(event)
         return event.id
 

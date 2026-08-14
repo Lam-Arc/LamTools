@@ -56,3 +56,43 @@ async def test_plugin_operations_list_enable_disable_and_trust(tmp_path: Path):
 
     await catalog.execute("hook.trust", {"hook_id": hook_id})
     assert trust.is_trusted(hook_hash) is True
+
+
+@pytest.mark.asyncio
+async def test_websearch_config_save_preserves_urls_in_strings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """A URL inside a quoted value must survive JSONC validation — the old
+    comment-stripping regex corrupted it into ``https:`` (audit 11)."""
+    from lamtools_core.config.root import core_config_file
+
+    monkeypatch.setenv("LAMTOOLS_HOME", str(tmp_path))
+    monkeypatch.setenv("LAMTOOLS_CORE_CONFIG_ROOT", str(tmp_path / "config"))
+
+    catalog = build_plugin_operation_catalog(
+        plugin_registry=PluginRegistry(plugin_roots=[]),
+        plugin_state_store=PluginStateStore(tmp_path / "plugin-state.json"),
+        hook_registry_factory=lambda: HookRegistry(),
+        hook_trust_store=HookTrustStore(tmp_path / "hook-trust.json"),
+    )
+
+    content = (
+        "{\n"
+        '  // 搜索引擎配置\n'
+        '  "url": "https://example.com/search?q={query}", /* 注意 URL */\n'
+        '  "fallback": "http://127.0.0.1:8080/path//deep"\n'
+        "}\n"
+    )
+    result = await catalog.execute("websearch.config.update", {"content": content})
+    assert result.status != "error", result.payload
+
+    saved = core_config_file("websearch.jsonc").read_text(encoding="utf-8")
+    assert 'https://example.com/search?q={query}' in saved
+
+    # Round-trip: read back and validate as JSON after comment stripping.
+    read = await catalog.execute("websearch.config.get")
+    assert read.status != "error"
+    import json as _json
+
+    from lamtools_core.plugins.operations import _strip_jsonc_comments
+    parsed = _json.loads(_strip_jsonc_comments(read.payload["content"]))
+    assert parsed["url"] == "https://example.com/search?q={query}"
+    assert parsed["fallback"] == "http://127.0.0.1:8080/path//deep"

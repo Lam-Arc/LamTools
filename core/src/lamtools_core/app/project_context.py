@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -30,7 +29,8 @@ class ContextConfig:
         if not path.is_file():
             return None
         try:
-            text = path.read_text(encoding="utf-8")
+            # utf-8-sig: a BOM must not silently void the file (audit 09 S3).
+            text = path.read_text(encoding="utf-8-sig")
         except (OSError, UnicodeDecodeError):
             return None
         data = _parse_jsonc(text)
@@ -191,9 +191,9 @@ def _coerce_kind(raw: str) -> PromptPartKind:
     return "system"
 
 
-_JSONC_RE = re.compile(r"/\*.*?\*/|//[^\n]*", re.DOTALL)
-
-
 def _parse_jsonc(text: str) -> object:
-    stripped = _JSONC_RE.sub("", text)
-    return json.loads(stripped)
+    # Shared string-context-aware stripper (audit 09 S3: the old regex cut
+    # `//` inside quoted URLs, silently corrupting values).
+    from lamtools_core.llm.profiles import strip_jsonc
+
+    return json.loads(strip_jsonc(text))

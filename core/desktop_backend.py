@@ -10,7 +10,6 @@ Environment variables (set by the Tauri shell):
                                 every data file beside the app (green mode)
     LAMTOOLS_CORE_DB          – path to core.db
     LAMTOOLS_CORE_DATA_DIR    – user data directory (exact override)
-    LAMTOOLS_CORE_WORK_ROOT   – workspace root
     LAMTOOLS_FRONTEND_DIR     – optional: serve built SPA from here
 
 Models/providers/settings are jsonc-only (no config DB, no LAMTOOLS_LLM_CONFIG_DB).
@@ -62,7 +61,7 @@ def _run() -> None:
 
     # --- data directory ------------------------------------------------
     # Green/portable mode: LAMTOOLS_HOME (set by the Tauri shell to the app
-    # directory's .lam/) keeps core.db/workspace/logs beside the app, so
+    # directory's .lam/) keeps core.db / config / logs beside the app, so
     # nothing is written outside the install root. LAMTOOLS_CORE_DATA_DIR is
     # an exact override; otherwise fall back to %APPDATA%\LamCore.
     data_dir_env = os.environ.get("LAMTOOLS_CORE_DATA_DIR")
@@ -79,11 +78,6 @@ def _run() -> None:
         os.environ.get("LAMTOOLS_CORE_DB")
         or (data_dir / "core.db")
     )
-    work_root = Path(
-        os.environ.get("LAMTOOLS_CORE_WORK_ROOT")
-        or (data_dir / "workspace")
-    )
-    work_root.mkdir(parents=True, exist_ok=True)
 
     # --- unified config directory defaults -------------------------------
     # Seed .lam/core/config/ with built-in default files (loadtools.jsonc,
@@ -96,7 +90,6 @@ def _run() -> None:
 
     os.environ.setdefault("LAMTOOLS_CORE_DB", str(core_db))
     os.environ.setdefault("LAMTOOLS_CORE_DATA_DIR", str(data_dir))
-    os.environ.setdefault("LAMTOOLS_CORE_WORK_ROOT", str(work_root))
 
     _log.info("core_db=%s  data_dir=%s", core_db, data_dir)
 

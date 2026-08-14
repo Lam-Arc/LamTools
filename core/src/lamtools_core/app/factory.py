@@ -8,12 +8,13 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Callable
 
-from fastapi import APIRouter, FastAPI
+from fastapi import APIRouter, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from ..member import MemberManifest, MemberRegistry
+from .security import allowed_origins, is_allowed_origin
 
 
 @asynccontextmanager
@@ -93,14 +94,36 @@ def create_app(
         lifespan=lambda app: _lifespan(app, startup_hooks, shutdown_hooks),
     )
 
-    # Allow all origins in Tauri/desktop mode (localhost webview).
+    # Explicit origin allow-list: the backend is bound to loopback, so any
+    # browser page carrying an Origin header must be one of our own (dev vite
+    # servers or the Tauri WebView).  Requests without an Origin (CLI / Python
+    # clients) are trusted as local callers.  A wildcard + credentials combo
+    # would let any web page read responses and drive the local agent.
+    origins = allowed_origins()
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @app.middleware("http")
+    async def _check_request_origin(request: Request, call_next: Callable) -> Any:
+        # Origin is only present on browser-style (cross-site) requests;
+        # non-browser clients omit it and stay trusted.
+        origin = request.headers.get("origin")
+        if origin is not None and not is_allowed_origin(origin):
+            return JSONResponse(status_code=403, content={"detail": "origin not allowed"})
+        response = await call_next(request)
+        # Security headers (audit 03 S3): the SPA is served inline and file
+        # responses use guessable content-types — nosniff + frame/referrer
+        # policies shrink the sniffing / clickjacking surface.
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        response.headers.setdefault("Cross-Origin-Resource-Policy", "same-origin")
+        return response
 
     # --- Core routes ---
     if health_payload is not None:
@@ -163,12 +186,16 @@ def add_spa_fallback(app: FastAPI, frontend_dir: Path | str) -> None:
         )
     _index_html = index_path.read_text(encoding="utf-8")
 
-    @app.get("/{filename:path}", include_in_schema=False)
-    async def _spa_fallback(filename: str) -> HTMLResponse:
+    @app.get("/{filename:path}", include_in_schema=False, response_model=None)
+    async def _spa_fallback(filename: str) -> HTMLResponse | FileResponse:
         # Try to serve as a static file first (non-/assets files like favicon).
-        candidate = resolved / filename
-        if candidate.is_file():
-            return FileResponse(str(candidate))
+        # ``filename`` is client-controlled, so containment-check it against the
+        # frontend root — a raw ``resolved / filename`` join allows ``..`` /
+        # ``%2e%2e`` segments to escape and read arbitrary local files.
+        candidate = (resolved / filename).resolve()
+        if candidate == resolved or candidate.is_relative_to(resolved):
+            if candidate.is_file():
+                return FileResponse(str(candidate))
         return HTMLResponse(content=_index_html)
 
 

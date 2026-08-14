@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, Callable
 
@@ -8,6 +9,11 @@ from sqlalchemy import select
 from lamtools_core.app.core_db import CoreAttachment
 from .service import AttachmentRecord, AttachmentService, AttachmentSession, attachment_to_dict
 
+# session_id becomes a directory name under data_dir/attachments, so it must
+# be a plain identifier — no path separators, no ``..`` (audit 11 S2: the raw
+# join allowed writing outside the storage root).
+_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+
 
 class _CoreAttachmentRepository:
     def __init__(self, session_factory: Callable[[], Any], data_dir: Path) -> None:
@@ -15,7 +21,11 @@ class _CoreAttachmentRepository:
         self.data_dir = data_dir
 
     async def session(self, session_id: str) -> AttachmentSession:
-        return AttachmentSession(id=session_id, storage_root=self.data_dir / "attachments" / session_id)
+        value = str(session_id or "")
+        # ``..`` alone would resolve one level up from the storage root.
+        if not _SESSION_ID_RE.match(value) or ".." in value:
+            raise LookupError("Invalid attachment session id")
+        return AttachmentSession(id=value, storage_root=self.data_dir / "attachments" / value)
 
     async def create(self, record: AttachmentRecord) -> AttachmentRecord:
         row = CoreAttachment(
