@@ -19,7 +19,7 @@
 
 1. **前端构建**：`core/desktop` 下 `npm run build`（Vite SPA → `core/desktop/dist/`）
 2. **Python 后端打包**：`py -3.14 -m PyInstaller lamtools-core-backend.spec --clean --noconfirm`，产物 `dist/LamCore/`
-3. **Tauri 打包**：把后端产物复制到 `core/desktop/src-tauri/lamcore-backend/`，再 `npx tauri build` 生成 Windows 安装包；最后 `patch-nsis.ps1` 修补 NSIS 脚本
+3. **Tauri 打包**：把后端产物复制到 `core/desktop/src-tauri/lamcore-backend/`，再 `npx tauri build` 生成 Windows 安装包（NSIS 模板已固化中文 UI，`src-tauri/installer.nsi`；旧 `patch-nsis.ps1` 字符串手术已废弃，无需执行）
 
 ## 为什么不能直接 `tauri build`
 

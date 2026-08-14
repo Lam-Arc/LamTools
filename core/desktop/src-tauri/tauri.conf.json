@@ -23,19 +23,16 @@
       }
     ],
     "security": {
-      "csp": null,
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:* ws://127.0.0.1:* tauri:; img-src 'self' asset: http://127.0.0.1:* data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self'",
       "assetProtocol": {
         "enable": true,
-        "scope": ["**"]
+        "scope": [".lam/**", "lam_projects/**"]
       },
       "capabilities": [
         {
           "identifier": "default",
           "windows": ["main"],
           "permissions": [
-            "core:window:allow-minimize",
-            "core:window:allow-toggle-maximize",
-            "core:window:allow-close",
             "core:window:allow-start-dragging"
           ]
         }

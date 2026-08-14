@@ -901,8 +901,12 @@ Section Uninstall
     DeleteRegKey /ifempty HKCU "${MANUKEY}"
 
     SetShellVarContext current
-    RmDir /r "$APPDATA\${BUNDLEID}"
-    RmDir /r "$LOCALAPPDATA\${BUNDLEID}"
+    ; Green/portable mode keeps ALL user data beside the app (main.rs sets
+    ; LAMTOOLS_HOME=$INSTDIR\.lam, projects under $INSTDIR\lam_projects).
+    ; The old %APPDATA%\<BUNDLEID> target was never written, so the checkbox
+    ; silently did nothing (audit 20 S3).
+    RmDir /r "$INSTDIR\.lam"
+    RmDir /r "$INSTDIR\lam_projects"
   ${EndIf}
 
   !ifmacrodef NSIS_HOOK_POSTUNINSTALL

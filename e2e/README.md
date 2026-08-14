@@ -1,5 +1,11 @@
 ﻿# LamTools E2E Tests
 
+> **⚠️ DEPRECATED（2026-08-13，audit 24 S2）**：本套件已过期，指向已归档的
+> Writer 产品（`archive/members/`），不在任何 CI 工作流中运行，且依赖已被移除
+> 的产品外壳。请勿在此之上新增用例；重写为 Core（Tauri 观测环境）端到端
+> 用例的计划见 `docs/code-audit/24-*.md`，落地前以 `core/tests/` 的
+> `test_core_live_client_e2e.py`（真实 WS server）为准。
+
 Playwright E2E smoke tests for the active LamTools frontend.
 
 ## Setup

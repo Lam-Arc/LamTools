@@ -19,6 +19,51 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # ---------- 0. tag ↔ 版本号一致性校验 ----------
+      # 发布前断言 tag（v0.3.0）与 5 处版本号同步，杜绝"漏跑 bump-version 后
+      # 0.2.3 的安装包挂到 v0.3.0 Release 名下"的错版发布（audit 14 S2 —
+      # 错版会让 update.check 提示死循环）。
+      - name: Verify tag matches package versions
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          if (-not ($tag -match '^v\d+\.\d+\.\d+$')) {
+            Write-Error "Tag '$tag' is not a vX.Y.Z tag"
+            exit 1
+          }
+          $expected = $tag.Substring(1)
+          $files = @{
+            'core/src/lamtools_core/__init__.py' = '__version__ = "([^"]+)"'
+            'core/desktop/src-tauri/tauri.conf.json' = '"version"\s*:\s*"([^"]+)"'
+            'core/desktop/src-tauri/Cargo.toml' = '^version\s*=\s*"([^"]+)"'
+            'core/desktop/package.json' = '"version"\s*:\s*"([^"]+)"'
+            'core/pyproject.toml' = '^version\s*=\s*"([^"]+)"'
+          }
+          $failed = $false
+          foreach ($file in $files.Keys) {
+            if (-not (Test-Path $file)) {
+              Write-Error "Version file missing: $file"
+              $failed = $true
+              continue
+            }
+            $content = Get-Content $file -Raw
+            $match = [regex]::Match($content, $files[$file], [System.Text.RegularExpressions.RegexOptions]::Multiline)
+            if (-not $match.Success) {
+              Write-Error "Version pattern not found in $file"
+              $failed = $true
+              continue
+            }
+            $actual = $match.Groups[1].Value
+            if ($actual -ne $expected) {
+              Write-Error "Version mismatch in $file: expected $expected, found $actual"
+              $failed = $true
+            } else {
+              Write-Host "OK $file = $actual"
+            }
+          }
+          if ($failed) { exit 1 }
+          Write-Host "All 5 version locations match tag $tag"
+
       # ---------- 1. 前端构建 ----------
       - name: Set up Node.js
         uses: actions/setup-node@v4

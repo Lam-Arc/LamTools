@@ -33,7 +33,8 @@ Start-Sleep -Seconds 1
 
 # ── Restart backend ──
 Write-Host "==> Starting Core backend (port $backendPort)..." -ForegroundColor Cyan
-Start-Process -FilePath "py" -ArgumentList "-3.14","-m","lamtools_core.cli","serve","--port",$backendPort -WorkingDirectory "$Root\core"
+$env:PYTHONPATH = "$Root\core\src" + $(if ($env:PYTHONPATH) { ";$env:PYTHONPATH" } else { "" })
+            Start-Process -FilePath "py" -ArgumentList "-3.14","-m","lamtools_core.cli","serve","--port",$backendPort -WorkingDirectory "$Root\core"
 
 # ── Restart frontend ──
 Write-Host "==> Starting Core frontend (port $frontendPort)..." -ForegroundColor Cyan

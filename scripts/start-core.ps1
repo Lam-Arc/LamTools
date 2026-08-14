@@ -28,7 +28,8 @@ Start-Sleep -Seconds 1
 
 # ── Backend ──
 $env:CORE_BACKEND_PORT = $backendPort
-Start-Process py -ArgumentList "-3.14","-m","lamtools_core.cli","serve","--port",$backendPort -WorkingDirectory "$Root\core"
+$env:PYTHONPATH = "$Root\core\src" + $(if ($env:PYTHONPATH) { ";$env:PYTHONPATH" } else { "" })
+            Start-Process py -ArgumentList "-3.14","-m","lamtools_core.cli","serve","--port",$backendPort -WorkingDirectory "$Root\core"
 
 # ── Frontend (proxy → backend) ──
 $env:CORE_BACKEND_PORT = $backendPort

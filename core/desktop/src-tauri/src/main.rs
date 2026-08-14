@@ -14,7 +14,7 @@ use std::{
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -112,6 +112,15 @@ fn main() {
     };
 
     tauri::Builder::default()
+        // Single-instance guard: two instances would each spawn a backend
+        // writing the same .lam/core.db (SQLite lock storms, config
+        // clobbering) (audit 20 S3).
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            // Focus the existing window instead of starting a second instance.
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.set_focus();
+            }
+        }))
         .manage(state)
         .setup(|app| {
             let state = app.state::<BackendState>();
@@ -121,6 +130,12 @@ fn main() {
                         .api_base
                         .lock()
                         .map_err(|_| "backend state lock failed")? = Some(api_base);
+                    // Watch the backend process: if it dies mid-run (panic,
+                    // fatal Python exception) the frontend gets an event and
+                    // can show a recovery banner instead of silently failing
+                    // every request (audit 20 S3).
+                    let app_handle = app.handle().clone();
+                    spawn_backend_watcher(app_handle);
                     Ok(())
                 }
                 Err(e) => {
@@ -191,7 +206,10 @@ fn dev_backend_command(port: u16) -> Result<Command, Box<dyn std::error::Error>>
         .arg("serve")
         .arg("--port")
         .arg(port.to_string())
-        .arg("--reload")
+        // No --reload: uvicorn's reloader spawns a detached child on Windows
+        // that survives stop_backend's kill(), orphaning a backend that keeps
+        // core/core.db locked (audit 20 S2). Tauri dev restarts are full
+        // teardown anyway (AGENTS.md: exit completely, then tauri dev again).
         .current_dir(&core_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
@@ -256,8 +274,6 @@ fn find_backend_exe(app: &tauri::App) -> Result<PathBuf, Box<dyn std::error::Err
         return Ok(adjacent);
     }
 
-    // ... rest unchanged
-
     // 3) Project dist directory (dev convenience)
     let project_dist = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()                         // src-tauri/ -> desktop/
@@ -320,6 +336,36 @@ fn stop_backend(state: &BackendState) {
             let _ = child.wait();
         }
     }
+}
+
+/// Poll the backend child process; if it exits outside the normal shutdown
+/// path (child was still registered), emit a `backend-crashed` event so the
+/// frontend can surface a recovery banner (audit 20 S3).
+fn spawn_backend_watcher(app_handle: tauri::AppHandle) {
+    thread::spawn(move || loop {
+        thread::sleep(Duration::from_secs(2));
+        let state = app_handle.state::<BackendState>();
+        let mut guard = match state.child.lock() {
+            Ok(guard) => guard,
+            Err(_) => return,
+        };
+        if guard.is_none() {
+            // Normal shutdown: stop_backend already took the child.
+            return;
+        }
+        let exited = match guard.as_mut().map(|child| child.try_wait()) {
+            Some(Ok(Some(_status))) => true,
+            Some(Ok(None)) => false,
+            _ => true, // try_wait error — treat as gone
+        };
+        if exited {
+            *guard = None;
+            drop(guard);
+            eprintln!("[lamcore] backend process exited unexpectedly");
+            let _ = app_handle.emit("backend-crashed", ());
+            return;
+        }
+    });
 }
 
 #[cfg(windows)]

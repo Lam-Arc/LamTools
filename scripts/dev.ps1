@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
   LamTools Core dev entry point.
 .DESCRIPTION
@@ -29,6 +29,7 @@ function Start-Dev {
             if ($Lyr -eq "all" -or $Lyr -eq "backend") {
                 $bPort = $Ports.core.backend
                 Write-Host "[core/backend] core serve --port $bPort" -ForegroundColor Cyan
+                $env:PYTHONPATH = "$Root\core\src" + $(if ($env:PYTHONPATH) { ";$env:PYTHONPATH" } else { "" })
                 Start-Process -FilePath "py" -ArgumentList "-3.14","-m","lamtools_core.cli","serve","--port",$bPort -WorkingDirectory "$Root\core"
             }
         }
