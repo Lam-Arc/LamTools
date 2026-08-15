@@ -1,0 +1,181 @@
+{
+  "mode": "embed=none",
+  "aggregate": {
+    "r1": 0.0,
+    "r5": 0.0,
+    "r10": 0.0,
+    "p5": 0.0,
+    "mrr": 0.0,
+    "p95_ms": 0.9
+  },
+  "results": [
+    {
+      "question": "销售合同的违约金比例是多少？",
+      "type": "exact",
+      "rank": null,
+      "r1": 0,
+      "r5": 0,
+      "r10": 0,
+      "p5": 0.0,
+      "mrr": 0.0,
+      "ms": 0.9,
+      "top_docs": []
+    },
+    {
+      "question": "租赁合同要求支付多少押金？",
+      "type": "number",
+      "rank": null,
+      "r1": 0,
+      "r5": 0,
+      "r10": 0,
+      "p5": 0.0,
+      "mrr": 0.0,
+      "ms": 0.9,
+      "top_docs": []
+    },
+    {
+      "question": "借款合同的年利率是多少？",
+      "type": "exact",
+      "rank": null,
+      "r1": 0,
+      "r5": 0,
+      "r10": 0,
+      "p5": 0.0,
+      "mrr": 0.0,
+      "ms": 0.8,
+      "top_docs": []
+    },
+    {
+      "question": "保密义务要持续多久？",
+      "type": "exact",
+      "rank": null,
+      "r1": 0,
+      "r5": 0,
+      "r10": 0,
+      "p5": 0.0,
+      "mrr": 0.0,
+      "ms": 0.8,
+      "top_docs": []
+    },
+    {
+      "question": "逾期交货怎么处罚？",
+      "type": "paraphrase",
+      "rank": null,
+      "r1": 0,
+      "r5": 0,
+      "r10": 0,
+      "p5": 0.0,
+      "mrr": 0.0,
+      "ms": 0.8,
+      "top_docs": []
+    },
+    {
+      "question": "哪些合同约定了仲裁解决争议？",
+      "type": "multi",
+      "rank": null,
+      "r1": 0,
+      "r5": 0,
+      "r10": 0,
+      "p5": 0.0,
+      "mrr": 0.0,
+      "ms": 0.8,
+      "top_docs": []
+    },
+    {
+      "question": "技术服务合同的知识产权归谁？",
+      "type": "exact",
+      "rank": null,
+      "r1": 0,
+      "r5": 0,
+      "r10": 0,
+      "p5": 0.0,
+      "mrr": 0.0,
+      "ms": 0.8,
+      "top_docs": []
+    },
+    {
+      "question": "采购合同的质保期是几年？",
+      "type": "exact",
+      "rank": null,
+      "r1": 0,
+      "r5": 0,
+      "r10": 0,
+      "p5": 0.0,
+      "mrr": 0.0,
+      "ms": 0.8,
+      "top_docs": []
+    },
+    {
+      "question": "股权转让的价款是多少？",
+      "type": "number",
+      "rank": null,
+      "r1": 0,
+      "r5": 0,
+      "r10": 0,
+      "p5": 0.0,
+      "mrr": 0.0,
+      "ms": 0.8,
+      "top_docs": []
+    },
+    {
+      "question": "劳务合同的服务期限是多久？",
+      "type": "exact",
+      "rank": null,
+      "r1": 0,
+      "r5": 0,
+      "r10": 0,
+      "p5": 0.0,
+      "mrr": 0.0,
+      "ms": 0.8,
+      "top_docs": []
+    },
+    {
+      "question": "提前解除劳务合同要赔偿多少？",
+      "type": "exact",
+      "rank": null,
+      "r1": 0,
+      "r5": 0,
+      "r10": 0,
+      "p5": 0.0,
+      "mrr": 0.0,
+      "ms": 0.8,
+      "top_docs": []
+    },
+    {
+      "question": "押金什么时候退还？",
+      "type": "paraphrase",
+      "rank": null,
+      "r1": 0,
+      "r5": 0,
+      "r10": 0,
+      "p5": 0.0,
+      "mrr": 0.0,
+      "ms": 0.7,
+      "top_docs": []
+    },
+    {
+      "question": "双方发生争议去哪家仲裁委？",
+      "type": "exact",
+      "rank": null,
+      "r1": 0,
+      "r5": 0,
+      "r10": 0,
+      "p5": 0.0,
+      "mrr": 0.0,
+      "ms": 0.8,
+      "top_docs": []
+    },
+    {
+      "question": "采购不合格可以要求什么？",
+      "type": "paraphrase",
+      "rank": null,
+      "r1": 0,
+      "r5": 0,
+      "r10": 0,
+      "p5": 0.0,
+      "mrr": 0.0,
+      "ms": 0.8,
+      "top_docs": []
+    }
+  ]
+}

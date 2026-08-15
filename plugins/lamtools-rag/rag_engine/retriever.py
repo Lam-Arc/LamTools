@@ -46,23 +46,92 @@ def search(
     return merged
 
 
+_WORD_RE = re.compile(r"[\u4e00-\u9fff]{2,}|[A-Za-z0-9_-]{2,}")
+
+# 中文疑问/虚词停用表（启发式查询切分用；P5 评估 jieba 分词对比）。
+# 注意：不/没/未 不入表——否定常构成内容词（不合格/不可抗力/未履行）
+_FTS_STOP = frozenset(
+    "的是多少什么怎么哪些哪家哪个要吗了在去及与和为之其对向谁几如何"
+    "多久几年何时哪里双方发生要求约定规定请问一下有"
+)
+
+
+def _fts_query(query: str) -> str:
+    """把自然语言查询转成 FTS5 OR 短语查询。
+
+    关键：FTS5 trigram 下 MATCH 默认把整句当"短语"——查询与文档必须
+    连续匹配才会命中，自然语言长句必然全 miss。因此先做启发式切分：
+    去停用词 → 保留 ≥3 字的连续片段 → '"片段1" OR "片段2"'。
+    限制：2 字概念词（押金/仲裁）trigram 无法匹配——这是词法腿的真实
+    边界，由向量腿补齐（消融基线的一部分）。
+    """
+    cleaned = re.sub(r"[？?。，、：；！!（）()\s]+", " ", query)
+    parts: list[str] = []
+    for seg in cleaned.split(" "):
+        buf = ""
+        for ch in seg:
+            if ch in _FTS_STOP:
+                if len(buf) >= 3:
+                    parts.append(buf)
+                buf = ""
+            else:
+                buf += ch
+        if len(buf) >= 3:
+            parts.append(buf)
+    seen: set[str] = set()
+    uniq = [p for p in parts if not (p in seen or seen.add(p))]
+    if not uniq:
+        return f'"{query}"'  # 全被停用词吃掉：回退整句（大概率 miss，诚实返回）
+    return " OR ".join(f'"{p}"' for p in uniq)
+
+
+def _fts_expanded_query(query: str) -> str:
+    """窗口展开版：在基础片段上补 3-6 字滑动窗口（两阶段回退用）。
+
+    跨停用词拼接出的超长短语在文档中往往不连续（如"提前解除劳务合同"），
+    子窗口（"提前解除"/"劳务合同"/"不合格"）才是可匹配单元。
+    """
+    base = _fts_query(query)
+    m = re.findall(r'"([^"]+)"', base)
+    expanded: list[str] = []
+    for p in m:
+        expanded.append(p)
+        if len(p) > 4:
+            for w in (3, 4, 5, 6):
+                for i in range(0, len(p) - w + 1):
+                    expanded.append(p[i : i + w])
+    dedup = sorted(set(expanded), key=len, reverse=True)
+    return " OR ".join(f'"{p}"' for p in dedup)
+
+
 def _fts(conn, query: str, *, source: str, top: int, role: str | None) -> list[dict]:
+    # 两阶段：基础短语 OR → 无命中时窗口展开重试（降噪与召回兼得）
+    fts_query = _fts_query(query)
+    rows = _run_fts(conn, fts_query, source=source, top=top, role=role)
+    if not rows:
+        expanded = _fts_expanded_query(query)
+        if expanded != fts_query:
+            rows = _run_fts(conn, expanded, source=source, top=top, role=role)
+    hits: list[dict] = []
+    for row in rows:
+        hit = _load_hit(conn, row["chunk_id"], score=-float(row["score"]))
+        if hit:
+            hits.append(hit)
+    return hits
+
+
+def _run_fts(conn, fts_query: str, *, source: str, top: int, role: str | None) -> list:
     sql = (
         "SELECT chunk_id, bm25(chunks_fts) AS score FROM chunks_fts "
         "WHERE chunks_fts MATCH ? AND source = ?"
     )
-    args: list = [query, source]
+    args: list = [fts_query, source]
     if role:
         sql += " AND role = ?"
         args.append(role)
     sql += " ORDER BY score LIMIT ?"
     args.append(top)
-    hits: list[dict] = []
-    for row in conn.execute(sql, args).fetchall():
-        hit = _load_hit(conn, row["chunk_id"], score=-float(row["score"]))
-        if hit:
-            hits.append(hit)
-    return hits
+    return conn.execute(sql, args).fetchall()
 
 
 def _vec(

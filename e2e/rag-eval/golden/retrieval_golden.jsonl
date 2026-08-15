@@ -1,0 +1,14 @@
+{"question": "销售合同的违约金比例是多少？", "gold_docs": ["销售合同.md"], "gold_fragments": ["百分之三十"], "type": "exact"}
+{"question": "租赁合同要求支付多少押金？", "gold_docs": ["租赁合同.md"], "gold_fragments": ["四万元"], "type": "number"}
+{"question": "借款合同的年利率是多少？", "gold_docs": ["借款合同.md"], "gold_fragments": ["百分之六"], "type": "exact"}
+{"question": "保密义务要持续多久？", "gold_docs": ["保密协议.md"], "gold_fragments": ["五年"], "type": "exact"}
+{"question": "逾期交货怎么处罚？", "gold_docs": ["销售合同.md"], "gold_fragments": ["违约金，金额为合同总价的百分之三十"], "type": "paraphrase"}
+{"question": "哪些合同约定了仲裁解决争议？", "gold_docs": ["租赁合同.md", "保密协议.md", "股权转让协议.md"], "gold_fragments": ["仲裁"], "type": "multi"}
+{"question": "技术服务合同的知识产权归谁？", "gold_docs": ["技术服务合同.md"], "gold_fragments": ["甲方所有"], "type": "exact"}
+{"question": "采购合同的质保期是几年？", "gold_docs": ["采购合同.md"], "gold_fragments": ["三年"], "type": "exact"}
+{"question": "股权转让的价款是多少？", "gold_docs": ["股权转让协议.md"], "gold_fragments": ["五百万元"], "type": "number"}
+{"question": "劳务合同的服务期限是多久？", "gold_docs": ["劳务合同.md"], "gold_fragments": ["十二个月"], "type": "exact"}
+{"question": "提前解除劳务合同要赔偿多少？", "gold_docs": ["劳务合同.md"], "gold_fragments": ["一万元"], "type": "exact"}
+{"question": "押金什么时候退还？", "gold_docs": ["租赁合同.md"], "gold_fragments": ["押金全额退还"], "type": "paraphrase"}
+{"question": "双方发生争议去哪家仲裁委？", "gold_docs": ["保密协议.md"], "gold_fragments": ["上海国际经济贸易仲裁委员会"], "type": "exact"}
+{"question": "采购不合格可以要求什么？", "gold_docs": ["采购合同.md"], "gold_fragments": ["退货并索赔双倍定金"], "type": "paraphrase"}
