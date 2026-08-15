@@ -193,7 +193,7 @@ B2 manifest 级 `permissions` 字段**显式移除**（models/registry 删除，
 B3 pip 冲突保护：安装前 dry-run 冲突检测（覆盖已装包即拒装并回滚）、安装清单记录、卸载按清单回滚（多插件共用依赖保留）
 B4 插件工具信任 = **安装即永信**（安装动作 = 信任门，更新自动跟随）；插件 hooks 保持现状逐条 sha256 信任（两套并存，trust_all 立场不变）
 B5 卸载 = 删插件目录 + 可选按清单清依赖（默认保留）；禁用 = 只写状态
-B6 UI：删除原 Skills/Hooks tab，插件页区块重构（插件列表 + 详情资产 + 系统级区块，原组件拆解复用）
+B6 UI：**插件与设置同级 + 插件/技能/钩子导航内页**（用户共识修正：插件独立于设置体系）——新建 PluginsShell 全屏页（与 CoreSettings 同骨架/同入口层级，入口在侧边栏「插件」按钮），侧边栏三内页：插件（CorePluginsEditor：列表/安装/详情资产/配置表单）、技能（CoreSkillsEditor：系统级 + 插件技能，按来源分组）、钩子（CoreHooksEditor：逐条信任）；设置内不再保留 Skills/Hooks tab（全部迁入插件页）
 B7 安装 = 复制到插件根（默认用户级，可选项目级）+ GitHub 资产 sha256 校验（无校验和提示风险）+ zip 解压路径逃逸检查（is_relative_to + 条目/体积限额）
 B8 工具名全局唯一：与已注入工具同名 → 不可用；插件间同名 → 先声明者保留、后者报冲突（plugin.list 标注）
 B9 插件更新 = 重装即更新（覆盖旧目录）
@@ -237,7 +237,7 @@ F4 **插件 = 唯一安装单元**（manifest 可只含 skills / 只含 hooks / 
 
 ### 实现状态（2026-08-14）
 
-- 后端全链落地：`plugins/`（models/registry/tools/deps/install/config_store/manager_tools/adapters/_jsonc/operations）+ `app/`（base_agent/default_agent）+ `tool/`（default_toolbox 注入/惰性暴露/占位 handler）+ `kernel/loop.py`（C2）+ `config/`（imagegen 迁移）+ CLI plugin 子命令 + UI 插件页（CorePluginsEditor + tab 重构）。
+- 后端全链落地：`plugins/`（models/registry/tools/deps/install/config_store/manager_tools/adapters/_jsonc/operations）+ `app/`（base_agent/default_agent）+ `tool/`（default_toolbox 注入/惰性暴露/占位 handler）+ `kernel/loop.py`（C2）+ `config/`（imagegen 迁移）+ CLI plugin 子命令 + UI 插件页（PluginsShell 与设置同级，插件/技能/钩子三导航内页；设置内不再保留 Skills/Hooks tab）。
 - 测试：`tests/test_plugin_tools.py`（17）/ `test_plugin_lifecycle.py`（18）/ `test_bundled_plugins.py`（9）/ `test_plugin_adapters.py`（6）/ CLI 插件命令（2）——全量 1458+ 通过。
 - 文档：`docs/plugin-dev-guide.md`（开发指南）· `docs/plugin-compat-matrix.md`（兼容矩阵）。
 
@@ -264,3 +264,19 @@ G4 消费方：RAG 插件 `rag.sessions.search`——与工具 `rag_search_sessi
 **验收补充**：测试插件声明 `operations` → JSON-RPC 直调 → 权限档位验证 → 卸载清理（与 §9 第 2 条合并执行）。
 
 **优先级**：RAG 插件开发前必须（会话历史搜索入口依赖此通道）。
+
+---
+
+## 增量需求（2026-08-16，实测暴露）：安装-扫描不一致（H 组）
+
+H1 **现象**：`plugin.install` 默认安装到**用户级根**（B7），但默认扫描链（`default_core_agent_plugin_roots`，
+`include_user_plugins=False`）**不含用户级根**——UI 安装插件后 `plugin.list` 看不见、装配不加载。
+实测：Tauri 后端插件页只显示 3 个内置插件，用户级安装的 `lamtools-rag` 不可见。
+H2 **根因**：① `include_user_plugins` 默认 False；② Tauri 后端（`http_agent_app.py:178,319`）
+`plugin_roots` 默认**空元组 `()`**（非 None）——`assemble`/`build_core_plugin_operation_catalog` 的
+`plugin_roots is not None` 把空元组当"显式传空"，兜底只补内置根 + bundled，**项目级/用户级根全被排除**。
+H3 **影响**：用户级/项目级安装的插件默认不可见（安装即消失）；dev 期规避 = 复制到内置根
+`core_plugins_root()`（`core/.lam/core/plugins`，扫描链兜底保证存在）——lamtools-rag 已如此放置。
+H4 **建议修复（专项会话）**：① 空 `plugin_roots` 回退默认根集合（`if plugin_roots` 而非 `is not None`）；
+② 或装配默认 `include_user_plugins=True`（与 B7"默认用户级安装"对齐）；③ 修复后回归：安装→可见→可用
+端到端用例补进验收清单；④ 明确"用户级插件默认启用"的隐私/安全语义（多项目共享 = 全局信任面扩大）。
