@@ -109,12 +109,18 @@ P3 VLM → P4 闸门 → P6 1w 合同模拟
 
 | 模式 | recall@1 | recall@5 | recall@10 | MRR | p5 | p95 延迟 | §2-B 达标 |
 |---|---|---|---|---|---|---|---|
-| BM25-only（含查询切分） | 0.786 | 0.857 | **0.857** | 0.821 | 0.643 | 1.5ms | ✅ recall@10 ≥ 0.80 |
-| 混合（BM25+vec0/fastembed local） | 0.786 | 0.857 | 0.857 | 0.821 | 0.643 | **21s ⚠️** | ✅ 但延迟异常 |
+| BM25-only（含查询切分） | 0.786 | 0.857 | 0.857 | 0.821 | 0.643 | 1.5ms | ✅ recall@10 ≥ 0.80 |
+| **混合（BM25+vec0/fastembed local，修复后）** | **0.857** | **1.0** | **1.0** | **0.917** | **0.771** | **6.5ms** | ✅ 且消融成立 |
 
 **关键结论与问题**：
 
 1. **查询切分是 trigram 的必备前置**：FTS5 MATCH 默认把整句当短语，自然语言长句必然全 miss（首测 0/14）。两阶段策略（基础短语 OR → 无命中时 3-6 字窗口展开）后达标；"不/没/未"不入停用表（否定常构成内容词：不合格/不可抗力）。
-2. **剩余 2 miss 为真实语义边界**：Q6"哪些合同约定了仲裁解决争议"（仲裁 vs 仲裁委员会，2 字概念词 + 词边界）、Q12"押金什么时候退还"（押金/退还均 2 字）——**向量腿职责域**。
-3. **环境问题（阻塞向量腿验证）**：fastembed 初始化固定 ~170s（模型已缓存，非下载）、单条查询嵌入最高 21s、**同一进程第二次 embed() 抛异常返回 None**——混合检索的"混合 ≥ max(单腿)"消融标准**未验证**。下轮诊断：onnxruntime providers（CPU EP 配置）、批量嵌入、或评估换 runtime（sentence-transformers 排除——torch 2GB；候选：onnx 直跑 / api embedding）。
-4. 评测产物：`e2e/rag-eval/`（corpus 8 文档 / golden 14 问 / runner）+ `reports/*.json` 全量存档。
+2. **消融成立：混合（1.0）> BM25 单腿（0.857）**——BM25 的 2 个语义 miss（Q6 仲裁 multi、Q12 押金，2 字概念词）由向量腿补上；MRR 0.821→0.917、p5 0.643→0.771 全面提升。
+3. **"数字不可信"根因链（已全部修复，防再犯机制已加）**：
+   - ① HF 直连不通 → fastembed 每次构造卡网络超时 ~170s、**模型从未下载成功** → embed 静默失败 → vec 腿空转，混合分数 = BM25 复读（0.857 完全相同的真相）；
+   - ② onnxruntime 1.28 的 AzureExecutionProvider 排首位，默认先试 Azure 硬件；
+   - ③ embedder 吞异常 + 评测无自检 → 数字看起来对；
+   - ④ db.py 全局 `_VEC_LOADED` 标志导致 vec0 只加载于第一个连接（第二个连接 `no such module: vec0`）。
+   - 修复：`HF_ENDPOINT=hf-mirror.com` + `HF_HUB_DISABLE_XET=1`（镜像站 Xet 401）+ 显式 `providers=["CPUExecutionProvider"]` + embedder 统计（attempts/failures/last_error）+ **评测自检（构造 ≤30s、单次 embed ≤5s、3 次稳定性；失败拒绝出报告 exit 3）** + vec 腿参与度进报告（vec_hits 合计，0 则标注"不可信"）+ 移除全局标志逐连接加载。
+   - 修复后实测：构造 0.5s、单次 embed 1-2ms、索引 0.3s、查询 p95 6.5ms。
+4. 评测产物：`e2e/rag-eval/`（corpus 8 文档 / golden 14 问 / runner 含自检）+ `reports/*.json` 全量存档（含不可信样本，审计可追溯）。

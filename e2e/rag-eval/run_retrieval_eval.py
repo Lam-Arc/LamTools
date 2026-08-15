@@ -23,7 +23,7 @@ sys.path.insert(0, str(PLUGIN_ROOT))
 
 from rag_engine import indexer, retriever  # noqa: PLC0415
 from rag_engine.db import connect  # noqa: PLC0415
-from rag_engine.embedder import Embedder  # noqa: PLC0415
+from rag_engine.embedder import Embedder, EMBED_LIMIT_MS, INIT_LIMIT_S  # noqa: PLC0415
 
 EVAL_DIR = Path(__file__).resolve().parent
 CORPUS = EVAL_DIR / "corpus"
@@ -42,6 +42,36 @@ def load_golden() -> list[dict]:
     return items
 
 
+def _embed_self_check(embedder: Embedder) -> bool:
+    """embed 环境自检（防"数字不可信"再犯，2026-08-15 教训）：
+
+    构造计时 + 3 次嵌入（稳定性 + 耗时上限）。任何一项失败 →
+    拒绝出报告（exit 3），避免静默降级产出污染指标。
+    """
+    print("embed 环境自检…")
+    t0 = time.time()
+    first = embedder.embed(["自检文本"])
+    init_s = time.time() - t0
+    if first is None:
+        print(f"❌ 自检失败：embed 返回 None（{embedder.error}）")
+        return False
+    if init_s > INIT_LIMIT_S:
+        print(f"❌ 自检失败：构造耗时 {init_s:.1f}s 超上限 {INIT_LIMIT_S:.0f}s（网络/加载异常）")
+        return False
+    for i in range(2):
+        t = time.time()
+        emb = embedder.embed(["自检文本"])
+        ms = (time.time() - t) * 1000
+        if emb is None:
+            print(f"❌ 自检失败：第 {i + 2} 次 embed 返回 None（不稳定）")
+            return False
+        if ms > EMBED_LIMIT_MS:
+            print(f"❌ 自检失败：单次 embed {ms:.0f}ms 超上限 {EMBED_LIMIT_MS:.0f}ms")
+            return False
+    print(f"✅ embed 自检通过：init {init_s:.1f}s，后续单次 <{EMBED_LIMIT_MS:.0f}ms")
+    return True
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--embed", choices=["none", "local"], default="none")
@@ -55,6 +85,9 @@ def main() -> int:
         for f in docs:
             shutil.copy2(f, wr / f.name)
         embedder = Embedder(source=args.embed)
+        if args.embed == "local" and not _embed_self_check(embedder):
+            print("拒绝出报告：embed 环境异常，数字不可信（exit 3）")
+            return 3
         t0 = time.time()
         stats = indexer.index_documents(
             wr, dbp, paths=[f.name for f in docs], embedder=embedder
@@ -76,15 +109,20 @@ def main() -> int:
 
         results: list[dict] = []
         latencies: list[float] = []
+        vec_total = 0
+        fts_total = 0
         for item in load_golden():
             q = item["question"]
             golds = [path2id[p] for p in item["gold_docs"] if p in path2id]
             t1 = time.time()
+            legs: dict = {}
             hits = retriever.search(
-                dbp, q, source="workspace_doc", top=K, embedder=embedder
+                dbp, q, source="workspace_doc", top=K, embedder=embedder, stats=legs
             )
             ms = (time.time() - t1) * 1000
             latencies.append(ms)
+            vec_total += legs.get("vec_hits", 0)
+            fts_total += legs.get("fts_hits", 0)
             hit_ids = [h["doc_id"] for h in hits]
             rank = next((i + 1 for i, d in enumerate(hit_ids) if d in golds), None)
             rel5 = sum(1 for d in hit_ids[:5] if d in golds)
@@ -99,6 +137,7 @@ def main() -> int:
                     "p5": round(rel5 / 5, 3),
                     "mrr": round(1.0 / rank, 3) if rank else 0.0,
                     "ms": round(ms, 1),
+                    "vec_hits": legs.get("vec_hits", 0),
                     "top_docs": [
                         next((p for p, i in path2id.items() if i == d), "?")
                         for d in hit_ids[:3]
@@ -116,6 +155,10 @@ def main() -> int:
         print(f"\n=== 检索质量（{args.embed}，n={n}，golden 14 问）===")
         for k, v in agg.items():
             print(f"  {k:<8} = {v}")
+        print(
+            f"  腿参与度：vec_hits 合计={vec_total}，fts_hits 合计={fts_total}"
+            + ("（⚠️ vec 腿全程 0 命中——混合数字等同于 BM25，不可信）" if vec_total == 0 else "")
+        )
         print(f"\n对照 §2-B 标准 recall@10 ≥ 0.80 → {'✅ 达标' if passed else '❌ 未达标'}")
 
         print("\n逐题明细（rank / 命中前 3 文档）：")

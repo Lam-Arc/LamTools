@@ -5,8 +5,6 @@ import struct
 import sqlite3
 from pathlib import Path
 
-_VEC_LOADED = False
-
 
 def connect(db_path: Path) -> sqlite3.Connection:
     """打开 rag.db（自动建表 + 加载 vec0 扩展）。"""
@@ -22,9 +20,8 @@ def connect(db_path: Path) -> sqlite3.Connection:
 
 
 def _load_vec(conn: sqlite3.Connection) -> None:
-    global _VEC_LOADED
-    if _VEC_LOADED:
-        return
+    """每个连接都必须单独加载扩展（sqlite 扩展是连接级状态，
+    不能像此前用全局标志跳过——第二次 connect 会报 no such module: vec0）。"""
     try:
         import sqlite_vec  # noqa: PLC0415
     except ImportError as exc:
@@ -35,7 +32,6 @@ def _load_vec(conn: sqlite3.Connection) -> None:
     conn.enable_load_extension(True)
     sqlite_vec.load(conn)
     conn.enable_load_extension(False)
-    _VEC_LOADED = True
 
 
 def encode_vector(vec: list[float]) -> bytes:

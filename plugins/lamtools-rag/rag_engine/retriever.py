@@ -28,8 +28,13 @@ def search(
     top: int = _DEFAULT_TOP,
     role: str | None = None,
     embedder: Embedder | None = None,
+    stats: dict | None = None,
 ) -> list[dict]:
-    """混合检索。返回命中列表（含 snippet），按 RRF 分数降序。"""
+    """混合检索。返回命中列表（含 snippet），按 RRF 分数降序。
+
+    stats（可选）：传入 dict 时填充 {"fts_hits": n, "vec_hits": n}——
+    评测用，让"vec 腿是否真参与"可见（防静默降级污染指标）。
+    """
     top = max(1, min(int(top), _MAX_TOP))
     embedder = embedder or Embedder(source="none")
     conn = connect(db_path)
@@ -40,6 +45,9 @@ def search(
             vec_hits = _vec(conn, query, source=source, top=top * 3, role=role, embedder=embedder)
     finally:
         conn.close()
+    if isinstance(stats, dict):
+        stats["fts_hits"] = len(fts_hits)
+        stats["vec_hits"] = len(vec_hits)
     merged = _rrf([fts_hits, vec_hits], top=top)
     for hit in merged:
         hit["snippet"] = _snippet(hit.get("context", ""), query)
