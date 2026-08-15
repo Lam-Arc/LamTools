@@ -134,6 +134,8 @@ jobs:
         with:
           files: core/desktop/src-tauri/target/release/bundle/nsis/*-setup.exe
           generate_release_notes: true
+          # 同一 tag 重复构建时更新资产但不重复追加 notes
+          update_release_body: false
           fail_on_unmatched_files: true
 
       - name: Upload installer as build artifact (manual run)
