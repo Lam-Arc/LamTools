@@ -880,16 +880,19 @@ def assemble_core_agent_plugins(
     data_dir: str | Path,
     work_root: str | Path,
     plugin_roots: list[Path | str] | tuple[Path | str, ...] | None,
-    include_user_plugins: bool = False,
+    include_user_plugins: bool = True,
 ) -> dict[str, Any]:
     from lamtools_core.plugins.engine import HookEngine
     from lamtools_core.plugins.hook_config import HookRegistry
     from lamtools_core.plugins.registry import PluginRegistry, PluginStateStore
     from lamtools_core.plugins.trust import HookTrustStore
 
+    # H 组缺口修复（2026-08-16）：空/None 一律回退默认根集合（含用户级根，
+    # 与 plugin.install 默认安装到用户级根的产品语义对齐）；只有非空显式
+    # 列表才按调用方指定。include_user_plugins 保留显式覆盖（向后兼容）。
     roots: list[Path] = (
         [Path(item) for item in plugin_roots]
-        if plugin_roots is not None
+        if plugin_roots
         else default_core_agent_plugin_roots(work_root, include_user_plugins=include_user_plugins)
     )
     # Unified config directory — user-modifiable after packaging
@@ -981,7 +984,7 @@ def assemble_core_agent_plugins(
 def default_core_agent_plugin_roots(
     work_root: str | Path,
     *,
-    include_user_plugins: bool = False,
+    include_user_plugins: bool = True,
 ) -> list[Path]:
     from lamtools_core.plugins.registry import (
         bundled_plugins_dir,
@@ -991,6 +994,8 @@ def default_core_agent_plugin_roots(
     from lamtools_core.config.root import core_plugins_root
 
     roots: list[Path] = []
+    # 用户级根默认纳入扫描（H 组缺口修复：plugin.install 默认装用户级根，
+    # 安装即可见；显式 include_user_plugins=False 的调用方不受影响）。
     if include_user_plugins:
         roots.append(default_user_plugin_root())
     roots.append(default_project_plugin_root(work_root))
@@ -1005,7 +1010,7 @@ def build_core_plugin_operation_catalog(
     data_dir: str | Path,
     work_root: str | Path,
     plugin_roots: list[Path | str] | tuple[Path | str, ...] | None = None,
-    include_user_plugins: bool = False,
+    include_user_plugins: bool = True,
 ):
     from lamtools_core.plugins.hook_config import HookRegistry
     from lamtools_core.plugins.operations import build_plugin_operation_catalog
@@ -1015,9 +1020,11 @@ def build_core_plugin_operation_catalog(
     from lamtools_core.config.root import core_skills_root
     from lamtools_core.composer_commands import default_core_skill_roots
 
+    # H 组缺口修复（2026-08-16）：空/None 一律回退默认根集合（含用户级根，
+    # 与 assemble_core_agent_plugins 同语义）；非空显式列表才按调用方指定。
     roots = (
         [Path(item) for item in plugin_roots]
-        if plugin_roots is not None
+        if plugin_roots
         else default_core_agent_plugin_roots(work_root, include_user_plugins=include_user_plugins)
     )
     # 与 assemble_core_agent_plugins 同款兜底：内置根永远在扫描链路里

@@ -856,6 +856,42 @@ async def test_core_plugin_operation_catalog_uses_user_and_project_roots(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_core_plugin_catalog_default_chain_includes_user_root(tmp_path):
+    """H 组缺口回归（2026-08-16）：默认扫描链必须含用户级插件根——
+    不显式传 include_user_plugins / plugin_roots 时，用户级安装的插件
+    默认可见（与 plugin.install 默认装用户级根的产品语义对齐）。
+
+    isolated_config_root（autouse）把 LAMTOOLS_HOME 钉到临时目录，
+    用户级根解析为 {lam_home}/plugins（green/portable 布局）。
+    """
+    from lamtools_core.config.root import lam_home
+
+    data_dir = tmp_path / "data"
+    work_root = tmp_path / "work"
+    work_root.mkdir()
+    user_plugin = lam_home() / "plugins" / "user-default"
+    user_plugin.mkdir(parents=True)
+    (user_plugin / "plugin.json").write_text('{"name":"user-default","version":"1.0.0"}', encoding="utf-8")
+
+    catalog = build_core_plugin_operation_catalog(data_dir=data_dir, work_root=work_root)
+    listed = await catalog.execute("plugin.list")
+    names = {item["name"] for item in listed.payload["plugins"]}
+    assert "user-default" in names
+
+
+def test_default_core_agent_plugin_roots_includes_user_root(tmp_path):
+    """H 组缺口回归：default_core_agent_plugin_roots 默认链含用户级根；
+    显式 include_user_plugins=False 仍可排除（向后兼容）。"""
+    from lamtools_core.app.base_agent import default_core_agent_plugin_roots
+    from lamtools_core.plugins.registry import default_user_plugin_root
+
+    roots = default_core_agent_plugin_roots(work_root=tmp_path)
+    assert default_user_plugin_root() in roots
+    roots_no_user = default_core_agent_plugin_roots(work_root=tmp_path, include_user_plugins=False)
+    assert default_user_plugin_root() not in roots_no_user
+
+
+@pytest.mark.asyncio
 async def test_core_agent_approval_respond_executes_pending_tool_and_continues(tmp_path):
     work_root = tmp_path / "work"
     work_root.mkdir()
