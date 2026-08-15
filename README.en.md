@@ -1,6 +1,12 @@
+## Support the project
+
+If LamTools helps you, please Star the repo. Meow! 🐱
+
 # LamTools
 
 Local-first AI Agent framework. DeepSeek-compatible, multi-model (OpenAI / Claude / GLM / Xfyun), with a ready-to-run Windows desktop app.
+
+**[简体中文](README.md) | English**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.14-blue.svg)](https://www.python.org/)
@@ -122,7 +128,3 @@ LamTools/
 ## License
 
 MIT, Copyright (c) 2026 Lam (Laaaaaaaam)
-
-## Support the project
-
-If LamTools helps you, a Star would mean a lot.
