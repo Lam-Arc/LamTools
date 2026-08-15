@@ -14,6 +14,9 @@ dependencies = [
     "python-docx>=1.2.0",
     "pypdf>=6.10.0",
     "python-multipart>=0.0.32",
+    # IANA timezone database — Windows Python lacks zoneinfo data, and
+    # runtime/arrange.py resolves local wall-clock via ZoneInfo("Asia/Shanghai").
+    "tzdata>=2025.2; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]
