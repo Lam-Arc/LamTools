@@ -1,3 +1,7 @@
+## 支持项目
+
+如果 LamTools 对你有帮助，欢迎点 Star 支持喵！不点会哈气喵！
+
 # LamTools
 
 Local-first AI Agent framework. 本地优先的 AI Agent 框架，兼容 DeepSeek、OpenAI、Claude 等主流模型。
@@ -123,6 +127,4 @@ LamTools/
 
 MIT，Copyright (c) 2026 Lam (Laaaaaaaam)
 
-## 支持项目
 
-如果 LamTools 对你有帮助，欢迎点 Star 支持。
