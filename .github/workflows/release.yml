@@ -87,6 +87,20 @@ jobs:
             if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
           }
 
+      - name: Smoke-test WebSocket handshake
+        # 捕获「打包缺 websockets/wsproto 库」类回归：REST health 正常但
+        # WebSocket 握手被拒（HTTP 200 而非 101）时，前端会报
+        # "Core App Server socket failed" 且供应商管理全不可用。
+        shell: pwsh
+        run: |
+          python -c "import websockets" 2>$null
+          if ($LASTEXITCODE -ne 0) { pip install websockets }
+          python scripts/verify-backend-ws.py --exe "core/dist/LamCore/LamCore.exe" --port $((Get-Random -Minimum 5300 -Maximum 5900))
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "WebSocket smoke test failed — missing websockets/wsproto in bundle?"
+            exit 1
+          }
+
       # ---------- 3. 后端资源复制进 Tauri ----------
       - name: Copy backend into src-tauri resources
         shell: pwsh
