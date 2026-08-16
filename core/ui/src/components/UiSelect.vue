@@ -180,11 +180,14 @@ onUnmounted(() => {
   padding: 6px;
   display: grid;
   gap: 4px;
+  /* 弹出入场：scale+淡入（popover-in 与项目菜单同源） */
+  animation: popover-in var(--dur-base) var(--ease-out);
+  transform-origin: top;
 }
-
 .ui-select--up .ui-select-menu {
   top: auto;
   bottom: calc(100% + 6px);
+  transform-origin: bottom;
 }
 
 .ui-select-group {
@@ -261,5 +264,11 @@ onUnmounted(() => {
 .ui-select-option.disabled {
   opacity: .45;
   cursor: default;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-select-menu {
+    animation: none;
+  }
 }
 </style>

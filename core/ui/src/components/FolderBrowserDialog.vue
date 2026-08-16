@@ -3,11 +3,12 @@
        its own target (audit 19 S3 — hardcoding ".workspace-shell" silently
        broke rendering in hosts without the shell). -->
   <Teleport :to="teleportTarget">
-    <div
-      v-if="visible"
-      class="fb-dialog-backdrop"
-      @mousedown.self="cancel"
-    >
+    <Transition name="fb-overlay">
+      <div
+        v-if="visible"
+        class="fb-dialog-backdrop"
+        @mousedown.self="cancel"
+      >
       <section
         ref="dialogRef"
         class="fb-dialog"
@@ -78,7 +79,8 @@
           >选择此目录</button>
         </footer>
       </section>
-    </div>
+      </div>
+    </Transition>
   </Teleport>
 </template>
 
@@ -252,6 +254,26 @@ function confirm() {
   color: var(--text);
   box-shadow: var(--shadow-md);
   overflow: hidden;
+  /* 入场：scale+淡入（与弹层统一节奏） */
+  animation: popover-in 160ms var(--ease-out);
+  transform-origin: center;
+}
+
+/* 离场过渡：遮罩淡出 + 对话框轻微下沉（B6） */
+.fb-overlay-enter-active,
+.fb-overlay-leave-active {
+  transition: opacity var(--dur-base) ease;
+}
+.fb-overlay-enter-active .fb-dialog,
+.fb-overlay-leave-active .fb-dialog {
+  transition: transform var(--dur-base) var(--ease-out);
+}
+.fb-overlay-enter-from,
+.fb-overlay-leave-to {
+  opacity: 0;
+}
+.fb-overlay-leave-to .fb-dialog {
+  transform: translateY(4px);
 }
 
 .fb-dialog-header {
@@ -428,5 +450,17 @@ function confirm() {
   .fb-dialog-body { flex-direction: column; padding: 10px 14px; }
   .fb-tree-panel { flex: 1; }
   .fb-dialog-footer { padding: 10px 14px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fb-dialog {
+    animation: none;
+  }
+  .fb-overlay-enter-active,
+  .fb-overlay-leave-active,
+  .fb-overlay-enter-active .fb-dialog,
+  .fb-overlay-leave-active .fb-dialog {
+    transition: none;
+  }
 }
 </style>

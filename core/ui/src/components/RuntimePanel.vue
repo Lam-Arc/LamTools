@@ -32,6 +32,7 @@
             v-for="step in visibleSteps(group)"
             :key="step.id"
             class="runtime-panel__step"
+            :class="{ 'is-running': step.status === 'running' }"
           >
             <div class="runtime-panel__step-title">{{ step.title }}</div>
             <div class="runtime-panel__step-status">{{ formatStatus(step.status) }}</div>
@@ -137,4 +138,22 @@ function formatPanelValue(value: unknown): string {
 .runtime-panel__more { justify-self: start; border: 0; background: transparent; color: color-mix(in srgb, var(--theme-backdrop-text) 58%, transparent); padding: 2px 0; font: inherit; font-size: 12px; cursor: pointer; }
 .runtime-panel__more:hover { color: var(--theme-backdrop-text); }
 .runtime-panel__more:focus-visible { outline: 2px solid color-mix(in srgb, var(--green) 48%, transparent); outline-offset: 3px; }
+
+/* ── 运行态步骤：绿色强调 + 克制呼吸（区别于 spinner 转圈的静态绿）── */
+.runtime-panel__step.is-running .runtime-panel__step-title,
+.runtime-panel__step.is-running .runtime-panel__step-status {
+  color: color-mix(in srgb, var(--green) 74%, var(--theme-backdrop-text) 26%);
+}
+.runtime-panel__step.is-running {
+  animation: runtime-step-breathe 1.6s ease-in-out infinite;
+}
+@keyframes runtime-step-breathe {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .55; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .runtime-panel__step.is-running {
+    animation: none;
+  }
+}
 </style>

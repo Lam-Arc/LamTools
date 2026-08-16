@@ -47,6 +47,15 @@
   /* —— 行式高亮渐隐宽度（选项行左右两侧渐隐，约为行宽 20%）—— */
   --row-fade: 20%;
 
+  /* —— 动效 token（时长 / 缓动；收敛 layout.css 中的硬编码值）—— */
+  --dur-fast: 120ms;            /* 微交互：图标/颜色翻转 */
+  --dur-base: 180ms;            /* 标准过渡：hover/菜单/淡入 */
+  --dur-slow: 280ms;            /* 展开折叠/抽屉滑入 */
+  --dur-morph: 500ms;           /* 布局 morph：主卡/浮动 composer 跟随抽屉 */
+  --ease-out: cubic-bezier(.25, 1, .5, 1);            /* 克制出场 */
+  --ease-inout: cubic-bezier(.2, .8, .2, 1);          /* 抽屉/面板往返 */
+  --ease-emphasized: cubic-bezier(.16, 1, .3, 1);     /* 强调入场 */
+
   --sidebar-width: 300px;
   --right-panel-width: 320px;
 }

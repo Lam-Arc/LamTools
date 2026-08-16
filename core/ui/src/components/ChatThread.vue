@@ -10,6 +10,7 @@
       v-for="msg in messages"
       :key="msg.id"
       v-memo="[msg, assistantLabel, processExpandedIds.has(msg.id), typingMessageIds.has(msg.id), messageActions, turnActive, activeTurnId, checkpointTurnIds]"
+      :motion-enter="!initialMessageIds.has(msg.id)"
       :msg="msg"
         :assistant-label="assistantLabel"
         :process-expanded-ids="processExpandedIds"
@@ -146,6 +147,13 @@ function onRollbackMessage(payload: AssistantActionPayload): void {
 function onEditMessage(payload: EditMessagePayload): void {
   emit('edit-message', payload)
 }
+
+// ── 消息入场动效（motion-enter prop）：初始批次（挂载时已在列表中的消息）不播，
+//    之后新到达的消息（新 turn 的用户消息/助手回复）挂载时淡入。集合在 setup
+//    期捕获、只读，不引入任何流式 tick 响应式状态，v-memo 依赖不变。
+//    注意：不能做成 directive 挂在 MessageView 上——该组件是多根（div + Teleport），
+//    运行时 directive 不生效（Vue warn），动画在 MessageView 内部 onMounted 执行。
+const initialMessageIds = new Set(props.messages.map((m) => m.id))
 </script>
 
 <style>
@@ -284,11 +292,6 @@ function onEditMessage(payload: EditMessagePayload): void {
 .process-step--error .process-step-marker {
   background: var(--red, #e5484d);
   box-shadow: none;
-}
-@keyframes stream-spin { to { transform: rotate(360deg); } }
-@keyframes process-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: .4; }
 }
 @keyframes shallow-thinking-dot {
   0%, 70%, 100% { opacity: .28; }
@@ -494,18 +497,6 @@ function onEditMessage(payload: EditMessagePayload): void {
   overflow: auto;
   max-height: 800px;
   opacity: 1;
-  transition: max-height 0.28s cubic-bezier(0.2, 0.8, 0.2, 1),
-              opacity 0.22s ease,
-              margin 0.28s cubic-bezier(0.2, 0.8, 0.2, 1),
-              padding 0.28s cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-.tool-card-body--closed {
-  max-height: 0;
-  opacity: 0;
-  margin-top: 0;
-  margin-bottom: 0;
-  padding-top: 0;
-  padding-bottom: 0;
 }
 .tool-card-body--row {
   margin: 2px 0 10px 18px;
@@ -800,6 +791,8 @@ function onEditMessage(payload: EditMessagePayload): void {
   border-radius: 0;
   background: transparent;
   box-shadow: none;
+  /* 状态翻转：pending 金边 → 已答复中性边的平滑过渡（B5） */
+  transition: border-left-color var(--dur-base) ease;
 }
 
 .decision-card-head,
@@ -945,6 +938,8 @@ function onEditMessage(payload: EditMessagePayload): void {
   font-weight: 600;
   line-height: 1.45;
   overflow-wrap: anywhere;
+  /* 答复出现时播放入场（B5：pending → answered 的状态翻转动画） */
+  animation: panel-enter 220ms var(--ease-out);
 }
 
 .decision-guide {
@@ -1479,18 +1474,6 @@ function onEditMessage(payload: EditMessagePayload): void {
   font-style: normal;
   text-wrap: pretty;
   opacity: 1;
-  transition: max-height 0.28s cubic-bezier(0.2, 0.8, 0.2, 1),
-              opacity 0.22s ease,
-              margin 0.28s cubic-bezier(0.2, 0.8, 0.2, 1),
-              padding 0.28s cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-.reasoning-body--closed {
-  max-height: 0;
-  opacity: 0;
-  margin-top: 0;
-  margin-bottom: 0;
-  padding-top: 0;
-  padding-bottom: 0;
 }
 .reasoning-body .process-step-detail {
   display: block;

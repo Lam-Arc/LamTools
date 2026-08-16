@@ -125,8 +125,8 @@
   display: flex;
   flex-direction: column;
   transition:
-    transform .28s cubic-bezier(.2,.8,.2,1),
-    opacity .18s ease;
+    transform var(--dur-slow) var(--ease-inout),
+    opacity var(--dur-base) ease;
 }
 
 .drawer-left {
@@ -145,6 +145,8 @@
 .drawer-left:not(.open) {
   opacity: 0;
   pointer-events: none;
+  /* 桌面端关闭态：轻微侧滑 + 淡出（与移动端整幅滑出区分） */
+  transform: translateX(-10px);
 }
 
 .drawer-right {
@@ -156,11 +158,11 @@
   pointer-events: auto;
   transform: none;
 }
-.drawer-right:not(.open) { opacity: 0; pointer-events: none; }
+.drawer-right:not(.open) { opacity: 0; pointer-events: none; transform: translateX(10px); }
 .drawer-right.open { transform: none; }
 
 /* Force drawers visible when stage is open */
-.workspace-shell.stage-open .drawer-right { opacity: 1; pointer-events: auto; }
+.workspace-shell.stage-open .drawer-right { opacity: 1; pointer-events: auto; transform: none; }
 
 .drawer-head {
   flex: 0 0 auto;
@@ -340,11 +342,11 @@
   flex-direction: column;
   box-shadow: var(--shadow-sm);
   transition:
-    left .5s cubic-bezier(.2,.8,.2,1),
-    right .5s cubic-bezier(.2,.8,.2,1),
-    top .5s cubic-bezier(.2,.8,.2,1),
-    height .5s cubic-bezier(.2,.8,.2,1),
-    padding-bottom .3s ease;
+    left var(--dur-morph) var(--ease-inout),
+    right var(--dur-morph) var(--ease-inout),
+    top var(--dur-morph) var(--ease-inout),
+    height var(--dur-morph) var(--ease-inout),
+    padding-bottom var(--dur-slow) ease;
 }
 
 .workspace-shell:has(.core-goal-area) .workspace-main {
@@ -405,8 +407,8 @@
   box-shadow: var(--shadow-sm);
   overflow: hidden;
   transition:
-    left .5s cubic-bezier(.2,.8,.2,1),
-    width .5s cubic-bezier(.2,.8,.2,1);
+    left var(--dur-morph) var(--ease-inout),
+    width var(--dur-morph) var(--ease-inout);
 }
 .composer-main-card {
   position: relative;
@@ -750,6 +752,8 @@
   gap: 14px;
   min-width: 0;
   min-height: 360px;
+  /* 设置 section 切换：v-if 重挂载时播放入场（与 SettingsShell 的 contentEnter 同节奏） */
+  animation: panel-enter 260ms var(--ease-emphasized);
 }
 
 .settings-notice {
@@ -1499,6 +1503,9 @@
   border-radius: var(--radius);
   background: var(--theme-backdrop-background);
   box-shadow: var(--shadow-md);
+  /* 弹出入场：scale+淡入（popover-in 与 UiSelect 菜单同源） */
+  animation: popover-in var(--dur-base) var(--ease-out);
+  transform-origin: top right;
 }
 .project-menu button {
   width: 100%;
@@ -1693,12 +1700,11 @@
 .conversation .status.waiting {
   background: color-mix(in srgb, var(--theme-backdrop-text) 30%, var(--orange) 70%);
   box-shadow: none;
+  /* waiting = 呼吸（区别于 running 的转圈）；status-breathe 唯一消费者 */
+  animation: status-breathe 1.6s ease-in-out infinite;
 }
 .conversation .status.idle {
   background: color-mix(in srgb, var(--theme-backdrop-text) 54%, transparent);
-}
-@keyframes stream-spin {
-  to { transform: rotate(360deg); }
 }
 @keyframes status-breathe {
   0%, 100% {
@@ -2464,7 +2470,7 @@
 }
 .core-toast-enter-active,
 .core-toast-leave-active {
-  transition: opacity 0.18s ease, transform 0.18s ease;
+  transition: opacity var(--dur-base) ease, transform var(--dur-base) ease;
 }
 .core-toast-enter-from,
 .core-toast-leave-to {
@@ -2509,8 +2515,8 @@
     opacity: 0;
     pointer-events: none;
   }
-  .drawer-left { transform: translateX(-102%); }
-  .drawer-right { display: flex; transform: translateX(102%); }
+  .drawer-left:not(.open) { transform: translateX(-102%); }
+  .drawer-right:not(.open) { transform: translateX(102%); }
   .drawer-left.open,
   .drawer-right.open {
     transform: translateX(0);
@@ -2833,10 +2839,6 @@
 @keyframes stream-caret {
   50% { opacity: 0; }
 }
-@keyframes shallow-thinking-dot {
-  0%, 70%, 100% { opacity: .28; }
-  35% { opacity: 1; }
-}
 @media (prefers-reduced-motion: reduce) {
   .part-text-content--streaming::after {
     animation: none;
@@ -3009,18 +3011,6 @@
   font-style: normal;
   text-wrap: pretty;
   opacity: 1;
-  transition: max-height 0.28s cubic-bezier(0.2, 0.8, 0.2, 1),
-              opacity 0.22s ease,
-              margin 0.28s cubic-bezier(0.2, 0.8, 0.2, 1),
-              padding 0.28s cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-.thread .reasoning-body--closed {
-  max-height: 0;
-  opacity: 0;
-  margin-top: 0;
-  margin-bottom: 0;
-  padding-top: 0;
-  padding-bottom: 0;
 }
 .thread .reasoning-body .process-step-detail {
   display: block;
@@ -3154,21 +3144,33 @@
   50% { opacity: .45; }
 }
 
+/* ── Motion: CSS 入场 keyframes（GSAP 离散动效之外的轻量入场统一收敛在此）── */
+@keyframes stream-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes popover-in {
+  from { opacity: 0; transform: translateY(-3px) scale(.98); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes panel-enter {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .workspace-drawer,
   .workspace-main,
   .floating-composer {
     transition-duration: .5s !important;
   }
-  .reasoning-body,
-  .tool-card-body {
-    transition: none !important;
+  .conversation .status.waiting {
+    animation: none;
   }
-  .reasoning-body--closed,
-  .tool-card-body--closed {
-    max-height: none;
-    opacity: 1;
+  .project-menu,
+  .settings-panel {
+    animation: none;
   }
+  /* 折叠展开由 GSAP 驱动（motion/expandPanel.ts），reduced-motion 时直切无动画 */
 }
 
 /* Old message summary controls are intentionally hidden. */
@@ -3203,4 +3205,103 @@
     animation: none;
     opacity: .55;
   }
+}
+
+/* ── Settings overlay shell（CoreSettings / PluginsShell 共用骨架）── */
+.settings-overlay {
+  position: fixed;
+  inset: var(--titlebar-offset, 36px) 0 0 0;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+}
+
+.settings-card {
+  position: relative;
+  width: min(960px, calc(100vw - 48px));
+  max-height: calc(100dvh - var(--titlebar-offset, 36px) - 48px);
+  border: 1px solid color-mix(in srgb, var(--settings-main-text, #f2efeb) 12%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--settings-card-background, var(--theme-main-background, #111111));
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Floating editor popover（CoreSettings / CorePluginsEditor 共用）── */
+.editor-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-popover);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  padding: 24px;
+}
+.editor-popover {
+  width: min(560px, 100%);
+  max-height: calc(100% - 48px);
+  overflow-y: auto;
+  border-radius: var(--radius);
+  background: var(--settings-card-background, var(--theme-main-background, #111111));
+  border: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 14%, transparent);
+  box-shadow: var(--shadow-md);
+  padding: 18px 20px;
+  color: var(--settings-card-text, var(--settings-main-text, var(--text)));
+  /* 弹层在 .settings-main 的 --muted 重映射作用域之外（layout.css），
+     自行跟随主题：亮色分支注入 --settings-muted，暗色 fallback 与全局一致 */
+  --muted: var(--settings-muted, #a7a29b);
+}
+.editor-popover-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+.editor-popover-head h3 {
+  margin: 0;
+  font-size: 15px;
+}
+.editor-popover-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 0;
+}
+.editor-popover-close:hover {
+  background: color-mix(in srgb, var(--settings-main-text, #fff) 10%, transparent);
+}
+
+/* ── 启用开关图标按钮（ToggleRight/ToggleLeft，语义化开关）── */
+.text-btn.is-on {
+  color: var(--green);
+}
+
+.toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 6px;
+  color: var(--muted);
+}
+
+.toggle-btn.is-on {
+  color: var(--green);
 }

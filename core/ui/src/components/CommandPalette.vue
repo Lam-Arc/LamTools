@@ -72,6 +72,9 @@ function commandLabel(command: CoreCommandCatalogItem): string {
   background: var(--theme-composer-background, #111);
   box-shadow: var(--shadow-md);
   z-index: 20;
+  /* 弹出入场：scale+淡入（popover-in 与项目菜单同源，向上弹出） */
+  animation: popover-in var(--dur-base) var(--ease-out);
+  transform-origin: bottom;
 }
 
 .command-list {
@@ -169,6 +172,12 @@ function commandLabel(command: CoreCommandCatalogItem): string {
 
   .command-footer {
     gap: 8px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .command-palette {
+    animation: none;
   }
 }
 </style>

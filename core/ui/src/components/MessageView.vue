@@ -1,7 +1,7 @@
 ﻿<template>
   <!-- inheritAttrs: false — 模板根节点是 div + Teleport 双根，自动继承会把 class/attrs 丢掉；
        显式把 $attrs 绑到消息根节点，保证 class（如 sub-line-chat）能落到 DOM 上 -->
-  <div class="message-view" v-bind="$attrs">
+  <div ref="rootEl" class="message-view" v-bind="$attrs">
       <!-- Per-message override: product provides full rendering -->
       <slot
         v-if="$slots['message-product']"
@@ -180,11 +180,13 @@
                       <span v-beam class="process-step-title">{{ reasoningTitle(part.status) }}</span>
                       <span v-if="reasoningDuration(part, true)" class="reasoning-duration">{{ reasoningDuration(part, true) }}</span>
                     </button>
+                    <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
                     <div v-if="isPartExpanded(part, true)" v-auto-follow-scroll="part.content ?? ''" class="reasoning-body">
                       <slot name="reasoning-content" :content="part.content ?? ''" :live="true">
                         <MarkdownRenderer class="process-step-detail part-text-content--streaming" :content="part.content ?? ''" :streaming="true" />
                       </slot>
                     </div>
+                    </Transition>
                   </div>
 
                   <div
@@ -261,6 +263,7 @@
                           <span v-if="shouldShowToolStatusSuffix(part)" class="tool-row-status">{{ toolStatusLabel(part) }}</span>
                         </template>
                       </button>
+                      <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
                       <div
                         v-if="shouldShowToolBody(part, true)"
                         class="tool-card-body"
@@ -320,6 +323,7 @@
                         </div>
                         <pre v-else-if="!displayToolInputPreview(part) && readableProcessDetail(part)" v-auto-follow-scroll="readableProcessDetail(part)" class="tool-output">{{ readableProcessDetail(part) }}</pre>
                       </div>
+                      </Transition>
                     </div>
 
                     <div v-else-if="isModelRetryPart(part)" class="model-retry-bar">
@@ -358,6 +362,7 @@
                         <span v-if="groupHasError(group)" class="process-step-marker process-step-marker--error" />
                         <span v-beam class="process-group-text">{{ group.summary }}</span>
                       </button>
+                      <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
                       <div v-if="isGroupExpanded(processGroupId(group))" class="process-group-body">
                         <div
                           v-for="part in group.parts"
@@ -371,11 +376,13 @@
                               <span v-beam class="process-step-title">{{ reasoningTitle(part.status) }}</span>
                               <span v-if="reasoningDuration(part, true)" class="reasoning-duration">{{ reasoningDuration(part, true) }}</span>
                             </button>
+                            <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
                             <div v-if="isPartExpanded(part, true)" v-auto-follow-scroll="part.content ?? ''" class="reasoning-body">
                               <slot name="reasoning-content" :content="part.content ?? ''" :live="true">
                                 <MarkdownRenderer class="process-step-detail part-text-content--streaming" :content="part.content ?? ''" :streaming="true" />
                               </slot>
                             </div>
+                            </Transition>
                           </div>
                           <div
                             v-else-if="(part.partType === 'tool_call' || part.partType === 'tool_result') && !isControlTool(part)"
@@ -400,6 +407,7 @@
                                 <span v-if="shouldShowToolStatusSuffix(part)" class="tool-row-status" :class="{ 'tool-row-status--retry': toolRetryLabel(part) }">{{ toolRetryLabel(part) || toolStatusLabel(part) }}</span>
                               </template>
                             </button>
+                            <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
                             <div
                               v-if="shouldShowToolBody(part, true)"
                               class="tool-card-body"
@@ -459,9 +467,11 @@
                               </div>
                               <pre v-else-if="!displayToolInputPreview(part) && readableProcessDetail(part)" v-auto-follow-scroll="readableProcessDetail(part)" class="tool-output">{{ readableProcessDetail(part) }}</pre>
                             </div>
+                            </Transition>
                           </div>
                         </div>
                       </div>
+                      </Transition>
                     </div>
                   </template>
                 </template>
@@ -496,6 +506,7 @@
                           <span v-if="groupHasError(group)" class="process-step-marker process-step-marker--error" />
                           <span v-beam class="process-group-text">{{ group.summary }}</span>
                         </button>
+                        <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
                         <div v-if="isGroupExpanded(processGroupId(group))" class="process-group-body">
                           <div
                             v-for="part in group.parts"
@@ -509,11 +520,13 @@
                                 <span v-beam class="process-step-title">{{ reasoningTitle(part.status) }}</span>
                                 <span v-if="reasoningDuration(part)" class="reasoning-duration">{{ reasoningDuration(part) }}</span>
                               </button>
+                              <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
                               <div v-if="isPartExpanded(part, false)" class="reasoning-body">
                                 <slot name="reasoning-content" :content="part.content ?? ''" :live="false">
                                   <MarkdownRenderer class="process-step-detail" :content="part.content ?? ''" />
                                 </slot>
                               </div>
+                              </Transition>
                             </div>
                             <div
                               v-else-if="(part.partType === 'tool_call' || part.partType === 'tool_result') && !isControlTool(part)"
@@ -537,6 +550,7 @@
                                   <span v-if="shouldShowToolStatusSuffix(part)" class="tool-row-status">{{ toolStatusLabel(part) }}</span>
                                 </template>
                               </button>
+                              <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
                               <div v-if="shouldShowToolBody(part, false)" class="tool-card-body" :class="{ 'tool-card-body--row': !isCommandTool(part) }">
                                 <pre v-if="displayToolError(part)" class="tool-output tool-output--error">{{ displayToolError(part) }}</pre>
                                 <div v-else-if="displayToolResult(part) && isFileTool(part)" class="diff-block" :class="[fileDiffClass(part), { 'diff-block--wrap': isToolWrapEnabled(part.id) }]">
@@ -592,9 +606,11 @@
                                 </div>
                                 <pre v-else-if="!displayToolInputPreview(part) && readableProcessDetail(part)" class="tool-output">{{ readableProcessDetail(part) }}</pre>
                               </div>
+                              </Transition>
                             </div>
                           </div>
                         </div>
+                        </Transition>
                       </div>
                     </template>
 
@@ -622,6 +638,7 @@
                             <span v-if="shouldShowToolStatusSuffix(group.part)" class="tool-row-status">{{ toolStatusLabel(group.part) }}</span>
                           </template>
                         </button>
+                        <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
                         <div
                           v-if="shouldShowToolBody(group.part, false)"
                           class="tool-card-body"
@@ -681,6 +698,7 @@
                           </div>
                           <pre v-else-if="!displayToolInputPreview(group.part) && readableProcessDetail(group.part)" class="tool-output">{{ readableProcessDetail(group.part) }}</pre>
                         </div>
+                        </Transition>
                       </div>
 
                       <div
@@ -696,11 +714,13 @@
                           <span v-beam class="process-step-title">{{ reasoningTitle(group.part.status) }}</span>
                           <span v-if="reasoningDuration(group.part)" class="reasoning-duration">{{ reasoningDuration(group.part) }}</span>
                         </button>
+                        <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
                         <div v-if="isPartExpanded(group.part, false)" class="reasoning-body">
                           <slot name="reasoning-content" :content="group.part.content ?? ''" :live="false">
                             <MarkdownRenderer class="process-step-detail" :content="group.part.content ?? ''" />
                           </slot>
                         </div>
+                        </Transition>
                       </div>
 
                       <div
@@ -778,6 +798,7 @@
                         <div v-if="agentDeliveryMeta(group.part).length > 0" class="sub-line-delivery-meta">
                           <span v-for="item in agentDeliveryMeta(group.part)" :key="item">{{ item }}</span>
                         </div>
+                        <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
                         <div v-if="isPartExpanded(group.part, false)" class="sub-line-body">
                           <MessageView
                             v-for="subMsg in agentSubMessages(group.part)" :key="subMsg.id"
@@ -808,6 +829,7 @@
                             </template>
                           </MessageView>
                         </div>
+                        </Transition>
                       </div>
 
                       <div
@@ -883,10 +905,12 @@
                           <span v-beam class="process-step-title">{{ processTitleWithState(group.part) }}</span>
                           <span v-if="readableProcessDetail(group.part)" class="process-step-detail">{{ readableProcessDetail(group.part) }}</span>
                         </template>
+                        <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
                         <div v-if="hasExpandableProcessDetail(group.part) && isPartExpanded(group.part, false)" class="process-detail-panel">
                           <button type="button" class="process-detail-copy" @click.stop="copyProcessDetail(group.part)">复制</button>
                           <pre>{{ fullProcessDetail(group.part) }}</pre>
                         </div>
+                        </Transition>
                       </div>
                     </template>
                   </template>
@@ -949,11 +973,13 @@
                     <span v-if="group.part.status === 'error'" class="process-step-marker process-step-marker--error" />
                     <span v-beam class="process-step-title">{{ reasoningTitle(group.part.status) }}</span>
                   </button>
+                  <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
                   <div v-if="isPartExpanded(group.part, true)" v-auto-follow-scroll="group.part.content ?? ''" class="reasoning-body">
                     <slot name="reasoning-content" :content="group.part.content ?? ''" :live="true">
                       <MarkdownRenderer class="process-step-detail" :content="group.part.content ?? ''" />
                     </slot>
                   </div>
+                  </Transition>
                 </div>
 
                 <!-- tool: compact during live -->
@@ -971,10 +997,12 @@
                     <span v-beam class="process-step-title tool-row-summary">{{ processTitleWithState(group.part) }}</span>
                     <span v-if="shouldShowToolStatusSuffix(group.part)" class="tool-row-status" :class="{ 'tool-row-status--retry': toolRetryLabel(group.part) }">{{ toolRetryLabel(group.part) || toolStatusLabel(group.part) }}</span>
                   </button>
+                  <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
                   <div v-if="shouldShowToolBody(group.part, true)" class="tool-card-body" :class="{ 'tool-card-body--row': !isCommandTool(group.part) }">
                     <pre v-if="displayToolError(group.part)" class="tool-output tool-output--error">{{ displayToolError(group.part) }}</pre>
                     <pre v-else-if="displayToolResult(group.part)" class="tool-output-content">{{ displayToolResult(group.part) }}</pre>
                   </div>
+                  </Transition>
                 </div>
 
                 <!-- process-group: batched reasoning + tools during live -->
@@ -989,6 +1017,7 @@
                       <span v-if="groupHasError(group)" class="process-step-marker process-step-marker--error" />
                       <span v-beam class="process-group-text">{{ group.summary }}</span>
                     </button>
+                    <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
                     <div v-if="isGroupExpanded(processGroupId(group))" class="process-group-body">
                       <div
                         v-for="part in group.parts"
@@ -1001,11 +1030,13 @@
                             <span v-if="part.status === 'error'" class="process-step-marker process-step-marker--error" />
                             <span v-beam class="process-step-title">{{ reasoningTitle(part.status) }}</span>
                           </button>
+                          <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
                           <div v-if="isPartExpanded(part, true)" v-auto-follow-scroll="part.content ?? ''" class="reasoning-body">
                             <slot name="reasoning-content" :content="part.content ?? ''" :live="true">
                               <MarkdownRenderer class="process-step-detail" :content="part.content ?? ''" />
                             </slot>
                           </div>
+                          </Transition>
                         </div>
                         <div
                           v-else-if="(part.partType === 'tool_call' || part.partType === 'tool_result') && !isControlTool(part)"
@@ -1021,13 +1052,16 @@
                             <span v-beam class="process-step-title tool-row-summary">{{ processTitleWithState(part) }}</span>
                             <span v-if="shouldShowToolStatusSuffix(part)" class="tool-row-status" :class="{ 'tool-row-status--retry': toolRetryLabel(part) }">{{ toolRetryLabel(part) || toolStatusLabel(part) }}</span>
                           </button>
+                          <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
                           <div v-if="shouldShowToolBody(part, true)" class="tool-card-body" :class="{ 'tool-card-body--row': !isCommandTool(part) }">
                             <pre v-if="displayToolError(part)" class="tool-output tool-output--error">{{ displayToolError(part) }}</pre>
                             <pre v-else-if="displayToolResult(part)" class="tool-output-content">{{ displayToolResult(part) }}</pre>
                           </div>
+                          </Transition>
                         </div>
                       </div>
                     </div>
+                    </Transition>
                   </div>
                 </template>
 
@@ -1045,6 +1079,59 @@
                       :class="{ 'model-retry-bar__segment--filled': i <= modelRetryCounts(group.part).attempt }"
                     />
                   </div>
+                </div>
+
+                <!-- decision: approval request during live（非 timeline live 分支——
+                     turn 挂起（decision=wait）时消息保持 live 走此分支，审批卡必须直接渲染，
+                     否则用户看不到问题、无法回答（ask-user 卡不显示根因）） -->
+                <div
+                  v-else-if="group.kind === 'process' && group.part.partType === 'decision'"
+                  class="decision-card"
+                  :class="'decision-card--' + group.part.status"
+                >
+                  <div class="decision-card-head">
+                    <span v-if="group.part.status === 'error'" class="process-step-marker process-step-marker--error" />
+                    <span class="decision-card-title">{{ decisionTitle(group.part) }}</span>
+                    <span class="decision-card-status">{{ decisionStatusLabel(group.part) }}</span>
+                  </div>
+                  <p v-if="decisionDetail(group.part)" class="decision-card-detail">{{ decisionDetail(group.part) }}</p>
+                  <p v-if="decisionResponseText(group.part)" class="decision-card-decision">{{ decisionResponseText(group.part) }}</p>
+                  <div v-if="group.part.status === 'pending' && decisionOptions(group.part).length > 0" class="decision-options">
+                    <div v-for="option in decisionOptions(group.part)" :key="option.id" class="decision-option-group">
+                      <button
+                        type="button"
+                        class="decision-option"
+                        :class="{
+                          'decision-option--approve': option.id === 'approve',
+                          'decision-option--deny': option.id === 'deny',
+                        }"
+                        @click="emit('decision-select', { partId: group.part.id, option, response: decisionOptionResponse(group.part, option) })"
+                      >
+                        <span class="decision-option-label">{{ option.label }}</span>
+                      </button>
+                      <span v-if="option.description" class="decision-option-desc">{{ option.description }}</span>
+                    </div>
+                  </div>
+                  <details v-if="canGuideDecision(group.part)" class="decision-guide">
+                    <summary class="decision-guide-toggle">其他处理方式</summary>
+                    <div class="decision-guide-fields">
+                      <textarea
+                        class="decision-guide-input"
+                        :value="decisionGuideDraft(group.part)"
+                        placeholder="说明希望如何处理…"
+                        rows="2"
+                        @input="updateDecisionGuideDraft(group.part, $event)"
+                      />
+                      <button
+                        type="button"
+                        class="decision-guide-submit"
+                        :disabled="!decisionGuideDraft(group.part).trim()"
+                        @click="submitDecisionGuide(group.part)"
+                      >
+                        提交
+                      </button>
+                    </div>
+                  </details>
                 </div>
               </template>
             </div>
@@ -1065,6 +1152,7 @@
                       <span v-if="groupHasError(group)" class="process-step-marker process-step-marker--error" />
                       <span v-beam class="process-group-text">{{ group.summary }}</span>
                     </button>
+                    <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
                     <div v-if="isGroupExpanded(processGroupId(group))" class="process-group-body">
                       <div
                         v-for="part in group.parts"
@@ -1078,11 +1166,13 @@
                             <span v-beam class="process-step-title">{{ reasoningTitle(part.status) }}</span>
                             <span v-if="reasoningDuration(part)" class="reasoning-duration">{{ reasoningDuration(part) }}</span>
                           </button>
+                          <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
                           <div v-if="isPartExpanded(part, false)" class="reasoning-body">
                             <slot name="reasoning-content" :content="part.content ?? ''" :live="false">
                               <MarkdownRenderer class="process-step-detail" :content="part.content ?? ''" />
                             </slot>
                           </div>
+                          </Transition>
                         </div>
                         <div
                           v-else-if="(part.partType === 'tool_call' || part.partType === 'tool_result') && !isControlTool(part)"
@@ -1106,6 +1196,7 @@
                               <span v-if="shouldShowToolStatusSuffix(part)" class="tool-row-status">{{ toolStatusLabel(part) }}</span>
                             </template>
                           </button>
+                          <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
                           <div v-if="shouldShowToolBody(part, false)" class="tool-card-body" :class="{ 'tool-card-body--row': !isCommandTool(part) }">
                             <pre v-if="displayToolError(part)" class="tool-output tool-output--error">{{ displayToolError(part) }}</pre>
                             <div v-else-if="displayToolResult(part) && isFileTool(part)" class="diff-block" :class="[fileDiffClass(part), { 'diff-block--wrap': isToolWrapEnabled(part.id) }]">
@@ -1161,9 +1252,11 @@
                             </div>
                             <pre v-else-if="!displayToolInputPreview(part) && readableProcessDetail(part)" class="tool-output">{{ readableProcessDetail(part) }}</pre>
                           </div>
+                          </Transition>
                         </div>
                       </div>
                     </div>
+                    </Transition>
                   </div>
                 </template>
 
@@ -1181,11 +1274,13 @@
                       <span v-beam class="process-step-title">{{ reasoningTitle(group.part.status) }}</span>
                       <span v-if="reasoningDuration(group.part)" class="reasoning-duration">{{ reasoningDuration(group.part) }}</span>
                     </button>
+                    <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
                     <div v-if="isPartExpanded(group.part, false)" class="reasoning-body">
                       <slot name="reasoning-content" :content="group.part.content ?? ''" :live="false">
                         <MarkdownRenderer class="process-step-detail" :content="group.part.content ?? ''" />
                       </slot>
                     </div>
+                    </Transition>
                   </div>
 
                   <div
@@ -1212,6 +1307,7 @@
                       </template>
                     </button>
                     <span v-if="!hasToolDisplay(group.part) && !group.part.toolArgs && readableProcessDetail(group.part)" class="process-step-detail">{{ readableProcessDetail(group.part) }}</span>
+                    <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
                     <div
                       v-if="shouldShowToolBody(group.part, false)"
                       class="tool-card-body"
@@ -1273,6 +1369,7 @@
                       </div>
                       <pre v-else-if="readableProcessDetail(group.part)" class="tool-output">{{ readableProcessDetail(group.part) }}</pre>
                     </div>
+                    </Transition>
                   </div>
 
                   <div
@@ -1294,10 +1391,12 @@
                       <span class="process-step-title">{{ group.part.label || '出错' }}</span>
                       <span class="process-step-detail">{{ processDetailPreview(group.part) }}</span>
                     </button>
+                    <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
                     <div v-if="isPartExpanded(group.part, false)" class="process-detail-panel process-detail-panel--error">
                       <button type="button" class="process-detail-copy" @click.stop="copyProcessDetail(group.part)">复制</button>
                       <pre>{{ fullProcessDetail(group.part) }}</pre>
                     </div>
+                    </Transition>
                   </div>
 
                   <div v-else-if="isModelRetryPart(group.part)" class="model-retry-bar">
@@ -1328,10 +1427,12 @@
                       <span class="process-step-title">{{ group.part.label || '状态' }}</span>
                       <span class="process-step-detail">{{ group.part.detail || group.part.content }}</span>
                     </template>
+                    <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
                     <div v-if="hasExpandableProcessDetail(group.part) && isPartExpanded(group.part, false)" class="process-detail-panel">
                       <button type="button" class="process-detail-copy" @click.stop="copyProcessDetail(group.part)">复制</button>
                       <pre>{{ fullProcessDetail(group.part) }}</pre>
                     </div>
+                    </Transition>
                   </div>
 
                   <div
@@ -1401,6 +1502,7 @@
                         <div v-if="agentDeliveryMeta(group.part).length > 0" class="sub-line-delivery-meta">
                           <span v-for="item in agentDeliveryMeta(group.part)" :key="item">{{ item }}</span>
                         </div>
+                        <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
                         <div v-if="isPartExpanded(group.part, false)" class="sub-line-body">
                           <MessageView
                             v-for="subMsg in agentSubMessages(group.part)" :key="subMsg.id"
@@ -1431,6 +1533,7 @@
                             </template>
                           </MessageView>
                         </div>
+                        </Transition>
                       </div>
 
                   <div
@@ -1578,7 +1681,8 @@
 
 <script setup lang="ts">
 import type { CoreAttachment, CoreMessage, MessagePart, MessagePartStatus, ToolArtifact } from '../types'
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { gsap } from 'gsap'
 import { Check, Copy, GitFork, Hourglass, Info, Pencil, Undo2, X, type LucideIcon } from 'lucide-vue-next'
 import { assistantSegmentTurnId } from '../appServer'
 import AutoTextarea from './AutoTextarea.vue'
@@ -1586,6 +1690,7 @@ import MarkdownRenderer from './MarkdownRenderer.vue'
 import TypewriterText from './TypewriterText.vue'
 import MessageView from './MessageView.vue'
 import { autoFollowScrollDirective as vAutoFollowScroll } from '../directives/autoFollowScroll'
+import { panelEnter, panelLeave } from '../motion/expandPanel'
 
 /**
  * 运行态标题流光（工具行 / sub-agent 行通用）：v-beam 挂在标题元素上，
@@ -1685,6 +1790,9 @@ const props = withDefaults(
     turnActive?: boolean
     /** 有 checkpoint 的 turn ids：回退/分叉/编辑按钮依赖 checkpoint，无节点时不显示 */
     checkpointTurnIds?: Set<string>
+    /** 挂载时播放入场动效（新消息淡入；初始批次/历史加载不播）。
+        注意不能做成 directive：本组件多根（div + Teleport），运行时 directive 不生效。 */
+    motionEnter?: boolean
   }>(),
   {
     assistantLabel: 'Assistant',
@@ -1697,6 +1805,7 @@ const props = withDefaults(
     activeTurnId: null,
     turnActive: false,
     checkpointTurnIds: () => new Set(),
+    motionEnter: false,
   },
 )
 
@@ -1707,6 +1816,33 @@ const emit = defineEmits<{
   'rollback-message': [payload: AssistantActionPayload]
   'edit-message': [payload: EditMessagePayload]
 }>()
+
+// ── 消息入场动效（motionEnter prop，ChatThread 传入）：新消息挂载时淡入。
+//    mount-only + transform/opacity + 局部元素，不写响应式状态、不动兄弟节点
+//    （对齐 perf 文档红线；reduced-motion / 无 rAF 环境直切）。
+const rootEl = ref<HTMLElement | null>(null)
+
+onMounted(() => {
+  if (!props.motionEnter || !rootEl.value) return
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+  if (typeof requestAnimationFrame !== 'function') return
+  gsap.fromTo(
+    rootEl.value,
+    { autoAlpha: 0, y: 8 },
+    {
+      autoAlpha: 1,
+      y: 0,
+      duration: 0.22,
+      ease: 'power2.out',
+      overwrite: true,
+      clearProps: 'autoAlpha,transform',
+    },
+  )
+})
+
+onBeforeUnmount(() => {
+  if (rootEl.value) gsap.killTweensOf(rootEl.value)
+})
 
 interface AssistantActionPayload {
   turnId: string

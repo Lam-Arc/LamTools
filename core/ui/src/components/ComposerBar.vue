@@ -11,6 +11,13 @@
       <div class="composer-ambient" :class="{ 'composer-ambient--on': active }" aria-hidden="true">
         <span v-for="i in 7" :key="i" class="composer-particle" :style="{ '--i': i - 1 }" />
       </div>
+      <!-- 运行态顶部流光线条（demo-composer-line-gsap 原型落地）：active 时流动，inactive 淡出 -->
+      <span
+        ref="glowEl"
+        class="composer-glow"
+        :class="{ 'composer-glow--on': active }"
+        aria-hidden="true"
+      />
       <slot name="preamble" />
       <div class="composer-main-card">
         <slot name="status" />
@@ -55,9 +62,12 @@
  * Renders a floating or embedded textarea with toolbar and send button.
  * Drag-and-drop support via slots and events.
  */
-import { ref } from 'vue'
+import { onBeforeUnmount, ref, watch } from 'vue'
+import { startFlowLine, stopFlowLine } from '../motion/flowLine'
 
-withDefaults(defineProps<{
+const REDUCED_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)')
+
+const props = withDefaults(defineProps<{
   modelValue?: string
   placeholder?: string
   textareaAriaLabel?: string
@@ -90,6 +100,23 @@ const emit = defineEmits<{
 }>()
 
 const dragOver = ref(false)
+const glowEl = ref<HTMLElement | null>(null)
+
+// ── 运行态流光线条：active 时启动 20fps 流动（WebView2 需内联样式写入），
+//    inactive / reduced-motion / 卸载时停止并清理（模块级共享 rAF，见 motion/flowLine.ts）
+watch(
+  () => props.active,
+  (on) => {
+    if (!glowEl.value) return
+    if (on && !REDUCED_MOTION.matches) startFlowLine(glowEl.value)
+    else stopFlowLine(glowEl.value)
+  },
+  { immediate: true, flush: 'post' },
+)
+
+onBeforeUnmount(() => {
+  if (glowEl.value) stopFlowLine(glowEl.value)
+})
 
 // IME guard: the composition-confirm Enter must not submit the message
 // (audit 19 S3 — the default textarea previously emitted submit on any
@@ -144,9 +171,38 @@ function onEnterKey(event: KeyboardEvent) {
   0%, 100% { transform: translateY(-50px); }
   50% { transform: translateY(50px); }
 }
+
+/* ── 运行态顶部流光线条：active 时亮起，渐变随 background-position 流动
+   （flowLine.ts 每帧写内联样式；inactive 淡出）── */
+.composer-glow {
+  position: absolute;
+  top: -1px;
+  left: 10%;
+  right: 10%;
+  height: 2px;
+  border-radius: 0 0 999px 999px;
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in srgb, var(--green) 62%, transparent) 35%,
+    color-mix(in srgb, var(--blue) 55%, transparent) 65%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  opacity: 0;
+  transition: opacity .3s ease;
+  pointer-events: none;
+}
+.composer-glow--on {
+  opacity: .85;
+}
 @media (prefers-reduced-motion: reduce) {
   .composer-particle {
     animation: none;
+  }
+  .composer-glow {
+    opacity: 0;
+    transition: none;
   }
 }
 

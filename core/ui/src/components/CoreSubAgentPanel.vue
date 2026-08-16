@@ -172,14 +172,26 @@ function statusLabel(status: MessagePartStatus): string {
   return '已完成'
 }
 
+let tooltipScrollRaf = 0
+
+function onWindowScroll() {
+  // capture 捕获所有容器滚动 + passive + rAF 合并（原实现非 passive 每滚动事件同步跑 getBoundingClientRect）
+  if (tooltipScrollRaf) return
+  tooltipScrollRaf = requestAnimationFrame(() => {
+    tooltipScrollRaf = 0
+    updateTooltipPosition()
+  })
+}
+
 onMounted(() => {
   window.addEventListener('resize', updateTooltipPosition)
-  window.addEventListener('scroll', updateTooltipPosition, true)
+  window.addEventListener('scroll', onWindowScroll, { passive: true, capture: true })
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('resize', updateTooltipPosition)
-  window.removeEventListener('scroll', updateTooltipPosition, true)
+  window.removeEventListener('scroll', onWindowScroll, { capture: true } as EventListenerOptions)
+  if (tooltipScrollRaf) cancelAnimationFrame(tooltipScrollRaf)
 })
 </script>
 

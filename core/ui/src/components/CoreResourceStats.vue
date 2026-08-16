@@ -13,7 +13,7 @@
   >
     <span></span>
   </div>
-  <section v-else class="runtime-widget core-resource-widget">
+  <section v-else ref="widgetEl" class="runtime-widget core-resource-widget">
     <div class="runtime-widget-head">
       <h3>{{ title }}</h3>
       <strong v-if="summary" class="core-resource-state">{{ summary.statusLabel }}</strong>
@@ -45,7 +45,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { gsap } from 'gsap'
 import type { CoreMessage } from '../types'
 import { buildCoreResourceSummary, CORE_CONTEXT_COMPACTION_TRIGGER_RATIO } from '../runtime/resources'
 
@@ -68,6 +69,76 @@ const resourceStyle = computed(() => ({
 const composerTitle = computed(() => summary.value?.hasContext
   ? `上下文 ${summary.value.contextLabel}（${summary.value.percentLabel}）`
   : '暂无上下文统计')
+
+// ── 数字滚动（C13）：数值文本在 settle 变化时 300ms 滚动到位 ──
+// 流式热路径保护：live 消息存在时（每 tick 数值都在变）不启动 tween、不写额外 DOM；
+// 回合结束/会话切换等离散变化才播动画。watcher 用 flush:'pre'（DOM 仍是上一目标值），
+// 播完后 textContent 交给 Vue 的最终渲染。
+const REDUCED_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)')
+const widgetEl = ref<HTMLElement | null>(null)
+const statTweens = new Map<HTMLElement, gsap.core.Tween>()
+const isLiveStreaming = computed(() => props.messages.some((m) => m.metadata?.live))
+
+interface ParsedNum {
+  value: number
+  suffix: string
+  scale: number
+}
+
+function parseNumeric(text: string): ParsedNum | null {
+  const m = String(text).trim().match(/^(-?\d+(?:\.\d+)?)([kK]?)([%a-zA-Z]*)$/)
+  if (!m) return null
+  const scale = m[2] ? 1000 : 1
+  return { value: parseFloat(m[1]) * scale, suffix: m[3] || (m[2] ? 'k' : ''), scale }
+}
+
+function formatNumber(p: ParsedNum): string {
+  let v = p.value
+  let suffix = p.suffix
+  if (p.scale === 1000) {
+    v /= 1000
+    suffix = suffix || 'k'
+  }
+  const display = Number.isInteger(v) ? String(v) : v.toFixed(1)
+  return display + suffix
+}
+
+function animateStat(el: HTMLElement, nextText: string) {
+  const next = parseNumeric(nextText)
+  if (!next || REDUCED_MOTION.matches || typeof requestAnimationFrame !== 'function') {
+    el.textContent = nextText
+    return
+  }
+  const cur = parseNumeric(el.textContent ?? '')
+  if (cur && cur.value === next.value) return
+  statTweens.get(el)?.kill()
+  const proxy = { v: cur ? cur.value : 0 }
+  const tween = gsap.to(proxy, {
+    v: next.value,
+    duration: 0.3,
+    ease: 'power1.out',
+    overwrite: true,
+    onUpdate: () => { el.textContent = formatNumber({ ...next, value: proxy.v }) },
+    onComplete: () => { el.textContent = nextText; statTweens.delete(el) },
+  })
+  statTweens.set(el, tween)
+}
+
+watch(summary, (s) => {
+  if (isLiveStreaming.value || !widgetEl.value || !s) return
+  const percent = widgetEl.value.querySelector<HTMLElement>('.core-resource-values strong:nth-child(2)')
+  if (percent) animateStat(percent, s.percentLabel)
+  const statEls = widgetEl.value.querySelectorAll<HTMLElement>('.core-resource-stats > div > strong')
+  s.callItems.forEach((item, i) => {
+    const el = statEls[i]
+    if (el) animateStat(el, item.value)
+  })
+}, { flush: 'pre' })
+
+onBeforeUnmount(() => {
+  statTweens.forEach((t) => t.kill())
+  statTweens.clear()
+})
 </script>
 
 <style scoped>

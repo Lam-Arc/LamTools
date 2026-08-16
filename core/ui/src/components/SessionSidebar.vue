@@ -62,6 +62,7 @@
         <div
           v-for="s in visibleSessions(group)"
           :key="s.id"
+          v-motion-enter="!initialSessionIds.has(s.id)"
           class="conversation"
           :class="{ active: s.id === activeSessionId }"
           :data-session-row="s.id"
@@ -169,6 +170,7 @@
 <script setup lang="ts">
 import { computed, ref, reactive, onBeforeUnmount, onMounted } from 'vue'
 import { MoreHorizontal } from 'lucide-vue-next'
+import { motionEnterDirective } from '../directives/motionEnter'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -247,6 +249,11 @@ const groupCollapsed = reactive<Record<string, boolean>>(loadCollapsedProjectIds
 const pinnedProjectIds = ref<string[]>(loadPinnedProjectIds())
 const pinnedSessionIds = ref<string[]>(loadPinnedSessionIds())
 const openProjectMenuId = ref<string | null>(null)
+
+// ── 新会话条目入场（C14）：挂载时已在列表中的会话不播，之后新出现的会话淡入。
+//    集合 setup 期捕获、只读，不引入响应式状态（会话列表变更频率极低）。
+const initialSessionIds = new Set(props.projectGroups.flatMap((g) => g.sessions.map((s) => s.id)))
+const vMotionEnter = motionEnterDirective
 
 const projectSections = computed(() => {
   const pinned = props.projectGroups.filter((group) => isPinned(group.id))
