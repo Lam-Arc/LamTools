@@ -7,12 +7,12 @@
 
 ---
 
-## 1. 形态与发布
+## 1. 形态与发布（2026-08-16 决策更新：随主仓库走，不单开独立仓库）
 
-- **独立仓库** `lamtools-rag`，GitHub Release 分发，用户下载安装到插件目录
-  （用户级 `APPDATA/LamTools/plugins/` 或项目级 `{work_root}/.lamtools/plugins/`）。
-- **安装方式**：插件管理 UI（安装本地目录 / zip / Release URL）+ `plugin.install` 自动装依赖
-  （依赖声明于 manifest，pip 装入 core 运行环境）。
+- **随主仓库发布**：源码位于仓库 `plugins/lamtools-rag/`，与 LamTools 主版本同发布链（tag `vX.Y.Z` → `release.yml` 构建时把插件目录打成 `lamtools-rag-vX.Y.Z.zip` 挂到 Release 资产）。
+- **安装途径**（用户侧，插件系统已支持，B7）：插件管理 UI → 安装 → GitHub Release URL / 本地 zip / 本地目录；`plugin.install` 自动装依赖（pip 装入 core 运行环境）。
+- **为什么不打进 Tauri 安装包**：与"安装器不打包 `.lam`"同源的 NSIS 覆盖语义——插件若放程序目录内置位，用户升级安装包会被抹掉；**用户级插件根（`%APPDATA%/LamTools/plugins/`）才是正确落点**（H 组已修复默认可见）。
+- **版本同步**：插件 `plugin.json` version 与主仓库 tag 同步（bump-version.ps1 时一并 bump）。
 - **许可与信任**：插件 = 可执行代码（工具 handler + VLM 调用），安装时显式信任提示。
 
 ## 2. 插件结构
@@ -286,7 +286,7 @@ Phase 1 批量抽取（LLM，并行）           Phase 2 确定性聚合（代�
 
 | # | 决策 | 结论 |
 |---|---|---|
-| 1 | 整个 RAG 功能 | 插件化（独立仓库发布），core 零 RAG 依赖 |
+| 1 | 整个 RAG 功能 | 插件化（**随主仓库发布**，Release 资产 zip 分发；2026-08-16 从"独立仓库"变更），core 零 RAG 依赖 |
 | 2 | Skill 组织 | 分两类：rag-indexer（建立）+ rag-for-agent（查询与回答）；内部树状、对外平铺检索 |
 | 3 | 工具执行 | 原生工具注册（manifest 声明 + 注入 CoreToolbox），弃 run_command / MCP 路线 |
 | 4 | 工具膨胀 | 惰性暴露（visibility=on_load 跟随 skill 加载），零膨胀 |
