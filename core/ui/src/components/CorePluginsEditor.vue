@@ -165,7 +165,7 @@
           <h4>参数</h4>
           <div v-if="schemaLoading" class="muted">加载中…</div>
           <div v-else class="config-form">
-            <div v-for="prop in schemaProps" :key="prop.key" class="field">
+            <div v-for="prop in schemaProps" :key="prop.key" class="field" :class="{ 'field-boolean': prop.type === 'boolean' }">
               <span class="field-label">{{ prop.label }}<code v-if="prop.type" class="field-type">{{ prop.type }}</code></span>
 
               <!-- x-control: path-list —— 路径列表：每项可编辑 + 浏览（目录选择），
@@ -977,6 +977,19 @@ onMounted(fetchPlugins)
   gap: 8px;
   font-size: 13px;
   margin-bottom: 4px;
+}
+
+/* 布尔参数：开关与标题同行（label 左、开关右），不单起一行 */
+.field-boolean {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 32px;
+}
+
+.field-boolean .field-label {
+  margin-bottom: 0;
 }
 
 .field-type {
