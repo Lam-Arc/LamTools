@@ -552,3 +552,95 @@ describe('core appServer workbench projection', () => {
     expect(updateCoreSessionListStatus(updated, 'missing', 'running', 'later')).toBe(updated)
   })
 })
+
+// ── 审批请求快照恢复（ask-user 卡不显示修复，ChatThread 真实投影路径）──
+// 快照恢复时 tool_call item 的 kind 回落 'tool_call'，只留 last_kind /
+// payload.type='serverRequest'——投影必须产出 decision part，否则审批卡丢失。
+describe('core appServer workbench approval recovery', () => {
+  it('projects a snapshot-restored approval tool_call as a decision part', () => {
+    const turnId = 'turn-approval-wb'
+    const toolItemId = `${turnId}:call_00_xyz:tool`
+    const snapshot = hydrateSnapshot({
+      thread_id: 'thread-approval-wb',
+      snapshot_seq: 11,
+      core: {
+        thread_id: 'thread-approval-wb',
+        snapshot_seq: 11,
+        status: 'waiting',
+        item_order: [`${turnId}:user`, toolItemId],
+        turns: {
+          [turnId]: {
+            turn_id: turnId, status: 'waiting', last_kind: 'approval_request',
+            items: [`${turnId}:user`, toolItemId],
+          },
+        },
+        items: {
+          [`${turnId}:user`]: {
+            item_id: `${turnId}:user`, turn_id: turnId, kind: 'message', status: 'completed',
+            payload: { type: 'userMessage', content: [{ type: 'text', text: '问我一个问题' }] },
+          },
+          [toolItemId]: {
+            item_id: toolItemId,
+            turn_id: turnId,
+            kind: 'tool_call',
+            last_kind: 'approval_request',
+            status: 'waiting',
+            payload: {
+              type: 'serverRequest',
+              request_id: 'req-wb',
+              tool_name: 'question',
+              question: '你希望我做什么？',
+              options: [{ id: 'a', label: '选项 A' }],
+            },
+          },
+        },
+        requests: {
+          'req-wb': { request_id: 'req-wb', status: 'open', item_id: toolItemId, turn_id: turnId },
+        },
+      },
+    } satisfies CoreAppSnapshot)
+
+    const messages = selectCoreWorkbenchMessages(snapshot)
+    const assistant = messages.find((m) => m.role === 'assistant')
+    const decision = assistant?.parts?.find((part) => part.partType === 'decision')
+
+    expect(decision).toBeDefined()
+    expect(decision?.toolName).toBe('question')
+    expect(decision?.status).toBe('pending')
+    const metadata = decision?.metadata as Record<string, unknown> | undefined
+    expect(metadata?.request_id).toBe('req-wb')
+    expect(metadata?.waitingRequest).toBeDefined()
+  })
+
+  it('keeps a real tool_call (no approval marker) as a tool part', () => {
+    const turnId = 'turn-tool-wb'
+    const toolItemId = `${turnId}:call_00_tool:tool`
+    const snapshot = hydrateSnapshot({
+      thread_id: 'thread-tool-wb',
+      snapshot_seq: 4,
+      core: {
+        thread_id: 'thread-tool-wb',
+        snapshot_seq: 4,
+        status: 'completed',
+        item_order: [toolItemId],
+        turns: { [turnId]: { turn_id: turnId, status: 'completed', items: [toolItemId] } },
+        items: {
+          [toolItemId]: {
+            item_id: toolItemId,
+            turn_id: turnId,
+            kind: 'tool_call',
+            status: 'completed',
+            payload: { type: 'dynamicToolCall', tool_name: 'read_file', arguments: { path: 'README.md' } },
+          },
+        },
+      },
+    } satisfies CoreAppSnapshot)
+
+    const messages = selectCoreWorkbenchMessages(snapshot)
+    const assistant = messages.find((m) => m.role === 'assistant')
+    const tool = assistant?.parts?.find((part) => part.partType === 'tool_call')
+
+    expect(tool).toBeDefined()
+    expect(tool?.toolName).toBe('read_file')
+  })
+})

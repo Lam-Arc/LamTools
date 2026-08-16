@@ -252,6 +252,18 @@ class CoreLiveConnection:
             event_method = event.get("method") if isinstance(event, dict) else getattr(event, "method", "")
             if event_method == CORE_RUN_ITEM_METHOD:
                 await self._enqueue_run_item(event)
+                # approval_request（审批请求）是重要边界：事件流可能因订阅者
+                # 溢出被强制断连而丢失，而持久化 item 的 kind 回落 tool_call
+                # （审批状态只存在于事件流/requests），前端断连恢复拿不到审批
+                # 卡就无法回答（死锁）。到达即节流推一次快照，让所有连接都能
+                # 从快照恢复审批状态（快照由 item 表组装 + requests，见
+                # snapshot_store._assemble）。
+                if _run_item_kind(event) == "approval_request":
+                    await self._flush_run_item_buffer()
+                    now = asyncio.get_running_loop().time()
+                    if now - self._last_snapshot_sent_at >= SNAPSHOT_MIN_INTERVAL_SECONDS:
+                        self._last_snapshot_sent_at = now
+                        await self._send_snapshot(_event_thread_id(event))
                 continue
             # Non-runItem events must land after any buffered deltas so the
             # client never observes state out of order.
@@ -645,6 +657,26 @@ def _event_thread_id(event: Any) -> str:
         return str(event.thread_id)
     if isinstance(event, dict):
         return str(event.get("thread_id") or "")
+    return ""
+
+
+def _run_item_kind(event: Any) -> str:
+    """Extract the runItem kind from an envelope (dict or object form).
+
+    The hub delivers envelopes whose ``payload`` is the serialized RunItemEvent
+    dict (``{kind, item_id, payload: {...}}``) — or a dict envelope with the
+    same shape. Only ``approval_request`` is interesting to the boundary
+    snapshot logic.
+    """
+    payload = event.get("payload") if isinstance(event, dict) else getattr(event, "payload", None)
+    if not isinstance(payload, dict):
+        return ""
+    kind = payload.get("kind")
+    if isinstance(kind, str):
+        return kind
+    inner = payload.get("payload")
+    if isinstance(inner, dict) and isinstance(inner.get("kind"), str):
+        return inner["kind"]
     return ""
 
 

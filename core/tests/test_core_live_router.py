@@ -1121,3 +1121,100 @@ def test_approval_respond_binds_to_subscribed_thread() -> None:
         assert seen["params"]["request_id"] == "req-1"
 
     asyncio.run(run())
+
+
+def test_core_live_connection_sends_snapshot_for_approval_request() -> None:
+    """approval_request 是审批边界：事件流可能因订阅者溢出断连而丢失，而持久化
+    item 的 kind 回落 tool_call——快照是前端恢复审批卡的可靠来源，到达必须推快照
+    （与 turn/interrupted 等边界事件同等待遇，节流 1s）。"""
+    async def run() -> None:
+        class SessionFactory:
+            async def __aenter__(self):
+                return object()
+
+            async def __aexit__(self, *args):
+                return None
+
+        class SnapshotStore:
+            def __init__(self):
+                self.loads = 0
+
+            async def load(self, _db, thread_id: str):
+                self.loads += 1
+                return {"thread_id": thread_id, "snapshot_seq": 1}
+
+        snapshot_store = SnapshotStore()
+        connection = CoreLiveConnection(
+            DummyWebSocket(),
+            context=SimpleNamespace(
+                session_factory=SessionFactory,
+                snapshot_store=snapshot_store,
+            ),
+        )
+        connection.subscription = asyncio.Queue()
+        await connection.subscription.put({
+            "event_id": "approval-1",
+            "thread_id": "thread-1",
+            "seq": 0,
+            "method": "core/runItem",
+            "payload": {
+                "kind": "approval_request",
+                "item_id": "tool-1",
+                "payload": {"type": "serverRequest", "request_id": "req-1"},
+            },
+            "created_at": "2026-07-15T00:00:00+00:00",
+            "transient": False,
+        })
+        reader = asyncio.create_task(connection._hub_reader())
+        try:
+            first = await asyncio.wait_for(connection.outbound.get(), timeout=0.1)
+            assert first["method"] == "core/runItem"
+            second = await asyncio.wait_for(connection.outbound.get(), timeout=0.1)
+            assert second["method"] == "thread/snapshot"
+            assert second["params"]["thread_id"] == "thread-1"
+            assert snapshot_store.loads == 1
+        finally:
+            reader.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await reader
+
+    asyncio.run(run())
+
+
+def test_core_live_connection_skips_snapshot_for_plain_run_item() -> None:
+    """普通 runItem（tool_call/text 等）不触发快照——保持 perf 红线（大线程
+    快照洪泛）。只有 approval_request 是审批边界例外。"""
+    async def run() -> None:
+        class BoomSessionFactory:
+            async def __aenter__(self):
+                raise AssertionError("snapshot must not be loaded for a plain runItem event")
+
+            async def __aexit__(self, *args):
+                return None
+
+        connection = CoreLiveConnection(
+            DummyWebSocket(),
+            context=SimpleNamespace(session_factory=BoomSessionFactory()),
+        )
+        connection.subscription = asyncio.Queue()
+        await connection.subscription.put({
+            "event_id": "tool-1",
+            "thread_id": "thread-1",
+            "seq": 0,
+            "method": "core/runItem",
+            "payload": {"kind": "tool_call", "item_id": "tool-1", "payload": {"type": "dynamicToolCall"}},
+            "created_at": "2026-07-15T00:00:00+00:00",
+            "transient": False,
+        })
+        reader = asyncio.create_task(connection._hub_reader())
+        try:
+            notification = await asyncio.wait_for(connection.outbound.get(), timeout=0.1)
+            assert notification["method"] == "core/runItem"
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(connection.outbound.get(), timeout=0.02)
+        finally:
+            reader.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await reader
+
+    asyncio.run(run())

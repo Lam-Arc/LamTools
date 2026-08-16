@@ -408,3 +408,100 @@ describe('core appServer selectors', () => {
     expect(messages[1]?.content).toBe('完成')
   })
 })
+
+// ── 审批请求快照恢复（ask-user 卡不显示修复）──
+// 事件流里 approval_request 的 kind='approval_request'；持久化快照里同一 item
+// kind 保持 'tool_call'（后端 _upsert_item 不覆盖既有 kind），只更新
+// last_kind / payload.type='serverRequest'。断连重连走快照恢复时必须识别，
+// 否则 question/decision_point 等 control tool 不渲染审批卡。
+describe('core appServer approval snapshot recovery', () => {
+  it('projects a tool_call item with last_kind=approval_request as a decision part', () => {
+    const turnId = 'turn-approval'
+    const toolItemId = `${turnId}:call_00_abc:tool`
+    const snapshot = hydrateSnapshot({
+      thread_id: 'thread-approval',
+      snapshot_seq: 11,
+      core: {
+        thread_id: 'thread-approval',
+        snapshot_seq: 11,
+        status: 'waiting',
+        item_order: [`${turnId}:user`, toolItemId],
+        turns: {
+          [turnId]: {
+            turn_id: turnId,
+            status: 'waiting',
+            last_kind: 'approval_request',
+            items: [`${turnId}:user`, toolItemId],
+          },
+        },
+        items: {
+          [`${turnId}:user`]: {
+            item_id: `${turnId}:user`, turn_id: turnId, kind: 'message', status: 'completed',
+            payload: { type: 'userMessage', content: [{ type: 'text', text: '问我一个问题' }] },
+          },
+          [toolItemId]: {
+            item_id: toolItemId,
+            turn_id: turnId,
+            // 快照持久化后的形态：kind 回落 tool_call，只留 last_kind 与 payload
+            kind: 'tool_call',
+            last_kind: 'approval_request',
+            status: 'waiting',
+            payload: {
+              type: 'serverRequest',
+              request_id: 'req-1',
+              tool_name: 'question',
+              question: '你希望我做什么？',
+              options: [{ id: 'a', label: '选项 A' }],
+            },
+          },
+        },
+        requests: {
+          'req-1': { request_id: 'req-1', status: 'open', item_id: toolItemId, turn_id: turnId },
+        },
+      },
+    } satisfies CoreAppSnapshot)
+
+    const messages = selectChatMessages(snapshot)
+    const assistant = messages.find((m) => m.role === 'assistant')
+    // selectChatMessages 的 parts 是 CoreAppItem（type 字段）；MessagePart 转换在
+    // workbenchProjection（coreAppItemToWorkbenchPart），另测。
+    const decision = assistant?.parts?.find((part) => part.type === 'serverRequest')
+
+    expect(decision).toBeDefined()
+    expect(decision?.tool_name).toBe('question')
+    expect(decision?.status).toBe('waiting')
+    expect(decision?.request_id).toBe('req-1')
+  })
+
+  it('projects an approval_request item by kind (event stream shape) as a decision part', () => {
+    const turnId = 'turn-approval-2'
+    const toolItemId = `${turnId}:call_00_def:tool`
+    const snapshot = hydrateSnapshot({
+      thread_id: 'thread-approval-2',
+      snapshot_seq: 3,
+      core: {
+        thread_id: 'thread-approval-2',
+        snapshot_seq: 3,
+        status: 'waiting',
+        item_order: [toolItemId],
+        turns: { [turnId]: { turn_id: turnId, status: 'waiting', items: [toolItemId] } },
+        items: {
+          [toolItemId]: {
+            item_id: toolItemId,
+            turn_id: turnId,
+            kind: 'approval_request',
+            status: 'waiting',
+            payload: { type: 'serverRequest', request_id: 'req-2', tool_name: 'question' },
+          },
+        },
+        requests: { 'req-2': { request_id: 'req-2', status: 'open', item_id: toolItemId, turn_id: turnId } },
+      },
+    } satisfies CoreAppSnapshot)
+
+    const messages = selectChatMessages(snapshot)
+    const decision = messages.find((m) => m.role === 'assistant')?.parts?.find((part) => part.type === 'serverRequest')
+
+    expect(decision).toBeDefined()
+    expect(decision?.status).toBe('waiting')
+  })
+})

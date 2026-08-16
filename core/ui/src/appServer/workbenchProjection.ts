@@ -382,15 +382,23 @@ export function nextCoreProcessExpandedIds(
   currentExpandedIds: Set<string>,
   active: boolean,
 ): Set<string> {
-  if (!active) return currentExpandedIds
   const next = new Set(currentExpandedIds)
   for (const message of messages) {
+    const parts = message.parts || []
     // Only messages with live-streaming parts (running) auto-expand.
     // Adding EVERY assistant message here at turn start flipped all messages'
     // v-memo keys at once (full-thread re-render ~1s on large threads);
     // historical/completed messages stay collapsed (compact groups).
-    if (message.role === 'assistant' && coreMessageHasProcessParts(message)
-      && (message.parts || []).some(part => part.status === 'running')) {
+    const hasLiveRunning = active && message.role === 'assistant'
+      && coreMessageHasProcessParts(message)
+      && parts.some(part => part.status === 'running')
+    // 未响应的审批卡必须直接可见：pending decision part（waitingRequest 无
+    // response）与 running part 同等待遇。turn 挂起（decision=wait）时
+    // active=false，但审批卡仍需展开——否则用户看不到问题、无法回答（死锁）。
+    const hasPendingApproval = message.role === 'assistant'
+      && parts.some(part => part.partType === 'decision' && part.status === 'pending'
+        && !isApprovalResponded(part))
+    if (hasLiveRunning || hasPendingApproval) {
       next.add(message.id)
     }
   }
@@ -409,6 +417,17 @@ export function nextCoreProcessExpandedIds(
     if (same) return currentExpandedIds
   }
   return next
+}
+
+/** 审批是否已响应：waitingRequest.response（或 waitingResponse metadata）存在即已答复 */
+function isApprovalResponded(part: MessagePart): boolean {
+  const metadata = (part.metadata || {}) as Record<string, unknown>
+  const waiting = metadata.waitingRequest
+  if (waiting && typeof waiting === 'object') {
+    const request = waiting as Record<string, unknown>
+    if (request.response) return true
+  }
+  return Boolean(metadata.waitingResponse)
 }
 
 export function normalizeCoreSessionStatus(status: string): string {

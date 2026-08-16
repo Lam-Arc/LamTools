@@ -581,8 +581,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function coreItemType(item: CoreRuntimeItem): string {
   if (item.kind === 'thinking') return 'reasoning'
+  // 审批请求恢复：事件流里 kind='approval_request'；持久化快照里同一 item 的
+  // kind 保持 'tool_call'（_upsert_item 不覆盖既有 kind），只更新 last_kind /
+  // payload.type='serverRequest'——断连重连走快照恢复时必须按这两个信号识别，
+  // 否则审批卡在恢复后永久丢失（question/decision_point 等 control tool 不渲染工具卡）。
+  if (item.kind === 'approval_request'
+    || item.last_kind === 'approval_request'
+    || (isRecord(item.payload) && item.payload.type === 'serverRequest')) {
+    return 'serverRequest'
+  }
   if (item.kind === 'tool_call' || item.kind === 'tool_result') return 'dynamicToolCall'
-  if (item.kind === 'approval_request') return 'serverRequest'
   if (item.kind === 'error') return 'error'
   if (item.kind === 'status') return 'status'
   return 'agentMessage'
