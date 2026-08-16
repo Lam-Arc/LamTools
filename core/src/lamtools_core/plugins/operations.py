@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json as _json
 import logging
+import os
 import re
 import shutil
 from collections.abc import Callable
@@ -25,6 +26,54 @@ def _now_iso() -> str:
     from datetime import datetime, timezone
 
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _detect_dir(base: Path, dir_name: str, case_insensitive: bool) -> Path | None:
+    """在 ``base`` 下检测 ``dir_name`` 目录是否存在，返回解析后的绝对路径。
+
+    - 绝对路径：直接解析并检查（大小写不敏感时仍逐级比较）。
+    - 相对路径：逐级在 ``base`` 下查找；``case_insensitive=True`` 时每级
+      先用原名探测，失败再扫描条目做忽略大小写匹配（Linux/macOS 大小写
+      敏感盘上有意义；Windows 上原名探测天然不区分大小写）。
+    - 最终统一 ``resolve()`` 规范化——Windows 上顺带把 8.3 短路径/大小写
+      差异还原为磁盘上的真实长路径（参考 ``Path.resolve()`` 语义）。
+    """
+    candidate = Path(dir_name).expanduser()
+    if candidate.is_absolute():
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            return None
+        return resolved if resolved.is_dir() else None
+    parts = [part for part in re.split(r"[\\/]", dir_name) if part]
+    if not parts:
+        return None
+    current = base
+    for part in parts:
+        direct = current / part
+        if direct.exists():
+            current = direct
+            continue
+        if not case_insensitive:
+            return None
+        # 忽略大小写：扫描当前目录找名字折叠相等的条目
+        match: Path | None = None
+        try:
+            with os.scandir(current) as it:
+                for entry in it:
+                    if entry.name.casefold() == part.casefold():
+                        match = Path(entry.path)
+                        break
+        except OSError:
+            return None
+        if match is None:
+            return None
+        current = match
+    try:
+        resolved = current.resolve()
+    except OSError:
+        return None
+    return resolved if resolved.is_dir() else None
 
 
 # 插件配置中的密钥字段名（回显打码 / 掩码提交保留原值，镜像 provider 契约）
@@ -848,7 +897,49 @@ def build_plugin_operation_catalog(
                 "schema": schema,
                 "config_schema_path": str(plugin.config_schema) if plugin.config_schema else "",
                 "has_secrets": masked["has_secrets"],
+                # 工作区根：前端把浏览/扫描得到的绝对路径转成工作区相对路径
+                "work_root": str(work_root) if work_root else "",
             },
+        )
+
+    async def plugin_config_detect_dirs(request: OperationRequest) -> OperationResult:
+        """检测 base（缺省 = 当前 work_root）下是否存在指定目录。
+
+        x-control ``scan`` 的数据源：入参 ``{dirs: [string], case_insensitive:
+        bool, base?: string}``，返回 ``{found: [{dir, path, relative}],
+        missing: [dir]}``。``path`` 为解析后的绝对路径，``relative`` 为相对
+        base 的 posix 路径（越界时省略）。
+        """
+        payload = request.payload if isinstance(request.payload, dict) else {}
+        raw_dirs = payload.get("dirs")
+        if not isinstance(raw_dirs, list):
+            return OperationResult(name=request.name, status="error", payload={"error": "dirs must be a list"})
+        dirs = [str(item).strip() for item in raw_dirs if isinstance(item, str) and str(item).strip()]
+        case_insensitive = bool(payload.get("case_insensitive", False))
+        base_raw = str(payload.get("base") or "").strip()
+        if base_raw:
+            base = Path(base_raw).expanduser().resolve()
+        elif work_root:
+            base = Path(work_root).expanduser().resolve()
+        else:
+            base = Path.cwd()
+        found: list[dict[str, str]] = []
+        missing: list[str] = []
+        for dir_name in dirs:
+            resolved = _detect_dir(base, dir_name, case_insensitive)
+            if resolved is None:
+                missing.append(dir_name)
+                continue
+            entry: dict[str, str] = {"dir": dir_name, "path": str(resolved)}
+            try:
+                rel = resolved.relative_to(base)
+                entry["relative"] = rel.as_posix()
+            except ValueError:
+                pass  # 越界：只保留绝对路径
+            found.append(entry)
+        return OperationResult(
+            name=request.name,
+            payload={"found": found, "missing": missing, "base": str(base)},
         )
 
     async def plugin_config_update(request: OperationRequest) -> OperationResult:
@@ -894,6 +985,7 @@ def build_plugin_operation_catalog(
     catalog.register("plugin.deps-status", plugin_deps_status)
     catalog.register("plugin.config.get", plugin_config_get)
     catalog.register("plugin.config.update", plugin_config_update)
+    catalog.register("plugin.config.detect-dirs", plugin_config_detect_dirs)
     catalog.register("plugin.enable", plugin_enable)
     catalog.register("plugin.disable", plugin_disable)
     catalog.register("hook.list", hook_list)

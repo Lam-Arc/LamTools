@@ -143,7 +143,60 @@
           <div v-else class="config-form">
             <div v-for="prop in schemaProps" :key="prop.key" class="field">
               <span class="field-label">{{ prop.label }}<code v-if="prop.type" class="field-type">{{ prop.type }}</code></span>
-              <select v-if="prop.enum" v-model="configDraft[prop.key]" class="field-input">
+
+              <!-- x-control: path-list —— 路径列表：每项可编辑 + 浏览（目录选择），
+                   表单级扫描按钮（plugin.config.detect-dirs） -->
+              <template v-if="prop.xControl?.kind === 'path-list'">
+                <div v-if="prop.xControl.scan" class="scan-row">
+                  <button class="small-btn" type="button" :disabled="scanning" @click="scanDirs(prop)">
+                    {{ scanning ? '扫描中…' : (prop.xControl.scan.label || '扫描目录') }}
+                  </button>
+                  <span v-if="scanNotice[prop.key]" class="scan-notice">{{ scanNotice[prop.key] }}</span>
+                </div>
+                <div class="path-list">
+                  <div v-for="(item, index) in arrayDraft[prop.key] || []" :key="index" class="path-row">
+                    <input v-model="arrayDraft[prop.key][index]" class="field-input path-input" type="text" />
+                    <button class="small-btn" type="button" @click="browsePath(prop, index)">浏览</button>
+                    <button class="text-btn danger" type="button" @click="removePath(prop, index)">删除</button>
+                  </div>
+                  <div class="path-row">
+                    <input
+                      v-model="newPathDraft[prop.key]"
+                      class="field-input path-input"
+                      type="text"
+                      placeholder="目录路径（工作区相对或绝对）"
+                      @keyup.enter="addPath(prop)"
+                    />
+                    <button class="small-btn" type="button" @click="addPath(prop)">添加</button>
+                    <button class="small-btn" type="button" @click="browsePath(prop)">浏览…</button>
+                  </div>
+                </div>
+              </template>
+
+              <!-- x-control: model-select —— 模型下拉：选项来自 config.models.list，
+                   按 capability 过滤；无多模态模型 / 加载失败时退化为可自由输入 -->
+              <template v-else-if="prop.xControl?.kind === 'model-select'">
+                <input
+                  v-if="modelOptionsFor(prop).length"
+                  v-model="configDraft[prop.key]"
+                  class="field-input"
+                  type="text"
+                  :list="modelListId(prop)"
+                  placeholder="选择或输入模型 ID"
+                />
+                <datalist v-if="modelOptionsFor(prop).length" :id="modelListId(prop)">
+                  <option v-for="m in modelOptionsFor(prop)" :key="m.id" :value="m.id">{{ m.display_name || m.model_id }}</option>
+                </datalist>
+                <input
+                  v-else
+                  v-model="configDraft[prop.key]"
+                  class="field-input"
+                  type="text"
+                  :placeholder="modelLoadFailed ? '模型列表加载失败，可手动输入' : '暂无可用模型，可手动输入模型 ID'"
+                />
+              </template>
+
+              <select v-else-if="prop.enum" v-model="configDraft[prop.key]" class="field-input">
                 <option v-for="opt in prop.enum" :key="opt" :value="opt">{{ opt }}</option>
               </select>
               <button
@@ -193,6 +246,17 @@
           >{{ installingDeps ? '安装中…' : '安装依赖' }}</button>
         </div>
       </div>
+
+      <!-- 目录树对话框：teleport 进 overlay 内（overlay 自身 z-95 高于对话框
+           z-modal，只有作为其子节点才能保证对话框可交互） -->
+      <FolderBrowserDialog
+        v-model="browseDialogOpen"
+        :api-base="browseApiBase"
+        teleport-target=".plugin-folder-host"
+        @selected="onBrowseSelected"
+        @update:model-value="onBrowseDismissed"
+      />
+      <div class="plugin-folder-host"></div>
     </div>
   </section>
 </template>
@@ -200,6 +264,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { ToggleLeft, ToggleRight, X } from 'lucide-vue-next'
+import FolderBrowserDialog from './FolderBrowserDialog.vue'
 
 interface PluginToolDecl {
   name: string
@@ -227,6 +292,37 @@ interface PluginItem {
   config_schema: string
 }
 
+// x-control 控件协议（插件 configSchema 扩展，见 plugins/lamtools-rag/config/schema.jsonc）：
+// path-list = 路径列表（浏览 + 扫描），model-select = 模型下拉（按 capability 过滤）
+interface XBrowseSpec {
+  type?: string
+  mode?: string
+}
+interface XScanSpec {
+  label?: string
+  dirs?: string[]
+  case_insensitive?: boolean
+}
+interface XControlSpec {
+  kind?: string
+  browse?: XBrowseSpec
+  scan?: XScanSpec
+  capability?: string
+}
+interface SchemaProp {
+  key: string
+  label: string
+  type: string
+  enum?: string[]
+  xControl?: XControlSpec
+}
+interface ModelOption {
+  id: string
+  model_id: string
+  display_name: string
+  capability: string
+}
+
 const props = defineProps<{
   requestRpc: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>
 }>()
@@ -245,9 +341,21 @@ const installPath = ref('')
 const configPlugin = ref<PluginItem | null>(null)
 const configDraft = ref<Record<string, unknown>>({})
 const arrayDraft = ref<Record<string, string[]>>({})
-const schemaProps = ref<{ key: string; label: string; type: string; enum?: string[] }[]>([])
+const schemaProps = ref<SchemaProp[]>([])
 const schemaLoading = ref(false)
 const configSaving = ref(false)
+
+// x-control 状态：工作区根（相对路径转换）、扫描、模型下拉
+const workRoot = ref('')
+const scanning = ref(false)
+const scanNotice = ref<Record<string, string>>({})
+const newPathDraft = ref<Record<string, string>>({})
+const allModels = ref<ModelOption[]>([])
+const modelLoadFailed = ref(false)
+const browseDialogOpen = ref(false)
+const browseApiBase = ((window as { __LAMTOOLS_API_BASE__?: string }).__LAMTOOLS_API_BASE__) || '/api/core'
+// 目录树对话框的挂起回调（非 Tauri 环境回落用）
+let pendingBrowseResolve: ((path: string | null) => void) | null = null
 
 const enabledCount = computed(() => plugins.value.filter((p) => p.enabled).length)
 
@@ -369,6 +477,13 @@ function openConfig(plugin: PluginItem) {
 function closeConfig() {
   configPlugin.value = null
   schemaProps.value = []
+  workRoot.value = ''
+  scanNotice.value = {}
+  newPathDraft.value = {}
+  allModels.value = []
+  modelLoadFailed.value = false
+  browseDialogOpen.value = false
+  pendingBrowseResolve = null
 }
 
 async function loadConfig(plugin: PluginItem) {
@@ -383,7 +498,9 @@ async function loadConfig(plugin: PluginItem) {
       label: key,
       type: String(spec.type || 'string'),
       enum: Array.isArray(spec.enum) ? (spec.enum as string[]) : undefined,
+      xControl: parseXControl(spec),
     }))
+    workRoot.value = String(result.work_root || '')
     configDraft.value = { ...((result.config as Record<string, unknown>) || {}) }
     arrayDraft.value = {}
     for (const [key, spec] of Object.entries(propsMap)) {
@@ -391,6 +508,9 @@ async function loadConfig(plugin: PluginItem) {
         const raw = configDraft.value[key]
         arrayDraft.value[key] = Array.isArray(raw) ? raw.map(String) : []
       }
+    }
+    if (schemaProps.value.some((p) => p.xControl?.kind === 'model-select')) {
+      await loadModelOptions()
     }
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
@@ -414,6 +534,180 @@ async function saveConfig() {
   } finally {
     configSaving.value = false
   }
+}
+
+// ── x-control: path-list ──────────────────────────────────────────────
+
+function parseXControl(spec: Record<string, unknown>): XControlSpec | undefined {
+  const raw = spec['x-control']
+  if (!raw || typeof raw !== 'object') return undefined
+  const xc = raw as Record<string, unknown>
+  const browseRaw = xc.browse
+  const scanRaw = xc.scan
+  return {
+    kind: String(xc.kind || ''),
+    browse: browseRaw && typeof browseRaw === 'object'
+      ? {
+          type: String((browseRaw as Record<string, unknown>).type || ''),
+          mode: String((browseRaw as Record<string, unknown>).mode || ''),
+        }
+      : undefined,
+    scan: scanRaw && typeof scanRaw === 'object'
+      ? {
+          label: String((scanRaw as Record<string, unknown>).label || ''),
+          dirs: Array.isArray((scanRaw as Record<string, unknown>).dirs)
+            ? ((scanRaw as Record<string, unknown>).dirs as string[])
+            : [],
+          case_insensitive: Boolean((scanRaw as Record<string, unknown>).case_insensitive),
+        }
+      : undefined,
+    capability: String(xc.capability || ''),
+  }
+}
+
+function appendPathValue(prop: SchemaProp, value: string): boolean {
+  const trimmed = value.trim()
+  if (!trimmed) return false
+  if (!arrayDraft.value[prop.key]) arrayDraft.value[prop.key] = []
+  const list = arrayDraft.value[prop.key]
+  // 重复去重：case_insensitive 时忽略大小写比较
+  const fold = (s: string) => (prop.xControl?.scan?.case_insensitive ? s.toLowerCase() : s)
+  if (list.some((item) => fold(item.trim()) === fold(trimmed))) return false
+  list.push(trimmed)
+  return true
+}
+
+function addPath(prop: SchemaProp) {
+  if (appendPathValue(prop, newPathDraft.value[prop.key] || '')) {
+    newPathDraft.value[prop.key] = ''
+    scanNotice.value[prop.key] = ''
+  }
+}
+
+function removePath(prop: SchemaProp, index: number) {
+  arrayDraft.value[prop.key]?.splice(index, 1)
+}
+
+// 绝对路径 → 工作区相对路径（相对则保留相对，越界则保留绝对并提示）
+function toWorkspaceRelative(absolute: string): { value: string; outside: boolean } | null {
+  const root = workRoot.value
+  if (!root) return null
+  const norm = (s: string) => s.replace(/\\/g, '/').replace(/\/+$/, '')
+  const target = norm(absolute)
+  const base = norm(root)
+  const lowerTarget = target.toLowerCase()
+  const lowerBase = base.toLowerCase()
+  if (lowerTarget === lowerBase) return { value: '.', outside: false }
+  if (lowerTarget.startsWith(lowerBase + '/')) return { value: target.slice(lowerBase.length + 1), outside: false }
+  return { value: absolute, outside: true }
+}
+
+// 目录选择：优先原生选择器（Tauri desktop 已注册 __LAMTOOLS_PICK_DIRECTORY__），
+// 非 Tauri（浏览器 dev / demo）回落内置目录树对话框（/api/core/browse-directory）。
+// 不新增任何依赖——两条路径都是仓库既有能力。
+async function pickDirectory(): Promise<string | null> {
+  const nativePick = (window as { __LAMTOOLS_PICK_DIRECTORY__?: () => Promise<string | null> }).__LAMTOOLS_PICK_DIRECTORY__
+  if (nativePick) {
+    try {
+      return await nativePick()
+    } catch {
+      // 原生选择器异常 → 回落目录树对话框
+    }
+  }
+  return new Promise<string | null>((resolve) => {
+    pendingBrowseResolve = resolve
+    browseDialogOpen.value = true
+  })
+}
+
+function onBrowseSelected(path: string) {
+  browseDialogOpen.value = false
+  pendingBrowseResolve?.(path)
+  pendingBrowseResolve = null
+}
+
+function onBrowseDismissed() {
+  browseDialogOpen.value = false
+  pendingBrowseResolve?.(null)
+  pendingBrowseResolve = null
+}
+
+async function browsePath(prop: SchemaProp, index?: number) {
+  const picked = await pickDirectory()
+  if (!picked) return
+  const converted = toWorkspaceRelative(picked)
+  const value = converted?.value ?? picked
+  if (index !== undefined) {
+    if (!arrayDraft.value[prop.key]) arrayDraft.value[prop.key] = []
+    arrayDraft.value[prop.key][index] = value
+  } else if (!appendPathValue(prop, value)) {
+    scanNotice.value[prop.key] = '该目录已在列表中'
+  }
+  if (converted?.outside) {
+    scanNotice.value[prop.key] = '所选目录在工作区之外，已保留绝对路径'
+  }
+}
+
+// 表单级扫描：调 plugin.config.detect-dirs，结果追加进列表（重复去重、
+// 工作区相对路径），未命中目录在提示里列出
+async function scanDirs(prop: SchemaProp) {
+  const scan = prop.xControl?.scan
+  if (!scan || scanning.value) return
+  scanning.value = true
+  error.value = ''
+  try {
+    const result = await props.requestRpc('plugin.config.detect-dirs', {
+      dirs: scan.dirs || [],
+      case_insensitive: !!scan.case_insensitive,
+    })
+    const found = ((result.found || []) as { dir: string; path: string; relative?: string }[])
+    const missing = ((result.missing || []) as string[]).filter(Boolean)
+    if (!arrayDraft.value[prop.key]) arrayDraft.value[prop.key] = []
+    const list = arrayDraft.value[prop.key]
+    const fold = (s: string) => (scan.case_insensitive ? s.toLowerCase() : s)
+    let added = 0
+    for (const item of found) {
+      const value = (item.relative || item.path).trim()
+      if (!value || list.some((existing) => fold(existing.trim()) === fold(value))) continue
+      list.push(value)
+      added += 1
+    }
+    const parts: string[] = []
+    if (added) parts.push(`已添加 ${added} 个目录`)
+    if (missing.length) parts.push(`未找到：${missing.join('、')}`)
+    if (!parts.length) parts.push('未发现新目录')
+    scanNotice.value[prop.key] = parts.join('；')
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    scanning.value = false
+  }
+}
+
+// ── x-control: model-select ───────────────────────────────────────────
+
+async function loadModelOptions() {
+  modelLoadFailed.value = false
+  allModels.value = []
+  try {
+    const result = await props.requestRpc('config.models.list')
+    allModels.value = ((result.models || []) as ModelOption[]).filter(
+      (m) => m && typeof m === 'object' && typeof m.capability === 'string',
+    )
+  } catch (e) {
+    // 枚举数据加载失败 → 退化为普通输入框（兜底可手动输入）
+    modelLoadFailed.value = true
+    error.value = e instanceof Error ? e.message : String(e)
+  }
+}
+
+function modelOptionsFor(prop: SchemaProp): ModelOption[] {
+  const capability = prop.xControl?.capability || 'multimodal'
+  return allModels.value.filter((m) => m.capability === capability)
+}
+
+function modelListId(prop: SchemaProp): string {
+  return `plugin-model-${prop.key}`
 }
 
 onMounted(fetchPlugins)
@@ -597,6 +891,42 @@ onMounted(fetchPlugins)
 .array-input {
   font-family: var(--font-mono);
   font-size: 12px;
+}
+
+/* ── x-control: path-list ── */
+.scan-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.scan-notice {
+  font-size: 12px;
+  color: var(--muted);
+  min-width: 0;
+}
+
+.path-list {
+  display: grid;
+  gap: 6px;
+}
+
+.path-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 6px;
+  align-items: center;
+}
+
+.path-input {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+/* 目录树对话框 teleport 宿主（空节点，仅作为挂载点） */
+.plugin-folder-host {
+  display: contents;
 }
 
 .deps-line {
