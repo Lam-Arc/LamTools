@@ -5,7 +5,16 @@
       "type": "array",
       "items": { "type": "string" },
       "default": [".lam/docs"],
-      "description": "自动检测并向量化的目录白名单（工作区相对路径；缺省 = 工作区 .lam/docs，会话启动增量扫描仅限这些目录）"
+      "description": "自动检测并向量化的目录白名单（工作区相对路径；缺省 = 工作区 .lam/docs，会话启动增量扫描仅限这些目录）",
+      "x-control": {
+        "kind": "path-list",
+        "browse": { "type": "directory", "mode": "multi" },
+        "scan": {
+          "label": "扫描工作区 docs",
+          "dirs": ["docs", ".lam/docs"],
+          "case_insensitive": true
+        }
+      }
     },
     "indexDir": {
       "type": "string",
@@ -19,7 +28,11 @@
     },
     "vlmModel": {
       "type": "string",
-      "description": "VLM 页面图理解模型（P3；缺省复用 default_multimodal_model）"
+      "description": "VLM 页面图理解模型（P3；缺省复用 default_multimodal_model）",
+      "x-control": {
+        "kind": "model-select",
+        "capability": "multimodal"
+      }
     }
   }
 }

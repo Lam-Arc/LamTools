@@ -76,8 +76,10 @@ def _fmt_doc_hit(h: dict, idx: int) -> str:
 
 def _fmt_session_hit(h: dict, idx: int) -> str:
     role = h.get("role") or "?"
+    title = str(h.get("title") or "").strip()
+    head = f"会话「{title}」" if title else "会话消息"
     return (
-        f"[{idx}] 会话消息 role={role} msg={h.get('message_id')}"
+        f"[{idx}] {head} role={role} msg={h.get('message_id')}"
         + f" turn={h.get('turn_index')}"
         + f" (score={h.get('score', 0):.2f})\n{h.get('snippet', '')}"
     )
@@ -196,12 +198,113 @@ async def rag_read(call) -> ToolResult:
     return _ok(call, content)
 
 
+async def _search_sessions(work_root: Path, data_dir: Path, args: dict) -> tuple[list[dict], str]:
+    """会话历史检索公共内核（P2：工具 rag_search_sessions 与 operation
+    rag.sessions.search 双出口单内核，设计文档 §8.4）。
+
+    返回 (hits, error)。hits 为 retriever.search(source="session_history")
+    结果（含 message_id/role/turn_index/snippet），供工具/operation 各自
+    格式化。
+    """
+    query = str(args.get("query") or "").strip()
+    if not query:
+        return [], "query 不能为空"
+    top = int(args.get("top") or 10)
+    filters = args.get("filters") or {}
+    if not isinstance(filters, dict):
+        filters = {}
+    role = str(filters.get("role") or "").strip() or None
+    embedder = Embedder(source=_embedding_source(data_dir))
+    hits = await asyncio.to_thread(
+        retriever.search,
+        _db_path(work_root, data_dir),
+        query,
+        source="session_history",
+        top=top,
+        role=role,
+        embedder=embedder,
+    )
+    if not hits:
+        return [], (
+            "会话历史无命中。可能原因：会话索引未建立（会话结束后 Stop hook 自动索引，"
+            "或用 py scripts/session_index.py --work-root <项目根> 手动补索引）或检索词差异过大。"
+        )
+    # 补会话标题（documents.title，供格式化与 UI 展示）
+    conn = connect(_db_path(work_root, data_dir))
+    try:
+        doc_ids = sorted({h["doc_id"] for h in hits})
+        if doc_ids:
+            placeholders = ",".join("?" * len(doc_ids))
+            title_map = {
+                row["doc_id"]: row["title"]
+                for row in conn.execute(
+                    f"SELECT doc_id, title FROM documents WHERE doc_id IN ({placeholders})",
+                    doc_ids,
+                )
+            }
+            for h in hits:
+                h["title"] = title_map.get(h["doc_id"], "")
+    finally:
+        conn.close()
+    return hits, ""
+
+
 async def rag_search_sessions(call) -> ToolResult:
-    # P2：core.db 只读索引（消息级/turn_index/水位） + 本工具 + operation rag.sessions.search
-    return _fail(
-        call,
-        "会话历史索引尚未实现（P2 阶段）。当前请使用 rag_search 检索工作区文档；"
-        "涉及历史会话的问题可先询问用户或引用当前会话上下文。",
+    global _HIT_CACHE
+    work_root, data_dir = _ctx(call)
+    hits, error = await _search_sessions(work_root, data_dir, call.arguments or {})
+    if error:
+        return _fail(call, error)
+    _HIT_CACHE = hits[-_HIT_CACHE_MAX:]  # 供 submit_answer 规则层校验
+    lines = [_fmt_session_hit(h, i + 1) for i, h in enumerate(hits)]
+    meta_hits = [
+        {k: h.get(k) for k in ("message_id", "role", "turn_index", "score", "snippet", "ts")}
+        for h in hits
+    ]
+    args = call.arguments if isinstance(call.arguments, dict) else {}
+    return _ok(call, "\n".join(lines), {"hits": meta_hits, "query": str(args.get("query") or "")})
+
+
+async def rag_sessions_search(
+    request, *, work_root, data_dir
+):
+    """operation `rag.sessions.search`（G 组 G4）：UI 全局搜索直调，不经 agent。
+
+    契约：``async def handler(request, *, work_root, data_dir) -> OperationResult``
+    （operations_loader 注册时 partial 绑定上下文）。与工具
+    rag_search_sessions 共用同一检索内核（双出口单内核）。返回结构化
+    命中（message_id/session/role/snippet），UI 渲染列表 + 跳转锚点。
+    """
+    from lamtools_core.app import OperationResult
+
+    payload = request.payload if hasattr(request, "payload") else (request or {})
+    hits, error = await _search_sessions(
+        Path(work_root or "."), Path(data_dir or "."), dict(payload)
+    )
+    if error:
+        return OperationResult(
+            name=getattr(request, "name", "rag.sessions.search"),
+            status="error",
+            payload={"error": error},
+        )
+    return OperationResult(
+        name=getattr(request, "name", "rag.sessions.search"),
+        payload={
+            "hits": [
+                {
+                    "message_id": h.get("message_id"),
+                    "session_id": str(h.get("doc_id") or "").removeprefix("session:"),
+                    "role": h.get("role"),
+                    "turn_index": h.get("turn_index"),
+                    "score": round(float(h.get("score") or 0), 3),
+                    "snippet": h.get("snippet", ""),
+                    "ts": h.get("ts"),
+                }
+                for h in hits
+            ],
+            "query": str(payload.get("query") or ""),
+            "count": len(hits),
+        },
     )
 
 

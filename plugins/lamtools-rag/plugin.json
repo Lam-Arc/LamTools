@@ -3,9 +3,20 @@
   "version": "0.1.0",
   "description": "Agent RAG：工作区文档 + 会话历史检索（sqlite-vec / FTS5+vec0 混合检索 / 强制引用）",
   "manifest_version": "1",
-  "skills": ["./skills"],
-  "hooks": ["./hooks/hooks.json"],
-  "tools": ["./tools/tools.jsonc"],
-  "dependencies": ["sqlite-vec>=0.1.9"],
-  "configSchema": "./config/schema.jsonc"
+  "skills": [
+    "./skills"
+  ],
+  "hooks": [
+    "./hooks/hooks.json"
+  ],
+  "tools": [
+    "./tools/tools.jsonc"
+  ],
+  "dependencies": [
+    "sqlite-vec>=0.1.9"
+  ],
+  "configSchema": "./config/schema.jsonc",
+  "operations": [
+    "./operations.jsonc"
+  ]
 }

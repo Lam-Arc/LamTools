@@ -76,6 +76,17 @@ CREATE TABLE IF NOT EXISTS extractions (
   model_id TEXT,
   created_at REAL
 );
+
+-- 元数据（索引水位等）
+CREATE TABLE IF NOT EXISTS meta (
+  key TEXT PRIMARY KEY,
+  value TEXT
+);
+
+-- 会话消息块幂等：compaction 重插后 history_seq 保留 → message_id 稳定，
+-- INSERT OR IGNORE 去重（防重复索引同一消息）
+CREATE UNIQUE INDEX IF NOT EXISTS uq_chunks_doc_message
+  ON chunks(doc_id, message_id) WHERE message_id IS NOT NULL;
 """.format(dim=EMB_DIM)
 
 

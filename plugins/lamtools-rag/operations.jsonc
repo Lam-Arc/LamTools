@@ -1,0 +1,24 @@
+{
+  "operations": [
+    {
+      "name": "rag.sessions.search",
+      "description": "在历史会话记录中检索（UI 全局搜索直调，不经 agent）。与工具 rag_search_sessions 共用同一检索内核。返回命中消息（message_id/session_id/role/turn_index/snippet），UI 据此渲染列表并跳转会话。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string" },
+          "top": { "type": "integer", "description": "返回条数（默认 10）" },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "role": { "type": "string", "enum": ["user", "assistant"] }
+            }
+          }
+        },
+        "required": ["query"]
+      },
+      "permission": "auto_allow",
+      "handler": "rag_engine.tools:rag_sessions_search"
+    }
+  ]
+}
