@@ -82,11 +82,24 @@
               </button>
               <button
                 v-if="plugin.config_schema || plugin.dependencies.length || hasAssets(plugin)"
-                class="text-btn"
+                class="text-btn icon-btn"
                 type="button"
+                aria-label="配置"
+                title="配置"
                 @click="openConfig(plugin)"
-              >配置</button>
-              <button v-if="!isBundled(plugin)" class="text-btn danger" type="button" @click="doUninstall(plugin)">卸载</button>
+              >
+                <Settings :size="15" :stroke-width="1.8" aria-hidden="true" />
+              </button>
+              <button
+                v-if="!isBundled(plugin)"
+                class="text-btn danger icon-btn"
+                type="button"
+                aria-label="卸载"
+                title="卸载"
+                @click="doUninstall(plugin)"
+              >
+                <Trash2 :size="15" :stroke-width="1.8" aria-hidden="true" />
+              </button>
             </div>
           </div>
         </div>
@@ -274,7 +287,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { ToggleLeft, ToggleRight, X } from 'lucide-vue-next'
+import { Settings, ToggleLeft, ToggleRight, Trash2, X } from 'lucide-vue-next'
 import FolderBrowserDialog from './FolderBrowserDialog.vue'
 
 interface PluginToolDecl {
@@ -814,6 +827,14 @@ onMounted(fetchPlugins)
   margin: 0 0 8px;
   font-size: 12px;
   opacity: 0.7;
+}
+
+/* 行操作图标按钮（配置/卸载）：图标垂直居中，与文字按钮同高 */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 4px;
 }
 
 .install-form {
