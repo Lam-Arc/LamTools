@@ -50,18 +50,26 @@ def _detect_dir(base: Path, dir_name: str, case_insensitive: bool) -> Path | Non
         return None
     current = base
     for part in parts:
-        direct = current / part
-        if direct.exists():
-            current = direct
-            continue
-        if not case_insensitive:
-            return None
-        # 忽略大小写：扫描当前目录找名字折叠相等的条目
+        if case_insensitive:
+            # 快路径：原名直接命中（Linux/macOS 大小写敏感盘上有意义）
+            direct = current / part
+            if direct.exists():
+                current = direct
+                continue
+        # 枚举精确匹配：Windows NTFS 上 exists() 天然大小写不敏感，
+        # case_insensitive=False 时不能用它探测——必须逐条目精确比较
+        # （True 时用 casefold 折叠相等）
         match: Path | None = None
         try:
             with os.scandir(current) as it:
                 for entry in it:
-                    if entry.name.casefold() == part.casefold():
+                    if not entry.is_dir():
+                        continue
+                    if case_insensitive:
+                        same = entry.name.casefold() == part.casefold()
+                    else:
+                        same = entry.name == part
+                    if same:
                         match = Path(entry.path)
                         break
         except OSError:
