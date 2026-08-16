@@ -7,24 +7,35 @@
 
     <p v-if="error" class="skill-error" role="alert">{{ error }}</p>
 
-    <!-- 安装表单 -->
+    <!-- 安装区：拖拽 zip 直装 / 粘贴 Release URL -->
     <article class="setting-card install-card">
       <h3>安装插件</h3>
-      <div class="install-form">
-        <select v-model="installSource" class="field-input">
-          <option value="local">本地目录</option>
-          <option value="zip">本地 zip</option>
-          <option value="url">GitHub Release URL</option>
-        </select>
-        <input
-          v-model="installPath"
-          class="field-input install-path"
-          type="text"
-          :placeholder="installSource === 'url' ? 'https://github.com/{owner}/{repo}/releases/…/{asset}.zip' : '插件目录或 .zip 路径'"
-        />
-        <button class="small-btn" type="button" :disabled="installing || !installPath.trim()" @click="doInstall">
-          {{ installing ? '安装中…' : '安装' }}
-        </button>
+      <div
+        class="install-dropzone"
+        :class="{ 'is-drag': dragActive }"
+        @dragover.prevent="onDragOver"
+        @dragenter.prevent="dragActive = true"
+        @dragleave.prevent="onDragLeave"
+        @drop.prevent="onDrop"
+      >
+        <p class="dropzone-hint">{{ dragActive ? '松开以安装' : '拖拽 .zip 文件到此处安装' }}</p>
+        <p class="dropzone-sub">或粘贴 GitHub Release URL：</p>
+        <div class="install-form">
+          <select v-model="installSource" class="field-input">
+            <option value="url">GitHub Release URL</option>
+            <option value="local">本地目录</option>
+            <option value="zip">本地 zip 路径</option>
+          </select>
+          <input
+            v-model="installPath"
+            class="field-input install-path"
+            type="text"
+            :placeholder="installSource === 'url' ? 'https://github.com/{owner}/{repo}/releases/…/{asset}.zip' : '插件目录或 .zip 路径'"
+          />
+          <button class="small-btn" type="button" :disabled="installing || !installPath.trim()" @click="doInstall">
+            {{ installing ? '安装中…' : '安装' }}
+          </button>
+        </div>
       </div>
       <p v-if="installNotice" class="install-notice">{{ installNotice }}</p>
     </article>
@@ -334,8 +345,47 @@ const errors = ref<{ name: string; error: string }[]>([])
 const installing = ref(false)
 const installingDeps = ref(false)
 const installNotice = ref('')
-const installSource = ref('local')
+const installSource = ref('url')
 const installPath = ref('')
+const dragActive = ref(false)
+
+// 拖拽安装：Tauri（dragDropEnabled）下拖入文件的 File.path 为真实路径，
+// 直接走 plugin.install(source=zip)；非桌面端无 path 时提示改用 URL。
+function onDragOver() {
+  dragActive.value = true
+}
+function onDragLeave(e: DragEvent) {
+  // 离开子元素不熄灭（relatedTarget 在拖拽区内则忽略）
+  const related = e.relatedTarget as Node | null
+  if (related && (e.currentTarget as Node).contains(related)) return
+  dragActive.value = false
+}
+async function onDrop(e: DragEvent) {
+  dragActive.value = false
+  const file = e.dataTransfer?.files?.[0]
+  if (!file) return
+  const p = (file as File & { path?: string }).path
+  if (!p) {
+    installNotice.value = '当前环境不支持拖拽安装（请使用 Release URL 粘贴安装）'
+    return
+  }
+  if (!/\.zip$/i.test(p)) {
+    installNotice.value = `仅支持 .zip 安装包：${file.name}`
+    return
+  }
+  installNotice.value = ''
+  installing.value = true
+  error.value = ''
+  try {
+    await props.requestRpc('plugin.install', { source: 'zip', path: p })
+    installNotice.value = `安装成功：${file.name}`
+    await fetchPlugins()
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    installing.value = false
+  }
+}
 
 // 配置卡片（浮层）：当前打开的插件
 const configPlugin = ref<PluginItem | null>(null)
@@ -739,6 +789,31 @@ onMounted(fetchPlugins)
 .install-card h3 {
   margin: 0 0 8px;
   font-size: 14px;
+}
+
+.install-dropzone {
+  border: 1.5px dashed var(--border, rgba(128, 128, 128, 0.45));
+  border-radius: 8px;
+  padding: 14px 12px;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.install-dropzone.is-drag {
+  border-color: var(--accent, #4f8cff);
+  background: color-mix(in srgb, var(--accent, #4f8cff) 8%, transparent);
+}
+
+.dropzone-hint {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text, inherit);
+}
+
+.dropzone-sub {
+  margin: 0 0 8px;
+  font-size: 12px;
+  opacity: 0.7;
 }
 
 .install-form {
