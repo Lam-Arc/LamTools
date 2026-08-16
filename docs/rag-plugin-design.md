@@ -234,8 +234,8 @@ tool 角色消息            → 不入库
 
 ## 10. 索引时机：自动 + 手动
 
-- **自动**：`autoRoots` 配置（项目内子目录白名单，如 `["docs/contracts"]`）——会话启动增量扫描（sha256/mtime 变更检测），**仅限白名单范围**；长任务 JSONL 进度 + 断点续跑。
-- **手动**：会话内自然语言指令（"给 docs/contracts 建 rag"）→ load rag-indexer → `rag_index` 工具（范围参数，ASK_USER 审批一次）。
+- **自动**：`autoRoots` 配置（工作区子目录白名单，**缺省 = `[".lam/docs"]`**，2026-08-16 决策）——会话启动增量扫描（sha256/mtime 变更检测），**仅限白名单范围**（`.lam/docs` 为默认自动索引文档库，目录内有 README 约定）；长任务 JSONL 进度 + 断点续跑。
+- **手动**：会话内自然语言指令（"给 docs/contracts 建 rag"）→ load rag-indexer → `rag_index` 工具（范围参数，ASK_USER 审批一次）；autoRoots 目录缺失时 rag_index 给出创建引导（不静默空索引）。
 - **会话历史**：Stop hook 自动触发（§8.2）。
 - 查询路径永不现解析/OCR/VLM/embedding——重活全在索引期。
 

@@ -45,7 +45,10 @@ def _plugin_config(data_dir: Path) -> dict:
 
 
 def _auto_roots(data_dir: Path) -> list[str]:
-    return list(_plugin_config(data_dir).get("autoRoots") or [])
+    """自动索引白名单。缺省 = ['.lam/docs']（2026-08-16 决策：
+    自动检测并向量化的路径统一放工作区 .lam/docs）。"""
+    cfg_roots = list(_plugin_config(data_dir).get("autoRoots") or [])
+    return cfg_roots or [".lam/docs"]
 
 
 def _embedding_source(data_dir: Path) -> str:
@@ -93,6 +96,15 @@ async def rag_index(call) -> ToolResult:
             "或先在插件配置中设置 autoRoots 白名单",
         )
     embedder = Embedder(source=_embedding_source(data_dir))
+    if not paths:
+        # 缺省 autoRoots 目录不存在时给出明确引导（而非静默空索引）
+        missing = [r for r in roots if not (work_root / r).is_dir()]
+        if len(missing) == len(roots):
+            return _fail(
+                call,
+                f"自动索引目录不存在：{missing[0]}（工作区相对路径）。"
+                "请将待索引文档放入该目录，或在插件配置 autoRoots 指定其他目录",
+            )
     stats = await asyncio.to_thread(
         indexer.index_documents,
         work_root,

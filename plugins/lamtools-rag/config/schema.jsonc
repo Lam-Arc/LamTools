@@ -4,7 +4,8 @@
     "autoRoots": {
       "type": "array",
       "items": { "type": "string" },
-      "description": "自动索引的工作区子目录白名单（会话启动增量扫描仅限这些目录）"
+      "default": [".lam/docs"],
+      "description": "自动检测并向量化的目录白名单（工作区相对路径；缺省 = 工作区 .lam/docs，会话启动增量扫描仅限这些目录）"
     },
     "indexDir": {
       "type": "string",
