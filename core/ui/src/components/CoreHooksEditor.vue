@@ -1,26 +1,11 @@
 <template>
   <section class="settings-panel">
     <header class="settings-title">
-      <h1>Hooks</h1>
+      <h1>钩子</h1>
       <p>管理事件钩子。未信任的 Hook 不会执行，需在此审核后启用。</p>
     </header>
 
     <p v-if="error" class="hook-error">{{ error }}</p>
-
-    <article class="setting-card agent-toggle">
-      <div class="agent-toggle-row">
-        <div>
-          <h3>允许 Agent 自建 Hook</h3>
-          <p>开启后，系统提示词会注入 hooks.json 的编写指引，Agent 可按用户要求自行创建事件钩子。</p>
-        </div>
-        <button
-          class="text-btn"
-          :class="{ 'is-on': allowAgentCreateHooks }"
-          type="button"
-          @click="toggleAllowCreate"
-        >{{ allowAgentCreateHooks ? '已开启' : '已关闭' }}</button>
-      </div>
-    </article>
 
     <div class="subhead">
       <span class="muted">{{ loading ? '加载中…' : `共 ${totalCount} 个 · 已信任 ${trustedCount}${trustableCount ? ` · 待审核 ${trustableCount}` : ''}` }}</span>
@@ -113,10 +98,19 @@
             placeholder="执行前显示给用户的状态文字"
           />
         </label>
-        <label class="field field-wide checkbox-inline">
+        <div class="field field-wide checkbox-inline">
           <span>hook 失败时阻断执行</span>
-          <input v-model="hookForm.required" type="checkbox" />
-        </label>
+          <button
+            type="button"
+            class="toggle-btn"
+            :class="{ 'is-on': hookForm.required }"
+            aria-label="hook 失败时阻断执行"
+            @click="hookForm.required = !hookForm.required"
+          >
+            <ToggleRight v-if="hookForm.required" :size="16" :stroke-width="1.8" aria-hidden="true" />
+            <ToggleLeft v-else :size="16" :stroke-width="1.8" aria-hidden="true" />
+          </button>
+        </div>
         <div class="editor-actions field-wide">
           <button type="button" class="small-btn quiet" @click="showHookForm = false">取消</button>
           <button class="small-btn primary" type="submit" :disabled="hookFormSaving">
@@ -225,7 +219,6 @@ const error = ref('')
 const totalCount = ref(0)
 const trustedCount = ref(0)
 const trustableCount = ref(0)
-const allowAgentCreateHooks = ref(false)
 
 const showConfig = ref(false)
 const configDraft = ref('')
@@ -320,35 +313,15 @@ async function fetchHooks() {
   loading.value = true
   error.value = ''
   try {
-    const [hookResult, settingsResult] = await Promise.all([
-      props.requestRpc('hook.list'),
-      props.requestRpc('settings.get', { namespace: 'core.runtimeControls' }),
-    ])
-    const result = hookResult as unknown as CoreHookListPayload
+    const result = (await props.requestRpc('hook.list')) as unknown as CoreHookListPayload
     hooks.value = result.hooks || []
     totalCount.value = result.total_count || 0
     trustedCount.value = result.trusted_count || 0
     trustableCount.value = result.trustable_count || 0
-    const value = settingsResult.value as Record<string, unknown> | undefined
-    allowAgentCreateHooks.value = value ? !!value.allow_agent_create_hooks : false
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
   } finally {
     loading.value = false
-  }
-}
-
-async function toggleAllowCreate() {
-  const next = !allowAgentCreateHooks.value
-  allowAgentCreateHooks.value = next
-  try {
-    await props.requestRpc('settings.update', {
-      namespace: 'core.runtimeControls',
-      value: { allow_agent_create_hooks: next },
-    })
-  } catch (e) {
-    allowAgentCreateHooks.value = !next
-    error.value = e instanceof Error ? e.message : String(e)
   }
 }
 
@@ -521,29 +494,6 @@ onMounted(fetchHooks)
 </script>
 
 <style scoped>
-.agent-toggle {
-  padding: 12px 14px;
-}
-
-.agent-toggle-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 14px;
-  align-items: center;
-}
-
-.agent-toggle h3 {
-  margin: 0 0 4px;
-  font-size: 14px;
-}
-
-.agent-toggle p {
-  margin: 0;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.5;
-}
-
 .hook-error {
   margin: 0;
   padding: 9px 12px;
@@ -622,45 +572,6 @@ onMounted(fetchHooks)
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--settings-control-solid, var(--theme-control-background)) 70%, transparent);
   color: var(--settings-control-text, var(--theme-control-text));
-}
-
-.hook-form input[type="checkbox"] {
-  appearance: none;
-  -webkit-appearance: none;
-  width: 14px;
-  height: 14px;
-  min-width: 14px;
-  min-height: 14px;
-  margin: 0;
-  padding: 0;
-  border: 1.5px solid color-mix(in srgb, var(--settings-main-text, #fff) 30%, transparent);
-  border-radius: 4px;
-  background: transparent;
-  cursor: pointer;
-  position: relative;
-  flex-shrink: 0;
-  transition: border-color .15s, background .15s;
-}
-
-.hook-form input[type="checkbox"]:hover {
-  border-color: color-mix(in srgb, var(--settings-main-text, #fff) 55%, transparent);
-}
-
-.hook-form input[type="checkbox"]:checked {
-  border-color: var(--green, #32d17d);
-  background: var(--green, #32d17d);
-}
-
-.hook-form input[type="checkbox"]:checked::after {
-  content: '';
-  position: absolute;
-  top: 0px;
-  left: 3px;
-  width: 3px;
-  height: 7px;
-  border: solid var(--theme-backdrop-text, #f2efeb);
-  border-width: 0 1.5px 1.5px 0;
-  transform: rotate(45deg);
 }
 
 .checkbox-inline {

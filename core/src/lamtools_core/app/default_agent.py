@@ -420,8 +420,6 @@ def create_core_agent_operations(
                 active_mode = None
             # Optional per-turn instructions override (e.g. workflow-mode context).
             turn_instructions = str(request.payload.get("instructions") or "").strip() or None
-            allow_agent_install_skill = bool(request.payload.get("allow_agent_install_skill"))
-            allow_agent_create_hooks = bool(request.payload.get("allow_agent_create_hooks"))
             allow_access_outside_workdir = bool(request.payload.get("allow_access_outside_workdir"))
             raw_imagegen = request.payload.get("imagegen_config")
             imagegen_config = raw_imagegen if isinstance(raw_imagegen, dict) else None
@@ -496,8 +494,6 @@ def create_core_agent_operations(
                             approval_policy=approval_policy,  # type: ignore[arg-type]
                             active_mode=active_mode,
                             capability=runtime_options.capability,
-                            allow_agent_install_skill=allow_agent_install_skill,
-                            allow_agent_create_hooks=allow_agent_create_hooks,
                         ),
                         toolbox=toolbox,
                         verification_policy=kit.verification_policy(),

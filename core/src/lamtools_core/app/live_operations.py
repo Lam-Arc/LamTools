@@ -617,8 +617,6 @@ async def handle_turn_start_operation(
         "active_tier": resolved["active_tier"],
         "tier_tools": resolved["tier_tools"],
         "active_mode": resolved["active_mode"],
-        "allow_agent_install_skill": resolved.get("allow_agent_install_skill", False),
-        "allow_agent_create_hooks": resolved.get("allow_agent_create_hooks", False),
         "allow_access_outside_workdir": resolved.get("allow_access_outside_workdir", False),
         "imagegen_config": imagegen_config,
         "model_id": str(params.get("model_id") or params.get("modelId") or ""),
@@ -714,8 +712,6 @@ async def _resolve_turn_approval_policy(*, context: "CoreLiveContext", params: d
         "active_tier": None,
         "tier_tools": None,
         "active_mode": active_mode,
-        "allow_agent_install_skill": False,
-        "allow_agent_create_hooks": False,
         "allow_access_outside_workdir": False,
     }
     if explicit is not None:
@@ -742,16 +738,12 @@ async def _resolve_turn_approval_policy(*, context: "CoreLiveContext", params: d
     active_tier: PermissionMode = permission_mode  # type: ignore[assignment]
     tier_tools = _load_tier_tools(context)
     approval_policy = "auto_approve" if active_tier == "full_edit" else "require"
-    allow_agent_install_skill = bool(value.get("allow_agent_install_skill"))
-    allow_agent_create_hooks = bool(value.get("allow_agent_create_hooks"))
     allow_access_outside_workdir = bool(value.get("allow_access_outside_workdir"))
     return {
         "approval_policy": approval_policy,
         "active_tier": active_tier,
         "tier_tools": tier_tools,
         "active_mode": active_mode,
-        "allow_agent_install_skill": allow_agent_install_skill,
-        "allow_agent_create_hooks": allow_agent_create_hooks,
         "allow_access_outside_workdir": allow_access_outside_workdir,
     }
 
@@ -1966,9 +1958,7 @@ async def _dispatch_next_queue_item(
                 "active_tier": resolved["active_tier"],
                 "tier_tools": resolved["tier_tools"],
                 "active_mode": resolved["active_mode"],
-                "allow_agent_install_skill": resolved.get("allow_agent_install_skill", False),
-                "allow_agent_create_hooks": resolved.get("allow_agent_create_hooks", False),
-                **prepared.runtime_extras,
+                                **prepared.runtime_extras,
                 **materialized.runtime_extras,
             }
             return [dispatched, accepted, user, running], runtime_start

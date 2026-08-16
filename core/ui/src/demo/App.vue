@@ -53,6 +53,12 @@
     @refresh-workflows="loadSettingsWorkflows"
     @toggle-workflow-exposed="onToggleWorkflowExposed"
   />
+  <PluginsShell
+    v-if="showPlugins"
+    :request-rpc="requestConfigOperation"
+    :theme="theme"
+    @close="showPlugins = false"
+  />
   <CoreArrangeManager
     v-if="showArrange"
     :work-root="currentWorkRoot()"
@@ -84,6 +90,7 @@
     v-model:stage-open="stageOpen"
     @new-session="openProjectCreate"
     @settings="openSettings"
+    @plugins="openPlugins"
     @composer-submit="submitComposer"
     @composer-drop="handleComposerDrop"
   >
@@ -605,6 +612,7 @@ import CoreProjectCreate from '../components/CoreProjectCreate.vue'
 import CoreSessionTitleEditor from '../components/CoreSessionTitleEditor.vue'
 import ArtifactPanel from '../components/ArtifactPanel.vue'
 import OnboardingWizard from '../components/OnboardingWizard.vue'
+import PluginsShell from '../components/PluginsShell.vue'
 import CoreSettings, {
   type CoreSettingsModelPayload,
   type CoreSettingsProviderPayload,
@@ -707,6 +715,7 @@ function toggleRightPinned() {
 }
 const settingsStorageKey = 'lamtools.core.ui'
 const showSettings = ref(false)
+const showPlugins = ref(false)
 const showArrange = ref(false)
 const showOnboarding = ref(false)
 const wizardLoading = ref(false)
@@ -2077,6 +2086,10 @@ async function loadAvailableTools() {
 function openSettings() {
   showSettings.value = true
   void loadSettingsWorkflows()
+}
+
+function openPlugins() {
+  showPlugins.value = true
 }
 
 async function selectWorkflow(name: string) {

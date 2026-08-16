@@ -130,10 +130,6 @@
         </KeepAlive>
       </section>
 
-      <section v-if="activeSection === 'plugins'" class="settings-panel">
-        <CorePluginsEditor :request-rpc="requestRpc || defaultRequestRpc" />
-      </section>
-
       <section v-if="activeSection === 'permissions'" class="settings-panel">
         <header class="settings-title">
           <h1>权限策略</h1>
@@ -164,15 +160,19 @@
         <article class="setting-card">
           <h3>工作目录访问</h3>
           <div class="dream-row">
-            <label class="dream-toggle">
-              <input
-                type="checkbox"
-                data-allow-outside-workdir
-                :checked="allowAccessOutsideWorkdir"
-                @change="toggleAllowOutsideWorkdir"
-              />
+            <div class="dream-toggle">
+          <button
+            type="button"
+            class="toggle-btn"
+            :class="{ 'is-on': allowAccessOutsideWorkdir }"
+            :aria-label="'允许访问工作目录以外'"
+            @click="toggleAllowOutsideWorkdir"
+          >
+            <ToggleRight v-if="allowAccessOutsideWorkdir" :size="16" :stroke-width="1.8" aria-hidden="true" />
+            <ToggleLeft v-else :size="16" :stroke-width="1.8" aria-hidden="true" />
+          </button>
               <span class="dream-toggle-label">允许访问工作目录以外</span>
-            </label>
+            </div>
             <span class="muted">开启后 Agent 可读写工作目录之外的任意路径（敏感文件仍受拦截）</span>
           </div>
         </article>
@@ -297,10 +297,19 @@
             </div>
           </div>
           <div class="dream-row">
-            <label class="dream-toggle">
-              <input v-model="dreamingEnabled" type="checkbox" :disabled="dreamingLoading" @change="saveDreamingSettings" />
+            <div class="dream-toggle">
+          <button
+            type="button"
+            class="toggle-btn"
+            :class="{ 'is-on': dreamingEnabled }"
+            :aria-label="'自动记忆整理'"
+            @click="saveDreamingSettings"
+          >
+            <ToggleRight v-if="dreamingEnabled" :size="16" :stroke-width="1.8" aria-hidden="true" />
+            <ToggleLeft v-else :size="16" :stroke-width="1.8" aria-hidden="true" />
+          </button>
               <span class="dream-toggle-label">自动记忆整理</span>
-            </label>
+            </div>
             <span class="muted">每轮会话结束时自动把值得长期保留的内容蒸馏到工作区 MEMORY.md</span>
           </div>
           <div class="dream-row">
@@ -406,15 +415,19 @@
         <article class="setting-card">
           <h3>自动检查</h3>
           <div class="dream-row">
-            <label class="dream-toggle">
-              <input
-                type="checkbox"
-                data-update-auto-check
-                :checked="updateAutoCheck"
-                @change="toggleUpdateAutoCheck"
-              />
+            <div class="dream-toggle">
+          <button
+            type="button"
+            class="toggle-btn"
+            :class="{ 'is-on': updateAutoCheck }"
+            :aria-label="'启动时自动检查更新'"
+            @click="toggleUpdateAutoCheck"
+          >
+            <ToggleRight v-if="updateAutoCheck" :size="16" :stroke-width="1.8" aria-hidden="true" />
+            <ToggleLeft v-else :size="16" :stroke-width="1.8" aria-hidden="true" />
+          </button>
               <span class="dream-toggle-label">启动时自动检查更新</span>
-            </label>
+            </div>
             <span class="muted">发现新版本时会在顶部显示提示条</span>
           </div>
         </article>
@@ -533,9 +546,19 @@
                   <label class="field">Temperature
                     <input v-model.number="modelEditor.temperature" type="number" min="0" max="2" step="0.1" />
                   </label>
-                  <label class="field checkbox-field">
-                    <input v-model="modelEditor.thinking_supported" type="checkbox" /> 支持推理
-                  </label>
+                  <div class="field checkbox-field">
+                    <button
+                      type="button"
+                      class="toggle-btn"
+                      :class="{ 'is-on': modelEditor.thinking_supported }"
+                      aria-label="支持推理"
+                      @click="modelEditor.thinking_supported = !modelEditor.thinking_supported"
+                    >
+                      <ToggleRight v-if="modelEditor.thinking_supported" :size="16" :stroke-width="1.8" aria-hidden="true" />
+                      <ToggleLeft v-else :size="16" :stroke-width="1.8" aria-hidden="true" />
+                    </button>
+                    <span>支持推理</span>
+                  </div>
                   <label class="field">能力分类
                     <UiSelect
                       :model-value="modelEditor.capability ?? ''"
@@ -577,7 +600,6 @@ import {
 } from '../helpers/theme'
 import SettingsShell, { type SettingsSection } from './SettingsShell.vue'
 import ThemeEditor from './ThemeEditor.vue'
-import CorePluginsEditor from './CorePluginsEditor.vue'
 import CoreSubAgentEditor from './CoreSubAgentEditor.vue'
 import CoreLoadToolsEditor from './CoreLoadToolsEditor.vue'
 import UiSelect from './UiSelect.vue'
@@ -704,7 +726,6 @@ const sections: SettingsSection[] = [
   { id: 'models', label: '模型与供应商', icon: 'database' },
   { id: 'appearance', label: '界面', icon: 'palette' },
   { id: 'loadtools', label: '工具模式', icon: 'list-checks' },
-  { id: 'plugins', label: '插件', icon: 'puzzle' },
   { id: 'permissions', label: '权限', icon: 'lock' },
   { id: 'agents', label: '上下文与记忆', icon: 'file-code' },
   { id: 'workflow', label: '工作流', icon: 'workflow' },
@@ -1370,85 +1391,6 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
   padding: 0;
 }
 
-/* ── Overlay — full-viewport backdrop with centered card ── */
-.settings-overlay {
-  position: fixed;
-  inset: var(--titlebar-offset, 36px) 0 0 0;
-  z-index: 90;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.5);
-  backdrop-filter: blur(3px);
-  -webkit-backdrop-filter: blur(3px);
-}
-
-.settings-card {
-  position: relative;
-  width: min(960px, calc(100vw - 48px));
-  max-height: calc(100dvh - var(--titlebar-offset, 36px) - 48px);
-  border: 1px solid color-mix(in srgb, var(--settings-main-text, #f2efeb) 12%, transparent);
-  border-radius: var(--radius-lg);
-  background: var(--settings-card-background, var(--theme-main-background, #111111));
-  box-shadow: var(--shadow-lg);
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-}
-
-/* ── Floating editor popover ── */
-.editor-overlay {
-  position: absolute;
-  inset: 0;
-  z-index: var(--z-popover);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.35);
-  backdrop-filter: blur(2px);
-  -webkit-backdrop-filter: blur(2px);
-  padding: 24px;
-}
-.editor-popover {
-  width: min(560px, 100%);
-  max-height: calc(100% - 48px);
-  overflow-y: auto;
-  border-radius: var(--radius);
-  background: var(--settings-card-background, var(--theme-main-background, #111111));
-  border: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 14%, transparent);
-  box-shadow: var(--shadow-md);
-  padding: 18px 20px;
-  color: var(--settings-card-text, var(--settings-main-text, var(--text)));
-  /* 弹层在 .settings-main 的 --muted 重映射作用域之外（layout.css），
-     自行跟随主题：亮色分支注入 --settings-muted，暗色 fallback 与全局一致 */
-  --muted: var(--settings-muted, #a7a29b);
-}
-.editor-popover-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 14px;
-}
-.editor-popover-head h3 {
-  margin: 0;
-  font-size: 15px;
-}
-.editor-popover-close {
-  flex-shrink: 0;
-  width: 28px;
-  height: 28px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--muted);
-  font-size: 20px;
-  line-height: 1;
-  cursor: pointer;
-}
-.editor-popover-close:hover {
-  background: color-mix(in srgb, var(--settings-main-text, #fff) 10%, transparent);
-}
-
 /* ── Responsive: full-screen on narrow viewports ── */
 @media (max-width: 640px) {
   .settings-card {
@@ -1721,48 +1663,6 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
   .permission-tools {
     grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
   }
-}
-
-.config-form .checkbox-field {
-  display: flex;
-  align-items: center;
-  min-height: 36px;
-}
-
-/* ── 主题化 checkbox（对齐 layout.css toggle-line 配方：绿勾选中态）── */
-.config-form .checkbox-field input[type="checkbox"],
-.dream-toggle input[type="checkbox"] {
-  appearance: none;
-  -webkit-appearance: none;
-  width: 15px;
-  height: 15px;
-  min-width: 15px;
-  min-height: 15px;
-  margin: 0;
-  padding: 0;
-  border: 1px solid color-mix(in srgb, var(--settings-main-text, #fff) 24%, transparent);
-  border-radius: 4px;
-  background: transparent;
-  cursor: pointer;
-  position: relative;
-  flex-shrink: 0;
-  display: grid;
-  place-items: center;
-  transition: background .12s ease, border-color .12s ease;
-}
-.config-form .checkbox-field input[type="checkbox"]:checked,
-.dream-toggle input[type="checkbox"]:checked {
-  border-color: var(--green, #32d17d);
-  background: var(--green, #32d17d);
-}
-.config-form .checkbox-field input[type="checkbox"]:checked::after,
-.dream-toggle input[type="checkbox"]:checked::after {
-  content: "";
-  width: 7px;
-  height: 4px;
-  border-left: 2px solid color-mix(in srgb, var(--settings-main-text, #fff) 92%, transparent);
-  border-bottom: 2px solid color-mix(in srgb, var(--settings-main-text, #fff) 92%, transparent);
-  transform: rotate(-45deg) translateY(-1px);
 }
 
 .capability-badge {

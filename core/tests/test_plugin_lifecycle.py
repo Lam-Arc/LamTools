@@ -324,3 +324,94 @@ async def test_toolbox_missing_dependency_placeholder(tmp_path, monkeypatch):
     assert "missing dependencies" in (result.error or "")
     assert "pip install" in (result.error or "")
     assert "no-such-pkg-xyz" in toolbox._plugin_handler_errors["dep_tool"]
+
+
+async def test_plugin_config_secret_masking(lifecycle, tmp_path):
+    """密钥字段（api_key）回显打码；掩码提交保留原值。"""
+    catalog, data_dir, roots = lifecycle
+    schema = {"type": "object", "properties": {
+        "api_key": {"type": "string"},
+        "model": {"type": "string"},
+    }}
+    src = _make_plugin_dir(tmp_path, schema=schema)
+    await catalog.execute("plugin.install", {"source": "local", "path": str(src)})
+    await catalog.execute("plugin.config.update", {"name": "demo-plugin", "config": {"api_key": "sk-real-123", "model": "m1"}})
+
+    got = await catalog.execute("plugin.config.get", {"name": "demo-plugin"})
+    assert got.payload["config"]["api_key"] == "********"  # 打码
+    assert got.payload["has_secrets"] is True
+    assert got.payload["config"]["model"] == "m1"  # 非密钥字段原样
+
+    # 掩码提交 → 保留原值
+    kept = await catalog.execute("plugin.config.update", {"name": "demo-plugin", "config": {"api_key": "********", "model": "m2"}})
+    assert kept.payload["config"]["api_key"] == "sk-real-123"
+    after = await catalog.execute("plugin.config.get", {"name": "demo-plugin"})
+    assert after.payload["config"]["model"] == "m2"
+    # 真值提交 → 覆盖
+    replaced = await catalog.execute("plugin.config.update", {"name": "demo-plugin", "config": {"api_key": "sk-new"}})
+    assert replaced.payload["config"]["api_key"] == "sk-new"
+
+
+async def test_plugin_list_asset_details(lifecycle, tmp_path):
+    """plugin.list 返回具体技能名与钩子事件摘要（配置卡片展示用）。"""
+    catalog, data_dir, roots = lifecycle
+    # 插件带 skills + hooks
+    src = tmp_path / "asset-plugin"
+    (src / "skills" / "demo-skill").mkdir(parents=True)
+    (src / "skills" / "demo-skill" / "SKILL.md").write_text(
+        "---\nname: demo-skill\ndescription: d\n---\nbody", encoding="utf-8"
+    )
+    (src / "skills" / "other").mkdir(parents=True)
+    (src / "skills" / "other" / "SKILL.md").write_text(
+        "---\nname: other-skill\ndescription: o\n---\nbody", encoding="utf-8"
+    )
+    (src / "hooks").mkdir()
+    (src / "hooks" / "hooks.json").write_text(
+        json.dumps({"hooks": {
+            "PreToolUse": [{"matcher": "read_file", "hooks": [{"type": "command", "command": "echo x"}]}],
+            "SessionStart": [{"matcher": "*", "hooks": [{"type": "prompt", "prompt": "hi"}]}],
+        }}),
+        encoding="utf-8",
+    )
+    (src / "plugin.json").write_text(json.dumps({
+        "name": "asset-plugin", "version": "1.0.0",
+        "skills": ["./skills"], "hooks": ["./hooks/hooks.json"],
+    }), encoding="utf-8")
+    await catalog.execute("plugin.install", {"source": "local", "path": str(src)})
+
+    listed = await catalog.execute("plugin.list")
+    plugin = next(p for p in listed.payload["plugins"] if p["name"] == "asset-plugin")
+    assert plugin["skill_names"] == ["demo-skill", "other-skill"]
+    assert len(plugin["hook_summary"]) == 2
+    by_event = {h["event"]: h for h in plugin["hook_summary"]}
+    assert by_event["PreToolUse"]["matcher"] == "read_file"
+    assert by_event["PreToolUse"]["type"] == "command"
+    assert by_event["SessionStart"]["type"] == "prompt"
+
+
+async def test_skill_create_roundtrip(lifecycle, tmp_path, monkeypatch):
+    """skill.create：标题/描述/内容 → 用户级 SKILL.md → skill.list 可见。"""
+    catalog, data_dir, roots = lifecycle
+    monkeypatch.setenv("LAMTOOLS_HOME", str(tmp_path / "lamhome"))
+
+    result = await catalog.execute("skill.create", {
+        "name": "my-skill", "description": "我的技能", "content": "这是正文",
+    })
+    assert result.status == "ok", result.payload
+    assert result.payload["created"] is True
+    md = (tmp_path / "lamhome" / "skills" / "my-skill" / "SKILL.md").read_text(encoding="utf-8")
+    assert "name: my-skill" in md
+    assert "description: 我的技能" in md
+    assert "这是正文" in md
+
+    # 重名拒绝
+    dup = await catalog.execute("skill.create", {
+        "name": "my-skill", "description": "x", "content": "y",
+    })
+    assert dup.status == "error"
+
+    # 校验必填与名字字符集
+    missing = await catalog.execute("skill.create", {"name": "", "description": "x", "content": "y"})
+    assert missing.status == "error"
+    bad_name = await catalog.execute("skill.create", {"name": "bad name!", "description": "x", "content": "y"})
+    assert bad_name.status == "error"

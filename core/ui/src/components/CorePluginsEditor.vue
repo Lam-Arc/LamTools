@@ -1,5 +1,5 @@
 <template>
-  <section class="settings-panel">
+  <section class="settings-panel plugins-root">
     <header class="settings-title">
       <h1>插件</h1>
       <p>插件 = 工具 / 技能 / Hooks / MCP 的统一安装单元。内置插件（git / websearch / imagegen）可禁用、不可卸载。</p>
@@ -46,7 +46,7 @@
         <div class="model-list">
           <div v-for="plugin in plugins" :key="plugin.name" class="model-row plugin-row" :class="{ 'is-disabled': !plugin.enabled }">
             <div class="model-identity">
-              <button class="plugin-name-btn" type="button" @click="toggleDetail(plugin.name)">
+              <button class="plugin-name-btn" type="button" @click="openConfig(plugin)">
                 <strong>{{ plugin.name }}</strong>
                 <span class="plugin-version">{{ plugin.version }}</span>
               </button>
@@ -56,85 +56,26 @@
                 <span class="hook-status is-plugins-tools">{{ toolCount(plugin) }} 工具</span>
                 <span v-if="isBundled(plugin)" class="hook-status is-bundled">内置</span>
               </span>
-              <span v-if="pluginDetail === plugin.name" class="plugin-path">{{ plugin.root }}</span>
             </div>
             <div class="row-actions">
               <button
-                class="text-btn"
+                class="text-btn toggle-btn"
                 :class="{ 'is-on': plugin.enabled }"
                 type="button"
+                :aria-label="plugin.enabled ? `禁用插件 ${plugin.name}` : `启用插件 ${plugin.name}`"
+                :title="plugin.enabled ? '已启用' : '已禁用'"
                 @click="toggleEnabled(plugin)"
-              >{{ plugin.enabled ? '已启用' : '已禁用' }}</button>
+              >
+                <ToggleRight v-if="plugin.enabled" :size="16" :stroke-width="1.8" aria-hidden="true" />
+                <ToggleLeft v-else :size="16" :stroke-width="1.8" aria-hidden="true" />
+              </button>
               <button
-                v-if="plugin.config_schema || plugin.dependencies.length"
+                v-if="plugin.config_schema || plugin.dependencies.length || hasAssets(plugin)"
                 class="text-btn"
                 type="button"
-                @click="toggleDetail(plugin.name)"
+                @click="openConfig(plugin)"
               >配置</button>
               <button v-if="!isBundled(plugin)" class="text-btn danger" type="button" @click="doUninstall(plugin)">卸载</button>
-            </div>
-
-            <!-- 展开详情：资产 + 配置 -->
-            <div v-if="pluginDetail === plugin.name" class="plugin-detail">
-              <div class="detail-block">
-                <h4>资产</h4>
-                <div v-if="plugin.skills.length || plugin.hooks.length || plugin.tools.length" class="detail-assets">
-                  <span v-for="tool in allTools(plugin)" :key="tool.name" class="asset-chip">{{ tool.name }}</span>
-                  <span v-for="path in plugin.skills" :key="path" class="asset-chip">skill</span>
-                  <span v-for="path in plugin.hooks" :key="path" class="asset-chip">hooks</span>
-                </div>
-                <p v-else class="muted">无资产（仅管理单元）。</p>
-              </div>
-
-              <div v-if="plugin.config_schema" class="detail-block">
-                <h4>配置</h4>
-                <div v-if="schemaLoading" class="muted">加载中…</div>
-                <div v-else class="config-form">
-                  <label v-for="prop in schemaProps" :key="prop.key" class="field">
-                    <span class="field-label">{{ prop.label }}<code v-if="prop.type" class="field-type">{{ prop.type }}</code></span>
-                    <select v-if="prop.enum" v-model="configDraft[prop.key]" class="field-input">
-                      <option v-for="opt in prop.enum" :key="opt" :value="opt">{{ opt }}</option>
-                    </select>
-                    <input
-                      v-else-if="prop.type === 'boolean'"
-                      v-model="configDraft[prop.key]"
-                      class="checkbox"
-                      type="checkbox"
-                    />
-                    <input
-                      v-else-if="prop.type === 'number' || prop.type === 'integer'"
-                      v-model.number="configDraft[prop.key]"
-                      class="field-input"
-                      type="number"
-                    />
-                    <textarea
-                      v-else-if="prop.type === 'array'"
-                      v-model="arrayDraft[prop.key]"
-                      class="field-input array-input"
-                      rows="2"
-                      placeholder="每行一个"
-                    ></textarea>
-                    <input v-else v-model="configDraft[prop.key]" class="field-input" type="text" />
-                  </label>
-                  <div class="editor-actions">
-                    <button class="small-btn" type="button" :disabled="configSaving" @click="saveConfig(plugin)">
-                      {{ configSaving ? '保存中…' : '保存配置' }}
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              <div v-if="plugin.dependencies.length" class="detail-block">
-                <h4>依赖</h4>
-                <p class="muted deps-line">{{ plugin.dependencies.join(' · ') }}</p>
-                <button
-                  v-if="plugin.deps_status !== 'ok' && plugin.deps_status !== 'none'"
-                  class="small-btn"
-                  type="button"
-                  :disabled="installingDeps"
-                  @click="installDeps(plugin)"
-                >{{ installingDeps ? '安装中…' : '安装依赖' }}</button>
-              </div>
             </div>
           </div>
         </div>
@@ -145,18 +86,120 @@
       <span v-for="err in errors" :key="err.name">{{ err.name }}: {{ err.error }}</span>
     </p>
 
-    <!-- 系统级 Skills / Hooks 区块（B6：原 tab 迁入，复用原组件） -->
-    <div class="system-block">
-      <CoreSkillsEditor :request-rpc="props.requestRpc" />
-      <CoreHooksEditor :request-rpc="props.requestRpc" />
+    <!-- 插件配置卡片（浮层，非行内展开） -->
+    <div v-if="configPlugin" class="editor-overlay" @click.self="closeConfig">
+      <div class="editor-popover plugin-config-popover">
+        <p v-if="error" class="skill-error editor-error" role="alert">{{ error }}</p>
+        <div class="editor-popover-head">
+          <h3>{{ configPlugin.name }} <span class="plugin-version">{{ configPlugin.version }}</span></h3>
+          <button type="button" class="editor-popover-close" aria-label="关闭" @click="closeConfig">
+            <X :size="14" :stroke-width="1.8" aria-hidden="true" />
+          </button>
+        </div>
+
+        <p class="plugin-path">{{ configPlugin.root }}</p>
+
+        <!-- 工具列表 -->
+        <div class="detail-block">
+          <h4>工具 <span class="asset-count">{{ allTools(configPlugin).length }}</span></h4>
+          <div v-if="allTools(configPlugin).length" class="asset-list">
+            <div v-for="tool in allTools(configPlugin)" :key="tool.name" class="asset-row">
+              <span class="asset-name">{{ tool.name }}</span>
+              <span class="asset-tag" :class="permClass(tool.permission)">{{ tool.permission }}</span>
+              <span v-if="tool.visibility === 'on_load'" class="asset-tag">on_load</span>
+            </div>
+          </div>
+          <p v-else class="muted">无工具</p>
+        </div>
+
+        <!-- 技能列表 -->
+        <div class="detail-block">
+          <h4>技能 <span class="asset-count">{{ configPlugin.skill_names.length }}</span></h4>
+          <div v-if="configPlugin.skill_names.length" class="asset-list">
+            <div v-for="name in configPlugin.skill_names" :key="name" class="asset-row">
+              <span class="asset-name">{{ name }}</span>
+            </div>
+          </div>
+          <p v-else class="muted">无技能</p>
+        </div>
+
+        <!-- 钩子列表 -->
+        <div class="detail-block">
+          <h4>钩子 <span class="asset-count">{{ configPlugin.hook_summary.length }}</span></h4>
+          <div v-if="configPlugin.hook_summary.length" class="asset-list">
+            <div v-for="(hook, i) in configPlugin.hook_summary" :key="i" class="asset-row">
+              <span class="asset-name">{{ hook.event }}</span>
+              <span class="asset-tag">{{ hook.matcher }}</span>
+              <span class="asset-tag">{{ hook.type }}</span>
+            </div>
+          </div>
+          <p v-else class="muted">无钩子</p>
+        </div>
+
+        <!-- 参数（configSchema 驱动，如生图 api_url/api_key） -->
+        <div v-if="configPlugin.config_schema" class="detail-block">
+          <h4>参数</h4>
+          <div v-if="schemaLoading" class="muted">加载中…</div>
+          <div v-else class="config-form">
+            <div v-for="prop in schemaProps" :key="prop.key" class="field">
+              <span class="field-label">{{ prop.label }}<code v-if="prop.type" class="field-type">{{ prop.type }}</code></span>
+              <select v-if="prop.enum" v-model="configDraft[prop.key]" class="field-input">
+                <option v-for="opt in prop.enum" :key="opt" :value="opt">{{ opt }}</option>
+              </select>
+              <button
+                v-else-if="prop.type === 'boolean'"
+                type="button"
+                class="toggle-btn"
+                :class="{ 'is-on': !!configDraft[prop.key] }"
+                :aria-label="`${prop.label} 开关`"
+                @click="configDraft[prop.key] = !configDraft[prop.key]"
+              >
+                <ToggleRight v-if="configDraft[prop.key]" :size="16" :stroke-width="1.8" aria-hidden="true" />
+                <ToggleLeft v-else :size="16" :stroke-width="1.8" aria-hidden="true" />
+              </button>
+              <input
+                v-else-if="prop.type === 'number' || prop.type === 'integer'"
+                v-model.number="configDraft[prop.key]"
+                class="field-input"
+                type="number"
+              />
+              <textarea
+                v-else-if="prop.type === 'array'"
+                v-model="arrayDraft[prop.key]"
+                class="field-input array-input"
+                rows="2"
+                placeholder="每行一个"
+              ></textarea>
+              <input v-else v-model="configDraft[prop.key]" class="field-input" type="text" />
+            </div>
+            <div class="editor-actions">
+              <button class="small-btn" type="button" :disabled="configSaving" @click="saveConfig">
+                {{ configSaving ? '保存中…' : '保存配置' }}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 依赖 -->
+        <div v-if="configPlugin.dependencies.length" class="detail-block">
+          <h4>依赖</h4>
+          <p class="muted deps-line">{{ configPlugin.dependencies.join(' · ') }}</p>
+          <button
+            v-if="configPlugin.deps_status !== 'ok' && configPlugin.deps_status !== 'none'"
+            class="small-btn"
+            type="button"
+            :disabled="installingDeps"
+            @click="installDeps(configPlugin)"
+          >{{ installingDeps ? '安装中…' : '安装依赖' }}</button>
+        </div>
+      </div>
     </div>
   </section>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import CoreSkillsEditor from './CoreSkillsEditor.vue'
-import CoreHooksEditor from './CoreHooksEditor.vue'
+import { ToggleLeft, ToggleRight, X } from 'lucide-vue-next'
 
 interface PluginToolDecl {
   name: string
@@ -177,6 +220,8 @@ interface PluginItem {
   hooks: string[]
   mcp: string[]
   tools: { path: string; tools: PluginToolDecl[]; error?: string }[]
+  skill_names: string[]
+  hook_summary: { event: string; matcher: string; type: string }[]
   dependencies: string[]
   deps_status: string
   config_schema: string
@@ -190,13 +235,14 @@ const plugins = ref<PluginItem[]>([])
 const loading = ref(true)
 const error = ref('')
 const errors = ref<{ name: string; error: string }[]>([])
-const pluginDetail = ref('')
 const installing = ref(false)
 const installingDeps = ref(false)
 const installNotice = ref('')
 const installSource = ref('local')
 const installPath = ref('')
 
+// 配置卡片（浮层）：当前打开的插件
+const configPlugin = ref<PluginItem | null>(null)
 const configDraft = ref<Record<string, unknown>>({})
 const arrayDraft = ref<Record<string, string[]>>({})
 const schemaProps = ref<{ key: string; label: string; type: string; enum?: string[] }[]>([])
@@ -217,6 +263,16 @@ function toolCount(plugin: PluginItem): number {
 
 function allTools(plugin: PluginItem): PluginToolDecl[] {
   return plugin.tools.flatMap((tf) => tf.tools || [])
+}
+
+function hasAssets(plugin: PluginItem): boolean {
+  return plugin.skills.length > 0 || plugin.hooks.length > 0 || plugin.mcp.length > 0 || plugin.tools.length > 0
+}
+
+function permClass(permission?: string): string {
+  if (permission === 'auto_allow') return 'is-auto'
+  if (permission === 'hard_block') return 'is-block'
+  return 'is-ask'
 }
 
 function depsLabel(plugin: PluginItem): string {
@@ -281,7 +337,7 @@ async function doUninstall(plugin: PluginItem) {
   if (!window.confirm(`卸载插件「${plugin.name}」？将删除其目录${plugin.dependencies.length ? '（依赖默认保留）' : ''}。`)) return
   try {
     await props.requestRpc('plugin.uninstall', { name: plugin.name })
-    if (pluginDetail.value === plugin.name) pluginDetail.value = ''
+    if (configPlugin.value?.name === plugin.name) closeConfig()
     await fetchPlugins()
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
@@ -294,6 +350,9 @@ async function installDeps(plugin: PluginItem) {
   try {
     await props.requestRpc('plugin.install', { name: plugin.name, install_deps: true })
     await fetchPlugins()
+    if (configPlugin.value?.name === plugin.name) {
+      configPlugin.value = { ...configPlugin.value, deps_status: 'ok' }
+    }
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
   } finally {
@@ -301,14 +360,15 @@ async function installDeps(plugin: PluginItem) {
   }
 }
 
-async function toggleDetail(name: string) {
-  if (pluginDetail.value === name) {
-    pluginDetail.value = ''
-    return
-  }
-  pluginDetail.value = name
-  const plugin = plugins.value.find((p) => p.name === name)
-  if (plugin && plugin.config_schema) await loadConfig(plugin)
+function openConfig(plugin: PluginItem) {
+  configPlugin.value = plugin
+  error.value = ''
+  if (plugin.config_schema) void loadConfig(plugin)
+}
+
+function closeConfig() {
+  configPlugin.value = null
+  schemaProps.value = []
 }
 
 async function loadConfig(plugin: PluginItem) {
@@ -339,7 +399,8 @@ async function loadConfig(plugin: PluginItem) {
   }
 }
 
-async function saveConfig(plugin: PluginItem) {
+async function saveConfig() {
+  if (!configPlugin.value) return
   configSaving.value = true
   error.value = ''
   const payload = { ...configDraft.value }
@@ -347,7 +408,7 @@ async function saveConfig(plugin: PluginItem) {
     payload[key] = (list || []).filter((item) => item.trim())
   }
   try {
-    await props.requestRpc('plugin.config.update', { name: plugin.name, config: payload })
+    await props.requestRpc('plugin.config.update', { name: configPlugin.value.name, config: payload })
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
   } finally {
@@ -359,6 +420,23 @@ onMounted(fetchPlugins)
 </script>
 
 <style scoped>
+.plugins-root {
+  position: relative;
+}
+
+/* 配置卡片浮层：fixed 相对视口定位（面板高度=全部内容高度，absolute 会
+   让弹层居中于整个面板而非视口——改为视口定位）；透明遮罩（无压暗/无
+   blur），弹层自身带背景/阴影/边框独立呈现，点击外部仍可关闭 */
+.plugins-root .editor-overlay {
+  position: fixed;
+  inset: var(--titlebar-offset, 36px) 0 0 0;
+  z-index: 95;
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  padding: 24px;
+}
+
 .install-card {
   padding: 12px 14px;
   margin-bottom: 14px;
@@ -433,17 +511,18 @@ onMounted(fetchPlugins)
   font-family: var(--font-mono);
   font-size: 11px;
   opacity: .7;
-  margin-top: 2px !important;
+  margin: 0 0 10px;
 }
 
-.plugin-detail {
-  grid-column: 1 / -1;
-  margin-top: 10px;
-  padding: 10px 12px;
-  border-radius: var(--radius);
-  background: color-mix(in srgb, var(--settings-main-text, #fff) 4%, transparent);
+/* ── 配置卡片（浮层）内部 ── */
+.plugin-config-popover {
+  width: min(620px, 100%);
   display: grid;
-  gap: 12px;
+  gap: 14px;
+}
+
+.plugin-config-popover .editor-popover-head h3 {
+  font-size: 16px;
 }
 
 .detail-block h4 {
@@ -451,18 +530,49 @@ onMounted(fetchPlugins)
   font-size: 13px;
 }
 
-.detail-assets {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-.asset-chip {
+.asset-count {
   font-family: var(--font-mono);
   font-size: 11px;
-  padding: 2px 8px;
+  color: var(--muted);
+  margin-left: 4px;
+}
+
+.asset-list {
+  display: grid;
+  gap: 4px;
+}
+
+.asset-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+}
+
+.asset-name {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  min-width: 0;
+}
+
+.asset-tag {
+  font-size: 10px;
+  padding: 1px 7px;
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--settings-main-text, #fff) 8%, transparent);
+  color: var(--muted);
+}
+
+.asset-tag.is-auto {
+  color: var(--green);
+}
+
+.asset-tag.is-ask {
+  color: var(--orange);
+}
+
+.asset-tag.is-block {
+  color: var(--red);
 }
 
 .config-form {
@@ -495,10 +605,8 @@ onMounted(fetchPlugins)
   font-size: 12px;
 }
 
-.system-block {
-  margin-top: 22px;
-  border-top: 1px solid var(--line);
-  padding-top: 4px;
+.editor-error {
+  margin: 0 0 10px;
 }
 
 .text-btn.danger {

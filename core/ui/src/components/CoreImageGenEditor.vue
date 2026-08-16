@@ -14,11 +14,16 @@
           <p>关闭后工具从工具集移除；启用但 API 地址为空时，调用返回“未配置生图 API”。</p>
         </div>
         <button
-          class="text-btn"
+          class="text-btn toggle-btn"
           :class="{ 'is-on': form.enabled }"
           type="button"
+          aria-label="启用或关闭生图工具"
+          :title="form.enabled ? '已开启' : '已关闭'"
           @click="toggleEnabled"
-        >{{ form.enabled ? '已开启' : '已关闭' }}</button>
+        >
+          <ToggleRight v-if="form.enabled" :size="16" :stroke-width="1.8" aria-hidden="true" />
+          <ToggleLeft v-else :size="16" :stroke-width="1.8" aria-hidden="true" />
+        </button>
       </div>
     </article>
 

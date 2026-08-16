@@ -442,8 +442,6 @@ def _error(request: OperationRequest, message: str) -> OperationResult:
 
 _PERMISSION_MODES = ("read_only", "limited_edit", "full_edit")
 _RUNTIME_CONTROL_BOOLS = (
-    "allow_agent_install_skill",
-    "allow_agent_create_hooks",
     "allow_access_outside_workdir",
 )
 

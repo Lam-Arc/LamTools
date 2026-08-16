@@ -1,34 +1,63 @@
 <template>
   <section class="settings-panel">
     <header class="settings-title">
-      <h1>Skills</h1>
-      <p>管理已发现的 Skills，禁用后不会出现在斜杠命令中。</p>
+      <h1>技能</h1>
+      <p>管理已发现的 Skills，禁用后不会出现在斜杠命令中；新建技能写入用户级技能目录，Agent 按需 load_skill 调取。</p>
     </header>
 
     <p v-if="error" class="skill-error">{{ error }}</p>
 
-    <article class="setting-card agent-toggle">
-      <div class="agent-toggle-row">
-        <div>
-          <h3>允许 Agent 安装 Skill</h3>
-          <p>开启后，系统提示词会注入创建 SKILL.md 的指引，Agent 可按用户要求自行编写新技能。</p>
-        </div>
+    <div class="subhead">
+      <span class="muted">{{ loading ? '加载中…' : `共 ${skills.length} 个 · 已启用 ${enabledCount}` }}</span>
+      <div class="row-actions">
         <button
-          class="text-btn"
-          :class="{ 'is-on': allowAgentInstallSkill }"
+          v-if="!showCreateForm"
+          class="small-btn primary"
           type="button"
-          @click="toggleAllowInstall"
-        >{{ allowAgentInstallSkill ? '已开启' : '已关闭' }}</button>
+          @click="openCreateForm"
+        >新建技能</button>
+        <button class="text-btn" type="button" @click="fetchSkills">刷新</button>
+      </div>
+    </div>
+
+    <!-- 新建技能表单：标题 / 描述 / 内容 -->
+    <article v-if="showCreateForm" class="setting-card skill-create-card">
+      <div class="editor-popover-head">
+        <h3>新建技能</h3>
+        <button type="button" class="editor-popover-close" aria-label="关闭" @click="closeCreateForm">
+          <X :size="14" :stroke-width="1.8" aria-hidden="true" />
+        </button>
+      </div>
+      <p v-if="createError" class="skill-error create-error" role="alert">{{ createError }}</p>
+      <div class="config-form">
+        <label class="field">
+          <span class="field-label">标题（name）<code class="field-type">目录名 + frontmatter name</code></span>
+          <input v-model="createForm.name" class="field-input" type="text" placeholder="如 my-skill（字母/数字/._-）" />
+        </label>
+        <label class="field">
+          <span class="field-label">描述（description）<code class="field-type">说明何时使用，供 Agent 检索</code></span>
+          <input v-model="createForm.description" class="field-input" type="text" placeholder="一句话说明这个技能的用途" />
+        </label>
+        <label class="field">
+          <span class="field-label">内容（content）<code class="field-type">SKILL.md 正文，加载后应遵循的指引</code></span>
+          <textarea
+            v-model="createForm.content"
+            class="field-input skill-content-input"
+            rows="8"
+            placeholder="技能加载后 Agent 应遵循的完整指引……"
+          ></textarea>
+        </label>
+        <div class="editor-actions">
+          <button class="small-btn quiet" type="button" @click="closeCreateForm">取消</button>
+          <button class="small-btn primary" type="button" :disabled="createSaving" @click="submitCreate">
+            {{ createSaving ? '创建中…' : '创建技能' }}
+          </button>
+        </div>
       </div>
     </article>
 
-    <div class="subhead">
-      <span class="muted">{{ loading ? '加载中…' : `共 ${skills.length} 个 · 已启用 ${enabledCount}` }}</span>
-      <button class="text-btn" type="button" @click="fetchSkills">刷新</button>
-    </div>
-
     <article v-if="!loading && !skills.length" class="setting-card">
-      <p>未发现任何 Skill。将 SKILL.md 放入 <code>.lam/skills/</code> 目录即可注册。</p>
+      <p>未发现任何 Skill。点击「新建技能」创建，或将 SKILL.md 放入 <code>.lam/skills/</code> 目录。</p>
     </article>
 
     <div v-else class="provider-list">
@@ -58,11 +87,16 @@
             </div>
             <div class="row-actions">
               <button
-                class="text-btn"
+                class="text-btn toggle-btn"
                 :class="{ 'is-on': skill.enabled }"
                 type="button"
+                :aria-label="skill.enabled ? `禁用技能 ${skill.name}` : `启用技能 ${skill.name}`"
+                :title="skill.enabled ? '已启用' : '已禁用'"
                 @click="toggleSkill(skill.name, !skill.enabled)"
-              >{{ skill.enabled ? '已启用' : '已禁用' }}</button>
+              >
+                <ToggleRight v-if="skill.enabled" :size="16" :stroke-width="1.8" aria-hidden="true" />
+                <ToggleLeft v-else :size="16" :stroke-width="1.8" aria-hidden="true" />
+              </button>
             </div>
           </div>
         </div>
@@ -73,6 +107,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { ToggleLeft, ToggleRight, X } from 'lucide-vue-next'
 import type { CoreSkillItem } from '../types'
 
 const props = defineProps<{
@@ -82,7 +117,12 @@ const props = defineProps<{
 const skills = ref<CoreSkillItem[]>([])
 const loading = ref(true)
 const error = ref('')
-const allowAgentInstallSkill = ref(false)
+
+// 新建技能表单（标题 / 描述 / 内容三块）
+const showCreateForm = ref(false)
+const createSaving = ref(false)
+const createError = ref('')
+const createForm = ref({ name: '', description: '', content: '' })
 
 const enabledCount = computed(() => skills.value.filter((s) => s.enabled).length)
 
@@ -112,31 +152,12 @@ async function fetchSkills() {
   loading.value = true
   error.value = ''
   try {
-    const [skillResult, settingsResult] = await Promise.all([
-      props.requestRpc('skill.list'),
-      props.requestRpc('settings.get', { namespace: 'core.runtimeControls' }),
-    ])
+    const skillResult = await props.requestRpc('skill.list')
     skills.value = (skillResult.skills as CoreSkillItem[]) || []
-    const value = settingsResult.value as Record<string, unknown> | undefined
-    allowAgentInstallSkill.value = value ? !!value.allow_agent_install_skill : false
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
   } finally {
     loading.value = false
-  }
-}
-
-async function toggleAllowInstall() {
-  const next = !allowAgentInstallSkill.value
-  allowAgentInstallSkill.value = next
-  try {
-    await props.requestRpc('settings.update', {
-      namespace: 'core.runtimeControls',
-      value: { allow_agent_install_skill: next },
-    })
-  } catch (e) {
-    allowAgentInstallSkill.value = !next
-    error.value = e instanceof Error ? e.message : String(e)
   }
 }
 
@@ -150,37 +171,35 @@ async function toggleSkill(name: string, enable: boolean) {
   }
 }
 
+function openCreateForm() {
+  showCreateForm.value = true
+  createError.value = ''
+}
+
+function closeCreateForm() {
+  showCreateForm.value = false
+  createError.value = ''
+  createForm.value = { name: '', description: '', content: '' }
+}
+
+async function submitCreate() {
+  createSaving.value = true
+  createError.value = ''
+  try {
+    await props.requestRpc('skill.create', { ...createForm.value })
+    closeCreateForm()
+    await fetchSkills()
+  } catch (e) {
+    createError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    createSaving.value = false
+  }
+}
+
 onMounted(fetchSkills)
 </script>
 
 <style scoped>
-.agent-toggle {
-  padding: 12px 14px;
-}
-
-.agent-toggle-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 14px;
-  align-items: center;
-}
-
-.agent-toggle h3 {
-  margin: 0 0 4px;
-  font-size: 14px;
-}
-
-.agent-toggle p {
-  margin: 0;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.text-btn.is-on {
-  color: var(--green);
-}
-
 .skill-error {
   margin: 0;
   padding: 9px 12px;
@@ -189,6 +208,22 @@ onMounted(fetchSkills)
   background: color-mix(in srgb, var(--red) 10%, transparent);
   color: color-mix(in srgb, var(--red) 64%, var(--settings-main-text, #fff));
   font-size: 13px;
+}
+
+.skill-create-card {
+  padding: 14px 16px;
+  margin-bottom: 14px;
+}
+
+.create-error {
+  margin-bottom: 10px;
+}
+
+.skill-content-input {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  resize: vertical;
 }
 
 .skill-path {

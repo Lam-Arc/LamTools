@@ -100,7 +100,7 @@ async def rag_search(call) -> ToolResult:
 
 | 操作 | 入口 | 说明 |
 |---|---|---|
-| 安装 | UI 插件页 / `plugin.install` / `cli plugin install` | 本地目录 / zip / GitHub Release URL / CC / Codex 适配；复制到插件根（默认用户级）|
+| 安装 | UI 插件页（侧边栏「插件」入口，与设置同级）/ `plugin.install` / `cli plugin install` | 本地目录 / zip / GitHub Release URL / CC / Codex 适配；复制到插件根（默认用户级）|
 | 更新 | 重装即更新 | 对已存在插件 install = 覆盖旧目录 |
 | 启用/禁用 | `plugin.enable/disable` | **即时生效**（下一轮模型可见列表即变） |
 | 卸载 | `plugin.uninstall` | 删目录 + 可选清依赖（默认保留）；清理该插件 hook 信任与配置 |

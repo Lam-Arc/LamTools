@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json as _json
 import logging
+import re
 import shutil
 from collections.abc import Callable
 from pathlib import Path
@@ -24,6 +25,78 @@ def _now_iso() -> str:
     from datetime import datetime, timezone
 
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+# 插件配置中的密钥字段名（回显打码 / 掩码提交保留原值，镜像 provider 契约）
+_SECRET_KEY_RE = re.compile(r"(?i)(api[_-]?key|token|secret|password)")
+
+
+def _mask_secret_fields(config: dict[str, Any]) -> dict[str, Any]:
+    """把密钥字段打码为 ``********``；返回 (config, has_secrets)。"""
+    masked = dict(config)
+    has_secrets = False
+    for key in list(masked.keys()):
+        if _SECRET_KEY_RE.search(str(key)) and isinstance(masked[key], str) and masked[key]:
+            masked[key] = "********"
+            has_secrets = True
+    return {"config": masked, "has_secrets": has_secrets}
+
+
+def _SECRET_KEY_PATTERN_MATCHES(config: dict[str, Any]) -> list[str]:
+    return [key for key in config.keys() if _SECRET_KEY_RE.search(str(key))]
+
+
+def _skill_names_from_roots(roots: list[Path]) -> list[str]:
+    """扫描技能目录下的 SKILL.md，返回技能名列表（frontmatter name）。"""
+    names: list[str] = []
+    for root in roots:
+        if not root.exists() or not root.is_dir():
+            continue
+        for skill_md in sorted(root.glob("*/SKILL.md")):
+            name = ""
+            try:
+                text = skill_md.read_text(encoding="utf-8-sig", errors="replace")
+                fm = re.search(r"^---\s*\n(.*?)\n---", text, re.DOTALL)
+                if fm:
+                    name_match = re.search(r"^name:\s*(.+?)\s*$", fm.group(1), re.MULTILINE)
+                    if name_match:
+                        name = name_match.group(1).strip().strip('"\'')
+            except OSError:
+                continue
+            names.append(name or skill_md.parent.name)
+    return sorted(set(names))
+
+
+def _hook_summary_from_files(files: list[Path]) -> list[dict[str, Any]]:
+    """解析插件的 hooks.json，返回事件摘要列表（event/matcher/type）。"""
+    summary: list[dict[str, Any]] = []
+    for path in files:
+        if not path.exists():
+            continue
+        try:
+            raw = _json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, _json.JSONDecodeError):
+            continue
+        hooks = raw.get("hooks", {}) if isinstance(raw, dict) else {}
+        if not isinstance(hooks, dict):
+            continue
+        for event, groups in hooks.items():
+            if not isinstance(groups, list):
+                continue
+            for group in groups:
+                if not isinstance(group, dict):
+                    continue
+                matcher = str(group.get("matcher") or "*")
+                handlers = group.get("hooks", [])
+                if isinstance(handlers, list) and handlers:
+                    first = handlers[0]
+                    htype = first.get("type") if isinstance(first, dict) else "command"
+                else:
+                    htype = "command"
+                summary.append(
+                    {"event": str(event), "matcher": matcher, "type": str(htype or "command")}
+                )
+    return summary
 
 
 def _skill_source(location: Path, work_root: str | Path | None) -> str:
@@ -111,6 +184,9 @@ def build_plugin_operation_catalog(
                     "hooks": [str(path) for path in item.hook_files],
                     "mcp": [str(path) for path in item.mcp_files],
                     "tools": tool_status,
+                    # 插件资产明细（配置卡片展示用）：具体技能名 / 钩子事件摘要
+                    "skill_names": _skill_names_from_roots(item.skill_roots),
+                    "hook_summary": _hook_summary_from_files(item.hook_files),
                     "dependencies": list(item.dependencies),
                     # B10：依赖状态（已装/缺失/版本不符）随 list 全量返回
                     "deps_status": (
@@ -345,6 +421,46 @@ def build_plugin_operation_catalog(
             "total_count": len(skills),
             "enabled_count": sum(1 for s in skills if s.get("enabled")),
         })
+
+    async def skill_create(request: OperationRequest) -> OperationResult:
+        """新建技能：标题（name）/ 描述（description）/ 内容（content）三块，
+        写入用户级技能目录 ``{lam_home}/skills/<name>/SKILL.md``。
+        """
+        payload = request.payload if isinstance(request.payload, dict) else {}
+        name = str(payload.get("name") or "").strip()
+        description = str(payload.get("description") or "").strip()
+        content = str(payload.get("content") or "").strip()
+        if not name:
+            return OperationResult(name=request.name, status="error", payload={"error": "标题（name）是必填的"})
+        if not description:
+            return OperationResult(name=request.name, status="error", payload={"error": "描述（description）是必填的"})
+        if not content:
+            return OperationResult(name=request.name, status="error", payload={"error": "内容（content）是必填的"})
+        if not re.match(r"^[A-Za-z0-9._-]+$", name):
+            return OperationResult(
+                name=request.name, status="error",
+                payload={"error": "技能名只允许字母/数字/._-（将作为目录名）"},
+            )
+        from lamtools_core.config.root import lam_home
+
+        skill_dir = lam_home() / "skills" / name
+        if skill_dir.exists():
+            return OperationResult(
+                name=request.name, status="error",
+                payload={"error": f"技能 '{name}' 已存在（{skill_dir}）"},
+            )
+        try:
+            skill_dir.mkdir(parents=True, exist_ok=False)
+            (skill_dir / "SKILL.md").write_text(
+                f"---\nname: {name}\ndescription: {description}\n---\n\n{content}\n",
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            return OperationResult(name=request.name, status="error", payload={"error": f"创建失败: {exc}"})
+        return OperationResult(
+            name=request.name,
+            payload={"name": name, "location": str(skill_dir / "SKILL.md"), "created": True},
+        )
 
     async def skill_enable(request: OperationRequest) -> OperationResult:
         name = str(request.payload.get("name") or "").strip()
@@ -721,18 +837,25 @@ def build_plugin_operation_catalog(
         from .config_store import merged_with_defaults, read_plugin_config
 
         config = merged_with_defaults(read_plugin_config(data_dir, name), schema)
+        # 密钥打码（照抄 provider 契约：api_key/token/secret/password 字段
+        # 不回显明文——mask 后客户端提交掩码/空值即保留原值）
+        masked = _mask_secret_fields(config)
         return OperationResult(
             name=request.name,
             payload={
                 "name": name,
-                "config": config,
+                "config": masked["config"],
                 "schema": schema,
                 "config_schema_path": str(plugin.config_schema) if plugin.config_schema else "",
+                "has_secrets": masked["has_secrets"],
             },
         )
 
     async def plugin_config_update(request: OperationRequest) -> OperationResult:
-        """写入插件配置（configSchema 校验值，E5 共识）。"""
+        """写入插件配置（configSchema 校验值，E5 共识）。
+
+        密钥字段（api_key/token/secret/password）提交掩码/空值 → 保留原值。
+        """
         payload = request.payload if isinstance(request.payload, dict) else {}
         name = str(payload.get("name") or "").strip()
         if not name:
@@ -745,7 +868,7 @@ def build_plugin_operation_catalog(
             return OperationResult(name=request.name, status="error", payload={"error": f"plugin '{name}' not found"})
         if data_dir is None:
             return OperationResult(name=request.name, status="error", payload={"error": "data_dir not configured"})
-        from .config_store import validate_config, write_plugin_config
+        from .config_store import read_plugin_config, validate_config, write_plugin_config
 
         schema = _load_schema(plugin)
         if schema:
@@ -755,8 +878,15 @@ def build_plugin_operation_catalog(
                     name=request.name, status="error",
                     payload={"error": "config validation failed", "errors": errors},
                 )
-        write_plugin_config(data_dir, name, raw_config)
-        return OperationResult(name=request.name, payload={"name": name, "config": raw_config, "validated": True})
+        # 密钥保留：掩码/空值提交不覆盖原值
+        current = read_plugin_config(data_dir, name)
+        merged = dict(raw_config)
+        for key in _SECRET_KEY_PATTERN_MATCHES(current):
+            submitted = merged.get(key)
+            if isinstance(submitted, str) and submitted.strip() in {"", "********"}:
+                merged[key] = current[key]
+        write_plugin_config(data_dir, name, merged)
+        return OperationResult(name=request.name, payload={"name": name, "config": merged, "validated": True})
 
     catalog.register("plugin.list", plugin_list)
     catalog.register("plugin.install", plugin_install)
@@ -775,6 +905,7 @@ def build_plugin_operation_catalog(
     catalog.register("websearch.config.get", websearch_config_get)
     catalog.register("websearch.config.update", websearch_config_update)
     catalog.register("skill.list", skill_list)
+    catalog.register("skill.create", skill_create)
     catalog.register("skill.enable", skill_enable)
     catalog.register("skill.disable", skill_disable)
     return catalog

@@ -138,35 +138,7 @@ class CoreBaseAgentConfig:
     # customization; change this only for member-wide advanced defaults.
     project_context_files: list[tuple[str, int, str]] | None = None
     max_project_context_chars: int = 20000
-    allow_agent_install_skill: bool = False
-    allow_agent_create_hooks: bool = False
 
-
-_SKILL_INSTALL_GUIDE = """\
-## Installing Skills
-You may create new skills when the user asks you to. A skill is a directory \
-containing a SKILL.md file:
-- Project skills: <project root>/.lam/skills/<name>/SKILL.md
-- User (global) skills: ~/.lam/skills/<name>/SKILL.md
-Use write_file to create SKILL.md. The file begins with YAML frontmatter \
-(delimited by ---) with at least `name` and `description` keys, followed by \
-detailed instructions the agent should follow when the skill is loaded via \
-load_skill. Keep skill instructions self-contained and reference related files \
-relative to the skill directory. After creating a skill, tell the user it will \
-be available as /<name> in the composer in the next session."""
-
-_HOOK_CREATE_GUIDE = """\
-## Creating Hooks
-You may create hooks when the user asks. Hooks are configured in hooks.json \
-(located at .lam/core/config/hooks.json). The schema:
-{"hooks": {"<EventName>": [{"matcher": "ToolName", "hooks": [{"type": \
-"command", "command": "...", "timeout": 10, "statusMessage": "..."}]}]}}
-Events: PreToolUse, PostToolUse, PostToolUseFailure, SessionStart, Stop, \
-UserPromptSubmit, PermissionRequest. Handler types: command (shell, receives \
-JSON on stdin, returns JSON decision), http (POST JSON to url), mcp (call an \
-MCP tool), prompt (inline additional context). Use edit_file to modify \
-hooks.json. Newly created hooks require user trust review before they execute \
-(they appear as "pending" in the Hooks settings page)."""
 
 
 class CoreBaseAgentKit:
@@ -239,8 +211,6 @@ class CoreBaseAgentKit:
         for key in ("model_id", "thinking_enabled", "thinking_budget", "shallow_thinking_enabled", "capability", "deferred_attachments", "context_window_tokens", "compact_trigger_tokens", "compact_limit_tokens"):
             if key in turn_input.metadata:
                 state.metadata[key] = turn_input.metadata[key]
-        state.metadata.setdefault("allow_agent_install_skill", self.config.allow_agent_install_skill)
-        state.metadata.setdefault("allow_agent_create_hooks", self.config.allow_agent_create_hooks)
         if turn_input.user_message:
             state.metadata.setdefault("original_user_message", turn_input.user_message)
         state.metadata.setdefault("activated_mcp_servers", [])
@@ -299,13 +269,6 @@ class CoreBaseAgentKit:
         skill_index = self.toolbox.skill_index()
         if skill_index:
             system_lines.extend(["", skill_index])
-        meta = state.metadata or {}
-        allow_install = self.config.allow_agent_install_skill or bool(meta.get("allow_agent_install_skill"))
-        allow_hooks = self.config.allow_agent_create_hooks or bool(meta.get("allow_agent_create_hooks"))
-        if allow_install:
-            system_lines.extend(["", _SKILL_INSTALL_GUIDE])
-        if allow_hooks:
-            system_lines.extend(["", _HOOK_CREATE_GUIDE])
         # List available MCP servers for mcp_activate tool
         mcp_caller = getattr(self.toolbox, "mcp_caller", None)
         if mcp_caller is not None and hasattr(mcp_caller, "server_names"):
