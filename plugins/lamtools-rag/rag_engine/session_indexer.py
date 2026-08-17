@@ -135,11 +135,14 @@ def index_session(
     work_root: Path | str,
     session_title: str = "",
     core_db: Path | None = None,
+    embedder: Embedder | None = None,
 ) -> dict:
     """增量索引一个会话的全部消息到 rag.db（幂等，水位推进）。
 
     返回 {"indexed": n, "chunks": n, "watermark": seq}；core.db 不存在或
     无新消息时返回零值——索引失败绝不抛出（Stop hook 不得影响会话）。
+    embedder：传入共享实例复用（脚本全量循环）；缺省共享 local
+    （会话块也走向量——2 字词/语义查询依赖它）。
     """
     work_root = Path(work_root)
     db_path = work_root / ".lamtools" / "rag-index" / "rag.db"
@@ -160,7 +163,9 @@ def index_session(
         if not messages:
             return {"indexed": 0, "chunks": 0, "watermark": watermark}
 
-        embedder = Embedder(source="none")
+        embedder = embedder or _shared_instance(
+            os.environ.get("LAMTOOLS_RAG_EMBEDDING") or "local"
+        )
         conn.execute("BEGIN")
         # 标题保留策略：显式 session_title 优先；无则保留旧标题；
         # 都没有才用默认占位（增量索引不覆盖真实标题）

@@ -28,6 +28,16 @@ INIT_LIMIT_S = 30.0
 EMBED_LIMIT_MS = 5000.0
 
 
+def _shared_instance(source: str) -> Embedder:
+    """按 source 复用的共享实例（避免多次构造 ~0.5s 的模型加载）。"""
+    if source not in _SHARED:
+        _SHARED[source] = Embedder(source)
+    return _SHARED[source]
+
+
+_SHARED: dict[str, Embedder] = {}
+
+
 class Embedder:
     def __init__(self, source: str = "local") -> None:
         self._source = source

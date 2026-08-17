@@ -15,6 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from rag_engine.session_indexer import core_db_path, index_session  # noqa: E402
+from rag_engine.embedder import _shared_instance  # noqa: E402
 
 
 def main() -> int:
@@ -46,8 +47,12 @@ def main() -> int:
 
     total_indexed = 0
     total_chunks = 0
+    # 共享 embedder：全量循环只加载一次模型（会话块向量化，支持 2 字词/语义检索）
+    embedder = _shared_instance("local")
     for thread_id in thread_ids:
-        result = index_session(thread_id=thread_id, work_root=args.work_root)
+        result = index_session(
+            thread_id=thread_id, work_root=args.work_root, embedder=embedder
+        )
         total_indexed += result["indexed"]
         total_chunks += result["chunks"]
         print(
