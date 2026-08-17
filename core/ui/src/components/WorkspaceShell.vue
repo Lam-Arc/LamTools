@@ -92,6 +92,10 @@
       </div>
 
       <footer class="drawer-footer">
+        <button class="settings-entry" aria-label="打开搜索" @click="$emit('search')">
+          <span aria-hidden="true"><Search :size="14" :stroke-width="1.8" /></span>
+          <span>搜索</span>
+        </button>
         <button class="settings-entry" aria-label="打开插件" @click="$emit('plugins')">
           <span aria-hidden="true"><Puzzle :size="14" :stroke-width="1.8" /></span>
           <span>插件</span>
@@ -216,7 +220,7 @@
  * Product provides slots for actual content.
  */
 import { ref, useId, watch } from 'vue'
-import { Command, Puzzle } from 'lucide-vue-next'
+import { Command, Puzzle, Search } from 'lucide-vue-next'
 import { useShellLayout } from '../composables/useShellLayout'
 import type { ThemeData } from '../composables/useShellLayout'
 import { dismissToast, showToast } from '../composables/useCoreToast'
@@ -272,6 +276,7 @@ const emit = defineEmits<{
   'new-session': []
   settings: []
   plugins: []
+  search: []
   'composer-submit': []
   'composer-drop': [event: DragEvent]
   'update:stageOpen': [value: boolean]

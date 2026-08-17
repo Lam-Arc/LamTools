@@ -305,6 +305,72 @@ async def rag_sessions_search(
     )
 
 
+async def rag_docs_search(request, *, work_root, data_dir):
+    """operation `rag.docs.search`：工作区文档语义检索（搜索对话框"文档"Tab 直调）。
+
+    与工具 rag_search 共用检索内核（retriever.search source=workspace_doc），
+    返回结构化命中（doc_id/page/heading/snippet/score），UI 渲染列表。
+    """
+    from lamtools_core.app import OperationResult
+
+    payload = request.payload if hasattr(request, "payload") else (request or {})
+    if not isinstance(payload, dict):
+        payload = {}
+    query = str(payload.get("query") or "").strip()
+    if not query:
+        return OperationResult(
+            name=getattr(request, "name", "rag.docs.search"),
+            status="error",
+            payload={"error": "query 不能为空"},
+        )
+    top = min(max(int(payload.get("top") or 10), 1), 50)
+    embedder = Embedder(source=_embedding_source(Path(data_dir or ".")))
+    hits = await asyncio.to_thread(
+        retriever.search,
+        _db_path(Path(work_root or "."), Path(data_dir or ".")),
+        query,
+        source="workspace_doc",
+        top=top,
+        embedder=embedder,
+    )
+    # 补文档路径/标题
+    conn = connect(_db_path(Path(work_root or "."), Path(data_dir or ".")))
+    try:
+        doc_ids = sorted({h["doc_id"] for h in hits})
+        if doc_ids:
+            placeholders = ",".join("?" * len(doc_ids))
+            meta = {
+                row["doc_id"]: {"path": row["path"], "title": row["title"]}
+                for row in conn.execute(
+                    f"SELECT doc_id, path, title FROM documents WHERE doc_id IN ({placeholders})",
+                    doc_ids,
+                )
+            }
+        else:
+            meta = {}
+    finally:
+        conn.close()
+    return OperationResult(
+        name=getattr(request, "name", "rag.docs.search"),
+        payload={
+            "hits": [
+                {
+                    "doc_id": h.get("doc_id"),
+                    "path": str(meta.get(h.get("doc_id"), {}).get("path") or ""),
+                    "title": str(meta.get(h.get("doc_id"), {}).get("title") or ""),
+                    "page": h.get("page"),
+                    "heading": h.get("heading", ""),
+                    "score": round(float(h.get("score") or 0), 3),
+                    "snippet": h.get("snippet", ""),
+                }
+                for h in hits
+            ],
+            "query": query,
+            "count": len(hits),
+        },
+    )
+
+
 async def submit_answer(call) -> ToolResult:
     args = call.arguments or {}
     answer = str(args.get("answer") or "").strip()

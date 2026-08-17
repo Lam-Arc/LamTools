@@ -6,19 +6,53 @@
       "input_schema": {
         "type": "object",
         "properties": {
-          "query": { "type": "string" },
-          "top": { "type": "integer", "description": "返回条数（默认 10）" },
+          "query": {
+            "type": "string"
+          },
+          "top": {
+            "type": "integer",
+            "description": "返回条数（默认 10）"
+          },
           "filters": {
             "type": "object",
             "properties": {
-              "role": { "type": "string", "enum": ["user", "assistant"] }
+              "role": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "assistant"
+                ]
+              }
             }
           }
         },
-        "required": ["query"]
+        "required": [
+          "query"
+        ]
       },
       "permission": "auto_allow",
       "handler": "rag_engine.tools:rag_sessions_search"
+    },
+    {
+      "name": "rag.docs.search",
+      "description": "在工作区已索引文档中语义检索（搜索对话框\"文档\"Tab 直调，不经 agent）。与工具 rag_search 共用检索内核，返回 doc_id/page/heading/snippet。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "top": {
+            "type": "integer",
+            "description": "返回条数（默认 10）"
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "permission": "auto_allow",
+      "handler": "rag_engine.tools:rag_docs_search"
     }
   ]
 }

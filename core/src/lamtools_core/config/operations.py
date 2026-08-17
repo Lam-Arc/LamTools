@@ -314,10 +314,75 @@ def build_config_operation_catalog(
             payload={"provider": _provider_response(provider), "model": _model_response(model)},
         )
 
+    # ── workspace.search：文件/内容搜索（搜索对话框 UI 直调，与工具
+    #    search_files/search_content 同语义的轻量 operation 封装）──
+    _SEARCH_SKIP_DIRS = frozenset(
+        {".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build",
+         ".lamtools", ".lam", "target", ".acceptance", ".cache"}
+    )
+
+    async def workspace_search(request: OperationRequest) -> OperationResult:
+        payload = request.payload if isinstance(request.payload, dict) else {}
+        query = str(payload.get("query") or "").strip()
+        if not query:
+            return OperationResult(name=request.name, status="error", payload={"error": "query 不能为空"})
+        mode = str(payload.get("mode") or "content")
+        if mode not in ("files", "content"):
+            return OperationResult(name=request.name, status="error", payload={"error": f"mode 无效: {mode}"})
+        limit = max(1, min(int(payload.get("limit") or 20), 100))
+        search_root = Path(root or ".")  # work_root 闭包
+
+        def _iter_files(base: Path):
+            if base.is_file():
+                yield base
+                return
+            for dirpath, dirnames, filenames in os.walk(base):
+                dirnames[:] = [d for d in dirnames if d not in _SEARCH_SKIP_DIRS]
+                for fname in filenames:
+                    yield Path(dirpath) / fname
+
+        results: list[dict] = []
+        try:
+            for fpath in _iter_files(search_root):
+                if len(results) >= limit:
+                    break
+                try:
+                    rel = fpath.relative_to(search_root).as_posix()
+                except ValueError:
+                    continue
+                if mode == "files":
+                    if query.lower() not in fpath.name.lower():
+                        continue
+                    results.append({"path": rel})
+                    continue
+                # content：子串行匹配
+                try:
+                    text = fpath.read_text(encoding="utf-8", errors="ignore")
+                except OSError:
+                    continue
+                for line_no, line in enumerate(text.splitlines(), 1):
+                    if query in line:
+                        results.append({"path": rel, "line": line_no, "content": line.strip()[:200]})
+                        if len(results) >= limit:
+                            break
+        except OSError as exc:
+            return OperationResult(name=request.name, status="error", payload={"error": f"搜索失败: {exc}"})
+        return OperationResult(
+            name=request.name,
+            payload={
+                "mode": mode,
+                "query": query,
+                "results": results,
+                "total": len(results),
+                "truncated": len(results) >= limit,
+            },
+        )
+
     for name, handler in {
         "config.providers.list": providers_list,
         "config.provider.create": provider_create,
         "config.provider.update": provider_update,
+        "workspace.search": workspace_search,
         "config.provider.delete": provider_delete,
         "config.models.list": models_list,
         "config.model.create": model_create,
