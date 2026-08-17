@@ -225,10 +225,7 @@ async def _search_sessions(work_root: Path, data_dir: Path, args: dict) -> tuple
         embedder=embedder,
     )
     if not hits:
-        return [], (
-            "会话历史无命中。可能原因：会话索引未建立（会话结束后 Stop hook 自动索引，"
-            "或用 py scripts/session_index.py --work-root <项目根> 手动补索引）或检索词差异过大。"
-        )
+        return [], "无"
     # 补会话标题（documents.title，供格式化与 UI 展示）
     conn = connect(_db_path(work_root, data_dir))
     try:
