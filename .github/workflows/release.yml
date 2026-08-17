@@ -171,6 +171,62 @@ jobs:
           }
           Write-Host "Installer: $($installer.FullName) ($([math]::Round($installer.Length / 1MB, 1)) MB)"
 
+      # ---------- 4.5 真·安装冒烟 ----------
+      # CI 盲区（2026-08-17 补）：此前只冒烟了裸后端 binary（core/dist/LamCore/
+      # LamCore.exe），从未验证「Tauri 壳 → 找到打包后端 → 拉起 → health」闭环。
+      # find_backend_exe 路径约定 / bundle.resources 打包配置若漂移，CI 依然全绿
+      # 而安装包残废。此步真实安装安装包 → 启动安装出的 lamcore.exe → 从
+      # .lam/backend.log 抓随机端口 → 轮询 /api/health（>=90s）。
+      # 注意：安装器参数必须经 PowerShell Start-Process 传递
+      # （Git Bash / cmd 直传会被 MSYS/引号规则吞掉 /S /D=）。
+      - name: Install installer & smoke installed app
+        shell: pwsh
+        run: |
+          $installDir = Join-Path $env:RUNNER_TEMP "lamcore-installed"
+          if (Test-Path $installDir) { Remove-Item -Recurse -Force $installDir }
+          New-Item -ItemType Directory -Path $installDir | Out-Null
+          $installer = Get-ChildItem "core/desktop/src-tauri/target/release/bundle/nsis/*-setup.exe" -ErrorAction Stop | Select-Object -First 1
+          $p = Start-Process -FilePath $installer.FullName -ArgumentList @("/S", "/D=$installDir") -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Write-Error "Installer exited nonzero ($($p.ExitCode))"; exit 1 }
+          if (-not (Test-Path (Join-Path $installDir "lamcore.exe"))) {
+            Write-Error "lamcore.exe missing after install (NSIS payload incomplete?)"
+            exit 1
+          }
+          Write-Host "Installed to $installDir"
+
+          $app = Start-Process -FilePath (Join-Path $installDir "lamcore.exe") -PassThru
+          $port = $null
+          $ok = $false
+          try {
+            for ($i = 0; $i -lt 90; $i++) {
+              Start-Sleep -Seconds 1
+              if ($app.HasExited) { Write-Host "lamcore.exe exited early (code $($app.ExitCode))"; break }
+              if (-not $port) {
+                $log = Join-Path $installDir ".lam\backend.log"
+                if (Test-Path $log) {
+                  $m = Select-String -Path $log -Pattern "Starting LamCore backend on 127\.0\.0\.1:(\d+)" | Select-Object -Last 1
+                  if ($m -and $m.Matches.Count -gt 0) { $port = [int]$m.Matches[0].Groups[1].Value }
+                }
+              }
+              if ($port) {
+                try {
+                  $r = Invoke-WebRequest -Uri "http://127.0.0.1:$port/api/health" -TimeoutSec 2 -UseBasicParsing
+                  if ($r.StatusCode -eq 200) { $ok = $true; break }
+                } catch { }
+              }
+            }
+            if (-not $ok) {
+              Write-Error "Installed app health failed — Tauri shell cannot boot bundled backend (resource path drift?)"
+              exit 1
+            }
+            Write-Host "Installed LamCore health OK on port $port after $($i + 1)s"
+          } finally {
+            if (-not $app.HasExited) { Stop-Process -Id $app.Id -Force }
+            # 壳被杀后后端子进程可能残留，统一清理
+            Get-Process -Name "LamCore" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            Remove-Item -Recurse -Force $installDir -ErrorAction SilentlyContinue
+          }
+
       # ---------- 5. 上传 ----------
       # tag 触发 → 发布到 GitHub Releases；手动触发 → 仅作为构建产物保留
       - name: Upload installer to GitHub Release
