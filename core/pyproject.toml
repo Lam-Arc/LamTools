@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lamtools-core"
-version = "0.2.3"
+version = "0.2.4"
 description = "LamTools Core SDK - protocols, types, and base interfaces"
 requires-python = ">=3.14"
 dependencies = [
@@ -14,12 +14,15 @@ dependencies = [
     "python-docx>=1.2.0",
     "pypdf>=6.15.0",
     "python-multipart>=0.0.32",
+    # IANA timezone database — Windows Python lacks zoneinfo data, and
+    # runtime/arrange.py resolves local wall-clock via ZoneInfo("Asia/Shanghai").
+    "tzdata>=2025.2; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=9.1.1", "pytest-asyncio>=1.4.0", "fastapi>=0.137.2"]
-server = ["uvicorn>=0.49.0", "fastapi>=0.137.2"]
-desktop = ["uvicorn>=0.49.0", "fastapi>=0.137.2"]
+server = ["uvicorn[standard]>=0.49.0", "fastapi>=0.137.2"]
+desktop = ["uvicorn[standard]>=0.49.0", "fastapi>=0.137.2"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/lamtools_core"]

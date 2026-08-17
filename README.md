@@ -1,10 +1,15 @@
+## 支持项目
+
+如果 LamTools 对你有帮助，欢迎点 Star 支持喵！不点会哈气喵！
+
 # LamTools
 
 Local-first AI Agent framework. 本地优先的 AI Agent 框架，兼容 DeepSeek、OpenAI、Claude 等主流模型。
 
+**[English](README.en.md) | 简体中文**
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.14-blue.svg)](https://www.python.org/)
-[![Version](https://img.shields.io/badge/version-0.2.2-green.svg)](https://github.com/Lam-Arc/LamTools/releases)
 [![Stars](https://img.shields.io/github/stars/Lam-Arc/LamTools.svg?style=social)](https://github.com/Lam-Arc/LamTools)
 
 ---
@@ -123,6 +128,4 @@ LamTools/
 
 MIT，Copyright (c) 2026 Lam (Laaaaaaaam)
 
-## 支持项目
 
-如果 LamTools 对你有帮助，欢迎点 Star 支持。

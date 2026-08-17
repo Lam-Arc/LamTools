@@ -388,6 +388,10 @@ defineExpose({ leftPinned, rightPinned, toggleLeftPinned, toggleRightPinned })
 </script>
 
 <style scoped>
+/* 移动端导航条标题：桌面端不渲染（无独立 CSS 曾导致桌面显示多余 productName 行） */
+.mobile-shell-title {
+  display: none;
+}
 .sidebar-label {
   flex: 1;
   font-size: 13px;
