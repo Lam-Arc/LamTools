@@ -55,7 +55,7 @@ jobs:
             }
             $actual = $match.Groups[1].Value
             if ($actual -ne $expected) {
-              Write-Error "Version mismatch in $file: expected $expected, found $actual"
+              Write-Error "Version mismatch in ${file}: expected $expected, found $actual"
               $failed = $true
             } else {
               Write-Host "OK $file = $actual"
