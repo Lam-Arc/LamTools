@@ -316,10 +316,21 @@ def build_config_operation_catalog(
 
     # ── workspace.search：文件/内容搜索（搜索对话框 UI 直调，与工具
     #    search_files/search_content 同语义的轻量 operation 封装）──
+    # 跳过：构建/依赖/版本库等基础设施目录；.lam 为 LamTools 本地配置根，
+    # 整体跳过会漏掉用户文档——仅保留 .lam/docs（RAG 插件同名文档根约定），
+    # 其余 .lam 子目录（config/plugins/tools/loadtools/…）不进工作区搜索。
     _SEARCH_SKIP_DIRS = frozenset(
         {".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build",
          ".lamtools", ".lam", "target", ".acceptance", ".cache"}
     )
+
+    def _keep_dir(dirname: str, dirpath: str) -> bool:
+        # .lam 本身放行进入，其子目录仅保留 docs（其余 config/plugins/... 跳过）
+        if dirname == ".lam":
+            return True
+        if Path(dirpath).name == ".lam":
+            return dirname == "docs"
+        return dirname not in _SEARCH_SKIP_DIRS
 
     async def workspace_search(request: OperationRequest) -> OperationResult:
         payload = request.payload if isinstance(request.payload, dict) else {}
@@ -337,7 +348,7 @@ def build_config_operation_catalog(
                 yield base
                 return
             for dirpath, dirnames, filenames in os.walk(base):
-                dirnames[:] = [d for d in dirnames if d not in _SEARCH_SKIP_DIRS]
+                dirnames[:] = [d for d in dirnames if _keep_dir(d, dirpath)]
                 for fname in filenames:
                     yield Path(dirpath) / fname
 
