@@ -72,11 +72,6 @@
     :theme="theme"
     @close="showSearch = false"
   />
-  <SessionSearchDialog
-    :request-rpc="requestConfigOperation"
-    :sessions="sessions"
-    :on-jump="jumpToSearchedMessage"
-  />
   <OnboardingWizard
     v-if="showOnboarding"
     :providers="availableProviders"
@@ -628,7 +623,6 @@ import ArtifactPanel from '../components/ArtifactPanel.vue'
 import OnboardingWizard from '../components/OnboardingWizard.vue'
 import PluginsShell from '../components/PluginsShell.vue'
 import SearchShell from '../components/SearchShell.vue'
-import SessionSearchDialog from '../components/SessionSearchDialog.vue'
 import CoreSettings, {
   type CoreSettingsModelPayload,
   type CoreSettingsProviderPayload,
@@ -733,6 +727,15 @@ const settingsStorageKey = 'lamtools.core.ui'
 const showSettings = ref(false)
 const showPlugins = ref(false)
 const showSearch = ref(false)
+
+// Ctrl+K 全局搜索：与侧边栏「搜索」按钮一样切 showSearch（同一 SearchShell 入口）。
+// 打开时避免触发浏览器/输入框插件快捷键（旧 SessionSearchDialog 已并入 SearchShell）。
+function handleGlobalSearchKeydown(event: KeyboardEvent): void {
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+    event.preventDefault()
+    showSearch.value = !showSearch.value
+  }
+}
 const showArrange = ref(false)
 const showOnboarding = ref(false)
 const wizardLoading = ref(false)
@@ -1479,7 +1482,7 @@ async function selectSession(id: string) {
   await threadScroll.scrollToBottom(true)
 }
 
-// ── 全局搜索跳转（SessionSearchDialog 命中 → 打开会话 + 消息锚点定位）──
+// ── 全局搜索跳转（SearchShell 会话命中 → 打开会话 + 消息锚点定位）──
 async function jumpToSearchedMessage(sessionId: string, messageId: string): Promise<void> {
   if (activeSessionId.value !== sessionId) {
     await selectSession(sessionId)
@@ -2581,6 +2584,8 @@ onMounted(() => {
   window.addEventListener('dragover', handleWindowDragOver)
   window.addEventListener('dragleave', handleWindowDragLeave)
   window.addEventListener('drop', handleWindowDrop)
+  // Ctrl+K 全局搜索（与侧边栏「搜索」同一个 SearchShell——统一入口）
+  window.addEventListener('keydown', handleGlobalSearchKeydown)
   // 滚动跟随唯一通道：容器高度变化 -> 控制器 gating（易错点 5/9/10）。
   // 线程元素在 workflow 模式切换时会被 Vue 销毁重建（v-if/v-else），
   // 因此这里用 watch(threadScrollEl) 跟随元素生命周期重建 observer，
@@ -2611,6 +2616,7 @@ onUnmounted(() => {
   window.removeEventListener('dragover', handleWindowDragOver)
   window.removeEventListener('dragleave', handleWindowDragLeave)
   window.removeEventListener('drop', handleWindowDrop)
+  window.removeEventListener('keydown', handleGlobalSearchKeydown)
   threadResizeObserver?.disconnect()
   threadResizeObserver = null
   threadResizeObserverTarget = null

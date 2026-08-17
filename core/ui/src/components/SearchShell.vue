@@ -16,7 +16,9 @@
               @input="onInput"
               @compositionstart="composing = true"
               @compositionend="onCompositionEnd"
-              @keydown.enter.prevent="enterFirst"
+              @keydown.enter.prevent="onEnter"
+              @keydown.down.prevent="moveCursor(1)"
+              @keydown.up.prevent="moveCursor(-1)"
               @keydown.esc.prevent="$emit('close')"
             />
             <button type="button" class="search-clear" aria-label="清除" @click="query = ''">
@@ -67,7 +69,14 @@
 
             <!-- 会话：历史消息命中 -->
             <template v-else-if="activeTab === 'sessions'">
-              <li v-for="hit in results" :key="hit.message_id" class="search-hit" @mousedown.prevent="jumpSession(hit)">
+              <li
+                v-for="(hit, idx) in results"
+                :key="hit.message_id"
+                class="search-hit"
+                :class="{ 'is-active': idx === cursor }"
+                @mousedown.prevent="cursor = idx; jumpSession(hit)"
+                @mouseenter="cursor = idx"
+              >
                 <div class="search-hit-head">
                   <span class="search-hit-title">{{ titleOf(hit.session_id) }}</span>
                   <span class="search-hit-role" :class="hit.role">{{ roleLabel(hit.role) }}</span>
@@ -130,7 +139,7 @@ const props = defineProps<{
   theme?: ThemeData | null
 }>()
 
-defineEmits<{ close: [] }>()
+const emit = defineEmits<{ close: [] }>()
 
 type SearchTabId = 'files' | 'content' | 'sessions' | 'docs'
 interface SearchHit {
@@ -162,7 +171,11 @@ const searching = ref(false)
 const searched = ref(false)
 const error = ref('')
 const ragEnabled = ref(false)
-// IME 合成标志：与 SessionSearchDialog 同一手动管理策略（WebView2 compositionend 偶发不触发）
+const cursor = ref(0)
+// IME 合成标志：手动管理（不用 v-model 的 composition 拦截——WebView2 上
+// compositionend 偶发不触发，v-model 内部标志卡死 → 退格后 modelValue 不
+// 更新、渲染时字符回弹 = "无法退格"。合成中不更新 query，合成结束强制同步。
+// 与旧 SessionSearchDialog 同一策略（已并入本组件）。
 const composing = ref(false)
 
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
@@ -249,17 +262,23 @@ function onCompositionEnd(event: Event): void {
 
 function switchTab(tab: SearchTabId): void {
   activeTab.value = tab
+  cursor.value = 0
   runSearch(query.value.trim())
 }
 
-function enterFirst(): void {
+function onEnter(): void {
   if (activeTab.value === 'sessions') {
-    const hit = results.value[0] as SearchHit | undefined
+    const hit = results.value[cursor.value] as SearchHit | undefined
     if (hit?.session_id && hit?.message_id) jumpSession(hit)
     return
   }
   const q = query.value.trim()
   if (q) runSearch(q)
+}
+
+function moveCursor(step: number): void {
+  if (activeTab.value !== 'sessions' || !results.value.length) return
+  cursor.value = (cursor.value + step + results.value.length) % results.value.length
 }
 
 watch(query, (value) => {
@@ -292,6 +311,7 @@ async function runSearch(q: string): Promise<void> {
     const result = await callForTab(activeTab.value, q)
     if (seq !== searchSeq) return // 过期响应丢弃
     results.value = result
+    cursor.value = 0
     searched.value = true
   } catch (e) {
     if (seq !== searchSeq) return
@@ -320,7 +340,11 @@ async function callForTab(tab: SearchTabId, q: string): Promise<SearchHit[]> {
 }
 
 function jumpSession(hit: SearchHit): void {
-  if (hit.session_id && hit.message_id) props.onJump(hit.session_id, hit.message_id)
+  if (hit.session_id && hit.message_id) {
+    // 跳转后立即关闭搜索页（与 Ctrl+K 快速搜索同语义：命中即离开）
+    emit('close')
+    props.onJump(hit.session_id, hit.message_id)
+  }
 }
 
 function titleOf(sessionId: string | undefined): string {
@@ -493,6 +517,10 @@ onMounted(async () => {
 .search-hit:hover {
   background: color-mix(in srgb, var(--settings-main-text, #fff) 5%, transparent);
   border-left-color: var(--settings-control-background, #3a3834);
+}
+.search-hit.is-active {
+  background: color-mix(in srgb, var(--settings-control-background, #3a3834) 28%, transparent);
+  border-left-color: var(--settings-control-background, #ffd166);
 }
 
 .file-hit {

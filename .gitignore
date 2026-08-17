@@ -141,3 +141,4 @@ core/scripts/
 # Scratch / debugging artifacts (local only)
 core/_swap_checkboxes.py
 *.png
+dist-plugins/
