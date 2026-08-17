@@ -891,6 +891,19 @@ def build_parser() -> argparse.ArgumentParser:
     _add_live_connection_arguments(plugin_config_set)
     plugin_config_set.add_argument("--raw", action="store_true")
     plugin_config_set.set_defaults(func=cmd_plugin_config_set)
+    plugin_operations = plugin_sub.add_parser(
+        "operations", help="Inspect plugin-declared operations (RPC surface, G 组)"
+    )
+    plugin_operations_sub = plugin_operations.add_subparsers(
+        dest="plugin_operations_command", required=True
+    )
+    plugin_operations_list = plugin_operations_sub.add_parser(
+        "list", help="List plugin-declared operations (optionally filtered by plugin name)"
+    )
+    plugin_operations_list.add_argument("name", nargs="?", default="", help="Plugin name filter")
+    _add_live_connection_arguments(plugin_operations_list)
+    plugin_operations_list.add_argument("--raw", action="store_true")
+    plugin_operations_list.set_defaults(func=cmd_plugin_operations_list)
 
     command = sub.add_parser("command", help="Use the Core command system")
     command_sub = command.add_subparsers(dest="command_action", required=True)
@@ -1545,6 +1558,38 @@ async def cmd_plugin_config_get(args: argparse.Namespace) -> int:
         print(json.dumps(result, ensure_ascii=False), flush=True)
         return 0
     print(json.dumps(result.get("config") or {}, ensure_ascii=False, indent=2), flush=True)
+    return 0
+
+
+async def cmd_plugin_operations_list(args: argparse.Namespace) -> int:
+    """G 组：列插件声明的 operations（RPC 面直调入口，GUI 能力必有 CLI）。"""
+    result = await _invoke_live(args, lambda client: client.request("plugin.list", {}))
+    if args.raw:
+        print(json.dumps(result, ensure_ascii=False), flush=True)
+        return 0
+    plugins = result.get("plugins") if isinstance(result, dict) else []
+    if args.name:
+        plugins = [item for item in plugins if item.get("name") == args.name]
+    found = False
+    for item in plugins:
+        operations = [
+            op
+            for operation_file in (item.get("operations") or [])
+            for op in operation_file.get("operations", [])
+        ]
+        if not operations:
+            continue
+        found = True
+        state = "enabled" if item.get("enabled") else "disabled"
+        print(f"{item.get('name')} {item.get('version')} [{state}]", flush=True)
+        for op in operations:
+            permission = op.get("permission") or "auto_allow"
+            print(f"  {op.get('name')} [{permission}] {op.get('handler')}", flush=True)
+    if not found:
+        target = f" plugin '{args.name}'" if args.name else ""
+        print(f"No plugin-declared operations{target}.", flush=True)
+    for error in result.get("errors") or []:
+        print(f"[error] {error.get('name')}: {error.get('error')}", flush=True)
     return 0
 
 

@@ -137,3 +137,7 @@ core/scripts/
 
 # Legacy playwright test workspace (archived test fixtures, not e2e/)
 .playwright-test/
+
+# Scratch / debugging artifacts (local only)
+core/_swap_checkboxes.py
+*.png

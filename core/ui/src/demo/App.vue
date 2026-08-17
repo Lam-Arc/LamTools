@@ -64,6 +64,19 @@
     :work-root="currentWorkRoot()"
     @back="showArrange = false"
   />
+  <SearchShell
+    v-if="showSearch"
+    :request-rpc="requestConfigOperation"
+    :sessions="sessions"
+    :on-jump="jumpToSearchedMessage"
+    :theme="theme"
+    @close="showSearch = false"
+  />
+  <SessionSearchDialog
+    :request-rpc="requestConfigOperation"
+    :sessions="sessions"
+    :on-jump="jumpToSearchedMessage"
+  />
   <OnboardingWizard
     v-if="showOnboarding"
     :providers="availableProviders"
@@ -91,6 +104,7 @@
     @new-session="openProjectCreate"
     @settings="openSettings"
     @plugins="openPlugins"
+    @search="showSearch = true"
     @composer-submit="submitComposer"
     @composer-drop="handleComposerDrop"
   >
@@ -613,6 +627,8 @@ import CoreSessionTitleEditor from '../components/CoreSessionTitleEditor.vue'
 import ArtifactPanel from '../components/ArtifactPanel.vue'
 import OnboardingWizard from '../components/OnboardingWizard.vue'
 import PluginsShell from '../components/PluginsShell.vue'
+import SearchShell from '../components/SearchShell.vue'
+import SessionSearchDialog from '../components/SessionSearchDialog.vue'
 import CoreSettings, {
   type CoreSettingsModelPayload,
   type CoreSettingsProviderPayload,
@@ -716,6 +732,7 @@ function toggleRightPinned() {
 const settingsStorageKey = 'lamtools.core.ui'
 const showSettings = ref(false)
 const showPlugins = ref(false)
+const showSearch = ref(false)
 const showArrange = ref(false)
 const showOnboarding = ref(false)
 const wizardLoading = ref(false)
@@ -1460,6 +1477,37 @@ async function selectSession(id: string) {
   await refreshGoal(id, true)
   loadCheckpointGraph(id) // fire-and-forget: refresh turn→checkpoint map for rollback/fork
   await threadScroll.scrollToBottom(true)
+}
+
+// ── 全局搜索跳转（SessionSearchDialog 命中 → 打开会话 + 消息锚点定位）──
+async function jumpToSearchedMessage(sessionId: string, messageId: string): Promise<void> {
+  if (activeSessionId.value !== sessionId) {
+    await selectSession(sessionId)
+  }
+  await locateMessage(messageId)
+}
+
+/** 定位消息：轮询目标 DOM（窗口未含则逐步加载更早历史），
+ * 命中 → scrollIntoView 居中 + 高亮渐隐（2.6s）。找不到给出提示。 */
+async function locateMessage(messageId: string): Promise<void> {
+  const selector = `[data-message-id="${CSS.escape(messageId)}"]`
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    const el = document.querySelector<HTMLElement>(selector)
+    if (el) {
+      el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      el.classList.add('rag-hit-highlight')
+      window.setTimeout(() => el.classList.remove('rag-hit-highlight'), 2600)
+      return
+    }
+    if (projectionController.hasMoreHistory.value) {
+      projectionController.loadMoreHistory()
+      await nextTick()
+      await new Promise((resolve) => setTimeout(resolve, 150))
+      continue
+    }
+    break
+  }
+  showToast('error', '未找到该消息（可能已被删除或属于子会话）', 5000)
 }
 
 // Session-scoped model memory: each session remembers its own model choice,

@@ -103,6 +103,42 @@ def _SECRET_KEY_PATTERN_MATCHES(config: dict[str, Any]) -> list[str]:
     return [key for key in config.keys() if _SECRET_KEY_RE.search(str(key))]
 
 
+def _operation_status_from_files(
+    files: list[Path], *, plugin_root: Path
+) -> list[dict[str, Any]]:
+    """解析插件的 operations.jsonc 声明，返回状态列表（G 组，plugin.list 展示用）。
+
+    与工具 tool_status 同构：文件缺失/清单非法 → 报 error；合法 → 逐条
+    operation 摘要（name/permission/handler）。
+    """
+    from .operations_loader import load_plugin_operations
+
+    status: list[dict[str, Any]] = []
+    for operation_file in files:
+        if not operation_file.exists():
+            status.append({"path": str(operation_file), "error": "operation file not found"})
+            continue
+        try:
+            declared = load_plugin_operations([operation_file], plugin_root=plugin_root)
+        except (OSError, ValueError, _json.JSONDecodeError) as exc:
+            status.append({"path": str(operation_file), "error": str(exc)})
+            continue
+        status.append(
+            {
+                "path": str(operation_file),
+                "operations": [
+                    {
+                        "name": operation.name,
+                        "permission": operation.permission,
+                        "handler": operation.handler,
+                    }
+                    for operation in declared
+                ],
+            }
+        )
+    return status
+
+
 def _skill_names_from_roots(roots: list[Path]) -> list[str]:
     """扫描技能目录下的 SKILL.md，返回技能名列表（frontmatter name）。"""
     names: list[str] = []
@@ -241,6 +277,10 @@ def build_plugin_operation_catalog(
                     "hooks": [str(path) for path in item.hook_files],
                     "mcp": [str(path) for path in item.mcp_files],
                     "tools": tool_status,
+                    # G 组：operations.jsonc 声明状态（RPC 面，UI/CLI 直调）
+                    "operations": _operation_status_from_files(
+                        item.operation_files, plugin_root=item.root
+                    ),
                     # 插件资产明细（配置卡片展示用）：具体技能名 / 钩子事件摘要
                     "skill_names": _skill_names_from_roots(item.skill_roots),
                     "hook_summary": _hook_summary_from_files(item.hook_files),
@@ -1008,4 +1048,51 @@ def build_plugin_operation_catalog(
     catalog.register("skill.create", skill_create)
     catalog.register("skill.enable", skill_enable)
     catalog.register("skill.disable", skill_disable)
+    # ── G 组（2026-08-15 增量需求）：插件声明 operations（RPC 面）──────
+    # 收集各 enabled 插件的 operations.jsonc → 动态导入 handler →
+    # partial 绑定 work_root/data_dir → 注册进 catalog。UI 经现成
+    # JSON-RPC 总线直调（live_router catalog.execute），无需改 router。
+    # 信任语义同工具 handler（G3）：安装即永信；导入失败 = 不可用，
+    # 不阻断其他插件（错误随 catalog 元数据返回，plugin.list 已展示）。
+    operation_errors: list[dict[str, Any]] = []
+    from .operations_loader import register_plugin_operations
+
+    _work_root = Path(work_root) if work_root else None
+    _data_dir = Path(data_dir) if data_dir else None
+    # 与 assemble_core_agent_plugins 同语义：插件 handler（module:function）
+    # 经 importlib 解析，插件根必须进 sys.path（append 尾部避免遮蔽 stdlib；
+    # 插件已信任，安装即永信）。catalog 独立构建（CLI/UI 直连）时同样生效。
+    import sys as _sys
+
+    for item in plugin_registry.discover():
+        if not item.enabled:
+            continue
+        root = str(item.root)
+        if root not in _sys.path:
+            _sys.path.append(root)
+    for item in plugin_registry.discover():
+        if not item.enabled or not item.operation_files:
+            continue
+        try:
+            from .operations_loader import load_plugin_operations
+
+            declared = load_plugin_operations(item.operation_files, plugin_root=item.root)
+        except (OSError, ValueError, _json.JSONDecodeError) as exc:
+            operation_errors.append(
+                {
+                    "plugin": item.name,
+                    "error": str(exc),
+                }
+            )
+            continue
+        operation_errors.extend(
+            register_plugin_operations(
+                catalog,
+                declared,
+                plugin_name=item.name,
+                work_root=_work_root,
+                data_dir=_data_dir,
+            )
+        )
+    catalog.plugin_operation_errors = operation_errors
     return catalog

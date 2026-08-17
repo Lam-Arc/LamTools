@@ -17,6 +17,7 @@ SUPPORTED_MANIFEST_VERSION = "1"
 # manifest 键 → PluginManifest 字段（新增工具/依赖/配置字段）
 MANIFEST_DEPENDENCIES_KEY = "dependencies"
 MANIFEST_TOOLS_KEY = "tools"
+MANIFEST_OPERATIONS_KEY = "operations"
 MANIFEST_CONFIG_SCHEMA_KEY = "configSchema"
 
 
@@ -231,6 +232,7 @@ class PluginRegistry:
             hook_files=hook_files,
             mcp_files=mcp_files,
             tool_files=self._paths(root, raw.get(MANIFEST_TOOLS_KEY)),
+            operation_files=self._paths(root, raw.get(MANIFEST_OPERATIONS_KEY)),
             dependencies=[
                 str(item).strip()
                 for item in raw.get(MANIFEST_DEPENDENCIES_KEY, [])

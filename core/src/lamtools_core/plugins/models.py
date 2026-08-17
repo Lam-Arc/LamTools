@@ -42,6 +42,7 @@ class PluginManifest:
     mcp_files: list[Path] = field(default_factory=list)
     # ── 原生工具 / 依赖 / 配置（插件系统改造新增）──────────────
     tool_files: list[Path] = field(default_factory=list)
+    operation_files: list[Path] = field(default_factory=list)
     dependencies: list[str] = field(default_factory=list)
     config_schema: Path | None = None
     raw: dict[str, Any] = field(default_factory=dict)
@@ -66,6 +67,25 @@ class PluginToolSpec:
     skill: str = ""
     handler: str = ""  # module:function 动态导入入口
     timeout: float | None = None
+    raw: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class PluginOperationSpec:
+    """operations.jsonc 中的单个 operation 声明（RPC 面，G 组增量）。
+
+    operation 由 UI/CLI 直接发起（不经 kernel/toolbox）——调用者即用户
+    或开发工具，不参与 ApprovalGate 审批链；permission 缺省
+    ``auto_allow``，``hard_block`` 拒绝注册（plugin.list 报状态）。
+    handler 为 ``module:function`` 动态导入入口，契约：
+    ``async def handler(request, *, work_root, data_dir) -> OperationResult``。
+    """
+
+    name: str
+    description: str = ""
+    input_schema: dict[str, Any] = field(default_factory=dict)
+    permission: str = "auto_allow"  # auto_allow | ask_user | hard_block
+    handler: str = ""  # module:function 动态导入入口
     raw: dict[str, Any] = field(default_factory=dict)
 
 

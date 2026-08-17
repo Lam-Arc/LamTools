@@ -200,7 +200,9 @@
                       <span class="decision-card-status">{{ decisionStatusLabel(part) }}</span>
                     </div>
                     <p v-if="decisionDetail(part)" class="decision-card-detail">{{ decisionDetail(part) }}</p>
-                    <p v-if="decisionResponseText(part)" class="decision-card-decision">{{ decisionResponseText(part) }}</p>
+                    <Transition :css="false" @enter="decisionResponseEnter" @leave="fadeSlideLeave">
+                      <p v-if="decisionResponseText(part)" class="decision-card-decision">{{ decisionResponseText(part) }}</p>
+                    </Transition>
                     <div v-if="part.status === 'pending' && decisionOptions(part).length > 0" class="decision-options">
                       <div v-for="option in decisionOptions(part)" :key="option.id" class="decision-option-group">
                         <button
@@ -742,7 +744,9 @@
                           <span class="decision-card-status">{{ decisionStatusLabel(group.part) }}</span>
                         </div>
                         <p v-if="decisionDetail(group.part)" class="decision-card-detail">{{ decisionDetail(group.part) }}</p>
-                        <p v-if="decisionResponseText(group.part)" class="decision-card-decision">{{ decisionResponseText(group.part) }}</p>
+                        <Transition :css="false" @enter="decisionResponseEnter" @leave="fadeSlideLeave">
+                          <p v-if="decisionResponseText(group.part)" class="decision-card-decision">{{ decisionResponseText(group.part) }}</p>
+                        </Transition>
                         <div v-if="group.part.status === 'pending' && decisionOptions(group.part).length > 0" class="decision-options">
                           <div v-for="option in decisionOptions(group.part)" :key="option.id" class="decision-option-group">
                             <button
@@ -806,6 +810,7 @@
 :msg="subMsg"
                             :assistant-label="agentTitle(group.part)"
                             :process-expanded-ids="agentProcessExpandedIds(group.part)"
+                            :suppress-artifacts-panel="artifactsPanelSuppressed"
                             @toggle-process="toggleAgentProcess"
                             @decision-select="emit('decision-select', $event)"
                           >
@@ -1095,7 +1100,9 @@
                     <span class="decision-card-status">{{ decisionStatusLabel(group.part) }}</span>
                   </div>
                   <p v-if="decisionDetail(group.part)" class="decision-card-detail">{{ decisionDetail(group.part) }}</p>
-                  <p v-if="decisionResponseText(group.part)" class="decision-card-decision">{{ decisionResponseText(group.part) }}</p>
+                  <Transition :css="false" @enter="decisionResponseEnter" @leave="fadeSlideLeave">
+                    <p v-if="decisionResponseText(group.part)" class="decision-card-decision">{{ decisionResponseText(group.part) }}</p>
+                  </Transition>
                   <div v-if="group.part.status === 'pending' && decisionOptions(group.part).length > 0" class="decision-options">
                     <div v-for="option in decisionOptions(group.part)" :key="option.id" class="decision-option-group">
                       <button
@@ -1446,7 +1453,9 @@
                       <span class="decision-card-status">{{ decisionStatusLabel(group.part) }}</span>
                     </div>
                     <p v-if="decisionDetail(group.part)" class="decision-card-detail">{{ decisionDetail(group.part) }}</p>
-                    <p v-if="decisionResponseText(group.part)" class="decision-card-decision">{{ decisionResponseText(group.part) }}</p>
+                    <Transition :css="false" @enter="decisionResponseEnter" @leave="fadeSlideLeave">
+                      <p v-if="decisionResponseText(group.part)" class="decision-card-decision">{{ decisionResponseText(group.part) }}</p>
+                    </Transition>
                     <div v-if="group.part.status === 'pending' && decisionOptions(group.part).length > 0" class="decision-options">
                       <div v-for="option in decisionOptions(group.part)" :key="option.id" class="decision-option-group">
                         <button
@@ -1510,6 +1519,7 @@
 :msg="subMsg"
                             :assistant-label="agentTitle(group.part)"
                             :process-expanded-ids="agentProcessExpandedIds(group.part)"
+                            :suppress-artifacts-panel="artifactsPanelSuppressed"
                             @toggle-process="toggleAgentProcess"
                             @decision-select="emit('decision-select', $event)"
                           >
@@ -1601,13 +1611,15 @@
             <MarkdownRenderer class="assistant-answer" :content="answerContent(msg)" />
           </slot>
 
-          <!-- 本轮 artifact 产出（生图等）统一挂到消息结尾 -->
-          <div v-if="messageImages.length" class="message-artifacts" aria-label="本轮产出">
+          <!-- 本轮 artifact 产出（生图等）统一挂到消息结尾；本轮（turn）运行期间
+               隐藏（活跃轮所有消息含子代理段），轮次结束才出现（GSAP 淡入） -->
+          <Transition :css="false" @enter="artifactsEnter" @leave="fadeSlideLeave">
+          <div v-if="messageImages.length && !artifactsPanelSuppressed" class="message-artifacts" aria-label="本轮产出">
             <div class="message-artifacts-head">本轮产出</div>
             <div class="tool-image-row">
               <figure
-                v-for="artifact in messageImages"
-                :key="artifact.artifact_id || artifact.uri"
+                v-for="(artifact, i) in messageImages"
+                :key="artifact.artifact_id || artifact.uri || artifact.metadata?.image_data_url || 'no-key-' + i"
                 class="tool-image-card"
                 @click="openImagePreview(artifact)"
               >
@@ -1615,6 +1627,7 @@
               </figure>
             </div>
           </div>
+          </Transition>
 
           <!-- 输出中（turn 运行中，与 stop 按钮同步）：文字区域最下方三个圆点逐个显现循环 -->
           <div v-if="isActiveTurnMessage(msg)" class="streaming-dots" role="status" aria-label="正在输出">
@@ -1691,6 +1704,7 @@ import TypewriterText from './TypewriterText.vue'
 import MessageView from './MessageView.vue'
 import { autoFollowScrollDirective as vAutoFollowScroll } from '../directives/autoFollowScroll'
 import { panelEnter, panelLeave } from '../motion/expandPanel'
+import { fadeSlideEnter, fadeSlideLeave } from '../motion/fadeSlide'
 
 /**
  * 运行态标题流光（工具行 / sub-agent 行通用）：v-beam 挂在标题元素上，
@@ -1793,6 +1807,9 @@ const props = withDefaults(
     /** 挂载时播放入场动效（新消息淡入；初始批次/历史加载不播）。
         注意不能做成 directive：本组件多根（div + Teleport），运行时 directive 不生效。 */
     motionEnter?: boolean
+    /** 「本轮产出」面板抑制（由父消息向下传播）：本轮运行中，子代理 sub-line 段
+        的面板同样隐藏，轮次结束才出现 */
+    suppressArtifactsPanel?: boolean
   }>(),
   {
     assistantLabel: 'Assistant',
@@ -1806,6 +1823,7 @@ const props = withDefaults(
     turnActive: false,
     checkpointTurnIds: () => new Set(),
     motionEnter: false,
+    suppressArtifactsPanel: false,
   },
 )
 
@@ -1821,6 +1839,10 @@ const emit = defineEmits<{
 //    mount-only + transform/opacity + 局部元素，不写响应式状态、不动兄弟节点
 //    （对齐 perf 文档红线；reduced-motion / 无 rAF 环境直切）。
 const rootEl = ref<HTMLElement | null>(null)
+
+// 组件级 GSAP 作用域 context（对齐 gsap-frameworks 规范）：本轮产出面板、
+// 决策答复等 Transition 钩子里创建的 tween 全部挂进 ctx，卸载时一次 revert 清理。
+const gsapCtx = gsap.context(() => {}, rootEl)
 
 onMounted(() => {
   if (!props.motionEnter || !rootEl.value) return
@@ -1841,8 +1863,20 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  // 消息入场 tween（mount-only）与 ctx 内新动画（面板/决策答复）统一清理
   if (rootEl.value) gsap.killTweensOf(rootEl.value)
+  gsapCtx.revert()
 })
+
+// ── Transition 入场钩子（本轮产出面板 / 决策答复）：tween 挂进 gsapCtx，
+//    由 ctx.revert() 统一清理；离场走 fadeSlideLeave 瞬时直切（出现类元素移除无需动画）。
+function artifactsEnter(el: Element, done: () => void): void {
+  gsapCtx.add(() => fadeSlideEnter(el, done))
+}
+
+function decisionResponseEnter(el: Element, done: () => void): void {
+  gsapCtx.add(() => fadeSlideEnter(el, done))
+}
 
 interface AssistantActionPayload {
   turnId: string
@@ -3031,18 +3065,13 @@ function imageAlt(artifact: { name?: string; uri?: string }): string {
 const previewImageSrc = ref('')
 const previewImageAlt = ref('')
 
-/** 本轮（消息）所有 image artifact，含子代理 sub-line 递归收集，按 id/uri 去重。 */
+/** 本轮（消息）所有 image artifact，含子代理 sub-line 递归收集（去重在 messageImages 内做）。 */
 function collectImageArtifacts(
   part: MessagePart,
   out: Array<ToolArtifact & { artifact_id?: string }>,
 ): void {
   for (const artifact of imageArtifacts(part)) {
-    const duplicate = out.some(
-      (existing) =>
-        (existing.artifact_id && existing.artifact_id === artifact.artifact_id)
-        || (!existing.artifact_id && !artifact.artifact_id && existing.uri === artifact.uri),
-    )
-    if (!duplicate) out.push(artifact)
+    out.push(artifact)
   }
   const subLineParts = (part.metadata as { subLineParts?: MessagePart[] } | undefined)?.subLineParts
   if (Array.isArray(subLineParts)) {
@@ -3050,10 +3079,47 @@ function collectImageArtifacts(
   }
 }
 
+/** 「本轮产出」面板抑制：本轮（turn）运行期间不显示——活跃轮内的消息
+ *  （含父消息传播的 sub-line 子消息）或仍带 live 标记的消息，轮次结束才出现。 */
+const artifactsPanelSuppressed = computed(() => {
+  return props.suppressArtifactsPanel === true
+    || isActiveTurnMessage(props.msg)
+    || isLiveMessage(props.msg)
+})
+
 const messageImages = computed<Array<ToolArtifact & { artifact_id?: string }>>(() => {
-  const out: Array<ToolArtifact & { artifact_id?: string }> = []
-  for (const part of props.msg.parts || []) collectImageArtifacts(part, out)
-  return out
+  const raw: Array<ToolArtifact & { artifact_id?: string }> = []
+  for (const part of props.msg.parts || []) collectImageArtifacts(part, raw)
+  // 归一化键去重：artifact_id → uri → image_data_url（read_file base64）。
+  // 同一张图跨多个 part 只留一张；同一 uri 下优先保留带 artifact_id 的条目
+  // （id 是权威身份，uri 是弱身份，base64 内容兜底——旧实现只在「双方都无 id」
+  //  时按 uri 去重，read_file 图与 id/uri 不一致的同图会重复出现）。
+  const seen = new Map<string, ToolArtifact & { artifact_id?: string }>()
+  for (const artifact of raw) {
+    const idKey = artifact.artifact_id || ''
+    const uriKey = typeof artifact.uri === 'string' ? artifact.uri : ''
+    if (idKey) {
+      const prevById = [...seen.values()].find(a => a.artifact_id === idKey)
+      if (prevById) continue
+      if (uriKey && seen.has(uriKey)) {
+        const prev = seen.get(uriKey)
+        if (!prev || prev.artifact_id) continue
+        seen.delete(uriKey) // 无 id 的同 uri 条目让位给带 id 的
+      }
+      seen.set(uriKey || idKey, artifact)
+    } else if (uriKey) {
+      if (seen.has(uriKey)) continue
+      seen.set(uriKey, artifact)
+    } else if (typeof artifact.metadata?.image_data_url === 'string') {
+      const dataUrl = artifact.metadata.image_data_url
+      if (seen.has(dataUrl)) continue
+      seen.set(dataUrl, artifact)
+    } else {
+      // 无任何可归一化键（极罕见）：直接保留，避免丢图
+      seen.set(`no-key-${seen.size}`, artifact)
+    }
+  }
+  return [...seen.values()]
 })
 
 function openImagePreview(artifact: NonNullable<MessagePart['artifacts']>[number]): void {

@@ -213,3 +213,191 @@ async def test_plugin_config_get_returns_work_root(tmp_path: Path):
     result = await catalog.execute("plugin.config.get", {"name": "demo"})
     assert result.status != "error", result.payload
     assert result.payload["work_root"] == str(work_root)
+
+
+# ── G 组（2026-08-15 增量需求）：插件声明 operations（RPC 面）──────
+
+PING_HANDLER = '''\
+from lamtools_core.app import OperationResult
+
+
+async def ping(request, *, work_root, data_dir):
+    payload = request.payload if hasattr(request, "payload") else {}
+    return OperationResult(
+        name=getattr(request, "name", "?"),
+        payload={
+            "pong": payload.get("x"),
+            "work_root": str(work_root),
+            "data_dir": str(data_dir),
+        },
+    )
+'''
+
+
+def _write_ops_plugin(root: Path, name: str = "testops", *, operations: list[dict]) -> Path:
+    plug = root / name
+    plug.mkdir(parents=True, exist_ok=True)
+    write_json(
+        plug / "plugin.json",
+        {"name": name, "version": "1.0.0", "operations": ["./operations.jsonc"]},
+    )
+    write_json(plug / "operations.jsonc", {"operations": operations})
+    (plug / "testops_handler.py").write_text(PING_HANDLER, encoding="utf-8")
+    return plug
+
+
+def _build_ops_catalog(root: Path, *, enabled: bool = True, work_root: Path | None = None):
+    state = PluginStateStore(root / "plugin-state.json")
+    if not enabled:
+        state.set_enabled("testops", False)
+    return build_plugin_operation_catalog(
+        plugin_registry=PluginRegistry(plugin_roots=[root], state_store=state),
+        plugin_state_store=state,
+        hook_registry_factory=lambda: HookRegistry(),
+        hook_trust_store=HookTrustStore(root / "hook-trust.json"),
+        work_root=work_root or root / "work",
+        data_dir=root / "data",
+    )
+
+
+# G1：manifest operations 字段解析 + 越界校验（_paths 同套规则）
+
+def test_g_manifest_operations_field_parsed(tmp_path: Path):
+    plug = _write_ops_plugin(tmp_path, operations=[{"name": "testops.ping", "handler": "testops_handler:ping"}])
+    manifest = PluginRegistry(plugin_roots=[tmp_path], state_store=None).discover()[0]
+    assert manifest.name == "testops"
+    assert manifest.operation_files == [plug / "operations.jsonc"]
+
+
+def test_g_operations_path_escape_rejected(tmp_path: Path):
+    plug = tmp_path / "evil"
+    plug.mkdir()
+    write_json(plug / "plugin.json", {"name": "evil", "operations": ["../outside.jsonc"]})
+    registry = PluginRegistry(plugin_roots=[tmp_path], state_store=None)
+    registry.discover()
+    assert registry.discover_errors and "outside" in registry.discover_errors[0]["error"]
+
+
+def test_g_operations_missing_handler_rejected(tmp_path: Path):
+    plug = _write_ops_plugin(tmp_path, operations=[{"name": "x.nohandler"}])
+    from lamtools_core.plugins.operations_loader import load_plugin_operations
+
+    with pytest.raises(ValueError):
+        load_plugin_operations([plug / "operations.jsonc"], plugin_root=plug)
+
+
+# G2：注册链路——catalog 收集 → execute 直调（JSON-RPC 总线同路径）
+
+@pytest.mark.asyncio
+async def test_g_operations_registered_and_executed(tmp_path: Path):
+    _write_ops_plugin(tmp_path, operations=[{
+        "name": "testops.ping",
+        "permission": "auto_allow",
+        "handler": "testops_handler:ping",
+    }])
+    catalog = _build_ops_catalog(tmp_path)
+    assert "testops.ping" in catalog.list()
+    result = await catalog.execute("testops.ping", {"x": 42})
+    assert result.status == "ok"
+    assert result.payload["pong"] == 42
+    # 契约：work_root/data_dir 经 partial 绑定注入
+    assert "work" in str(result.payload["work_root"])
+    assert "data" in str(result.payload["data_dir"])
+
+
+# G3：权限档位（hard_block 拒绝 / 插件禁用 → 不注册）
+
+@pytest.mark.asyncio
+async def test_g_hard_block_operation_rejected(tmp_path: Path):
+    _write_ops_plugin(tmp_path, operations=[
+        {"name": "testops.ok", "permission": "auto_allow", "handler": "testops_handler:ping"},
+        {"name": "testops.blocked", "permission": "hard_block", "handler": "testops_handler:ping"},
+    ])
+    catalog = _build_ops_catalog(tmp_path)
+    assert "testops.ok" in catalog.list()
+    assert "testops.blocked" not in catalog.list()
+    assert any(
+        err["name"] == "testops.blocked" and "hard_block" in err["error"]
+        for err in catalog.plugin_operation_errors
+    )
+
+
+@pytest.mark.asyncio
+async def test_g_disabled_plugin_operations_not_registered(tmp_path: Path):
+    _write_ops_plugin(tmp_path, operations=[
+        {"name": "testops.ping", "permission": "auto_allow", "handler": "testops_handler:ping"},
+    ])
+    catalog = _build_ops_catalog(tmp_path, enabled=False)
+    assert "testops.ping" not in catalog.list()
+
+
+# 信任语义同工具（B4）：handler 导入失败 = 不可用报状态，不阻断其他插件
+
+@pytest.mark.asyncio
+async def test_g_handler_import_failure_surfaces_error(tmp_path: Path):
+    _write_ops_plugin(tmp_path, operations=[
+        {"name": "testops.broken", "permission": "auto_allow", "handler": "missing_module_xyz:nope"},
+        {"name": "testops.ping", "permission": "auto_allow", "handler": "testops_handler:ping"},
+    ])
+    catalog = _build_ops_catalog(tmp_path)
+    assert "testops.ping" in catalog.list()
+    assert "testops.broken" not in catalog.list()
+    assert any(err["name"] == "testops.broken" for err in catalog.plugin_operation_errors)
+
+
+# 同名冲突：先声明者保留，后声明者报错（与工具 B8 同语义）
+
+@pytest.mark.asyncio
+async def test_g_duplicate_operation_name_conflict(tmp_path: Path):
+    roots = tmp_path / "roots"
+    for name in ("plug-a", "plug-b"):
+        plug = roots / name
+        plug.mkdir(parents=True)
+        write_json(plug / "plugin.json", {"name": name, "operations": ["./operations.jsonc"]})
+        write_json(plug / "operations.jsonc", {"operations": [{"name": "shared.op", "handler": "testops_handler:ping"}]})
+        (plug / "testops_handler.py").write_text(PING_HANDLER, encoding="utf-8")
+    state = PluginStateStore(tmp_path / "plugin-state.json")
+    catalog = build_plugin_operation_catalog(
+        plugin_registry=PluginRegistry(plugin_roots=[roots], state_store=state),
+        plugin_state_store=state,
+        hook_registry_factory=lambda: HookRegistry(),
+        hook_trust_store=HookTrustStore(tmp_path / "hook-trust.json"),
+        work_root=tmp_path / "work",
+        data_dir=tmp_path / "data",
+    )
+    assert "shared.op" in catalog.list()
+    assert any(
+        "already registered" in err["error"] for err in catalog.plugin_operation_errors
+    )
+
+
+# 卸载清理：目录删除 → operation 不注册
+
+@pytest.mark.asyncio
+async def test_g_uninstall_removes_operations(tmp_path: Path):
+    _write_ops_plugin(tmp_path, operations=[
+        {"name": "testops.ping", "permission": "auto_allow", "handler": "testops_handler:ping"},
+    ])
+    catalog = _build_ops_catalog(tmp_path)
+    assert "testops.ping" in catalog.list()
+    import shutil
+
+    shutil.rmtree(tmp_path / "testops")
+    catalog2 = _build_ops_catalog(tmp_path)
+    assert "testops.ping" not in catalog2.list()
+
+
+# plugin.list 全量返回 operations 状态（B10 同构扩展）
+
+@pytest.mark.asyncio
+async def test_g_plugin_list_includes_operations_status(tmp_path: Path):
+    _write_ops_plugin(tmp_path, operations=[
+        {"name": "testops.ping", "permission": "auto_allow", "handler": "testops_handler:ping"},
+    ])
+    catalog = _build_ops_catalog(tmp_path)
+    result = await catalog.execute("plugin.list", {})
+    plugins = {item["name"]: item for item in result.payload["plugins"]}
+    assert "testops" in plugins
+    status = plugins["testops"]["operations"]
+    assert status and status[0]["operations"][0]["name"] == "testops.ping"
+    assert status[0]["operations"][0]["permission"] == "auto_allow"

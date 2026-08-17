@@ -9,6 +9,7 @@
     <MessageView
       v-for="msg in messages"
       :key="msg.id"
+      :data-message-id="msg.id"
       v-memo="[msg, assistantLabel, processExpandedIds.has(msg.id), typingMessageIds.has(msg.id), messageActions, turnActive, activeTurnId, checkpointTurnIds]"
       :motion-enter="!initialMessageIds.has(msg.id)"
       :msg="msg"
@@ -938,8 +939,7 @@ const initialMessageIds = new Set(props.messages.map((m) => m.id))
   font-weight: 600;
   line-height: 1.45;
   overflow-wrap: anywhere;
-  /* 答复出现时播放入场（B5：pending → answered 的状态翻转动画） */
-  animation: panel-enter 220ms var(--ease-out);
+  /* 答复出现入场已迁移到 MessageView 的 GSAP Transition（fadeSlide，B5 状态翻转动画） */
 }
 
 .decision-guide {

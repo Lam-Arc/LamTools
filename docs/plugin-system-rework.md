@@ -265,6 +265,17 @@ G4 消费方：RAG 插件 `rag.sessions.search`——与工具 `rag_search_sessi
 
 **优先级**：RAG 插件开发前必须（会话历史搜索入口依赖此通道）。
 
+**实现状态（2026-08-16 专项会话）**：G1-G3 已实现于 `core/`——manifest `operations` 字段
+（`plugins/models.py` PluginOperationSpec + `registry.py` 解析，`_paths()` 同套越界校验）、
+注册链路（`plugins/operations_loader.py` 解析/动态导入/partial 绑定 work_root+data_dir，
+`build_plugin_operation_catalog` 收集注册，插件根自动进 sys.path，`plugin.list` 返回
+operations 状态）、CLI `plugin operations list`；G4 消费方已落地——`plugins/lamtools-rag`
+声明 `rag.sessions.search`（operations.jsonc，handler 复用 `retriever.search(source="session_history")`
+双出口单内核），并实现 P2 会话历史索引（`rag_engine/session_indexer.py` 消息级分块/水位增量，
+Stop hook `on_stop.py` 自动索引 + `scripts/session_index.py` 手动补索引）。
+测试：`tests/test_plugin_operations.py` G 组 15 例（注册/直调/权限档位/导入失败/同名冲突/
+卸载清理/list 状态），全量 1482 通过。
+
 ---
 
 ## 增量需求（2026-08-16，实测暴露）：安装-扫描不一致（H 组）

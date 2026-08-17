@@ -82,6 +82,49 @@ let mermaidSeq = 0
 // diagrams.
 const markdownCache = new Map<string, { html: string; blocks: { id: string; code: string }[]; seq: number }>()
 
+// ── Code block copy button ──
+// Inline lucide Copy / Check icons (same geometry as the <Copy>/<Check>
+// components used elsewhere: 15px, stroke-width 1.8). Buttons live inside
+// rendered HTML strings so Vue components are not an option here; the raw
+// source travels in a hidden sibling element (see copyButtonHtml) and clicks
+// are handled by delegation on the root.
+const COPY_ICON =
+  '<svg class="code-copy-icon" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<rect width="13" height="13" x="9" y="9" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>'
+const DONE_ICON =
+  '<svg class="code-copy-icon code-copy-icon--done" xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<path d="M20 6 9 17l-5-5"></path></svg>'
+
+function copyButtonHtml(source: string): string {
+  // The raw source rides in a hidden sibling element: DOMPurify drops
+  // attribute values containing `-->` or closing-tag sequences
+  // (SAFE_FOR_XML), so a data attribute is not a reliable carrier for
+  // arbitrary code — mermaid edges alone would lose every copy source.
+  // A hidden span keeps the escaped text byte-for-byte and is in the
+  // default allowlist. (Note: never write a literal closing-script tag in
+  // this comment — the SFC parser treats it as the end of the script block.)
+  return (
+    `<button type="button" class="code-copy" data-code-copy aria-label="复制代码" title="复制代码">${COPY_ICON}${DONE_ICON}</button>` +
+    `<span class="code-source" hidden>${escapeHtml(source)}</span>`
+  )
+}
+
+function renderMarkdownDocument(source: string): string {
+  // Nested markdown document (```markdown / ```md): run the same pipeline as
+  // the top level — math protection → marked → sanitize → math restore — so
+  // inner formulas, diagrams and code blocks behave identically. Inner tokens
+  // are restored before returning, so the outer restoreMath never sees them.
+  const math = protectMath(source)
+  const renderer = createMermaidRenderer()
+  const html = marked.parse(math.content, {
+    renderer,
+    async: false,
+    breaks: false,
+    gfm: true,
+  }) as string
+  return DOMPurify.sanitize(restoreMath(html, math.tokens))
+}
+
 function createMermaidRenderer(): Renderer {
   const renderer = new marked.Renderer()
 
@@ -89,11 +132,16 @@ function createMermaidRenderer(): Renderer {
     if (props.mermaid && lang === 'mermaid') {
       const id = `mermaid-${mermaidSeq++}`
       mermaidBlocks.push({ id, code: text })
-      return `<div class="mermaid-placeholder" data-mermaid-id="${id}"></div>`
+      // The placeholder is later replaced by the rendered diagram (or the
+      // error fallback); the copy button is its sibling and survives that.
+      return `<div class="code-block"><div class="mermaid-placeholder" data-mermaid-id="${id}"></div>${copyButtonHtml(text)}</div>`
+    }
+    if (lang === 'markdown' || lang === 'md') {
+      return `<div class="code-block"><div class="nested-markdown">${renderMarkdownDocument(text)}</div>${copyButtonHtml(text)}</div>`
     }
     // Default code block
     const langAttr = lang ? ` class="language-${lang}"` : ''
-    return `<pre><code${langAttr}>${escapeHtml(text)}</code></pre>`
+    return `<div class="code-block"><pre><code${langAttr}>${escapeHtml(text)}</code></pre>${copyButtonHtml(text)}</div>`
   }
 
   return renderer
@@ -194,7 +242,7 @@ function renderStreamingCodeBlock(block: string): string {
   const lang = opening.replace(/^```/, '').trim()
   const body = lines.slice(1).join('\n').replace(/\n?```$/, '')
   const langAttr = lang ? ` class="language-${escapeHtml(lang)}"` : ''
-  return `<pre><code${langAttr}>${escapeHtml(body)}</code></pre>`
+  return `<div class="code-block"><pre><code${langAttr}>${escapeHtml(body)}</code></pre>${copyButtonHtml(body)}</div>`
 }
 
 function renderStreamingBlock(block: string): string {
@@ -372,12 +420,56 @@ watch(() => props.streaming, (streaming) => {
   if (!streaming) clearStreamedSegments()
 })
 
+// ── Code block copy (delegated; buttons live inside rendered HTML) ──
+let copiedButton: HTMLElement | null = null
+let copyResetTimer: ReturnType<typeof setTimeout> | null = null
+
+function fallbackCopyText(text: string): void {
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.style.position = 'fixed'
+  textarea.style.opacity = '0'
+  document.body.appendChild(textarea)
+  textarea.select()
+  try {
+    document.execCommand('copy')
+  } catch {
+    // ignore — clipboard stays unavailable
+  }
+  textarea.remove()
+}
+
+function handleCodeCopyClick(button: HTMLElement): void {
+  if (copiedButton && copiedButton !== button) copiedButton.removeAttribute('data-copied')
+  if (copyResetTimer) clearTimeout(copyResetTimer)
+  copiedButton = button
+  button.setAttribute('data-copied', '')
+  copyResetTimer = setTimeout(() => {
+    button.removeAttribute('data-copied')
+    if (copiedButton === button) copiedButton = null
+  }, 1400)
+  const source = button.closest('.code-block')?.querySelector('.code-source')?.textContent ?? ''
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(source).catch(() => fallbackCopyText(source))
+  } else {
+    fallbackCopyText(source)
+  }
+}
+
 // ── Intercept link clicks so they open in the system browser ──
 // The Tauri webview has no navigation policy; without this, clicking any
 // `<a href>` navigates the app window itself. We only hijack external
 // http(s) links — relative anchors are left alone.
 function onRootClick(event: MouseEvent) {
-  const target = (event.target as HTMLElement)?.closest?.('a')
+  const element = event.target as HTMLElement
+  const copyButton = element?.closest?.('[data-code-copy]') as HTMLElement | null
+  if (copyButton) {
+    event.preventDefault()
+    event.stopPropagation()
+    handleCodeCopyClick(copyButton)
+    return
+  }
+  const target = element?.closest?.('a')
   if (!target) return
   const href = target.getAttribute('href') ?? ''
   if (!isExternalUrl(href)) return
@@ -457,6 +549,71 @@ defineExpose({ renderStreaming })
   line-height: 1.45;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* Code block copy button — hover-reveal, same interaction pattern as the
+   assistant message action bar. The button overlays the pre's top-right. */
+.markdown-body :deep(.code-block) {
+  position: relative;
+}
+/* Hidden carrier for the copy source — never rendered */
+.markdown-body :deep(.code-source) {
+  display: none;
+}
+.markdown-body :deep(.code-copy) {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 46%, transparent);
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 150ms ease-out, background-color 150ms ease-out, color 150ms ease-out;
+}
+.markdown-body :deep(.code-block:hover .code-copy),
+.markdown-body :deep(.code-block:focus-within .code-copy) {
+  opacity: 1;
+  pointer-events: auto;
+}
+.markdown-body :deep(.code-copy:hover),
+.markdown-body :deep(.code-copy:focus-visible) {
+  background: color-mix(in srgb, var(--theme-main-text, #fff) var(--alpha-hover), transparent);
+  color: var(--theme-main-text, #fff);
+}
+.markdown-body :deep(.code-copy:focus-visible) {
+  outline: 2px solid var(--blue, #79bcff);
+  outline-offset: 1px;
+}
+.markdown-body :deep(.code-copy svg) {
+  width: 15px;
+  height: 15px;
+}
+/* Copy → check swap while the source is on the clipboard */
+.markdown-body :deep(.code-copy .code-copy-icon--done) {
+  display: none;
+}
+.markdown-body :deep(.code-copy[data-copied] .code-copy-icon) {
+  display: none;
+}
+.markdown-body :deep(.code-copy[data-copied] .code-copy-icon--done) {
+  display: block;
+}
+.markdown-body :deep(.code-copy[data-copied]) {
+  color: var(--green, #32d17d);
+}
+@media (prefers-reduced-motion: reduce) {
+  .markdown-body :deep(.code-copy) {
+    transition: none;
+  }
 }
 
 /* Lists */

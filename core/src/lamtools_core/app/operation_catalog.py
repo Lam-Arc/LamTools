@@ -35,6 +35,9 @@ def normalize_operation_name(name: str, aliases: dict[str, str] | None = None) -
 class OperationCatalog:
     def __init__(self) -> None:
         self._handlers: dict[str, OperationHandler] = {}
+        # G 组：插件 operations 注册失败明细（hard_block/导入失败/同名冲突），
+        # catalog 构建方写入，供上层（RPC 面 / 调试）检查；缺省空列表。
+        self.plugin_operation_errors: list[dict[str, Any]] = []
 
     def register(self, name: str, handler: OperationHandler) -> None:
         if not name:

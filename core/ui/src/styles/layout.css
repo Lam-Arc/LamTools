@@ -3305,3 +3305,22 @@
 .toggle-btn.is-on {
   color: var(--green);
 }
+
+/* ── 全局搜索跳转：消息定位高亮渐隐（SessionSearchDialog → locateMessage）──
+   class 加在 MessageView 根元素（.message-view）上，动画 2.6s 渐隐 */
+.rag-hit-highlight {
+  animation: rag-hit-fade 2.6s ease-out;
+  border-radius: var(--radius);
+}
+
+@keyframes rag-hit-fade {
+  0% {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent, #4f8cff) 70%, transparent),
+                0 0 18px color-mix(in srgb, var(--accent, #4f8cff) 40%, transparent);
+    background: color-mix(in srgb, var(--accent, #4f8cff) 14%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 3px transparent, 0 0 0 transparent;
+    background: transparent;
+  }
+}

@@ -30,6 +30,7 @@
   "hooks": ["./hooks/hooks.json"],
   "mcpServers": ["./mcp/mcp.json"], // 可选
   "tools": ["./tools/tools.jsonc"], // 可选：原生工具清单
+  "operations": ["./operations.jsonc"], // 可选：RPC 面操作清单（G 组，UI/CLI 直调）
   "dependencies": ["sqlite-vec>=0.1.9"], // 可选：pip 依赖（PEP 508）
   "configSchema": "./config/schema.jsonc" // 可选：配置 schema
 }
@@ -90,6 +91,42 @@ async def rag_search(call) -> ToolResult:
 
 用户可在权限设置中**升降级覆盖**插件工具的 permission（`{data_dir}/tool_permissions.jsonc`，覆盖优先于 manifest；显式禁用的工具不可被覆盖解禁）。
 
+## 3.5 operations.jsonc（RPC 面操作，G 组）
+
+**用途**：UI / CLI **不经 agent 直调**的入口（JSON-RPC 总线 `catalog.execute`）。
+与工具的差别：工具走 kernel/toolbox（模型调用、审批链），operation 由用户界面直接发起——
+典型场景：全局搜索对话框（Ctrl+K 直搜会话历史，不经 agent 生成）。
+
+```jsonc
+{
+  "operations": [
+    {
+      "name": "rag.sessions.search",   // 全局唯一（RPC 面命名空间，点分）
+      "description": "在历史会话记录中检索",
+      "input_schema": {                 // JSON Schema（object）
+        "type": "object",
+        "properties": { "query": { "type": "string" } },
+        "required": ["query"]
+      },
+      "permission": "auto_allow",       // auto_allow | ask_user | hard_block（缺省 auto_allow）
+      "handler": "rag_engine.tools:rag_sessions_search" // 必填：module:function
+    }
+  ]
+}
+```
+
+- `permission` 缺省 **auto_allow**（operation 由用户/开发工具发起，无模型审批链）；
+  `hard_block` 拒绝注册（`plugin.list` 报状态）；插件禁用 → 其 operations 全部不注册。
+- **handler 契约**：`async def handler(request, *, work_root, data_dir) -> OperationResult`
+  ——`work_root` / `data_dir` 由 catalog 构建时 partial 绑定注入（与工具 handler 的
+  metadata 传参同源）。返回 `OperationResult(name=..., payload=..., status="ok"|"error")`。
+- **信任语义同工具**（安装即永信）：handler 导入失败 = 该 operation 不可用并报状态，
+  不阻断其他插件；同名冲突（插件间）先声明者保留、后者报错。
+- **插件根进 sys.path**：与工具装配同语义，catalog 构建时自动注入，handler 可直接
+  import 插件内模块。
+- 幂等建议：UI 直调的 operation 保持只读/轻量（如检索），写操作走工具链路（有审批）。
+- CLI 查看：`cli plugin operations list [name]`（GUI 能力必有 CLI）。
+
 ## 4. 安全模型
 
 - **插件 = 可执行代码**：handler 在 core 进程内运行，可读写本机文件与配置（含明文 `providers/*.jsonc` API key）。**安装即永信**——安装动作 = 显式信任门，插件更新自动跟随；只从可信来源安装。
@@ -125,5 +162,7 @@ handler 由 core 显式装配（`_bundled_plugin_handler` 按工具名查表）�
 ## 8. 测试
 
 `core/tests/test_plugin_*.py` 覆盖：声明解析 / spec 补全 / 注入与执行 / 惰性暴露 /
-冲突 / timeout / 导入失败 / 依赖缺失占位 / 权限档位 / 安装卸载配置全链 / 适配器翻译。
-新插件建议自测：安装 → `plugin.list` 确认工具 → 按 visibility 验证可见性 → 执行 → 卸载。
+冲突 / timeout / 导入失败 / 依赖缺失占位 / 权限档位 / 安装卸载配置全链 / 适配器翻译 /
+**operations 注册与直调（`test_plugin_operations.py` G 组）**。
+新插件建议自测：安装 → `plugin.list` 确认工具 → 按 visibility 验证可见性 → 执行 → 卸载；
+声明了 operations 的插件再用 `cli plugin operations list` 确认 RPC 面入口。

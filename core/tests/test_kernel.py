@@ -677,6 +677,34 @@ class TestKernelWait:
         assert result.state is not None
         assert result.state.status == "waiting"
 
+    @pytest.mark.asyncio
+    async def test_resume_after_wait_continues_step_numbering(self):
+        """approval-wait 恢复后 step 编号必须延续：response item id 由
+        response_index 生成（{run_id}:response-{index}），若每次 kernel.run 都从
+        0 重置，恢复后的新输出复用旧 item id——前端投影按 item_id 合并，新内容
+        覆盖旧 part 且排序错乱（ask-user 回复后"输出覆盖 + 审批卡沉底"）。"""
+        kit = MockRuntimeKit(steps=[
+            MockKitStep(reply="need more info", decision="wait"),
+        ])
+        store = InMemoryStateStore()
+        sink = CollectingEventSink()
+        kernel = _make_kernel(kit, state_store=store, event_sink=sink)
+
+        first = await kernel.run(_make_turn_input())
+        assert first.decision == "wait"
+        assert first.steps[0].index == 0
+        # wait 路径保存 state，kernel_steps 保留（跨 run 的 step 计数依据）
+        saved = await store.get(first.state.session_id)
+        assert isinstance(saved.metadata.get("kernel_steps"), list)
+        assert len(saved.metadata["kernel_steps"]) == 1
+
+        # 恢复：同一 session 再跑（模拟 approval 答复后 turn 继续）
+        kit2 = MockRuntimeKit(steps=[MockKitStep(reply="all done", decision="done")])
+        kernel2 = _make_kernel(kit2, state_store=store)
+        resumed = await kernel2.run(_make_turn_input(session_id=first.state.session_id))
+        assert resumed.decision == "done"
+        assert resumed.steps[0].index == 1  # 延续，不从 0 重置
+
 
 class TestKernelDone:
     @pytest.mark.asyncio

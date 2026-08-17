@@ -497,7 +497,16 @@ class CoreLoopKernel:
         # 5. Main loop. There is intentionally no step budget: complex tasks
         # may need many model/tool rounds. Cancellation, explicit failure,
         # waiting for the user, or a no-tool final response ends the run.
-        index = 0
+        # Step numbering MUST continue across approval-wait resumes: response
+        # item ids are derived from response_index (`{run_id}:response-{index}`),
+        # and a fresh `index = 0` on every kernel.run would reuse the previous
+        # run's item ids — the frontend projection merges by item_id, so new
+        # output overwrites the old parts and the sort order breaks (reply
+        # after ask-user showed the new text before the approval card).
+        # state.metadata.kernel_steps survives checkpoints, so its length is
+        # the cumulative step count across resumes.
+        steps_log = state.metadata.get("kernel_steps")
+        index = len(steps_log) if isinstance(steps_log, list) else 0
         while True:
             step = KernelStep(index=index, state_before=self._copy_state(state))
             steps.append(step)
