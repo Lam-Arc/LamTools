@@ -1,0 +1,32 @@
+cff-version: 1.2.0
+title: "LamTools"
+message: "If you use LamTools, please cite the specific archived software release."
+type: software
+version: "0.2.6"
+abstract: >-
+  Local-first AI agent runtime with a Core Loop Kernel, approval-aware tools,
+  SQLite-backed state, checkpoints, plugins, and capability-aware sub-agent
+  delegation for heterogeneous model inputs.
+authors:
+  - given-names: Yulin
+    family-names: Zhang
+    orcid: "https://orcid.org/0009-0007-3202-5746"
+    affiliation: Independent Researcher
+  - given-names: Yiming
+    family-names: Zhang
+    orcid: "https://orcid.org/0009-0005-5317-0665"
+    affiliation: Independent Researcher
+keywords:
+  - AI agents
+  - local-first software
+  - model delegation
+  - multimodal agents
+  - persistent runtime
+  - software infrastructure
+license: MIT
+repository-code: "https://github.com/Lam-Arc/LamTools"
+url: "https://github.com/Lam-Arc/LamTools"
+identifiers:
+  - type: doi
+    value: "10.5281/zenodo.22039646"
+    description: "Archived software release DOI"
