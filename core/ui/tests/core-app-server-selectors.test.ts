@@ -3,6 +3,50 @@ import { hydrateSnapshot, selectChatMessages, selectLatestTurnStatus } from '../
 import type { CoreAppSnapshot } from '../src/appServer'
 
 describe('core appServer selectors', () => {
+  it('merges runtime and tool-result metadata for checklist snapshots', () => {
+    const snapshot = hydrateSnapshot({
+      thread_id: 'thread-checklist',
+      snapshot_seq: 4,
+      core: {
+        thread_id: 'thread-checklist',
+        snapshot_seq: 4,
+        status: 'running',
+        item_order: ['tool-checklist'],
+        turns: {
+          'turn-checklist': { turn_id: 'turn-checklist', status: 'running', items: ['tool-checklist'] },
+        },
+        items: {
+          'tool-checklist': {
+            item_id: 'tool-checklist',
+            turn_id: 'turn-checklist',
+            kind: 'tool_result',
+            status: 'completed',
+            metadata: { runtime_phase: 'runtime.part', run_id: 'run-1' },
+            payload: {
+              type: 'dynamicToolCall',
+              tool_name: 'update_checklist',
+              tool_result: 'Checklist updated',
+              metadata: {
+                task_plan: {
+                  current_step_id: 's2',
+                  steps: [{ id: 's2', description: '验证', status: 'in_progress' }],
+                },
+              },
+            },
+          },
+        },
+      },
+    } satisfies CoreAppSnapshot)
+
+    const part = selectChatMessages(snapshot)[0]?.parts[0]
+
+    expect(part?.metadata).toMatchObject({
+      runtime_phase: 'runtime.part',
+      run_id: 'run-1',
+      task_plan: { current_step_id: 's2' },
+    })
+  })
+
   it('migrates legacy compaction limits without exposing the retired target field', () => {
     const snapshot = hydrateSnapshot({
       thread_id: 'thread-1',

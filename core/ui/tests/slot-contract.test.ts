@@ -210,6 +210,7 @@ describe('WorkspaceShell rendering', () => {
         'main-content': '<main class="test-main">Thread</main>',
         'composer-textarea': '<textarea class="test-composer"></textarea>',
         'right-panel': '<aside class="test-review">Review</aside>',
+        'runtime-overlay': '<aside class="test-runtime-overlay">Checklist</aside>',
       },
     });
 
@@ -217,13 +218,14 @@ describe('WorkspaceShell rendering', () => {
     expect(wrapper.find('.test-main').text()).toBe('Thread');
     expect(wrapper.find('.test-composer').exists()).toBe(true);
     expect(wrapper.find('.test-review').text()).toBe('Review');
+    expect(wrapper.find('.test-runtime-overlay').text()).toBe('Checklist');
   });
 
   it('emits shell actions', async () => {
     const wrapper = mountShell();
 
     await wrapper.find('.drawer-head .icon-btn').trigger('click');
-    await wrapper.find('.settings-entry').trigger('click');
+    await wrapper.find('.settings-entry[aria-label="打开设置"]').trigger('click');
     await wrapper.find('.floating-composer').trigger('submit');
 
     expect(wrapper.emitted('new-session')).toHaveLength(1);

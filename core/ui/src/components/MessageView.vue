@@ -1619,7 +1619,7 @@
             <div class="tool-image-row">
               <figure
                 v-for="(artifact, i) in messageImages"
-                :key="artifact.artifact_id || artifact.uri || artifact.metadata?.image_data_url || 'no-key-' + i"
+                :key="String(artifact.artifact_id || artifact.uri || artifact.metadata?.image_data_url || `no-key-${i}`)"
                 class="tool-image-card"
                 @click="openImagePreview(artifact)"
               >

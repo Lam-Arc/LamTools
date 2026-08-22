@@ -110,6 +110,9 @@
 
     <!-- ===== Main Area ===== -->
     <main class="workspace-main" :inert="rightDrawerModal || undefined">
+      <div class="workspace-runtime-overlay">
+        <slot name="runtime-overlay" />
+      </div>
       <slot name="main-header" />
       <slot name="main-content">
         <section class="thread">

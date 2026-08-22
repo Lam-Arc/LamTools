@@ -109,6 +109,7 @@ export { default as CoreQueuedInputTray } from './components/CoreQueuedInputTray
 export { default as CommandPalette } from './components/CommandPalette.vue';
 export { default as AttachmentTray } from './components/AttachmentTray.vue';
 export { default as RuntimePanel } from './components/RuntimePanel.vue';
+export { default as RuntimeChecklistCard } from './components/RuntimeChecklistCard.vue';
 export { default as SettingsShell } from './components/SettingsShell.vue';
 export { default as ThemeEditor } from './components/ThemeEditor.vue';
 export { default as ThemeAreaEditor } from './components/ThemeAreaEditor.vue';

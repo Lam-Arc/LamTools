@@ -45,6 +45,56 @@ describe('buildCurrentTurnChecklistGroups', () => {
     }])
   })
 
+  it('projects plan step deliverables without changing empty-step shape', () => {
+    const groups = buildCurrentTurnChecklistGroups([{
+      id: 'assistant:deliverables',
+      role: 'assistant',
+      content: '',
+      timestamp: '',
+      parts: [{
+        ...checklistPart,
+        metadata: {
+          task_plan: {
+            steps: [
+              { id: 's1', description: '检查接线', status: 'completed', deliverables: ['src/main.ts', '  ]'] },
+              { id: 's2', description: '完成验证', status: 'in_progress', deliverables: [] },
+              { id: 's3', description: '收尾', status: 'pending', deliverables: [''] },
+            ],
+          },
+        },
+      }],
+    }])
+
+    expect(groups[0]?.steps).toEqual([
+      { id: 's1', title: '检查接线', status: 'completed', deliverables: ['src/main.ts', ']'] },
+      { id: 's2', title: '完成验证', status: 'running' },
+      { id: 's3', title: '收尾', status: 'pending' },
+    ])
+  })
+
+  it('projects current_step_id for deterministic card selection', () => {
+    const groups = buildCurrentTurnChecklistGroups([{
+      id: 'assistant:current-id',
+      role: 'assistant',
+      content: '',
+      timestamp: '',
+      parts: [{
+        ...checklistPart,
+        metadata: {
+          task_plan: {
+            current_step_id: 's2',
+            steps: [
+              { id: 's1', description: '第一步', status: 'in_progress' },
+              { id: 's2', description: '第二步', status: 'in_progress' },
+            ],
+          },
+        },
+      }],
+    }])
+
+    expect(groups[0]?.metadata).toEqual({ current_step_id: 's2' })
+  })
+
   it('keeps the latest checklist from the current turn after the final answer arrives', () => {
     const groups = buildCurrentTurnChecklistGroups([
       { id: 'user:new', role: 'user', content: 'new task', timestamp: '', parts: [] },

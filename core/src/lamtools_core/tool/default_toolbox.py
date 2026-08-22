@@ -427,7 +427,9 @@ DEFAULT_TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
     {
         "name": "write_checklist",
         "description": (
-            "Create the active structured checklist for the task. Use short numbered steps; each step becomes a "
+            "Optionally create the main agent's planning/progress checklist for the task; simple tasks may skip it. "
+            "For complex tasks, use 3-7 non-overlapping steps. Each step's deliverables must be verifiable "
+            "sub-items. Sub-agents should focus on their delegated task and return evidence. Each step becomes a "
             "Markdown checkbox in the UI."
         ),
         "input_schema": _schema(
@@ -439,11 +441,11 @@ DEFAULT_TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
                 "files": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Files or deliverables expected to change.",
+                    "description": "Files or deliverables expected to change; omit for tasks with no file outputs.",
                 },
                 "steps": {
                     "type": "array",
-                    "description": "Ordered checklist items. Use 3-7 concrete steps for normal engineering tasks.",
+                    "description": "Ordered, non-overlapping checklist items. Use 3-7 concrete steps for complex tasks; simple tasks may skip the checklist.",
                     "items": _schema(
                         {
                             "id": {"type": "string", "description": "Stable id like s1, s2, s3."},
@@ -451,7 +453,7 @@ DEFAULT_TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
                             "deliverables": {
                                 "type": "array",
                                 "items": {"type": "string"},
-                                "description": "Concrete outputs for this step.",
+                                "description": "Verifiable sub-items produced by this step.",
                             },
                         },
                         ["id", "description"],
@@ -609,7 +611,13 @@ def strict_tool_schema(schema: dict[str, Any]) -> dict[str, Any]:
                 node["type"] = [*schema_type, "null"]
 
     def visit(node: dict[str, Any]) -> None:
-        if node.get("type") == "object" or "properties" in node:
+        schema_type = node.get("type")
+        is_object = (
+            schema_type == "object"
+            or (isinstance(schema_type, list) and "object" in schema_type)
+            or "properties" in node
+        )
+        if is_object:
             properties = node.get("properties")
             if isinstance(properties, dict):
                 originally_required = set(node.get("required") or [])
@@ -630,7 +638,8 @@ def strict_tool_schema(schema: dict[str, Any]) -> dict[str, Any]:
 
 async def _write_checklist_handler(call: ToolCall) -> ToolResult:
     args = call.arguments if isinstance(call.arguments, dict) else {}
-    files = args.get("files", [])
+    raw_files = args.get("files")
+    files = [str(item) for item in raw_files] if isinstance(raw_files, list) else []
     design_summary = args.get("design_summary", "")
     steps = args.get("steps", [])
     normalized_steps = normalize_checklist_steps(steps, files)

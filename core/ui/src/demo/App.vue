@@ -297,6 +297,10 @@
       />
     </template>
 
+    <template #runtime-overlay>
+      <RuntimeChecklistCard v-if="!workflowMode" :step-groups="stepGroups" />
+    </template>
+
     <template #composer-preamble>
       <div v-if="activeGoal" class="core-goal-area" :data-status="activeGoal.status">
         <CoreGoalStrip :goal="activeGoal" @cancel="handleCancelGoal" />
@@ -508,6 +512,7 @@
         @open-file="openFileInStage"
       />
       <template v-else>
+        <RuntimeChecklistCard v-if="!workflowMode" class="runtime-checklist-mobile" :step-groups="stepGroups" />
         <CoreResourceStats
           :messages="messages"
           :context-window="executionControls.activeModel.value?.context_window"
@@ -518,7 +523,6 @@
           :api-base="apiBase"
           :request-rpc="requestConfigOperation"
         />
-        <RuntimePanel :step-groups="stepGroups" />
       </template>
     </template>
   </WorkspaceShell>
@@ -629,7 +633,7 @@ import CoreSettings, {
   type WorkflowListItem,
 } from '../components/CoreSettings.vue'
 import CoreProjectSettings from '../components/CoreProjectSettings.vue'
-import RuntimePanel from '../components/RuntimePanel.vue'
+import RuntimeChecklistCard from '../components/RuntimeChecklistCard.vue'
 import SessionSidebar from '../components/SessionSidebar.vue'
 import WorkspaceShell from '../components/WorkspaceShell.vue'
 import TitleBar from '../components/TitleBar.vue'
@@ -2634,6 +2638,17 @@ onUnmounted(() => {
 
 .core-project-header-action {
   position: relative;
+}
+
+.runtime-checklist-mobile {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  .runtime-checklist-mobile {
+    display: block;
+    margin-bottom: var(--space-3);
+  }
 }
 
 /* ── 新版本提示条（fixed 在标题栏下方，36px = --titlebar-offset） ── */

@@ -123,6 +123,15 @@ class FakeSkillRegistry:
         return SkillRef()
 
 
+def test_strict_tool_schema_closes_nullable_object_properties(tmp_path):
+    toolbox = build_core_toolbox(work_root=tmp_path)
+    mcp = next(spec for spec in toolbox.tool_specs() if spec.name == "mcp_tool")
+    arguments = mcp.input_schema["properties"]["arguments"]
+
+    assert arguments["type"] == ["object", "null"]
+    assert arguments["additionalProperties"] is False
+
+
 def test_core_toolbox_exposes_generic_tool_specs(tmp_path):
     toolbox = build_core_toolbox(work_root=tmp_path)
 
@@ -154,6 +163,69 @@ def test_core_toolbox_exposes_generic_tool_specs(tmp_path):
         item["type"] for item in specs["write_file"].metadata["failure_modes"]
     }
     assert specs["write_file"].metadata["recovery"]
+
+
+def test_write_checklist_description_covers_optional_planning_contract(tmp_path):
+    toolbox = build_core_toolbox(work_root=tmp_path)
+
+    description = next(spec for spec in toolbox.tool_specs() if spec.name == "write_checklist").description
+
+    assert "optionally" in description.lower()
+    assert "simple tasks may skip" in description.lower()
+    assert "3-7" in description
+    assert "non-overlapping" in description.lower()
+    assert "verifiable" in description.lower()
+    assert "sub-agents" in description.lower()
+    assert "evidence" in description.lower()
+
+
+@pytest.mark.asyncio
+async def test_write_checklist_normalizes_none_files(tmp_path):
+    toolbox = build_core_toolbox(work_root=tmp_path)
+
+    result = await toolbox.execute(
+        ToolCall(
+            id="checklist-none-files",
+            name="write_checklist",
+            arguments={
+                "design_summary": "Inspect the project",
+                "files": None,
+                "steps": [{"id": "s1", "description": "Inspect sources"}],
+            },
+        )
+    )
+
+    assert result.status == "ok"
+    assert result.metadata["plan_files"] == []
+    assert result.metadata["task_plan"]["files"] == []
+
+
+@pytest.mark.asyncio
+async def test_write_checklist_preserves_deliverables_in_outputs(tmp_path):
+    toolbox = build_core_toolbox(work_root=tmp_path)
+
+    result = await toolbox.execute(
+        ToolCall(
+            id="checklist-deliverables",
+            name="write_checklist",
+            arguments={
+                "design_summary": "Add checklist coverage",
+                "files": ["core/tests/test_default_toolbox.py"],
+                "steps": [
+                    {
+                        "id": "s1",
+                        "description": "Add focused tests",
+                        "deliverables": ["passing pytest assertions"],
+                    }
+                ],
+            },
+        )
+    )
+
+    assert result.status == "ok"
+    assert result.metadata["plan_steps"][0]["deliverables"] == ["passing pytest assertions"]
+    assert result.metadata["task_plan"]["steps"][0]["deliverables"] == ["passing pytest assertions"]
+    assert "passing pytest assertions" in result.content
 
 
 @pytest.mark.asyncio

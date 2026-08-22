@@ -1756,6 +1756,28 @@
 .activity-text { color: var(--text); font-weight: 600; }
 
 /* =========================================================================
+   Runtime checklist overlay
+   ========================================================================= */
+.workspace-runtime-overlay {
+  position: absolute;
+  /* Keep the card below the thread header divider inside the main card. */
+  top: calc(44px + 46px + var(--space-3));
+  right: var(--space-4);
+  z-index: var(--z-popover, 60);
+  width: min(320px, calc(100% - 2 * var(--space-4)));
+  pointer-events: none;
+}
+.workspace-runtime-overlay > * {
+  pointer-events: auto;
+}
+.workspace-shell.right-open .workspace-runtime-overlay {
+  display: none;
+}
+.right-body .runtime-checklist-card {
+  box-shadow: none;
+}
+
+/* =========================================================================
    Main page shared add-ons
    ========================================================================= */
 .field-input {
@@ -2500,6 +2522,7 @@
   }
 }
 @media (max-width: 640px) {
+  .workspace-runtime-overlay { display: none; }
   .workspace-shell { --left-card-width: min(86vw, 320px); }
   .workspace-shell { --right-drawer-width: 100vw; }
   .workspace-shell { --main-x-padding: 14px; }

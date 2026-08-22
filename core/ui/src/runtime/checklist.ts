@@ -24,11 +24,17 @@ export function buildCurrentTurnChecklistGroups(messages: CoreMessage[]): CoreRu
   if (!message || !checklistPart) return []
 
   const steps = checklistSteps(checklistPart)
+  const metadata = asRecord(checklistPart.metadata)
+  const taskPlan = asRecord(metadata.task_plan)
+  const currentStepId = typeof taskPlan.current_step_id === 'string'
+    ? taskPlan.current_step_id
+    : undefined
   return [{
     id: `${message.id}:checklist`,
     label: 'Checklist',
     status: groupStatus(steps),
     steps,
+    ...(currentStepId ? { metadata: { current_step_id: currentStepId } } : {}),
   }]
 }
 
@@ -45,10 +51,14 @@ function checklistSteps(part: MessagePart): CoreRuntimeStep[] {
     if (!Object.keys(item).length) return []
     const title = String(item.description || item.title || item.text || '').trim()
     if (!title) return []
+    const deliverables = Array.isArray(item.deliverables)
+      ? item.deliverables.map((value) => String(value).trim()).filter(Boolean)
+      : []
     return [{
       id: String(item.id || `${part.id}:step:${index + 1}`),
       title,
       status: normalizeStatus(item.status),
+      ...(deliverables.length > 0 ? { deliverables } : {}),
     }]
   })
 }

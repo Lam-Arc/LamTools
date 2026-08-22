@@ -1706,6 +1706,49 @@ class TestKernelEvents:
         assert started[0].payload["tool_name"] == "search"
 
     @pytest.mark.asyncio
+    async def test_checklist_snapshot_is_emitted_after_writeback(self):
+        call = ToolCall(
+            id="checklist-1",
+            name="write_checklist",
+            arguments={"design_summary": "Plan", "steps": [{"id": "s1", "description": "Do it"}]},
+        )
+        result = ToolResult(
+            call_id=call.id,
+            name=call.name,
+            status="ok",
+            content="Checklist recorded",
+            metadata={"task_plan": {"steps": [{"id": "s1", "description": "Do it", "status": "in_progress"}]}},
+        )
+
+        class PlanKit(MockRuntimeKit):
+            async def writeback(self, state, turn, tool_results, verification, decision):
+                state.metadata["task_plan"] = {
+                    "goal": "Plan",
+                    "status": "active",
+                    "current_step_id": "s1",
+                    "steps": [{"id": "s1", "description": "Do it", "status": "completed"}],
+                }
+                state.metadata["active_plan"] = {
+                    "plan_steps": state.metadata["task_plan"]["steps"],
+                    "plan_summary": "Plan",
+                }
+
+        sink = CollectingEventSink()
+        kernel = _make_kernel(
+            PlanKit(steps=[MockKitStep(tool_calls=[call], tool_results=[result], decision="done")]),
+            event_sink=sink,
+        )
+
+        await kernel.run(_make_turn_input())
+
+        parts = [event for event in sink.events if event.name == "runtime.part"]
+        snapshot = next(event for event in parts if event.payload.get("metadata", {}).get("checklist_snapshot") is True)
+        assert snapshot.payload["part_id"] == "part-checklist-1"
+        assert snapshot.payload["metadata"]["checklist_snapshot"] is True
+        assert snapshot.payload["metadata"]["task_plan"]["steps"][0]["status"] == "completed"
+        assert snapshot.payload["metadata"]["active_plan"]["plan_summary"] == "Plan"
+        assert snapshot.payload["replace"] is True
+
     async def test_verification_event_emitted(self):
         """Kernel emits verification result event."""
         kit = MockRuntimeKit(steps=[

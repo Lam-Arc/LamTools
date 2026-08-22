@@ -1187,6 +1187,12 @@ class CoreLoopKernel:
 
                 # 5.12 Writeback
                 await self.kit.writeback(state, turn, tool_results, verification, decision)
+                await self._emit_checklist_snapshots(
+                    state,
+                    turn,
+                    tool_results,
+                    response_index=index,
+                )
 
                 # Update state
                 state.loop_state = decision
@@ -3236,6 +3242,66 @@ class CoreLoopKernel:
             run_id=state.run_id,
             tags=["tool", "approval", "part"],
         ))
+
+    async def _emit_checklist_snapshots(
+        self,
+        state: RuntimeState,
+        turn: KernelTurn,
+        tool_results: list[ToolResult],
+        *,
+        response_index: int | None = None,
+    ) -> None:
+        """Publish the post-writeback checklist projection for the UI.
+
+        Checklist tool results are emitted before writeback so the model can see
+        them immediately. The second, replace-style part carries the canonical
+        state after update actions and automatic deliverable advancement.
+        """
+        task_plan = state.metadata.get("task_plan")
+        if not isinstance(task_plan, dict) or not task_plan.get("steps"):
+            return
+        active_plan = state.metadata.get("active_plan")
+        active_plan = active_plan if isinstance(active_plan, dict) else {}
+        checklist_results = {
+            result.call_id: result
+            for result in tool_results
+            if result.status == "ok" and result.name in {"write_checklist", "update_checklist"}
+        }
+        if not checklist_results:
+            return
+
+        calls_by_id = {call.id: call for call in turn.tool_calls}
+        for call_id, result in checklist_results.items():
+            call = calls_by_id.get(call_id)
+            if call is None:
+                continue
+            metadata = dict(result.metadata) if isinstance(result.metadata, dict) else {}
+            metadata.update({
+                "task_plan": copy.deepcopy(task_plan),
+                "active_plan": copy.deepcopy(active_plan),
+                "checklist_snapshot": True,
+            })
+            await self.event_sink.emit(CoreEvent(
+                name="runtime.part",
+                category="tool",
+                payload={
+                    "part_type": "tool_result",
+                    "status": "completed",
+                    "tool_name": call.name,
+                    "label": "Checklist updated",
+                    "detail": (result.content or "")[:200],
+                    "tool_result": result.content or "",
+                    "replace": True,
+                    "tool_args": call.arguments if isinstance(call.arguments, dict) else {},
+                    "metadata": metadata,
+                    "part_id": f"part-{call.id}",
+                    "message_id": state.run_id or "",
+                    **({"response_index": response_index} if response_index is not None else {}),
+                },
+                session_id=state.session_id,
+                run_id=state.run_id,
+                tags=["tool", "part"],
+            ))
 
     async def _emit_tool_finished(
         self,
