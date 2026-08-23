@@ -20,6 +20,7 @@ class CoreAppEventHub:
     def __init__(self, *, queue_size: int = 256) -> None:
         self._queue_size = queue_size
         self._subscribers: dict[str, set[asyncio.Queue[Any | None]]] = defaultdict(set)
+        self._global_subscribers: set[asyncio.Queue[Any | None]] = set()
 
     def subscribe(self, thread_id: str) -> asyncio.Queue[Any | None]:
         queue: asyncio.Queue[Any | None] = asyncio.Queue(maxsize=self._queue_size)
@@ -34,7 +35,17 @@ class CoreAppEventHub:
         if not subscribers:
             self._subscribers.pop(thread_id, None)
 
+    def subscribe_all(self) -> asyncio.Queue[Any | None]:
+        """Subscribe to projection events without choosing a thread."""
+        queue: asyncio.Queue[Any | None] = asyncio.Queue(maxsize=self._queue_size)
+        self._global_subscribers.add(queue)
+        return queue
+
+    def unsubscribe_all(self, queue: asyncio.Queue[Any | None]) -> None:
+        self._global_subscribers.discard(queue)
+
     async def publish(self, event: Any) -> None:
+        self._publish_to_global_subscribers(event)
         thread_id = str(getattr(event, "thread_id", "") or "")
         if not thread_id and isinstance(event, dict):
             thread_id = str(event.get("thread_id") or "")
@@ -63,6 +74,24 @@ class CoreAppEventHub:
                     queue.put_nowait(event)
                 except asyncio.QueueFull:
                     pass  # best-effort for global notifications
+        await asyncio.sleep(0)
+
+    def _publish_to_global_subscribers(self, event: Any) -> None:
+        """Offer a raw event to projection services and global clients."""
+
+        for queue in list(self._global_subscribers):
+            try:
+                queue.put_nowait(event)
+            except asyncio.QueueFull:
+                while not queue.empty():
+                    queue.get_nowait()
+                queue.put_nowait(CoreAppEventGap(thread_id="", reason="global_subscriber_overflow"))
+                self.unsubscribe_all(queue)
+                logger.warning("Core app-server global subscriber overflow; forcing reconnect/resume")
+
+    async def publish_global(self, event: Any) -> None:
+        """Publish a projection-only event to global subscribers."""
+        self._publish_to_global_subscribers(event)
         await asyncio.sleep(0)
 
 

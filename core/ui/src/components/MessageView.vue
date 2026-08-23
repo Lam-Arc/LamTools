@@ -1619,7 +1619,7 @@
             <div class="tool-image-row">
               <figure
                 v-for="(artifact, i) in messageImages"
-                :key="artifact.artifact_id || artifact.uri || artifact.metadata?.image_data_url || 'no-key-' + i"
+                :key="artifactKey(artifact, i)"
                 class="tool-image-card"
                 @click="openImagePreview(artifact)"
               >
@@ -3060,6 +3060,17 @@ function imageSrc(artifact: { uri?: string; artifact_id?: string; metadata?: Rec
 
 function imageAlt(artifact: { name?: string; uri?: string }): string {
   return artifact.name || (typeof artifact.uri === 'string' ? artifact.uri.split('/').pop() || '生成图片' : '生成图片')
+}
+
+function artifactKey(
+  artifact: { artifact_id?: string; uri?: string; metadata?: Record<string, unknown> },
+  index: number,
+): string {
+  const imageDataUrl = artifact.metadata?.image_data_url
+  return artifact.artifact_id
+    || artifact.uri
+    || (typeof imageDataUrl === 'string' ? imageDataUrl : '')
+    || `no-key-${index}`
 }
 
 const previewImageSrc = ref('')

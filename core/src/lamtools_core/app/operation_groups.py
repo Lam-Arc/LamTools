@@ -28,6 +28,8 @@ CORE_WORKBENCH_OPERATION_NAMES: tuple[str, ...] = (
     "attachment.get",
     "attachment.preview",
     "attachment.open",
+    "pet.overview.read",
+    "pet.packs.list",
     "settings.get",
     "settings.update",
     "config.providers.list",

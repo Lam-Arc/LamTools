@@ -1,12 +1,27 @@
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 
 async function init() {
-  try {
-    // In Tauri: ask Rust for the dynamically chosen port
-    const apiBase = await invoke<string>('get_api_base');
-    (window as any).__LAMTOOLS_API_BASE__ = apiBase + '/api/core';
-  } catch {
-    console.log('[Main] Not running in Tauri, using default API base');
+  const isTauri = Boolean((window as any).__TAURI_INTERNALS__)
+  const windowParams = new URLSearchParams(window.location.search)
+  if (isTauri) {
+    // The Pet windows are created in parallel with WebView2. Do not mount a
+    // Pet surface against Vite's fallback URL while the Core port is still
+    // starting; that race presents as an endless "connecting" overlay.
+    let apiBase = windowParams.get('api_base') || ''
+    let lastError: unknown
+    for (let attempt = 0; attempt < 120 && !apiBase; attempt += 1) {
+      try {
+        apiBase = await invoke<string>('get_api_base')
+      } catch (error) {
+        lastError = error
+        await new Promise(resolve => setTimeout(resolve, 250))
+      }
+    }
+    if (!apiBase) throw lastError instanceof Error ? lastError : new Error('LamTools Core did not become ready')
+    ;(window as any).__LAMTOOLS_API_BASE__ = apiBase + '/api/core'
+  } else {
+    console.log('[Main] Not running in Tauri, using default API base')
   }
 
   // Packaged app version (from tauri.conf.json). The settings "关于与更新"
@@ -63,7 +78,17 @@ async function init() {
   }
 
   const { createApp } = await import('vue');
-  const App = (await import('../../ui/src/demo/App.vue')).default;
+  let label = windowParams.get('window') || getCurrentWindow().label;
+  try {
+    label = await invoke<string>('get_window_label');
+  } catch {
+    // Browser fallback uses the query/current-window label above.
+  }
+  const App = label === 'pet'
+    ? (await import('../../ui/src/pet/PetApp.vue')).default
+    : label === 'pet-overlay'
+      ? (await import('../../ui/src/pet/PetOverlayApp.vue')).default
+      : (await import('../../ui/src/demo/App.vue')).default;
   createApp(App).mount('#app');
 }
 

@@ -44,25 +44,45 @@ export class CoreAppServerClient {
   constructor(private readonly options: CoreAppServerClientOptions) {}
 
   async connect(params: { threadId?: string; lastSeenSeq?: number } = {}): Promise<void> {
+    this.close()
     this.options.onConnectionState?.('connecting')
-    this.socket = new WebSocket(this.options.url)
+    const socket = new WebSocket(this.options.url)
+    this.socket = socket
     await new Promise<void>((resolve, reject) => {
-      if (!this.socket) {
-        reject(new Error('WebSocket was not created'))
-        return
-      }
-      this.socket.onopen = () => {
+      let settled = false
+      const timeout = setTimeout(() => {
+        if (settled || this.socket !== socket) return
+        settled = true
+        socket.close()
+        reject(new Error('Core App Server connection timed out'))
+      }, 8_000)
+      socket.onopen = () => {
+        if (this.socket !== socket) return
+        settled = true
+        clearTimeout(timeout)
         this.options.onConnectionState?.('open')
         resolve()
       }
-      this.socket.onerror = () => {
+      socket.onerror = () => {
+        if (settled || this.socket !== socket) return
+        settled = true
+        clearTimeout(timeout)
         this.options.onConnectionState?.('error')
         reject(new Error('Core App Server socket failed'))
       }
-      this.socket.onclose = () => {
+      socket.onclose = () => {
+        if (this.socket !== socket) return
+        clearTimeout(timeout)
         this.options.onConnectionState?.('closed')
+        this.socket = null
+        for (const pending of this.pending.values()) {
+          pending.reject(new CoreAppServerClosedError())
+        }
+        this.pending.clear()
       }
-      this.socket.onmessage = (message) => this.handleMessage(message.data)
+      socket.onmessage = (message) => {
+        if (this.socket === socket) this.handleMessage(message.data)
+      }
     })
 
     await this.request('initialize', {
@@ -74,8 +94,9 @@ export class CoreAppServerClient {
   }
 
   close(): void {
-    this.socket?.close()
+    const socket = this.socket
     this.socket = null
+    socket?.close()
     this.serverRequestIds.clear()
     for (const pending of this.pending.values()) {
       pending.reject(new CoreAppServerClosedError())

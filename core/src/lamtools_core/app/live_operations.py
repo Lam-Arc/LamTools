@@ -35,6 +35,7 @@ from .live_member import DefaultCoreLiveMemberHooks, PreparedLiveInput
 from .live_protocol import INVALID_REQUEST, rpc_error, rpc_result
 from .operation_catalog import OperationCatalog, OperationHandler, OperationRequest, OperationResult
 from .operation_groups import CORE_WORKBENCH_OPERATION_NAMES
+from .pet import PetPackLoader, load_pet_overview_from_session_factory
 from .persistence_host import AppPersistenceHost
 from .queue_state import (
     ACTIVE_TURN_STATUSES,
@@ -181,6 +182,26 @@ async def handle_attachment_preview_operation(**kwargs):
 
 async def handle_attachment_open_operation(**kwargs):
     return await handle_attachment_operation(**kwargs, operation="open")
+
+
+async def handle_pet_overview_operation(
+    *, request_id: int | str | None, params: dict[str, Any], context: "CoreLiveContext"
+) -> "CoreLiveOperationOutcome":
+    del params
+    if context.session_factory is None:
+        return CoreLiveOperationOutcome(
+            response=rpc_error(request_id, code=INVALID_REQUEST, message="Core database is not ready")
+        )
+    overview = await load_pet_overview_from_session_factory(context.session_factory)
+    return CoreLiveOperationOutcome(response=rpc_result(request_id, {"overview": overview.to_dict()}))
+
+
+async def handle_pet_packs_operation(
+    *, request_id: int | str | None, params: dict[str, Any], context: "CoreLiveContext"
+) -> "CoreLiveOperationOutcome":
+    del params, context
+    packs = [pack.to_dict() for pack in PetPackLoader().list_packs()]
+    return CoreLiveOperationOutcome(response=rpc_result(request_id, {"packs": packs}))
 
 
 @dataclass
@@ -2662,6 +2683,8 @@ _CORE_LIVE_OPERATION_EXECUTORS = {
     "attachment.get": handle_attachment_get_operation,
     "attachment.preview": handle_attachment_preview_operation,
     "attachment.open": handle_attachment_open_operation,
+    "pet.overview.read": handle_pet_overview_operation,
+    "pet.packs.list": handle_pet_packs_operation,
     "queue.create": handle_queue_create_operation,
     "queue.update": handle_queue_update_operation,
     "queue.delete": handle_queue_delete_operation,
@@ -2677,6 +2700,8 @@ __all__ = [
     "handle_queue_delete_operation",
     "handle_queue_guidance_operation",
     "handle_queue_update_operation",
+    "handle_pet_overview_operation",
+    "handle_pet_packs_operation",
     "handle_approval_respond_operation",
     "handle_thread_read_operation",
     "handle_thread_start_operation",

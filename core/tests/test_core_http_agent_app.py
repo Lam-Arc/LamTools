@@ -97,6 +97,28 @@ def test_core_agent_http_app_exposes_live_app_server(tmp_path: Path, isolated_co
     assert initialized["result"]["protocolVersion"] == "core.app_server.v1"
 
 
+def test_core_agent_http_app_serves_validated_pet_pack_frames(
+    tmp_path: Path, isolated_config_root: Path
+) -> None:
+    frame = isolated_config_root.parent / "pets" / "test-pack" / "idle" / "0001.png"
+    frame.parent.mkdir(parents=True)
+    frame.write_bytes(b"png-frame")
+    app = create_core_agent_http_app(
+        model_id="model-record",
+        core_db=tmp_path / "core.db",
+        data_dir=tmp_path / "core-data",
+        work_root=tmp_path / "workspace",
+    )
+
+    with TestClient(app) as client:
+        served = client.get("/api/core/pets/test-pack/idle/0001.png")
+        escaped = client.get("/api/core/pets/test-pack/idle/../../config.json")
+
+    assert served.status_code == 200
+    assert served.content == b"png-frame"
+    assert escaped.status_code in {404, 400}
+
+
 def test_core_agent_http_app_uses_member_identity_and_manifest(tmp_path: Path, isolated_config_root: Path) -> None:
     _write_jsonc_config(isolated_config_root)
     manifest = MemberManifest(

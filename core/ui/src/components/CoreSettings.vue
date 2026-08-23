@@ -121,6 +121,48 @@
         />
       </section>
 
+      <section v-if="activeSection === 'pet'" class="settings-panel">
+        <header class="settings-title">
+          <h1>桌宠</h1>
+          <p>桌宠与主窗口共用 Core 状态。右键桌宠可打开审批、询问和快速设置。</p>
+        </header>
+        <article class="setting-card pet-settings-card">
+          <div class="dream-row">
+            <div class="dream-toggle">
+              <button
+                type="button"
+                class="toggle-btn"
+                :class="{ 'is-on': petSettings.enabled }"
+                aria-label="显示桌宠"
+                @click="togglePetEnabled"
+              >
+                <ToggleRight v-if="petSettings.enabled" :size="16" :stroke-width="1.8" aria-hidden="true" />
+                <ToggleLeft v-else :size="16" :stroke-width="1.8" aria-hidden="true" />
+              </button>
+              <span class="dream-toggle-label">显示桌宠</span>
+            </div>
+            <span class="muted">{{ petSettingsStatus }}</span>
+          </div>
+          <label class="field">透明度
+            <input v-model.number="petSettings.opacity" type="range" min="0.2" max="1" step="0.05" @change="savePetSettings" />
+          </label>
+          <label class="field">大小
+            <input v-model.number="petSettings.scale" type="range" min="0.5" max="2" step="0.1" @change="savePetSettings" />
+          </label>
+          <label class="field">宠物包
+            <select v-model="petSettings.selected_pet" @change="savePetSettings">
+              <option v-for="pack in petPacks" :key="pack.id" :value="pack.id" :disabled="!pack.valid">{{ pack.name }}{{ pack.valid ? '' : '（无效）' }}</option>
+            </select>
+          </label>
+          <div class="editor-actions">
+            <button class="small-btn primary" type="button" @click="showPet">显示桌宠</button>
+            <button class="small-btn quiet" type="button" @click="hidePet">隐藏桌宠</button>
+            <button class="small-btn quiet" type="button" @click="openPetFolder">打开资源目录</button>
+            <button class="small-btn quiet" type="button" @click="refreshPetPacks">刷新资源</button>
+          </div>
+        </article>
+      </section>
+
       <section v-if="activeSection === 'loadtools'" class="settings-panel">
         <!-- KeepAlive: switching sections must not destroy editor draft
              state (audit 17 S3 — the SettingsShell :key remount used to
@@ -587,7 +629,9 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { RefreshCw, Star, X } from 'lucide-vue-next'
+import { RefreshCw, Star, X, ToggleLeft, ToggleRight } from 'lucide-vue-next'
+import { emit as emitTauri, listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { invoke } from '@tauri-apps/api/core'
 import { PROVIDER_PRESETS } from '../data/provider-presets'
 import { THEME_PRESETS } from '../data/theme-presets'
 import {
@@ -725,6 +769,7 @@ function refreshWorkflowList() {
 const sections: SettingsSection[] = [
   { id: 'models', label: '模型与供应商', icon: 'database' },
   { id: 'appearance', label: '界面', icon: 'palette' },
+  { id: 'pet', label: '桌宠', icon: 'sparkles' },
   { id: 'loadtools', label: '工具模式', icon: 'list-checks' },
   { id: 'permissions', label: '权限', icon: 'lock' },
   { id: 'agents', label: '上下文与记忆', icon: 'file-code' },
@@ -955,6 +1000,78 @@ function closeEditors() {
 
 const defaultRequestRpc = async (_method: string, _params?: Record<string, unknown>) => {
   throw new Error('requestRpc not provided — connect CoreSettings to a CoreAppServerClient')
+}
+
+const petSettings = ref({ enabled: false, selected_pet: 'default-cat', opacity: 1, scale: 1 })
+const petPacks = ref<Array<{ id: string; name: string; valid: boolean }>>([])
+const petSettingsStatus = ref('加载中…')
+let unlistenPetSettings: UnlistenFn | null = null
+let unlistenPetVisibility: UnlistenFn | null = null
+
+async function fetchPetSettings() {
+  try {
+    const value = await (props.requestRpc || defaultRequestRpc)('settings.get', { namespace: 'core.pet' })
+    const raw = value.value && typeof value.value === 'object' ? value.value as Record<string, unknown> : {}
+    petSettings.value = {
+      enabled: raw.enabled !== false,
+      selected_pet: String(raw.selected_pet || 'default-cat'),
+      opacity: Number(raw.opacity) || 1,
+      scale: Number(raw.scale) || 1,
+    }
+    petSettingsStatus.value = '已连接 Core'
+    await refreshPetPacks()
+  } catch {
+    petSettingsStatus.value = '暂时无法连接 Core'
+  }
+}
+
+async function refreshPetPacks() {
+  try {
+    const result = await (props.requestRpc || defaultRequestRpc)('pet.packs.list')
+    petPacks.value = Array.isArray(result.packs)
+      ? result.packs.map((item: any) => ({ id: String(item.id || ''), name: String(item.name || item.id || ''), valid: item.valid !== false }))
+        .filter(item => item.id)
+      : []
+  } catch {
+    petSettingsStatus.value = '宠物资源暂时无法读取'
+  }
+}
+
+async function savePetSettings() {
+  try {
+    await (props.requestRpc || defaultRequestRpc)('settings.update', { namespace: 'core.pet', value: petSettings.value })
+    await emitTauri('pet-settings-changed', petSettings.value)
+    await emitTauri('pet-visibility-changed', { enabled: petSettings.value.enabled })
+    petSettingsStatus.value = '已保存'
+  } catch {
+    petSettingsStatus.value = '保存失败，请重试'
+  }
+}
+
+async function togglePetEnabled() {
+  petSettings.value.enabled = !petSettings.value.enabled
+  await savePetSettings()
+  await (petSettings.value.enabled ? showPet() : hidePet())
+}
+
+async function showPet() {
+  await invoke('show_pet_window')
+  petSettings.value.enabled = true
+  await savePetSettings()
+}
+
+async function hidePet() {
+  await invoke('hide_pet_window')
+  petSettings.value.enabled = false
+  await savePetSettings()
+}
+
+async function openPetFolder() {
+  try {
+    await invoke('open_pet_resource_folder')
+  } catch {
+    petSettingsStatus.value = '资源目录暂时无法打开'
+  }
 }
 
 // 放在 defaultRequestRpc 之后实例化（const TDZ：setup 顶层立即求值）
@@ -1282,14 +1399,33 @@ function onKeydown(e: KeyboardEvent) {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
   document.addEventListener('keydown', onKeydown)
+  unlistenPetSettings = await listen<typeof petSettings.value>('pet-settings-changed', ({ payload }) => {
+    petSettings.value = {
+      enabled: payload.enabled !== false,
+      selected_pet: String(payload.selected_pet || 'default-cat'),
+      opacity: Number(payload.opacity) || 1,
+      scale: Number(payload.scale) || 1,
+    }
+    petSettingsStatus.value = '已同步'
+  })
+  unlistenPetVisibility = await listen<{ enabled?: boolean }>('pet-visibility-changed', ({ payload }) => {
+    if (typeof payload.enabled !== 'boolean') return
+    petSettings.value = { ...petSettings.value, enabled: payload.enabled }
+    petSettingsStatus.value = '已同步'
+  })
   void fetchGlobalAgentsMd()
   void fetchGlobalMemory()
   void fetchLoadContext()
   void fetchDreamingSettings()
+  void fetchPetSettings()
 })
 onUnmounted(() => document.removeEventListener('keydown', onKeydown))
+onUnmounted(() => {
+  unlistenPetSettings?.()
+  unlistenPetVisibility?.()
+})
 </script>
 
 <style scoped>

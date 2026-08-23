@@ -18,6 +18,17 @@
     <div class="titlebar-right">
       <!-- sidebar pin buttons -->
       <button
+        class="pet-toggle-btn"
+        :class="{ active: petEnabled }"
+        :aria-pressed="petEnabled ? 'true' : 'false'"
+        :title="petEnabled ? '隐藏桌宠' : '显示桌宠'"
+        type="button"
+        @click="$emit('togglePet')"
+      >
+        <span class="pet-toggle-track" aria-hidden="true"><span class="pet-toggle-thumb" /></span>
+        <span class="pet-toggle-text">桌宠</span>
+      </button>
+      <button
         class="pin-btn"
         :class="{ active: leftPinned }"
         :title="leftPinned ? '取消固定左侧栏' : '固定左侧栏'"
@@ -63,12 +74,14 @@ defineProps<{
   leftPinned?: boolean
   rightPinned?: boolean
   workflowMode?: boolean
+  petEnabled?: boolean
 }>()
 
 defineEmits<{
   toggleLeftPinned: []
   toggleRightPinned: []
   toggleWorkflowMode: []
+  togglePet: []
 }>()
 
 const isTauri = ref(false)
@@ -185,6 +198,69 @@ onUnmounted(() => {
   gap: 4px;
   -webkit-app-region: no-drag;
   app-region: no-drag;
+}
+
+/* ── Pet visibility switch ── */
+.pet-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 5px 0 4px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 52%, transparent);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+.pet-toggle-btn:hover {
+  background: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) var(--alpha-hover), transparent);
+  color: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 90%, transparent);
+}
+
+.pet-toggle-btn:focus-visible {
+  outline: 2px solid var(--blue, #79bcff);
+  outline-offset: 1px;
+}
+
+.pet-toggle-track {
+  position: relative;
+  display: inline-block;
+  width: 24px;
+  height: 14px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 22%, transparent);
+  transition: background .15s ease;
+}
+
+.pet-toggle-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 72%, transparent);
+  transition: transform .15s ease, background .15s ease;
+}
+
+.pet-toggle-btn.active .pet-toggle-track {
+  background: color-mix(in srgb, var(--green, #83c98b) 70%, transparent);
+}
+
+.pet-toggle-btn.active .pet-toggle-thumb {
+  transform: translateX(10px);
+  background: var(--theme-backdrop-text, #f2efeb);
+}
+
+.pet-toggle-text {
+  line-height: 1;
+  white-space: nowrap;
 }
 
 /* ── Pin buttons ── */

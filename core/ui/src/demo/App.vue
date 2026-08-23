@@ -3,9 +3,11 @@
     :left-pinned="leftPinned"
     :right-pinned="rightPinned"
     :workflow-mode="workflowMode"
+    :pet-enabled="petEnabled"
     @toggle-left-pinned="toggleLeftPinned"
     @toggle-right-pinned="toggleRightPinned"
     @toggle-workflow-mode="toggleWorkflowMode"
+    @toggle-pet="togglePet"
   />
   <div v-if="backendCrashed" class="core-update-banner" role="alert" data-backend-crashed-banner>
     <span class="core-update-banner-text">后端进程已停止响应（可能已崩溃）。请重启应用以恢复。</span>
@@ -550,6 +552,8 @@ import {
   watch,
 } from 'vue'
 import { ArrowDown, ArrowLeft, Boxes, CalendarClock, ChevronDown, ChevronUp, Command, Cpu, FileCode2, FileText, Upload, X, type LucideIcon } from 'lucide-vue-next'
+import { invoke } from '@tauri-apps/api/core'
+import { emit as emitTauri } from '@tauri-apps/api/event'
 import type {
   CoreAttachment,
   CoreSessionListItem,
@@ -727,6 +731,47 @@ const settingsStorageKey = 'lamtools.core.ui'
 const showSettings = ref(false)
 const showPlugins = ref(false)
 const showSearch = ref(false)
+const petEnabled = ref(false)
+const petSettings = ref<Record<string, unknown>>({ enabled: false })
+let unlistenPetVisibility: (() => void) | null = null
+let unlistenPetOpenSession: (() => void) | null = null
+
+async function loadPetEnabled() {
+  if (!(window as any).__TAURI_INTERNALS__) return
+  try {
+    const result = await requestConfigOperation('settings.get', { namespace: 'core.pet' }) as { value?: unknown }
+    const value = result.value && typeof result.value === 'object'
+      ? result.value as Record<string, unknown>
+      : { enabled: true }
+    petSettings.value = value
+    petEnabled.value = value.enabled !== false
+  } catch {
+    // Keep the switch off until Core has answered. This avoids rendering an
+    // enabled flash while the persisted setting is still being hydrated.
+    petEnabled.value = false
+  }
+}
+
+async function togglePet() {
+  const previous = petEnabled.value
+  const next = !previous
+  petEnabled.value = next
+  const nextSettings = { ...petSettings.value, enabled: next }
+  try {
+    await requestConfigOperation('settings.update', {
+      namespace: 'core.pet',
+      value: nextSettings,
+    })
+    petSettings.value = nextSettings
+    await invoke(next ? 'show_pet_window' : 'hide_pet_window')
+    await emitTauri('pet-settings-changed', nextSettings)
+    await emitTauri('pet-visibility-changed', { enabled: next })
+  } catch (error) {
+    petEnabled.value = previous
+    const message = error instanceof Error ? error.message : String(error)
+    showToast('error', `桌宠设置保存失败：${message}`)
+  }
+}
 
 // Ctrl+K 全局搜索：与侧边栏「搜索」按钮一样切 showSearch（同一 SearchShell 入口）。
 // 打开时避免触发浏览器/输入框插件快捷键（旧 SessionSearchDialog 已并入 SearchShell）。
@@ -2597,6 +2642,7 @@ onMounted(() => {
     void threadScroll.scrollToBottom(true)
   }, { immediate: true })
   void loadInitialData().then(() => checkOnboarding())
+  void loadPetEnabled()
   // 启动时静默检查更新（仅 Tauri 桌面环境，且用户未关闭「启动时自动检查更新」）
   if ((window as any).__TAURI_INTERNALS__ && readUpdateAutoCheck()) {
     void updateState.check()
@@ -2608,6 +2654,17 @@ onMounted(() => {
       void listen('backend-crashed', () => {
         backendCrashed.value = true
       })
+      void listen<{ enabled?: boolean }>('pet-visibility-changed', (event) => {
+        const enabled = event.payload?.enabled
+        if (typeof enabled === 'boolean') {
+          petEnabled.value = enabled
+          petSettings.value = { ...petSettings.value, enabled }
+        }
+      }).then((unlisten) => { unlistenPetVisibility = unlisten })
+      void listen<{ thread_id?: string }>('pet-open-session', (event) => {
+        const threadId = event.payload?.thread_id
+        if (threadId) void selectSession(threadId)
+      }).then((unlisten) => { unlistenPetOpenSession = unlisten })
     }).catch(() => {})
   }
 })
@@ -2623,6 +2680,10 @@ onUnmounted(() => {
   runtimeController.disconnect()
   configClient?.close()
   configClient = null
+  unlistenPetVisibility?.()
+  unlistenPetVisibility = null
+  unlistenPetOpenSession?.()
+  unlistenPetOpenSession = null
 })
 </script>
 

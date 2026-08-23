@@ -27,28 +27,35 @@ def lam_home() -> Path:
 
 
 def core_config_root() -> Path:
-    """Return the .lam/core/ directory for user-facing config files."""
+    """Return the .lam/core/ directory for user-facing config files.
+
+    A clean checkout does not contain the ignored user config tree yet.  Create
+    its immediate ``config`` child so path discovery has the same contract in
+    dev, CI, and the packaged desktop app; default files remain lazily seeded
+    by :func:`ensure_default_config_files`.
+    """
     env = os.environ.get("LAMTOOLS_CORE_CONFIG_ROOT")
     if env:
-        return Path(env)
+        root = Path(env)
+    else:
+        # Green/portable mode: unified under the app-side .lam/.
+        lam = os.environ.get("LAMTOOLS_HOME")
+        if lam:
+            root = (Path(lam) / "core").resolve()
+        elif not getattr(sys, "frozen", False):
+            # Dev mode (cli serve / Tauri dev / dev.ps1): config lives in the
+            # repository's core/.lam/ tree, not the repository root's .lam/.
+            root = (Path(__file__).resolve().parent.parent.parent.parent / ".lam" / "core").resolve()
+        else:
+            root = (_exe_dir() / ".lam" / "core").resolve()
 
-    # Green/portable mode: unified under the app-side .lam/.
-    lam = os.environ.get("LAMTOOLS_HOME")
-    if lam:
-        return (Path(lam) / "core").resolve()
-
-    if not getattr(sys, "frozen", False):
-        # Dev mode (cli serve / Tauri dev / dev.ps1): config lives in the
-        # repository's core/.lam/ so dev and repo-managed data share one
-        # root. Do NOT fall through to _exe_dir() — that is the repo root in
-        # dev, which would silently fork the config tree to <repo>/.lam and
-        # make everything configured in dev invisible to the next dev run
-        # (audit 20: dev/prod config-root divergence).
-        # config/root.py → lamtools_core → src → core/
-        return (Path(__file__).resolve().parent.parent.parent.parent / ".lam" / "core").resolve()
-
-    exe_dir = _exe_dir()
-    return (exe_dir / ".lam" / "core").resolve()
+    try:
+        (root / "config").mkdir(parents=True, exist_ok=True)
+    except OSError:
+        # Read-only installations can still resolve existing config files;
+        # writes will report the concrete filesystem error at the write site.
+        pass
+    return root
 
 
 def core_config_file(name: str) -> Path:

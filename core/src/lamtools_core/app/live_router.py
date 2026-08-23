@@ -54,6 +54,8 @@ SNAPSHOT_TRIGGER_EVENTS = frozenset({
 # connection per interval — the next trigger (or thread/resume) delivers the
 # latest state anyway.
 SNAPSHOT_MIN_INTERVAL_SECONDS = 1.0
+PET_CLIENT_NAME = "lamtools-pet"
+PET_CLIENT_NAMES = {PET_CLIENT_NAME, "lamtools-pet-overlay"}
 
 CoreLiveContextFactory = Callable[[], CoreLiveContext | Awaitable[CoreLiveContext]]
 CoreLiveClientResponseHandler = Callable[["CoreLiveConnection", dict[str, Any]], bool | Awaitable[bool]]
@@ -140,6 +142,7 @@ class CoreLiveConnection:
         self.initialized = False
         self.thread_id: str | None = None
         self.subscription: asyncio.Queue[Any | None] | None = None
+        self.global_subscription: asyncio.Queue[Any | None] | None = None
         # Signalled when a subscription is active so _hub_reader can block
         # without busy-polling while idle. Cleared on unsubscribe.
         self._subscription_ready = asyncio.Event()
@@ -239,17 +242,26 @@ class CoreLiveConnection:
         while True:
             # Block until a subscription exists, instead of busy-polling at
             # 20 Hz. Event.wait() yields the loop with no wakeups while idle.
-            if self.subscription is None:
+            subscription = self.global_subscription if self.global_subscription is not None else self.subscription
+            if subscription is None:
                 await self._subscription_ready.wait()
                 continue
-            event = await self.subscription.get()
+            event = await subscription.get()
             if isinstance(event, CoreAppEventGap):
-                logger.warning("core-app-server event stream overflow; closing ws 1013 (thread=%s)", self.thread_id or "-")
+                logger.warning(
+                    "core-app-server event stream overflow; closing ws 1013 (thread=%s)",
+                    self.thread_id or "global",
+                )
                 await self.websocket.close(code=1013, reason="Event stream overflow; reconnect to resume.")
                 return
             if event is None:
                 continue
             event_method = event.get("method") if isinstance(event, dict) else getattr(event, "method", "")
+            if self.global_subscription is not None:
+                if event_method != "pet/overviewChanged":
+                    continue
+                await self._send(event_notification(event))
+                continue
             if event_method == CORE_RUN_ITEM_METHOD:
                 await self._enqueue_run_item(event)
                 # approval_request（审批请求）是重要边界：事件流可能因订阅者
@@ -395,13 +407,29 @@ class CoreLiveConnection:
         self.subscription = self.context.hub.subscribe(thread_id)
         self._subscription_ready.set()
 
+    def _subscribe_global(self) -> None:
+        if self.global_subscription is not None:
+            return
+        self._unsubscribe()
+        subscribe_all = getattr(self.context.hub, "subscribe_all", None)
+        if not callable(subscribe_all):
+            raise RuntimeError("global event subscriptions are not available")
+        self.global_subscription = subscribe_all()
+        self._subscription_ready.set()
+
     def switch_thread_subscription(self, thread_id: str) -> None:
         self._subscribe(thread_id)
 
     def _unsubscribe(self) -> None:
         if self.thread_id and self.subscription is not None:
             self.context.hub.unsubscribe(self.thread_id, self.subscription)
+        if self.global_subscription is not None:
+            unsubscribe_all = getattr(self.context.hub, "unsubscribe_all", None)
+            if callable(unsubscribe_all):
+                unsubscribe_all(self.global_subscription)
         self.subscription = None
+        self.global_subscription = None
+        self.thread_id = None
         self._subscription_ready.clear()
 
     async def _handle_raw(self, raw: dict[str, Any]) -> None:
@@ -560,6 +588,8 @@ class CoreLiveConnection:
         )
         if params.threadId:
             self._subscribe(params.threadId)
+        elif str(params.clientInfo.name or "") in PET_CLIENT_NAMES:
+            self._subscribe_global()
         if self.adapter.after_initialize is not None:
             initialized = self.adapter.after_initialize(self, params)
             if inspect.isawaitable(initialized):

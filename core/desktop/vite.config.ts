@@ -16,6 +16,12 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    watch: {
+      // Rust writes and locks generated binaries under this directory while
+      // `tauri dev` is compiling. Watching it makes Windows WebView/Vite
+      // crash with EBUSY during the first build.
+      ignored: ['**/src-tauri/target/**'],
+    },
     proxy: {
       '/api': {
         target: `http://127.0.0.1:${process.env.CORE_BACKEND_PORT || '5172'}`,

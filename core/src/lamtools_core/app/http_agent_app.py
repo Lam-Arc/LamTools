@@ -47,6 +47,7 @@ from .factory import add_spa_fallback, create_app
 from .live_hub import CoreAppEventHub
 from .live_member import DefaultCoreLiveMemberHooks
 from .live_operations import CoreLiveContext, CoreLiveOperationHost, recover_stale_active_turns
+from .pet import PET_STATES, PetOverviewService, ensure_default_pet_packs, pet_packs_root
 from .project_store import ActiveProjectSessionsError, CoreProjectStore
 from lamtools_core.artifact import ArtifactRegistry, kind_from_mime
 from .live_router import create_core_live_router
@@ -292,6 +293,12 @@ def create_core_agent_http_app(
             member_defaults={"session": {"member_id": runtime_spec.member_id}},
         )
         app_state["core_db"] = core_db_handle
+        pet_overview_service = PetOverviewService(
+            session_factory=core_db_handle.session_factory,
+            hub=live_hub,
+        )
+        await pet_overview_service.start()
+        app_state["pet_overview_service"] = pet_overview_service
         app_state["attachment_store"] = CoreAttachmentStore(core_db_handle.session_factory, resolved_data_dir)
         goal_manager = GoalManager(core_db_handle.goal_store)
         arrange_manager = ArrangeManager(core_db_handle.arrange_store)
@@ -556,6 +563,9 @@ def create_core_agent_http_app(
         arrange_runner = app_state.get("arrange_runner")
         if arrange_runner is not None:
             await arrange_runner.stop()
+        pet_overview_service = app_state.get("pet_overview_service")
+        if pet_overview_service is not None:
+            await pet_overview_service.stop()
         await runtime_task_registry.shutdown()
         core_db_handle = app_state.get("core_db")
         if core_db_handle is not None:
@@ -617,6 +627,28 @@ def create_core_agent_http_app(
     @app.get("/api/core/config/providers")
     async def list_config_providers() -> dict[str, Any]:
         return {"providers": _list_llm_provider_configs()}
+
+    @app.get("/api/core/pets/{pack_id}/{state}/{frame_name}")
+    async def pet_frame(pack_id: str, state: str, frame_name: str) -> FileResponse:
+        """Serve a validated user Pet Pack frame without exposing arbitrary files."""
+
+        ensure_default_pet_packs()
+        if state not in PET_STATES or any(part in {"", ".", ".."} for part in (pack_id, frame_name)):
+            raise HTTPException(status_code=404, detail="Pet frame not found")
+        root = pet_packs_root().resolve()
+        pack_root = (root / pack_id).resolve()
+        state_root = (pack_root / state).resolve()
+        candidate = (state_root / frame_name).resolve()
+        try:
+            pack_root.relative_to(root)
+            state_root.relative_to(pack_root)
+            candidate.relative_to(state_root)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail="Pet frame not found") from exc
+        if not candidate.is_file() or candidate.suffix.casefold() not in {".png", ".webp"}:
+            raise HTTPException(status_code=404, detail="Pet frame not found")
+        media_type = "image/webp" if candidate.suffix.casefold() == ".webp" else "image/png"
+        return FileResponse(candidate, media_type=media_type)
 
     def attachment_store() -> CoreAttachmentStore:
         store = app_state.get("attachment_store")

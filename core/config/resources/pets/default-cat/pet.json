@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "spriteVersionNumber": 2,
+  "id": "default-cat",
+  "name": "小猫",
+  "atlas": {
+    "file": "atlas.png",
+    "columns": 8,
+    "rows": 11,
+    "cellWidth": 192,
+    "cellHeight": 208,
+    "lookDirections": 16
+  },
+  "states": {
+    "idle": {
+      "fps": 8,
+      "frames": 4
+    },
+    "running": {
+      "fps": 8,
+      "frames": 4
+    },
+    "waiting": {
+      "fps": 8,
+      "frames": 4
+    },
+    "error": {
+      "fps": 8,
+      "frames": 4
+    }
+  }
+}

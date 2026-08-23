@@ -56,6 +56,13 @@ from lamtools_core.config.model_store import ModelConfig, ModelStore
 from lamtools_core.config.provider_store import ProviderConfig, ProviderStore
 from lamtools_core.config.settings_store import delete_setting, get_setting, set_setting
 from lamtools_core.config.root import ensure_projects_root
+from lamtools_core.app.pet import (
+    PetPackLoader,
+    load_pet_overview_from_db,
+    load_pet_settings,
+    pet_packs_root,
+    update_pet_settings,
+)
 from lamtools_core.runtime import RuntimeTurnInput
 from lamtools_core.tool.default_toolbox import ApprovalPolicy, build_core_toolbox
 
@@ -991,6 +998,29 @@ def build_parser() -> argparse.ArgumentParser:
     session_rollback.add_argument("--raw", action="store_true")
     session_rollback.set_defaults(func=cmd_session_rollback)
 
+    pet = sub.add_parser("pet", help="Inspect and configure the desktop Pet")
+    pet_sub = pet.add_subparsers(dest="pet_command", required=True)
+    pet_status = pet_sub.add_parser("status", help="Show the current global Pet runtime overview")
+    pet_status.add_argument("--core-db", default="", help="Core-owned SQLite runtime database")
+    pet_status.add_argument("--raw", action="store_true")
+    pet_status.set_defaults(func=cmd_pet_status)
+    pet_config = pet_sub.add_parser("config", help="Show or update Pet settings")
+    pet_config_sub = pet_config.add_subparsers(dest="pet_config_command", required=True)
+    pet_config_show = pet_config_sub.add_parser("show", help="Show Pet settings")
+    pet_config_show.set_defaults(func=cmd_pet_config_show)
+    pet_config_set = pet_config_sub.add_parser("set", help="Update Pet settings")
+    pet_config_set.add_argument("--enabled", choices=("true", "false"))
+    pet_config_set.add_argument("--selected-pet", default=None)
+    pet_config_set.add_argument("--opacity", type=float, default=None)
+    pet_config_set.add_argument("--scale", type=float, default=None)
+    pet_config_set.add_argument("--monitor", default=None)
+    pet_config_set.add_argument("--x", type=float, default=None)
+    pet_config_set.add_argument("--y", type=float, default=None)
+    pet_config_set.set_defaults(func=cmd_pet_config_set)
+    pet_packs = pet_sub.add_parser("packs", help="List installed Pet Packs")
+    pet_packs.add_argument("--root", default="", help="Override the Pet Pack root for inspection")
+    pet_packs.set_defaults(func=cmd_pet_packs)
+
     project = sub.add_parser("project", help="Manage Core project workspaces")
     project_sub = project.add_subparsers(dest="project_command", required=True)
     project_list = project_sub.add_parser("list", help="List project workspaces")
@@ -1861,6 +1891,61 @@ async def cmd_session_show(args: argparse.Namespace) -> int:
         print(f"[session] {detail['thread_id']}", flush=True)
         print(f"[status] {snapshot.get('status') or '-'} seq={snapshot.get('snapshot_seq') or 0}", flush=True)
         print(f"[events] {len(detail.get('events') or [])}", flush=True)
+    return 0
+
+
+async def cmd_pet_status(args: argparse.Namespace) -> int:
+    db = await open_core_app_db(_resolve_core_db(args.core_db or None))
+    try:
+        overview = await load_pet_overview_from_db(db)
+    finally:
+        await db.close()
+    payload = {"settings": load_pet_settings().to_dict(), "overview": overview.to_dict()}
+    if args.raw:
+        print(json.dumps(payload, ensure_ascii=False, indent=2), flush=True)
+    else:
+        print(
+            f"state={overview.global_state} running={overview.running_count} "
+            f"waiting={overview.waiting_count} error={overview.error_count}",
+            flush=True,
+        )
+        for item in overview.pending_interactions:
+            print(f"waiting {item.id} {item.session_name}: {item.message}", flush=True)
+    return 0
+
+
+async def cmd_pet_config_show(args: argparse.Namespace) -> int:
+    print(json.dumps(load_pet_settings().to_dict(), ensure_ascii=False, indent=2), flush=True)
+    return 0
+
+
+async def cmd_pet_config_set(args: argparse.Namespace) -> int:
+    updates: dict[str, Any] = {}
+    if args.enabled is not None:
+        updates["enabled"] = args.enabled == "true"
+    if args.selected_pet is not None:
+        updates["selected_pet"] = args.selected_pet
+    for name in ("opacity", "scale"):
+        value = getattr(args, name)
+        if value is not None:
+            updates[name] = value
+    placement = {
+        name: getattr(args, name)
+        for name in ("monitor", "x", "y")
+        if getattr(args, name) is not None
+    }
+    if placement:
+        updates["placement"] = placement
+    if not updates:
+        raise ValueError("at least one Pet setting is required")
+    print(json.dumps(update_pet_settings(updates).to_dict(), ensure_ascii=False, indent=2), flush=True)
+    return 0
+
+
+async def cmd_pet_packs(args: argparse.Namespace) -> int:
+    root = Path(args.root) if args.root else pet_packs_root()
+    packs = PetPackLoader(root).list_packs()
+    print(json.dumps({"root": str(root), "packs": [pack.to_dict() for pack in packs]}, ensure_ascii=False, indent=2), flush=True)
     return 0
 
 

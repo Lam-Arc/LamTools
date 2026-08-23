@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "spriteVersionNumber": 2,
+  "id": "my-pet",
+  "name": "My Pet",
+  "atlas": {
+    "file": "atlas.png",
+    "columns": 8,
+    "rows": 11,
+    "frameWidth": 192,
+    "frameHeight": 208,
+    "directions": 16
+  },
+  "states": {
+    "idle": { "fps": 6, "frames": ["idle/0000.png"] },
+    "running": { "fps": 10, "frames": ["running/0000.png"] },
+    "waiting": { "fps": 6, "frames": ["waiting/0000.png"] },
+    "error": { "fps": 8, "frames": ["error/0000.png"] }
+  }
+}

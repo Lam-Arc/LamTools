@@ -176,6 +176,43 @@ def test_core_live_connection_closes_on_hub_gap_signal() -> None:
     asyncio.run(run())
 
 
+def test_pet_client_uses_global_projection_subscription() -> None:
+    async def run() -> None:
+        websocket = DummyWebSocket()
+        hub = CoreAppEventHub()
+        context = SimpleNamespace(hub=hub)
+        connection = CoreLiveConnection(websocket, context=context)
+
+        await connection._initialize(
+            JsonRpcRequest(
+                id=1,
+                method="initialize",
+                params={"clientInfo": {"name": "lamtools-pet"}},
+            )
+        )
+
+        assert connection.thread_id is None
+        assert connection.subscription is None
+        assert connection.global_subscription is not None
+        await connection.outbound.get()
+
+        reader = asyncio.create_task(connection._hub_reader())
+        await hub.publish({"thread_id": "thread-1", "method": "turn/accepted"})
+        assert connection.outbound.empty()
+        await hub.publish_global({
+            "method": "pet/overviewChanged",
+            "thread_id": "",
+            "payload": {"overview": {"global_state": "running"}},
+        })
+        notification = await asyncio.wait_for(connection.outbound.get(), timeout=0.1)
+        assert notification["method"] == "pet/overviewChanged"
+        reader.cancel()
+        await asyncio.gather(reader, return_exceptions=True)
+        connection._unsubscribe()
+
+    asyncio.run(run())
+
+
 def test_core_live_connection_sends_run_item_without_snapshot_reload() -> None:
     async def run() -> None:
         connection = CoreLiveConnection(DummyWebSocket(), context=SimpleNamespace())
