@@ -137,10 +137,10 @@ describe('CoreSettings', () => {
 
     expect(wrapper.text()).toContain('权限策略')
     expect(wrapper.text()).toContain('放行模式')
-    expect(wrapper.findAll('input, select, textarea').length).toBe(1)
+    expect(wrapper.findAll('input, select, textarea').length).toBe(0)
     await wrapper.get('[aria-label="选择完全编辑"]').trigger('click')
     expect(wrapper.emitted('update-permission-mode')).toEqual([['full_edit']])
-    await wrapper.get('[data-allow-outside-workdir]').setValue(true)
+    await wrapper.get('[data-allow-outside-workdir]').trigger('click')
     expect(wrapper.emitted('update-allow-outside-workdir')).toEqual([[true]])
   })
 })
@@ -155,7 +155,7 @@ describe('Core settings permission contract', () => {
     expect(source).toContain("'update-allow-outside-workdir': [value: boolean]")
     expect(source).toContain('data-allow-outside-workdir')
     expect(source).toContain('允许访问工作目录以外')
-    expect(source).toContain("emit('update-allow-outside-workdir', input.checked)")
+    expect(source).toContain("emit('update-allow-outside-workdir', !(props.allowAccessOutsideWorkdir ?? false))")
   })
 
   it('binds the toggle state in the Core demo App', () => {

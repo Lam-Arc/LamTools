@@ -69,7 +69,7 @@ function makeRpc(overrides: RpcOverrides = {}) {
 
 async function openConfig(wrapper: ReturnType<typeof mount>) {
   await flushPromises()
-  const configBtn = wrapper.findAll('button').find((b) => b.text() === '配置')
+  const configBtn = wrapper.find('button[aria-label="配置"]')
   expect(configBtn).toBeTruthy()
   await configBtn!.trigger('click')
   await flushPromises()

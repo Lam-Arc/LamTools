@@ -47,7 +47,7 @@ describe('Core UI package boundary', () => {
   it('keeps the shared composer inside the main workspace when a narrow viewport still has a pinned sidebar', () => {
     expect(layoutCss).toMatch(/@media \(max-width: 820px\)[\s\S]*?\.floating-composer \{ width: var\(--composer-full-width\); \}/)
     expect(layoutCss).toMatch(/\.send \{[\s\S]*?flex: 0 0 54px;/)
-    expect(layoutCss).toMatch(/\.drawer-right:not\(\.open\) \{ opacity: 0; pointer-events: none; \}/)
+    expect(layoutCss).toMatch(/\.drawer-right:not\(\.open\) \{[\s\S]*?opacity: 0;[\s\S]*?pointer-events: none;[\s\S]*?\}/)
   })
 
   it('keeps the right runtime toolbar reachable below 640px', () => {
@@ -58,7 +58,7 @@ describe('Core UI package boundary', () => {
     expect(mobileCss).not.toMatch(/\.drawer-right \{[^}]*display: none/)
     // The drawer hides through opacity/pointer-events, and the mobile nav keeps
     // a dedicated right-panel toggle so the runtime toolbar stays reachable
-    expect(layoutCss).toMatch(/\.drawer-right:not\(\.open\) \{ opacity: 0; pointer-events: none; \}/)
+    expect(layoutCss).toMatch(/\.drawer-right:not\(\.open\) \{[\s\S]*?opacity: 0;[\s\S]*?pointer-events: none;[\s\S]*?\}/)
     expect(shellSource).toMatch(/data-mobile-right-toggle/)
   })
 })

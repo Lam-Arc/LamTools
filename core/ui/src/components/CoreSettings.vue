@@ -165,6 +165,7 @@
             type="button"
             class="toggle-btn"
             :class="{ 'is-on': allowAccessOutsideWorkdir }"
+            data-allow-outside-workdir
             :aria-label="'允许访问工作目录以外'"
             @click="toggleAllowOutsideWorkdir"
           >
@@ -420,6 +421,7 @@
             type="button"
             class="toggle-btn"
             :class="{ 'is-on': updateAutoCheck }"
+            data-update-auto-check
             :aria-label="'启动时自动检查更新'"
             @click="toggleUpdateAutoCheck"
           >
@@ -587,7 +589,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { RefreshCw, Star, X } from 'lucide-vue-next'
+import { RefreshCw, Star, ToggleLeft, ToggleRight, X } from 'lucide-vue-next'
 import { PROVIDER_PRESETS } from '../data/provider-presets'
 import { THEME_PRESETS } from '../data/theme-presets'
 import {
@@ -735,10 +737,10 @@ const sections: SettingsSection[] = [
 
 // ── Update check state (共享实例由 App.vue 传入以便启动时自动检查；缺省自建) ──
 const updateAutoCheck = ref(readUpdateAutoCheck())
-function toggleUpdateAutoCheck(event: Event) {
-  const input = event.target as HTMLInputElement
-  updateAutoCheck.value = input.checked
-  setUpdateAutoCheck(input.checked)
+function toggleUpdateAutoCheck() {
+  const nextValue = !updateAutoCheck.value
+  updateAutoCheck.value = nextValue
+  setUpdateAutoCheck(nextValue)
 }
 async function openUpdateReleasePage() {
   if (updateReleaseUrl.value) {
@@ -973,9 +975,8 @@ const {
 } = update
 
 const permissionMode = computed(() => props.permissionMode || 'full_edit')
-function toggleAllowOutsideWorkdir(event: Event) {
-  const input = event.target as HTMLInputElement
-  emit('update-allow-outside-workdir', input.checked)
+function toggleAllowOutsideWorkdir() {
+  emit('update-allow-outside-workdir', !(props.allowAccessOutsideWorkdir ?? false))
 }
 const permissionTiers = [
   {

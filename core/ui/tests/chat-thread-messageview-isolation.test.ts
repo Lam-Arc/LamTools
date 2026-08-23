@@ -65,14 +65,14 @@ describe('ChatThread → MessageView isolation', () => {
     expect(renderCount).toBe(0)
   })
 
-  it('renders the message-product slot instead of MessageView when provided', () => {
+  it('renders the message-product slot through the MessageView shell when provided', () => {
     const m1 = { id: 'assistant:1', role: 'assistant' as const, content: 'a', timestamp: '', parts: [] }
     const wrapper = mount(ChatThread, {
       props: { messages: [m1] },
       slots: { 'message-product': '<div data-product-override>custom</div>' },
     })
     expect(wrapper.find('[data-product-override]').exists()).toBe(true)
-    expect(wrapper.find('[data-message-id]').exists()).toBe(false)
+    expect(wrapper.find('[data-message-id="assistant:1"]').exists()).toBe(true)
   })
 
   it('does not re-render historical messages when a new message arrives (Set reference changes)', async () => {
