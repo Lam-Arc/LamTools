@@ -292,6 +292,15 @@ def build_plugin_operation_catalog(
                         else "none"
                     ),
                     "config_schema": str(item.config_schema) if item.config_schema else "",
+                    "desktop": (
+                        {
+                            "entry": str(item.desktop_entry),
+                            "title": item.desktop_title or item.name,
+                            "window": dict(item.desktop_window),
+                        }
+                        if item.desktop_entry is not None
+                        else None
+                    ),
                 }
             )
         return OperationResult(

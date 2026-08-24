@@ -20,10 +20,30 @@
         "decorations": false,
         "dragDropEnabled": true,
         "additionalBrowserArgs": "--disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling --disable-backgrounding-tabs"
+      },
+      {
+        "label": "desktop-plugin-host",
+        "create": true,
+        "url": "desktop-plugin-host.html",
+        "title": "LamTools Desktop Plugin",
+        "width": 256,
+        "height": 288,
+        "minWidth": 96,
+        "minHeight": 96,
+        "visible": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "maximizable": false,
+        "minimizable": false,
+        "dragDropEnabled": false,
+        "additionalBrowserArgs": "--disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling --disable-backgrounding-tabs"
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:* ws://127.0.0.1:* tauri:; img-src 'self' asset: http://127.0.0.1:* data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self'",
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:* ws://127.0.0.1:* tauri:; frame-src http://127.0.0.1:*; img-src 'self' asset: http://127.0.0.1:* data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self'",
       "assetProtocol": {
         "enable": true,
         "scope": [".lam/**", "lam_projects/**"]
@@ -33,8 +53,16 @@
           "identifier": "default",
           "windows": ["main"],
           "permissions": [
-            "core:window:allow-start-dragging"
+            "core:window:allow-start-dragging",
+            "core:event:default"
           ]
+        },
+        {
+          "identifier": "desktop-plugins",
+          "description": "Allows the local desktop plugin host to call LamCore host commands.",
+          "local": true,
+          "windows": ["desktop-plugin-*"],
+          "permissions": []
         }
       ]
     }

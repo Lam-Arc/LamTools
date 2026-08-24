@@ -45,6 +45,12 @@ class PluginManifest:
     operation_files: list[Path] = field(default_factory=list)
     dependencies: list[str] = field(default_factory=list)
     config_schema: Path | None = None
+    # Optional self-contained desktop UI. The entry stays inside the plugin
+    # root and is served by the Core loopback HTTP app; Tauri only hosts the
+    # resulting window and never imports plugin code into the main UI bundle.
+    desktop_entry: Path | None = None
+    desktop_title: str = ""
+    desktop_window: dict[str, Any] = field(default_factory=dict)
     raw: dict[str, Any] = field(default_factory=dict)
 
 
