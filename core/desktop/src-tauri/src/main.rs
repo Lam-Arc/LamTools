@@ -1,12 +1,16 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::{
+    collections::HashMap,
     env,
     io::{Read, Write},
     net::{TcpListener, TcpStream},
     path::PathBuf,
     process::{Child, Command, Stdio},
-    sync::Mutex,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex,
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -14,7 +18,8 @@ use std::{
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
-use tauri::{Emitter, Manager};
+use serde::{Deserialize, Serialize};
+use tauri::{Emitter, Manager, WebviewWindow, WebviewWindowBuilder};
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -22,6 +27,92 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 struct BackendState {
     api_base: Mutex<Option<String>>,
     child: Mutex<Option<Child>>,
+    desktop_windows: Mutex<HashMap<String, DesktopWindowRegistration>>,
+    quitting: AtomicBool,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopWindowSpec {
+    #[serde(default = "default_collapsed_width")]
+    collapsed_width: f64,
+    #[serde(default = "default_collapsed_height")]
+    collapsed_height: f64,
+    #[serde(default = "default_expanded_width")]
+    expanded_width: f64,
+    #[serde(default = "default_expanded_height")]
+    expanded_height: f64,
+    #[serde(default = "default_window_margin")]
+    margin: f64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum HorizontalAnchor {
+    Left,
+    Right,
+}
+
+impl HorizontalAnchor {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Left => "left",
+            Self::Right => "right",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct DesktopWindowRegistration {
+    spec: DesktopWindowSpec,
+    anchor: HorizontalAnchor,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopWindowTransition {
+    anchor: &'static str,
+}
+
+impl Default for DesktopWindowSpec {
+    fn default() -> Self {
+        Self {
+            collapsed_width: default_collapsed_width(),
+            collapsed_height: default_collapsed_height(),
+            expanded_width: default_expanded_width(),
+            expanded_height: default_expanded_height(),
+            margin: default_window_margin(),
+        }
+    }
+}
+
+impl DesktopWindowSpec {
+    fn sanitized(&self) -> Self {
+        let collapsed_width = self.collapsed_width.clamp(96.0, 800.0);
+        let collapsed_height = self.collapsed_height.clamp(96.0, 800.0);
+        Self {
+            collapsed_width,
+            collapsed_height,
+            expanded_width: self.expanded_width.clamp(collapsed_width, 1600.0),
+            expanded_height: self.expanded_height.clamp(collapsed_height, 1200.0),
+            margin: self.margin.clamp(0.0, 200.0),
+        }
+    }
+}
+
+fn default_collapsed_width() -> f64 {
+    256.0
+}
+fn default_collapsed_height() -> f64 {
+    288.0
+}
+fn default_expanded_width() -> f64 {
+    400.0
+}
+fn default_expanded_height() -> f64 {
+    568.0
+}
+fn default_window_margin() -> f64 {
+    24.0
 }
 
 // ---------------------------------------------------------------------------
@@ -55,6 +146,142 @@ fn toggle_maximize_window(window: tauri::WebviewWindow) {
 #[tauri::command]
 fn close_window(window: tauri::WebviewWindow) {
     let _ = window.close();
+}
+
+#[tauri::command]
+fn start_window_dragging(window: tauri::WebviewWindow) -> Result<(), String> {
+    window.start_dragging().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn get_desktop_plugin_anchor(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, BackendState>,
+) -> Result<&'static str, String> {
+    let anchor = desktop_window_anchor(&window)?;
+    let mut windows = state
+        .desktop_windows
+        .lock()
+        .map_err(|_| "desktop window state lock failed".to_string())?;
+    let registration = windows
+        .get_mut(window.label())
+        .ok_or_else(|| "desktop plugin window is not registered".to_string())?;
+    registration.anchor = anchor;
+    Ok(anchor.as_str())
+}
+
+#[tauri::command]
+fn set_desktop_plugin_expanded(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, BackendState>,
+    expanded: bool,
+    reduced_motion: bool,
+    content_width: Option<f64>,
+    content_height: Option<f64>,
+    viewport_width: Option<f64>,
+    viewport_height: Option<f64>,
+) -> Result<DesktopWindowTransition, String> {
+    let registration = state
+        .desktop_windows
+        .lock()
+        .map_err(|_| "desktop window state lock failed".to_string())?
+        .get(window.label())
+        .cloned()
+        .ok_or_else(|| "desktop plugin window is not registered".to_string())?;
+    let (requested_width, requested_height) = if expanded {
+        adaptive_expanded_dimensions(
+            &window,
+            content_width,
+            content_height,
+            viewport_width,
+            viewport_height,
+            registration.spec.collapsed_width,
+            registration.spec.collapsed_height,
+        )?
+    } else {
+        (None, None)
+    };
+    let anchor = if expanded && requested_width.is_none() && requested_height.is_none() {
+        desktop_window_anchor(&window)?
+    } else {
+        registration.anchor
+    };
+    if let Ok(mut windows) = state.desktop_windows.lock() {
+        if let Some(current) = windows.get_mut(window.label()) {
+            current.anchor = anchor;
+        }
+    }
+    let (width, height) = desktop_window_target_size(
+        &window,
+        &registration.spec,
+        anchor,
+        expanded,
+        requested_width,
+        requested_height,
+    )?;
+    animate_window_anchored(
+        &window,
+        width,
+        height,
+        anchor,
+        if reduced_motion {
+            Duration::ZERO
+        } else {
+            Duration::from_millis(220)
+        },
+    )?;
+    Ok(DesktopWindowTransition {
+        anchor: anchor.as_str(),
+    })
+}
+
+#[tauri::command]
+fn hide_current_window(window: tauri::WebviewWindow) {
+    let _ = window.hide();
+}
+
+#[tauri::command]
+fn show_current_window(window: tauri::WebviewWindow) {
+    let _ = window.show();
+}
+
+#[tauri::command]
+fn configure_desktop_plugin_window(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, BackendState>,
+    spec: DesktopWindowSpec,
+) -> Result<(), String> {
+    let spec = spec.sanitized();
+    state
+        .desktop_windows
+        .lock()
+        .map_err(|_| "desktop window state lock failed".to_string())?
+        .insert(
+            window.label().to_string(),
+            DesktopWindowRegistration {
+                spec: spec.clone(),
+                anchor: HorizontalAnchor::Right,
+            },
+        );
+    window
+        .set_size(tauri::LogicalSize::new(
+            spec.collapsed_width,
+            spec.collapsed_height,
+        ))
+        .map_err(|error| error.to_string())?;
+    place_window_bottom_right(&window, &spec)
+}
+
+#[tauri::command]
+fn show_main_window(app: tauri::AppHandle) {
+    reveal_main_window(&app);
+}
+
+#[tauri::command]
+fn quit_app(app: tauri::AppHandle, state: tauri::State<'_, BackendState>) {
+    state.quitting.store(true, Ordering::SeqCst);
+    stop_backend(state.inner());
+    app.exit(0);
 }
 
 #[tauri::command]
@@ -109,6 +336,8 @@ fn main() {
     let state = BackendState {
         api_base: Mutex::new(None),
         child: Mutex::new(None),
+        desktop_windows: Mutex::new(HashMap::new()),
+        quitting: AtomicBool::new(false),
     };
 
     tauri::Builder::default()
@@ -117,9 +346,7 @@ fn main() {
         // clobbering) (audit 20 S3).
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // Focus the existing window instead of starting a second instance.
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.set_focus();
-            }
+            reveal_main_window(app);
         }))
         .manage(state)
         .setup(|app| {
@@ -129,7 +356,7 @@ fn main() {
                     *state
                         .api_base
                         .lock()
-                        .map_err(|_| "backend state lock failed")? = Some(api_base);
+                        .map_err(|_| "backend state lock failed")? = Some(api_base.clone());
                     // Watch the backend process: if it dies mid-run (panic,
                     // fatal Python exception) the frontend gets an event and
                     // can show a recovery banner instead of silently failing
@@ -143,26 +370,84 @@ fn main() {
                     eprintln!("{}", msg);
                     #[cfg(windows)]
                     {
-                        let msg_wide: Vec<u16> = msg.encode_utf16().chain(std::iter::once(0)).collect();
+                        let msg_wide: Vec<u16> =
+                            msg.encode_utf16().chain(std::iter::once(0)).collect();
                         extern "system" {
-                            fn MessageBoxW(hwnd: isize, text: *const u16, caption: *const u16, utype: u32) -> i32;
+                            fn MessageBoxW(
+                                hwnd: isize,
+                                text: *const u16,
+                                caption: *const u16,
+                                utype: u32,
+                            ) -> i32;
                         }
-                        let caption: Vec<u16> = "LamCore 启动错误".encode_utf16().chain(std::iter::once(0)).collect();
+                        let caption: Vec<u16> = "LamCore 启动错误"
+                            .encode_utf16()
+                            .chain(std::iter::once(0))
+                            .collect();
                         unsafe { MessageBoxW(0, msg_wide.as_ptr(), caption.as_ptr(), 0x00000010) };
                     }
                     Err(e)
                 }
             }
         })
-        .invoke_handler(tauri::generate_handler![get_api_base, minimize_window, toggle_maximize_window, close_window, ping, get_app_info, pick_directory, open_external_url])
+        .invoke_handler(tauri::generate_handler![
+            get_api_base,
+            minimize_window,
+            toggle_maximize_window,
+            close_window,
+            start_window_dragging,
+            get_desktop_plugin_anchor,
+            set_desktop_plugin_expanded,
+            hide_current_window,
+            show_current_window,
+            configure_desktop_plugin_window,
+            show_main_window,
+            quit_app,
+            ping,
+            get_app_info,
+            pick_directory,
+            open_external_url
+        ])
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::Destroyed = event {
-                let state = window.state::<BackendState>();
-                stop_backend(state.inner());
+            let state = window.state::<BackendState>();
+            match event {
+                tauri::WindowEvent::CloseRequested { api, .. }
+                    if window.label() == "main" && !state.quitting.load(Ordering::SeqCst) =>
+                {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+                tauri::WindowEvent::Destroyed if window.label() == "main" => {
+                    stop_backend(state.inner());
+                }
+                tauri::WindowEvent::Destroyed if window.label().starts_with("desktop-plugin-") => {
+                    if let Ok(mut windows) = state.desktop_windows.lock() {
+                        windows.remove(window.label());
+                    }
+                }
+                _ => {}
             }
         })
-        .run(tauri::generate_context!())
-        .expect("failed to run LamCore");
+        .build(tauri::generate_context!())
+        .expect("failed to build LamCore")
+        .run(|app_handle, event| {
+            if matches!(event, tauri::RunEvent::Ready) {
+                if app_handle
+                    .get_webview_window("desktop-plugin-host")
+                    .is_some()
+                {
+                    eprintln!("[lamcore] desktop plugin host ready");
+                    return;
+                }
+                let app_handle = app_handle.clone();
+                thread::spawn(move || match create_desktop_plugin_host(&app_handle) {
+                    Ok(window) => {
+                        eprintln!("[lamcore] desktop plugin host created: {}", window.label())
+                    }
+                    Err(error) => eprintln!("[lamcore] desktop plugin host failed: {error}"),
+                });
+            }
+        });
 }
 
 // ---------------------------------------------------------------------------
@@ -183,19 +468,20 @@ fn start_backend(
     };
 
     let child = cmd.spawn()?;
-    *state.child.lock().map_err(|_| "backend state lock failed")? = Some(child);
+    *state
+        .child
+        .lock()
+        .map_err(|_| "backend state lock failed")? = Some(child);
 
     wait_for_health(port)?;
     Ok(api_base)
 }
 
 fn dev_backend_command(port: u16) -> Result<Command, Box<dyn std::error::Error>> {
-    // Resolve the core/ directory relative to the Cargo workspace root.
-    // src-tauri/ is two levels under core/desktop/, so go up three.
+    // Resolve core/ from core/desktop/src-tauri.
     let core_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()                      // src-tauri/
-        .and_then(|p| p.parent())      // desktop/
-        .and_then(|p| p.parent())      // core/
+        .parent() // desktop/
+        .and_then(|p| p.parent()) // core/
         .ok_or("cannot locate core/ directory")?
         .to_path_buf();
 
@@ -211,6 +497,10 @@ fn dev_backend_command(port: u16) -> Result<Command, Box<dyn std::error::Error>>
         // core/core.db locked (audit 20 S2). Tauri dev restarts are full
         // teardown anyway (AGENTS.md: exit completely, then tauri dev again).
         .current_dir(&core_dir)
+        // A src-layout checkout is not importable from core/ by default.
+        // Pin dev mode to this worktree instead of whichever editable
+        // lamtools_core installation happens to be active on the machine.
+        .env("PYTHONPATH", core_dir.join("src"))
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
@@ -276,9 +566,9 @@ fn find_backend_exe(app: &tauri::App) -> Result<PathBuf, Box<dyn std::error::Err
 
     // 3) Project dist directory (dev convenience)
     let project_dist = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()                         // src-tauri/ -> desktop/
-        .and_then(|p| p.parent())         // desktop/ -> core/
-        .and_then(|p| p.parent())         // core/ -> repo root
+        .parent() // src-tauri/ -> desktop/
+        .and_then(|p| p.parent()) // desktop/ -> core/
+        .and_then(|p| p.parent()) // core/ -> repo root
         .ok_or("cannot locate project root")?
         .join("dist")
         .join("LamCore")
@@ -366,6 +656,298 @@ fn spawn_backend_watcher(app_handle: tauri::AppHandle) {
             return;
         }
     });
+}
+
+// ---------------------------------------------------------------------------
+// Desktop plugin windows
+// ---------------------------------------------------------------------------
+
+fn create_desktop_plugin_host(
+    app: &tauri::AppHandle,
+) -> Result<WebviewWindow, Box<dyn std::error::Error>> {
+    let config = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|config| config.label == "desktop-plugin-host")
+        .cloned()
+        .ok_or("desktop plugin host window config is missing")?;
+    Ok(WebviewWindowBuilder::from_config(app, &config)?.build()?)
+}
+
+fn place_window_bottom_right(
+    window: &WebviewWindow,
+    spec: &DesktopWindowSpec,
+) -> Result<(), String> {
+    let monitor = window
+        .current_monitor()
+        .map_err(|error| error.to_string())?
+        .or(window
+            .primary_monitor()
+            .map_err(|error| error.to_string())?)
+        .ok_or_else(|| "no monitor available".to_string())?;
+    let scale = window.scale_factor().map_err(|error| error.to_string())?;
+    let width = (spec.collapsed_width * scale).round() as i32;
+    let height = (spec.collapsed_height * scale).round() as i32;
+    let margin = (spec.margin * scale).round() as i32;
+    let work_area = monitor.work_area();
+    let x = work_area.position.x + work_area.size.width as i32 - width - margin;
+    let y = work_area.position.y + work_area.size.height as i32 - height - margin;
+    window
+        .set_position(tauri::PhysicalPosition::new(x, y))
+        .map_err(|error| error.to_string())
+}
+
+fn desktop_window_anchor(window: &WebviewWindow) -> Result<HorizontalAnchor, String> {
+    let monitor = window
+        .current_monitor()
+        .map_err(|error| error.to_string())?
+        .or(window
+            .primary_monitor()
+            .map_err(|error| error.to_string())?)
+        .ok_or_else(|| "no monitor available".to_string())?;
+    let work_area = monitor.work_area();
+    let position = window.outer_position().map_err(|error| error.to_string())?;
+    let size = window.outer_size().map_err(|error| error.to_string())?;
+    Ok(horizontal_anchor_for_geometry(
+        position.x,
+        size.width,
+        work_area.position.x,
+        work_area.size.width,
+    ))
+}
+
+fn horizontal_anchor_for_geometry(
+    window_x: i32,
+    window_width: u32,
+    work_x: i32,
+    work_width: u32,
+) -> HorizontalAnchor {
+    let window_center = i64::from(window_x) * 2 + i64::from(window_width);
+    let work_center = i64::from(work_x) * 2 + i64::from(work_width);
+    if window_center < work_center {
+        HorizontalAnchor::Left
+    } else {
+        HorizontalAnchor::Right
+    }
+}
+
+fn desktop_window_target_size(
+    window: &WebviewWindow,
+    spec: &DesktopWindowSpec,
+    anchor: HorizontalAnchor,
+    expanded: bool,
+    requested_width: Option<f64>,
+    requested_height: Option<f64>,
+) -> Result<(f64, f64), String> {
+    if !expanded {
+        return Ok((spec.collapsed_width, spec.collapsed_height));
+    }
+    let monitor = window
+        .current_monitor()
+        .map_err(|error| error.to_string())?
+        .or(window
+            .primary_monitor()
+            .map_err(|error| error.to_string())?)
+        .ok_or_else(|| "no monitor available".to_string())?;
+    let work_area = monitor.work_area();
+    let position = window.outer_position().map_err(|error| error.to_string())?;
+    let size = window.outer_size().map_err(|error| error.to_string())?;
+    let scale = window.scale_factor().map_err(|error| error.to_string())?;
+    let margin = (spec.margin * scale).round() as i32;
+    let work_left = work_area.position.x + margin;
+    let work_right = work_area.position.x + work_area.size.width as i32 - margin;
+    let work_top = work_area.position.y + margin;
+    let old_right = position.x + size.width as i32;
+    let old_bottom = position.y + size.height as i32;
+    let available_width = match anchor {
+        HorizontalAnchor::Left => work_right - position.x,
+        HorizontalAnchor::Right => old_right - work_left,
+    };
+    let available_height = old_bottom - work_top;
+    let max_width = (f64::from(available_width.max(1)) / scale).max(spec.collapsed_width);
+    let max_height = (f64::from(available_height.max(1)) / scale).max(spec.collapsed_height);
+    Ok((
+        requested_width
+            .unwrap_or(spec.expanded_width)
+            .clamp(spec.collapsed_width, max_width),
+        requested_height
+            .unwrap_or(spec.expanded_height)
+            .clamp(spec.collapsed_height, max_height),
+    ))
+}
+
+fn adaptive_expanded_dimensions(
+    window: &WebviewWindow,
+    content_width: Option<f64>,
+    content_height: Option<f64>,
+    viewport_width: Option<f64>,
+    viewport_height: Option<f64>,
+    minimum_width: f64,
+    minimum_height: f64,
+) -> Result<(Option<f64>, Option<f64>), String> {
+    let size = window.outer_size().map_err(|error| error.to_string())?;
+    let scale = window.scale_factor().map_err(|error| error.to_string())?;
+    let current_width = f64::from(size.width) / scale;
+    let current_height = f64::from(size.height) / scale;
+    Ok((
+        content_width
+            .zip(viewport_width)
+            .and_then(|(content, viewport)| {
+                scaled_viewport_dimension(current_width, content, viewport, minimum_width)
+            }),
+        content_height
+            .zip(viewport_height)
+            .and_then(|(content, viewport)| {
+                scaled_viewport_dimension(current_height, content, viewport, minimum_height)
+            }),
+    ))
+}
+
+fn scaled_viewport_dimension(
+    current_dimension: f64,
+    requested_viewport_dimension: f64,
+    current_viewport_dimension: f64,
+    minimum_dimension: f64,
+) -> Option<f64> {
+    if !current_dimension.is_finite()
+        || !requested_viewport_dimension.is_finite()
+        || !current_viewport_dimension.is_finite()
+        || current_dimension <= 0.0
+        || requested_viewport_dimension <= 0.0
+        || current_viewport_dimension <= 0.0
+    {
+        return None;
+    }
+    Some(
+        (current_dimension * requested_viewport_dimension / current_viewport_dimension)
+            .max(minimum_dimension),
+    )
+}
+
+fn animate_window_anchored(
+    window: &WebviewWindow,
+    width: f64,
+    height: f64,
+    anchor: HorizontalAnchor,
+    duration: Duration,
+) -> Result<(), String> {
+    let start_position = window.outer_position().map_err(|error| error.to_string())?;
+    let start_size = window.outer_size().map_err(|error| error.to_string())?;
+    let scale = window.scale_factor().map_err(|error| error.to_string())?;
+    let target_width = (width * scale).round().max(1.0) as u32;
+    let target_height = (height * scale).round().max(1.0) as u32;
+    let fixed_x = match anchor {
+        HorizontalAnchor::Left => start_position.x,
+        HorizontalAnchor::Right => start_position.x + start_size.width as i32,
+    };
+    let fixed_bottom = start_position.y + start_size.height as i32;
+
+    let apply = |progress: f64| -> Result<(), String> {
+        let current_width = lerp_u32(start_size.width, target_width, progress);
+        let current_height = lerp_u32(start_size.height, target_height, progress);
+        let (x, y) =
+            anchored_position(fixed_x, fixed_bottom, current_width, current_height, anchor);
+        window
+            .set_size(tauri::PhysicalSize::new(current_width, current_height))
+            .map_err(|error| error.to_string())?;
+        window
+            .set_position(tauri::PhysicalPosition::new(x, y))
+            .map_err(|error| error.to_string())
+    };
+
+    if duration.is_zero() {
+        return apply(1.0);
+    }
+    let steps = 14u32;
+    let step_duration = duration / steps;
+    for step in 1..=steps {
+        let linear = f64::from(step) / f64::from(steps);
+        let eased = 1.0 - (1.0 - linear).powi(4);
+        apply(eased)?;
+        if step < steps {
+            thread::sleep(step_duration);
+        }
+    }
+    Ok(())
+}
+
+fn lerp_u32(start: u32, end: u32, progress: f64) -> u32 {
+    (f64::from(start) + (f64::from(end) - f64::from(start)) * progress)
+        .round()
+        .max(1.0) as u32
+}
+
+fn anchored_position(
+    fixed_x: i32,
+    fixed_bottom: i32,
+    width: u32,
+    height: u32,
+    anchor: HorizontalAnchor,
+) -> (i32, i32) {
+    let x = match anchor {
+        HorizontalAnchor::Left => fixed_x,
+        HorizontalAnchor::Right => fixed_x - width as i32,
+    };
+    (x, fixed_bottom - height as i32)
+}
+
+#[cfg(test)]
+mod desktop_window_tests {
+    use super::{
+        anchored_position, horizontal_anchor_for_geometry, scaled_viewport_dimension,
+        HorizontalAnchor,
+    };
+
+    #[test]
+    fn chooses_inward_expansion_from_each_monitor_half() {
+        assert_eq!(
+            horizontal_anchor_for_geometry(40, 256, 0, 1920),
+            HorizontalAnchor::Left
+        );
+        assert_eq!(
+            horizontal_anchor_for_geometry(1600, 256, 0, 1920),
+            HorizontalAnchor::Right
+        );
+    }
+
+    #[test]
+    fn expansion_preserves_bottom_left_anchor() {
+        assert_eq!(
+            anchored_position(24, 1040, 440, 680, HorizontalAnchor::Left),
+            (24, 360)
+        );
+    }
+
+    #[test]
+    fn expansion_preserves_bottom_right_anchor() {
+        assert_eq!(
+            anchored_position(1896, 1040, 440, 680, HorizontalAnchor::Right),
+            (1456, 360)
+        );
+    }
+
+    #[test]
+    fn adaptive_dimension_scales_from_the_rendered_viewport() {
+        assert_eq!(
+            scaled_viewport_dimension(680.0, 320.0, 460.0, 288.0),
+            Some(473.04347826086956)
+        );
+        assert_eq!(
+            scaled_viewport_dimension(680.0, 120.0, 460.0, 288.0),
+            Some(288.0)
+        );
+        assert_eq!(scaled_viewport_dimension(680.0, 320.0, 0.0, 288.0), None);
+    }
+}
+
+fn reveal_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
 }
 
 #[cfg(windows)]

@@ -19,6 +19,7 @@ MANIFEST_DEPENDENCIES_KEY = "dependencies"
 MANIFEST_TOOLS_KEY = "tools"
 MANIFEST_OPERATIONS_KEY = "operations"
 MANIFEST_CONFIG_SCHEMA_KEY = "configSchema"
+MANIFEST_DESKTOP_KEY = "desktop"
 
 
 def _appdata_root() -> Path:
@@ -220,6 +221,28 @@ class PluginRegistry:
                 mcp_files = [root / ".mcp.json"]
             elif (root / "mcp" / "mcp.json").exists():
                 mcp_files = [root / "mcp" / "mcp.json"]
+        desktop_raw = raw.get(MANIFEST_DESKTOP_KEY)
+        desktop_entry: Path | None = None
+        desktop_title = ""
+        desktop_window: dict[str, Any] = {}
+        if desktop_raw is not None:
+            if not isinstance(desktop_raw, dict):
+                raise ValueError(f"plugin desktop manifest must be an object: {manifest_path}")
+            entries = self._paths(root, desktop_raw.get("entry"))
+            if (
+                len(entries) != 1
+                or entries[0].suffix.lower() != ".html"
+                or not entries[0].is_file()
+            ):
+                raise ValueError(
+                    f"plugin desktop.entry must name one existing './'-relative HTML file: {manifest_path}"
+                )
+            desktop_entry = entries[0]
+            desktop_title = str(desktop_raw.get("title") or name).strip() or name
+            raw_window = desktop_raw.get("window")
+            if raw_window is not None and not isinstance(raw_window, dict):
+                raise ValueError(f"plugin desktop.window must be an object: {manifest_path}")
+            desktop_window = dict(raw_window or {})
         enabled = self.state_store.is_enabled(name) if self.state_store else True
         return PluginManifest(
             name=name,
@@ -245,6 +268,9 @@ class PluginRegistry:
                 if raw.get(MANIFEST_CONFIG_SCHEMA_KEY)
                 else None
             ),
+            desktop_entry=desktop_entry,
+            desktop_title=desktop_title,
+            desktop_window=desktop_window,
             raw=dict(raw),
         )
 

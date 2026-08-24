@@ -13,6 +13,12 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
+    rollupOptions: {
+      input: {
+        main: resolve(__dirname, 'index.html'),
+        desktopPluginHost: resolve(__dirname, 'desktop-plugin-host.html'),
+      },
+    },
   },
   server: {
     port: 5173,
