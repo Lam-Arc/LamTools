@@ -6,9 +6,9 @@
     <title>LamTools Desktop Plugin</title>
     <style>
       * { box-sizing: border-box; }
-      html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: transparent; }
+      html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; color-scheme: dark; background: transparent !important; background-color: rgba(0, 0, 0, 0) !important; }
       body { font: 13px/1.5 system-ui, "Microsoft YaHei UI", sans-serif; }
-      iframe { display: block; width: 100%; height: 100%; border: 0; background: transparent; }
+      iframe { display: block; width: 100%; height: 100%; border: 0; color-scheme: dark; background: transparent !important; background-color: rgba(0, 0, 0, 0) !important; }
       #host-error {
         display: none;
         width: 100%;
@@ -27,6 +27,7 @@
     <iframe
       id="plugin-frame"
       title="LamTools 桌面插件"
+      allowtransparency="true"
       sandbox="allow-forms allow-same-origin allow-scripts"
     ></iframe>
     <main id="host-error" role="alert"></main>

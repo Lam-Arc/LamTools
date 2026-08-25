@@ -100,6 +100,28 @@
   };
   var dragGesture = null;
   var suppressPetToggleClick = false;
+  var pointerPassthrough = null;
+  var pointerPassthroughTimer = 0;
+
+  function isInteractiveRenderedPoint(x, y) {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+    var target = document.elementFromPoint(x, y);
+    return target instanceof Element && !!target.closest('[data-pet-hit-surface]');
+  }
+
+  async function pollPointerPassthrough() {
+    var cursor = await invoke('get_desktop_plugin_cursor_position');
+    if (cursor && Number.isFinite(cursor.x) && Number.isFinite(cursor.y)) {
+      var nextPassthrough = !isInteractiveRenderedPoint(cursor.x, cursor.y);
+      if (nextPassthrough !== pointerPassthrough) {
+        var applied = await invoke('set_desktop_plugin_cursor_passthrough', {
+          passthrough: nextPassthrough
+        });
+        if (applied === nextPassthrough) pointerPassthrough = nextPassthrough;
+      }
+    }
+    pointerPassthroughTimer = window.setTimeout(pollPointerPassthrough, 16);
+  }
 
   function setEmotion(id) {
     ball.setEmotion(id);
@@ -845,10 +867,14 @@
     ball.setActive(!event.matches);
     if (event.matches) ball.renderStatic();
   });
-  window.addEventListener('beforeunload', closeSocket);
+  window.addEventListener('beforeunload', function () {
+    window.clearTimeout(pointerPassthroughTimer);
+    closeSocket();
+  });
 
   rememberCollapsedViewport();
   applyAnchor('right');
+  pollPointerPassthrough();
   loadSessions(true);
   window.setInterval(function () { loadSessions(false); }, 3000);
 })();

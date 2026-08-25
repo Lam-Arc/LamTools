@@ -19,15 +19,26 @@ use std::{
 use std::os::windows::process::CommandExt;
 
 use serde::{Deserialize, Serialize};
-use tauri::{Emitter, Manager, WebviewWindow, WebviewWindowBuilder};
+use tauri::{
+    menu::{Menu, MenuEvent, MenuItem},
+    tray::TrayIconBuilder,
+    Emitter, Manager, WebviewWindow, WebviewWindowBuilder,
+};
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+const DESKTOP_PLUGIN_WINDOW_LABEL: &str = "desktop-plugin-host";
+const TRAY_ID: &str = "lamtools-tray";
+const TRAY_TOGGLE_PET_ID: &str = "tray-toggle-pet";
+const TRAY_OPEN_MAIN_ID: &str = "tray-open-main";
+const TRAY_QUIT_ID: &str = "tray-quit";
 
 struct BackendState {
     api_base: Mutex<Option<String>>,
     child: Mutex<Option<Child>>,
     desktop_windows: Mutex<HashMap<String, DesktopWindowRegistration>>,
+    tray_pet_item: Mutex<Option<MenuItem<tauri::Wry>>>,
     quitting: AtomicBool,
 }
 
@@ -65,6 +76,14 @@ impl HorizontalAnchor {
 struct DesktopWindowRegistration {
     spec: DesktopWindowSpec,
     anchor: HorizontalAnchor,
+    ignoring_cursor_events: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopCursorPosition {
+    x: f64,
+    y: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -236,22 +255,74 @@ fn set_desktop_plugin_expanded(
 }
 
 #[tauri::command]
-fn hide_current_window(window: tauri::WebviewWindow) {
-    let _ = window.hide();
+fn get_desktop_plugin_cursor_position(
+    window: tauri::WebviewWindow,
+) -> Result<DesktopCursorPosition, String> {
+    let cursor = window
+        .cursor_position()
+        .map_err(|error| error.to_string())?;
+    let position = window.inner_position().map_err(|error| error.to_string())?;
+    let scale = window.scale_factor().map_err(|error| error.to_string())?;
+    let (x, y) = logical_cursor_position(
+        cursor.x,
+        cursor.y,
+        f64::from(position.x),
+        f64::from(position.y),
+        scale,
+    );
+    Ok(DesktopCursorPosition { x, y })
 }
 
 #[tauri::command]
-fn show_current_window(window: tauri::WebviewWindow) {
+fn set_desktop_plugin_cursor_passthrough(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, BackendState>,
+    passthrough: bool,
+) -> Result<bool, String> {
+    let should_update = state
+        .desktop_windows
+        .lock()
+        .map_err(|_| "desktop window state lock failed".to_string())?
+        .get(window.label())
+        .map(|registration| registration.ignoring_cursor_events != passthrough)
+        .ok_or_else(|| "desktop plugin window is not registered".to_string())?;
+    if should_update {
+        window
+            .set_ignore_cursor_events(passthrough)
+            .map_err(|error| error.to_string())?;
+        if let Some(registration) = state
+            .desktop_windows
+            .lock()
+            .map_err(|_| "desktop window state lock failed".to_string())?
+            .get_mut(window.label())
+        {
+            registration.ignoring_cursor_events = passthrough;
+        }
+    }
+    Ok(passthrough)
+}
+
+#[tauri::command]
+fn hide_current_window(window: tauri::WebviewWindow, app: tauri::AppHandle) {
+    let _ = window.hide();
+    sync_pet_tray_item(&app);
+}
+
+#[tauri::command]
+fn show_current_window(window: tauri::WebviewWindow, app: tauri::AppHandle) {
     let _ = window.show();
+    sync_pet_tray_item(&app);
 }
 
 #[tauri::command]
 fn configure_desktop_plugin_window(
     window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
     state: tauri::State<'_, BackendState>,
     spec: DesktopWindowSpec,
 ) -> Result<(), String> {
     let spec = spec.sanitized();
+    make_desktop_plugin_window_transparent(&window)?;
     state
         .desktop_windows
         .lock()
@@ -261,6 +332,7 @@ fn configure_desktop_plugin_window(
             DesktopWindowRegistration {
                 spec: spec.clone(),
                 anchor: HorizontalAnchor::Right,
+                ignoring_cursor_events: false,
             },
         );
     window
@@ -269,7 +341,9 @@ fn configure_desktop_plugin_window(
             spec.collapsed_height,
         ))
         .map_err(|error| error.to_string())?;
-    place_window_bottom_right(&window, &spec)
+    place_window_bottom_right(&window, &spec)?;
+    sync_pet_tray_item(&app);
+    Ok(())
 }
 
 #[tauri::command]
@@ -328,6 +402,107 @@ fn open_external_url(url: String) -> Result<(), String> {
     open::that(url).map_err(|e| e.to_string())
 }
 
+fn sync_pet_tray_item(app: &tauri::AppHandle) {
+    let state = app.state::<BackendState>();
+    let plugin_enabled = state
+        .desktop_windows
+        .lock()
+        .map(|windows| windows.contains_key(DESKTOP_PLUGIN_WINDOW_LABEL))
+        .unwrap_or(false);
+    let visible = plugin_enabled
+        && app
+            .get_webview_window(DESKTOP_PLUGIN_WINDOW_LABEL)
+            .and_then(|window| window.is_visible().ok())
+            .unwrap_or(false);
+
+    if let Ok(item) = state.tray_pet_item.lock() {
+        if let Some(item) = item.as_ref() {
+            let _ = item.set_enabled(plugin_enabled);
+            let _ = item.set_text(if visible {
+                "隐藏桌宠"
+            } else {
+                "显示桌宠"
+            });
+        }
+    };
+}
+
+fn make_desktop_plugin_window_transparent(window: &WebviewWindow) -> Result<(), String> {
+    window
+        .set_background_color(Some(tauri::utils::config::Color(0, 0, 0, 0)))
+        .map_err(|error| error.to_string())?;
+    window.set_shadow(false).map_err(|error| error.to_string())
+}
+
+fn logical_cursor_position(
+    cursor_x: f64,
+    cursor_y: f64,
+    window_x: f64,
+    window_y: f64,
+    scale: f64,
+) -> (f64, f64) {
+    ((cursor_x - window_x) / scale, (cursor_y - window_y) / scale)
+}
+
+fn toggle_desktop_plugin_window(app: &tauri::AppHandle) {
+    let state = app.state::<BackendState>();
+    let plugin_enabled = state
+        .desktop_windows
+        .lock()
+        .map(|windows| windows.contains_key(DESKTOP_PLUGIN_WINDOW_LABEL))
+        .unwrap_or(false);
+    if !plugin_enabled {
+        sync_pet_tray_item(app);
+        return;
+    }
+
+    if let Some(window) = app.get_webview_window(DESKTOP_PLUGIN_WINDOW_LABEL) {
+        if window.is_visible().unwrap_or(false) {
+            let _ = window.hide();
+        } else {
+            let _ = window.show();
+        }
+    }
+    sync_pet_tray_item(app);
+}
+
+fn handle_tray_menu(app: &tauri::AppHandle, event: MenuEvent) {
+    match event.id().as_ref() {
+        TRAY_TOGGLE_PET_ID => toggle_desktop_plugin_window(app),
+        TRAY_OPEN_MAIN_ID => reveal_main_window(app),
+        TRAY_QUIT_ID => {
+            let state = app.state::<BackendState>();
+            quit_app(app.clone(), state);
+        }
+        _ => {}
+    }
+}
+
+fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    let toggle_pet = MenuItem::with_id(app, TRAY_TOGGLE_PET_ID, "显示桌宠", false, None::<&str>)?;
+    let open_main = MenuItem::with_id(app, TRAY_OPEN_MAIN_ID, "打开界面", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, TRAY_QUIT_ID, "退出", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&toggle_pet, &open_main, &quit])?;
+
+    let mut builder = TrayIconBuilder::with_id(TRAY_ID)
+        .menu(&menu)
+        .tooltip("LamTools")
+        .show_menu_on_left_click(true)
+        .on_menu_event(handle_tray_menu);
+    if let Some(icon) = app.default_window_icon().cloned() {
+        builder = builder.icon(icon);
+    }
+    builder.build(app)?;
+
+    let state = app.state::<BackendState>();
+    state
+        .tray_pet_item
+        .lock()
+        .map_err(|_| "tray state lock failed")?
+        .replace(toggle_pet);
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // App entry point
 // ---------------------------------------------------------------------------
@@ -337,6 +512,7 @@ fn main() {
         api_base: Mutex::new(None),
         child: Mutex::new(None),
         desktop_windows: Mutex::new(HashMap::new()),
+        tray_pet_item: Mutex::new(None),
         quitting: AtomicBool::new(false),
     };
 
@@ -357,6 +533,7 @@ fn main() {
                         .api_base
                         .lock()
                         .map_err(|_| "backend state lock failed")? = Some(api_base.clone());
+                    setup_tray(app)?;
                     // Watch the backend process: if it dies mid-run (panic,
                     // fatal Python exception) the frontend gets an event and
                     // can show a recovery banner instead of silently failing
@@ -398,6 +575,8 @@ fn main() {
             start_window_dragging,
             get_desktop_plugin_anchor,
             set_desktop_plugin_expanded,
+            get_desktop_plugin_cursor_position,
+            set_desktop_plugin_cursor_passthrough,
             hide_current_window,
             show_current_window,
             configure_desktop_plugin_window,
@@ -432,16 +611,19 @@ fn main() {
         .expect("failed to build LamCore")
         .run(|app_handle, event| {
             if matches!(event, tauri::RunEvent::Ready) {
-                if app_handle
-                    .get_webview_window("desktop-plugin-host")
-                    .is_some()
-                {
+                if let Some(window) = app_handle.get_webview_window(DESKTOP_PLUGIN_WINDOW_LABEL) {
+                    if let Err(error) = make_desktop_plugin_window_transparent(&window) {
+                        eprintln!("[lamcore] desktop plugin host transparency failed: {error}");
+                    }
                     eprintln!("[lamcore] desktop plugin host ready");
                     return;
                 }
                 let app_handle = app_handle.clone();
                 thread::spawn(move || match create_desktop_plugin_host(&app_handle) {
                     Ok(window) => {
+                        if let Err(error) = make_desktop_plugin_window_transparent(&window) {
+                            eprintln!("[lamcore] desktop plugin host transparency failed: {error}");
+                        }
                         eprintln!("[lamcore] desktop plugin host created: {}", window.label())
                     }
                     Err(error) => eprintln!("[lamcore] desktop plugin host failed: {error}"),
@@ -670,7 +852,7 @@ fn create_desktop_plugin_host(
         .app
         .windows
         .iter()
-        .find(|config| config.label == "desktop-plugin-host")
+        .find(|config| config.label == DESKTOP_PLUGIN_WINDOW_LABEL)
         .cloned()
         .ok_or("desktop plugin host window config is missing")?;
     Ok(WebviewWindowBuilder::from_config(app, &config)?.build()?)
@@ -896,9 +1078,21 @@ fn anchored_position(
 #[cfg(test)]
 mod desktop_window_tests {
     use super::{
-        anchored_position, horizontal_anchor_for_geometry, scaled_viewport_dimension,
-        HorizontalAnchor,
+        anchored_position, horizontal_anchor_for_geometry, logical_cursor_position,
+        scaled_viewport_dimension, HorizontalAnchor,
     };
+
+    #[test]
+    fn maps_physical_desktop_cursor_to_logical_webview_coordinates() {
+        assert_eq!(
+            logical_cursor_position(1810.0, 910.0, 1600.0, 700.0, 1.5),
+            (140.0, 140.0)
+        );
+        assert_eq!(
+            logical_cursor_position(140.0, 230.0, -160.0, -70.0, 2.0),
+            (150.0, 150.0)
+        );
+    }
 
     #[test]
     fn chooses_inward_expansion_from_each_monitor_half() {

@@ -1,6 +1,6 @@
 {
   "name": "emotion-ball-pet",
-  "version": "0.1.0",
+  "version": "0.2.8",
   "description": "Emotion Ball desktop companion for Core questions and approvals",
   "manifest_version": "1",
   "desktop": {
