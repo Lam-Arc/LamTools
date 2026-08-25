@@ -44,12 +44,20 @@
 }
 
 * { box-sizing: border-box; }
-html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: transparent; }
+html, body, #app { width: 100%; height: 100%; margin: 0; overflow: hidden; background: transparent !important; background-color: rgba(0, 0, 0, 0) !important; }
 body { color: var(--theme-main-text); font-family: var(--font-sans); font-size: .8125rem; }
 button, textarea { font: inherit; }
 button { -webkit-tap-highlight-color: transparent; }
 
-.pet-shell { position: relative; width: 100%; height: 100%; cursor: grab; }
+.pet-shell {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  cursor: grab;
+}
 .pet-shell.is-dragging { cursor: grabbing; }
 .pet-stage {
   position: absolute;
@@ -74,16 +82,20 @@ body.anchor-right .pet-stage { right: 0; left: auto; }
   border: 0;
   background: transparent;
   cursor: pointer;
-  pointer-events: auto;
+  pointer-events: none;
 }
 .ball {
   display: block;
   width: 154px;
   height: 154px;
   margin: 5px auto;
-  filter: drop-shadow(0 14px 18px rgba(0, 0, 0, 0.28));
+  filter: drop-shadow(0 4px 6px rgba(0, 0, 0, 0.18));
+  pointer-events: none;
 }
-.ball > svg { width: 100%; height: 100%; overflow: visible; }
+.ball > svg { width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+.ball > svg [data-pet-hit-surface],
+.status-badge,
+.attention-dot { pointer-events: auto; }
 .status-badge {
   position: absolute;
   left: 50%;
@@ -332,5 +344,4 @@ button:disabled { cursor: default; opacity: .45; }
     animation-duration: .01ms !important;
     animation-iteration-count: 1 !important;
   }
-  .ball { filter: drop-shadow(0 10px 14px rgba(0, 0, 0, 0.22)); }
 }

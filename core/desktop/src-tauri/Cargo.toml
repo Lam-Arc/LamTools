@@ -1,6 +1,6 @@
 [package]
 name = "lamcore"
-version = "0.2.6"
+version = "0.2.8"
 description = "LamCore desktop app"
 authors = ["Lam"]
 edition = "2021"
@@ -11,7 +11,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tauri = { version = "2", features = ["protocol-asset"] }
+tauri = { version = "2", features = ["protocol-asset", "tray-icon"] }
 tauri-plugin-single-instance = "2"
 rfd = "0.17"
 # Opens URLs/files in the OS default application. Used to route clicked

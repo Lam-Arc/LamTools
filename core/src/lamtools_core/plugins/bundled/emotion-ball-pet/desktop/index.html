@@ -12,14 +12,14 @@
       <section class="pet-stage" aria-label="桌宠状态">
         <button id="petToggle" class="pet-toggle" type="button" aria-expanded="false" aria-controls="petPanel">
           <span id="ball" class="ball" aria-hidden="true"></span>
-          <span id="statusBadge" class="status-badge" data-tone="idle">正在连接</span>
-          <span id="attentionDot" class="attention-dot" hidden aria-hidden="true"></span>
+          <span id="statusBadge" class="status-badge" data-pet-hit-surface data-tone="idle">正在连接</span>
+          <span id="attentionDot" class="attention-dot" data-pet-hit-surface hidden aria-hidden="true"></span>
         </button>
       </section>
 
       <section id="queuePreviewThird" class="pet-panel queue-preview queue-preview-third" aria-hidden="true" hidden></section>
       <section id="queuePreviewSecond" class="pet-panel queue-preview queue-preview-second" aria-hidden="true" hidden></section>
-      <section id="petPanel" class="pet-panel" aria-label="待处理事项" hidden>
+      <section id="petPanel" class="pet-panel" data-pet-hit-surface aria-label="待处理事项" hidden>
         <section id="interactionCard" class="interaction-region" hidden aria-labelledby="interactionTitle">
           <header class="interaction-heading">
             <p id="interactionTitle">需要批准</p>

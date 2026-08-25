@@ -138,8 +138,15 @@
     var fxBack = el('g', { 'pointer-events': 'none' });
     svg.appendChild(fxBack);
 
-    var bodyG = el('g', {});
-    var head = el('path', { d: ringPath(headRing), fill: 'url(#' + id + 'g)', stroke: 'none', 'stroke-width': '2' });
+    var bodyG = el('g', { 'data-pet-hit-surface': '' });
+    var head = el('path', {
+      d: ringPath(headRing),
+      fill: 'url(#' + id + 'g)',
+      stroke: 'none',
+      'stroke-width': '2',
+      'pointer-events': 'visiblePainted',
+      'data-pet-hit-surface': ''
+    });
     bodyG.appendChild(head);
 
     function buildEye(k) {

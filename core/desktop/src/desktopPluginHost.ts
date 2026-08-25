@@ -21,6 +21,8 @@ const allowedCommands = new Set([
   'start_window_dragging',
   'get_desktop_plugin_anchor',
   'set_desktop_plugin_expanded',
+  'get_desktop_plugin_cursor_position',
+  'set_desktop_plugin_cursor_passthrough',
   'show_main_window',
   'hide_current_window',
   'quit_app',
@@ -40,6 +42,11 @@ async function showError(error: unknown): Promise<void> {
 }
 
 function commandArgs(message: PluginRequest): Record<string, unknown> {
+  if (message.command === 'set_desktop_plugin_cursor_passthrough') {
+    return {
+      passthrough: message.args?.passthrough === true,
+    }
+  }
   if (message.command === 'set_desktop_plugin_expanded') {
     const contentWidth = Number(message.args?.contentWidth)
     const contentHeight = Number(message.args?.contentHeight)
