@@ -124,6 +124,12 @@ LamTools/
 - Plugin marketplace (planned)
 - macOS / Linux installers (planned)
 
+## Research outputs / Citation
+
+- Technical paper / preprint: [LamTools: A Local-First Agent Runtime with Capability-Aware Delegation](https://doi.org/10.5281/zenodo.22040870)
+- Archived software release: [LamTools v0.2.6](https://doi.org/10.5281/zenodo.22039646)
+- Citation metadata: [CITATION.cff](./CITATION.cff)
+
 ## License
 
 MIT, Copyright (c) 2026 Lam (Laaaaaaaam)

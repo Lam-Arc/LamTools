@@ -1,0 +1,97 @@
+{
+  "software_version": "v0.2.6",
+  "software_commit": "dd54b7fdd57f4eb0926f1dd3a94fbf2c2bb0fd8a",
+  "metric_definition": "Any-gold document Recall@k after deduplicating returned document IDs; a multi-document question counts as a hit when any gold document appears.",
+  "mrr_definition": "Mean reciprocal rank of the first any-gold document; complete-set recall is not measured.",
+  "latency_definition": "Warm query-time latency retained in the source reports; p95 uses inclusive linear interpolation over the 14 per-question values.",
+  "derived": {
+    "bm25-only": {
+      "mode": "bm25-only",
+      "source_report": "e2e/rag-eval/reports/retrieval-none-20260815-095234.json",
+      "question_count": 14,
+      "aggregate": {
+        "any_gold_recall@1": 0.786,
+        "any_gold_recall@5": 0.857,
+        "any_gold_recall@10": 0.857,
+        "mrr_first_any_gold": 0.821,
+        "p95_warm_query_ms": 1.75
+      },
+      "ranks": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        null,
+        1,
+        1,
+        1,
+        1,
+        1,
+        null,
+        2,
+        1
+      ],
+      "latencies_ms": [
+        1.5,
+        1.3,
+        1.2,
+        1.0,
+        0.9,
+        1.0,
+        1.4,
+        1.4,
+        1.2,
+        1.3,
+        2.2,
+        0.8,
+        0.9,
+        1.2
+      ]
+    },
+    "local-hybrid": {
+      "mode": "local-hybrid",
+      "source_report": "e2e/rag-eval/reports/retrieval-local-20260815-101253.json",
+      "question_count": 14,
+      "aggregate": {
+        "any_gold_recall@1": 0.857,
+        "any_gold_recall@5": 1.0,
+        "any_gold_recall@10": 1.0,
+        "mrr_first_any_gold": 0.917,
+        "p95_warm_query_ms": 6.67
+      },
+      "ranks": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        3,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        2,
+        1
+      ],
+      "latencies_ms": [
+        7.0,
+        6.3,
+        5.6,
+        5.1,
+        4.8,
+        5.5,
+        6.2,
+        5.8,
+        5.5,
+        5.6,
+        6.5,
+        4.8,
+        5.2,
+        5.4
+      ]
+    }
+  }
+}

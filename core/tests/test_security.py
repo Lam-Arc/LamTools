@@ -23,7 +23,7 @@ from lamtools_core.app.factory import add_spa_fallback, create_app
 from lamtools_core.app.live_hub import CoreAppEventHub
 from lamtools_core.app.live_operations import CoreLiveContext
 from lamtools_core.app.live_router import create_core_live_router
-from lamtools_core.app.security import is_allowed_origin
+from lamtools_core.app.security import is_allowed_origin, is_same_server_origin
 from lamtools_core.app.snapshot_store import SqlAlchemyThreadSnapshotStore
 
 
@@ -88,12 +88,29 @@ def test_is_allowed_origin_units() -> None:
     assert is_allowed_origin("http://localhost:9999") is False
 
 
+def test_is_same_server_origin_uses_listener_not_host_header() -> None:
+    assert is_same_server_origin(
+        "http://127.0.0.1:56583", scheme="http", server=("127.0.0.1", 56583)
+    )
+    assert is_same_server_origin(
+        "http://127.0.0.1:56583", scheme="ws", server=("127.0.0.1", 56583)
+    )
+    assert not is_same_server_origin(
+        "http://evil.example:56583", scheme="http", server=("127.0.0.1", 56583)
+    )
+    assert not is_same_server_origin(
+        "http://127.0.0.1:9999", scheme="http", server=("127.0.0.1", 56583)
+    )
+
+
 def test_http_origin_check(tmp_path: pathlib.Path) -> None:
     client = _make_spa_app(tmp_path)
     # Non-browser clients (no Origin header) stay trusted.
     assert client.get("/api/health").status_code == 200
     # Allowed dev/Tauri origins pass.
     assert client.get("/api/health", headers={"Origin": "http://localhost:5173"}).status_code == 200
+    # Tauri's plugin document is served from Core's dynamic listener origin.
+    assert client.get("/api/health", headers={"Origin": "http://testserver"}).status_code == 200
     # Anything else is rejected on every path, not just /api.
     assert client.get("/api/health", headers={"Origin": "http://evil.example"}).status_code == 403
     assert client.get("/", headers={"Origin": "http://evil.example"}).status_code == 403
@@ -131,6 +148,12 @@ def test_websocket_origin_rejected(tmp_path: pathlib.Path) -> None:
             "/api/core/app-server", headers={"Origin": "http://evil.example"}
         ):
             pass  # pragma: no cover
+    with client.websocket_connect(
+        "/api/core/app-server", headers={"Origin": "http://testserver"}
+    ) as websocket:
+        websocket.send_json({"id": 1, "method": "initialize", "params": {"clientInfo": {"name": "pet"}}})
+        initialized = websocket.receive_json()
+        assert initialized["result"]["protocolVersion"] == "core.app_server.v1"
     # Non-browser WS client (no Origin) is accepted and can initialize.
     with client.websocket_connect("/api/core/app-server") as websocket:
         websocket.send_json({"id": 1, "method": "initialize", "params": {"clientInfo": {"name": "test"}}})

@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
+import statistics
 import sys
 import tempfile
 import time
@@ -124,8 +125,9 @@ def main() -> int:
             vec_total += legs.get("vec_hits", 0)
             fts_total += legs.get("fts_hits", 0)
             hit_ids = [h["doc_id"] for h in hits]
-            rank = next((i + 1 for i, d in enumerate(hit_ids) if d in golds), None)
-            rel5 = sum(1 for d in hit_ids[:5] if d in golds)
+            unique_hit_ids = list(dict.fromkeys(hit_ids))
+            rank = next((i + 1 for i, d in enumerate(unique_hit_ids) if d in golds), None)
+            rel5 = sum(1 for d in unique_hit_ids[:5] if d in golds)
             results.append(
                 {
                     "question": q,
@@ -140,7 +142,7 @@ def main() -> int:
                     "vec_hits": legs.get("vec_hits", 0),
                     "top_docs": [
                         next((p for p, i in path2id.items() if i == d), "?")
-                        for d in hit_ids[:3]
+                        for d in unique_hit_ids[:3]
                     ],
                 }
             )
@@ -150,7 +152,13 @@ def main() -> int:
             k: round(sum(r[k] for r in results) / n, 3)
             for k in ("r1", "r5", "r10", "p5", "mrr")
         }
-        agg["p95_ms"] = round(sorted(latencies)[max(0, int(n * 0.95) - 1)], 1)
+        if n == 1:
+            p95_ms = latencies[0]
+        else:
+            p95_ms = statistics.quantiles(
+                latencies, n=100, method="inclusive"
+            )[94]
+        agg["p95_ms"] = round(p95_ms, 1)
         passed = agg["r10"] >= 0.80
         print(f"\n=== 检索质量（{args.embed}，n={n}，golden 14 问）===")
         for k, v in agg.items():
@@ -175,7 +183,13 @@ def main() -> int:
         )
         out.write_text(
             json.dumps(
-                {"mode": f"embed={args.embed}", "aggregate": agg, "results": results},
+                {
+                    "mode": f"embed={args.embed}",
+                    "metric_definition": "any-gold document recall over deduplicated document ranks; multi-document questions count as a hit when any gold document appears",
+                    "latency_definition": "warm query-time latency; p95 uses inclusive linear interpolation over per-question values",
+                    "aggregate": agg,
+                    "results": results,
+                },
                 ensure_ascii=False,
                 indent=2,
             ),

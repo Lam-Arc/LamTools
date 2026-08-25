@@ -8,6 +8,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 import logging
+from urllib.parse import quote
 
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
@@ -617,6 +618,63 @@ def create_core_agent_http_app(
     @app.get("/api/core/config/providers")
     async def list_config_providers() -> dict[str, Any]:
         return {"providers": _list_llm_provider_configs()}
+
+    async def _desktop_plugin_entries(*, enabled_only: bool = True) -> list[dict[str, Any]]:
+        actual = app_state.get("operations")
+        if not isinstance(actual, OperationCatalog):
+            raise HTTPException(status_code=503, detail="Core Agent is not ready")
+        result = await actual.execute("plugin.list", {})
+        if result.status != "ok":
+            raise HTTPException(status_code=503, detail=str(result.payload.get("error") or "Plugin registry unavailable"))
+        plugins = result.payload.get("plugins") if isinstance(result.payload, dict) else []
+        if not isinstance(plugins, list):
+            return []
+        return [
+            item
+            for item in plugins
+            if isinstance(item, dict)
+            and isinstance(item.get("desktop"), dict)
+            and (not enabled_only or item.get("enabled") is True)
+        ]
+
+    @app.get("/api/core/desktop-plugins")
+    async def list_desktop_plugins() -> dict[str, Any]:
+        plugins: list[dict[str, Any]] = []
+        for item in await _desktop_plugin_entries():
+            desktop = dict(item["desktop"])
+            entry = Path(str(desktop.get("entry") or ""))
+            if not entry.is_file():
+                continue
+            name = str(item.get("name") or "")
+            plugins.append({
+                "name": name,
+                "title": str(desktop.get("title") or name),
+                "entry_url": (
+                    f"/api/core/desktop-plugins/{quote(name, safe='')}/assets/"
+                    f"{quote(entry.name, safe='')}"
+                ),
+                "window": desktop.get("window") if isinstance(desktop.get("window"), dict) else {},
+            })
+        return {"plugins": plugins}
+
+    @app.get("/api/core/desktop-plugins/{plugin_name}/assets/{asset_path:path}")
+    async def desktop_plugin_asset(plugin_name: str, asset_path: str) -> FileResponse:
+        plugin = next(
+            (item for item in await _desktop_plugin_entries() if str(item.get("name") or "") == plugin_name),
+            None,
+        )
+        if plugin is None:
+            raise HTTPException(status_code=404, detail="Desktop plugin not found")
+        desktop = plugin.get("desktop")
+        entry = Path(str(desktop.get("entry") or "")).resolve() if isinstance(desktop, dict) else Path()
+        desktop_root = entry.parent
+        target = (desktop_root / asset_path).resolve()
+        if not target.is_relative_to(desktop_root) or not target.is_file():
+            raise HTTPException(status_code=404, detail="Desktop plugin asset not found")
+        # Desktop plugins can be updated independently while Core keeps the
+        # same loopback route. Do not let WebView2 pin stale HTML/JS in its
+        # memory cache across host reloads.
+        return FileResponse(target, headers={"Cache-Control": "no-store"})
 
     def attachment_store() -> CoreAttachmentStore:
         store = app_state.get("attachment_store")

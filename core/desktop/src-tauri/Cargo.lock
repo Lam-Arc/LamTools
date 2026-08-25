@@ -1860,7 +1860,7 @@ dependencies = [
 
 [[package]]
 name = "lamcore"
-version = "0.2.6"
+version = "0.2.8"
 dependencies = [
  "open",
  "rfd",

@@ -17,6 +17,7 @@ member products that run their own frontend on a different port.
 from __future__ import annotations
 
 import os
+from urllib.parse import urlsplit
 
 _DEFAULT_ORIGINS = frozenset({
     # vite dev servers (the ui proxy rewrites the browser origin to the
@@ -66,3 +67,37 @@ def is_allowed_origin(origin: str | None) -> bool:
     if not origin:
         return True
     return normalize_origin(origin) in _allowed_origins()
+
+
+def is_same_server_origin(
+    origin: str | None,
+    *,
+    scheme: str,
+    server: tuple[str, int] | None,
+) -> bool:
+    """Return whether ``origin`` exactly matches the ASGI listener.
+
+    Core can bind a random loopback port in Tauri. Unsafe same-origin browser
+    requests and WebSocket handshakes include that dynamic origin, so it
+    cannot live in the static allow-list. Comparing with ASGI's listener tuple
+    instead of the request Host header keeps DNS-rebinding origins rejected.
+    """
+    if not origin or not server:
+        return False
+    try:
+        parsed = urlsplit(origin)
+        origin_port = parsed.port or (443 if parsed.scheme.lower() == "https" else 80)
+    except ValueError:
+        return False
+    expected_scheme = {"ws": "http", "wss": "https"}.get(scheme.lower(), scheme.lower())
+    server_host, server_port = server
+    return (
+        parsed.scheme.lower() == expected_scheme
+        and (parsed.hostname or "").lower() == str(server_host).lower()
+        and origin_port == int(server_port)
+        and parsed.username is None
+        and parsed.password is None
+        and parsed.path in {"", "/"}
+        and not parsed.query
+        and not parsed.fragment
+    )

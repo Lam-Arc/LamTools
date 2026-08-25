@@ -26,6 +26,8 @@ _datas: list[tuple[str, str]] = [
     ("config/resources", "config/resources"),
     ("config/command", "config/command"),
     ("config/llm_adapters", "config/llm_adapters"),
+    # Bundled plugins may now include self-contained desktop UI assets.
+    ("src/lamtools_core/plugins/bundled", "resources/plugins/bundled"),
 ]
 
 # ---------------------------------------------------------------------------

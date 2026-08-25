@@ -976,3 +976,61 @@ async def test_core_config_routing_llm_client_uses_selected_model_output_limit_b
 
     assert [event.kind for event in events] == ["done"]
     assert captured == [8192]
+
+
+def test_core_http_serves_enabled_desktop_plugin_assets(
+    tmp_path: Path,
+    isolated_config_root: Path,
+) -> None:
+    _write_jsonc_config(isolated_config_root)
+    data_dir = tmp_path / "core-data"
+    app = create_core_agent_http_app(
+        model_id="model-record",
+        core_db=tmp_path / "core.db",
+        data_dir=data_dir,
+        work_root=tmp_path / "workspace",
+    )
+
+    with TestClient(app) as client:
+        listed = client.get("/api/core/desktop-plugins")
+        assert listed.status_code == 200
+        pet = next(item for item in listed.json()["plugins"] if item["name"] == "emotion-ball-pet")
+        assert pet["window"]["collapsedWidth"] == 256
+        assert pet["window"]["collapsedHeight"] == 288
+        assert pet["window"]["expandedWidth"] == 376
+        assert pet["window"]["expandedHeight"] == 680
+
+        html = client.get(pet["entry_url"])
+        script = client.get(
+            "/api/core/desktop-plugins/emotion-ball-pet/assets/pet.js"
+        )
+        escaped = client.get(
+            "/api/core/desktop-plugins/emotion-ball-pet/assets/%2E%2E/plugin.json"
+        )
+        assert html.status_code == 200
+        assert "LamTools 桌宠" in html.text
+        assert "x-frame-options" not in html.headers
+        assert html.headers["cross-origin-resource-policy"] == "cross-origin"
+        assert "http://127.0.0.1:*" in html.headers["content-security-policy"]
+        assert html.headers["cache-control"] == "no-store"
+        assert script.status_code == 200
+        assert "当前会话" not in html.text
+        assert "向 Core 提问" not in html.text
+        assert "turn/start" not in script.text
+        assert "approval/respond" in script.text
+        assert "toolName === 'question'" in script.text
+        assert "get_desktop_plugin_anchor" in script.text
+        assert 'id="queuePreviewSecond"' in html.text
+        assert 'id="queuePreviewThird"' in html.text
+        assert "if (a.status === 'waiting' && b.status === 'waiting')" in script.text
+        assert escaped.status_code == 404
+
+        (data_dir / "plugins.jsonc").write_text(
+            '{"plugins":{"emotion-ball-pet":{"enabled":false}}}',
+            encoding="utf-8",
+        )
+        disabled = client.get("/api/core/desktop-plugins")
+        disabled_asset = client.get(pet["entry_url"])
+
+    assert all(item["name"] != "emotion-ball-pet" for item in disabled.json()["plugins"])
+    assert disabled_asset.status_code == 404

@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' ws:; img-src 'self' data:; style-src 'self'; script-src 'self'">
+    <title>LamTools 桌宠</title>
+    <link rel="stylesheet" href="pet.css">
+  </head>
+  <body class="is-collapsed">
+    <main class="pet-shell" aria-label="LamTools 桌宠">
+      <section class="pet-stage" aria-label="桌宠状态">
+        <button id="petToggle" class="pet-toggle" type="button" aria-expanded="false" aria-controls="petPanel">
+          <span id="ball" class="ball" aria-hidden="true"></span>
+          <span id="statusBadge" class="status-badge" data-pet-hit-surface data-tone="idle">正在连接</span>
+          <span id="attentionDot" class="attention-dot" data-pet-hit-surface hidden aria-hidden="true"></span>
+        </button>
+      </section>
+
+      <section id="queuePreviewThird" class="pet-panel queue-preview queue-preview-third" aria-hidden="true" hidden></section>
+      <section id="queuePreviewSecond" class="pet-panel queue-preview queue-preview-second" aria-hidden="true" hidden></section>
+      <section id="petPanel" class="pet-panel" data-pet-hit-surface aria-label="待处理事项" hidden>
+        <section id="interactionCard" class="interaction-region" hidden aria-labelledby="interactionTitle">
+          <header class="interaction-heading">
+            <p id="interactionTitle">需要批准</p>
+            <span id="interactionKind" class="interaction-kind">Approval</span>
+          </header>
+          <p id="interactionMessage" class="interaction-message"></p>
+          <div id="interactionDetail" class="interaction-detail" hidden>
+            <p id="interactionDetailLabel" class="interaction-detail-label">运行命令</p>
+            <pre class="interaction-detail-value"><code id="interactionDetailValue"></code></pre>
+          </div>
+          <div id="approvalOptions" class="approval-options" hidden></div>
+          <div id="approvalActions" class="approval-actions">
+            <button id="denyButton" class="button secondary" type="button">拒绝</button>
+            <button id="approveButton" class="button primary" type="button">批准</button>
+          </div>
+          <form id="guidanceForm" class="guidance-form" hidden>
+            <label class="visually-hidden" for="guidanceInput">其他回答</label>
+            <textarea id="guidanceInput" rows="1" maxlength="2000" placeholder="其他回答…"></textarea>
+            <button id="guidanceSubmitButton" class="button primary" type="submit">提交</button>
+          </form>
+        </section>
+      </section>
+    </main>
+
+    <script src="vendor/rings.js"></script>
+    <script src="vendor/emotions.js"></script>
+    <script src="vendor/ball.js"></script>
+    <script src="vendor/engine.js"></script>
+    <script src="pet.js"></script>
+  </body>
+</html>
