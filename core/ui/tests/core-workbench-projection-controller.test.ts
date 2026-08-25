@@ -265,5 +265,6 @@ describe('useCoreWorkbenchProjectionController', () => {
     expect(assistant?.metadata?.shallowThinkingPending).toBeUndefined()
     expect(fixture.statusChanges).toEqual(['thread-a:completed'])
     expect(fixture.finished).toEqual(['thread-a:completed'])
+    expect(fixture.controller.processExpandedIds.value).toEqual(new Set())
   })
 })

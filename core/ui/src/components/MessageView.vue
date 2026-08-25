@@ -40,8 +40,7 @@
           </div>
           <template v-else>
             <div class="user-bubble">
-              <TypewriterText v-if="typingMessageIds?.has(msg.id)" :text="msg.content" />
-              <template v-else>{{ msg.content }}</template>
+              {{ msg.content }}
             </div>
           </template>
           <div v-if="attachmentParts(msg).length" class="message-attachment-list" aria-label="消息附件">
@@ -1143,7 +1142,19 @@
               </template>
             </div>
 
-            <div v-if="!isTimelineMessage(msg) && !isLiveMessage(msg)" class="process-stream process-stream--history">
+            <template v-if="!isTimelineMessage(msg) && !isLiveMessage(msg)">
+              <button
+                v-if="processSummary(msg).count > 0 && !isCompactionOnlyMessage(msg)"
+                type="button"
+                class="process-toggle"
+                @click="emit('toggle-process', msg.id)"
+              >
+                <span class="process-toggle-icon" :class="processBarStatus(msg)" />
+                <span class="process-toggle-text">{{ processSummary(msg).text }}</span>
+                <span class="process-toggle-hint">{{ isProcessExpanded(msg) ? '收起过程' : '查看过程' }}</span>
+              </button>
+
+            <div v-if="isProcessExpanded(msg)" class="process-stream process-stream--history">
               <template
                 v-for="group in compactGroups(groupParts(processParts(msg)))"
                 :key="group.kind === 'process-group' ? processGroupId(group) : group.part.id"
@@ -1604,6 +1615,24 @@
               </template>
             </div>
 
+            <div v-if="answerContent(msg)" class="assistant-answer">
+              <slot name="assistant-content" :content="answerContent(msg)">
+                <MarkdownRenderer class="part-text-content" :content="answerContent(msg)" />
+              </slot>
+            </div>
+            <template v-else>
+              <div
+                v-for="(group, gi) in textGroups(processParts(msg))"
+                :key="'history-txt-' + gi"
+                class="assistant-answer"
+              >
+                <slot name="assistant-content" :content="group.content">
+                  <MarkdownRenderer class="part-text-content" :content="group.content" />
+                </slot>
+              </div>
+            </template>
+            </template>
+
                       </template>
 
           <!-- Fallback: no parts → render flat content -->
@@ -1700,7 +1729,6 @@ import { Check, Copy, GitFork, Hourglass, Info, Pencil, Undo2, X, type LucideIco
 import { assistantSegmentTurnId } from '../appServer'
 import AutoTextarea from './AutoTextarea.vue'
 import MarkdownRenderer from './MarkdownRenderer.vue'
-import TypewriterText from './TypewriterText.vue'
 import MessageView from './MessageView.vue'
 import { autoFollowScrollDirective as vAutoFollowScroll } from '../directives/autoFollowScroll'
 import { panelEnter, panelLeave } from '../motion/expandPanel'
@@ -1788,8 +1816,6 @@ const props = withDefaults(
     assistantLabel?: string
     /** Set of message ids whose process section is expanded */
     processExpandedIds?: Set<string>
-    /** Set of message ids that should play a typewriter reveal */
-    typingMessageIds?: Set<string>
     /** Show hover actions (copy / fork / roll back) under assistant replies */
     messageActions?: boolean
     /** API base for building file raw URLs (e.g. /api/core); used for image artifact previews */
@@ -1814,7 +1840,6 @@ const props = withDefaults(
   {
     assistantLabel: 'Assistant',
     processExpandedIds: () => new Set(),
-    typingMessageIds: () => new Set(),
     messageActions: false,
     apiBase: '/api/core',
     projectId: null,

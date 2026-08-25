@@ -10,12 +10,11 @@
       v-for="msg in messages"
       :key="msg.id"
       :data-message-id="msg.id"
-      v-memo="[msg, assistantLabel, processExpandedIds.has(msg.id), typingMessageIds.has(msg.id), messageActions, turnActive, activeTurnId, checkpointTurnIds]"
+      v-memo="[msg, assistantLabel, processExpandedIds.has(msg.id), messageActions, turnActive, activeTurnId, checkpointTurnIds]"
       :motion-enter="!initialMessageIds.has(msg.id)"
       :msg="msg"
         :assistant-label="assistantLabel"
         :process-expanded-ids="processExpandedIds"
-        :typing-message-ids="typingMessageIds"
         :message-actions="messageActions"
       :api-base="apiBase"
       :project-id="projectId"
@@ -68,8 +67,6 @@ const props = withDefaults(
     assistantLabel?: string
     /** Set of message ids whose process section is expanded */
     processExpandedIds?: Set<string>
-    /** Set of message ids that should play a typewriter reveal */
-    typingMessageIds?: Set<string>
     /** Show hover actions (copy / fork / roll back) under assistant replies */
     messageActions?: boolean
     /** API base for building file raw URLs (e.g. /api/core); used for image artifact previews */
@@ -88,7 +85,6 @@ const props = withDefaults(
   {
     assistantLabel: 'Assistant',
     processExpandedIds: () => new Set(),
-    typingMessageIds: () => new Set(),
     messageActions: false,
     apiBase: '/api/core',
     projectId: null,

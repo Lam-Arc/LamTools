@@ -62,6 +62,17 @@ class TestWorkflowBuildSpecs:
             "workflow_update_node",
         ]
 
+    def test_port_value_has_a_model_schema_type(self):
+        specs = {spec.name: spec for spec in workflow_build_tool_specs()}
+        for name in ("workflow_add_node", "workflow_update_node"):
+            value = specs[name].input_schema["properties"]["ports"]["items"]["properties"]["value"]
+            assert value["type"] == "string"
+
+    def test_node_config_declares_runtime_fields(self):
+        specs = {spec.name: spec for spec in workflow_build_tool_specs()}
+        config = specs["workflow_add_node"].input_schema["properties"]["config"]
+        assert {"command", "script", "instruction", "workflow_name"} <= set(config["properties"])
+
 
 class TestWorkflowGraph:
     async def test_empty_graph_when_missing(self, handlers):

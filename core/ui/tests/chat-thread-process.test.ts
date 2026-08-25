@@ -1651,18 +1651,23 @@ describe('ChatThread process cards', () => {
     expect(wrapper.find('.reasoning-body').exists()).toBe(false);
   });
 
-  it('shows historical process sections directly with reasoning collapsed until opened', async () => {
+  it('collapses completed non-timeline process and keeps the latest answer visible', async () => {
     const messages: CoreMessage[] = [{
       id: 'm-process-reasoning',
       role: 'assistant',
-      content: 'Done.',
+      content: '最后一段输出',
       timestamp: '2026-06-18T00:00:00.000Z',
       parts: [{
         id: 'p-process-reasoning',
         partType: 'reasoning',
         status: 'completed',
         label: '思考',
-        content: 'Historical reasoning stays visible after completion.',
+        content: '上面的过程不应默认显示。',
+      }, {
+        id: 'p-previous-output',
+        partType: 'model_text',
+        status: 'completed',
+        content: '更早的一段输出不应显示。',
       }],
     }];
 
@@ -1673,15 +1678,22 @@ describe('ChatThread process cards', () => {
       },
     });
 
-    // Non-timeline history renders its process stream directly — no parent toggle
-    expect(wrapper.find('.process-toggle').exists()).toBe(false);
+    expect(wrapper.find('.process-toggle').exists()).toBe(true);
+    expect(wrapper.find('.process-stream--history').exists()).toBe(false);
+    expect(wrapper.text()).toContain('最后一段输出');
+    expect(wrapper.text()).not.toContain('更早的一段输出不应显示。');
+
+    await wrapper.find('.process-toggle').trigger('click');
+    expect(wrapper.emitted('toggle-process')).toEqual([['m-process-reasoning']]);
+    await wrapper.setProps({ processExpandedIds: new Set(['m-process-reasoning']) });
     const stream = wrapper.find('.process-stream--history');
     expect(stream.exists()).toBe(true);
     expect(stream.find('.reasoning-body').exists()).toBe(false);
+    expect(stream.text()).toContain('更早的一段输出不应显示。');
 
     await stream.find('.reasoning-toggle').trigger('click');
     expect(stream.find('.reasoning-body').exists()).toBe(true);
-    expect(stream.find('.reasoning-body').text()).toContain('Historical reasoning');
+    expect(stream.find('.reasoning-body').text()).toContain('上面的过程不应默认显示。');
   });
 
   it('does not create an internal scroll container for reasoning bodies', () => {

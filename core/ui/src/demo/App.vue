@@ -238,7 +238,6 @@
         <ChatThread
           :messages="messages"
           :process-expanded-ids="processExpandedIds"
-          :typing-message-ids="typingMessageIds"
           :message-actions="true"
           :api-base="apiBase"
           :project-id="activeProjectId ?? selectedProjectId"
@@ -459,7 +458,6 @@
                   <ChatThread
                     :messages="messages"
                     :process-expanded-ids="processExpandedIds"
-                    :typing-message-ids="typingMessageIds"
                     :message-actions="true"
                     :api-base="apiBase"
                     :project-id="activeProjectId ?? selectedProjectId"
@@ -491,7 +489,6 @@
             <ChatThread
               :messages="messages"
               :process-expanded-ids="processExpandedIds"
-              :typing-message-ids="typingMessageIds"
               :message-actions="true"
               :active-turn-id="activeTurnId"
               :turn-active="activeTurnRunning"
@@ -1187,7 +1184,6 @@ const projectionController = useCoreWorkbenchProjectionController({
 })
 const { messages, processExpandedIds, toggleProcess, hasMoreHistory, totalMessages, loadMoreHistory } = projectionController
 
-const typingMessageIds = ref(new Set<string>())
 const pendingPlaceholder = ref<{ id: string; content: string } | null>(null)
 const stepGroups = computed(() => buildCurrentTurnChecklistGroups(messages.value))
 
@@ -2519,13 +2515,10 @@ watch(selectedModelId, (modelId) => {
     .catch(() => { /* best-effort persistence */ })
 })
 
-watch(messages, async (newVal, oldVal) => {
+watch(messages, (newVal, oldVal) => {
   const oldIds = new Set((oldVal || []).map(m => m.id))
   const newUserMsgs = (newVal || []).filter(m => !oldIds.has(m.id) && m.role === 'user')
-  for (const msg of newUserMsgs) {
-    typingMessageIds.value.add(msg.id)
-    pendingPlaceholder.value = null
-  }
+  if (newUserMsgs.length > 0) pendingPlaceholder.value = null
   // 滚动跟随已统一由 ResizeObserver 单一通道驱动（见 syncThreadResizeObserver），
   // 这里不再重建 observer / 隐式滚动 —— 消除历史补丁堆叠。
 }, { deep: true })

@@ -591,7 +591,11 @@ def core_model_tools(
                     "name": spec.name,
                     "description": spec.description,
                     "strict": True,
-                    "parameters": deepcopy(spec.input_schema),
+                    # Every model-facing function is advertised as strict.
+                    # Normalize injected/durable/workflow schemas here as well
+                    # as the built-in schemas so every property is required,
+                    # optional values are nullable, and objects reject extras.
+                    "parameters": strict_tool_schema(spec.input_schema),
                 },
             }
         )
@@ -599,7 +603,17 @@ def core_model_tools(
 
 
 def strict_tool_schema(schema: dict[str, Any]) -> dict[str, Any]:
-    normalized = deepcopy(schema)
+    """Normalize a tool input schema for strict function calling.
+
+    Strict function schemas require every object to close its properties and
+    every declared property to be required.  Tool sources are intentionally
+    allowed to use ordinary JSON Schema (including optional fields), so this
+    adapter also converts optional fields to nullable fields.  The final
+    normalization is the single guard for built-in, plugin, MCP, durable, and
+    workflow tools.
+    """
+
+    normalized = deepcopy(schema) if isinstance(schema, dict) else {}
 
     def allow_null(node: dict[str, Any]) -> None:
         schema_type = node.get("type")
@@ -609,29 +623,120 @@ def strict_tool_schema(schema: dict[str, Any]) -> dict[str, Any]:
         elif isinstance(schema_type, list):
             if "null" not in schema_type:
                 node["type"] = [*schema_type, "null"]
+        elif isinstance(node.get("anyOf"), list):
+            branches = node["anyOf"]
+            if not any(
+                isinstance(branch, dict)
+                and (
+                    branch.get("type") == "null"
+                    or (
+                        isinstance(branch.get("type"), list)
+                        and "null" in branch["type"]
+                    )
+                )
+                for branch in branches
+            ):
+                branches.append({"type": "null"})
+        elif "$ref" in node:
+            original = deepcopy(node)
+            node.clear()
+            node["anyOf"] = [original, {"type": "null"}]
+        else:
+            # A property without a type is not a valid strict schema.  Use a
+            # scalar fallback for third-party/generic declarations; workflow
+            # schemas that genuinely need other types declare them explicitly.
+            node["type"] = ["string", "null"]
 
-    def visit(node: dict[str, Any]) -> None:
+    def infer_type(node: dict[str, Any]) -> None:
         schema_type = node.get("type")
-        is_object = (
+        if isinstance(schema_type, (str, list)):
+            return
+        if "properties" in node:
+            node["type"] = "object"
+        elif "items" in node:
+            node["type"] = "array"
+        elif isinstance(node.get("anyOf"), list) or "$ref" in node:
+            # anyOf/$ref are valid schema forms without a sibling type.
+            return
+        else:
+            # enum-only and empty third-party leaf schemas both need a type.
+            node["type"] = "string"
+
+    def is_object(node: dict[str, Any]) -> bool:
+        schema_type = node.get("type")
+        return (
             schema_type == "object"
             or (isinstance(schema_type, list) and "object" in schema_type)
             or "properties" in node
         )
-        if is_object:
-            properties = node.get("properties")
-            if isinstance(properties, dict):
-                originally_required = set(node.get("required") or [])
-                for key, child in properties.items():
-                    if isinstance(child, dict):
-                        if key not in originally_required:
-                            allow_null(child)
-                        visit(child)
-                node["required"] = list(properties.keys())
-            node["additionalProperties"] = False
-        items = node.get("items")
-        if isinstance(items, dict):
-            visit(items)
 
+    def is_array(node: dict[str, Any]) -> bool:
+        schema_type = node.get("type")
+        return schema_type == "array" or (
+            isinstance(schema_type, list) and "array" in schema_type
+        )
+
+    def visit(node: dict[str, Any]) -> None:
+        if not isinstance(node, dict):
+            return
+
+        # OpenAI strict mode supports anyOf but not oneOf.  No current core
+        # schema emits oneOf, yet normalizing it here keeps plugin schemas from
+        # being able to reintroduce an unsupported composition keyword.
+        if "oneOf" in node and "anyOf" not in node:
+            node["anyOf"] = node.pop("oneOf")
+
+        branches = node.get("anyOf")
+        if isinstance(branches, list):
+            for branch in branches:
+                if isinstance(branch, dict):
+                    visit(branch)
+
+        definitions = node.get("$defs")
+        if isinstance(definitions, dict):
+            for definition in definitions.values():
+                if isinstance(definition, dict):
+                    visit(definition)
+
+        infer_type(node)
+        if is_object(node):
+            properties = node.get("properties")
+            if not isinstance(properties, dict):
+                properties = {}
+                node["properties"] = properties
+            originally_required = set(node.get("required") or [])
+            for key, child in list(properties.items()):
+                if not isinstance(child, dict):
+                    child = {}
+                    properties[key] = child
+                visit(child)
+                if key not in originally_required:
+                    allow_null(child)
+            node["required"] = list(properties.keys())
+            node["additionalProperties"] = False
+        elif is_array(node):
+            items = node.get("items")
+            if not isinstance(items, dict):
+                # Strict validators require an item schema for model-facing
+                # arrays.  Keep the fallback concrete and nullable-safe.
+                node["items"] = {"type": "string"}
+            else:
+                visit(items)
+
+    root_type = normalized.get("type")
+    root_is_object = (
+        root_type == "object"
+        or (isinstance(root_type, list) and "object" in root_type)
+        or "properties" in normalized
+    )
+    if not root_is_object:
+        # Function parameters must always be a root object.  A malformed or
+        # generic plugin declaration must not turn the whole parameters node
+        # into a scalar/anyOf schema and make the API reject the request.
+        description = normalized.get("description")
+        normalized = {"type": "object", "properties": {}}
+        if description:
+            normalized["description"] = description
     visit(normalized)
     return normalized
 

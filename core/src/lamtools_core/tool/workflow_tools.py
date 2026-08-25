@@ -54,14 +54,18 @@ def workflow_tool_specs(enrolled: list[WorkflowDef]) -> list[ToolSpec]:
             entry: dict[str, Any] = {}
             if desc:
                 entry["description"] = desc
-            json_type = _json_type(ptype)
-            if json_type:
-                entry["type"] = json_type
+            # ``any`` is a runtime compatibility type, not a JSON Schema
+            # type.  Use a concrete, provider-compatible fallback at the
+            # model boundary instead of emitting an untyped property.
+            entry["type"] = _json_type(ptype)
             properties[name] = entry
             required.append(name)
-        schema: dict[str, Any] = {"type": "object", "properties": properties}
-        if required:
-            schema["required"] = required
+        schema: dict[str, Any] = {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": properties,
+            "required": required,
+        }
         specs.append(
             ToolSpec(
                 name=tool_name,
@@ -174,7 +178,7 @@ def workflow_tool_provider(
     return get
 
 
-def _json_type(type_name: str) -> str | None:
+def _json_type(type_name: str) -> str:
     mapping = {
         "text": "string",
         "string": "string",
@@ -183,10 +187,14 @@ def _json_type(type_name: str) -> str | None:
         "int": "integer",
         "boolean": "boolean",
         "bool": "boolean",
+        "array": "array",
         "json": "object",
         "object": "object",
     }
-    return mapping.get(str(type_name or "").strip().lower())  # "any" -> None
+    # ``any`` (and legacy/unknown type names) has no direct JSON Schema type.
+    # A string is the safest provider-compatible fallback; the workflow
+    # runtime still accepts richer values when called internally.
+    return mapping.get(str(type_name or "").strip().lower(), "string")
 
 
 def _from_operation(call: ToolCall, result: Any) -> ToolResult:

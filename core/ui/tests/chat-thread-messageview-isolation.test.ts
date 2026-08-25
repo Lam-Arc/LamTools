@@ -8,11 +8,11 @@ let lastRenderedIds: string[] = []
 vi.mock('../src/components/MessageView.vue', () => ({
   default: defineComponent({
     name: 'MessageViewMock',
+    inheritAttrs: false,
     props: {
       msg: { type: Object, required: true },
       assistantLabel: { type: String, default: 'Assistant' },
       processExpandedIds: { type: Set, default: () => new Set() },
-      typingMessageIds: { type: Set, default: () => new Set() },
       messageActions: { type: Boolean, default: false },
     },
     setup(props, { slots }) {

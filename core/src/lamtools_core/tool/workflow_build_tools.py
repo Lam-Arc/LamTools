@@ -35,9 +35,61 @@ def workflow_build_tool_specs() -> list[ToolSpec]:
             "type": {"type": "string"},
             "direction": {"type": "string", "enum": ["in", "out"]},
             "description": {"type": "string"},
-            "value": {"description": "Constant value for a content node's output port."},
+            # Content values are serialized through the model tool boundary.
+            # Keep the boundary scalar and let strict_tool_schema make this
+            # optional field nullable; an untyped leaf is rejected by strict
+            # function-schema validators before the request is sent.
+            "value": {
+                "type": "string",
+                "description": "Constant value for a content node's output port.",
+            },
         },
         "required": ["name", "direction"],
+    }
+    config_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            # AI / agent node settings
+            "mode": {"type": "string", "enum": ["single", "loop", "agent"]},
+            "instruction": {"type": "string"},
+            "system_prompt": {"type": "string"},
+            "goal": {"type": "string"},
+            "output_format_text": {"type": "string"},
+            "model_id": {"type": "string"},
+            "agent": {"type": "string"},
+            "reasoning_effort": {"type": "string"},
+            "temperature": {"type": "number"},
+            "top_p": {"type": "number"},
+            "max_tokens": {"type": "integer"},
+            "loop_max_iterations": {"type": "integer"},
+            "tools": {"type": "array", "items": {"type": "string"}},
+            "allowed_tools": {"type": "array", "items": {"type": "string"}},
+            # Subgraph node settings
+            "workflow_name": {"type": "string"},
+            "iterate": {"type": "string", "enum": ["none", "loop", "map"]},
+            "max_iterations": {"type": "integer"},
+            "condition": {"type": "string"},
+            # Command / script node settings
+            "command": {"type": "string"},
+            "cwd": {"type": "string"},
+            "env": {"type": "object", "properties": {}},
+            "timeout": {"type": "number"},
+            "script": {"type": "string"},
+            # Shared execution/error settings
+            "retries": {"type": "integer"},
+            "on_error": {
+                "type": "object",
+                "properties": {
+                    "strategy": {"type": "string", "enum": ["abort", "fallback", "skip"]},
+                    "fallback_port": {"type": "string"},
+                    "error_value": {"type": "string"},
+                },
+            },
+            # Legacy action-node migration field.
+            "action_type": {"type": "string"},
+        },
+        "required": [],
     }
     return [
         ToolSpec(
@@ -84,7 +136,7 @@ def workflow_build_tool_specs() -> list[ToolSpec]:
             input_schema=_schema({
                 "kind": node_kind,
                 "title": {"type": "string"},
-                "config": {"type": "object"},
+                "config": config_schema,
                 "ports": {"type": "array", "items": port_schema},
                 "position": {"type": "object", "properties": {"x": {"type": "number"}, "y": {"type": "number"}}},
                 "node_id": {"type": "string", "description": "Optional explicit node id (auto-generated if omitted)"},
@@ -128,7 +180,7 @@ def workflow_build_tool_specs() -> list[ToolSpec]:
             input_schema=_schema({
                 "node_id": {"type": "string"},
                 "title": {"type": "string"},
-                "config": {"type": "object"},
+                "config": config_schema,
                 "ports": {"type": "array", "items": port_schema},
                 "position": {"type": "object", "properties": {"x": {"type": "number"}, "y": {"type": "number"}}},
             }, required=["node_id"]),

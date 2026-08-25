@@ -132,6 +132,95 @@ def test_strict_tool_schema_closes_nullable_object_properties(tmp_path):
     assert arguments["additionalProperties"] is False
 
 
+def _assert_strict_schema(node, path="schema"):
+    assert isinstance(node, dict), f"{path} must be an object"
+    assert any(key in node for key in ("type", "anyOf", "$ref")), (
+        f"{path} has no type/anyOf/$ref: {node}"
+    )
+
+    schema_type = node.get("type")
+    is_object = schema_type == "object" or (
+        isinstance(schema_type, list) and "object" in schema_type
+    ) or "properties" in node
+    if is_object:
+        properties = node.get("properties")
+        assert isinstance(properties, dict), f"{path}.properties must be an object"
+        assert node.get("additionalProperties") is False, f"{path} is open"
+        assert set(node.get("required") or []) == set(properties), (
+            f"{path}.required does not cover every property"
+        )
+        for key, child in properties.items():
+            _assert_strict_schema(child, f"{path}.properties.{key}")
+
+    is_array = schema_type == "array" or (
+        isinstance(schema_type, list) and "array" in schema_type
+    )
+    if is_array:
+        assert isinstance(node.get("items"), dict), f"{path}.items is missing"
+        _assert_strict_schema(node["items"], f"{path}.items")
+
+    for index, branch in enumerate(node.get("anyOf") or []):
+        _assert_strict_schema(branch, f"{path}.anyOf[{index}]")
+    for name, definition in (node.get("$defs") or {}).items():
+        _assert_strict_schema(definition, f"{path}.$defs.{name}")
+
+
+def test_all_model_tool_schemas_are_strict_compatible(tmp_path):
+    from lamtools_core.runtime.workflow import (
+        WorkflowDef,
+        WorkflowInputParam,
+        WorkflowNode,
+        WorkflowPort,
+    )
+    from lamtools_core.tool import ToolSpec
+    from lamtools_core.tool.default_toolbox import (
+        bundled_core_tool_specs,
+        core_model_tools,
+        default_core_tool_specs,
+    )
+    from lamtools_core.tool.durable_tools import durable_tool_specs
+    from lamtools_core.tool.workflow_build_tools import workflow_build_tool_specs
+    from lamtools_core.tool.workflow_tools import workflow_tool_specs
+    from lamtools_core.plugins.manager_tools import plugin_manager_tool_specs
+
+    workflow = WorkflowDef(
+        name="dynamic",
+        nodes=[
+            WorkflowNode(
+                id="input",
+                kind="command",
+                ports=[WorkflowPort(name="payload", type="any")],
+            )
+        ],
+        input_params=[WorkflowInputParam(name="items", type="array")],
+    )
+    specs = [
+        *default_core_tool_specs(),
+        *bundled_core_tool_specs(),
+        *durable_tool_specs(goal=True, arrange=True),
+        *workflow_build_tool_specs(),
+        *plugin_manager_tool_specs(),
+        *workflow_tool_specs([workflow]),
+        ToolSpec(name="empty_schema", input_schema={}),
+        ToolSpec(
+            name="untyped_property",
+            input_schema={
+                "type": "object",
+                "properties": {"value": {}},
+            },
+        ),
+        ToolSpec(name="malformed_root", input_schema={"description": "no parameters"}),
+    ]
+
+    definitions = core_model_tools(specs)
+    assert len(definitions) == len(specs)
+    for definition in definitions:
+        _assert_strict_schema(
+            definition["function"]["parameters"],
+            definition["function"]["name"],
+        )
+
+
 def test_core_toolbox_exposes_generic_tool_specs(tmp_path):
     toolbox = build_core_toolbox(work_root=tmp_path)
 
