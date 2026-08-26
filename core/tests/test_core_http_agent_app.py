@@ -1018,7 +1018,7 @@ def test_core_http_serves_enabled_desktop_plugin_assets(
         assert script.status_code == 200
         assert "当前会话" not in html.text
         assert "向 Core 提问" not in html.text
-        assert "turn/start" not in script.text
+        assert "turn/start" in script.text
         assert "/api/core/desktop-plugins/emotion-ball-pet/session" in script.text
         assert "/api/core/sessions" not in script.text
         assert "approval/respond" in script.text

@@ -85,6 +85,9 @@
     petCardInput: $('petCardInput'),
     petCardInputWrap: $('petCardInputWrap'),
     petCardTitle: $('petCardTitle'),
+    petComposer: $('petComposer'),
+    petComposerInput: $('petComposerInput'),
+    petComposerSend: $('petComposerSend'),
     petPanel: $('petPanel'),
     petShell: document.querySelector('.pet-shell'),
     petToggle: $('petToggle'),
@@ -113,6 +116,8 @@
     reconnectTimer: 0,
     connected: false,
     sessionRecoveryAttempted: false,
+    connectionPromise: null,
+    clientMessageId: 1,
     running: false,
     interaction: null,
     autoExpandedRequestId: '',
@@ -497,7 +502,7 @@
     var delay = Math.min(10000, 500 * Math.pow(2, state.reconnectAttempt++));
     state.reconnectTimer = window.setTimeout(function () {
       state.reconnectTimer = 0;
-      if (generation === state.connectionGeneration) connectSession(state.sessionId, true);
+      if (generation === state.connectionGeneration) startPetConnection(true);
     }, delay);
   }
 
@@ -575,6 +580,53 @@
     if (!sessionId) throw new Error('桌宠专属会话响应缺少 session_id');
     state.sessionId = sessionId;
     return sessionId;
+  }
+
+  function startPetConnection(reconnecting) {
+    if (state.connectionPromise) return state.connectionPromise;
+    var session = state.sessionId
+      ? Promise.resolve(state.sessionId)
+      : ensurePetSession();
+    state.connectionPromise = session
+      .then(function (sessionId) { return connectSession(sessionId, !!reconnecting); })
+      .finally(function () { state.connectionPromise = null; });
+    return state.connectionPromise;
+  }
+
+  async function sendPetTurn(options) {
+    options = options || {};
+    var text = String(options.text || '').trim();
+    var attachments = Array.isArray(options.attachments) ? options.attachments : [];
+    var input = [];
+    if (text) input.push({ type: 'text', text: text });
+    attachments.forEach(function (attachment) {
+      if (!attachment || typeof attachment !== 'object') return;
+      var id = String(attachment.attachment_id || attachment.id || '').trim();
+      if (!id) return;
+      input.push({
+        type: 'attachment',
+        attachment_id: id,
+        filename: attachment.filename || '',
+        mime_type: attachment.mime_type || '',
+        preview_type: attachment.preview_type || '',
+        size: attachment.size
+      });
+    });
+    if (input.length === 0) throw new Error('请输入消息内容');
+    if (!state.connected || !state.socket || state.socket.readyState !== WebSocket.OPEN) {
+      await startPetConnection(false);
+    }
+    if (!state.connected || !state.socket || state.socket.readyState !== WebSocket.OPEN) {
+      throw new Error('Core App Server 尚未连接');
+    }
+    var response = await rpcRequest('turn/start', {
+      thread_id: state.sessionId,
+      client_message_id: 'pet-' + Date.now() + '-' + state.clientMessageId++,
+      input: input
+    }, 60000);
+    state.running = true;
+    setStatus('正在处理', 'idle', '32');
+    return response;
   }
 
   function handleSocketMessage(messageEvent) {
@@ -907,6 +959,16 @@
   elements.approveButton.addEventListener('click', function () { respondApproval('approve_once'); });
   elements.denyButton.addEventListener('click', function () { respondApproval('deny'); });
   elements.petCardClose.addEventListener('click', function () { hideCard('user'); });
+  elements.petComposer.addEventListener('submit', function (event) {
+    event.preventDefault();
+    var text = elements.petComposerInput.value.trim();
+    if (!text) return;
+    elements.petComposerSend.disabled = true;
+    sendPetTurn({ text: text })
+      .then(function () { elements.petComposerInput.value = ''; })
+      .catch(showError)
+      .finally(function () { elements.petComposerSend.disabled = false; });
+  });
   elements.guidanceForm.addEventListener('submit', function (event) {
     event.preventDefault();
     var guidance = elements.guidanceInput.value.trim();
@@ -940,4 +1002,5 @@
   window.showCard = showCard;
   window.hideCard = hideCard;
   window.promoteCardToPanel = promoteCardToPanel;
+  window.sendPetTurn = sendPetTurn;
 })();
