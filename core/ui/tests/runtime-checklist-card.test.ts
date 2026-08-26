@@ -15,13 +15,16 @@ const stepGroups: CoreRuntimeStepGroup[] = [{
 }]
 
 describe('RuntimeChecklistCard', () => {
-  it('shows the previous completed step and current deliverables in the compact view', () => {
+  it('shows only the current step number in the compact view', () => {
     const wrapper = mount(RuntimeChecklistCard, { props: { stepGroups } })
 
     expect(wrapper.find('.runtime-checklist-card').exists()).toBe(true)
-    expect(wrapper.find('.runtime-checklist-card__compact-title').text()).toBe('第 2：完成验证')
+    expect(wrapper.find('.runtime-checklist-card__compact-icon').text()).toBe('2')
+    expect(wrapper.find('.runtime-checklist-card__compact-title').exists()).toBe(false)
+    expect(wrapper.find('.runtime-checklist-card__compact-row .runtime-checklist-card__status').exists()).toBe(false)
     expect(wrapper.find('.runtime-checklist-card__compact-row').text()).not.toContain('测试报告')
     expect(wrapper.find('.runtime-checklist-card__compact-row').text()).not.toContain('截图')
+    expect(wrapper.get('.runtime-checklist-card').attributes('aria-label')).toBe('当前步骤：第 2 步，完成验证，运行中')
     expect(wrapper.find('.runtime-checklist-card__previous').exists()).toBe(false)
     expect(wrapper.find('.runtime-checklist-card__current').exists()).toBe(false)
     expect(wrapper.find('.runtime-checklist-card__details').isVisible()).toBe(false)
@@ -60,10 +63,10 @@ describe('RuntimeChecklistCard', () => {
     })
 
     expect(wrapper.find('.runtime-checklist-card').exists()).toBe(true)
-    expect(wrapper.find('.runtime-checklist-card__compact-title').text()).toContain('整理交付')
-    expect(wrapper.find('.runtime-checklist-card__compact-row .runtime-checklist-card__status').text()).toBe('失败')
-    expect(wrapper.find('.runtime-checklist-card__compact-row').classes()).not.toContain('is-running')
-    expect(wrapper.find('.runtime-checklist-card__compact-row .runtime-checklist-card__indicator--running').exists()).toBe(false)
+    expect(wrapper.find('.runtime-checklist-card__compact-icon').text()).toBe('3')
+    expect(wrapper.find('.runtime-checklist-card__compact-icon').classes()).toContain('is-failed')
+    expect(wrapper.find('.runtime-checklist-card__compact-row .runtime-checklist-card__status').exists()).toBe(false)
+    expect(wrapper.get('.runtime-checklist-card').attributes('aria-label')).toBe('当前步骤：第 3 步，整理交付，失败')
   })
 
   it('hides when the current turn has no running or failed step', () => {

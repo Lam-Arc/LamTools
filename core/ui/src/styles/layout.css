@@ -2848,25 +2848,7 @@
   white-space: pre-wrap;
   word-break: break-word;
 }
-.part-text-content--streaming::after {
-  content: "";
-  display: inline-block;
-  width: 1px;
-  height: 1em;
-  margin-left: 2px;
-  transform: translateY(2px);
-  background: currentColor;
-  opacity: .62;
-  animation: stream-caret 900ms steps(2, start) infinite;
-}
-@keyframes stream-caret {
-  50% { opacity: 0; }
-}
 @media (prefers-reduced-motion: reduce) {
-  .part-text-content--streaming::after {
-    animation: none;
-    opacity: 0;
-  }
   .shallow-thinking-dots span {
     animation: none;
     opacity: 1;
@@ -2877,7 +2859,7 @@
   }
 }
 
-/* Running and historical process stream */
+/* Shared process stream; live/complete only add state decoration. */
 .process-stream {
   width: 100%;
   display: grid;
@@ -2891,41 +2873,8 @@
 .process-stream--live {
   animation: stream-enter .16s ease-out both;
 }
-.process-stream--secondary {
-  margin-top: 8px;
-  margin-bottom: 4px;
-  padding-top: 6px;
-  padding-bottom: 6px;
-  color: color-mix(in srgb, var(--theme-main-text, #fff) 42%, transparent);
-}
-.process-stream--secondary .process-current-title {
-  color: color-mix(in srgb, var(--theme-main-text, #fff) 58%, transparent);
-  font-weight: 620;
-}
-.process-stream--history {
-  margin-top: 6px;
+.process-stream--complete {
   color: color-mix(in srgb, var(--theme-main-text, #fff) 50%, transparent);
-}
-.process-current {
-  display: grid;
-  grid-template-columns: auto minmax(82px, max-content) minmax(0, 1fr);
-  gap: 8px;
-  align-items: baseline;
-  min-width: 0;
-  padding: 2px 0 3px;
-}
-.process-current-title {
-  color: color-mix(in srgb, var(--theme-main-text, #fff) 82%, transparent);
-  font-size: 13px;
-  font-weight: 720;
-}
-.process-current-detail {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: color-mix(in srgb, var(--theme-main-text, #fff) 50%, transparent);
-  font-size: 12px;
 }
 
 .process-timeline {
@@ -3059,7 +3008,7 @@
   color: color-mix(in srgb, var(--theme-main-text, #fff) 58%, transparent);
 }
 
-.process-toggle {
+.process-summary {
   width: fit-content;
   max-width: 100%;
   min-height: 30px;
@@ -3077,36 +3026,50 @@
   cursor: pointer;
   transition: background .14s ease, border-color .14s ease, color .14s ease;
 }
-.process-toggle:hover {
+.process-summary:hover {
   background: color-mix(in srgb, var(--theme-main-text, #fff) 5%, transparent);
   border-color: color-mix(in srgb, var(--theme-main-text, #fff) 14%, transparent);
   color: color-mix(in srgb, var(--theme-main-text, #fff) 72%, transparent);
 }
-.process-toggle-icon {
+.process-summary-icon {
   width: 7px;
   height: 7px;
   border-radius: 50%;
   background: color-mix(in srgb, var(--theme-main-text, #fff) 30%, transparent);
   flex: 0 0 auto;
 }
-.process-toggle-icon.part-dot--running {
+.process-summary-icon.part-dot--running {
   background: var(--theme-main-text, #fff);
   animation: part-pulse 1s ease-in-out infinite;
 }
-.process-toggle-icon.part-dot--completed {
+.process-summary-icon.part-dot--completed {
   background: var(--theme-main-text, #fff);
 }
-.process-toggle-icon.part-dot--error {
+.process-summary-icon.part-dot--error {
   background: color-mix(in srgb, var(--theme-main-text, #fff) 30%, var(--red) 70%);
 }
-.process-toggle-text {
+.process-summary-text {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.process-toggle-hint {
+.process-summary-hint {
   color: color-mix(in srgb, var(--theme-main-text, #fff) 34%, transparent);
+}
+.process-summary-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 78%, transparent);
+  font-weight: 620;
+}
+.process-summary-detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: color-mix(in srgb, var(--theme-main-text, #fff) 50%, transparent);
 }
 
 .stream-spinner {

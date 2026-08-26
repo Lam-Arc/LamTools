@@ -1,9 +1,9 @@
 ﻿<template>
-  <!-- Streaming: incremental DOM rendering (only the tail segment is rebuilt
-       per tick — full innerHTML replacement was O(content) per frame and made
-       long streams stutter). Non-streaming keeps the single-shot v-html. -->
-  <div v-if="streaming" ref="streamRoot" class="markdown-body" />
-  <div v-else ref="root" class="markdown-body" v-html="renderedHtml" />
+  <!-- One stable DOM shell for both modes. Streaming only changes how the
+       content node is filled; it never swaps the root or content container. -->
+  <div class="markdown-renderer" :class="{ 'markdown-renderer--streaming': streaming }">
+    <div ref="contentRoot" class="markdown-renderer__content markdown-body" />
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -44,8 +44,7 @@ const props = withDefaults(
   },
 )
 
-const root = ref<HTMLElement | null>(null)
-const streamRoot = ref<HTMLElement | null>(null)
+const contentRoot = ref<HTMLElement | null>(null)
 
 // ── Mermaid init ──
 let mermaidApi: typeof import('mermaid').default | null = null
@@ -298,7 +297,7 @@ function clearStreamedSegments(): void {
 }
 
 function renderStreamingIncremental(content: string): void {
-  const container = streamRoot.value
+  const container = contentRoot.value
   if (!container) return
   const blocks = normalizeMarkdownLineBreaks(content).split(/\n{2,}/)
   const segments = streamedSegments
@@ -344,7 +343,7 @@ function renderStreaming(content: string): string {
 const renderedHtml = computed(() => {
   if (!props.content) return ''
 
-  // Streaming mode renders via renderStreamingIncremental into streamRoot —
+  // Streaming mode renders via renderStreamingIncremental into contentRoot —
   // the v-html path is not used (and must not re-render the whole stream).
   if (props.streaming) return ''
 
@@ -383,13 +382,19 @@ const renderedHtml = computed(() => {
   return html
 })
 
+function renderStaticHtml(html: string): void {
+  if (!contentRoot.value) return
+  clearStreamedSegments()
+  contentRoot.value.innerHTML = html
+}
+
 // ── Render mermaid diagrams after DOM update ──
 async function renderMermaidDiagrams() {
-  if (!root.value || mermaidBlocks.length === 0) return
+  if (!contentRoot.value || mermaidBlocks.length === 0) return
   const mermaid = await ensureMermaid()
   if (!mermaid) return
 
-  const placeholders = root.value.querySelectorAll<HTMLElement>('.mermaid-placeholder')
+  const placeholders = contentRoot.value.querySelectorAll<HTMLElement>('.mermaid-placeholder')
   for (const placeholder of placeholders) {
     const id = placeholder.dataset.mermaidId
     const block = mermaidBlocks.find((b) => b.id === id)
@@ -403,19 +408,21 @@ async function renderMermaidDiagrams() {
   }
 }
 
-watch(renderedHtml, async () => {
+watch(renderedHtml, async (html) => {
   await nextTick()
+  if (props.streaming) return
+  renderStaticHtml(html)
   await renderMermaidDiagrams()
 })
 
 // Streaming ticks: incrementally render only the tail segment. flush:'post'
-// guarantees streamRoot is mounted/updated before we touch its children.
+// guarantees contentRoot is mounted/updated before we touch its children.
 watch(() => props.content, (value) => {
   if (props.streaming) renderStreamingIncremental(value)
 }, { flush: 'post' })
 
-// Leaving streaming mode hands the DOM back to the v-html branch; drop the
-// incremental state (the streamRoot subtree is destroyed by the v-if switch).
+// Leaving streaming mode keeps the same content node and replaces only its
+// contents with the static renderer output.
 watch(() => props.streaming, (streaming) => {
   if (!streaming) clearStreamedSegments()
 })
@@ -480,15 +487,14 @@ function onRootClick(event: MouseEvent) {
 }
 
 onMounted(async () => {
-  root.value?.addEventListener('click', onRootClick, true)
-  streamRoot.value?.addEventListener('click', onRootClick, true)
+  contentRoot.value?.addEventListener('click', onRootClick, true)
   if (props.streaming) renderStreamingIncremental(props.content)
+  else renderStaticHtml(renderedHtml.value)
   await renderMermaidDiagrams()
 })
 
 onBeforeUnmount(() => {
-  root.value?.removeEventListener('click', onRootClick, true)
-  streamRoot.value?.removeEventListener('click', onRootClick, true)
+  contentRoot.value?.removeEventListener('click', onRootClick, true)
   clearStreamedSegments()
 })
 

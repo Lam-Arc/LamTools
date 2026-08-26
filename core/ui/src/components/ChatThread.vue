@@ -307,19 +307,15 @@ const initialMessageIds = new Set(props.messages.map((m) => m.id))
 .part-dot--running { color: var(--theme-main-text, #fff); }
 
 /* ── Expandable tool cards ── */
-.process-stream--history {
+.process-stream {
   align-items: stretch;
   counter-reset: reasoning-step;
 }
-.process-stream--live,
-.process-stream--inline {
-  counter-reset: reasoning-step;
-}
-.process-stream--history .process-step {
+.process-stream .process-step {
   max-width: 100%;
 }
-.chat-thread .process-stream--history .process-step--context,
-.chat-thread .process-stream--history .process-step--tool {
+.chat-thread .process-step--context,
+.chat-thread .process-step--tool {
   display: block !important;
   grid-template-columns: none !important;
 }
@@ -334,11 +330,11 @@ const initialMessageIds = new Set(props.messages.map((m) => m.id))
   box-shadow: none;
   overflow: visible;
 }
-.process-stream--history .process-step--tool + .process-step--tool {
+.process-stream .process-step--tool + .process-step--tool {
   margin-top: 2px;
 }
-.process-stream--history .process-step--tool:has(.tool-card-header--command) + .process-step--tool,
-.process-stream--history .process-step--tool + .process-step--tool:has(.tool-card-header--command) {
+.process-stream .process-step--tool:has(.tool-card-header--command) + .process-step--tool,
+.process-stream .process-step--tool + .process-step--tool:has(.tool-card-header--command) {
   margin-top: 8px;
 }
 .tool-card-header {

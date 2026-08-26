@@ -2271,11 +2271,47 @@ class TestKernelModelCall:
             MockKitStep(decision="done"),
         ])
         llm = MockLLMClient()
-        kernel = _make_kernel(kit, llm_client=llm)
+        sink = CollectingEventSink()
+        kernel = _make_kernel(kit, llm_client=llm, event_sink=sink)
 
         result = await kernel.run(_make_turn_input())
 
         assert llm.call_count == 2
+        usage_events = [event for event in sink.events if event.name == "runtime.usage"]
+        assert len(usage_events) == 2
+        assert [event.payload["usage"]["llm_calls"] for event in usage_events] == [1, 1]
+
+    @pytest.mark.asyncio
+    async def test_streamed_response_emits_one_canonical_usage_event(self):
+        class OneResponseStreamLLM:
+            async def stream(self, request: LLMRequest):
+                _ = request
+                yield LLMStreamEvent(kind="content_delta", content="hello")
+                yield LLMStreamEvent(kind="done", metadata={"finish_reason": "stop"})
+
+            async def complete(self, request: LLMRequest) -> LLMResponse:
+                raise AssertionError("streaming fixture must not fall back to complete()")
+
+        sink = CollectingEventSink()
+        kernel = _make_kernel(
+            MockRuntimeKit(steps=[MockKitStep(decision="done")]),
+            llm_client=OneResponseStreamLLM(),
+            event_sink=sink,
+        )
+
+        await kernel.run(_make_turn_input())
+
+        usage_events = [event for event in sink.events if event.name == "runtime.usage"]
+        terminal_events = [
+            event for event in sink.events
+            if event.name == "runtime.reply_delta" and "done" in (event.tags or [])
+        ]
+        assert len(usage_events) == 1
+        assert usage_events[0].payload["usage"] == {"llm_calls": 1}
+        assert len(terminal_events) == 1
+        assert terminal_events[0].payload["usage_reported_separately"] is True
+        projected = core_events_to_run_items(sink.events, thread_id="session-1")
+        assert len([item for item in projected if item.kind == "usage"]) == 1
 
     @pytest.mark.asyncio
     async def test_model_failure_retries(self):

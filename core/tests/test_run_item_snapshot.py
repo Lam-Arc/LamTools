@@ -162,6 +162,32 @@ def test_terminal_status_metrics_preserve_exact_usage_without_double_counting_ca
     }
 
 
+def test_snapshot_sums_one_call_for_each_model_usage_event():
+    events = [
+        RunItemEvent(
+            kind="usage",
+            thread_id="thread-1",
+            event_id="event-call-1",
+            turn_id="turn-1",
+            seq=1,
+            usage={"input_tokens": 10, "llm_calls": 1},
+        ),
+        RunItemEvent(
+            kind="usage",
+            thread_id="thread-1",
+            event_id="event-call-2",
+            turn_id="turn-1",
+            seq=2,
+            usage={"input_tokens": 20, "llm_calls": 1},
+        ),
+    ]
+
+    snapshot = reduce_run_item_events("thread-1", events)
+
+    assert snapshot["turns"]["turn-1"]["usage"]["llm_calls"] == 2
+    assert snapshot["turns"]["turn-1"]["usage"]["input_tokens"] == 30
+
+
 def test_snapshot_tracks_tool_call_and_result_items():
     events = [
         RunItemEvent(

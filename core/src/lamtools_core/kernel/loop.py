@@ -569,15 +569,19 @@ class CoreLoopKernel:
                 # approval-wait / progress-gate / no-progress / normal exits and
                 # later error paths all share one consistent 口径 (audit 05 S4).
                 state.turn_count += 1
-                if response.usage is not None and not streamed_response:
-                    await self.event_sink.emit(CoreEvent(
-                        name="runtime.usage",
-                        category="usage",
-                        payload={"usage": response.usage.to_dict(), "response_index": index},
-                        session_id=state.session_id,
-                        run_id=state.run_id,
-                        tags=["usage"],
-                    ))
+                # Emit one canonical per-response usage fact for both streaming
+                # and non-streaming calls.  Providers are allowed to omit token
+                # usage, but a successful response is still one model call.
+                usage_payload = response.usage.to_dict() if response.usage is not None else {}
+                usage_payload["llm_calls"] = 1
+                await self.event_sink.emit(CoreEvent(
+                    name="runtime.usage",
+                    category="usage",
+                    payload={"usage": usage_payload, "response_index": index},
+                    session_id=state.session_id,
+                    run_id=state.run_id,
+                    tags=["usage"],
+                ))
                 if response.thinking and not streamed_response:
                     await self._emit_stream_part(
                         state,
@@ -1836,6 +1840,11 @@ class CoreLoopKernel:
                             "content": "",
                             "finish_reason": finish_reason,
                             "usage": usage_dict,
+                            # The canonical per-response usage event is emitted
+                            # by _run after this stream returns. Keep this
+                            # payload for protocol consumers, but do not let the
+                            # projection count it a second time.
+                            "usage_reported_separately": True,
                             "response_index": response_index,
                         },
                         session_id=state.session_id,

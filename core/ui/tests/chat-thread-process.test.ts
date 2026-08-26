@@ -190,7 +190,7 @@ describe('ChatThread process cards', () => {
     });
 
     const row = wrapper.find('.compaction-step');
-    expect(wrapper.find('.process-toggle').exists()).toBe(false);
+    expect(wrapper.find('.process-summary').exists()).toBe(false);
     expect(row.text()).toContain('上下文已压缩');
     expect(row.text()).toContain('351051 → 153000 tokens');
     expect(row.text()).toContain('5 段');
@@ -982,7 +982,7 @@ describe('ChatThread process cards', () => {
     await block.find('.sub-line-heading').trigger('click');
     const chat = block.find('.sub-line-chat');
     // Historical model text renders inline in the child process stream
-    const historicalText = chat.find('.process-stream--history .part-text-content');
+    const historicalText = chat.find('.process-stream .part-text-content');
     expect(historicalText.text()).toContain('我先检查写作要求。');
     expect(historicalText.text()).not.toContain('任务已完成。');
     // The final text owns the answer body
@@ -1154,7 +1154,7 @@ describe('ChatThread process cards', () => {
     expect(wrapper.find('.process-current').exists()).toBe(false);
   });
 
-  it('renders live model text inline in the live timeline', () => {
+  it('renders a live terminal model text in the fixed final-answer slot', () => {
     const messages: CoreMessage[] = [{
       id: 'm-live-model-text',
       role: 'assistant',
@@ -1177,14 +1177,12 @@ describe('ChatThread process cards', () => {
       },
     });
 
-    // Live timeline renders model text as an inline streaming part — no separate body
-    const answers = wrapper.findAll('.assistant-answer--process');
-    expect(answers).toHaveLength(1);
-    expect(answers[0].text()).toContain('Streaming model text is visible.');
-    expect(wrapper.find('.assistant-answer:not(.assistant-answer--process)').exists()).toBe(false);
+    expect(wrapper.find('.assistant-answer--process').exists()).toBe(false);
+    expect(wrapper.find('.assistant-answer').text()).toContain('Streaming model text is visible.');
+    expect(wrapper.find('.process-stream').exists()).toBe(false);
   });
 
-  it('renders all live model text inline in chronological order', () => {
+  it('keeps intermediate model text in the process stream and the terminal text in the answer slot', () => {
     const messages: CoreMessage[] = [{
       id: 'm-live-replaced-model-text',
       role: 'assistant',
@@ -1219,11 +1217,10 @@ describe('ChatThread process cards', () => {
 
     const wrapper = mount(ChatThread, { props: { messages } });
 
-    // Both old and new model text stay inline in timeline order (no body/process split)
-    const processAnswers = wrapper.findAll('.assistant-answer--process');
-    expect(processAnswers).toHaveLength(2);
-    expect(processAnswers[0].text()).toContain('旧正文进入过程。');
-    expect(processAnswers[1].text()).toContain('新正文留在主体。');
+    const process = wrapper.find('.process-stream');
+    expect(process.text()).toContain('旧正文进入过程。');
+    expect(process.text()).not.toContain('新正文留在主体。');
+    expect(wrapper.find('.assistant-answer').text()).toContain('新正文留在主体。');
   });
 
   it('shows a shallow thinking placeholder without forcing the message into live rendering', () => {
@@ -1311,7 +1308,7 @@ describe('ChatThread process cards', () => {
     });
 
     // Historical model text renders inline in the expanded process area
-    expect(wrapper.find('.process-stream--history .part-text-content').text()).toContain('Intermediate model text.');
+    expect(wrapper.find('.process-stream .part-text-content').text()).toContain('Intermediate model text.');
     expect(wrapper.find('.assistant-answer .part-text-content').text()).toContain('Final answer.');
   });
 
@@ -1339,9 +1336,9 @@ describe('ChatThread process cards', () => {
     });
 
     // Protocol labels never leak into the rendered process text
-    const processText = wrapper.find('.process-stream--history .part-text-content');
+    const processText = wrapper.find('.process-stream .part-text-content');
     expect(processText.text()).toBe('有什么我可以帮你的吗?');
-    expect(wrapper.find('.process-stream--history').text()).not.toContain('model text');
+    expect(wrapper.find('.process-stream').text()).not.toContain('model text');
   });
 
   it('shows command tool information in expanded historical process', async () => {
@@ -1382,7 +1379,7 @@ describe('ChatThread process cards', () => {
       },
     });
 
-    const stream = wrapper.find('.process-stream--history');
+    const stream = wrapper.find('.process-stream');
     const text = stream.text();
     expect(text).toContain('已思考');
     expect(text).toContain('已运行命令');
@@ -1678,15 +1675,15 @@ describe('ChatThread process cards', () => {
       },
     });
 
-    expect(wrapper.find('.process-toggle').exists()).toBe(true);
-    expect(wrapper.find('.process-stream--history').exists()).toBe(false);
+    expect(wrapper.find('.process-summary').exists()).toBe(true);
+    expect(wrapper.find('.process-stream').exists()).toBe(false);
     expect(wrapper.text()).toContain('最后一段输出');
     expect(wrapper.text()).not.toContain('更早的一段输出不应显示。');
 
-    await wrapper.find('.process-toggle').trigger('click');
+    await wrapper.find('.process-summary').trigger('click');
     expect(wrapper.emitted('toggle-process')).toEqual([['m-process-reasoning']]);
     await wrapper.setProps({ processExpandedIds: new Set(['m-process-reasoning']) });
-    const stream = wrapper.find('.process-stream--history');
+    const stream = wrapper.find('.process-stream');
     expect(stream.exists()).toBe(true);
     expect(stream.find('.reasoning-body').exists()).toBe(false);
     expect(stream.text()).toContain('更早的一段输出不应显示。');
@@ -1694,6 +1691,30 @@ describe('ChatThread process cards', () => {
     await stream.find('.reasoning-toggle').trigger('click');
     expect(stream.find('.reasoning-body').exists()).toBe(true);
     expect(stream.find('.reasoning-body').text()).toContain('上面的过程不应默认显示。');
+  });
+
+  it('does not repeat the latest model text in the historical process stream', () => {
+    const finalText = '你好！有什么需要我帮你处理的吗？';
+    const messages: CoreMessage[] = [{
+      id: 'm-duplicate-final-model-text',
+      role: 'assistant',
+      content: finalText,
+      timestamp: '2026-06-18T00:00:00.000Z',
+      parts: [{
+        id: 'p-duplicate-final-model-text',
+        partType: 'model_text',
+        status: 'completed',
+        label: '正文',
+        content: finalText,
+      }],
+    }];
+
+    const wrapper = mount(ChatThread, { props: { messages } });
+
+    expect(wrapper.find('.process-summary').exists()).toBe(false);
+    expect(wrapper.find('.process-stream').exists()).toBe(false);
+    expect(wrapper.findAll('.assistant-answer')).toHaveLength(1);
+    expect(wrapper.find('.assistant-answer').text()).toBe(finalText);
   });
 
   it('does not create an internal scroll container for reasoning bodies', () => {
@@ -1860,7 +1881,7 @@ describe('ChatThread process cards', () => {
       props: { messages },
     });
 
-    const text = wrapper.find('.process-toggle-text').text();
+    const text = wrapper.find('.process-summary-text').text();
     expect(text).toBe('模型调用 2 次 · 耗时 12 s · Token 165 · 命中率 50%');
     expect(text).not.toContain('总输入');
     expect(text).not.toContain('总输出');
@@ -1896,7 +1917,7 @@ describe('ChatThread process cards', () => {
       props: { messages },
     });
 
-    expect(wrapper.find('.process-toggle-text').text()).toBe('1 个工具 · 1 段思考 · 1 个失败');
+    expect(wrapper.find('.process-summary-text').text()).toBe('1 个工具 · 1 段思考 · 1 个失败');
   });
 
   it('does not print a fake 0% cache hit when usage carries no cache info', () => {
@@ -1931,7 +1952,7 @@ describe('ChatThread process cards', () => {
       props: { messages },
     });
 
-    const text = wrapper.find('.process-toggle-text').text();
+    const text = wrapper.find('.process-summary-text').text();
     expect(text).toContain('模型调用 1 次');
     expect(text).not.toContain('命中率');
   });
@@ -1967,7 +1988,7 @@ describe('ChatThread process cards', () => {
       props: { messages },
     });
 
-    expect(wrapper.find('.process-toggle-text').text()).toContain('命中率 80%');
+    expect(wrapper.find('.process-summary-text').text()).toContain('命中率 80%');
   });
 
   it('renders live process above live answer text', () => {
@@ -2000,10 +2021,10 @@ describe('ChatThread process cards', () => {
       props: { messages },
     });
 
-    // Live non-timeline messages stream everything inside process-stream--live,
-    // with process steps coming before the inline answer text
-    const html = wrapper.find('.process-stream--live').html();
-    expect(html.indexOf('tool-card-header')).toBeLessThan(html.indexOf('Final answer is streaming.'));
+    // The shared process stream stays before the fixed final-answer slot.
+    const html = wrapper.find('.assistant-message').html() || '';
+    expect(html.indexOf('process-stream')).toBeLessThan(html.indexOf('assistant-answer'));
+    expect(wrapper.find('.assistant-answer').text()).toContain('Final answer is streaming.');
   });
 
   it('does not compute historical reasoning duration from wall clock when completion time is missing', () => {
@@ -2031,5 +2052,66 @@ describe('ChatThread process cards', () => {
     });
 
     expect(wrapper.text()).not.toContain('Thought for');
+  });
+
+  it('keeps one process DOM and one final-answer position across live to complete', async () => {
+    const liveMessage: CoreMessage = {
+      id: 'm-unified-live-complete',
+      role: 'assistant',
+      content: '最终答案',
+      timestamp: '',
+      metadata: { live: true, timeline: true, liveStatus: '正在处理' },
+      parts: [
+        { id: 'p-unified-reasoning', partType: 'reasoning', status: 'running', content: '检查中' },
+        { id: 'p-unified-tool', partType: 'tool_call', status: 'running', toolName: 'run_command', toolArgs: { command: 'npm test' } },
+        { id: 'p-unified-answer', partType: 'model_text', status: 'running', content: '最终答案' },
+      ],
+    };
+    const wrapper = mount(ChatThread, {
+      props: { messages: [liveMessage], processExpandedIds: new Set([liveMessage.id]) },
+    });
+
+    const liveToolClass = (wrapper.find('.process-step--tool').attributes('class') || '').replace(/process-step--(?:running|completed|error)\b/g, '');
+    const liveStepCount = wrapper.findAll('.process-step').length;
+    const liveHtml = wrapper.find('.assistant-message').html() || '';
+    expect(liveHtml.indexOf('process-stream')).toBeLessThan(liveHtml.indexOf('assistant-answer'));
+
+    await wrapper.setProps({
+      messages: [{
+        ...liveMessage,
+        metadata: { ...liveMessage.metadata, live: false },
+        parts: liveMessage.parts?.map(part => ({ ...part, status: 'completed' as const })),
+      }],
+    });
+    await nextTick();
+
+    expect(wrapper.findAll('.process-step')).toHaveLength(liveStepCount);
+    expect((wrapper.find('.process-step--tool').attributes('class') || '').replace(/process-step--(?:running|completed|error)\b/g, '')).toBe(liveToolClass);
+    const completeHtml = wrapper.find('.assistant-message').html() || '';
+    expect(completeHtml.indexOf('process-stream')).toBeLessThan(completeHtml.indexOf('assistant-answer'));
+    expect(wrapper.find('.assistant-answer').text()).toContain('最终答案');
+  });
+
+  it('shows artifacts in the same bottom panel while live and after completion', async () => {
+    const message: CoreMessage = {
+      id: 'm-live-artifact',
+      role: 'assistant',
+      content: '已生成',
+      timestamp: '',
+      metadata: { live: true },
+      parts: [{
+        id: 'p-artifact',
+        partType: 'tool_result',
+        status: 'running',
+        toolName: 'image_gen',
+        artifacts: [{ kind: 'image', uri: 'data:image/png;base64,AA==' }],
+      }],
+    };
+    const wrapper = mount(ChatThread, { props: { messages: [message] } });
+    const livePanel = wrapper.find('.message-artifacts');
+    expect(livePanel.exists()).toBe(true);
+
+    await wrapper.setProps({ messages: [{ ...message, metadata: { live: false } }] });
+    expect(wrapper.find('.message-artifacts').exists()).toBe(true);
   });
 });

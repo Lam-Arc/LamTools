@@ -190,6 +190,10 @@ export interface CoreMessage {
   /** Optional typed parts for rich rendering. When present, the renderer
    *  should prefer parts over the flat `content` field. */
   parts?: MessagePart[];
+  /** Stable process/answer projection consumed by MessageView. */
+  processParts?: MessagePart[];
+  answerText?: string;
+  answerPart?: MessagePart | null;
   /** Product-specific persisted payload used by the host app to rebuild parts. */
   rawParts?: unknown;
   metadata?: Record<string, unknown>;

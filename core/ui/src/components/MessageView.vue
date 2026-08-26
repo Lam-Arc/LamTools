@@ -98,7 +98,10 @@
 
       <!-- Assistant message: answer stream + process stream -->
       <div v-else class="assistant-row">
-        <div class="assistant-message" :class="{ 'assistant-message--live': isLiveMessage(msg) }">
+        <div
+          class="assistant-message"
+          :class="{ 'assistant-message--live': isLiveMessage(msg), 'assistant-message--complete': !isLiveMessage(msg) }"
+        >
           <div class="assistant-meta">
             <span class="assistant-label">{{ assistantLabel }}</span>
             <span v-if="isLiveMessage(msg) && !isInitialWaitingMessage(msg)" class="assistant-live-state">
@@ -119,10 +122,11 @@
             <span v-else class="stream-spinner" />
           </div>
 
-          <!-- ── Part-based rendering ── -->
-          <template v-if="(msg.parts && msg.parts.length > 0) || shouldShowShallowThinkingPending(msg)">
+          <!-- One process renderer for both live and completed messages. The
+               projection has already removed the unique final answer part. -->
+          <template v-if="processParts(msg).length > 0 || shouldShowShallowThinkingPending(msg)">
             <div
-              v-if="shouldShowShallowThinkingPending(msg) && !isLiveMessage(msg) && !isInitialWaitingMessage(msg)"
+              v-if="shouldShowShallowThinkingPending(msg)"
               class="process-step process-step--reasoning shallow-thinking-pending-row"
             >
               <div class="reasoning-body reasoning-body--pending">
@@ -131,1030 +135,29 @@
                 </span>
               </div>
             </div>
-            <template v-if="isTimelineMessage(msg)">
-              <template v-if="isLiveMessage(msg)">
-                <div
-                  v-if="shouldShowShallowThinkingPending(msg)"
-                  class="process-step process-step--reasoning shallow-thinking-pending-row"
-                >
-                  <div class="reasoning-body reasoning-body--pending">
-                    <span class="shallow-thinking-pending" role="status" aria-live="polite">
-                      shallow thinking<span class="shallow-thinking-dots" aria-hidden="true"><span>.</span><span>.</span><span>.</span></span>
-                    </span>
-                  </div>
-                </div>
-                <template
-                  v-for="group in compactGroups(groupParts(timelineParts(msg)))"
-                  :key="group.kind === 'process-group' ? `live-tl-pg-${processGroupId(group)}` : group.part.id"
-                >
-                  <template v-if="group.kind === 'process'">
-                    <div
-                      v-for="part in [group.part]"
-                      :key="part.id"
-                      v-memo="partMemo(part, true)"
-                      class="part-wrap"
-                    >
-                  <div v-if="part.partType === 'text' && part.content" class="assistant-answer">
-                    <slot name="assistant-content" :content="part.content ?? ''">
-                      <MarkdownRenderer class="part-text-content part-text-content--streaming" :content="part.content ?? ''" :streaming="true" />
-                    </slot>
-                  </div>
 
-                  <div v-else-if="part.partType === 'model_text' && part.content" class="assistant-answer assistant-answer--process">
-                    <slot name="assistant-content" :content="part.content ?? ''">
-                      <MarkdownRenderer class="part-text-content part-text-content--streaming" :content="part.content ?? ''" :streaming="true" />
-                    </slot>
-                  </div>
-
-                  <div
-                    v-else-if="part.partType === 'reasoning'"
-                    :class="['process-step', 'process-step--reasoning', 'process-step--' + part.status]"
-                  >
-                    <button
-                      type="button"
-                      class="reasoning-toggle"
-                      @click="togglePartExpand(part, true)"
-                    >
-                      <span v-if="part.status === 'error'" class="process-step-marker process-step-marker--error" />
-                      <span v-beam class="process-step-title">{{ reasoningTitle(part.status) }}</span>
-                      <span v-if="reasoningDuration(part, true)" class="reasoning-duration">{{ reasoningDuration(part, true) }}</span>
-                    </button>
-                    <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
-                    <div v-if="isPartExpanded(part, true)" v-auto-follow-scroll="part.content ?? ''" class="reasoning-body">
-                      <slot name="reasoning-content" :content="part.content ?? ''" :live="true">
-                        <MarkdownRenderer class="process-step-detail part-text-content--streaming" :content="part.content ?? ''" :streaming="true" />
-                      </slot>
-                    </div>
-                    </Transition>
-                  </div>
-
-                  <div
-                    v-else-if="part.partType === 'decision'"
-                    class="decision-card"
-                    :class="'decision-card--' + part.status"
-                  >
-                    <div class="decision-card-head">
-                      <span v-if="part.status === 'error'" class="process-step-marker process-step-marker--error" />
-                      <span class="decision-card-title">{{ decisionTitle(part) }}</span>
-                      <span class="decision-card-status">{{ decisionStatusLabel(part) }}</span>
-                    </div>
-                    <p v-if="decisionDetail(part)" class="decision-card-detail">{{ decisionDetail(part) }}</p>
-                    <Transition :css="false" @enter="decisionResponseEnter" @leave="fadeSlideLeave">
-                      <p v-if="decisionResponseText(part)" class="decision-card-decision">{{ decisionResponseText(part) }}</p>
-                    </Transition>
-                    <div v-if="part.status === 'pending' && decisionOptions(part).length > 0" class="decision-options">
-                      <div v-for="option in decisionOptions(part)" :key="option.id" class="decision-option-group">
-                        <button
-                          type="button"
-                          class="decision-option"
-                          :class="{
-                            'decision-option--approve': option.id === 'approve',
-                            'decision-option--deny': option.id === 'deny',
-                          }"
-                          @click="emit('decision-select', { partId: part.id, option, response: decisionOptionResponse(part, option) })"
-                        >
-                          <span class="decision-option-label">{{ option.label }}</span>
-                        </button>
-                        <span v-if="option.description" class="decision-option-desc">{{ option.description }}</span>
-                      </div>
-                    </div>
-                    <details v-if="canGuideDecision(part)" class="decision-guide">
-                      <summary class="decision-guide-toggle">其他处理方式</summary>
-                      <div class="decision-guide-fields">
-                        <textarea
-                          class="decision-guide-input"
-                          :value="decisionGuideDraft(part)"
-                          placeholder="说明希望如何处理…"
-                          rows="2"
-                          @input="updateDecisionGuideDraft(part, $event)"
-                        />
-                        <button
-                          type="button"
-                          class="decision-guide-submit"
-                          :disabled="!decisionGuideDraft(part).trim()"
-                          @click="submitDecisionGuide(part)"
-                        >
-                          提交
-                        </button>
-                      </div>
-                    </details>
-                  </div>
-
-                  <div v-else-if="isHighValueLivePart(part)" class="process-stream process-stream--live process-stream--inline">
-                    <div
-                      v-if="(part.partType === 'tool_call' || part.partType === 'tool_result') && !isControlTool(part)"
-                      class="process-step process-step--tool"
-                      :class="['process-step--' + part.status, toolColorClass(part)]"
-                    >
-                      <button
-                        type="button"
-                        class="tool-card-header"
-                        :class="[{ 'has-detail': hasToolDisplay(part), 'process-tool-row': !isCommandTool(part), 'tool-card-header--command': isCommandTool(part) }, toolColorClass(part)]"
-                        :aria-expanded="!isCommandTool(part) && hasToolDisplay(part) ? shouldShowToolBody(part, true) : undefined"
-                        @click="togglePartExpand(part, true)"
-                      >
-                        <span v-if="part.status === 'error'" class="process-step-marker process-step-marker--error" />
-                        <template v-if="isCommandTool(part)">
-                          <span v-beam class="process-step-title">{{ processTitleWithState(part) }}</span>
-                          <span v-if="shouldShowToolArgsPreview(part)" class="tool-args-preview">{{ toolArgsPreview(part.toolArgs || {}) }}</span>
-                        </template>
-                        <template v-else>
-                          <span v-beam class="process-step-title tool-row-summary">{{ processTitleWithState(part) }}</span>
-                          <span v-if="shouldShowToolArgsPreview(part)" class="tool-args-preview tool-row-args">{{ toolArgsPreview(part.toolArgs || {}) }}</span>
-                          <span v-if="shouldShowToolStatusSuffix(part)" class="tool-row-status">{{ toolStatusLabel(part) }}</span>
-                        </template>
-                      </button>
-                      <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
-                      <div
-                        v-if="shouldShowToolBody(part, true)"
-                        class="tool-card-body"
-                        :class="{ 'tool-card-body--row': !isCommandTool(part) }"
-                      >
-                        <pre v-if="displayToolError(part)" class="tool-output tool-output--error" @click.stop="copyToolErrorText(part)" title="点击复制错误信息">{{ displayToolError(part) }}</pre>
-                        <div v-if="displayToolResult(part) && isFileTool(part)" class="diff-block" :class="[fileDiffClass(part), { 'diff-block--wrap': isToolWrapEnabled(part.id) }]">
-                          <div class="diff-header">
-                            <span class="diff-file">{{ diffHeaderText(part) }}</span>
-                            <button type="button" class="wrap-toggle" @click.stop="toggleToolWrap(part.id)">{{ isToolWrapEnabled(part.id) ? 'wrap' : 'scroll' }}</button>
-                          </div>
-                          <div class="diff-lines">
-                            <div v-for="(line, li) in diffDisplayLines(part)" :key="li" class="diff-line" :class="diffLineClass(line, part)">
-                              <span class="diff-line-num">{{ diffLineGutter(line, li, part) }}</span>
-                              <span class="diff-line-content">{{ diffLineContent(line, part) }}</span>
-                            </div>
-                          </div>
-                        </div>
-                        <div v-else-if="testArtifact(part)" class="test-result-card" :class="testResultClass(part)">
-                          <div class="test-result-head">
-                            <span class="test-result-state">{{ testResultTitle(part) }}</span>
-                            <span class="test-result-command">{{ testResultCommand(part) }}</span>
-                          </div>
-                          <div class="test-result-meta">
-                            <span v-for="item in testResultMeta(part)" :key="item">{{ item }}</span>
-                          </div>
-                          <pre v-if="testResultOutput(part)" class="test-result-output">{{ testResultOutput(part) }}</pre>
-                        </div>
-                        <div v-else-if="displayToolInputPreview(part)" v-auto-follow-scroll="displayToolInputPreview(part)" class="tool-output tool-input-preview">
-                          <div class="tool-output-meta">
-                            <span>{{ toolInputPreviewMeta(part) }}</span>
-                          </div>
-                          <pre class="tool-output-content" :class="{ 'tool-output-content--wrap': isToolWrapEnabled(part.id) }" @click="toggleToolWrap(part.id)">{{ displayToolInputPreview(part) }}</pre>
-                        </div>
-                        <div v-else-if="displayToolResult(part) && isCommandTool(part)" class="command-output">
-                          <div class="command-terminal-chrome" aria-hidden="true">
-                            <span class="command-terminal-light command-terminal-light--close" />
-                            <span class="command-terminal-light command-terminal-light--minimize" />
-                            <span class="command-terminal-light command-terminal-light--maximize" />
-                            <span class="command-terminal-title">run command</span>
-                          </div>
-                          <div class="command-terminal-body">
-                            <strong class="command-output-command">$ {{ commandDisplayText(part) }}</strong>
-                            <pre class="command-output-result">{{ commandOutputText(part) }}</pre>
-                          </div>
-                        </div>
-                        <div v-else-if="displayToolResult(part)" v-auto-follow-scroll="toolOutputContent(part)" class="tool-output">
-                          <div v-if="toolMetaItems(part).length > 0" class="tool-output-meta">
-                            <span v-for="item in toolMetaItems(part)" :key="item">{{ item }}</span>
-                          </div>
-                          <pre class="tool-output-content" :class="{ 'tool-output-content--wrap': isToolWrapEnabled(part.id) }" @click="toggleToolWrap(part.id)">{{ toolOutputContent(part) }}</pre>
-                        </div>
-                        <div v-if="imageArtifacts(part).length" class="tool-image-row">
-                          <figure v-for="artifact in imageArtifacts(part)" :key="artifact.artifact_id || artifact.uri" class="tool-image-card" @click="openImagePreview(artifact)">
-                            <img :src="imageSrc(artifact)" :alt="imageAlt(artifact)" loading="lazy" />
-                          </figure>
-                        </div>
-                        <pre v-else-if="!displayToolInputPreview(part) && readableProcessDetail(part)" v-auto-follow-scroll="readableProcessDetail(part)" class="tool-output">{{ readableProcessDetail(part) }}</pre>
-                      </div>
-                      </Transition>
-                    </div>
-
-                    <div v-else-if="isModelRetryPart(part)" class="model-retry-bar">
-                      <div class="model-retry-bar__track">
-                        <div
-                          v-for="i in modelRetryCounts(part).maxRetries"
-                          :key="i"
-                          class="model-retry-bar__segment"
-                          :class="{ 'model-retry-bar__segment--filled': i <= modelRetryCounts(part).attempt }"
-                        />
-                      </div>
-                      <span class="model-retry-bar__label">重试中 {{ modelRetryCounts(part).attempt }}/{{ modelRetryCounts(part).maxRetries }}</span>
-                    </div>
-
-                    <div v-else class="process-timeline">
-                      <div
-                        class="process-step"
-                        :class="['process-step--' + part.status, part.status === 'completed' ? 'process-step--compact' : 'process-step--current']"
-                      >
-                        <span v-if="part.status === 'error'" class="process-step-marker process-step-marker--error" />
-                        <span v-beam class="process-step-title">{{ processTitleWithState(part) }}</span>
-                        <span v-if="readableProcessDetail(part)" class="process-step-detail">{{ readableProcessDetail(part) }}</span>
-                      </div>
-                    </div>
-                  </div>
-                    </div>
-                  </template>
-                  <template v-else-if="group.kind === 'process-group'">
-                    <div class="process-group">
-                      <button
-                        type="button"
-                        class="process-group-summary"
-                        :class="{ 'process-group-summary--running': groupHasRunningPart(group) }"
-                        @click="toggleGroupExpand(processGroupId(group))"
-                      >
-                        <span v-if="groupHasError(group)" class="process-step-marker process-step-marker--error" />
-                        <span v-beam class="process-group-text">{{ group.summary }}</span>
-                      </button>
-                      <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
-                      <div v-if="isGroupExpanded(processGroupId(group))" class="process-group-body">
-                        <div
-                          v-for="part in group.parts"
-                          :key="part.id"
-                          v-memo="partMemo(part, true)"
-                          class="part-wrap"
-                        >
-                          <div v-if="part.partType === 'reasoning'" :class="['process-step', 'process-step--reasoning', 'process-step--' + part.status]">
-                            <button type="button" class="reasoning-toggle" @click="togglePartExpand(part, true)">
-                              <span v-if="part.status === 'error'" class="process-step-marker process-step-marker--error" />
-                              <span v-beam class="process-step-title">{{ reasoningTitle(part.status) }}</span>
-                              <span v-if="reasoningDuration(part, true)" class="reasoning-duration">{{ reasoningDuration(part, true) }}</span>
-                            </button>
-                            <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
-                            <div v-if="isPartExpanded(part, true)" v-auto-follow-scroll="part.content ?? ''" class="reasoning-body">
-                              <slot name="reasoning-content" :content="part.content ?? ''" :live="true">
-                                <MarkdownRenderer class="process-step-detail part-text-content--streaming" :content="part.content ?? ''" :streaming="true" />
-                              </slot>
-                            </div>
-                            </Transition>
-                          </div>
-                          <div
-                            v-else-if="(part.partType === 'tool_call' || part.partType === 'tool_result') && !isControlTool(part)"
-                            class="process-step process-step--tool"
-                            :class="['process-step--' + part.status, toolColorClass(part)]"
-                          >
-                            <button
-                              type="button"
-                              class="tool-card-header"
-                              :class="[{ 'has-detail': hasToolDisplay(part), 'process-tool-row': !isCommandTool(part), 'tool-card-header--command': isCommandTool(part) }, toolColorClass(part)]"
-                              :aria-expanded="!isCommandTool(part) && hasToolDisplay(part) ? shouldShowToolBody(part, true) : undefined"
-                              @click="togglePartExpand(part, true)"
-                            >
-                              <span v-if="part.status === 'error'" class="process-step-marker process-step-marker--error" />
-                              <template v-if="isCommandTool(part)">
-                                <span v-beam class="process-step-title">{{ processTitleWithState(part) }}</span>
-                                <span v-if="shouldShowToolArgsPreview(part)" class="tool-args-preview">{{ toolArgsPreview(part.toolArgs || {}) }}</span>
-                              </template>
-                              <template v-else>
-                                <span v-beam class="process-step-title tool-row-summary">{{ processTitleWithState(part) }}</span>
-                                <span v-if="shouldShowToolArgsPreview(part)" class="tool-args-preview tool-row-args">{{ toolArgsPreview(part.toolArgs || {}) }}</span>
-                                <span v-if="shouldShowToolStatusSuffix(part)" class="tool-row-status" :class="{ 'tool-row-status--retry': toolRetryLabel(part) }">{{ toolRetryLabel(part) || toolStatusLabel(part) }}</span>
-                              </template>
-                            </button>
-                            <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
-                            <div
-                              v-if="shouldShowToolBody(part, true)"
-                              class="tool-card-body"
-                              :class="{ 'tool-card-body--row': !isCommandTool(part) }"
-                            >
-                              <pre v-if="displayToolError(part)" class="tool-output tool-output--error" @click.stop="copyToolErrorText(part)" title="点击复制错误信息">{{ displayToolError(part) }}</pre>
-                              <div v-if="displayToolResult(part) && isFileTool(part)" class="diff-block" :class="[fileDiffClass(part), { 'diff-block--wrap': isToolWrapEnabled(part.id) }]">
-                                <div class="diff-header">
-                                  <span class="diff-file">{{ diffHeaderText(part) }}</span>
-                                  <button type="button" class="wrap-toggle" @click.stop="toggleToolWrap(part.id)">{{ isToolWrapEnabled(part.id) ? 'wrap' : 'scroll' }}</button>
-                                </div>
-                                <div class="diff-lines">
-                                  <div v-for="(line, li) in diffDisplayLines(part)" :key="li" class="diff-line" :class="diffLineClass(line, part)">
-                                    <span class="diff-line-num">{{ diffLineGutter(line, li, part) }}</span>
-                                    <span class="diff-line-content">{{ diffLineContent(line, part) }}</span>
-                                  </div>
-                                </div>
-                              </div>
-                              <div v-else-if="testArtifact(part)" class="test-result-card" :class="testResultClass(part)">
-                                <div class="test-result-head">
-                                  <span class="test-result-state">{{ testResultTitle(part) }}</span>
-                                  <span class="test-result-command">{{ testResultCommand(part) }}</span>
-                                </div>
-                                <div class="test-result-meta">
-                                  <span v-for="item in testResultMeta(part)" :key="item">{{ item }}</span>
-                                </div>
-                                <pre v-if="testResultOutput(part)" class="test-result-output">{{ testResultOutput(part) }}</pre>
-                              </div>
-                              <div v-else-if="displayToolInputPreview(part)" v-auto-follow-scroll="displayToolInputPreview(part)" class="tool-output tool-input-preview">
-                                <div class="tool-output-meta">
-                                  <span>{{ toolInputPreviewMeta(part) }}</span>
-                                </div>
-                                <pre class="tool-output-content" :class="{ 'tool-output-content--wrap': isToolWrapEnabled(part.id) }" @click="toggleToolWrap(part.id)">{{ displayToolInputPreview(part) }}</pre>
-                              </div>
-                              <div v-else-if="displayToolResult(part) && isCommandTool(part)" class="command-output">
-                                <div class="command-terminal-chrome" aria-hidden="true">
-                                  <span class="command-terminal-light command-terminal-light--close" />
-                                  <span class="command-terminal-light command-terminal-light--minimize" />
-                                  <span class="command-terminal-light command-terminal-light--maximize" />
-                                  <span class="command-terminal-title">run command</span>
-                                </div>
-                                <div class="command-terminal-body">
-                                  <strong class="command-output-command">$ {{ commandDisplayText(part) }}</strong>
-                                  <pre class="command-output-result">{{ commandOutputText(part) }}</pre>
-                                </div>
-                              </div>
-                              <div v-else-if="displayToolResult(part)" v-auto-follow-scroll="toolOutputContent(part)" class="tool-output">
-                                <div v-if="toolMetaItems(part).length > 0" class="tool-output-meta">
-                                  <span v-for="item in toolMetaItems(part)" :key="item">{{ item }}</span>
-                                </div>
-                                <pre class="tool-output-content" :class="{ 'tool-output-content--wrap': isToolWrapEnabled(part.id) }" @click="toggleToolWrap(part.id)">{{ toolOutputContent(part) }}</pre>
-                              </div>
-                              <div v-if="imageArtifacts(part).length" class="tool-image-row">
-                                <figure v-for="artifact in imageArtifacts(part)" :key="artifact.artifact_id || artifact.uri" class="tool-image-card" @click="openImagePreview(artifact)">
-                                  <img :src="imageSrc(artifact)" :alt="imageAlt(artifact)" loading="lazy" />
-                                </figure>
-                              </div>
-                              <pre v-else-if="!displayToolInputPreview(part) && readableProcessDetail(part)" v-auto-follow-scroll="readableProcessDetail(part)" class="tool-output">{{ readableProcessDetail(part) }}</pre>
-                            </div>
-                            </Transition>
-                          </div>
-                        </div>
-                      </div>
-                      </Transition>
-                    </div>
-                  </template>
-                </template>
-
-              </template>
-
-              <template v-else>
-                <button
-                  v-if="processSummary(msg).count > 0 && !isCompactionOnlyMessage(msg)"
-                  type="button"
-                  class="process-toggle"
-                  @click="emit('toggle-process', msg.id)"
-                >
-                  <span class="process-toggle-icon" :class="processBarStatus(msg)" />
-                  <span class="process-toggle-text">{{ processSummary(msg).text }}</span>
-                  <span class="process-toggle-hint">{{ isProcessExpanded(msg) ? '收起过程' : '查看过程' }}</span>
-                </button>
-
-                <div v-if="isProcessExpanded(msg)" class="process-stream process-stream--history">
-                  <template
-                    v-for="group in compactGroups(groupParts(processParts(msg)))"
-                    :key="group.kind === 'process-group' ? processGroupId(group) : group.part.id"
-                  >
-                    <template v-if="group.kind === 'process-group'">
-                      <div class="process-group">
-                        <button
-                          type="button"
-                          class="process-group-summary"
-                          :class="{ 'process-group-summary--running': groupHasRunningPart(group) }"
-                          @click="toggleGroupExpand(processGroupId(group))"
-                        >
-                          <span v-if="groupHasError(group)" class="process-step-marker process-step-marker--error" />
-                          <span v-beam class="process-group-text">{{ group.summary }}</span>
-                        </button>
-                        <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
-                        <div v-if="isGroupExpanded(processGroupId(group))" class="process-group-body">
-                          <div
-                            v-for="part in group.parts"
-                            :key="part.id"
-                            v-memo="partMemo(part, false)"
-                            class="part-wrap"
-                          >
-                            <div v-if="part.partType === 'reasoning'" :class="['process-step', 'process-step--reasoning', 'process-step--' + part.status]">
-                              <button type="button" class="reasoning-toggle" @click="togglePartExpand(part, false)">
-                                <span v-if="part.status === 'error'" class="process-step-marker process-step-marker--error" />
-                                <span v-beam class="process-step-title">{{ reasoningTitle(part.status) }}</span>
-                                <span v-if="reasoningDuration(part)" class="reasoning-duration">{{ reasoningDuration(part) }}</span>
-                              </button>
-                              <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
-                              <div v-if="isPartExpanded(part, false)" class="reasoning-body">
-                                <slot name="reasoning-content" :content="part.content ?? ''" :live="false">
-                                  <MarkdownRenderer class="process-step-detail" :content="part.content ?? ''" />
-                                </slot>
-                              </div>
-                              </Transition>
-                            </div>
-                            <div
-                              v-else-if="(part.partType === 'tool_call' || part.partType === 'tool_result') && !isControlTool(part)"
-                              class="process-step process-step--tool"
-                              :class="'process-step--' + part.status"
-                            >
-                              <button
-                                type="button"
-                                class="tool-card-header"
-                                :class="[{ 'has-detail': hasToolDisplay(part), 'process-tool-row': !isCommandTool(part), 'tool-card-header--command': isCommandTool(part) }, toolColorClass(part)]"
-                                @click="togglePartExpand(part, false)"
-                              >
-                                <span v-if="part.status === 'error'" class="process-step-marker process-step-marker--error" />
-                                <template v-if="isCommandTool(part)">
-                                  <span v-beam class="process-step-title">{{ processTitleWithState(part) }}</span>
-                                  <span v-if="shouldShowToolArgsPreview(part)" class="tool-args-preview">{{ toolArgsPreview(part.toolArgs || {}) }}</span>
-                                </template>
-                                <template v-else>
-                                  <span v-beam class="process-step-title tool-row-summary">{{ processTitleWithState(part) }}</span>
-                                  <span v-if="shouldShowToolArgsPreview(part)" class="tool-args-preview tool-row-args">{{ toolArgsPreview(part.toolArgs || {}) }}</span>
-                                  <span v-if="shouldShowToolStatusSuffix(part)" class="tool-row-status">{{ toolStatusLabel(part) }}</span>
-                                </template>
-                              </button>
-                              <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
-                              <div v-if="shouldShowToolBody(part, false)" class="tool-card-body" :class="{ 'tool-card-body--row': !isCommandTool(part) }">
-                                <pre v-if="displayToolError(part)" class="tool-output tool-output--error">{{ displayToolError(part) }}</pre>
-                                <div v-else-if="displayToolResult(part) && isFileTool(part)" class="diff-block" :class="[fileDiffClass(part), { 'diff-block--wrap': isToolWrapEnabled(part.id) }]">
-                                  <div class="diff-header">
-                                    <span class="diff-file">{{ diffHeaderText(part) }}</span>
-                                    <button type="button" class="wrap-toggle" @click.stop="toggleToolWrap(part.id)">{{ isToolWrapEnabled(part.id) ? 'wrap' : 'scroll' }}</button>
-                                  </div>
-                                  <div class="diff-lines">
-                                    <div v-for="(line, li) in diffDisplayLines(part)" :key="li" class="diff-line" :class="diffLineClass(line, part)">
-                                      <span class="diff-line-num">{{ diffLineGutter(line, li, part) }}</span>
-                                      <span class="diff-line-content">{{ diffLineContent(line, part) }}</span>
-                                    </div>
-                                  </div>
-                                </div>
-                                <div v-else-if="testArtifact(part)" class="test-result-card" :class="testResultClass(part)">
-                                  <div class="test-result-head">
-                                    <span class="test-result-state">{{ testResultTitle(part) }}</span>
-                                    <span class="test-result-command">{{ testResultCommand(part) }}</span>
-                                  </div>
-                                  <div class="test-result-meta">
-                                    <span v-for="item in testResultMeta(part)" :key="item">{{ item }}</span>
-                                  </div>
-                                  <pre v-if="testResultOutput(part)" class="test-result-output">{{ testResultOutput(part) }}</pre>
-                                </div>
-                                <div v-else-if="displayToolInputPreview(part)" class="tool-output tool-input-preview">
-                                  <div class="tool-output-meta">
-                                    <span>{{ toolInputPreviewMeta(part) }}</span>
-                                  </div>
-                                  <pre class="tool-output-content" :class="{ 'tool-output-content--wrap': isToolWrapEnabled(part.id) }" @click="toggleToolWrap(part.id)">{{ displayToolInputPreview(part) }}</pre>
-                                </div>
-                                <div v-else-if="displayToolResult(part) && isCommandTool(part)" class="command-output">
-                                  <div class="command-terminal-chrome" aria-hidden="true">
-                                    <span class="command-terminal-light command-terminal-light--close" />
-                                    <span class="command-terminal-light command-terminal-light--minimize" />
-                                    <span class="command-terminal-light command-terminal-light--maximize" />
-                                    <span class="command-terminal-title">run command</span>
-                                  </div>
-                                  <div class="command-terminal-body">
-                                    <strong class="command-output-command">$ {{ commandDisplayText(part) }}</strong>
-                                    <pre class="command-output-result">{{ commandOutputText(part) }}</pre>
-                                  </div>
-                                </div>
-                                <div v-else-if="displayToolResult(part)" class="tool-output">
-                                  <div v-if="toolMetaItems(part).length > 0" class="tool-output-meta">
-                                    <span v-for="item in toolMetaItems(part)" :key="item">{{ item }}</span>
-                                  </div>
-                                  <pre class="tool-output-content">{{ toolOutputContent(part) }}</pre>
-                                </div>
-                                <div v-if="imageArtifacts(part).length" class="tool-image-row">
-                                  <figure v-for="artifact in imageArtifacts(part)" :key="artifact.artifact_id || artifact.uri" class="tool-image-card" @click="openImagePreview(artifact)">
-                                    <img :src="imageSrc(artifact)" :alt="imageAlt(artifact)" loading="lazy" />
-                                  </figure>
-                                </div>
-                                <pre v-else-if="!displayToolInputPreview(part) && readableProcessDetail(part)" class="tool-output">{{ readableProcessDetail(part) }}</pre>
-                              </div>
-                              </Transition>
-                            </div>
-                          </div>
-                        </div>
-                        </Transition>
-                      </div>
-                    </template>
-
-                    <template v-else-if="group.kind === 'process' && group.part">
-                      <div
-                        v-if="(group.part.partType === 'tool_call' || group.part.partType === 'tool_result') && !isControlTool(group.part)"
-                        class="process-step process-step--tool"
-                        :class="'process-step--' + group.part.status"
-                      >
-                        <button
-                          type="button"
-                          class="tool-card-header"
-                          :class="[{ 'has-detail': hasToolDisplay(group.part), 'process-tool-row': !isCommandTool(group.part), 'tool-card-header--command': isCommandTool(group.part) }, toolColorClass(group.part)]"
-                          :aria-expanded="!isCommandTool(group.part) && hasToolDisplay(group.part) ? shouldShowToolBody(group.part, false) : undefined"
-                          @click="togglePartExpand(group.part, false)"
-                        >
-                          <span v-if="group.part.status === 'error'" class="process-step-marker process-step-marker--error" />
-                          <template v-if="isCommandTool(group.part)">
-                            <span v-beam class="process-step-title">{{ processTitleWithState(group.part) }}</span>
-                            <span v-if="shouldShowToolArgsPreview(group.part)" class="tool-args-preview">{{ toolArgsPreview(group.part.toolArgs || {}) }}</span>
-                          </template>
-                          <template v-else>
-                            <span v-beam class="process-step-title tool-row-summary">{{ processTitleWithState(group.part) }}</span>
-                            <span v-if="shouldShowToolArgsPreview(group.part)" class="tool-args-preview tool-row-args">{{ toolArgsPreview(group.part.toolArgs || {}) }}</span>
-                            <span v-if="shouldShowToolStatusSuffix(group.part)" class="tool-row-status">{{ toolStatusLabel(group.part) }}</span>
-                          </template>
-                        </button>
-                        <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
-                        <div
-                          v-if="shouldShowToolBody(group.part, false)"
-                          class="tool-card-body"
-                          :class="{ 'tool-card-body--row': !isCommandTool(group.part) }"
-                        >
-                          <pre v-if="displayToolError(group.part)" class="tool-output tool-output--error">{{ displayToolError(group.part) }}</pre>
-                          <div v-if="displayToolResult(group.part) && isFileTool(group.part)" class="diff-block" :class="[fileDiffClass(group.part), { 'diff-block--wrap': isToolWrapEnabled(group.part.id) }]">
-                            <div class="diff-header">
-                              <span class="diff-file">{{ diffHeaderText(group.part) }}</span>
-                              <button type="button" class="wrap-toggle" @click.stop="toggleToolWrap(group.part.id)">{{ isToolWrapEnabled(group.part.id) ? 'wrap' : 'scroll' }}</button>
-                            </div>
-                            <div class="diff-lines">
-                              <div v-for="(line, li) in diffDisplayLines(group.part)" :key="li" class="diff-line" :class="diffLineClass(line, group.part)">
-                                <span class="diff-line-num">{{ diffLineGutter(line, li, group.part) }}</span>
-                                <span class="diff-line-content">{{ diffLineContent(line, group.part) }}</span>
-                              </div>
-                            </div>
-                          </div>
-                          <div v-else-if="testArtifact(group.part)" class="test-result-card" :class="testResultClass(group.part)">
-                            <div class="test-result-head">
-                              <span class="test-result-state">{{ testResultTitle(group.part) }}</span>
-                              <span class="test-result-command">{{ testResultCommand(group.part) }}</span>
-                            </div>
-                            <div class="test-result-meta">
-                              <span v-for="item in testResultMeta(group.part)" :key="item">{{ item }}</span>
-                            </div>
-                            <pre v-if="testResultOutput(group.part)" class="test-result-output">{{ testResultOutput(group.part) }}</pre>
-                          </div>
-                          <div v-else-if="displayToolInputPreview(group.part)" v-auto-follow-scroll="displayToolInputPreview(group.part)" class="tool-output tool-input-preview">
-                            <div class="tool-output-meta">
-                              <span>{{ toolInputPreviewMeta(group.part) }}</span>
-                            </div>
-                            <pre class="tool-output-content" :class="{ 'tool-output-content--wrap': isToolWrapEnabled(group.part.id) }" @click="toggleToolWrap(group.part.id)">{{ displayToolInputPreview(group.part) }}</pre>
-                          </div>
-                          <div v-else-if="displayToolResult(group.part) && isCommandTool(group.part)" class="command-output">
-                            <div class="command-terminal-chrome" aria-hidden="true">
-                              <span class="command-terminal-light command-terminal-light--close" />
-                              <span class="command-terminal-light command-terminal-light--minimize" />
-                              <span class="command-terminal-light command-terminal-light--maximize" />
-                              <span class="command-terminal-title">run command</span>
-                            </div>
-                            <div class="command-terminal-body">
-                              <strong class="command-output-command">$ {{ commandDisplayText(group.part) }}</strong>
-                              <pre class="command-output-result">{{ commandOutputText(group.part) }}</pre>
-                            </div>
-                          </div>
-                          <div v-else-if="displayToolResult(group.part)" class="tool-output">
-                            <div v-if="toolMetaItems(group.part).length > 0" class="tool-output-meta">
-                              <span v-for="item in toolMetaItems(group.part)" :key="item">{{ item }}</span>
-                            </div>
-                            <pre class="tool-output-content" :class="{ 'tool-output-content--wrap': isToolWrapEnabled(group.part.id) }" @click="toggleToolWrap(group.part.id)">{{ toolOutputContent(group.part) }}</pre>
-                          </div>
-                          <div v-if="imageArtifacts(group.part).length" class="tool-image-row">
-                            <figure v-for="artifact in imageArtifacts(group.part)" :key="artifact.artifact_id || artifact.uri" class="tool-image-card" @click="openImagePreview(artifact)">
-                              <img :src="imageSrc(artifact)" :alt="imageAlt(artifact)" loading="lazy" />
-                            </figure>
-                          </div>
-                          <pre v-else-if="!displayToolInputPreview(group.part) && readableProcessDetail(group.part)" class="tool-output">{{ readableProcessDetail(group.part) }}</pre>
-                        </div>
-                        </Transition>
-                      </div>
-
-                      <div
-                        v-else-if="group.part.partType === 'reasoning'"
-                        :class="['process-step', 'process-step--reasoning', 'process-step--' + group.part.status]"
-                      >
-                        <button
-                          type="button"
-                          class="reasoning-toggle"
-                          @click="togglePartExpand(group.part, false)"
-                        >
-                          <span v-if="group.part.status === 'error'" class="process-step-marker process-step-marker--error" />
-                          <span v-beam class="process-step-title">{{ reasoningTitle(group.part.status) }}</span>
-                          <span v-if="reasoningDuration(group.part)" class="reasoning-duration">{{ reasoningDuration(group.part) }}</span>
-                        </button>
-                        <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
-                        <div v-if="isPartExpanded(group.part, false)" class="reasoning-body">
-                          <slot name="reasoning-content" :content="group.part.content ?? ''" :live="false">
-                            <MarkdownRenderer class="process-step-detail" :content="group.part.content ?? ''" />
-                          </slot>
-                        </div>
-                        </Transition>
-                      </div>
-
-                      <div
-                        v-else-if="group.part.partType === 'model_text' && group.part.content"
-                      >
-                        <slot name="assistant-content" :content="group.part.content ?? ''">
-                          <MarkdownRenderer class="part-text-content" :content="group.part.content ?? ''" />
-                        </slot>
-                      </div>
-
-                      <div
-                        v-else-if="group.part.partType === 'decision'"
-                        class="decision-card"
-                        :class="'decision-card--' + group.part.status"
-                      >
-                        <div class="decision-card-head">
-                          <span v-if="group.part.status === 'error'" class="process-step-marker process-step-marker--error" />
-                          <span class="decision-card-title">{{ decisionTitle(group.part) }}</span>
-                          <span class="decision-card-status">{{ decisionStatusLabel(group.part) }}</span>
-                        </div>
-                        <p v-if="decisionDetail(group.part)" class="decision-card-detail">{{ decisionDetail(group.part) }}</p>
-                        <Transition :css="false" @enter="decisionResponseEnter" @leave="fadeSlideLeave">
-                          <p v-if="decisionResponseText(group.part)" class="decision-card-decision">{{ decisionResponseText(group.part) }}</p>
-                        </Transition>
-                        <div v-if="group.part.status === 'pending' && decisionOptions(group.part).length > 0" class="decision-options">
-                          <div v-for="option in decisionOptions(group.part)" :key="option.id" class="decision-option-group">
-                            <button
-                              type="button"
-                              class="decision-option"
-                              :class="{
-                                'decision-option--approve': option.id === 'approve',
-                                'decision-option--deny': option.id === 'deny',
-                              }"
-                              @click="emit('decision-select', { partId: group.part.id, option, response: decisionOptionResponse(group.part, option) })"
-                            >
-                              <span class="decision-option-label">{{ option.label }}</span>
-                            </button>
-                            <span v-if="option.description" class="decision-option-desc">{{ option.description }}</span>
-                          </div>
-                        </div>
-                        <details v-if="canGuideDecision(group.part)" class="decision-guide">
-                          <summary class="decision-guide-toggle">其他处理方式</summary>
-                          <div class="decision-guide-fields">
-                            <textarea
-                              class="decision-guide-input"
-                              :value="decisionGuideDraft(group.part)"
-                              placeholder="说明希望如何处理…"
-                              rows="2"
-                              @input="updateDecisionGuideDraft(group.part, $event)"
-                            />
-                            <button
-                              type="button"
-                              class="decision-guide-submit"
-                              :disabled="!decisionGuideDraft(group.part).trim()"
-                              @click="submitDecisionGuide(group.part)"
-                            >
-                              提交
-                            </button>
-                          </div>
-                        </details>
-                      </div>
-
-                      <div
-                        v-else-if="isSubLinePart(group.part)"
-                        class="sub-line-block"
-                        :class="'sub-line--' + group.part.status"
-                      >
-                        <button
-                          type="button"
-                          class="sub-line-heading"
-                          @click="togglePartExpand(group.part, false)"
-                        >
-                          <span v-if="group.part.status === 'error'" class="process-step-marker process-step-marker--error" />
-                          <span v-beam class="sub-line-title">{{ agentTitle(group.part) }}</span>
-                          <span class="sub-line-status">{{ agentStatusLabel(group.part) }}</span>
-                        </button>
-                        <div v-if="agentDeliveryMeta(group.part).length > 0" class="sub-line-delivery-meta">
-                          <span v-for="item in agentDeliveryMeta(group.part)" :key="item">{{ item }}</span>
-                        </div>
-                        <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
-                        <div v-if="isPartExpanded(group.part, false)" class="sub-line-body">
-                          <MessageView
-                            v-for="subMsg in agentSubMessages(group.part)" :key="subMsg.id"
-                            class="sub-line-chat"
-:msg="subMsg"
-                            :assistant-label="agentTitle(group.part)"
-                            :process-expanded-ids="agentProcessExpandedIds(group.part)"
-                            :suppress-artifacts-panel="artifactsPanelSuppressed"
-                            @toggle-process="toggleAgentProcess"
-                            @decision-select="emit('decision-select', $event)"
-                          >
-                            <template #assistant-content="slotProps">
-                              <slot name="assistant-content" v-bind="slotProps">
-                                <MarkdownRenderer
-                                  class="part-text-content"
-                                  :content="slotProps.content"
-                                  :streaming="Boolean(slotProps.live)"
-                                />
-                              </slot>
-                            </template>
-                            <template #reasoning-content="slotProps">
-                              <slot name="reasoning-content" v-bind="slotProps">
-                                <MarkdownRenderer
-                                  class="process-step-detail"
-                                  :content="slotProps.content"
-                                  :streaming="Boolean(slotProps.live)"
-                                />
-                              </slot>
-                            </template>
-                          </MessageView>
-                        </div>
-                        </Transition>
-                      </div>
-
-                      <div
-                        v-else-if="group.part.partType === 'compaction'"
-                        class="compaction-step"
-                        :class="'compaction-step--' + compactionStatus(group.part)"
-                      >
-                        <button
-                          type="button"
-                          class="compaction-toggle"
-                          :disabled="!canToggleCompaction(group.part)"
-                          :aria-expanded="isCompactionExpanded(group.part)"
-                          :aria-controls="'compaction-summary-' + group.part.id"
-                          @click="canToggleCompaction(group.part) && toggleToolExpand(group.part.id)"
-                        >
-                          <span v-if="group.part.status === 'error'" class="process-step-marker process-step-marker--error" aria-hidden="true" />
-                          <span class="process-step-title">{{ compactionTitle(group.part) }}</span>
-                          <span class="process-step-detail">{{ compactionDetail(group.part) }}</span>
-                        </button>
-                        <div
-                          v-if="shouldShowCompactionSummary(group.part)"
-                          :id="'compaction-summary-' + group.part.id"
-                          class="compaction-summary"
-                          aria-live="polite"
-                          aria-atomic="false"
-                        >
-                          <pre class="compaction-summary-text" :class="{ 'compaction-summary-text--streaming': isRunningCompaction(group.part) }">{{ compactionPreview(group.part) }}</pre>
-                        </div>
-                      </div>
-
-                      <div
-                        v-else-if="isChecklistPart(group.part)"
-                        class="checklist-card"
-                        :class="'checklist-card--' + group.part.status"
-                      >
-                        <div class="checklist-card-head">
-                          <span v-if="group.part.status === 'error'" class="process-step-marker process-step-marker--error" />
-                          <span class="process-step-title">{{ controlTitle(group.part) }}</span>
-                        </div>
-                        <ol class="checklist-items">
-                          <li v-for="item in checklistItems(group.part)" :key="item.id" class="checklist-item" :class="'checklist-item--' + item.status">
-                            <span class="checklist-box"><Check v-if="item.checked" :size="10" :stroke-width="2.4" aria-hidden="true" /></span>
-                            <span class="checklist-text">{{ item.text }}</span>
-                          </li>
-                        </ol>
-                      </div>
-
-                      <div v-else-if="isModelRetryPart(group.part)" class="model-retry-bar">
-                        <div class="model-retry-bar__track">
-                          <div
-                            v-for="i in modelRetryCounts(group.part).maxRetries"
-                            :key="i"
-                            class="model-retry-bar__segment"
-                            :class="{ 'model-retry-bar__segment--filled': i <= modelRetryCounts(group.part).attempt }"
-                          />
-                        </div>
-                        <span class="model-retry-bar__label">重试中 {{ modelRetryCounts(group.part).attempt }}/{{ modelRetryCounts(group.part).maxRetries }}</span>
-                      </div>
-
-                      <div v-else class="process-step process-step--info" :class="'process-step--' + group.part.status">
-                        <button
-                          v-if="hasExpandableProcessDetail(group.part)"
-                          type="button"
-                          class="process-inline-toggle"
-                          @click="togglePartExpand(group.part, false)"
-                        >
-                          <span v-if="group.part.status === 'error'" class="process-step-marker process-step-marker--error" />
-                          <span v-beam class="process-step-title">{{ processTitleWithState(group.part) }}</span>
-                          <span class="process-step-detail">{{ processDetailPreview(group.part) }}</span>
-                        </button>
-                        <template v-else>
-                          <span v-if="group.part.status === 'error'" class="process-step-marker process-step-marker--error" />
-                          <span v-beam class="process-step-title">{{ processTitleWithState(group.part) }}</span>
-                          <span v-if="readableProcessDetail(group.part)" class="process-step-detail">{{ readableProcessDetail(group.part) }}</span>
-                        </template>
-                        <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
-                        <div v-if="hasExpandableProcessDetail(group.part) && isPartExpanded(group.part, false)" class="process-detail-panel">
-                          <button type="button" class="process-detail-copy" @click.stop="copyProcessDetail(group.part)">复制</button>
-                          <pre>{{ fullProcessDetail(group.part) }}</pre>
-                        </div>
-                        </Transition>
-                      </div>
-                    </template>
-                  </template>
-                </div>
-
-                <div v-if="answerContent(msg)" class="assistant-answer">
-                  <slot name="assistant-content" :content="answerContent(msg)">
-                    <MarkdownRenderer class="part-text-content" :content="answerContent(msg)" />
-                  </slot>
-                </div>
-                <template v-else>
-                  <div
-                    v-for="(group, gi) in textGroups(processParts(msg))"
-                    :key="'timeline-txt-' + gi"
-                    class="assistant-answer"
-                  >
-                    <slot name="assistant-content" :content="group.content">
-                      <MarkdownRenderer class="part-text-content" :content="group.content" />
-                    </slot>
-                  </div>
-                </template>
-              </template>
-            </template>
-
-            <!-- Non-timeline live: inline chronological rendering with status indicator -->
-            <div
-              v-if="!isTimelineMessage(msg) && isLiveMessage(msg) && !isInitialWaitingMessage(msg)"
-              class="process-stream process-stream--live"
-            >
-              <div class="process-current">
-                <span class="stream-spinner" />
-                <span class="process-current-title">{{ liveStatusText(msg) }}</span>
-                <span v-if="liveDetailText(msg)" class="process-current-detail">{{ liveDetailText(msg) }}</span>
-              </div>
-
-              <div v-if="shouldShowShallowThinkingPending(msg)" class="shallow-thinking-pending shallow-thinking-pending--process" role="status" aria-live="polite">
-                shallow thinking<span class="shallow-thinking-dots" aria-hidden="true"><span>.</span><span>.</span><span>.</span></span>
-              </div>
-
-              <!-- Live parts inline with streaming -->
-              <template
-                v-for="group in compactGroups(groupParts(processParts(msg)))"
-                :key="group.kind === 'process-group' ? `live-pg-${processGroupId(group)}` : `live-${group.part.id}`"
-              >
-                <!-- model_text: stream inline -->
-                <div v-if="group.kind === 'process' && group.part.partType === 'model_text' && group.part.content">
-                  <MarkdownRenderer
-                    class="part-text-content part-text-content--streaming"
-                    :content="group.part.content ?? ''"
-                    :streaming="true"
-                  />
-                </div>
-
-                <!-- reasoning: inline during live -->
-                <div
-                  v-else-if="group.kind === 'process' && group.part.partType === 'reasoning'"
-                  :class="['process-step', 'process-step--reasoning', 'process-step--' + group.part.status]"
-                >
-                  <button type="button" class="reasoning-toggle" @click="togglePartExpand(group.part, true)">
-                    <span v-if="group.part.status === 'error'" class="process-step-marker process-step-marker--error" />
-                    <span v-beam class="process-step-title">{{ reasoningTitle(group.part.status) }}</span>
-                  </button>
-                  <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
-                  <div v-if="isPartExpanded(group.part, true)" v-auto-follow-scroll="group.part.content ?? ''" class="reasoning-body">
-                    <slot name="reasoning-content" :content="group.part.content ?? ''" :live="true">
-                      <MarkdownRenderer class="process-step-detail" :content="group.part.content ?? ''" />
-                    </slot>
-                  </div>
-                  </Transition>
-                </div>
-
-                <!-- tool: compact during live -->
-                <div
-                  v-else-if="group.kind === 'process' && (group.part.partType === 'tool_call' || group.part.partType === 'tool_result') && !isControlTool(group.part)"
-                  class="process-step process-step--tool"
-                  :class="'process-step--' + group.part.status"
-                >
-                  <button
-                    type="button"
-                    class="tool-card-header process-tool-row"
-                    :class="{ 'has-detail': hasToolDisplay(group.part) }"
-                    @click="togglePartExpand(group.part, true)"
-                  >
-                    <span v-beam class="process-step-title tool-row-summary">{{ processTitleWithState(group.part) }}</span>
-                    <span v-if="shouldShowToolStatusSuffix(group.part)" class="tool-row-status" :class="{ 'tool-row-status--retry': toolRetryLabel(group.part) }">{{ toolRetryLabel(group.part) || toolStatusLabel(group.part) }}</span>
-                  </button>
-                  <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
-                  <div v-if="shouldShowToolBody(group.part, true)" class="tool-card-body" :class="{ 'tool-card-body--row': !isCommandTool(group.part) }">
-                    <pre v-if="displayToolError(group.part)" class="tool-output tool-output--error">{{ displayToolError(group.part) }}</pre>
-                    <pre v-else-if="displayToolResult(group.part)" class="tool-output-content">{{ displayToolResult(group.part) }}</pre>
-                  </div>
-                  </Transition>
-                </div>
-
-                <!-- process-group: batched reasoning + tools during live -->
-                <template v-else-if="group.kind === 'process-group'">
-                  <div class="process-group">
-                    <button
-                      type="button"
-                      class="process-group-summary"
-                      :class="{ 'process-group-summary--running': groupHasRunningPart(group) }"
-                      @click="toggleGroupExpand(processGroupId(group))"
-                    >
-                      <span v-if="groupHasError(group)" class="process-step-marker process-step-marker--error" />
-                      <span v-beam class="process-group-text">{{ group.summary }}</span>
-                    </button>
-                    <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
-                    <div v-if="isGroupExpanded(processGroupId(group))" class="process-group-body">
-                      <div
-                        v-for="part in group.parts"
-                        :key="part.id"
-                        v-memo="partMemo(part, true)"
-                        class="part-wrap"
-                      >
-                        <div v-if="part.partType === 'reasoning'" :class="['process-step', 'process-step--reasoning', 'process-step--' + part.status]">
-                          <button type="button" class="reasoning-toggle" @click="togglePartExpand(part, true)">
-                            <span v-if="part.status === 'error'" class="process-step-marker process-step-marker--error" />
-                            <span v-beam class="process-step-title">{{ reasoningTitle(part.status) }}</span>
-                          </button>
-                          <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
-                          <div v-if="isPartExpanded(part, true)" v-auto-follow-scroll="part.content ?? ''" class="reasoning-body">
-                            <slot name="reasoning-content" :content="part.content ?? ''" :live="true">
-                              <MarkdownRenderer class="process-step-detail" :content="part.content ?? ''" />
-                            </slot>
-                          </div>
-                          </Transition>
-                        </div>
-                        <div
-                          v-else-if="(part.partType === 'tool_call' || part.partType === 'tool_result') && !isControlTool(part)"
-                          class="process-step process-step--tool"
-                          :class="'process-step--' + part.status"
-                        >
-                          <button
-                            type="button"
-                            class="tool-card-header process-tool-row"
-                            :class="{ 'has-detail': hasToolDisplay(part) }"
-                            @click="togglePartExpand(part, true)"
-                          >
-                            <span v-beam class="process-step-title tool-row-summary">{{ processTitleWithState(part) }}</span>
-                            <span v-if="shouldShowToolStatusSuffix(part)" class="tool-row-status" :class="{ 'tool-row-status--retry': toolRetryLabel(part) }">{{ toolRetryLabel(part) || toolStatusLabel(part) }}</span>
-                          </button>
-                          <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
-                          <div v-if="shouldShowToolBody(part, true)" class="tool-card-body" :class="{ 'tool-card-body--row': !isCommandTool(part) }">
-                            <pre v-if="displayToolError(part)" class="tool-output tool-output--error">{{ displayToolError(part) }}</pre>
-                            <pre v-else-if="displayToolResult(part)" class="tool-output-content">{{ displayToolResult(part) }}</pre>
-                          </div>
-                          </Transition>
-                        </div>
-                      </div>
-                    </div>
-                    </Transition>
-                  </div>
-                </template>
-
-                <!-- model retry: progress bar during live -->
-                <div
-                  v-else-if="group.kind === 'process' && isModelRetryPart(group.part)"
-                  class="model-retry-bar"
-                >
-                  <span class="model-retry-bar__label">重试中 {{ modelRetryCounts(group.part).attempt }}/{{ modelRetryCounts(group.part).maxRetries }}</span>
-                  <div class="model-retry-bar__track">
-                    <div
-                      v-for="i in modelRetryCounts(group.part).maxRetries"
-                      :key="i"
-                      class="model-retry-bar__segment"
-                      :class="{ 'model-retry-bar__segment--filled': i <= modelRetryCounts(group.part).attempt }"
-                    />
-                  </div>
-                </div>
-
-                <!-- decision: approval request during live（非 timeline live 分支——
-                     turn 挂起（decision=wait）时消息保持 live 走此分支，审批卡必须直接渲染，
-                     否则用户看不到问题、无法回答（ask-user 卡不显示根因）） -->
-                <div
-                  v-else-if="group.kind === 'process' && group.part.partType === 'decision'"
-                  class="decision-card"
-                  :class="'decision-card--' + group.part.status"
-                >
-                  <div class="decision-card-head">
-                    <span v-if="group.part.status === 'error'" class="process-step-marker process-step-marker--error" />
-                    <span class="decision-card-title">{{ decisionTitle(group.part) }}</span>
-                    <span class="decision-card-status">{{ decisionStatusLabel(group.part) }}</span>
-                  </div>
-                  <p v-if="decisionDetail(group.part)" class="decision-card-detail">{{ decisionDetail(group.part) }}</p>
-                  <Transition :css="false" @enter="decisionResponseEnter" @leave="fadeSlideLeave">
-                    <p v-if="decisionResponseText(group.part)" class="decision-card-decision">{{ decisionResponseText(group.part) }}</p>
-                  </Transition>
-                  <div v-if="group.part.status === 'pending' && decisionOptions(group.part).length > 0" class="decision-options">
-                    <div v-for="option in decisionOptions(group.part)" :key="option.id" class="decision-option-group">
-                      <button
-                        type="button"
-                        class="decision-option"
-                        :class="{
-                          'decision-option--approve': option.id === 'approve',
-                          'decision-option--deny': option.id === 'deny',
-                        }"
-                        @click="emit('decision-select', { partId: group.part.id, option, response: decisionOptionResponse(group.part, option) })"
-                      >
-                        <span class="decision-option-label">{{ option.label }}</span>
-                      </button>
-                      <span v-if="option.description" class="decision-option-desc">{{ option.description }}</span>
-                    </div>
-                  </div>
-                  <details v-if="canGuideDecision(group.part)" class="decision-guide">
-                    <summary class="decision-guide-toggle">其他处理方式</summary>
-                    <div class="decision-guide-fields">
-                      <textarea
-                        class="decision-guide-input"
-                        :value="decisionGuideDraft(group.part)"
-                        placeholder="说明希望如何处理…"
-                        rows="2"
-                        @input="updateDecisionGuideDraft(group.part, $event)"
-                      />
-                      <button
-                        type="button"
-                        class="decision-guide-submit"
-                        :disabled="!decisionGuideDraft(group.part).trim()"
-                        @click="submitDecisionGuide(group.part)"
-                      >
-                        提交
-                      </button>
-                    </div>
-                  </details>
-                </div>
-              </template>
-            </div>
-
-            <template v-if="!isTimelineMessage(msg) && !isLiveMessage(msg)">
               <button
-                v-if="processSummary(msg).count > 0 && !isCompactionOnlyMessage(msg)"
+                v-if="(isLiveMessage(msg) || processSummary(msg).count > 0) && !isCompactionOnlyMessage(msg)"
                 type="button"
-                class="process-toggle"
+                class="process-summary"
                 @click="emit('toggle-process', msg.id)"
               >
-                <span class="process-toggle-icon" :class="processBarStatus(msg)" />
-                <span class="process-toggle-text">{{ processSummary(msg).text }}</span>
-                <span class="process-toggle-hint">{{ isProcessExpanded(msg) ? '收起过程' : '查看过程' }}</span>
+                <span v-if="isLiveMessage(msg) && !isInitialWaitingMessage(msg)" class="process-summary-state">
+                  <span class="stream-spinner" />
+                  <span>{{ liveStatusText(msg) }}</span>
+                </span>
+                <span v-if="isLiveMessage(msg) && liveDetailText(msg)" class="process-summary-detail">{{ liveDetailText(msg) }}</span>
+                <span class="process-summary-icon" :class="processBarStatus(msg)" />
+                <span class="process-summary-text">{{ isLiveMessage(msg) ? liveStatusText(msg) : processSummary(msg).text }}</span>
+                <span class="process-summary-hint">{{ isProcessExpanded(msg) ? '收起过程' : '查看过程' }}</span>
               </button>
 
-            <div v-if="isProcessExpanded(msg)" class="process-stream process-stream--history">
+            <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
+            <div
+                  v-if="isProcessExpanded(msg)"
+                  class="process-stream"
+                  :class="{ 'process-stream--live': isLiveMessage(msg), 'process-stream--complete': !isLiveMessage(msg) }"
+                >
               <template
                 v-for="group in compactGroups(groupParts(processParts(msg)))"
                 :key="group.kind === 'process-group' ? processGroupId(group) : group.part.id"
@@ -1175,18 +178,18 @@
                       <div
                         v-for="part in group.parts"
                         :key="part.id"
-                        v-memo="partMemo(part, false)"
+                        v-memo="partMemo(part, isLiveMessage(msg))"
                         class="part-wrap"
                       >
                         <div v-if="part.partType === 'reasoning'" :class="['process-step', 'process-step--reasoning', 'process-step--' + part.status]">
-                          <button type="button" class="reasoning-toggle" @click="togglePartExpand(part, false)">
+                          <button type="button" class="reasoning-toggle" @click="togglePartExpand(part, isLiveMessage(msg))">
                             <span v-if="part.status === 'error'" class="process-step-marker process-step-marker--error" />
                             <span v-beam class="process-step-title">{{ reasoningTitle(part.status) }}</span>
                             <span v-if="reasoningDuration(part)" class="reasoning-duration">{{ reasoningDuration(part) }}</span>
                           </button>
                           <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
-                          <div v-if="isPartExpanded(part, false)" class="reasoning-body">
-                            <slot name="reasoning-content" :content="part.content ?? ''" :live="false">
+                          <div v-if="isPartExpanded(part, isLiveMessage(msg))" class="reasoning-body">
+                            <slot name="reasoning-content" :content="part.content ?? ''" :live="isLiveMessage(msg)">
                               <MarkdownRenderer class="process-step-detail" :content="part.content ?? ''" />
                             </slot>
                           </div>
@@ -1201,7 +204,7 @@
                             type="button"
                             class="tool-card-header"
                             :class="[{ 'has-detail': hasToolDisplay(part), 'process-tool-row': !isCommandTool(part), 'tool-card-header--command': isCommandTool(part) }, toolColorClass(part)]"
-                            @click="togglePartExpand(part, false)"
+                            @click="togglePartExpand(part, isLiveMessage(msg))"
                           >
                             <span v-if="part.status === 'error'" class="process-step-marker process-step-marker--error" />
                             <template v-if="isCommandTool(part)">
@@ -1215,7 +218,7 @@
                             </template>
                           </button>
                           <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
-                          <div v-if="shouldShowToolBody(part, false)" class="tool-card-body" :class="{ 'tool-card-body--row': !isCommandTool(part) }">
+                          <div v-if="shouldShowToolBody(part, isLiveMessage(msg))" class="tool-card-body" :class="{ 'tool-card-body--row': !isCommandTool(part) }">
                             <pre v-if="displayToolError(part)" class="tool-output tool-output--error">{{ displayToolError(part) }}</pre>
                             <div v-else-if="displayToolResult(part) && isFileTool(part)" class="diff-block" :class="[fileDiffClass(part), { 'diff-block--wrap': isToolWrapEnabled(part.id) }]">
                               <div class="diff-header">
@@ -1286,15 +289,15 @@
                     <button
                       type="button"
                       class="reasoning-toggle"
-                      @click="togglePartExpand(group.part, false)"
+                      @click="togglePartExpand(group.part, isLiveMessage(msg))"
                     >
                       <span v-if="group.part.status === 'error'" class="process-step-marker process-step-marker--error" />
                       <span v-beam class="process-step-title">{{ reasoningTitle(group.part.status) }}</span>
                       <span v-if="reasoningDuration(group.part)" class="reasoning-duration">{{ reasoningDuration(group.part) }}</span>
                     </button>
                     <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
-                    <div v-if="isPartExpanded(group.part, false)" class="reasoning-body">
-                      <slot name="reasoning-content" :content="group.part.content ?? ''" :live="false">
+                    <div v-if="isPartExpanded(group.part, isLiveMessage(msg))" class="reasoning-body">
+                      <slot name="reasoning-content" :content="group.part.content ?? ''" :live="isLiveMessage(msg)">
                         <MarkdownRenderer class="process-step-detail" :content="group.part.content ?? ''" />
                       </slot>
                     </div>
@@ -1310,8 +313,8 @@
                       type="button"
                       class="tool-card-header"
                       :class="[{ 'has-detail': hasToolDisplay(group.part), 'process-tool-row': !isCommandTool(group.part), 'tool-card-header--command': isCommandTool(group.part) }, toolColorClass(group.part)]"
-                      :aria-expanded="!isCommandTool(group.part) && hasToolDisplay(group.part) ? shouldShowToolBody(group.part, false) : undefined"
-                      @click="togglePartExpand(group.part, false)"
+                      :aria-expanded="!isCommandTool(group.part) && hasToolDisplay(group.part) ? shouldShowToolBody(group.part, isLiveMessage(msg)) : undefined"
+                      @click="togglePartExpand(group.part, isLiveMessage(msg))"
                     >
                       <span v-if="group.part.status === 'error'" class="process-step-marker process-step-marker--error" />
                       <template v-if="isCommandTool(group.part)">
@@ -1324,10 +327,10 @@
                         <span v-if="shouldShowToolStatusSuffix(group.part)" class="tool-row-status" :class="{ 'tool-row-status--retry': toolRetryLabel(group.part) }">{{ toolRetryLabel(group.part) || toolStatusLabel(group.part) }}</span>
                       </template>
                     </button>
-                    <span v-if="!hasToolDisplay(group.part) && !group.part.toolArgs && readableProcessDetail(group.part)" class="process-step-detail">{{ readableProcessDetail(group.part) }}</span>
+                    <span v-if="!displayToolInputPreview(group.part) && !hasToolDisplay(group.part) && !group.part.toolArgs && readableProcessDetail(group.part)" class="process-step-detail">{{ readableProcessDetail(group.part) }}</span>
                     <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
                     <div
-                      v-if="shouldShowToolBody(group.part, false)"
+                      v-if="shouldShowToolBody(group.part, isLiveMessage(msg))"
                       class="tool-card-body"
                       :class="{ 'tool-card-body--row': !isCommandTool(group.part) }"
                     >
@@ -1385,7 +388,7 @@
                           <img :src="imageSrc(artifact)" :alt="imageAlt(artifact)" loading="lazy" />
                         </figure>
                       </div>
-                      <pre v-else-if="readableProcessDetail(group.part)" class="tool-output">{{ readableProcessDetail(group.part) }}</pre>
+                      <pre v-else-if="!displayToolInputPreview(group.part) && readableProcessDetail(group.part)" class="tool-output">{{ readableProcessDetail(group.part) }}</pre>
                     </div>
                     </Transition>
                   </div>
@@ -1396,6 +399,7 @@
                     <MarkdownRenderer
                       class="part-text-content"
                       :content="group.part.content ?? ''"
+                      :streaming="isLiveMessage(msg)"
                     />
                   </div>
 
@@ -1403,14 +407,14 @@
                     <button
                       type="button"
                       class="process-inline-toggle"
-                      @click="togglePartExpand(group.part, false)"
+                      @click="togglePartExpand(group.part, isLiveMessage(msg))"
                     >
                       <span v-if="group.part.status === 'error'" class="process-step-marker process-step-marker--error" />
                       <span class="process-step-title">{{ group.part.label || '出错' }}</span>
                       <span class="process-step-detail">{{ processDetailPreview(group.part) }}</span>
                     </button>
                     <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
-                    <div v-if="isPartExpanded(group.part, false)" class="process-detail-panel process-detail-panel--error">
+                    <div v-if="isPartExpanded(group.part, isLiveMessage(msg))" class="process-detail-panel process-detail-panel--error">
                       <button type="button" class="process-detail-copy" @click.stop="copyProcessDetail(group.part)">复制</button>
                       <pre>{{ fullProcessDetail(group.part) }}</pre>
                     </div>
@@ -1434,7 +438,7 @@
                       v-if="hasExpandableProcessDetail(group.part)"
                       type="button"
                       class="process-inline-toggle"
-                      @click="togglePartExpand(group.part, false)"
+                      @click="togglePartExpand(group.part, isLiveMessage(msg))"
                     >
                       <span v-if="group.part.status === 'error'" class="process-step-marker process-step-marker--error" />
                       <span class="process-step-title">{{ group.part.label || '状态' }}</span>
@@ -1446,7 +450,7 @@
                       <span class="process-step-detail">{{ group.part.detail || group.part.content }}</span>
                     </template>
                     <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
-                    <div v-if="hasExpandableProcessDetail(group.part) && isPartExpanded(group.part, false)" class="process-detail-panel">
+                    <div v-if="hasExpandableProcessDetail(group.part) && isPartExpanded(group.part, isLiveMessage(msg))" class="process-detail-panel">
                       <button type="button" class="process-detail-copy" @click.stop="copyProcessDetail(group.part)">复制</button>
                       <pre>{{ fullProcessDetail(group.part) }}</pre>
                     </div>
@@ -1513,7 +517,7 @@
                         <button
                           type="button"
                           class="sub-line-heading"
-                          @click="togglePartExpand(group.part, false)"
+                          @click="togglePartExpand(group.part, isLiveMessage(msg))"
                         >
                           <span v-if="group.part.status === 'error'" class="process-step-marker process-step-marker--error" />
                           <span v-beam class="sub-line-title">{{ agentTitle(group.part) }}</span>
@@ -1523,7 +527,7 @@
                           <span v-for="item in agentDeliveryMeta(group.part)" :key="item">{{ item }}</span>
                         </div>
                         <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
-                        <div v-if="isPartExpanded(group.part, false)" class="sub-line-body">
+                        <div v-if="isPartExpanded(group.part, isLiveMessage(msg))" class="sub-line-body">
                           <MessageView
                             v-for="subMsg in agentSubMessages(group.part)" :key="subMsg.id"
                             class="sub-line-chat"
@@ -1614,30 +618,18 @@
                 </template>
               </template>
             </div>
+            </Transition>
 
             <div v-if="answerContent(msg)" class="assistant-answer">
-              <slot name="assistant-content" :content="answerContent(msg)">
-                <MarkdownRenderer class="part-text-content" :content="answerContent(msg)" />
+              <slot name="assistant-content" :content="answerContent(msg)" :live="isLiveMessage(msg)">
+                <MarkdownRenderer class="part-text-content" :content="answerContent(msg)" :streaming="isLiveMessage(msg)" />
               </slot>
             </div>
-            <template v-else>
-              <div
-                v-for="(group, gi) in textGroups(processParts(msg))"
-                :key="'history-txt-' + gi"
-                class="assistant-answer"
-              >
-                <slot name="assistant-content" :content="group.content">
-                  <MarkdownRenderer class="part-text-content" :content="group.content" />
-                </slot>
-              </div>
-            </template>
-            </template>
-
-                      </template>
+          </template>
 
           <!-- Fallback: no parts → render flat content -->
           <slot v-else name="assistant-content" :content="answerContent(msg)">
-            <MarkdownRenderer class="assistant-answer" :content="answerContent(msg)" />
+            <MarkdownRenderer class="assistant-answer" :content="answerContent(msg)" :streaming="isLiveMessage(msg)" />
           </slot>
 
           <!-- 本轮 artifact 产出（生图等）统一挂到消息结尾；本轮（turn）运行期间
@@ -1722,11 +714,11 @@
 </template>
 
 <script setup lang="ts">
-import type { CoreAttachment, CoreMessage, MessagePart, MessagePartStatus, ToolArtifact } from '../types'
+import type { CoreAttachment, CoreMessage, MessagePart, ToolArtifact } from '../types'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { gsap } from 'gsap'
 import { Check, Copy, GitFork, Hourglass, Info, Pencil, Undo2, X, type LucideIcon } from 'lucide-vue-next'
-import { assistantSegmentTurnId } from '../appServer'
+import { assistantSegmentTurnId, projectAssistantMessageParts } from '../appServer'
 import AutoTextarea from './AutoTextarea.vue'
 import MarkdownRenderer from './MarkdownRenderer.vue'
 import MessageView from './MessageView.vue'
@@ -1993,11 +985,14 @@ function togglePartExpand(part: MessagePart, live = false) {
   const timer = partCompletionTimers.get(partId)
   if (timer) { clearTimeout(timer); partCompletionTimers.delete(partId) }
   
-  // Toggle expanded state
+  // A click is an explicit user decision. Keep it separate from automatic
+  // expansion so a completion timer can never close a manually opened part.
   if (isPartExpanded(part, live)) {
-    autoExpandedPartIds.value = new Set([...autoExpandedPartIds.value].filter(id => id !== partId))
+    userExpandedPartIds.value = new Set([...userExpandedPartIds.value].filter(id => id !== partId))
+    userCollapsedPartIds.value = new Set([...userCollapsedPartIds.value, partId])
   } else {
-    autoExpandedPartIds.value = new Set([...autoExpandedPartIds.value, partId])
+    userExpandedPartIds.value = new Set([...userExpandedPartIds.value, partId])
+    userCollapsedPartIds.value = new Set([...userCollapsedPartIds.value].filter(id => id !== partId))
   }
 }
 
@@ -2025,15 +1020,17 @@ function groupHasError(group: PartGroupProcessGroup): boolean {
 
 function isPartExpanded(part: MessagePart, live = false): boolean {
   // All parts default collapsed; only expanded when explicitly toggled
+  if (userCollapsedPartIds.value.has(part.id)) return false
   if (part.partType === 'error') return true // Errors always expanded
-  if (isSubLinePart(part)) return autoExpandedPartIds.value.has(part.id) // Sub-agents collapsed by default
+  if (userExpandedPartIds.value.has(part.id) || autoExpandedPartIds.value.has(part.id)) return true
+  if (isSubLinePart(part)) return false // Sub-agents collapsed by default
   
   // Reasoning, tool, status: collapsed by default unless toggled
   if (part.partType === 'reasoning' || part.partType === 'tool_call' || part.partType === 'tool_result') {
-    return autoExpandedPartIds.value.has(part.id)
+    return false
   }
   if (part.partType === 'status') {
-    return autoExpandedPartIds.value.has(part.id)
+    return false
   }
   
   // Default collapsed for others unless explicitly expanded
@@ -2042,8 +1039,20 @@ function isPartExpanded(part: MessagePart, live = false): boolean {
 
 // ── Auto expand/collapse state ──
 const autoExpandedPartIds = ref<Set<string>>(new Set())
+const userExpandedPartIds = ref<Set<string>>(new Set())
+const userCollapsedPartIds = ref<Set<string>>(new Set())
+const liveExpandedMessageIds = ref<Set<string>>(new Set())
 const expandedGroupIds = ref<Set<string>>(new Set())
 const partCompletionTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+watch(
+  () => isLiveMessage(props.msg),
+  (live) => {
+    if (!live) return
+    liveExpandedMessageIds.value = new Set([...liveExpandedMessageIds.value, props.msg.id])
+  },
+  { immediate: true },
+)
 
 function schedulePartAutoCollapse(partId: string) {
   const existing = partCompletionTimers.get(partId)
@@ -2144,15 +1153,20 @@ function agentSubMessages(part: MessagePart): CoreMessage[] {
   const processParts = agentTimelineParts(part)
   const conclusion = agentConclusion(part)
   if (processParts.length > 0 || conclusion) {
+    const live = part.status === 'running'
+    const projection = projectAssistantMessageParts(processParts, conclusion, { live })
     messages.push({
       id: agentAssistantMessageId(part),
       role: 'assistant',
       content: conclusion,
       timestamp: '',
       parts: processParts,
+      processParts: projection.processParts,
+      answerPart: projection.answerPart,
+      answerText: projection.answerText,
       metadata: {
         timeline: processParts.length > 0 ? true : undefined,
-        live: part.status === 'running' ? true : undefined,
+        live: live ? true : undefined,
         liveStatus: agentStatusLabel(part),
       },
     })
@@ -2424,10 +1438,6 @@ function isInitialWaitingMessage(msg: CoreMessage): boolean {
   return !!(msg.metadata as Record<string, unknown>)?.initialWaiting
 }
 
-function isTimelineMessage(msg: CoreMessage): boolean {
-  return !!(msg.metadata as Record<string, unknown>)?.timeline
-}
-
 function shouldShowShallowThinkingPending(msg: CoreMessage): boolean {
   const metadata = (msg.metadata || {}) as Record<string, unknown>
   return Boolean(metadata.shallowThinkingPending)
@@ -2436,47 +1446,51 @@ function shouldShowShallowThinkingPending(msg: CoreMessage): boolean {
 }
 
 function hasReasoningContent(msg: CoreMessage): boolean {
-  return (msg.parts || []).some(part => (
+  return processParts(msg).some(part => (
     part.partType === 'reasoning'
     && String(part.content || '').trim().length > 0
   ))
 }
 
-function timelineParts(msg: CoreMessage): MessagePart[] {
-  return processParts(msg)
-}
+const projectionCache = new WeakMap<CoreMessage, {
+  parts: MessagePart[] | undefined
+  processParts: MessagePart[] | undefined
+  content: string
+  answerText: string | undefined
+  projection: ReturnType<typeof projectAssistantMessageParts>
+}>()
 
-function latestNonEmptyModelTextPart(msg: CoreMessage): MessagePart | undefined {
-  const parts = msg.parts || []
-  for (let index = parts.length - 1; index >= 0; index -= 1) {
-    const part = parts[index]
-    if (part.partType !== 'model_text') continue
-    const content = normalizedBodyText(part.content)
-    if (!content) continue
-    return part
+function assistantPartsProjection(msg: CoreMessage): ReturnType<typeof projectAssistantMessageParts> {
+  const cached = projectionCache.get(msg)
+  if (
+    cached
+    && cached.parts === msg.parts
+    && cached.processParts === msg.processParts
+    && cached.content === msg.content
+    && cached.answerText === msg.answerText
+  ) {
+    return cached.projection
   }
-  return undefined
-}
 
-function normalizedBodyText(value: unknown): string {
-  return String(value || '').replace(/\s+/g, ' ').trim()
-}
-
-function currentBodyModelTextPart(msg: CoreMessage): MessagePart | undefined {
-  const latest = latestNonEmptyModelTextPart(msg)
-  if (!latest) return undefined
-  const explicitBody = normalizedBodyText(msg.content)
-  if (!explicitBody || isLiveMessage(msg)) return latest
-  return normalizedBodyText(latest.content) === explicitBody ? latest : undefined
+  const projection = Array.isArray(msg.processParts) && typeof msg.answerText === 'string'
+    ? {
+        processParts: msg.processParts,
+        answerPart: msg.answerPart ?? null,
+        answerText: msg.answerText,
+      }
+    : projectAssistantMessageParts(msg.parts || [], msg.content || '', { live: isLiveMessage(msg) })
+  projectionCache.set(msg, {
+    parts: msg.parts,
+    processParts: msg.processParts,
+    content: msg.content,
+    answerText: msg.answerText,
+    projection,
+  })
+  return projection
 }
 
 function processParts(msg: CoreMessage): MessagePart[] {
-  // All parts are rendered inline chronologically — no body filtering.
-  return msg.parts || []
-}
-
-function answerTextKey(msg: CoreMessage): string {
-  return currentBodyModelTextPart(msg)?.id || msg.id
+  return assistantPartsProjection(msg).processParts
 }
 
 function systemBubbleClass(msg: CoreMessage): string {
@@ -2498,6 +1512,9 @@ function systemIcon(msg: CoreMessage): LucideIcon {
 function isProcessExpanded(msg: CoreMessage): boolean {
   // During live streaming: auto-expand so user sees process unfolding (like GPT)
   if (isLiveMessage(msg)) return true
+  // Preserve the open state across the live -> complete transition. A freshly
+  // mounted historical message has no local live state and starts collapsed.
+  if (liveExpandedMessageIds.value.has(msg.id)) return true
   // Compaction is already a concise status row. Keep it visible so native
   // summary deltas and the terminal result are never hidden by a second,
   // redundant process disclosure.
@@ -2536,14 +1553,6 @@ interface TextGroup {
   content: string
 }
 
-interface LiveProcessItem {
-  id: string
-  title: string
-  detail: string
-  status: MessagePartStatus
-  compact: boolean
-}
-
 function liveStatusText(msg: CoreMessage): string {
   const metadata = (msg.metadata || {}) as Record<string, unknown>
   return String(metadata.liveStatus || metadata.statusText || '正在处理')
@@ -2555,12 +1564,11 @@ function liveDetailText(msg: CoreMessage): string {
 }
 
 function hasAnswerContent(msg: CoreMessage): boolean {
-  if (answerContent(msg)) return true
-  return textGroups(processParts(msg)).some(group => group.content.trim())
+  return Boolean(answerContent(msg).trim())
 }
 
 function terminalErrorText(msg: CoreMessage): string {
-  const parts = msg.parts || []
+  const parts = processParts(msg)
   for (let index = parts.length - 1; index >= 0; index -= 1) {
     const part = parts[index]
     if (part.partType !== 'status' || part.status !== 'error') continue
@@ -2570,11 +1578,7 @@ function terminalErrorText(msg: CoreMessage): string {
 }
 
 function answerContent(msg: CoreMessage): string {
-  const liveModelText = currentBodyModelTextPart(msg)
-  if (isLiveMessage(msg) && liveModelText) return String(liveModelText.content || '').trim()
-  const explicitBody = String(msg.content || '').trim()
-  if (explicitBody) return explicitBody
-  return String(liveModelText?.content || '').trim()
+  return assistantPartsProjection(msg).answerText
 }
 
 // ── User message hover actions: copy / edit ──
@@ -2682,48 +1686,6 @@ onBeforeUnmount(() => {
   partCompletionTimers.clear()
 })
 
-function liveProcessItems(msg: CoreMessage): LiveProcessItem[] {
-  const parts = processParts(msg)
-  if (hasAnswerContent(msg)) {
-    return parts
-      .filter(isHighValueLivePart)
-      .map((part): LiveProcessItem => ({
-        id: part.id,
-        title: livePartTitle(part),
-        detail: livePartDetail(part),
-        status: part.status,
-        compact: part.status === 'completed',
-      }))
-      .slice(-8)
-  }
-
-  const groups = groupParts(parts)
-  const items = groups.map((group): LiveProcessItem => ({
-    id: group.part.id,
-    title: livePartTitle(group.part),
-    detail: livePartDetail(group.part),
-    status: group.part.status,
-    compact: group.part.status === 'completed',
-  }))
-  return items.slice(-8)
-}
-
-function isHighValueLivePart(part: MessagePart): boolean {
-  if (isLowValueControlResult(part, String(part.detail || part.content || part.toolResult || ''))) return false
-  if (part.partType === 'text' || part.partType === 'reasoning' || part.partType === 'model_text' || part.partType === 'plan' || part.partType === 'todo_update') {
-    return false
-  }
-  if (part.partType === 'status') return true
-  if (part.partType === 'compaction') return true
-  if (part.partType === 'tool_call' || part.partType === 'tool_result' || part.partType === 'file_diff' || part.partType === 'command_output') {
-    return true
-  }
-  if (isSubLinePart(part) || part.partType === 'decision' || part.partType === 'error') {
-    return true
-  }
-  return Boolean(part.toolName || part.toolResult || part.toolError)
-}
-
 function livePartTitle(part: MessagePart): string {
   if (part.label) return part.label
   if (part.toolName) return part.toolName
@@ -2744,13 +1706,6 @@ function livePartTitle(part: MessagePart): string {
     compaction: '上下文已压缩',
   }
   return map[part.partType] || '处理中'
-}
-
-function livePartDetail(part: MessagePart): string {
-  const detail = String(part.detail || part.content || part.toolError || part.toolResult || '').trim()
-  if (detail) return detail
-  if (part.toolArgs && Object.keys(part.toolArgs).length > 0) return toolArgsPreview(part.toolArgs)
-  return ''
 }
 
 function modelTextTitle(part: MessagePart): string {
@@ -3104,12 +2059,9 @@ function collectImageArtifacts(
   }
 }
 
-/** 「本轮产出」面板抑制：本轮（turn）运行期间不显示——活跃轮内的消息
- *  （含父消息传播的 sub-line 子消息）或仍带 live 标记的消息，轮次结束才出现。 */
+/** Artifact 面板的位置固定在最终答案之后；只有显式的父级抑制才会隐藏它。 */
 const artifactsPanelSuppressed = computed(() => {
   return props.suppressArtifactsPanel === true
-    || isActiveTurnMessage(props.msg)
-    || isLiveMessage(props.msg)
 })
 
 const messageImages = computed<Array<ToolArtifact & { artifact_id?: string }>>(() => {

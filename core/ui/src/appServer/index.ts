@@ -45,7 +45,10 @@ export {
   coreAppItemPartStatus,
   coreAppItemPartType,
   coreAppItemToMessagePart,
+  normalizeAnswerText,
+  projectAssistantMessageParts,
   type CoreAppItemPartOptions,
+  type AssistantMessagePartsProjection,
 } from './messageParts.ts'
 
 export {
