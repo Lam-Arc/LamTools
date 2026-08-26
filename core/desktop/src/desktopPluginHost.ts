@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import type { DragDropEvent } from '@tauri-apps/api/webview'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 
 interface DesktopPluginDescriptor {
   name: string
@@ -27,6 +28,7 @@ const errorRegion = document.querySelector<HTMLElement>('#host-error')
 
 const allowedCommands = new Set([
   'start_window_dragging',
+  'save_desktop_plugin_position',
   'get_desktop_plugin_anchor',
   'set_desktop_plugin_expanded',
   'set_desktop_plugin_view_mode',
@@ -42,6 +44,8 @@ const allowedCommands = new Set([
 let pluginOrigin = ''
 let fileDropEnabled = false
 let unlistenFileDrop: (() => void) | undefined
+let unlistenWindowMoved: (() => void) | undefined
+let placementSaveTimer: number | undefined
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error || '未知错误')
@@ -75,9 +79,30 @@ async function listenForFileDrops(): Promise<void> {
   unlistenFileDrop = await getCurrentWebview().onDragDropEvent(handleFileDropEvent)
 }
 
+function scheduleDesktopPluginPlacementSave(): void {
+  if (placementSaveTimer !== undefined) window.clearTimeout(placementSaveTimer)
+  placementSaveTimer = window.setTimeout(() => {
+    placementSaveTimer = undefined
+    void invoke('save_desktop_plugin_position').catch((error) => {
+      console.warn('[desktop-plugin-host] saving desktop plugin position failed:', error)
+    })
+  }, 280)
+}
+
+async function listenForWindowMoves(): Promise<void> {
+  unlistenWindowMoved = await getCurrentWindow().onMoved(() => {
+    scheduleDesktopPluginPlacementSave()
+  })
+}
+
 window.addEventListener('beforeunload', () => {
   unlistenFileDrop?.()
   unlistenFileDrop = undefined
+  unlistenWindowMoved?.()
+  unlistenWindowMoved = undefined
+  if (placementSaveTimer !== undefined) window.clearTimeout(placementSaveTimer)
+  placementSaveTimer = undefined
+  void invoke('save_desktop_plugin_position').catch(() => undefined)
 })
 
 async function showError(error: unknown): Promise<void> {
@@ -178,6 +203,7 @@ async function start(): Promise<void> {
   document.title = plugin.title || plugin.name
 
   await invoke('configure_desktop_plugin_window', { spec: plugin.window || {} })
+  await listenForWindowMoves()
   await new Promise<void>((resolve, reject) => {
     frame.addEventListener('load', () => resolve(), { once: true })
     frame.addEventListener('error', () => reject(new Error('桌面插件页面加载失败')), { once: true })

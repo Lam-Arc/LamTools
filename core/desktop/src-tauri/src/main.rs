@@ -100,6 +100,46 @@ struct DesktopWindowTransition {
     anchor: &'static str,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", default)]
+struct DesktopPluginPlacement {
+    monitor_name: Option<String>,
+    x_ratio: f64,
+    y_ratio: f64,
+}
+
+impl Default for DesktopPluginPlacement {
+    fn default() -> Self {
+        Self {
+            monitor_name: None,
+            x_ratio: 1.0,
+            y_ratio: 1.0,
+        }
+    }
+}
+
+impl DesktopPluginPlacement {
+    fn sanitized(&self) -> Self {
+        Self {
+            monitor_name: self
+                .monitor_name
+                .as_ref()
+                .map(|name| name.trim().to_string())
+                .filter(|name| !name.is_empty()),
+            x_ratio: normalized_ratio(self.x_ratio, 1.0),
+            y_ratio: normalized_ratio(self.y_ratio, 1.0),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DesktopWorkArea {
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DesktopDropFileSummary {
@@ -216,6 +256,21 @@ fn close_window(window: tauri::WebviewWindow) {
 #[tauri::command]
 fn start_window_dragging(window: tauri::WebviewWindow) -> Result<(), String> {
     window.start_dragging().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn save_desktop_plugin_position(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+) -> Result<DesktopPluginPlacement, String> {
+    let placement = desktop_plugin_placement_for_window(&window)?;
+    let path = desktop_plugin_placement_path(&app)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let content = serde_json::to_string_pretty(&placement).map_err(|error| error.to_string())?;
+    std::fs::write(path, content).map_err(|error| error.to_string())?;
+    Ok(placement)
 }
 
 #[tauri::command]
@@ -537,7 +592,7 @@ fn configure_desktop_plugin_window(
             spec.collapsed_height,
         ))
         .map_err(|error| error.to_string())?;
-    place_window_bottom_right(&window, &spec)?;
+    restore_desktop_plugin_position(&window, &app, &spec)?;
     sync_pet_tray_item(&app);
     Ok(())
 }
@@ -770,6 +825,7 @@ fn main() {
             toggle_maximize_window,
             close_window,
             start_window_dragging,
+            save_desktop_plugin_position,
             register_desktop_plugin_drop,
             read_desktop_plugin_drop,
             discard_desktop_plugin_drop,
@@ -1059,10 +1115,218 @@ fn create_desktop_plugin_host(
     Ok(WebviewWindowBuilder::from_config(app, &config)?.build()?)
 }
 
-fn place_window_bottom_right(
+fn desktop_plugin_placement_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map(|directory| directory.join("desktop-plugin-placement.json"))
+        .map_err(|error| error.to_string())
+}
+
+fn load_desktop_plugin_placement(app: &tauri::AppHandle) -> Option<DesktopPluginPlacement> {
+    let path = match desktop_plugin_placement_path(app) {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("[lamcore] desktop plugin placement path unavailable: {error}");
+            return None;
+        }
+    };
+    let content = match std::fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(_) => return None,
+    };
+    match serde_json::from_str::<DesktopPluginPlacement>(&content) {
+        Ok(placement) => Some(placement.sanitized()),
+        Err(error) => {
+            eprintln!("[lamcore] desktop plugin placement is invalid: {error}");
+            None
+        }
+    }
+}
+
+fn normalized_ratio(value: f64, fallback: f64) -> f64 {
+    if value.is_finite() {
+        value.clamp(0.0, 1.0)
+    } else {
+        fallback.clamp(0.0, 1.0)
+    }
+}
+
+fn desktop_work_area_from_monitor(monitor: &tauri::Monitor) -> DesktopWorkArea {
+    let work_area = monitor.work_area();
+    DesktopWorkArea {
+        x: work_area.position.x,
+        y: work_area.position.y,
+        width: work_area.size.width,
+        height: work_area.size.height,
+    }
+}
+
+fn physical_window_size(logical_width: f64, logical_height: f64, scale: f64) -> (u32, u32) {
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
+    (
+        (logical_width * scale).round().max(1.0) as u32,
+        (logical_height * scale).round().max(1.0) as u32,
+    )
+}
+
+fn saved_monitor_index(
+    monitor_names: &[Option<String>],
+    saved_name: Option<&str>,
+) -> Option<usize> {
+    let saved_name = saved_name?.trim();
+    if saved_name.is_empty() {
+        return None;
+    }
+    monitor_names.iter().position(|name| {
+        name.as_deref()
+            .is_some_and(|monitor_name| monitor_name == saved_name)
+    })
+}
+
+fn clamp_desktop_plugin_position(
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    work_area: DesktopWorkArea,
+) -> (i32, i32) {
+    (
+        clamp_axis(x, work_area.x, work_area.width, width),
+        clamp_axis(y, work_area.y, work_area.height, height),
+    )
+}
+
+fn clamp_axis(position: i32, area_start: i32, area_size: u32, window_size: u32) -> i32 {
+    let minimum = i64::from(area_start);
+    let maximum = minimum + i64::from(area_size) - i64::from(window_size);
+    if maximum <= minimum {
+        return area_start;
+    }
+    i64::from(position)
+        .clamp(minimum, maximum)
+        .try_into()
+        .unwrap_or(area_start)
+}
+
+fn normalize_desktop_plugin_position(
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    work_area: DesktopWorkArea,
+) -> (f64, f64) {
+    (
+        normalize_axis(x, work_area.x, work_area.width, width),
+        normalize_axis(y, work_area.y, work_area.height, height),
+    )
+}
+
+fn normalize_axis(position: i32, area_start: i32, area_size: u32, window_size: u32) -> f64 {
+    let travel = i64::from(area_size).saturating_sub(i64::from(window_size));
+    if travel <= 0 {
+        return 0.0;
+    }
+    let offset = (i64::from(position) - i64::from(area_start)).clamp(0, travel);
+    offset as f64 / travel as f64
+}
+
+fn desktop_plugin_position_from_placement(
+    placement: &DesktopPluginPlacement,
+    width: u32,
+    height: u32,
+    work_area: DesktopWorkArea,
+) -> (i32, i32) {
+    let x = axis_from_ratio(placement.x_ratio, work_area.x, work_area.width, width);
+    let y = axis_from_ratio(placement.y_ratio, work_area.y, work_area.height, height);
+    clamp_desktop_plugin_position(x, y, width, height, work_area)
+}
+
+fn axis_from_ratio(ratio: f64, area_start: i32, area_size: u32, window_size: u32) -> i32 {
+    let travel = i64::from(area_size).saturating_sub(i64::from(window_size));
+    let value =
+        i64::from(area_start) + (travel as f64 * normalized_ratio(ratio, 1.0)).round() as i64;
+    value.try_into().unwrap_or(area_start)
+}
+
+fn place_window_bottom_right_on_monitor(
     window: &WebviewWindow,
     spec: &DesktopWindowSpec,
+    monitor: &tauri::Monitor,
 ) -> Result<(), String> {
+    let (width, height) = physical_window_size(
+        spec.collapsed_width,
+        spec.collapsed_height,
+        monitor.scale_factor(),
+    );
+    let margin = (spec.margin * monitor.scale_factor()).round().max(0.0) as i32;
+    let work_area = desktop_work_area_from_monitor(monitor);
+    let (x, y) = clamp_desktop_plugin_position(
+        work_area.x + work_area.width.saturating_sub(width) as i32 - margin,
+        work_area.y + work_area.height.saturating_sub(height) as i32 - margin,
+        width,
+        height,
+        work_area,
+    );
+    window
+        .set_size(tauri::PhysicalSize::new(width, height))
+        .map_err(|error| error.to_string())?;
+    window
+        .set_position(tauri::PhysicalPosition::new(x, y))
+        .map_err(|error| error.to_string())
+}
+
+fn restore_desktop_plugin_position(
+    window: &WebviewWindow,
+    app: &tauri::AppHandle,
+    spec: &DesktopWindowSpec,
+) -> Result<(), String> {
+    let placement = load_desktop_plugin_placement(app);
+    let monitors = window
+        .available_monitors()
+        .map_err(|error| error.to_string())?;
+    let fallback = window
+        .primary_monitor()
+        .map_err(|error| error.to_string())?
+        .or(window
+            .current_monitor()
+            .map_err(|error| error.to_string())?)
+        .ok_or_else(|| "no monitor available".to_string())?;
+    let Some(placement) = placement else {
+        return place_window_bottom_right_on_monitor(window, spec, &fallback);
+    };
+    let monitor_names: Vec<Option<String>> = monitors
+        .iter()
+        .map(|monitor| monitor.name().cloned())
+        .collect();
+    let monitor = saved_monitor_index(&monitor_names, placement.monitor_name.as_deref())
+        .and_then(|index| monitors.get(index))
+        .unwrap_or(&fallback);
+    let (width, height) = physical_window_size(
+        spec.collapsed_width,
+        spec.collapsed_height,
+        monitor.scale_factor(),
+    );
+    let position = desktop_plugin_position_from_placement(
+        &placement,
+        width,
+        height,
+        desktop_work_area_from_monitor(monitor),
+    );
+    window
+        .set_size(tauri::PhysicalSize::new(width, height))
+        .map_err(|error| error.to_string())?;
+    window
+        .set_position(tauri::PhysicalPosition::new(position.0, position.1))
+        .map_err(|error| error.to_string())
+}
+
+fn desktop_plugin_placement_for_window(
+    window: &WebviewWindow,
+) -> Result<DesktopPluginPlacement, String> {
     let monitor = window
         .current_monitor()
         .map_err(|error| error.to_string())?
@@ -1070,16 +1334,20 @@ fn place_window_bottom_right(
             .primary_monitor()
             .map_err(|error| error.to_string())?)
         .ok_or_else(|| "no monitor available".to_string())?;
-    let scale = window.scale_factor().map_err(|error| error.to_string())?;
-    let width = (spec.collapsed_width * scale).round() as i32;
-    let height = (spec.collapsed_height * scale).round() as i32;
-    let margin = (spec.margin * scale).round() as i32;
-    let work_area = monitor.work_area();
-    let x = work_area.position.x + work_area.size.width as i32 - width - margin;
-    let y = work_area.position.y + work_area.size.height as i32 - height - margin;
-    window
-        .set_position(tauri::PhysicalPosition::new(x, y))
-        .map_err(|error| error.to_string())
+    let position = window.outer_position().map_err(|error| error.to_string())?;
+    let size = window.outer_size().map_err(|error| error.to_string())?;
+    let (x_ratio, y_ratio) = normalize_desktop_plugin_position(
+        position.x,
+        position.y,
+        size.width,
+        size.height,
+        desktop_work_area_from_monitor(&monitor),
+    );
+    Ok(DesktopPluginPlacement {
+        monitor_name: monitor.name().cloned(),
+        x_ratio,
+        y_ratio,
+    })
 }
 
 fn desktop_window_anchor(window: &WebviewWindow) -> Result<HorizontalAnchor, String> {
@@ -1279,8 +1547,10 @@ fn anchored_position(
 #[cfg(test)]
 mod desktop_window_tests {
     use super::{
-        anchored_position, horizontal_anchor_for_geometry, logical_cursor_position,
-        scaled_viewport_dimension, HorizontalAnchor,
+        anchored_position, clamp_desktop_plugin_position, desktop_plugin_position_from_placement,
+        horizontal_anchor_for_geometry, logical_cursor_position, normalize_desktop_plugin_position,
+        physical_window_size, saved_monitor_index, scaled_viewport_dimension,
+        DesktopPluginPlacement, DesktopWorkArea, HorizontalAnchor,
     };
 
     #[test]
@@ -1334,6 +1604,65 @@ mod desktop_window_tests {
             Some(288.0)
         );
         assert_eq!(scaled_viewport_dimension(680.0, 320.0, 0.0, 288.0), None);
+    }
+
+    #[test]
+    fn normalizes_window_position_against_work_area_travel() {
+        let work_area = DesktopWorkArea {
+            x: -1920,
+            y: 40,
+            width: 1920,
+            height: 1040,
+        };
+        assert_eq!(
+            normalize_desktop_plugin_position(-1920, 40, 256, 288, work_area),
+            (0.0, 0.0)
+        );
+        assert_eq!(
+            normalize_desktop_plugin_position(-256, 792, 256, 288, work_area),
+            (1.0, 1.0)
+        );
+        assert_eq!(
+            normalize_desktop_plugin_position(-1088, 416, 256, 288, work_area),
+            (0.5, 0.5)
+        );
+    }
+
+    #[test]
+    fn restores_and_clamps_normalized_position() {
+        let work_area = DesktopWorkArea {
+            x: 100,
+            y: -200,
+            width: 1600,
+            height: 1200,
+        };
+        let placement = DesktopPluginPlacement {
+            monitor_name: Some("Display 1".to_string()),
+            x_ratio: 1.5,
+            y_ratio: -0.5,
+        };
+        assert_eq!(
+            desktop_plugin_position_from_placement(&placement, 400, 300, work_area),
+            (1300, -200)
+        );
+        assert_eq!(
+            clamp_desktop_plugin_position(9999, -9999, 400, 300, work_area),
+            (1300, -200)
+        );
+    }
+
+    #[test]
+    fn missing_saved_monitor_name_uses_fallback_index() {
+        let monitors = vec![Some("Primary".to_string()), Some("External".to_string())];
+        assert_eq!(saved_monitor_index(&monitors, Some("External")), Some(1));
+        assert_eq!(saved_monitor_index(&monitors, Some("Disconnected")), None);
+        assert_eq!(saved_monitor_index(&monitors, None), None);
+    }
+
+    #[test]
+    fn physical_size_respects_monitor_scale_factor() {
+        assert_eq!(physical_window_size(256.0, 288.0, 1.25), (320, 360));
+        assert_eq!(physical_window_size(256.0, 288.0, 1.5), (384, 432));
     }
 }
 
