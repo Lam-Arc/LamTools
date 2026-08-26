@@ -32,6 +32,7 @@ const allowedCommands = new Set([
   'get_desktop_plugin_anchor',
   'set_desktop_plugin_expanded',
   'set_desktop_plugin_view_mode',
+  'get_desktop_plugin_view_mode_transition',
   'get_desktop_plugin_cursor_position',
   'set_desktop_plugin_cursor_passthrough',
   'import_dropped_files',
@@ -137,6 +138,12 @@ function commandArgs(message: PluginRequest): Record<string, unknown> {
     return {
       mode: ['pet', 'card', 'panel'].includes(mode) ? mode : '',
       reducedMotion: message.args?.reducedMotion === true,
+    }
+  }
+  if (message.command === 'get_desktop_plugin_view_mode_transition') {
+    const mode = String(message.args?.mode || '').trim().toLowerCase()
+    return {
+      mode: ['pet', 'card', 'panel'].includes(mode) ? mode : '',
     }
   }
   if (message.command === 'import_dropped_files' || message.command === 'discard_dropped_files') {

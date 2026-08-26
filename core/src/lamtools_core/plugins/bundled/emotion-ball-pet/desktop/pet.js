@@ -544,10 +544,13 @@
     return size;
   }
 
-  function applyAnchor(anchor) {
+  function applyAnchor(anchor, verticalAnchor) {
     var normalized = anchor === 'left' ? 'left' : 'right';
+    var normalizedVertical = verticalAnchor === 'top' ? 'top' : 'bottom';
     document.body.classList.toggle('anchor-left', normalized === 'left');
     document.body.classList.toggle('anchor-right', normalized === 'right');
+    document.body.classList.toggle('anchor-top', normalizedVertical === 'top');
+    document.body.classList.toggle('anchor-bottom', normalizedVertical === 'bottom');
   }
 
   async function setViewMode(nextMode, options) {
@@ -573,12 +576,21 @@
     elements.petPanel.hidden = mode !== VIEW_MODE.PANEL;
     if (mode === VIEW_MODE.PANEL) elements.interactionCard.scrollTop = 0;
     try {
+      var preview = await invoke('get_desktop_plugin_view_mode_transition', {
+        mode: mode
+      });
+      if (generation !== state.expansionGeneration) return;
+      if (preview && (preview.anchor || preview.verticalAnchor)) {
+        applyAnchor(preview.anchor, preview.verticalAnchor);
+      }
       var transition = await invoke('set_desktop_plugin_view_mode', {
         mode: mode,
         reducedMotion: reducedMotion.matches
       });
       if (generation !== state.expansionGeneration) return;
-      if (transition && transition.anchor) applyAnchor(transition.anchor);
+      if (transition && (transition.anchor || transition.verticalAnchor)) {
+        applyAnchor(transition.anchor, transition.verticalAnchor);
+      }
       if (mode === VIEW_MODE.PANEL) syncQueueLayers();
     } finally {
       if (generation === state.expansionGeneration) state.expansionPending = false;
@@ -1224,7 +1236,7 @@
 
   rememberCollapsedViewport();
   document.body.dataset.viewMode = VIEW_MODE.PET;
-  applyAnchor('right');
+  applyAnchor('right', 'bottom');
   pollPointerPassthrough();
   ensurePetSession()
     .then(function (sessionId) { return connectSession(sessionId, false); })

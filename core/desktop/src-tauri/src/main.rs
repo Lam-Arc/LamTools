@@ -80,10 +80,52 @@ impl HorizontalAnchor {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum VerticalAnchor {
+    Top,
+    Bottom,
+}
+
+impl VerticalAnchor {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Top => "top",
+            Self::Bottom => "bottom",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DesktopPluginViewMode {
+    Pet,
+    Card,
+    Panel,
+}
+
+impl DesktopPluginViewMode {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "pet" => Some(Self::Pet),
+            "card" => Some(Self::Card),
+            "panel" => Some(Self::Panel),
+            _ => None,
+        }
+    }
+
+    fn logical_size(self, spec: &DesktopWindowSpec) -> (f64, f64) {
+        match self {
+            Self::Pet => (spec.collapsed_width, spec.collapsed_height),
+            Self::Card => (spec.card_width, spec.card_height),
+            Self::Panel => (spec.expanded_width, spec.expanded_height),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct DesktopWindowRegistration {
     spec: DesktopWindowSpec,
     anchor: HorizontalAnchor,
+    vertical_anchor: VerticalAnchor,
     ignoring_cursor_events: bool,
 }
 
@@ -98,6 +140,7 @@ struct DesktopCursorPosition {
 #[serde(rename_all = "camelCase")]
 struct DesktopWindowTransition {
     anchor: &'static str,
+    vertical_anchor: &'static str,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -138,6 +181,31 @@ struct DesktopWorkArea {
     y: i32,
     width: u32,
     height: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DesktopWindowGeometry {
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+}
+
+impl DesktopWindowGeometry {
+    fn right(self) -> i64 {
+        i64::from(self.x) + i64::from(self.width)
+    }
+
+    fn bottom(self) -> i64 {
+        i64::from(self.y) + i64::from(self.height)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DesktopWindowTargetGeometry {
+    geometry: DesktopWindowGeometry,
+    anchor: HorizontalAnchor,
+    vertical_anchor: VerticalAnchor,
 }
 
 #[derive(Debug, Serialize)]
@@ -453,6 +521,7 @@ fn set_desktop_plugin_expanded(
     )?;
     Ok(DesktopWindowTransition {
         anchor: anchor.as_str(),
+        vertical_anchor: registration.vertical_anchor.as_str(),
     })
 }
 
@@ -471,37 +540,51 @@ fn set_desktop_plugin_view_mode(
         .cloned()
         .ok_or_else(|| "desktop plugin window is not registered".to_string())?;
     let mode = mode.trim().to_ascii_lowercase();
-    let (width, height) = match mode.as_str() {
-        "pet" => (
-            registration.spec.collapsed_width,
-            registration.spec.collapsed_height,
-        ),
-        "card" => (registration.spec.card_width, registration.spec.card_height),
-        "panel" => (
-            registration.spec.expanded_width,
-            registration.spec.expanded_height,
-        ),
-        _ => return Err(format!("unknown desktop plugin view mode: {mode}")),
-    };
-    let anchor = desktop_window_anchor(&window)?;
-    if let Ok(mut windows) = state.desktop_windows.lock() {
-        if let Some(current) = windows.get_mut(window.label()) {
-            current.anchor = anchor;
-        }
-    }
-    animate_window_anchored(
+    let mode = DesktopPluginViewMode::parse(&mode)
+        .ok_or_else(|| format!("unknown desktop plugin view mode: {mode}"))?;
+    let (target, work_area) = desktop_plugin_view_mode_target(&window, &registration, mode)?;
+    animate_window_to_geometry(
         &window,
-        width,
-        height,
-        anchor,
+        target.geometry,
+        work_area,
         if reduced_motion {
             Duration::ZERO
         } else {
             Duration::from_millis(220)
         },
     )?;
+    if let Ok(mut windows) = state.desktop_windows.lock() {
+        if let Some(current) = windows.get_mut(window.label()) {
+            current.anchor = target.anchor;
+            current.vertical_anchor = target.vertical_anchor;
+        }
+    }
     Ok(DesktopWindowTransition {
-        anchor: anchor.as_str(),
+        anchor: target.anchor.as_str(),
+        vertical_anchor: target.vertical_anchor.as_str(),
+    })
+}
+
+#[tauri::command]
+fn get_desktop_plugin_view_mode_transition(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, BackendState>,
+    mode: String,
+) -> Result<DesktopWindowTransition, String> {
+    let registration = state
+        .desktop_windows
+        .lock()
+        .map_err(|_| "desktop window state lock failed".to_string())?
+        .get(window.label())
+        .cloned()
+        .ok_or_else(|| "desktop plugin window is not registered".to_string())?;
+    let mode = mode.trim().to_ascii_lowercase();
+    let mode = DesktopPluginViewMode::parse(&mode)
+        .ok_or_else(|| format!("unknown desktop plugin view mode: {mode}"))?;
+    let (target, _) = desktop_plugin_view_mode_target(&window, &registration, mode)?;
+    Ok(DesktopWindowTransition {
+        anchor: target.anchor.as_str(),
+        vertical_anchor: target.vertical_anchor.as_str(),
     })
 }
 
@@ -583,6 +666,7 @@ fn configure_desktop_plugin_window(
             DesktopWindowRegistration {
                 spec: spec.clone(),
                 anchor: HorizontalAnchor::Right,
+                vertical_anchor: VerticalAnchor::Bottom,
                 ignoring_cursor_events: false,
             },
         );
@@ -832,6 +916,7 @@ fn main() {
             get_desktop_plugin_anchor,
             set_desktop_plugin_expanded,
             set_desktop_plugin_view_mode,
+            get_desktop_plugin_view_mode_transition,
             get_desktop_plugin_cursor_position,
             set_desktop_plugin_cursor_passthrough,
             hide_current_window,
@@ -1350,20 +1435,34 @@ fn desktop_plugin_placement_for_window(
     })
 }
 
-fn desktop_window_anchor(window: &WebviewWindow) -> Result<HorizontalAnchor, String> {
-    let monitor = window
+fn desktop_plugin_monitor(window: &WebviewWindow) -> Result<tauri::Monitor, String> {
+    window
         .current_monitor()
         .map_err(|error| error.to_string())?
         .or(window
             .primary_monitor()
             .map_err(|error| error.to_string())?)
-        .ok_or_else(|| "no monitor available".to_string())?;
-    let work_area = monitor.work_area();
+        .ok_or_else(|| "no monitor available".to_string())
+}
+
+fn desktop_window_geometry(window: &WebviewWindow) -> Result<DesktopWindowGeometry, String> {
     let position = window.outer_position().map_err(|error| error.to_string())?;
     let size = window.outer_size().map_err(|error| error.to_string())?;
+    Ok(DesktopWindowGeometry {
+        x: position.x,
+        y: position.y,
+        width: size.width.max(1),
+        height: size.height.max(1),
+    })
+}
+
+fn desktop_window_anchor(window: &WebviewWindow) -> Result<HorizontalAnchor, String> {
+    let monitor = desktop_plugin_monitor(window)?;
+    let work_area = monitor.work_area();
+    let geometry = desktop_window_geometry(window)?;
     Ok(horizontal_anchor_for_geometry(
-        position.x,
-        size.width,
+        geometry.x,
+        geometry.width,
         work_area.position.x,
         work_area.size.width,
     ))
@@ -1381,6 +1480,81 @@ fn horizontal_anchor_for_geometry(
         HorizontalAnchor::Left
     } else {
         HorizontalAnchor::Right
+    }
+}
+
+fn desktop_plugin_view_mode_target(
+    window: &WebviewWindow,
+    registration: &DesktopWindowRegistration,
+    target_mode: DesktopPluginViewMode,
+) -> Result<(DesktopWindowTargetGeometry, DesktopWorkArea), String> {
+    let monitor = desktop_plugin_monitor(window)?;
+    let work_area = desktop_work_area_from_monitor(&monitor);
+    let target = desktop_window_target_geometry(
+        desktop_window_geometry(window)?,
+        target_mode,
+        work_area,
+        &registration.spec,
+        monitor.scale_factor(),
+    );
+    Ok((target, work_area))
+}
+
+fn desktop_window_target_geometry(
+    current_geometry: DesktopWindowGeometry,
+    target_mode: DesktopPluginViewMode,
+    monitor_work_area: DesktopWorkArea,
+    spec: &DesktopWindowSpec,
+    scale: f64,
+) -> DesktopWindowTargetGeometry {
+    let (logical_width, logical_height) = target_mode.logical_size(spec);
+    let (requested_width, requested_height) =
+        physical_window_size(logical_width, logical_height, scale);
+    let target_width = requested_width.min(monitor_work_area.width.max(1));
+    let target_height = requested_height.min(monitor_work_area.height.max(1));
+    let work_right = i64::from(monitor_work_area.x) + i64::from(monitor_work_area.width);
+    let work_bottom = i64::from(monitor_work_area.y) + i64::from(monitor_work_area.height);
+    let space_right = (work_right - current_geometry.right()).max(0);
+    let space_bottom = (work_bottom - current_geometry.bottom()).max(0);
+
+    // The anchor names describe where the pet remains inside the expanded
+    // window. Left means the window grows to the right; right means it grows
+    // to the left. The same convention is used by the plugin CSS.
+    let anchor = if space_right >= i64::from(target_width) {
+        HorizontalAnchor::Left
+    } else {
+        HorizontalAnchor::Right
+    };
+    let vertical_anchor = if space_bottom >= i64::from(target_height) {
+        VerticalAnchor::Top
+    } else {
+        VerticalAnchor::Bottom
+    };
+    let requested_x = match anchor {
+        HorizontalAnchor::Left => i64::from(current_geometry.x),
+        HorizontalAnchor::Right => current_geometry.right() - i64::from(target_width),
+    };
+    let requested_y = match vertical_anchor {
+        VerticalAnchor::Top => i64::from(current_geometry.y),
+        VerticalAnchor::Bottom => current_geometry.bottom() - i64::from(target_height),
+    };
+    let (x, y) = clamp_desktop_plugin_position(
+        requested_x.try_into().unwrap_or(current_geometry.x),
+        requested_y.try_into().unwrap_or(current_geometry.y),
+        target_width,
+        target_height,
+        monitor_work_area,
+    );
+
+    DesktopWindowTargetGeometry {
+        geometry: DesktopWindowGeometry {
+            x,
+            y,
+            width: target_width,
+            height: target_height,
+        },
+        anchor,
+        vertical_anchor,
     }
 }
 
@@ -1477,6 +1651,49 @@ fn scaled_viewport_dimension(
     )
 }
 
+fn animate_window_to_geometry(
+    window: &WebviewWindow,
+    target_geometry: DesktopWindowGeometry,
+    monitor_work_area: DesktopWorkArea,
+    duration: Duration,
+) -> Result<(), String> {
+    let start_geometry = desktop_window_geometry(window)?;
+    let apply = |progress: f64| -> Result<(), String> {
+        let current_width = lerp_u32(start_geometry.width, target_geometry.width, progress);
+        let current_height = lerp_u32(start_geometry.height, target_geometry.height, progress);
+        let requested_x = lerp_i32(start_geometry.x, target_geometry.x, progress);
+        let requested_y = lerp_i32(start_geometry.y, target_geometry.y, progress);
+        let (x, y) = clamp_desktop_plugin_position(
+            requested_x,
+            requested_y,
+            current_width,
+            current_height,
+            monitor_work_area,
+        );
+        window
+            .set_size(tauri::PhysicalSize::new(current_width, current_height))
+            .map_err(|error| error.to_string())?;
+        window
+            .set_position(tauri::PhysicalPosition::new(x, y))
+            .map_err(|error| error.to_string())
+    };
+
+    if duration.is_zero() {
+        return apply(1.0);
+    }
+    let steps = 14u32;
+    let step_duration = duration / steps;
+    for step in 1..=steps {
+        let linear = f64::from(step) / f64::from(steps);
+        let eased = 1.0 - (1.0 - linear).powi(4);
+        apply(eased)?;
+        if step < steps {
+            thread::sleep(step_duration);
+        }
+    }
+    Ok(())
+}
+
 fn animate_window_anchored(
     window: &WebviewWindow,
     width: f64,
@@ -1530,6 +1747,10 @@ fn lerp_u32(start: u32, end: u32, progress: f64) -> u32 {
         .max(1.0) as u32
 }
 
+fn lerp_i32(start: i32, end: i32, progress: f64) -> i32 {
+    (f64::from(start) + (f64::from(end) - f64::from(start)) * progress).round() as i32
+}
+
 fn anchored_position(
     fixed_x: i32,
     fixed_bottom: i32,
@@ -1548,9 +1769,11 @@ fn anchored_position(
 mod desktop_window_tests {
     use super::{
         anchored_position, clamp_desktop_plugin_position, desktop_plugin_position_from_placement,
-        horizontal_anchor_for_geometry, logical_cursor_position, normalize_desktop_plugin_position,
-        physical_window_size, saved_monitor_index, scaled_viewport_dimension,
-        DesktopPluginPlacement, DesktopWorkArea, HorizontalAnchor,
+        desktop_window_target_geometry, horizontal_anchor_for_geometry, logical_cursor_position,
+        normalize_desktop_plugin_position, physical_window_size, saved_monitor_index,
+        scaled_viewport_dimension, DesktopPluginPlacement, DesktopPluginViewMode,
+        DesktopWindowGeometry, DesktopWindowSpec, DesktopWorkArea, HorizontalAnchor,
+        VerticalAnchor,
     };
 
     #[test]
@@ -1575,6 +1798,180 @@ mod desktop_window_tests {
             horizontal_anchor_for_geometry(1600, 256, 0, 1920),
             HorizontalAnchor::Right
         );
+    }
+
+    fn geometry_test_spec() -> DesktopWindowSpec {
+        DesktopWindowSpec {
+            collapsed_width: 256.0,
+            collapsed_height: 288.0,
+            expanded_width: 376.0,
+            expanded_height: 680.0,
+            card_width: 376.0,
+            card_height: 360.0,
+            margin: 24.0,
+        }
+    }
+
+    fn geometry_test_work_area() -> DesktopWorkArea {
+        DesktopWorkArea {
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1080,
+        }
+    }
+
+    #[test]
+    fn target_geometry_expands_panel_inward_from_all_four_corners() {
+        let spec = geometry_test_spec();
+        let work_area = geometry_test_work_area();
+        let cases = [
+            (
+                DesktopWindowGeometry {
+                    x: 0,
+                    y: 0,
+                    width: 256,
+                    height: 288,
+                },
+                DesktopWindowGeometry {
+                    x: 0,
+                    y: 0,
+                    width: 376,
+                    height: 680,
+                },
+                HorizontalAnchor::Left,
+                VerticalAnchor::Top,
+            ),
+            (
+                DesktopWindowGeometry {
+                    x: 1664,
+                    y: 0,
+                    width: 256,
+                    height: 288,
+                },
+                DesktopWindowGeometry {
+                    x: 1544,
+                    y: 0,
+                    width: 376,
+                    height: 680,
+                },
+                HorizontalAnchor::Right,
+                VerticalAnchor::Top,
+            ),
+            (
+                DesktopWindowGeometry {
+                    x: 0,
+                    y: 792,
+                    width: 256,
+                    height: 288,
+                },
+                DesktopWindowGeometry {
+                    x: 0,
+                    y: 400,
+                    width: 376,
+                    height: 680,
+                },
+                HorizontalAnchor::Left,
+                VerticalAnchor::Bottom,
+            ),
+            (
+                DesktopWindowGeometry {
+                    x: 1664,
+                    y: 792,
+                    width: 256,
+                    height: 288,
+                },
+                DesktopWindowGeometry {
+                    x: 1544,
+                    y: 400,
+                    width: 376,
+                    height: 680,
+                },
+                HorizontalAnchor::Right,
+                VerticalAnchor::Bottom,
+            ),
+        ];
+
+        for (current, expected_geometry, expected_anchor, expected_vertical_anchor) in cases {
+            let target = desktop_window_target_geometry(
+                current,
+                DesktopPluginViewMode::Panel,
+                work_area,
+                &spec,
+                1.0,
+            );
+            assert_eq!(target.geometry, expected_geometry);
+            assert_eq!(target.anchor, expected_anchor);
+            assert_eq!(target.vertical_anchor, expected_vertical_anchor);
+        }
+    }
+
+    #[test]
+    fn target_geometry_handles_card_and_panel_transitions_at_center() {
+        let spec = geometry_test_spec();
+        let work_area = geometry_test_work_area();
+        let center_pet = DesktopWindowGeometry {
+            x: 832,
+            y: 360,
+            width: 256,
+            height: 288,
+        };
+        let card = desktop_window_target_geometry(
+            center_pet,
+            DesktopPluginViewMode::Card,
+            work_area,
+            &spec,
+            1.0,
+        );
+        assert_eq!(
+            card.geometry,
+            DesktopWindowGeometry {
+                x: 832,
+                y: 360,
+                width: 376,
+                height: 360,
+            }
+        );
+        assert_eq!(card.anchor, HorizontalAnchor::Left);
+        assert_eq!(card.vertical_anchor, VerticalAnchor::Top);
+
+        let panel = desktop_window_target_geometry(
+            card.geometry,
+            DesktopPluginViewMode::Panel,
+            work_area,
+            &spec,
+            1.0,
+        );
+        assert_eq!(
+            panel.geometry,
+            DesktopWindowGeometry {
+                x: 832,
+                y: 40,
+                width: 376,
+                height: 680,
+            }
+        );
+        assert_eq!(panel.anchor, HorizontalAnchor::Left);
+        assert_eq!(panel.vertical_anchor, VerticalAnchor::Bottom);
+
+        let pet = desktop_window_target_geometry(
+            panel.geometry,
+            DesktopPluginViewMode::Pet,
+            work_area,
+            &spec,
+            1.0,
+        );
+        assert_eq!(
+            pet.geometry,
+            DesktopWindowGeometry {
+                x: 832,
+                y: 40,
+                width: 256,
+                height: 288,
+            }
+        );
+        assert_eq!(pet.anchor, HorizontalAnchor::Left);
+        assert_eq!(pet.vertical_anchor, VerticalAnchor::Top);
     }
 
     #[test]
