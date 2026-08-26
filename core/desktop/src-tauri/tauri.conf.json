@@ -40,7 +40,7 @@
         "resizable": false,
         "maximizable": false,
         "minimizable": false,
-        "dragDropEnabled": false,
+        "dragDropEnabled": true,
         "additionalBrowserArgs": "--disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling --disable-backgrounding-tabs"
       }
     ],
@@ -64,7 +64,9 @@
           "description": "Allows the local desktop plugin host to call LamCore host commands.",
           "local": true,
           "windows": ["desktop-plugin-*"],
-          "permissions": []
+          "permissions": [
+            "core:event:default"
+          ]
         }
       ]
     }

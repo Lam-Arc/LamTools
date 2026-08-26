@@ -96,6 +96,14 @@ body.anchor-right .pet-stage { right: 0; left: auto; }
 .ball > svg [data-pet-hit-surface],
 .status-badge,
 .attention-dot { pointer-events: auto; }
+body[data-file-drag="true"] .ball {
+  filter: drop-shadow(0 0 12px color-mix(in srgb, var(--orange) 78%, transparent));
+  transform: scale(1.035);
+}
+body[data-file-drag="true"] .status-badge {
+  color: var(--orange);
+  border-color: color-mix(in srgb, var(--orange) 65%, transparent);
+}
 .status-badge {
   position: absolute;
   left: 50%;

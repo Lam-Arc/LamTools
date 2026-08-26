@@ -301,6 +301,7 @@ def build_plugin_operation_catalog(
                                 "cardWidth": item.desktop_card_width,
                                 "cardHeight": item.desktop_card_height,
                             },
+                            "fileDrop": item.desktop_file_drop,
                         }
                         if item.desktop_entry is not None
                         else None

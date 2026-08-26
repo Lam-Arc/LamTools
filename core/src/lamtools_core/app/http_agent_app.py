@@ -659,6 +659,7 @@ def create_core_agent_http_app(
                     f"{quote(entry.name, safe='')}"
                 ),
                 "window": desktop.get("window") if isinstance(desktop.get("window"), dict) else {},
+                "fileDrop": desktop.get("fileDrop") is True,
             })
         return {"plugins": plugins}
 

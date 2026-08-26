@@ -54,6 +54,18 @@
     if (event.source !== window.parent) return;
     var message = event.data;
     if (!message || message.source !== 'lamtools-desktop-host') return;
+    if (message.type === 'file-drag-enter') {
+      setFileDragActive(true);
+      return;
+    }
+    if (message.type === 'file-drag-leave') {
+      setFileDragActive(false);
+      return;
+    }
+    if (message.type === 'files-dropped') {
+      handleFilesDropped(message.files);
+      return;
+    }
     var resolve = hostRequests.get(message.id);
     if (!resolve) return;
     hostRequests.delete(message.id);
@@ -133,6 +145,9 @@
   var activeCard = null;
   var suspendedCard = null;
   var cardDismissTimer = 0;
+  var isFileDragActive = false;
+  var pendingFiles = [];
+  var fileInstruction = '';
 
   function isInteractiveRenderedPoint(x, y) {
     if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
@@ -172,6 +187,75 @@
   function clearCardTimer() {
     if (cardDismissTimer) window.clearTimeout(cardDismissTimer);
     cardDismissTimer = 0;
+  }
+
+  function setFileDragActive(active) {
+    isFileDragActive = !!active;
+    document.body.dataset.fileDrag = isFileDragActive ? 'true' : 'false';
+    if (isFileDragActive) {
+      setStatus('释放以添加文件', 'waiting', '35');
+      return;
+    }
+    if (state.interaction) {
+      setStatus('等待你的输入', 'waiting', '35');
+    } else if (state.running) {
+      setStatus('正在处理', 'idle', '32');
+    } else if (state.connected) {
+      setStatus('待命中', 'idle', '02');
+    }
+  }
+
+  function normalizeDroppedFiles(files) {
+    return (Array.isArray(files) ? files : []).map(function (file) {
+      var raw = file && typeof file === 'object' ? file : { path: file };
+      var path = String(raw.path || '').trim();
+      if (!path) return null;
+      var suppliedName = String(raw.name || '').trim();
+      var normalizedPath = path.replace(/[\\/]+$/, '');
+      var separator = Math.max(normalizedPath.lastIndexOf('\\'), normalizedPath.lastIndexOf('/'));
+      return {
+        path: path,
+        name: suppliedName || normalizedPath.slice(separator + 1) || normalizedPath
+      };
+    }).filter(Boolean);
+  }
+
+  function cancelPendingFiles() {
+    pendingFiles = [];
+    fileInstruction = '';
+    if (activeCard && activeCard.kind === 'file') hideCard('file-cancelled');
+  }
+
+  function showPendingFileCard() {
+    if (pendingFiles.length === 0) {
+      cancelPendingFiles();
+      return;
+    }
+    showCard({
+      kind: 'file',
+      title: '已添加 ' + pendingFiles.length + ' 个文件',
+      body: '想让我怎么处理？',
+      files: pendingFiles.slice(),
+      input: true,
+      inputValue: fileInstruction,
+      inputPlaceholder: '输入指令（可选）…',
+      onInput: function (value) { fileInstruction = String(value || ''); },
+      onRemoveFile: function (index) {
+        pendingFiles.splice(index, 1);
+        showPendingFileCard();
+      },
+      actions: [
+        { id: 'cancel-files', label: '取消', onClick: cancelPendingFiles },
+        { id: 'send-files', label: '发送', tone: 'primary', disabled: true }
+      ]
+    });
+  }
+
+  function handleFilesDropped(files) {
+    setFileDragActive(false);
+    pendingFiles = normalizeDroppedFiles(files);
+    fileInstruction = '';
+    if (pendingFiles.length > 0) showPendingFileCard();
   }
 
   function renderCard(card) {
@@ -959,6 +1043,11 @@
   elements.approveButton.addEventListener('click', function () { respondApproval('approve_once'); });
   elements.denyButton.addEventListener('click', function () { respondApproval('deny'); });
   elements.petCardClose.addEventListener('click', function () { hideCard('user'); });
+  elements.petCardInput.addEventListener('input', function () {
+    if (activeCard && typeof activeCard.onInput === 'function') {
+      activeCard.onInput(elements.petCardInput.value);
+    }
+  });
   elements.petComposer.addEventListener('submit', function (event) {
     event.preventDefault();
     var text = elements.petComposerInput.value.trim();
@@ -1003,4 +1092,5 @@
   window.hideCard = hideCard;
   window.promoteCardToPanel = promoteCardToPanel;
   window.sendPetTurn = sendPetTurn;
+  window.normalizeDroppedFiles = normalizeDroppedFiles;
 })();

@@ -229,6 +229,7 @@ class PluginRegistry:
         desktop_window: dict[str, Any] = {}
         desktop_card_width = DEFAULT_DESKTOP_CARD_WIDTH
         desktop_card_height = DEFAULT_DESKTOP_CARD_HEIGHT
+        desktop_file_drop = False
         if desktop_raw is not None:
             if not isinstance(desktop_raw, dict):
                 raise ValueError(f"plugin desktop manifest must be an object: {manifest_path}")
@@ -257,6 +258,9 @@ class PluginRegistry:
                 key="desktop.window.cardHeight",
                 default=DEFAULT_DESKTOP_CARD_HEIGHT,
             )
+            desktop_file_drop = desktop_raw.get("fileDrop", False)
+            if not isinstance(desktop_file_drop, bool):
+                raise ValueError(f"plugin desktop.fileDrop must be a boolean: {manifest_path}")
         enabled = self.state_store.is_enabled(name) if self.state_store else True
         return PluginManifest(
             name=name,
@@ -287,6 +291,7 @@ class PluginRegistry:
             desktop_window=desktop_window,
             desktop_card_width=desktop_card_width,
             desktop_card_height=desktop_card_height,
+            desktop_file_drop=desktop_file_drop,
             raw=dict(raw),
         )
 

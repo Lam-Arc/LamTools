@@ -85,10 +85,11 @@ async def test_plugin_list_includes_desktop_descriptor(tmp_path: Path):
     result = await catalog.execute("plugin.list")
 
     assert result.payload["plugins"][0]["desktop"] == {
-        "entry": str((plugin_root / "desktop" / "index.html").resolve()),
-        "title": "Pet window",
-        "window": {"expandedWidth": 400, "cardWidth": 376, "cardHeight": 360},
-    }
+            "entry": str((plugin_root / "desktop" / "index.html").resolve()),
+            "title": "Pet window",
+            "window": {"expandedWidth": 400, "cardWidth": 376, "cardHeight": 360},
+            "fileDrop": False,
+        }
 
 
 @pytest.mark.asyncio

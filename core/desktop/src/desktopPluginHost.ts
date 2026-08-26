@@ -1,10 +1,13 @@
 import { invoke } from '@tauri-apps/api/core'
+import { getCurrentWebview } from '@tauri-apps/api/webview'
+import type { DragDropEvent } from '@tauri-apps/api/webview'
 
 interface DesktopPluginDescriptor {
   name: string
   title: string
   entry_url: string
   window: Record<string, unknown>
+  fileDrop?: boolean
 }
 
 interface PluginRequest {
@@ -30,10 +33,50 @@ const allowedCommands = new Set([
 ])
 
 let pluginOrigin = ''
+let fileDropEnabled = false
+let unlistenFileDrop: (() => void) | undefined
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error || '未知错误')
 }
+
+function postPluginEvent(message: Record<string, unknown>): void {
+  if (!frame?.contentWindow || !pluginOrigin) return
+  frame.contentWindow.postMessage({ source: 'lamtools-desktop-host', ...message }, pluginOrigin)
+}
+
+function fileNameFromPath(path: string): string {
+  const normalized = path.replace(/[\\/]+$/, '')
+  const separator = Math.max(normalized.lastIndexOf('\\'), normalized.lastIndexOf('/'))
+  return normalized.slice(separator + 1) || normalized
+}
+
+function handleFileDropEvent(event: DragDropEvent): void {
+  if (!fileDropEnabled) return
+  if (event.payload.type === 'enter') {
+    postPluginEvent({ type: 'file-drag-enter' })
+  } else if (event.payload.type === 'leave') {
+    postPluginEvent({ type: 'file-drag-leave' })
+  } else if (event.payload.type === 'drop') {
+    postPluginEvent({
+      type: 'files-dropped',
+      files: event.payload.paths.map((path) => ({
+        path,
+        name: fileNameFromPath(path),
+      })),
+    })
+  }
+}
+
+async function listenForFileDrops(): Promise<void> {
+  if (!fileDropEnabled) return
+  unlistenFileDrop = await getCurrentWebview().onDragDropEvent(handleFileDropEvent)
+}
+
+window.addEventListener('beforeunload', () => {
+  unlistenFileDrop?.()
+  unlistenFileDrop = undefined
+})
 
 async function showError(error: unknown): Promise<void> {
   console.error('[desktop-plugin-host]', error)
@@ -116,6 +159,7 @@ async function start(): Promise<void> {
   const entryUrl = new URL(plugin.entry_url, apiBase)
   if (entryUrl.origin !== new URL(apiBase).origin) throw new Error('桌面插件入口不属于 Core')
   pluginOrigin = entryUrl.origin
+  fileDropEnabled = plugin.fileDrop === true
   document.title = plugin.title || plugin.name
 
   await invoke('configure_desktop_plugin_window', { spec: plugin.window || {} })
@@ -124,6 +168,7 @@ async function start(): Promise<void> {
     frame.addEventListener('error', () => reject(new Error('桌面插件页面加载失败')), { once: true })
     frame.src = entryUrl.toString()
   })
+  await listenForFileDrops()
   await invoke('show_current_window')
 }
 

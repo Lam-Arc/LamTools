@@ -1001,6 +1001,7 @@ def test_core_http_serves_enabled_desktop_plugin_assets(
         assert pet["window"]["expandedHeight"] == 680
         assert pet["window"]["cardWidth"] == 376
         assert pet["window"]["cardHeight"] == 360
+        assert pet["fileDrop"] is True
 
         html = client.get(pet["entry_url"])
         script = client.get(
@@ -1021,6 +1022,7 @@ def test_core_http_serves_enabled_desktop_plugin_assets(
         assert "turn/start" in script.text
         assert "/api/core/desktop-plugins/emotion-ball-pet/session" in script.text
         assert "/api/core/sessions" not in script.text
+        assert "files-dropped" in script.text
         assert "approval/respond" in script.text
         assert "toolName === 'question'" in script.text
         assert "set_desktop_plugin_view_mode" in script.text

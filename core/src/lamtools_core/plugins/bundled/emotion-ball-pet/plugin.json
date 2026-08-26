@@ -6,14 +6,15 @@
   "desktop": {
     "entry": "./desktop/index.html",
     "title": "LamTools 桌宠",
+    "fileDrop": true,
     "window": {
       "collapsedWidth": 256,
-        "collapsedHeight": 288,
-        "expandedWidth": 376,
-        "expandedHeight": 680,
-        "cardWidth": 376,
-        "cardHeight": 360,
-        "margin": 24
+      "collapsedHeight": 288,
+      "expandedWidth": 376,
+      "expandedHeight": 680,
+      "cardWidth": 376,
+      "cardHeight": 360,
+      "margin": 24
     }
   }
 }

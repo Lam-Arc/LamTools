@@ -53,6 +53,7 @@ class PluginManifest:
     desktop_window: dict[str, Any] = field(default_factory=dict)
     desktop_card_width: int = 376
     desktop_card_height: int = 360
+    desktop_file_drop: bool = False
     raw: dict[str, Any] = field(default_factory=dict)
 
 
