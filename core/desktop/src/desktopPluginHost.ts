@@ -17,6 +17,11 @@ interface PluginRequest {
   args?: Record<string, unknown>
 }
 
+interface DesktopDropSummary {
+  dropId: string
+  files: Array<{ name: string }>
+}
+
 const frame = document.querySelector<HTMLIFrameElement>('#plugin-frame')
 const errorRegion = document.querySelector<HTMLElement>('#host-error')
 
@@ -27,6 +32,8 @@ const allowedCommands = new Set([
   'set_desktop_plugin_view_mode',
   'get_desktop_plugin_cursor_position',
   'set_desktop_plugin_cursor_passthrough',
+  'import_dropped_files',
+  'discard_dropped_files',
   'show_main_window',
   'hide_current_window',
   'quit_app',
@@ -45,26 +52,21 @@ function postPluginEvent(message: Record<string, unknown>): void {
   frame.contentWindow.postMessage({ source: 'lamtools-desktop-host', ...message }, pluginOrigin)
 }
 
-function fileNameFromPath(path: string): string {
-  const normalized = path.replace(/[\\/]+$/, '')
-  const separator = Math.max(normalized.lastIndexOf('\\'), normalized.lastIndexOf('/'))
-  return normalized.slice(separator + 1) || normalized
-}
-
-function handleFileDropEvent(event: DragDropEvent): void {
+async function handleFileDropEvent(event: DragDropEvent): Promise<void> {
   if (!fileDropEnabled) return
   if (event.payload.type === 'enter') {
     postPluginEvent({ type: 'file-drag-enter' })
   } else if (event.payload.type === 'leave') {
     postPluginEvent({ type: 'file-drag-leave' })
   } else if (event.payload.type === 'drop') {
-    postPluginEvent({
-      type: 'files-dropped',
-      files: event.payload.paths.map((path) => ({
-        path,
-        name: fileNameFromPath(path),
-      })),
-    })
+    try {
+      const drop = await invoke<DesktopDropSummary>('register_desktop_plugin_drop', {
+        paths: event.payload.paths,
+      })
+      postPluginEvent({ type: 'files-dropped', dropId: drop.dropId, files: drop.files })
+    } catch (error) {
+      postPluginEvent({ type: 'file-drop-error', message: errorText(error) })
+    }
   }
 }
 
@@ -112,6 +114,11 @@ function commandArgs(message: PluginRequest): Record<string, unknown> {
       reducedMotion: message.args?.reducedMotion === true,
     }
   }
+  if (message.command === 'import_dropped_files' || message.command === 'discard_dropped_files') {
+    return {
+      dropId: String(message.args?.dropId || '').trim(),
+    }
+  }
   return {}
 }
 
@@ -133,7 +140,15 @@ window.addEventListener('message', async (event) => {
 
   try {
     if (!allowedCommands.has(message.command)) throw new Error(`桌面插件命令未获授权：${message.command}`)
-    response.result = await invoke(message.command, commandArgs(message as PluginRequest))
+    if (message.command === 'import_dropped_files') {
+      if (!fileDropEnabled) throw new Error('当前桌面插件未获 fileDrop 能力')
+      response.result = await invoke('read_desktop_plugin_drop', commandArgs(message as PluginRequest))
+    } else if (message.command === 'discard_dropped_files') {
+      if (!fileDropEnabled) throw new Error('当前桌面插件未获 fileDrop 能力')
+      response.result = await invoke('discard_desktop_plugin_drop', commandArgs(message as PluginRequest))
+    } else {
+      response.result = await invoke(message.command, commandArgs(message as PluginRequest))
+    }
   } catch (error) {
     response.error = errorText(error)
   }

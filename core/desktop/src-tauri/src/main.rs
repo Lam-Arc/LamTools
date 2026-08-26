@@ -8,13 +8,14 @@ use std::{
     path::PathBuf,
     process::{Child, Command, Stdio},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Mutex,
     },
     thread,
     time::{Duration, Instant},
 };
 
+use base64::Engine;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
@@ -33,11 +34,14 @@ const TRAY_ID: &str = "lamtools-tray";
 const TRAY_TOGGLE_PET_ID: &str = "tray-toggle-pet";
 const TRAY_OPEN_MAIN_ID: &str = "tray-open-main";
 const TRAY_QUIT_ID: &str = "tray-quit";
+const MAX_DESKTOP_DROP_FILE_BYTES: u64 = 50 * 1024 * 1024;
+static NEXT_DESKTOP_DROP_ID: AtomicU64 = AtomicU64::new(1);
 
 struct BackendState {
     api_base: Mutex<Option<String>>,
     child: Mutex<Option<Child>>,
     desktop_windows: Mutex<HashMap<String, DesktopWindowRegistration>>,
+    desktop_drops: Mutex<HashMap<String, Vec<PathBuf>>>,
     tray_pet_item: Mutex<Option<MenuItem<tauri::Wry>>>,
     quitting: AtomicBool,
 }
@@ -94,6 +98,34 @@ struct DesktopCursorPosition {
 #[serde(rename_all = "camelCase")]
 struct DesktopWindowTransition {
     anchor: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopDropFileSummary {
+    name: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopDropSummary {
+    drop_id: String,
+    files: Vec<DesktopDropFileSummary>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopDropFileData {
+    name: String,
+    size: u64,
+    data_base64: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopDropData {
+    drop_id: String,
+    files: Vec<DesktopDropFileData>,
 }
 
 impl Default for DesktopWindowSpec {
@@ -184,6 +216,107 @@ fn close_window(window: tauri::WebviewWindow) {
 #[tauri::command]
 fn start_window_dragging(window: tauri::WebviewWindow) -> Result<(), String> {
     window.start_dragging().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn register_desktop_plugin_drop(
+    state: tauri::State<'_, BackendState>,
+    paths: Vec<String>,
+) -> Result<DesktopDropSummary, String> {
+    let files: Vec<PathBuf> = paths
+        .into_iter()
+        .filter_map(|path| std::fs::canonicalize(path).ok())
+        .filter(|path| path.is_file())
+        .collect();
+    if files.is_empty() {
+        return Err("没有可读取的拖放文件".to_string());
+    }
+
+    let drop_id = format!(
+        "drop-{}",
+        NEXT_DESKTOP_DROP_ID.fetch_add(1, Ordering::Relaxed)
+    );
+    let summary = DesktopDropSummary {
+        drop_id: drop_id.clone(),
+        files: files
+            .iter()
+            .map(|path| DesktopDropFileSummary {
+                name: path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "attachment".to_string()),
+            })
+            .collect(),
+    };
+    state
+        .desktop_drops
+        .lock()
+        .map_err(|_| "desktop drop state lock failed".to_string())?
+        .insert(drop_id, files);
+    Ok(summary)
+}
+
+#[tauri::command]
+fn read_desktop_plugin_drop(
+    state: tauri::State<'_, BackendState>,
+    drop_id: String,
+) -> Result<DesktopDropData, String> {
+    let drop_id = drop_id.trim().to_string();
+    if drop_id.is_empty() {
+        return Err("dropId is required".to_string());
+    }
+    let paths = state
+        .desktop_drops
+        .lock()
+        .map_err(|_| "desktop drop state lock failed".to_string())?
+        .get(&drop_id)
+        .cloned()
+        .ok_or_else(|| "desktop drop not found or already imported".to_string())?;
+
+    let mut files = Vec::with_capacity(paths.len());
+    for path in paths {
+        let metadata = std::fs::metadata(&path).map_err(|error| error.to_string())?;
+        if !metadata.is_file() {
+            return Err(format!("拖放文件已不可用：{}", path.display()));
+        }
+        if metadata.len() > MAX_DESKTOP_DROP_FILE_BYTES {
+            return Err(format!("拖放文件超过 50 MB 限制：{}", path.display()));
+        }
+        let bytes = std::fs::read(&path).map_err(|error| error.to_string())?;
+        let name = path
+            .file_name()
+            .map(|value| value.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "attachment".to_string());
+        files.push(DesktopDropFileData {
+            name,
+            size: bytes.len() as u64,
+            data_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+        });
+    }
+
+    state
+        .desktop_drops
+        .lock()
+        .map_err(|_| "desktop drop state lock failed".to_string())?
+        .remove(&drop_id);
+    Ok(DesktopDropData { drop_id, files })
+}
+
+#[tauri::command]
+fn discard_desktop_plugin_drop(
+    state: tauri::State<'_, BackendState>,
+    drop_id: String,
+) -> Result<(), String> {
+    let drop_id = drop_id.trim();
+    if drop_id.is_empty() {
+        return Ok(());
+    }
+    state
+        .desktop_drops
+        .lock()
+        .map_err(|_| "desktop drop state lock failed".to_string())?
+        .remove(drop_id);
+    Ok(())
 }
 
 #[tauri::command]
@@ -284,9 +417,15 @@ fn set_desktop_plugin_view_mode(
         .ok_or_else(|| "desktop plugin window is not registered".to_string())?;
     let mode = mode.trim().to_ascii_lowercase();
     let (width, height) = match mode.as_str() {
-        "pet" => (registration.spec.collapsed_width, registration.spec.collapsed_height),
+        "pet" => (
+            registration.spec.collapsed_width,
+            registration.spec.collapsed_height,
+        ),
         "card" => (registration.spec.card_width, registration.spec.card_height),
-        "panel" => (registration.spec.expanded_width, registration.spec.expanded_height),
+        "panel" => (
+            registration.spec.expanded_width,
+            registration.spec.expanded_height,
+        ),
         _ => return Err(format!("unknown desktop plugin view mode: {mode}")),
     };
     let anchor = desktop_window_anchor(&window)?;
@@ -569,6 +708,7 @@ fn main() {
         api_base: Mutex::new(None),
         child: Mutex::new(None),
         desktop_windows: Mutex::new(HashMap::new()),
+        desktop_drops: Mutex::new(HashMap::new()),
         tray_pet_item: Mutex::new(None),
         quitting: AtomicBool::new(false),
     };
@@ -630,6 +770,9 @@ fn main() {
             toggle_maximize_window,
             close_window,
             start_window_dragging,
+            register_desktop_plugin_drop,
+            read_desktop_plugin_drop,
+            discard_desktop_plugin_drop,
             get_desktop_plugin_anchor,
             set_desktop_plugin_expanded,
             set_desktop_plugin_view_mode,

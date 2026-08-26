@@ -409,6 +409,93 @@ def test_core_agent_http_app_owns_attachment_storage(tmp_path: Path, isolated_co
     assert (tmp_path / "core-data" / "attachments" / "thread-attachment" / "notes.md").is_file()
 
 
+def test_core_agent_http_accepts_multiple_attachments_in_one_turn(
+    tmp_path: Path,
+    monkeypatch,
+    isolated_config_root: Path,
+) -> None:
+    _write_jsonc_config(isolated_config_root)
+
+    async def stream(self, request):
+        del self, request
+        yield LLMStreamEvent(kind="content_delta", content="已收到附件")
+        yield LLMStreamEvent(kind="done")
+
+    monkeypatch.setattr(CoreHttpLLMClient, "stream", stream)
+    app = create_core_agent_http_app(
+        model_id="model-record",
+        core_db=tmp_path / "core.db",
+        data_dir=tmp_path / "core-data",
+        work_root=tmp_path / "workspace",
+    )
+
+    with TestClient(app) as client:
+        uploaded = [
+            client.post(
+                "/api/core/sessions/pet-session/attachments",
+                files={"file": ("report.txt", b"report body", "text/plain")},
+            ),
+            client.post(
+                "/api/core/sessions/pet-session/attachments",
+                files={"file": ("data.csv", b"name,value\nA,1\n", "text/csv")},
+            ),
+        ]
+        assert all(response.status_code == 200 for response in uploaded)
+        attachments = [response.json() for response in uploaded]
+        input_items = [
+            {"type": "text", "text": "请比较这两个文件"},
+            {
+                "type": "attachment",
+                "attachment_id": attachments[0]["id"],
+                "filename": attachments[0]["filename"],
+                "mime_type": attachments[0]["mime_type"],
+                "preview_type": attachments[0]["preview_type"],
+                "size": attachments[0]["size"],
+            },
+            {
+                "type": "attachment",
+                "attachment_id": attachments[1]["id"],
+                "filename": attachments[1]["filename"],
+                "mime_type": attachments[1]["mime_type"],
+                "preview_type": attachments[1]["preview_type"],
+                "size": attachments[1]["size"],
+            },
+        ]
+
+        with client.websocket_connect("/api/core/app-server") as websocket:
+            _initialize_websocket(websocket)
+            websocket.send_json(
+                {
+                    "id": 3,
+                    "method": "turn/start",
+                    "params": {
+                        "thread_id": "pet-session",
+                        "client_message_id": "pet-attachments",
+                        "input": input_items,
+                    },
+                }
+            )
+            started = _receive_rpc_response(websocket, 3)["result"]
+            user_item_id = started["runtime_start"]["user_message_id"]
+            assert started["snapshot"]["items"][user_item_id]["content"] == input_items
+
+            final_snapshot = started["snapshot"]
+            for request_id in range(4, 40):
+                websocket.send_json(
+                    {
+                        "id": request_id,
+                        "method": "thread/read",
+                        "params": {"thread_id": "pet-session"},
+                    }
+                )
+                final_snapshot = _receive_rpc_response(websocket, request_id)["result"]["snapshot"]
+                if final_snapshot.get("status") in {"completed", "idle", "failed", "cancelled"}:
+                    break
+                time.sleep(0.02)
+
+    assert final_snapshot["items"][user_item_id]["content"] == input_items
+
+
 def test_core_http_sessions_survive_app_restart(tmp_path: Path, isolated_config_root: Path) -> None:
     core_db = tmp_path / "core.db"
     _write_jsonc_config(isolated_config_root)
@@ -1021,7 +1108,8 @@ def test_core_http_serves_enabled_desktop_plugin_assets(
         assert "向 Core 提问" not in html.text
         assert "turn/start" in script.text
         assert "/api/core/desktop-plugins/emotion-ball-pet/session" in script.text
-        assert "/api/core/sessions" not in script.text
+        assert "fetch('/api/core/sessions/'" in script.text
+        assert "/attachments" in script.text
         assert "files-dropped" in script.text
         assert "approval/respond" in script.text
         assert "toolName === 'question'" in script.text

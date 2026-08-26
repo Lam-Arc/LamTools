@@ -8,6 +8,8 @@
   var expandedMeasurementViewportWidth = window.innerWidth;
   var hostRequestId = 1;
   var hostRequests = new Map();
+  var strictHostRequestId = 1;
+  var strictHostRequests = new Map();
   var VIEW_MODE = Object.freeze({
     PET: 'pet',
     CARD: 'card',
@@ -50,6 +52,25 @@
       }, '*');
     });
   };
+  var invokeStrict = function (command, args) {
+    var core = window.__TAURI__ && window.__TAURI__.core;
+    if (core && typeof core.invoke === 'function') return core.invoke(command, args || {});
+    if (window.parent === window) return Promise.reject(new Error('桌面插件宿主不可用'));
+    var id = 'pet-strict-' + strictHostRequestId++;
+    return new Promise(function (resolve, reject) {
+      var timer = window.setTimeout(function () {
+        strictHostRequests.delete(id);
+        reject(new Error('桌面插件宿主请求超时：' + command));
+      }, 60000);
+      strictHostRequests.set(id, { resolve: resolve, reject: reject, timer: timer });
+      window.parent.postMessage({
+        source: 'lamtools-desktop-plugin',
+        id: id,
+        command: command,
+        args: args || {}
+      }, '*');
+    });
+  };
   window.addEventListener('message', function (event) {
     if (event.source !== window.parent) return;
     var message = event.data;
@@ -63,7 +84,20 @@
       return;
     }
     if (message.type === 'files-dropped') {
-      handleFilesDropped(message.files);
+      handleFilesDropped(message.files, message.dropId);
+      return;
+    }
+    if (message.type === 'file-drop-error') {
+      setFileDragActive(false);
+      showError(message.message || '读取拖放文件失败');
+      return;
+    }
+    var strictPending = strictHostRequests.get(message.id);
+    if (strictPending) {
+      strictHostRequests.delete(message.id);
+      clearTimeout(strictPending.timer);
+      if (message.error) strictPending.reject(new Error(String(message.error)));
+      else strictPending.resolve(message.result);
       return;
     }
     var resolve = hostRequests.get(message.id);
@@ -147,7 +181,10 @@
   var cardDismissTimer = 0;
   var isFileDragActive = false;
   var pendingFiles = [];
+  var pendingDropId = '';
+  var pendingImportedFiles = [];
   var fileInstruction = '';
+  var fileSendInFlight = false;
 
   function isInteractiveRenderedPoint(x, y) {
     if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
@@ -205,57 +242,83 @@
     }
   }
 
-  function normalizeDroppedFiles(files) {
-    return (Array.isArray(files) ? files : []).map(function (file) {
+  function normalizeDroppedFiles(files, dropId) {
+    var normalizedDropId = String(dropId || '').trim();
+    return (Array.isArray(files) ? files : []).map(function (file, index) {
       var raw = file && typeof file === 'object' ? file : { path: file };
       var path = String(raw.path || '').trim();
-      if (!path) return null;
       var suppliedName = String(raw.name || '').trim();
+      if (!suppliedName && !path) return null;
       var normalizedPath = path.replace(/[\\/]+$/, '');
       var separator = Math.max(normalizedPath.lastIndexOf('\\'), normalizedPath.lastIndexOf('/'));
+      var name = suppliedName || normalizedPath.slice(separator + 1) || normalizedPath;
+      if (!name) return null;
       return {
-        path: path,
-        name: suppliedName || normalizedPath.slice(separator + 1) || normalizedPath
+        name: name,
+        index: Number.isInteger(raw.index) ? raw.index : index,
+        dropId: normalizedDropId
       };
     }).filter(Boolean);
   }
 
+  function discardPendingDrop() {
+    var dropId = pendingDropId;
+    pendingDropId = '';
+    if (dropId) void invoke('discard_dropped_files', { dropId: dropId });
+  }
+
   function cancelPendingFiles() {
+    discardPendingDrop();
     pendingFiles = [];
+    pendingImportedFiles = [];
     fileInstruction = '';
+    fileSendInFlight = false;
     if (activeCard && activeCard.kind === 'file') hideCard('file-cancelled');
   }
 
-  function showPendingFileCard() {
+  function showPendingFileCard(options) {
+    options = options || {};
     if (pendingFiles.length === 0) {
       cancelPendingFiles();
       return;
     }
+    var sending = options.sending === true;
     showCard({
       kind: 'file',
-      title: '已添加 ' + pendingFiles.length + ' 个文件',
-      body: '想让我怎么处理？',
+      title: options.title || '已添加 ' + pendingFiles.length + ' 个文件',
+      body: options.body || '想让我怎么处理？',
       files: pendingFiles.slice(),
       input: true,
       inputValue: fileInstruction,
       inputPlaceholder: '输入指令（可选）…',
       onInput: function (value) { fileInstruction = String(value || ''); },
       onRemoveFile: function (index) {
+        if (fileSendInFlight) return;
         pendingFiles.splice(index, 1);
+        pendingImportedFiles.splice(index, 1);
         showPendingFileCard();
       },
+      disableFileEdits: sending,
       actions: [
-        { id: 'cancel-files', label: '取消', onClick: cancelPendingFiles },
-        { id: 'send-files', label: '发送', tone: 'primary', disabled: true }
+        { id: 'cancel-files', label: '取消', onClick: cancelPendingFiles, disabled: sending },
+        { id: 'send-files', label: '发送', tone: 'primary', onClick: sendPendingFiles, disabled: sending }
       ]
     });
   }
 
-  function handleFilesDropped(files) {
+  function handleFilesDropped(files, dropId) {
     setFileDragActive(false);
-    pendingFiles = normalizeDroppedFiles(files);
+    discardPendingDrop();
+    pendingDropId = String(dropId || '').trim();
+    pendingFiles = normalizeDroppedFiles(files, pendingDropId);
+    pendingImportedFiles = [];
     fileInstruction = '';
-    if (pendingFiles.length > 0) showPendingFileCard();
+    if (!pendingDropId || pendingFiles.length === 0) {
+      pendingDropId = '';
+      showError('没有可用的拖放文件');
+      return;
+    }
+    showPendingFileCard();
   }
 
   function renderCard(card) {
@@ -265,6 +328,7 @@
       elements.petCardFiles.replaceChildren();
       elements.petCardFiles.hidden = true;
       elements.petCardInput.value = '';
+      elements.petCardInput.disabled = false;
       elements.petCardInputWrap.hidden = true;
       elements.petCardActions.replaceChildren();
       return;
@@ -285,6 +349,7 @@
         remove.type = 'button';
         remove.className = 'pet-card-file-remove';
         remove.textContent = '×';
+        remove.disabled = card.disableFileEdits === true;
         remove.setAttribute('aria-label', '删除 ' + name.textContent);
         remove.addEventListener('click', function () { card.onRemoveFile(index); });
         row.appendChild(remove);
@@ -294,6 +359,7 @@
     elements.petCardFiles.hidden = files.length === 0;
     var inputEnabled = card.input === true || typeof card.onInput === 'function';
     elements.petCardInputWrap.hidden = !inputEnabled;
+    elements.petCardInput.disabled = card.disableFileEdits === true;
     elements.petCardInput.placeholder = String(card.inputPlaceholder || '输入内容…');
     if (typeof card.inputValue === 'string' && elements.petCardInput.value !== card.inputValue) {
       elements.petCardInput.value = card.inputValue;
@@ -711,6 +777,83 @@
     state.running = true;
     setStatus('正在处理', 'idle', '32');
     return response;
+  }
+
+  function base64ToBytes(value) {
+    var binary = atob(String(value || ''));
+    var bytes = new Uint8Array(binary.length);
+    for (var index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+    return bytes;
+  }
+
+  async function importPendingDrop() {
+    if (!pendingDropId) throw new Error('拖放文件引用已失效');
+    if (pendingImportedFiles.length >= pendingFiles.length && pendingImportedFiles.length > 0) {
+      return pendingImportedFiles;
+    }
+    var result = await invokeStrict('import_dropped_files', { dropId: pendingDropId });
+    if (!result || !Array.isArray(result.files)) throw new Error('无法读取拖放文件');
+    pendingImportedFiles = result.files;
+    if (pendingImportedFiles.length < pendingFiles.length) {
+      throw new Error('拖放文件读取不完整');
+    }
+    return pendingImportedFiles;
+  }
+
+  async function uploadPendingFiles() {
+    var imported = await importPendingDrop();
+    for (var index = 0; index < pendingFiles.length; index += 1) {
+      var pending = pendingFiles[index];
+      if (pending.attachment && pending.attachment.id) continue;
+      var importedIndex = Number.isInteger(pending.index) ? pending.index : index;
+      var file = imported[importedIndex];
+      if (!file || !file.dataBase64) throw new Error('拖放文件读取不完整');
+      var filename = String(file.name || pending.name || 'attachment');
+      var blob = new Blob([base64ToBytes(file.dataBase64)], { type: 'application/octet-stream' });
+      var body = new FormData();
+      body.append('file', blob, filename);
+      var response = await fetch('/api/core/sessions/' + encodeURIComponent(state.sessionId) + '/attachments', {
+        method: 'POST',
+        body: body
+      });
+      if (!response.ok) throw new Error('附件上传失败（HTTP ' + response.status + '）：' + filename);
+      pending.attachment = await response.json();
+    }
+    return pendingFiles.map(function (pending) { return pending.attachment; });
+  }
+
+  async function sendPendingFiles() {
+    if (fileSendInFlight || pendingFiles.length === 0) return;
+    fileSendInFlight = true;
+    showPendingFileCard({
+      sending: true,
+      title: '正在添加文件…',
+      body: '正在添加文件…'
+    });
+    try {
+      if (!state.connected || !state.socket || state.socket.readyState !== WebSocket.OPEN) {
+        await startPetConnection(false);
+      }
+      if (!state.connected || !state.sessionId) throw new Error('Core App Server 尚未连接');
+      var attachments = await uploadPendingFiles();
+      await sendPetTurn({
+        text: fileInstruction.trim() || '请查看这些文件。',
+        attachments: attachments
+      });
+      pendingFiles = [];
+      pendingImportedFiles = [];
+      discardPendingDrop();
+      fileInstruction = '';
+      hideCard('file-sent');
+    } catch (error) {
+      showError(error);
+      showPendingFileCard({
+        title: '文件发送失败',
+        body: '文件和指令已保留，可修正后重试。\n' + errorMessage(error)
+      });
+    } finally {
+      fileSendInFlight = false;
+    }
   }
 
   function handleSocketMessage(messageEvent) {
