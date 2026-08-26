@@ -166,6 +166,10 @@
     clientMessageId: 1,
     running: false,
     interaction: null,
+    interactionGuidance: '',
+    replyItemId: '',
+    replyText: '',
+    terminalCardShown: false,
     autoExpandedRequestId: '',
     suppressedRequestId: '',
     expansionGeneration: 0,
@@ -224,6 +228,12 @@
   function clearCardTimer() {
     if (cardDismissTimer) window.clearTimeout(cardDismissTimer);
     cardDismissTimer = 0;
+  }
+
+  function clearCardVisual() {
+    clearCardTimer();
+    activeCard = null;
+    renderCard(null);
   }
 
   function setFileDragActive(active) {
@@ -395,13 +405,12 @@
   }
 
   function hideCard(reason) {
-    clearCardTimer();
-    activeCard = null;
-    renderCard(null);
+    clearCardVisual();
     if (state.viewMode === VIEW_MODE.CARD) void setViewMode(VIEW_MODE.PET, { reason: reason || 'dismiss' });
   }
 
   function promoteCardToPanel() {
+    clearCardVisual();
     if (state.viewMode !== VIEW_MODE.PANEL) void setViewMode(VIEW_MODE.PANEL, { reason: 'card-detail' });
   }
 
@@ -608,14 +617,101 @@
     }, 2200);
   }
 
+  function resetReplyBuffer() {
+    state.replyItemId = '';
+    state.replyText = '';
+    state.terminalCardShown = false;
+  }
+
+  function contentText(value) {
+    if (typeof value === 'string') return value;
+    if (Array.isArray(value)) {
+      return value.map(function (part) {
+        if (typeof part === 'string') return part;
+        if (!part || typeof part !== 'object') return '';
+        return String(part.text || part.content || '');
+      }).join('');
+    }
+    if (value && typeof value === 'object') return String(value.text || value.content || '');
+    return value == null ? '' : String(value);
+  }
+
+  function replySummary(text) {
+    var lines = String(text || '').trim().split(/\r?\n/).map(function (line) {
+      return line.trim();
+    }).filter(Boolean).slice(0, 4);
+    var summary = lines.join('\n');
+    if (summary.length > 360) summary = summary.slice(0, 357).trimEnd() + '…';
+    return summary || 'Agent 已完成回答。';
+  }
+
+  function updateReplyBuffer(itemId, payload) {
+    if (!payload || payload.type === 'compaction' || payload.type === 'userMessage') return;
+    var payloadType = String(payload.type || '').toLowerCase();
+    if (payloadType && payloadType !== 'agentmessage' && payloadType !== 'assistantmessage') return;
+    var normalizedItemId = String(itemId || '').trim();
+    if (normalizedItemId && state.replyItemId && normalizedItemId !== state.replyItemId) {
+      state.replyText = '';
+    }
+    if (normalizedItemId) state.replyItemId = normalizedItemId;
+    var delta = contentText(payload.delta);
+    if (delta) {
+      state.replyText += delta;
+      return;
+    }
+    var content = contentText(payload.content).trim();
+    if (!content) return;
+    if (state.replyText && content.startsWith(state.replyText)) {
+      state.replyText = content;
+    } else if (content !== state.replyText) {
+      state.replyText = content;
+    }
+  }
+
+  function showTerminalCard() {
+    if (state.terminalCardShown) return;
+    state.terminalCardShown = true;
+    var reply = state.replyText.trim();
+    if (reply) {
+      if (state.viewMode !== VIEW_MODE.PANEL) {
+        showCard({
+          kind: 'reply',
+          title: 'Agent 回复',
+          body: replySummary(reply),
+          autoDismissMs: 8000,
+          actions: [{ id: 'reply-details', label: '查看完整', onClick: promoteCardToPanel }]
+        });
+      }
+      return;
+    }
+    if (state.viewMode !== VIEW_MODE.PANEL) {
+      showCard({
+        kind: 'success',
+        title: '处理完成',
+        body: '✓ 已完成',
+        autoDismissMs: 5000
+      });
+    }
+  }
+
   function errorMessage(error) {
     return error instanceof Error ? error.message : String(error || '未知错误');
   }
 
   function showError(error) {
     state.running = false;
+    var message = errorMessage(error);
     setStatus('连接或执行失败', 'error', '34');
-    console.warn('[emotion-ball-pet]', errorMessage(error));
+    console.warn('[emotion-ball-pet]', message);
+    if (state.viewMode !== VIEW_MODE.PANEL) {
+      showCard({
+        kind: 'error',
+        title: '处理失败',
+        body: message,
+        autoDismissMs: 10000,
+        actions: [{ id: 'error-details', label: '查看详情', onClick: promoteCardToPanel }]
+      });
+    }
   }
 
   function sendSocket(payload) {
@@ -781,6 +877,7 @@
     if (!state.connected || !state.socket || state.socket.readyState !== WebSocket.OPEN) {
       throw new Error('Core App Server 尚未连接');
     }
+    resetReplyBuffer();
     var response = await rpcRequest('turn/start', {
       thread_id: state.sessionId,
       client_message_id: 'pet-' + Date.now() + '-' + state.clientMessageId++,
@@ -946,13 +1043,14 @@
   function applySnapshot(snapshot) {
     showInteraction(pendingInteraction(snapshot));
     var status = String(runtimeSnapshot(snapshot).status || snapshot.status || '');
-    applyRunStatus(status);
+    applyRunStatus(status, { announce: false });
   }
 
   function applyEvent(event) {
     var method = event.method || '';
     var value = event.payload || {};
     if (method === 'turn/accepted') {
+      resetReplyBuffer();
       state.running = true;
       setStatus('已收到问题', 'idle', '31');
       return;
@@ -961,6 +1059,7 @@
     var kind = value.kind || '';
     var payload = value.payload || {};
     if (kind === 'message') {
+      updateReplyBuffer(value.item_id || value.itemId, payload);
       state.running = true;
       setStatus('正在回答', 'idle', '39');
     } else if (kind === 'approval_request') {
@@ -979,15 +1078,17 @@
       var name = String(payload.tool_name || value.tool_name || '');
       setStatus(name.includes('search') || name.includes('web') ? '正在检索资料' : '正在处理任务', 'idle', name.includes('search') || name.includes('web') ? '40' : '32');
     } else if (kind === 'status') {
-      applyRunStatus(payload.status || value.status || '');
+      applyRunStatus(payload.status || value.status || '', { announce: true, payload: payload });
     } else if (kind === 'error') {
       showError(payload.message || value.message || 'Agent 执行失败');
     }
   }
 
-  function applyRunStatus(rawStatus) {
+  function applyRunStatus(rawStatus, options) {
     var status = String(rawStatus || '').toLowerCase();
     if (!status) return;
+    options = options || {};
+    var announce = options.announce === true;
     if (status === 'running') {
       state.running = true;
       setStatus('正在思考', 'idle', '30');
@@ -997,6 +1098,10 @@
     } else if (status === 'failed') {
       state.running = false;
       setStatus('任务失败', 'error', '34');
+      if (announce) {
+        var failurePayload = options.payload && typeof options.payload === 'object' ? options.payload : {};
+        showError(failurePayload.message || failurePayload.error || failurePayload.raw_end_reason || 'Agent 执行失败');
+      }
     } else if (status === 'cancelled') {
       state.running = false;
       setStatus('任务已停止', 'error', '41');
@@ -1004,14 +1109,82 @@
       state.running = false;
       if (!state.interaction) {
         setStatus(status === 'completed' ? '回答完成' : '待命中', status === 'completed' ? 'done' : 'idle', status === 'completed' ? '33' : '02');
-        if (status === 'completed') scheduleIdle();
+        if (status === 'completed') {
+          if (announce) showTerminalCard();
+          scheduleIdle();
+        }
       }
     }
   }
 
+  function interactionCardData(interaction, isQuestion, presentation) {
+    var requestId = interaction.requestId;
+    var body = presentation.message;
+    if (presentation.detail) body += '\n\n' + presentation.detailLabel + '\n' + presentation.detail;
+    var card = {
+      kind: isQuestion ? 'question' : 'approval',
+      title: isQuestion ? '需要你的回答' : '需要批准',
+      body: body,
+      actions: []
+    };
+    if (isQuestion) {
+      card.input = true;
+      card.inputValue = state.interactionGuidance;
+      card.inputPlaceholder = '补充回答（可选）…';
+      card.onInput = function (value) {
+        if (state.interaction && state.interaction.requestId === requestId) {
+          state.interactionGuidance = String(value || '');
+        }
+      };
+      (Array.isArray(interaction.options) ? interaction.options : []).forEach(function (raw, index) {
+        if (!raw || typeof raw !== 'object') return;
+        var label = String(raw.label || raw.title || raw.id || '选项 ' + (index + 1));
+        var description = String(raw.description || raw.detail || '');
+        var response = String(raw.response || ('我选择：' + label + (description ? '\n原因/说明：' + description : '')));
+        card.actions.push({
+          id: 'question-option-' + index,
+          label: label,
+          onClick: function () {
+            if (state.interaction && state.interaction.requestId === requestId) {
+              void respondApproval('other_guidance', response);
+            }
+          }
+        });
+      });
+      card.actions.push({
+        id: 'question-submit',
+        label: '提交回答',
+        tone: 'primary',
+        onClick: function () {
+          if (!state.interaction || state.interaction.requestId !== requestId) return;
+          var guidance = elements.petCardInput.value.trim();
+          if (guidance) void respondApproval('other_guidance', guidance);
+        }
+      });
+      card.actions.push({ id: 'question-details', label: '查看详情', onClick: promoteCardToPanel });
+      return card;
+    }
+    card.actions = [
+      { id: 'approval-deny', label: '拒绝', onClick: function () {
+        if (state.interaction && state.interaction.requestId === requestId) void respondApproval('deny');
+      } },
+      { id: 'approval-allow', label: '允许一次', tone: 'primary', onClick: function () {
+        if (state.interaction && state.interaction.requestId === requestId) void respondApproval('approve_once');
+      } },
+      { id: 'approval-details', label: '查看详情', onClick: promoteCardToPanel }
+    ];
+    return card;
+  }
+
   function showInteraction(interaction) {
     var previousRequestId = state.interaction && state.interaction.requestId;
+    if (!interaction && activeCard && ['approval', 'question'].includes(activeCard.kind)) {
+      clearCardVisual();
+    }
     state.interaction = interaction && interaction.requestId ? interaction : null;
+    if (state.interaction && previousRequestId !== state.interaction.requestId) {
+      state.interactionGuidance = '';
+    }
     elements.interactionCard.hidden = !state.interaction;
     elements.attentionDot.hidden = !state.interaction;
     elements.guidanceForm.hidden = true;
@@ -1050,7 +1223,9 @@
     if (isNewRequest && state.suppressedRequestId !== state.interaction.requestId) {
       state.autoExpandedRequestId = state.interaction.requestId;
       invoke('show_current_window');
-      if (state.viewMode === VIEW_MODE.PET) setExpanded(true, { reason: 'interaction' });
+      if (state.viewMode !== VIEW_MODE.PANEL) {
+        showCard(interactionCardData(state.interaction, isQuestion, presentation));
+      }
     }
   }
 
