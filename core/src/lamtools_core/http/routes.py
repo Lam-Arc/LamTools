@@ -28,6 +28,7 @@ from ..session import (
     MessageRecord,
     SessionRecord,
     SessionStore,
+    build_session_record,
 )
 from ..usage import (
     InMemoryUsageLedger,
@@ -183,8 +184,8 @@ def create_core_router(
     async def create_session(body: SessionCreateRequest) -> dict[str, Any]:
         if _has_project_metadata(body.metadata):
             raise HTTPException(status_code=422, detail="Use the project session endpoint for project-owned sessions")
-        record = SessionRecord(
-            id=body.id,
+        record = build_session_record(
+            session_id=body.id,
             member_id=body.member_id,
             title=body.title,
             status=body.status,

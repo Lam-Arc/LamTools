@@ -104,8 +104,7 @@
 
   var state = {
     viewMode: VIEW_MODE.PET,
-    sessions: [],
-    sessionId: localStorage.getItem('lamtools.pet.session') || '',
+    sessionId: '',
     socket: null,
     rpcId: 1,
     pendingRpc: new Map(),
@@ -113,6 +112,7 @@
     reconnectAttempt: 0,
     reconnectTimer: 0,
     connected: false,
+    sessionRecoveryAttempted: false,
     running: false,
     interaction: null,
     autoExpandedRequestId: '',
@@ -331,13 +331,8 @@
   }
 
   function syncQueueLayers() {
-    var waitingSessions = state.sessions.filter(function (session) { return session.status === 'waiting'; });
-    var currentIsWaiting = waitingSessions.some(function (session) { return session.id === state.sessionId; });
-    var remaining = Math.max(0, waitingSessions.length - (currentIsWaiting ? 1 : 0));
-    var panelHeight = elements.petPanel.getBoundingClientRect().height;
-    [elements.queuePreviewSecond, elements.queuePreviewThird].forEach(function (preview, index) {
-      preview.hidden = !state.interaction || remaining <= index;
-      if (panelHeight > 0) preview.style.height = Math.ceil(panelHeight) + 'px';
+    [elements.queuePreviewSecond, elements.queuePreviewThird].forEach(function (preview) {
+      preview.hidden = true;
     });
   }
 
@@ -510,7 +505,6 @@
     if (!sessionId) return;
     closeSocket();
     state.sessionId = sessionId;
-    localStorage.setItem('lamtools.pet.session', sessionId);
     var generation = state.connectionGeneration;
     setStatus(reconnecting ? '正在重新连接' : '正在连接会话', 'idle', reconnecting ? '36' : '05');
     try {
@@ -546,12 +540,41 @@
       if (resumed.snapshot) applySnapshot(resumed.snapshot);
       state.connected = true;
       state.reconnectAttempt = 0;
+      state.sessionRecoveryAttempted = false;
       if (!state.interaction && !state.running) setStatus('待命中', 'idle', '02');
     } catch (error) {
       if (generation !== state.connectionGeneration) return;
+      if (isSessionNotFoundError(error) && !state.sessionRecoveryAttempted) {
+        state.sessionRecoveryAttempted = true;
+        try {
+          var recoveredSessionId = await ensurePetSession();
+          await connectSession(recoveredSessionId, false);
+          return;
+        } catch (recoveryError) {
+          error = recoveryError;
+        }
+      }
       showError(error);
       scheduleReconnect(generation);
     }
+  }
+
+  function isSessionNotFoundError(error) {
+    return /session|thread/i.test(errorMessage(error)) && /not found|missing|不存在|404/i.test(errorMessage(error));
+  }
+
+  async function ensurePetSession() {
+    var response = await fetch('/api/core/desktop-plugins/emotion-ball-pet/session', {
+      method: 'POST',
+      headers: { 'Accept': 'application/json' },
+      cache: 'no-store'
+    });
+    if (!response.ok) throw new Error('无法建立桌宠专属会话（HTTP ' + response.status + '）');
+    var data = await response.json();
+    var sessionId = String(data && data.session_id || '').trim();
+    if (!sessionId) throw new Error('桌宠专属会话响应缺少 session_id');
+    state.sessionId = sessionId;
+    return sessionId;
   }
 
   function handleSocketMessage(messageEvent) {
@@ -833,52 +856,12 @@
       var successText = interactionType === 'question' ? '已提交回答' : '已提交审批';
       setStatus(decision === 'deny' ? '已拒绝请求' : successText, decision === 'deny' ? 'error' : 'done', decision === 'deny' ? '38' : '33');
       scheduleIdle();
-      await loadSessions(false);
     } catch (error) {
       showError(error);
     } finally {
       elements.approveButton.disabled = false;
       elements.denyButton.disabled = false;
       elements.guidanceSubmitButton.disabled = false;
-    }
-  }
-
-  function sessionSort(a, b) {
-    if (a.status === 'waiting' && b.status !== 'waiting') return -1;
-    if (b.status === 'waiting' && a.status !== 'waiting') return 1;
-    if (a.status === 'waiting' && b.status === 'waiting') {
-      return String(a.updated_at || '').localeCompare(String(b.updated_at || ''))
-        || String(a.id || '').localeCompare(String(b.id || ''));
-    }
-    return String(b.updated_at || '').localeCompare(String(a.updated_at || ''));
-  }
-
-  async function loadSessions(autoConnect) {
-    try {
-      var response = await fetch('/api/core/sessions', { cache: 'no-store' });
-      if (!response.ok) throw new Error('无法读取会话列表');
-      var sessions = await response.json();
-      state.sessions = (Array.isArray(sessions) ? sessions : [])
-        .filter(function (session) { return session && session.id && !String(session.id).startsWith('wf_'); })
-        .sort(sessionSort);
-      syncQueueLayers();
-      var waiting = state.sessions.find(function (session) { return session.status === 'waiting'; });
-      if (waiting && waiting.id !== state.sessionId) {
-        state.sessionId = waiting.id;
-        connectSession(waiting.id, false);
-        return;
-      }
-      if (autoConnect) {
-        var selected = state.sessions.find(function (session) { return session.id === state.sessionId; }) || state.sessions[0];
-        if (!selected) {
-          setStatus('待命中', 'idle', '02');
-          return;
-        }
-        state.sessionId = selected.id;
-        connectSession(selected.id, false);
-      }
-    } catch (error) {
-      if (autoConnect) showError(error);
     }
   }
 
@@ -949,8 +932,9 @@
   document.body.dataset.viewMode = VIEW_MODE.PET;
   applyAnchor('right');
   pollPointerPassthrough();
-  loadSessions(true);
-  window.setInterval(function () { loadSessions(false); }, 3000);
+  ensurePetSession()
+    .then(function (sessionId) { return connectSession(sessionId, false); })
+    .catch(showError);
   window.VIEW_MODE = VIEW_MODE;
   window.setViewMode = setViewMode;
   window.showCard = showCard;

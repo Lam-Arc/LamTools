@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Protocol, runtime_checkable
+from uuid import uuid4
 
 
 @dataclass
@@ -58,6 +59,24 @@ class MessageRecord:
         if self.metadata:
             d["metadata"] = self.metadata
         return d
+
+
+def build_session_record(
+    *,
+    member_id: str,
+    title: str,
+    status: str = "idle",
+    metadata: dict[str, Any] | None = None,
+    session_id: str | None = None,
+) -> SessionRecord:
+    """Build a new session using the canonical Core session defaults."""
+    return SessionRecord(
+        id=str(session_id or uuid4().hex),
+        member_id=str(member_id),
+        title=str(title).strip() or "New Session",
+        status=str(status).strip() or "idle",
+        metadata=dict(metadata or {}),
+    )
 
 
 @runtime_checkable
@@ -128,6 +147,7 @@ class InMemorySessionStore:
 __all__ = [
     "SessionRecord",
     "MessageRecord",
+    "build_session_record",
     "SessionStore",
     "InMemorySessionStore",
 ]

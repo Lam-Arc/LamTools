@@ -352,6 +352,12 @@ async def handle_thread_resume_operation(
             response=rpc_error(request_id, code=INVALID_REQUEST, message="thread_id is required")
         )
     after_seq = _int_param(params.get("last_seen_seq") or params.get("lastSeenSeq"), default=0)
+    host = getattr(context, "host", None)
+    session_store = getattr(host, "session_store", None)
+    if session_store is not None and await session_store.get(thread_id) is None:
+        return CoreLiveOperationOutcome(
+            response=rpc_error(request_id, code=INVALID_REQUEST, message="thread not found")
+        )
     page_limit = max(1, min(_int_param(params.get("limit"), default=500), 500))
     async with context.session_factory() as db:
         events = await context.persistence.list_after(db, thread_id=thread_id, after_seq=after_seq, limit=page_limit)

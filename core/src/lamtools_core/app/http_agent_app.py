@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import uuid
 from dataclasses import replace
@@ -37,9 +38,11 @@ from lamtools_core.runtime.observer import ObserverSupervisor
 from lamtools_core.runtime.workflow import WorkflowManager, WorkflowRunner
 from lamtools_core.project.workflow_store import WorkflowStore
 from lamtools_core.member import MemberKit, MemberManifest
+from lamtools_core.session import build_session_record
 
 from .core_db import open_core_app_db
 from .core_session_store import CoreDbSessionStore
+from .desktop_plugin_session_store import DesktopPluginSessionStore
 from .default_agent import CoreAgentPaths, CoreAgentSpec, create_core_agent_operations
 from .durable_operations import register_durable_operations
 from .workflow_operations import register_workflow_operations
@@ -250,6 +253,8 @@ def create_core_agent_http_app(
     live_hub = CoreAppEventHub()
     runtime_task_registry = RuntimeTaskRegistry()
     session_store = CoreDbSessionStore(lambda: app_state["core_db"])
+    desktop_plugin_session_store = DesktopPluginSessionStore(resolved_data_dir / "desktop-plugin-sessions.json")
+    desktop_plugin_session_lock = asyncio.Lock()
 
     async def execute_core_operation(request: OperationRequest) -> OperationResult:
         actual = app_state.get("operations")
@@ -656,6 +661,45 @@ def create_core_agent_http_app(
                 "window": desktop.get("window") if isinstance(desktop.get("window"), dict) else {},
             })
         return {"plugins": plugins}
+
+    @app.post("/api/core/desktop-plugins/{plugin_id}/session")
+    async def ensure_desktop_plugin_session(plugin_id: str) -> dict[str, Any]:
+        plugin_id = str(plugin_id).strip()
+        candidates = await _desktop_plugin_entries(enabled_only=False)
+        plugin = next(
+            (item for item in candidates if str(item.get("name") or "") == plugin_id),
+            None,
+        )
+        if plugin is None or plugin.get("enabled") is not True:
+            raise HTTPException(status_code=404, detail="Enabled desktop plugin not found")
+
+        async with desktop_plugin_session_lock:
+            mapped_session_id = desktop_plugin_session_store.get(plugin_id)
+            if mapped_session_id:
+                existing = await session_store.get(mapped_session_id)
+                if existing is not None:
+                    return {
+                        "plugin_id": plugin_id,
+                        "session_id": existing.id,
+                        "created": False,
+                        "session": existing.to_dict(),
+                    }
+                desktop_plugin_session_store.delete(plugin_id)
+
+            desktop = plugin.get("desktop") if isinstance(plugin.get("desktop"), dict) else {}
+            record = build_session_record(
+                member_id=runtime_spec.member_id,
+                title=str(desktop.get("title") or plugin_id),
+                metadata={"desktop_plugin_id": plugin_id, "source": "desktop_plugin"},
+            )
+            await session_store.create(record)
+            desktop_plugin_session_store.set(plugin_id, record.id)
+            return {
+                "plugin_id": plugin_id,
+                "session_id": record.id,
+                "created": True,
+                "session": record.to_dict(),
+            }
 
     @app.get("/api/core/desktop-plugins/{plugin_name}/assets/{asset_path:path}")
     async def desktop_plugin_asset(plugin_name: str, asset_path: str) -> FileResponse:

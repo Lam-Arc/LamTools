@@ -1019,12 +1019,13 @@ def test_core_http_serves_enabled_desktop_plugin_assets(
         assert "当前会话" not in html.text
         assert "向 Core 提问" not in html.text
         assert "turn/start" not in script.text
+        assert "/api/core/desktop-plugins/emotion-ball-pet/session" in script.text
+        assert "/api/core/sessions" not in script.text
         assert "approval/respond" in script.text
         assert "toolName === 'question'" in script.text
         assert "set_desktop_plugin_view_mode" in script.text
         assert 'id="queuePreviewSecond"' in html.text
         assert 'id="queuePreviewThird"' in html.text
-        assert "if (a.status === 'waiting' && b.status === 'waiting')" in script.text
         assert escaped.status_code == 404
 
         (data_dir / "plugins.jsonc").write_text(
@@ -1036,3 +1037,92 @@ def test_core_http_serves_enabled_desktop_plugin_assets(
 
     assert all(item["name"] != "emotion-ball-pet" for item in disabled.json()["plugins"])
     assert disabled_asset.status_code == 404
+
+
+def _write_desktop_plugin(root: Path, name: str) -> None:
+    plugin_root = root / name
+    (plugin_root / "desktop").mkdir(parents=True, exist_ok=True)
+    (plugin_root / "plugin.json").write_text(
+        '{\n'
+        f'  "name": "{name}",\n'
+        '  "version": "0.1.0",\n'
+        '  "desktop": {\n'
+        '    "entry": "./desktop/index.html",\n'
+        f'    "title": "{name}",\n'
+        '    "window": {}\n'
+        '  }\n'
+        '}\n',
+        encoding="utf-8",
+    )
+    (plugin_root / "desktop" / "index.html").write_text("<!doctype html>", encoding="utf-8")
+
+
+def _desktop_session_test_app(tmp_path: Path, isolated_config_root: Path, plugin_roots: tuple[Path, ...] = ()):
+    _write_jsonc_config(isolated_config_root)
+    return create_core_agent_http_app(
+        model_id="model-record",
+        core_db=tmp_path / "core.db",
+        data_dir=tmp_path / "core-data",
+        work_root=tmp_path / "workspace",
+        plugin_roots=plugin_roots,
+    )
+
+
+def test_desktop_plugin_session_is_created_once(tmp_path: Path, isolated_config_root: Path) -> None:
+    app = _desktop_session_test_app(tmp_path, isolated_config_root)
+    with TestClient(app) as client:
+        first = client.post("/api/core/desktop-plugins/emotion-ball-pet/session")
+        second = client.post("/api/core/desktop-plugins/emotion-ball-pet/session")
+
+    restarted = _desktop_session_test_app(tmp_path, isolated_config_root)
+    with TestClient(restarted) as client:
+        after_restart = client.post("/api/core/desktop-plugins/emotion-ball-pet/session")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert after_restart.status_code == 200
+    assert first.json()["created"] is True
+    assert second.json()["created"] is False
+    assert after_restart.json()["created"] is False
+    assert first.json()["session_id"] == second.json()["session_id"]
+    assert first.json()["session_id"] == after_restart.json()["session_id"]
+
+
+def test_desktop_plugin_session_isolated_between_plugins(tmp_path: Path, isolated_config_root: Path) -> None:
+    plugins = tmp_path / "plugins"
+    _write_desktop_plugin(plugins, "plugin-a")
+    _write_desktop_plugin(plugins, "plugin-b")
+    app = _desktop_session_test_app(tmp_path, isolated_config_root, (plugins,))
+
+    with TestClient(app) as client:
+        session_a = client.post("/api/core/desktop-plugins/plugin-a/session")
+        session_b = client.post("/api/core/desktop-plugins/plugin-b/session")
+
+    assert session_a.status_code == 200
+    assert session_b.status_code == 200
+    assert session_a.json()["session_id"] != session_b.json()["session_id"]
+
+
+def test_deleted_desktop_plugin_session_is_recreated(tmp_path: Path, isolated_config_root: Path) -> None:
+    app = _desktop_session_test_app(tmp_path, isolated_config_root)
+    with TestClient(app) as client:
+        first = client.post("/api/core/desktop-plugins/emotion-ball-pet/session").json()
+        assert client.delete(f"/api/core/sessions/{first['session_id']}").status_code == 204
+        second = client.post("/api/core/desktop-plugins/emotion-ball-pet/session").json()
+
+    assert first["created"] is True
+    assert second["created"] is True
+    assert first["session_id"] != second["session_id"]
+
+
+def test_disabled_plugin_cannot_ensure_session(tmp_path: Path, isolated_config_root: Path) -> None:
+    app = _desktop_session_test_app(tmp_path, isolated_config_root)
+    data_dir = tmp_path / "core-data"
+    with TestClient(app) as client:
+        (data_dir / "plugins.jsonc").write_text(
+            '{"plugins":{"emotion-ball-pet":{"enabled":false}}}',
+            encoding="utf-8",
+        )
+        response = client.post("/api/core/desktop-plugins/emotion-ball-pet/session")
+
+    assert response.status_code == 404
