@@ -29,6 +29,8 @@ const errorRegion = document.querySelector<HTMLElement>('#host-error')
 const allowedCommands = new Set([
   'start_window_dragging',
   'save_desktop_plugin_position',
+  'get_desktop_plugin_dock_zone',
+  'set_desktop_plugin_dock',
   'get_desktop_plugin_anchor',
   'set_desktop_plugin_expanded',
   'set_desktop_plugin_view_mode',
@@ -144,6 +146,12 @@ function commandArgs(message: PluginRequest): Record<string, unknown> {
     const mode = String(message.args?.mode || '').trim().toLowerCase()
     return {
       mode: ['pet', 'card', 'panel'].includes(mode) ? mode : '',
+    }
+  }
+  if (message.command === 'set_desktop_plugin_dock') {
+    const dock = String(message.args?.dock || '').trim().toLowerCase()
+    return {
+      dock: ['left', 'right'].includes(dock) ? dock : '',
     }
   }
   if (message.command === 'import_dropped_files' || message.command === 'discard_dropped_files') {

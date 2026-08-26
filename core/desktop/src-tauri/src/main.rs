@@ -35,6 +35,7 @@ const TRAY_TOGGLE_PET_ID: &str = "tray-toggle-pet";
 const TRAY_OPEN_MAIN_ID: &str = "tray-open-main";
 const TRAY_QUIT_ID: &str = "tray-quit";
 const MAX_DESKTOP_DROP_FILE_BYTES: u64 = 50 * 1024 * 1024;
+const DESKTOP_PLUGIN_DOCK_THRESHOLD: i32 = 40;
 static NEXT_DESKTOP_DROP_ID: AtomicU64 = AtomicU64::new(1);
 
 struct BackendState {
@@ -149,6 +150,7 @@ struct DesktopPluginPlacement {
     monitor_name: Option<String>,
     x_ratio: f64,
     y_ratio: f64,
+    dock: Option<String>,
 }
 
 impl Default for DesktopPluginPlacement {
@@ -157,6 +159,7 @@ impl Default for DesktopPluginPlacement {
             monitor_name: None,
             x_ratio: 1.0,
             y_ratio: 1.0,
+            dock: None,
         }
     }
 }
@@ -171,6 +174,7 @@ impl DesktopPluginPlacement {
                 .filter(|name| !name.is_empty()),
             x_ratio: normalized_ratio(self.x_ratio, 1.0),
             y_ratio: normalized_ratio(self.y_ratio, 1.0),
+            dock: normalized_dock(self.dock.as_deref()),
         }
     }
 }
@@ -322,7 +326,11 @@ fn close_window(window: tauri::WebviewWindow) {
 }
 
 #[tauri::command]
-fn start_window_dragging(window: tauri::WebviewWindow) -> Result<(), String> {
+fn start_window_dragging(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    clear_desktop_plugin_dock(&app)?;
     window.start_dragging().map_err(|error| error.to_string())
 }
 
@@ -331,13 +339,59 @@ fn save_desktop_plugin_position(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
 ) -> Result<DesktopPluginPlacement, String> {
-    let placement = desktop_plugin_placement_for_window(&window)?;
-    let path = desktop_plugin_placement_path(&app)?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    }
-    let content = serde_json::to_string_pretty(&placement).map_err(|error| error.to_string())?;
-    std::fs::write(path, content).map_err(|error| error.to_string())?;
+    let dock = load_desktop_plugin_placement(&app).and_then(|placement| placement.dock);
+    let placement = desktop_plugin_placement_for_window(&window, dock)?;
+    write_desktop_plugin_placement(&app, &placement)?;
+    Ok(placement)
+}
+
+#[tauri::command]
+fn get_desktop_plugin_dock_zone(
+    window: tauri::WebviewWindow,
+) -> Result<Option<&'static str>, String> {
+    let monitor = desktop_plugin_monitor(&window)?;
+    let geometry = desktop_window_geometry(&window)?;
+    Ok(desktop_plugin_dock_zone_for_geometry(
+        geometry,
+        desktop_work_area_from_monitor(&monitor),
+    ))
+}
+
+#[tauri::command]
+fn set_desktop_plugin_dock(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    dock: String,
+) -> Result<DesktopPluginPlacement, String> {
+    let raw_dock = dock.trim().to_string();
+    let dock = normalized_dock(Some(&raw_dock))
+        .ok_or_else(|| format!("unknown desktop plugin dock zone: {raw_dock}"))?;
+    let monitor = desktop_plugin_monitor(&window)?;
+    let geometry = desktop_window_geometry(&window)?;
+    let work_area = desktop_work_area_from_monitor(&monitor);
+    let (x_ratio, y_ratio) = normalize_desktop_plugin_position(
+        geometry.x,
+        geometry.y,
+        geometry.width,
+        geometry.height,
+        work_area,
+    );
+    let placement = DesktopPluginPlacement {
+        monitor_name: monitor.name().cloned(),
+        x_ratio,
+        y_ratio,
+        dock: Some(dock),
+    };
+    write_desktop_plugin_placement(&app, &placement)?;
+    let position = desktop_plugin_position_from_placement(
+        &placement,
+        geometry.width,
+        geometry.height,
+        work_area,
+    );
+    window
+        .set_position(tauri::PhysicalPosition::new(position.0, position.1))
+        .map_err(|error| error.to_string())?;
     Ok(placement)
 }
 
@@ -910,6 +964,8 @@ fn main() {
             close_window,
             start_window_dragging,
             save_desktop_plugin_position,
+            get_desktop_plugin_dock_zone,
+            set_desktop_plugin_dock,
             register_desktop_plugin_drop,
             read_desktop_plugin_drop,
             discard_desktop_plugin_drop,
@@ -1228,11 +1284,41 @@ fn load_desktop_plugin_placement(app: &tauri::AppHandle) -> Option<DesktopPlugin
     }
 }
 
+fn write_desktop_plugin_placement(
+    app: &tauri::AppHandle,
+    placement: &DesktopPluginPlacement,
+) -> Result<(), String> {
+    let path = desktop_plugin_placement_path(app)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let content = serde_json::to_string_pretty(placement).map_err(|error| error.to_string())?;
+    std::fs::write(path, content).map_err(|error| error.to_string())
+}
+
+fn clear_desktop_plugin_dock(app: &tauri::AppHandle) -> Result<(), String> {
+    let Some(mut placement) = load_desktop_plugin_placement(app) else {
+        return Ok(());
+    };
+    if placement.dock.is_none() {
+        return Ok(());
+    }
+    placement.dock = None;
+    write_desktop_plugin_placement(app, &placement)
+}
+
 fn normalized_ratio(value: f64, fallback: f64) -> f64 {
     if value.is_finite() {
         value.clamp(0.0, 1.0)
     } else {
         fallback.clamp(0.0, 1.0)
+    }
+}
+
+fn normalized_dock(value: Option<&str>) -> Option<String> {
+    match value.map(str::trim).map(|dock| dock.to_ascii_lowercase()) {
+        Some(dock) if dock == "left" || dock == "right" => Some(dock),
+        _ => None,
     }
 }
 
@@ -1325,9 +1411,32 @@ fn desktop_plugin_position_from_placement(
     height: u32,
     work_area: DesktopWorkArea,
 ) -> (i32, i32) {
-    let x = axis_from_ratio(placement.x_ratio, work_area.x, work_area.width, width);
+    let x = match placement.dock.as_deref() {
+        Some("left") => work_area.x,
+        Some("right") => work_area.x + work_area.width.saturating_sub(width) as i32,
+        _ => axis_from_ratio(placement.x_ratio, work_area.x, work_area.width, width),
+    };
     let y = axis_from_ratio(placement.y_ratio, work_area.y, work_area.height, height);
     clamp_desktop_plugin_position(x, y, width, height, work_area)
+}
+
+fn desktop_plugin_dock_zone_for_geometry(
+    geometry: DesktopWindowGeometry,
+    work_area: DesktopWorkArea,
+) -> Option<&'static str> {
+    let left_distance = (i64::from(geometry.x) - i64::from(work_area.x)).max(0);
+    let right_distance =
+        (i64::from(work_area.x) + i64::from(work_area.width) - geometry.right()).max(0);
+    let threshold = i64::from(DESKTOP_PLUGIN_DOCK_THRESHOLD);
+    let left = left_distance <= threshold;
+    let right = right_distance <= threshold;
+    match (left, right) {
+        (true, true) if left_distance <= right_distance => Some("left"),
+        (true, true) => Some("right"),
+        (true, false) => Some("left"),
+        (false, true) => Some("right"),
+        _ => None,
+    }
 }
 
 fn axis_from_ratio(ratio: f64, area_start: i32, area_size: u32, window_size: u32) -> i32 {
@@ -1411,6 +1520,7 @@ fn restore_desktop_plugin_position(
 
 fn desktop_plugin_placement_for_window(
     window: &WebviewWindow,
+    dock: Option<String>,
 ) -> Result<DesktopPluginPlacement, String> {
     let monitor = window
         .current_monitor()
@@ -1432,6 +1542,7 @@ fn desktop_plugin_placement_for_window(
         monitor_name: monitor.name().cloned(),
         x_ratio,
         y_ratio,
+        dock: normalized_dock(dock.as_deref()),
     })
 }
 
@@ -1768,12 +1879,12 @@ fn anchored_position(
 #[cfg(test)]
 mod desktop_window_tests {
     use super::{
-        anchored_position, clamp_desktop_plugin_position, desktop_plugin_position_from_placement,
-        desktop_window_target_geometry, horizontal_anchor_for_geometry, logical_cursor_position,
-        normalize_desktop_plugin_position, physical_window_size, saved_monitor_index,
-        scaled_viewport_dimension, DesktopPluginPlacement, DesktopPluginViewMode,
-        DesktopWindowGeometry, DesktopWindowSpec, DesktopWorkArea, HorizontalAnchor,
-        VerticalAnchor,
+        anchored_position, clamp_desktop_plugin_position, desktop_plugin_dock_zone_for_geometry,
+        desktop_plugin_position_from_placement, desktop_window_target_geometry,
+        horizontal_anchor_for_geometry, logical_cursor_position, normalize_desktop_plugin_position,
+        normalized_dock, physical_window_size, saved_monitor_index, scaled_viewport_dimension,
+        DesktopPluginPlacement, DesktopPluginViewMode, DesktopWindowGeometry, DesktopWindowSpec,
+        DesktopWorkArea, HorizontalAnchor, VerticalAnchor,
     };
 
     #[test]
@@ -2037,6 +2148,7 @@ mod desktop_window_tests {
             monitor_name: Some("Display 1".to_string()),
             x_ratio: 1.5,
             y_ratio: -0.5,
+            dock: None,
         };
         assert_eq!(
             desktop_plugin_position_from_placement(&placement, 400, 300, work_area),
@@ -2046,6 +2158,93 @@ mod desktop_window_tests {
             clamp_desktop_plugin_position(9999, -9999, 400, 300, work_area),
             (1300, -200)
         );
+    }
+
+    #[test]
+    fn detects_only_left_and_right_dock_zones_within_threshold() {
+        let work_area = DesktopWorkArea {
+            x: 100,
+            y: 50,
+            width: 1600,
+            height: 900,
+        };
+        assert_eq!(
+            desktop_plugin_dock_zone_for_geometry(
+                DesktopWindowGeometry {
+                    x: 100,
+                    y: 200,
+                    width: 256,
+                    height: 288,
+                },
+                work_area,
+            ),
+            Some("left")
+        );
+        assert_eq!(
+            desktop_plugin_dock_zone_for_geometry(
+                DesktopWindowGeometry {
+                    x: 1460,
+                    y: 200,
+                    width: 240,
+                    height: 288,
+                },
+                work_area,
+            ),
+            Some("right")
+        );
+        assert_eq!(
+            desktop_plugin_dock_zone_for_geometry(
+                DesktopWindowGeometry {
+                    x: 500,
+                    y: 200,
+                    width: 256,
+                    height: 288,
+                },
+                work_area,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn docked_placement_restores_to_the_selected_edge_and_keeps_y_ratio() {
+        let work_area = DesktopWorkArea {
+            x: 100,
+            y: -200,
+            width: 1600,
+            height: 1200,
+        };
+        let left = DesktopPluginPlacement {
+            monitor_name: Some("Display 1".to_string()),
+            x_ratio: 0.75,
+            y_ratio: 0.5,
+            dock: Some("left".to_string()),
+        };
+        let right = DesktopPluginPlacement {
+            dock: Some("right".to_string()),
+            ..left.clone()
+        };
+        assert_eq!(
+            desktop_plugin_position_from_placement(&left, 400, 300, work_area),
+            (100, 250)
+        );
+        assert_eq!(
+            desktop_plugin_position_from_placement(&right, 400, 300, work_area),
+            (1300, 250)
+        );
+    }
+
+    #[test]
+    fn invalid_dock_values_are_discarded_while_legacy_placement_stays_valid() {
+        assert_eq!(normalized_dock(Some(" LEFT ")), Some("left".to_string()));
+        assert_eq!(normalized_dock(Some("center")), None);
+        let legacy = DesktopPluginPlacement {
+            monitor_name: None,
+            x_ratio: 0.25,
+            y_ratio: 0.75,
+            dock: None,
+        };
+        assert_eq!(legacy.sanitized().dock, None);
     }
 
     #[test]

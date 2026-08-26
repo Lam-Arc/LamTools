@@ -189,6 +189,8 @@
   var pendingImportedFiles = [];
   var fileInstruction = '';
   var fileSendInFlight = false;
+  var desktopDragInFlight = false;
+  var dockDetectionTimer = 0;
 
   function isInteractiveRenderedPoint(x, y) {
     if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
@@ -965,6 +967,38 @@
     }
   }
 
+  function showDockCard(zone) {
+    var normalizedZone = zone === 'left' ? 'left' : zone === 'right' ? 'right' : '';
+    if (!normalizedZone) return;
+    var label = normalizedZone === 'left' ? '左侧' : '右侧';
+    showCard({
+      kind: 'dock',
+      title: '固定桌宠位置？',
+      body: '要将桌宠固定在屏幕' + label + '吗？',
+      actions: [
+        { id: 'dock-cancel', label: '取消', onClick: function () { hideCard('dock-cancelled'); } },
+        { id: 'dock-confirm', label: '固定', tone: 'primary', onClick: function () {
+          invokeStrict('set_desktop_plugin_dock', { dock: normalizedZone })
+            .then(function () {
+              setStatus('已固定在' + label, 'done', '33');
+              hideCard('dock-confirmed');
+            })
+            .catch(showError);
+        } }
+      ]
+    });
+  }
+
+  function scheduleDockDetection() {
+    if (dockDetectionTimer) window.clearTimeout(dockDetectionTimer);
+    dockDetectionTimer = window.setTimeout(function () {
+      dockDetectionTimer = 0;
+      invoke('get_desktop_plugin_dock_zone').then(function (zone) {
+        if (zone === 'left' || zone === 'right') showDockCard(zone);
+      });
+    }, 360);
+  }
+
   function handleSocketMessage(messageEvent) {
     var message;
     try {
@@ -1359,15 +1393,19 @@
       window.setTimeout(function () { suppressPetToggleClick = false; }, 500);
     }
     dragGesture = null;
+    desktopDragInFlight = true;
     elements.petShell.classList.add('is-dragging');
     invoke('start_window_dragging').finally(function () {
+      desktopDragInFlight = false;
       elements.petShell.classList.remove('is-dragging');
+      scheduleDockDetection();
     });
   });
   ['pointerup', 'pointercancel', 'lostpointercapture'].forEach(function (eventName) {
     elements.petShell.addEventListener(eventName, function () {
       dragGesture = null;
       elements.petShell.classList.remove('is-dragging');
+      if (desktopDragInFlight) scheduleDockDetection();
     });
   });
   elements.approveButton.addEventListener('click', function () { respondApproval('approve_once'); });
@@ -1406,6 +1444,7 @@
   });
   window.addEventListener('beforeunload', function () {
     window.clearTimeout(pointerPassthroughTimer);
+    window.clearTimeout(dockDetectionTimer);
     closeSocket();
   });
 
