@@ -21,6 +21,7 @@ const allowedCommands = new Set([
   'start_window_dragging',
   'get_desktop_plugin_anchor',
   'set_desktop_plugin_expanded',
+  'set_desktop_plugin_view_mode',
   'get_desktop_plugin_cursor_position',
   'set_desktop_plugin_cursor_passthrough',
   'show_main_window',
@@ -59,6 +60,13 @@ function commandArgs(message: PluginRequest): Record<string, unknown> {
       contentHeight: Number.isFinite(contentHeight) && contentHeight > 0 ? contentHeight : null,
       viewportWidth: Number.isFinite(viewportWidth) && viewportWidth > 0 ? viewportWidth : null,
       viewportHeight: Number.isFinite(viewportHeight) && viewportHeight > 0 ? viewportHeight : null,
+    }
+  }
+  if (message.command === 'set_desktop_plugin_view_mode') {
+    const mode = String(message.args?.mode || '').trim().toLowerCase()
+    return {
+      mode: ['pet', 'card', 'panel'].includes(mode) ? mode : '',
+      reducedMotion: message.args?.reducedMotion === true,
     }
   }
   return {}

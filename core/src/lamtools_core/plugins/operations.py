@@ -296,7 +296,11 @@ def build_plugin_operation_catalog(
                         {
                             "entry": str(item.desktop_entry),
                             "title": item.desktop_title or item.name,
-                            "window": dict(item.desktop_window),
+                            "window": {
+                                **dict(item.desktop_window),
+                                "cardWidth": item.desktop_card_width,
+                                "cardHeight": item.desktop_card_height,
+                            },
                         }
                         if item.desktop_entry is not None
                         else None

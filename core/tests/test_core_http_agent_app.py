@@ -999,6 +999,8 @@ def test_core_http_serves_enabled_desktop_plugin_assets(
         assert pet["window"]["collapsedHeight"] == 288
         assert pet["window"]["expandedWidth"] == 376
         assert pet["window"]["expandedHeight"] == 680
+        assert pet["window"]["cardWidth"] == 376
+        assert pet["window"]["cardHeight"] == 360
 
         html = client.get(pet["entry_url"])
         script = client.get(
@@ -1019,7 +1021,7 @@ def test_core_http_serves_enabled_desktop_plugin_assets(
         assert "turn/start" not in script.text
         assert "approval/respond" in script.text
         assert "toolName === 'question'" in script.text
-        assert "get_desktop_plugin_anchor" in script.text
+        assert "set_desktop_plugin_view_mode" in script.text
         assert 'id="queuePreviewSecond"' in html.text
         assert 'id="queuePreviewThird"' in html.text
         assert "if (a.status === 'waiting' && b.status === 'waiting')" in script.text

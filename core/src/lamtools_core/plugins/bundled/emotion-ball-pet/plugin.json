@@ -8,10 +8,12 @@
     "title": "LamTools 桌宠",
     "window": {
       "collapsedWidth": 256,
-      "collapsedHeight": 288,
-      "expandedWidth": 376,
-      "expandedHeight": 680,
-      "margin": 24
+        "collapsedHeight": 288,
+        "expandedWidth": 376,
+        "expandedHeight": 680,
+        "cardWidth": 376,
+        "cardHeight": 360,
+        "margin": 24
     }
   }
 }

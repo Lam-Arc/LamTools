@@ -87,7 +87,7 @@ async def test_plugin_list_includes_desktop_descriptor(tmp_path: Path):
     assert result.payload["plugins"][0]["desktop"] == {
         "entry": str((plugin_root / "desktop" / "index.html").resolve()),
         "title": "Pet window",
-        "window": {"expandedWidth": 400},
+        "window": {"expandedWidth": 400, "cardWidth": 376, "cardHeight": 360},
     }
 
 

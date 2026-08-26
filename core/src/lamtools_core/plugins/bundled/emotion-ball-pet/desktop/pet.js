@@ -8,6 +8,21 @@
   var expandedMeasurementViewportWidth = window.innerWidth;
   var hostRequestId = 1;
   var hostRequests = new Map();
+  var VIEW_MODE = Object.freeze({
+    PET: 'pet',
+    CARD: 'card',
+    PANEL: 'panel'
+  });
+  var CARD_PRIORITY = Object.freeze({
+    approval: 100,
+    question: 90,
+    file: 80,
+    error: 70,
+    reply: 50,
+    success: 40,
+    dock: 30,
+    info: 10
+  });
   var invoke = function (command, args) {
     var core = window.__TAURI__ && window.__TAURI__.core;
     if (core && typeof core.invoke === 'function') {
@@ -62,6 +77,14 @@
     interactionKind: $('interactionKind'),
     interactionMessage: $('interactionMessage'),
     interactionTitle: $('interactionTitle'),
+    petCard: $('petCard'),
+    petCardActions: $('petCardActions'),
+    petCardBody: $('petCardBody'),
+    petCardClose: $('petCardClose'),
+    petCardFiles: $('petCardFiles'),
+    petCardInput: $('petCardInput'),
+    petCardInputWrap: $('petCardInputWrap'),
+    petCardTitle: $('petCardTitle'),
     petPanel: $('petPanel'),
     petShell: document.querySelector('.pet-shell'),
     petToggle: $('petToggle'),
@@ -80,7 +103,7 @@
   if (reducedMotion.matches) ball.renderStatic();
 
   var state = {
-    expanded: false,
+    viewMode: VIEW_MODE.PET,
     sessions: [],
     sessionId: localStorage.getItem('lamtools.pet.session') || '',
     socket: null,
@@ -102,6 +125,9 @@
   var suppressPetToggleClick = false;
   var pointerPassthrough = null;
   var pointerPassthroughTimer = 0;
+  var activeCard = null;
+  var suspendedCard = null;
+  var cardDismissTimer = 0;
 
   function isInteractiveRenderedPoint(x, y) {
     if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
@@ -132,6 +158,96 @@
     elements.statusBadge.textContent = text;
     elements.statusBadge.dataset.tone = tone || 'idle';
     if (emotionId) setEmotion(emotionId);
+  }
+
+  function cardPriority(card) {
+    return CARD_PRIORITY[String(card && card.kind || 'info')] || 0;
+  }
+
+  function clearCardTimer() {
+    if (cardDismissTimer) window.clearTimeout(cardDismissTimer);
+    cardDismissTimer = 0;
+  }
+
+  function renderCard(card) {
+    if (!card) {
+      elements.petCardTitle.textContent = '';
+      elements.petCardBody.textContent = '';
+      elements.petCardFiles.replaceChildren();
+      elements.petCardFiles.hidden = true;
+      elements.petCardInput.value = '';
+      elements.petCardInputWrap.hidden = true;
+      elements.petCardActions.replaceChildren();
+      return;
+    }
+    elements.petCardTitle.textContent = String(card.title || '桌宠提示');
+    elements.petCardBody.textContent = String(card.body || '');
+    elements.petCardFiles.replaceChildren();
+    var files = Array.isArray(card.files) ? card.files : [];
+    files.forEach(function (file, index) {
+      var row = document.createElement('div');
+      row.className = 'pet-card-file';
+      var name = document.createElement('span');
+      name.className = 'pet-card-file-name';
+      name.textContent = String(file && typeof file === 'object' ? file.name || file.path || '' : file || '');
+      row.appendChild(name);
+      if (typeof card.onRemoveFile === 'function') {
+        var remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'pet-card-file-remove';
+        remove.textContent = '×';
+        remove.setAttribute('aria-label', '删除 ' + name.textContent);
+        remove.addEventListener('click', function () { card.onRemoveFile(index); });
+        row.appendChild(remove);
+      }
+      elements.petCardFiles.appendChild(row);
+    });
+    elements.petCardFiles.hidden = files.length === 0;
+    var inputEnabled = card.input === true || typeof card.onInput === 'function';
+    elements.petCardInputWrap.hidden = !inputEnabled;
+    elements.petCardInput.placeholder = String(card.inputPlaceholder || '输入内容…');
+    if (typeof card.inputValue === 'string' && elements.petCardInput.value !== card.inputValue) {
+      elements.petCardInput.value = card.inputValue;
+    }
+    elements.petCardActions.replaceChildren();
+    (Array.isArray(card.actions) ? card.actions : []).forEach(function (action) {
+      if (!action || typeof action !== 'object') return;
+      var button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'button ' + (action.tone === 'primary' ? 'primary' : 'secondary');
+      button.textContent = String(action.label || action.id || '操作');
+      button.disabled = action.disabled === true;
+      button.addEventListener('click', function () {
+        if (typeof action.onClick === 'function') action.onClick();
+      });
+      elements.petCardActions.appendChild(button);
+    });
+  }
+
+  function showCard(card) {
+    if (!card || typeof card !== 'object') return false;
+    if (activeCard && cardPriority(card) < cardPriority(activeCard)) return false;
+    if (activeCard && cardPriority(card) > cardPriority(activeCard)) suspendedCard = activeCard;
+    clearCardTimer();
+    activeCard = Object.assign({ kind: 'info', title: '桌宠提示', body: '', files: [], actions: [] }, card);
+    renderCard(activeCard);
+    void setViewMode(VIEW_MODE.CARD, { reason: 'card' });
+    var timeout = Number(activeCard.autoDismissMs);
+    if (Number.isFinite(timeout) && timeout > 0) {
+      cardDismissTimer = window.setTimeout(function () { hideCard('timeout'); }, timeout);
+    }
+    return true;
+  }
+
+  function hideCard(reason) {
+    clearCardTimer();
+    activeCard = null;
+    renderCard(null);
+    if (state.viewMode === VIEW_MODE.CARD) void setViewMode(VIEW_MODE.PET, { reason: reason || 'dismiss' });
+  }
+
+  function promoteCardToPanel() {
+    if (state.viewMode !== VIEW_MODE.PANEL) void setViewMode(VIEW_MODE.PANEL, { reason: 'card-detail' });
   }
 
   function delay(milliseconds) {
@@ -278,91 +394,49 @@
     return size;
   }
 
-  async function fitExpandedWindow(attempt) {
-    if (!state.expanded || elements.petPanel.hidden) return;
-    await nextFrame();
-    var contentSize = measureInteractionPanel();
-    await invoke('set_desktop_plugin_expanded', {
-      expanded: true,
-      reducedMotion: reducedMotion.matches,
-      contentWidth: contentSize.width,
-      contentHeight: contentSize.height,
-      viewportWidth: window.innerWidth,
-      viewportHeight: window.innerHeight
-    });
-    await nextFrame();
-    syncQueueLayers();
-    if ((attempt || 0) < 1 && (
-      Math.abs(window.innerWidth - contentSize.width) > 1
-      || Math.abs(window.innerHeight - contentSize.height) > 1
-    )) {
-      await fitExpandedWindow((attempt || 0) + 1);
-    }
-  }
-
   function applyAnchor(anchor) {
     var normalized = anchor === 'left' ? 'left' : 'right';
     document.body.classList.toggle('anchor-left', normalized === 'left');
     document.body.classList.toggle('anchor-right', normalized === 'right');
   }
 
-  async function setExpanded(expanded, options) {
-    var target = !!expanded;
+  async function setViewMode(nextMode, options) {
+    var mode = String(nextMode || '').trim().toLowerCase();
+    if (![VIEW_MODE.PET, VIEW_MODE.CARD, VIEW_MODE.PANEL].includes(mode)) {
+      throw new Error('未知桌宠视图模式：' + mode);
+    }
     var userInitiated = !!(options && options.userInitiated);
-    if (target && !state.interaction) return;
-    if (userInitiated && !target && state.interaction) {
+    if (userInitiated && mode === VIEW_MODE.PET && state.interaction) {
       state.suppressedRequestId = state.interaction.requestId;
     }
-    if (state.expanded === target && !state.expansionPending) return;
+    if (state.viewMode === mode && !state.expansionPending) return;
 
     var generation = ++state.expansionGeneration;
     state.expansionPending = true;
-    elements.petToggle.setAttribute('aria-expanded', String(target));
-
-    if (target) {
-      if (!state.expanded) rememberCollapsedViewport();
-      var anchor = await invoke('get_desktop_plugin_anchor');
-      if (generation !== state.expansionGeneration) return;
-      applyAnchor(anchor);
-      state.expanded = true;
-      document.body.classList.remove('is-collapsed');
-      document.body.classList.add('is-window-open');
-      await invoke('set_desktop_plugin_expanded', {
-        expanded: true,
-        reducedMotion: reducedMotion.matches,
-        contentHeight: collapsedViewportHeight,
-        viewportHeight: window.innerHeight
+    state.viewMode = mode;
+    document.body.dataset.viewMode = mode;
+    document.body.classList.toggle('is-collapsed', mode === VIEW_MODE.PET);
+    document.body.classList.toggle('is-window-open', mode !== VIEW_MODE.PET);
+    document.body.classList.toggle('is-card-visible', mode !== VIEW_MODE.PET);
+    elements.petToggle.setAttribute('aria-expanded', String(mode === VIEW_MODE.PANEL));
+    elements.petCard.hidden = mode !== VIEW_MODE.CARD;
+    elements.petPanel.hidden = mode !== VIEW_MODE.PANEL;
+    if (mode === VIEW_MODE.PANEL) elements.interactionCard.scrollTop = 0;
+    try {
+      var transition = await invoke('set_desktop_plugin_view_mode', {
+        mode: mode,
+        reducedMotion: reducedMotion.matches
       });
       if (generation !== state.expansionGeneration) return;
-      expandedMeasurementViewportWidth = Math.max(collapsedViewportWidth, window.innerWidth);
-      elements.petPanel.hidden = false;
-      await nextFrame();
-      syncQueueLayers();
-      if (generation !== state.expansionGeneration) return;
-      await fitExpandedWindow();
-      if (generation !== state.expansionGeneration) return;
-      await nextFrame();
-      if (generation !== state.expansionGeneration) return;
-      elements.interactionCard.scrollTop = 0;
-      document.body.classList.add('is-card-visible');
-      state.expansionPending = false;
-      return;
+      if (transition && transition.anchor) applyAnchor(transition.anchor);
+      if (mode === VIEW_MODE.PANEL) syncQueueLayers();
+    } finally {
+      if (generation === state.expansionGeneration) state.expansionPending = false;
     }
+  }
 
-    document.body.classList.remove('is-card-visible');
-    await delay(reducedMotion.matches ? 0 : 140);
-    if (generation !== state.expansionGeneration) return;
-    elements.petPanel.hidden = true;
-    await invoke('set_desktop_plugin_expanded', {
-      expanded: false,
-      reducedMotion: reducedMotion.matches
-    });
-    if (generation !== state.expansionGeneration) return;
-    state.expanded = false;
-    state.expansionPending = false;
-    document.body.classList.remove('is-window-open');
-    document.body.classList.add('is-collapsed');
-    rememberCollapsedViewport();
+  function setExpanded(expanded, options) {
+    return setViewMode(expanded ? VIEW_MODE.PANEL : VIEW_MODE.PET, options);
   }
 
   function scheduleIdle() {
@@ -635,7 +709,7 @@
     document.body.classList.remove('interaction-question');
     if (!state.interaction) {
       syncQueueLayers();
-      if (previousRequestId && state.expanded) setExpanded(false);
+      if (previousRequestId && state.viewMode !== VIEW_MODE.PET) setViewMode(VIEW_MODE.PET, { reason: 'interaction-cleared' });
       return;
     }
 
@@ -658,13 +732,11 @@
     }
     setStatus(isQuestion ? '等待你的回答' : '等待审批', 'waiting', '35');
     syncQueueLayers();
-    if (state.expanded && !state.expansionPending) fitExpandedWindow();
-
     var isNewRequest = previousRequestId !== state.interaction.requestId;
     if (isNewRequest && state.suppressedRequestId !== state.interaction.requestId) {
       state.autoExpandedRequestId = state.interaction.requestId;
       invoke('show_current_window');
-      if (!state.expanded) setExpanded(true, { reason: 'interaction' });
+      if (state.viewMode === VIEW_MODE.PET) setExpanded(true, { reason: 'interaction' });
     }
   }
 
@@ -815,7 +887,7 @@
       suppressPetToggleClick = false;
       return;
     }
-    setExpanded(!state.expanded, { userInitiated: true });
+    setViewMode(state.viewMode === VIEW_MODE.PANEL ? VIEW_MODE.PET : VIEW_MODE.PANEL, { userInitiated: true });
   });
   elements.petShell.addEventListener('pointerdown', function (event) {
     if (event.button !== 0) return;
@@ -851,6 +923,7 @@
   });
   elements.approveButton.addEventListener('click', function () { respondApproval('approve_once'); });
   elements.denyButton.addEventListener('click', function () { respondApproval('deny'); });
+  elements.petCardClose.addEventListener('click', function () { hideCard('user'); });
   elements.guidanceForm.addEventListener('submit', function (event) {
     event.preventDefault();
     var guidance = elements.guidanceInput.value.trim();
@@ -873,8 +946,14 @@
   });
 
   rememberCollapsedViewport();
+  document.body.dataset.viewMode = VIEW_MODE.PET;
   applyAnchor('right');
   pollPointerPassthrough();
   loadSessions(true);
   window.setInterval(function () { loadSessions(false); }, 3000);
+  window.VIEW_MODE = VIEW_MODE;
+  window.setViewMode = setViewMode;
+  window.showCard = showCard;
+  window.hideCard = hideCard;
+  window.promoteCardToPanel = promoteCardToPanel;
 })();

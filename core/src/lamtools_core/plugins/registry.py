@@ -20,6 +20,8 @@ MANIFEST_TOOLS_KEY = "tools"
 MANIFEST_OPERATIONS_KEY = "operations"
 MANIFEST_CONFIG_SCHEMA_KEY = "configSchema"
 MANIFEST_DESKTOP_KEY = "desktop"
+DEFAULT_DESKTOP_CARD_WIDTH = 376
+DEFAULT_DESKTOP_CARD_HEIGHT = 360
 
 
 def _appdata_root() -> Path:
@@ -225,6 +227,8 @@ class PluginRegistry:
         desktop_entry: Path | None = None
         desktop_title = ""
         desktop_window: dict[str, Any] = {}
+        desktop_card_width = DEFAULT_DESKTOP_CARD_WIDTH
+        desktop_card_height = DEFAULT_DESKTOP_CARD_HEIGHT
         if desktop_raw is not None:
             if not isinstance(desktop_raw, dict):
                 raise ValueError(f"plugin desktop manifest must be an object: {manifest_path}")
@@ -243,6 +247,16 @@ class PluginRegistry:
             if raw_window is not None and not isinstance(raw_window, dict):
                 raise ValueError(f"plugin desktop.window must be an object: {manifest_path}")
             desktop_window = dict(raw_window or {})
+            desktop_card_width = _positive_int(
+                desktop_window.get("cardWidth"),
+                key="desktop.window.cardWidth",
+                default=DEFAULT_DESKTOP_CARD_WIDTH,
+            )
+            desktop_card_height = _positive_int(
+                desktop_window.get("cardHeight"),
+                key="desktop.window.cardHeight",
+                default=DEFAULT_DESKTOP_CARD_HEIGHT,
+            )
         enabled = self.state_store.is_enabled(name) if self.state_store else True
         return PluginManifest(
             name=name,
@@ -271,6 +285,8 @@ class PluginRegistry:
             desktop_entry=desktop_entry,
             desktop_title=desktop_title,
             desktop_window=desktop_window,
+            desktop_card_width=desktop_card_width,
+            desktop_card_height=desktop_card_height,
             raw=dict(raw),
         )
 
@@ -288,3 +304,11 @@ class PluginRegistry:
                 raise ValueError(f"plugin resource path is outside plugin root: {text}")
             paths.append(path)
         return paths
+
+
+def _positive_int(value: object, *, key: str, default: int) -> int:
+    if value is None:
+        return default
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{key} must be a positive integer")
+    return value

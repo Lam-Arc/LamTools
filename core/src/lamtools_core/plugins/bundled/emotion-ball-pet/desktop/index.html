@@ -7,10 +7,10 @@
     <title>LamTools 桌宠</title>
     <link rel="stylesheet" href="pet.css">
   </head>
-  <body class="is-collapsed">
+  <body class="is-collapsed" data-view-mode="pet">
     <main class="pet-shell" aria-label="LamTools 桌宠">
       <section class="pet-stage" aria-label="桌宠状态">
-        <button id="petToggle" class="pet-toggle" type="button" aria-expanded="false" aria-controls="petPanel">
+        <button id="petToggle" class="pet-toggle" type="button" aria-expanded="false" aria-controls="petCard petPanel">
           <span id="ball" class="ball" aria-hidden="true"></span>
           <span id="statusBadge" class="status-badge" data-pet-hit-surface data-tone="idle">正在连接</span>
           <span id="attentionDot" class="attention-dot" data-pet-hit-surface hidden aria-hidden="true"></span>
@@ -19,6 +19,19 @@
 
       <section id="queuePreviewThird" class="pet-panel queue-preview queue-preview-third" aria-hidden="true" hidden></section>
       <section id="queuePreviewSecond" class="pet-panel queue-preview queue-preview-second" aria-hidden="true" hidden></section>
+      <section id="petCard" class="pet-card" data-pet-hit-surface aria-label="桌宠卡片" hidden>
+        <header class="pet-card-header">
+          <p id="petCardTitle" class="pet-card-title"></p>
+          <button id="petCardClose" class="pet-card-close" type="button" aria-label="关闭卡片">×</button>
+        </header>
+        <div id="petCardBody" class="pet-card-body"></div>
+        <div id="petCardFiles" class="pet-card-files" hidden></div>
+        <div id="petCardInputWrap" class="pet-card-input-wrap" hidden>
+          <label class="visually-hidden" for="petCardInput">卡片输入</label>
+          <textarea id="petCardInput" rows="2" maxlength="4000" placeholder="输入内容…"></textarea>
+        </div>
+        <div id="petCardActions" class="pet-card-actions"></div>
+      </section>
       <section id="petPanel" class="pet-panel" data-pet-hit-surface aria-label="待处理事项" hidden>
         <section id="interactionCard" class="interaction-region" hidden aria-labelledby="interactionTitle">
           <header class="interaction-heading">

@@ -53,6 +53,10 @@ struct DesktopWindowSpec {
     expanded_width: f64,
     #[serde(default = "default_expanded_height")]
     expanded_height: f64,
+    #[serde(default = "default_card_width")]
+    card_width: f64,
+    #[serde(default = "default_card_height")]
+    card_height: f64,
     #[serde(default = "default_window_margin")]
     margin: f64,
 }
@@ -99,6 +103,8 @@ impl Default for DesktopWindowSpec {
             collapsed_height: default_collapsed_height(),
             expanded_width: default_expanded_width(),
             expanded_height: default_expanded_height(),
+            card_width: default_card_width(),
+            card_height: default_card_height(),
             margin: default_window_margin(),
         }
     }
@@ -113,6 +119,8 @@ impl DesktopWindowSpec {
             collapsed_height,
             expanded_width: self.expanded_width.clamp(collapsed_width, 1600.0),
             expanded_height: self.expanded_height.clamp(collapsed_height, 1200.0),
+            card_width: self.card_width.clamp(collapsed_width, 1600.0),
+            card_height: self.card_height.clamp(collapsed_height, 1200.0),
             margin: self.margin.clamp(0.0, 200.0),
         }
     }
@@ -129,6 +137,12 @@ fn default_expanded_width() -> f64 {
 }
 fn default_expanded_height() -> f64 {
     568.0
+}
+fn default_card_width() -> f64 {
+    376.0
+}
+fn default_card_height() -> f64 {
+    360.0
 }
 fn default_window_margin() -> f64 {
     24.0
@@ -238,6 +252,49 @@ fn set_desktop_plugin_expanded(
         requested_width,
         requested_height,
     )?;
+    animate_window_anchored(
+        &window,
+        width,
+        height,
+        anchor,
+        if reduced_motion {
+            Duration::ZERO
+        } else {
+            Duration::from_millis(220)
+        },
+    )?;
+    Ok(DesktopWindowTransition {
+        anchor: anchor.as_str(),
+    })
+}
+
+#[tauri::command]
+fn set_desktop_plugin_view_mode(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, BackendState>,
+    mode: String,
+    reduced_motion: bool,
+) -> Result<DesktopWindowTransition, String> {
+    let registration = state
+        .desktop_windows
+        .lock()
+        .map_err(|_| "desktop window state lock failed".to_string())?
+        .get(window.label())
+        .cloned()
+        .ok_or_else(|| "desktop plugin window is not registered".to_string())?;
+    let mode = mode.trim().to_ascii_lowercase();
+    let (width, height) = match mode.as_str() {
+        "pet" => (registration.spec.collapsed_width, registration.spec.collapsed_height),
+        "card" => (registration.spec.card_width, registration.spec.card_height),
+        "panel" => (registration.spec.expanded_width, registration.spec.expanded_height),
+        _ => return Err(format!("unknown desktop plugin view mode: {mode}")),
+    };
+    let anchor = desktop_window_anchor(&window)?;
+    if let Ok(mut windows) = state.desktop_windows.lock() {
+        if let Some(current) = windows.get_mut(window.label()) {
+            current.anchor = anchor;
+        }
+    }
     animate_window_anchored(
         &window,
         width,
@@ -575,6 +632,7 @@ fn main() {
             start_window_dragging,
             get_desktop_plugin_anchor,
             set_desktop_plugin_expanded,
+            set_desktop_plugin_view_mode,
             get_desktop_plugin_cursor_position,
             set_desktop_plugin_cursor_passthrough,
             hide_current_window,

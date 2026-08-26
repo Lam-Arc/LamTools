@@ -51,6 +51,8 @@ class PluginManifest:
     desktop_entry: Path | None = None
     desktop_title: str = ""
     desktop_window: dict[str, Any] = field(default_factory=dict)
+    desktop_card_width: int = 376
+    desktop_card_height: int = 360
     raw: dict[str, Any] = field(default_factory=dict)
 
 
