@@ -238,6 +238,22 @@
     renderCard(null);
   }
 
+  function isInteractionCard(card) {
+    return !!card && (card.kind === 'approval' || card.kind === 'question');
+  }
+
+  function restoreSuspendedCard() {
+    if (!suspendedCard) return false;
+    var card = suspendedCard;
+    suspendedCard = null;
+    if (card.kind === 'file') {
+      if (pendingFiles.length === 0) return false;
+      showPendingFileCard();
+      return true;
+    }
+    return showCard(card);
+  }
+
   function setFileDragActive(active) {
     isFileDragActive = !!active;
     document.body.dataset.fileDrag = isFileDragActive ? 'true' : 'false';
@@ -300,6 +316,7 @@
       title: options.title || '已添加 ' + pendingFiles.length + ' 个文件',
       body: options.body || '想让我怎么处理？',
       files: pendingFiles.slice(),
+      autoDismissMs: null,
       input: true,
       inputValue: fileInstruction,
       inputPlaceholder: '输入指令（可选）…',
@@ -393,6 +410,8 @@
 
   function showCard(card) {
     if (!card || typeof card !== 'object') return false;
+    var kind = String(card.kind || 'info');
+    if (state.viewMode === VIEW_MODE.PANEL && ['reply', 'success', 'info'].includes(kind)) return false;
     if (activeCard && cardPriority(card) < cardPriority(activeCard)) return false;
     if (activeCard && cardPriority(card) > cardPriority(activeCard)) suspendedCard = activeCard;
     clearCardTimer();
@@ -407,7 +426,9 @@
   }
 
   function hideCard(reason) {
+    var keepSuspendedCard = isInteractionCard(activeCard);
     clearCardVisual();
+    if (!keepSuspendedCard) suspendedCard = null;
     if (state.viewMode === VIEW_MODE.CARD) void setViewMode(VIEW_MODE.PET, { reason: reason || 'dismiss' });
   }
 
@@ -1212,8 +1233,13 @@
 
   function showInteraction(interaction) {
     var previousRequestId = state.interaction && state.interaction.requestId;
-    if (!interaction && activeCard && ['approval', 'question'].includes(activeCard.kind)) {
+    if (!interaction && isInteractionCard(activeCard)) {
       clearCardVisual();
+      if (!restoreSuspendedCard() && state.viewMode === VIEW_MODE.CARD) {
+        void setViewMode(VIEW_MODE.PET, { reason: 'interaction-cleared' });
+      }
+    } else if (!interaction && suspendedCard) {
+      restoreSuspendedCard();
     }
     state.interaction = interaction && interaction.requestId ? interaction : null;
     if (state.interaction && previousRequestId !== state.interaction.requestId) {
