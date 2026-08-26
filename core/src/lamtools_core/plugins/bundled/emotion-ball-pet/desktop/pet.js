@@ -10,20 +10,12 @@
   var hostRequests = new Map();
   var strictHostRequestId = 1;
   var strictHostRequests = new Map();
+  var petLogic = window.EmotionBallPetLogic;
+  if (!petLogic) throw new Error('桌宠纯逻辑模块未加载');
   var VIEW_MODE = Object.freeze({
     PET: 'pet',
     CARD: 'card',
     PANEL: 'panel'
-  });
-  var CARD_PRIORITY = Object.freeze({
-    approval: 100,
-    question: 90,
-    file: 80,
-    error: 70,
-    reply: 50,
-    success: 40,
-    dock: 30,
-    info: 10
   });
   var invoke = function (command, args) {
     var core = window.__TAURI__ && window.__TAURI__.core;
@@ -223,10 +215,6 @@
     if (emotionId) setEmotion(emotionId);
   }
 
-  function cardPriority(card) {
-    return CARD_PRIORITY[String(card && card.kind || 'info')] || 0;
-  }
-
   function clearCardTimer() {
     if (cardDismissTimer) window.clearTimeout(cardDismissTimer);
     cardDismissTimer = 0;
@@ -271,22 +259,7 @@
   }
 
   function normalizeDroppedFiles(files, dropId) {
-    var normalizedDropId = String(dropId || '').trim();
-    return (Array.isArray(files) ? files : []).map(function (file, index) {
-      var raw = file && typeof file === 'object' ? file : { path: file };
-      var path = String(raw.path || '').trim();
-      var suppliedName = String(raw.name || '').trim();
-      if (!suppliedName && !path) return null;
-      var normalizedPath = path.replace(/[\\/]+$/, '');
-      var separator = Math.max(normalizedPath.lastIndexOf('\\'), normalizedPath.lastIndexOf('/'));
-      var name = suppliedName || normalizedPath.slice(separator + 1) || normalizedPath;
-      if (!name) return null;
-      return {
-        name: name,
-        index: Number.isInteger(raw.index) ? raw.index : index,
-        dropId: normalizedDropId
-      };
-    }).filter(Boolean);
+    return petLogic.normalizeDroppedFiles(files, dropId);
   }
 
   function discardPendingDrop() {
@@ -412,8 +385,9 @@
     if (!card || typeof card !== 'object') return false;
     var kind = String(card.kind || 'info');
     if (state.viewMode === VIEW_MODE.PANEL && ['reply', 'success', 'info'].includes(kind)) return false;
-    if (activeCard && cardPriority(card) < cardPriority(activeCard)) return false;
-    if (activeCard && cardPriority(card) > cardPriority(activeCard)) suspendedCard = activeCard;
+    var replacement = petLogic.cardReplacement(activeCard, card);
+    if (!replacement.replace) return false;
+    if (replacement.suspend) suspendedCard = activeCard;
     clearCardTimer();
     activeCard = Object.assign({ kind: 'info', title: '桌宠提示', body: '', files: [], actions: [] }, card);
     renderCard(activeCard);
@@ -660,12 +634,7 @@
   }
 
   function replySummary(text) {
-    var lines = String(text || '').trim().split(/\r?\n/).map(function (line) {
-      return line.trim();
-    }).filter(Boolean).slice(0, 4);
-    var summary = lines.join('\n');
-    if (summary.length > 360) summary = summary.slice(0, 357).trimEnd() + '…';
-    return summary || 'Agent 已完成回答。';
+    return petLogic.replySummary(text);
   }
 
   function updateReplyBuffer(itemId, payload) {

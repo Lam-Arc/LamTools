@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite --port 5173",
     "build": "vite build",
+    "test:pet": "node --test tests/pet-logic.test.mjs",
     "tauri": "tauri"
   },
   "dependencies": {

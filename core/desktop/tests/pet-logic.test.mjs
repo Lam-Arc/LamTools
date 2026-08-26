@@ -1,0 +1,43 @@
+import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
+import test from 'node:test'
+import vm from 'node:vm'
+
+const logicSource = await readFile(new URL('../../src/lamtools_core/plugins/bundled/emotion-ball-pet/desktop/petLogic.js', import.meta.url), 'utf8')
+const context = { window: {} }
+context.globalThis = context
+vm.runInNewContext(logicSource, context, { filename: 'petLogic.js' })
+const logic = context.window.EmotionBallPetLogic
+
+test('exposes the fixed card priority ordering', () => {
+  assert.equal(logic.cardPriority({ kind: 'approval' }), 100)
+  assert.equal(logic.cardPriority({ kind: 'question' }), 90)
+  assert.equal(logic.cardPriority({ kind: 'file' }), 80)
+  assert.equal(logic.cardPriority({ kind: 'info' }), 10)
+  assert.equal(logic.cardPriority({ kind: 'unknown' }), 0)
+})
+
+test('replaces lower priority cards and reports suspended cards', () => {
+  assert.equal(JSON.stringify(logic.cardReplacement({ kind: 'file' }, { kind: 'approval' })), JSON.stringify({ replace: true, suspend: true }))
+  assert.equal(JSON.stringify(logic.cardReplacement({ kind: 'approval' }, { kind: 'success' })), JSON.stringify({ replace: false, suspend: false }))
+  assert.equal(JSON.stringify(logic.cardReplacement({ kind: 'reply' }, { kind: 'reply' })), JSON.stringify({ replace: true, suspend: false }))
+})
+
+test('normalizes dropped file names and preserves source indexes', () => {
+  assert.equal(JSON.stringify(logic.normalizeDroppedFiles([
+    { path: 'C:\\reports\\report.pdf' },
+    { path: '/tmp/notes.txt', name: 'notes.txt', index: 7 },
+    { path: '  ' },
+    null
+  ], ' drop-1 ')), JSON.stringify([
+    { name: 'report.pdf', index: 0, dropId: 'drop-1' },
+    { name: 'notes.txt', index: 7, dropId: 'drop-1' }
+  ]))
+})
+
+test('summarizes replies to four non-empty lines and a bounded length', () => {
+  assert.equal(logic.replySummary('  first\n\n second \nthird\nfourth\nfifth'), 'first\nsecond\nthird\nfourth')
+  assert.equal(logic.replySummary(''), 'Agent 已完成回答。')
+  assert.equal(logic.replySummary('x'.repeat(400)).length, 358)
+  assert.equal(logic.replySummary('x'.repeat(400)).endsWith('…'), true)
+})

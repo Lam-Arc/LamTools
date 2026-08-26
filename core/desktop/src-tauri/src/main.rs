@@ -2086,6 +2086,70 @@ mod desktop_window_tests {
     }
 
     #[test]
+    fn parses_all_view_modes_and_uses_their_dimensions() {
+        let spec = geometry_test_spec();
+        assert_eq!(
+            DesktopPluginViewMode::parse("pet"),
+            Some(DesktopPluginViewMode::Pet)
+        );
+        assert_eq!(
+            DesktopPluginViewMode::parse("card"),
+            Some(DesktopPluginViewMode::Card)
+        );
+        assert_eq!(
+            DesktopPluginViewMode::parse("panel"),
+            Some(DesktopPluginViewMode::Panel)
+        );
+        assert_eq!(DesktopPluginViewMode::parse("unknown"), None);
+        assert_eq!(
+            DesktopPluginViewMode::Pet.logical_size(&spec),
+            (256.0, 288.0)
+        );
+        assert_eq!(
+            DesktopPluginViewMode::Card.logical_size(&spec),
+            (376.0, 360.0)
+        );
+        assert_eq!(
+            DesktopPluginViewMode::Panel.logical_size(&spec),
+            (376.0, 680.0)
+        );
+    }
+
+    #[test]
+    fn target_geometry_clamps_card_and_panel_to_a_small_work_area() {
+        let current = DesktopWindowGeometry {
+            x: 0,
+            y: 0,
+            width: 96,
+            height: 96,
+        };
+        let work_area = DesktopWorkArea {
+            x: -100,
+            y: -50,
+            width: 300,
+            height: 200,
+        };
+        let target = desktop_window_target_geometry(
+            current,
+            DesktopPluginViewMode::Panel,
+            work_area,
+            &geometry_test_spec(),
+            1.0,
+        );
+        assert_eq!(
+            target.geometry,
+            DesktopWindowGeometry {
+                x: -100,
+                y: -50,
+                width: 300,
+                height: 200,
+            }
+        );
+        assert_eq!(target.anchor, HorizontalAnchor::Right);
+        assert_eq!(target.vertical_anchor, VerticalAnchor::Bottom);
+    }
+
+    #[test]
     fn expansion_preserves_bottom_left_anchor() {
         assert_eq!(
             anchored_position(24, 1040, 440, 680, HorizontalAnchor::Left),
@@ -2207,6 +2271,53 @@ mod desktop_window_tests {
     }
 
     #[test]
+    fn dock_zone_uses_the_threshold_boundary() {
+        let work_area = DesktopWorkArea {
+            x: 100,
+            y: 50,
+            width: 1600,
+            height: 900,
+        };
+        let left_at_boundary = DesktopWindowGeometry {
+            x: 140,
+            y: 200,
+            width: 256,
+            height: 288,
+        };
+        let left_outside_boundary = DesktopWindowGeometry {
+            x: 141,
+            ..left_at_boundary
+        };
+        assert_eq!(
+            desktop_plugin_dock_zone_for_geometry(left_at_boundary, work_area),
+            Some("left")
+        );
+        assert_eq!(
+            desktop_plugin_dock_zone_for_geometry(left_outside_boundary, work_area),
+            None
+        );
+
+        let right_at_boundary = DesktopWindowGeometry {
+            x: 1404,
+            y: 200,
+            width: 256,
+            height: 288,
+        };
+        let right_outside_boundary = DesktopWindowGeometry {
+            x: 1403,
+            ..right_at_boundary
+        };
+        assert_eq!(
+            desktop_plugin_dock_zone_for_geometry(right_at_boundary, work_area),
+            Some("right")
+        );
+        assert_eq!(
+            desktop_plugin_dock_zone_for_geometry(right_outside_boundary, work_area),
+            None
+        );
+    }
+
+    #[test]
     fn docked_placement_restores_to_the_selected_edge_and_keeps_y_ratio() {
         let work_area = DesktopWorkArea {
             x: 100,
@@ -2245,6 +2356,41 @@ mod desktop_window_tests {
             dock: None,
         };
         assert_eq!(legacy.sanitized().dock, None);
+    }
+
+    #[test]
+    fn sanitizes_monitor_name_ratios_and_dock_together() {
+        let placement = DesktopPluginPlacement {
+            monitor_name: Some(" Display 2 ".to_string()),
+            x_ratio: f64::NAN,
+            y_ratio: -0.5,
+            dock: Some(" RIGHT ".to_string()),
+        };
+        let sanitized = placement.sanitized();
+        assert_eq!(sanitized.monitor_name.as_deref(), Some("Display 2"));
+        assert_eq!(sanitized.x_ratio, 1.0);
+        assert_eq!(sanitized.y_ratio, 0.0);
+        assert_eq!(sanitized.dock.as_deref(), Some("right"));
+    }
+
+    #[test]
+    fn oversized_window_position_is_clamped_to_work_area_origin() {
+        let placement = DesktopPluginPlacement {
+            monitor_name: None,
+            x_ratio: 0.5,
+            y_ratio: 0.5,
+            dock: None,
+        };
+        let work_area = DesktopWorkArea {
+            x: -100,
+            y: -50,
+            width: 300,
+            height: 200,
+        };
+        assert_eq!(
+            desktop_plugin_position_from_placement(&placement, 400, 300, work_area),
+            (-100, -50)
+        );
     }
 
     #[test]
