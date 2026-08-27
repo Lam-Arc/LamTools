@@ -259,6 +259,10 @@ body.anchor-bottom.anchor-right .pet-card {
   background: var(--theme-main-soft-background);
   cursor: pointer;
 }
+.pet-card-close:disabled {
+  opacity: .46;
+  cursor: default;
+}
 .pet-card-body {
   min-height: 0;
   margin: var(--space-2) 0 var(--space-3);

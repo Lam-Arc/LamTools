@@ -274,7 +274,17 @@
     pendingImportedFiles = [];
     fileInstruction = '';
     fileSendInFlight = false;
+    if (suspendedCard && suspendedCard.kind === 'file') suspendedCard = null;
     if (activeCard && activeCard.kind === 'file') hideCard('file-cancelled');
+  }
+
+  function clearSentFiles() {
+    discardPendingDrop();
+    pendingFiles = [];
+    pendingImportedFiles = [];
+    fileInstruction = '';
+    if (suspendedCard && suspendedCard.kind === 'file') suspendedCard = null;
+    if (activeCard && activeCard.kind === 'file') hideCard('file-sent');
   }
 
   function showPendingFileCard(options) {
@@ -297,7 +307,6 @@
       onRemoveFile: function (index) {
         if (fileSendInFlight) return;
         pendingFiles.splice(index, 1);
-        pendingImportedFiles.splice(index, 1);
         showPendingFileCard();
       },
       disableFileEdits: sending,
@@ -333,6 +342,7 @@
       elements.petCardInput.disabled = false;
       elements.petCardInputWrap.hidden = true;
       elements.petCardActions.replaceChildren();
+      elements.petCardClose.disabled = false;
       return;
     }
     elements.petCardTitle.textContent = String(card.title || '桌宠提示');
@@ -362,6 +372,7 @@
     var inputEnabled = card.input === true || typeof card.onInput === 'function';
     elements.petCardInputWrap.hidden = !inputEnabled;
     elements.petCardInput.disabled = card.disableFileEdits === true;
+    elements.petCardClose.disabled = card.disableFileEdits === true;
     elements.petCardInput.placeholder = String(card.inputPlaceholder || '输入内容…');
     if (typeof card.inputValue === 'string' && elements.petCardInput.value !== card.inputValue) {
       elements.petCardInput.value = card.inputValue;
@@ -386,8 +397,11 @@
     var kind = String(card.kind || 'info');
     if (state.viewMode === VIEW_MODE.PANEL && ['reply', 'success', 'info'].includes(kind)) return false;
     var replacement = petLogic.cardReplacement(activeCard, card);
-    if (!replacement.replace) return false;
-    if (replacement.suspend) suspendedCard = activeCard;
+    if (!replacement.replace) {
+      if (replacement.defer) suspendedCard = card;
+      return false;
+    }
+    if (replacement.suspend && !isInteractionCard(activeCard)) suspendedCard = activeCard;
     clearCardTimer();
     activeCard = Object.assign({ kind: 'info', title: '桌宠提示', body: '', files: [], actions: [] }, card);
     renderCard(activeCard);
@@ -889,13 +903,13 @@
 
   async function importPendingDrop() {
     if (!pendingDropId) throw new Error('拖放文件引用已失效');
-    if (pendingImportedFiles.length >= pendingFiles.length && pendingImportedFiles.length > 0) {
+    if (petLogic.pendingSourcesReady(pendingFiles, pendingImportedFiles)) {
       return pendingImportedFiles;
     }
     var result = await invokeStrict('import_dropped_files', { dropId: pendingDropId });
     if (!result || !Array.isArray(result.files)) throw new Error('无法读取拖放文件');
     pendingImportedFiles = result.files;
-    if (pendingImportedFiles.length < pendingFiles.length) {
+    if (!petLogic.pendingSourcesReady(pendingFiles, pendingImportedFiles)) {
       throw new Error('拖放文件读取不完整');
     }
     return pendingImportedFiles;
@@ -941,11 +955,7 @@
         text: fileInstruction.trim() || '请查看这些文件。',
         attachments: attachments
       });
-      pendingFiles = [];
-      pendingImportedFiles = [];
-      discardPendingDrop();
-      fileInstruction = '';
-      hideCard('file-sent');
+      clearSentFiles();
     } catch (error) {
       showError(error);
       showPendingFileCard({
@@ -1202,13 +1212,15 @@
 
   function showInteraction(interaction) {
     var previousRequestId = state.interaction && state.interaction.requestId;
+    var restoredCard = false;
     if (!interaction && isInteractionCard(activeCard)) {
       clearCardVisual();
-      if (!restoreSuspendedCard() && state.viewMode === VIEW_MODE.CARD) {
+      restoredCard = restoreSuspendedCard();
+      if (!restoredCard && state.viewMode === VIEW_MODE.CARD) {
         void setViewMode(VIEW_MODE.PET, { reason: 'interaction-cleared' });
       }
     } else if (!interaction && suspendedCard) {
-      restoreSuspendedCard();
+      restoredCard = restoreSuspendedCard();
     }
     state.interaction = interaction && interaction.requestId ? interaction : null;
     if (state.interaction && previousRequestId !== state.interaction.requestId) {
@@ -1225,7 +1237,9 @@
     document.body.classList.remove('interaction-question');
     if (!state.interaction) {
       syncQueueLayers();
-      if (previousRequestId && state.viewMode !== VIEW_MODE.PET) setViewMode(VIEW_MODE.PET, { reason: 'interaction-cleared' });
+      if (petLogic.shouldCollapseAfterInteraction(previousRequestId, restoredCard, state.viewMode)) {
+        setViewMode(VIEW_MODE.PET, { reason: 'interaction-cleared' });
+      }
       return;
     }
 
@@ -1405,7 +1419,14 @@
   });
   elements.approveButton.addEventListener('click', function () { respondApproval('approve_once'); });
   elements.denyButton.addEventListener('click', function () { respondApproval('deny'); });
-  elements.petCardClose.addEventListener('click', function () { hideCard('user'); });
+  elements.petCardClose.addEventListener('click', function () {
+    if (activeCard && activeCard.kind === 'file') {
+      if (fileSendInFlight) return;
+      cancelPendingFiles();
+      return;
+    }
+    hideCard('user');
+  });
   elements.petCardInput.addEventListener('input', function () {
     if (activeCard && typeof activeCard.onInput === 'function') {
       activeCard.onInput(elements.petCardInput.value);

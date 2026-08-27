@@ -18,9 +18,14 @@ test('exposes the fixed card priority ordering', () => {
 })
 
 test('replaces lower priority cards and reports suspended cards', () => {
-  assert.equal(JSON.stringify(logic.cardReplacement({ kind: 'file' }, { kind: 'approval' })), JSON.stringify({ replace: true, suspend: true }))
-  assert.equal(JSON.stringify(logic.cardReplacement({ kind: 'approval' }, { kind: 'success' })), JSON.stringify({ replace: false, suspend: false }))
-  assert.equal(JSON.stringify(logic.cardReplacement({ kind: 'reply' }, { kind: 'reply' })), JSON.stringify({ replace: true, suspend: false }))
+  assert.equal(JSON.stringify(logic.cardReplacement({ kind: 'file' }, { kind: 'approval' })), JSON.stringify({ replace: true, suspend: true, defer: false }))
+  assert.equal(JSON.stringify(logic.cardReplacement({ kind: 'approval' }, { kind: 'success' })), JSON.stringify({ replace: false, suspend: false, defer: false }))
+  assert.equal(JSON.stringify(logic.cardReplacement({ kind: 'reply' }, { kind: 'reply' })), JSON.stringify({ replace: true, suspend: false, defer: false }))
+})
+
+test('defers file cards that arrive while an interaction card is active', () => {
+  assert.equal(JSON.stringify(logic.cardReplacement({ kind: 'approval' }, { kind: 'file' })), JSON.stringify({ replace: false, suspend: false, defer: true }))
+  assert.equal(JSON.stringify(logic.cardReplacement({ kind: 'question' }, { kind: 'file' })), JSON.stringify({ replace: false, suspend: false, defer: true }))
 })
 
 test('normalizes dropped file names and preserves source indexes', () => {
@@ -33,6 +38,22 @@ test('normalizes dropped file names and preserves source indexes', () => {
     { name: 'report.pdf', index: 0, dropId: 'drop-1' },
     { name: 'notes.txt', index: 7, dropId: 'drop-1' }
   ]))
+})
+
+test('checks imported files by their original source indexes', () => {
+  const imported = [
+    { dataBase64: 'first' },
+    { dataBase64: 'second' },
+  ]
+  assert.equal(logic.pendingSourcesReady([{ index: 1 }], imported), true)
+  assert.equal(logic.pendingSourcesReady([{ index: 1 }], [imported[1]]), false)
+  assert.equal(logic.pendingSourcesReady([{ index: 8, attachment: { id: 'uploaded' } }], []), true)
+})
+
+test('keeps a restored card open after an interaction is cleared', () => {
+  assert.equal(logic.shouldCollapseAfterInteraction(true, true, 'card'), false)
+  assert.equal(logic.shouldCollapseAfterInteraction(true, false, 'card'), true)
+  assert.equal(logic.shouldCollapseAfterInteraction(true, false, 'pet'), false)
 })
 
 test('summarizes replies to four non-empty lines and a bounded length', () => {

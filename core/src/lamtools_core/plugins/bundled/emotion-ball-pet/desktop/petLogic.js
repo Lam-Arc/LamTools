@@ -22,13 +22,20 @@
 
   function cardReplacement(currentCard, nextCard) {
     if (!nextCard || typeof nextCard !== 'object') {
-      return { replace: false, suspend: false };
+      return { replace: false, suspend: false, defer: false };
     }
-    if (!currentCard) return { replace: true, suspend: false };
+    if (!currentCard) return { replace: true, suspend: false, defer: false };
     var nextPriority = cardPriority(nextCard);
     var currentPriority = cardPriority(currentCard);
-    if (nextPriority < currentPriority) return { replace: false, suspend: false };
-    return { replace: true, suspend: nextPriority > currentPriority };
+    if (nextPriority < currentPriority) {
+      var currentKind = cardKind(currentCard);
+      return {
+        replace: false,
+        suspend: false,
+        defer: cardKind(nextCard) === 'file' && (currentKind === 'approval' || currentKind === 'question')
+      };
+    }
+    return { replace: true, suspend: nextPriority > currentPriority, defer: false };
   }
 
   function normalizeDroppedFiles(files, dropId) {
@@ -50,6 +57,22 @@
     }).filter(Boolean);
   }
 
+  function pendingSourcesReady(pendingFiles, importedFiles) {
+    if (!Array.isArray(pendingFiles) || pendingFiles.length === 0 || !Array.isArray(importedFiles)) {
+      return false;
+    }
+    return pendingFiles.every(function (pending, index) {
+      if (pending && pending.attachment && pending.attachment.id) return true;
+      var importedIndex = pending && Number.isInteger(pending.index) ? pending.index : index;
+      var imported = importedFiles[importedIndex];
+      return !!(imported && imported.dataBase64);
+    });
+  }
+
+  function shouldCollapseAfterInteraction(hadInteraction, restoredCard, viewMode) {
+    return !!hadInteraction && !restoredCard && String(viewMode || '') !== 'pet';
+  }
+
   function replySummary(text) {
     var lines = String(text || '').trim().split(/\r?\n/).map(function (line) {
       return line.trim();
@@ -64,6 +87,8 @@
     cardPriority: cardPriority,
     cardReplacement: cardReplacement,
     normalizeDroppedFiles: normalizeDroppedFiles,
+    pendingSourcesReady: pendingSourcesReady,
+    shouldCollapseAfterInteraction: shouldCollapseAfterInteraction,
     replySummary: replySummary
   });
 })(typeof window !== 'undefined' ? window : globalThis);
