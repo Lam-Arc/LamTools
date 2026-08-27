@@ -6,6 +6,7 @@ const packageRoot = resolve(import.meta.dirname, '..')
 const packageJson = JSON.parse(readFileSync(resolve(packageRoot, 'package.json'), 'utf8'))
 const viteConfig = readFileSync(resolve(packageRoot, 'vite.config.ts'), 'utf8')
 const demoApp = readFileSync(resolve(packageRoot, 'src/demo/App.vue'), 'utf8')
+const stagePane = readFileSync(resolve(packageRoot, 'src/components/StagePane.vue'), 'utf8')
 const layoutCss = readFileSync(resolve(packageRoot, 'src/styles/layout.css'), 'utf8')
 
 describe('Core UI package boundary', () => {
@@ -42,6 +43,13 @@ describe('Core UI package boundary', () => {
     expect(demoApp).toMatch(/@delete-session="deleteSession"/)
     expect(demoApp).toMatch(/:allow-session-delete="!workflowMode"/)
     expect(demoApp).not.toMatch(/coreAppItemToMessagePart/)
+  })
+
+  it('keeps low-frequency workspaces out of the desktop startup chunk', () => {
+    expect(demoApp).toContain("defineAsyncComponent(() => import('../components/CoreSettings.vue'))")
+    expect(demoApp).toContain("defineAsyncComponent(() => import('../components/StagePane.vue'))")
+    expect(demoApp).toContain("defineAsyncComponent(() => import('../components/WorkflowCanvas.vue'))")
+    expect(stagePane).toContain("defineAsyncComponent(() => import('./StageCodeEditor.vue'))")
   })
 
   it('keeps the shared composer inside the main workspace when a narrow viewport still has a pinned sidebar', () => {

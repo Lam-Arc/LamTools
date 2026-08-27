@@ -13,6 +13,10 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
+    // Mermaid is already demand-loaded only for diagram blocks; its largest
+    // parser/vendor chunk is ~663 kB. Keep the warning focused on accidental
+    // eager regressions instead of this intentional lazy boundary.
+    chunkSizeWarningLimit: 700,
     rollupOptions: {
       input: {
         main: resolve(__dirname, 'index.html'),

@@ -542,6 +542,7 @@
 <script setup lang="ts">
 import {
   computed,
+  defineAsyncComponent,
   nextTick,
   onMounted,
   onUnmounted,
@@ -607,7 +608,6 @@ import {
 
 import AttachmentTray from '../components/AttachmentTray.vue'
 import ChatThread from '../components/ChatThread.vue'
-import WorkflowCanvas from '../components/WorkflowCanvas.vue'
 import UiSelect from '../components/UiSelect.vue'
 import CommandPalette from '../components/CommandPalette.vue'
 import CoreExecutionControls from '../components/CoreExecutionControls.vue'
@@ -615,7 +615,6 @@ import CoreResourceStats from '../components/CoreResourceStats.vue'
 import CoreQueuedInputTray from '../components/CoreQueuedInputTray.vue'
 import CoreArrangeManager from '../components/CoreArrangeManager.vue'
 import CoreGoalStrip from '../components/CoreGoalStrip.vue'
-import StagePane from '../components/StagePane.vue'
 import FileTreePanel from '../components/FileTreePanel.vue'
 import type { StageResource, StageKind } from '../types'
 import CoreProjectCreate from '../components/CoreProjectCreate.vue'
@@ -624,16 +623,21 @@ import ArtifactPanel from '../components/ArtifactPanel.vue'
 import OnboardingWizard from '../components/OnboardingWizard.vue'
 import PluginsShell from '../components/PluginsShell.vue'
 import SearchShell from '../components/SearchShell.vue'
-import CoreSettings, {
-  type CoreSettingsModelPayload,
-  type CoreSettingsProviderPayload,
-  type WorkflowListItem,
+import type {
+  CoreSettingsModelPayload,
+  CoreSettingsProviderPayload,
 } from '../components/CoreSettings.vue'
 import CoreProjectSettings from '../components/CoreProjectSettings.vue'
 import RuntimeChecklistCard from '../components/RuntimeChecklistCard.vue'
 import SessionSidebar from '../components/SessionSidebar.vue'
 import WorkspaceShell from '../components/WorkspaceShell.vue'
 import TitleBar from '../components/TitleBar.vue'
+
+const CoreSettings = defineAsyncComponent(() => import('../components/CoreSettings.vue'))
+const StagePane = defineAsyncComponent(() => import('../components/StagePane.vue'))
+const WorkflowCanvas = defineAsyncComponent(() => import('../components/WorkflowCanvas.vue'))
+
+type StagePaneInstance = InstanceType<(typeof import('../components/StagePane.vue'))['default']>
 
 type RawSession = {
   id: string
@@ -792,7 +796,7 @@ const workflowSelectOptions = computed(() =>
 const stageOpen = ref(false)
 const stageTabs = ref<StageResource[]>([])
 const stageActiveId = ref<string | null>(null)
-const stagePaneRef = ref<InstanceType<typeof StagePane> | null>(null)
+const stagePaneRef = ref<StagePaneInstance | null>(null)
 
 function toggleStage() {
   stageOpen.value = !stageOpen.value
