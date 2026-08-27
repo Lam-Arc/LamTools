@@ -780,6 +780,13 @@
     });
   }
 
+  function rejectPendingRpc(message) {
+    state.pendingRpc.forEach(function (entry) {
+      entry.reject(new Error(message));
+    });
+    state.pendingRpc.clear();
+  }
+
   function closeSocket() {
     state.connectionGeneration += 1;
     state.connected = false;
@@ -787,10 +794,7 @@
     state.reconnectTimer = 0;
     if (state.socket) state.socket.close();
     state.socket = null;
-    state.pendingRpc.forEach(function (entry) {
-      entry.reject(new Error('Core App Server 连接已关闭'));
-    });
-    state.pendingRpc.clear();
+    rejectPendingRpc('Core App Server 连接已关闭');
   }
 
   function scheduleReconnect(generation) {
@@ -812,14 +816,27 @@
       var url = new URL('/api/core/app-server', window.location.origin);
       url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
       var socket = new WebSocket(url.toString());
+      var opened = false;
       state.socket = socket;
       await new Promise(function (resolve, reject) {
-        socket.onopen = resolve;
-        socket.onerror = function () { reject(new Error('Core App Server WebSocket 连接失败')); };
-        socket.onmessage = handleSocketMessage;
+        socket.onopen = function () {
+          opened = true;
+          resolve();
+        };
+        socket.onerror = function () {
+          if (!opened) reject(new Error('Core App Server WebSocket 连接失败'));
+        };
+        socket.onmessage = function (event) {
+          if (generation === state.connectionGeneration && socket === state.socket) {
+            handleSocketMessage(event);
+          }
+        };
         socket.onclose = function () {
-          if (generation !== state.connectionGeneration) return;
+          if (generation !== state.connectionGeneration || socket !== state.socket) return;
+          state.socket = null;
           state.connected = false;
+          rejectPendingRpc('Core App Server 连接已断开');
+          if (!opened) reject(new Error('Core App Server WebSocket 在连接完成前关闭'));
           setStatus('连接已断开', 'error', '34');
           scheduleReconnect(generation);
         };
