@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
+import type { Event } from '@tauri-apps/api/event'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import type { DragDropEvent } from '@tauri-apps/api/webview'
 import { getCurrentWindow } from '@tauri-apps/api/window'
@@ -49,30 +50,53 @@ let fileDropEnabled = false
 let unlistenFileDrop: (() => void) | undefined
 let unlistenWindowMoved: (() => void) | undefined
 let placementSaveTimer: number | undefined
+let fileDropRequestGeneration = 0
+const registeredDropIds = new Set<string>()
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error || '未知错误')
 }
 
-function postPluginEvent(message: Record<string, unknown>): void {
-  if (!frame?.contentWindow || !pluginOrigin) return
+function postPluginEvent(message: Record<string, unknown>): boolean {
+  if (!frame?.contentWindow || !pluginOrigin) return false
   frame.contentWindow.postMessage({ source: 'lamtools-desktop-host', ...message }, pluginOrigin)
+  return true
 }
 
-async function handleFileDropEvent(event: DragDropEvent): Promise<void> {
+async function discardRegisteredDrop(dropId: string): Promise<void> {
+  if (!dropId || !registeredDropIds.has(dropId)) return
+  try {
+    await invoke('discard_desktop_plugin_drop', { dropId })
+    registeredDropIds.delete(dropId)
+  } catch (error) {
+    console.warn('[desktop-plugin-host] discarding desktop drop failed:', error)
+  }
+}
+
+async function handleFileDropEvent(event: Event<DragDropEvent>): Promise<void> {
   if (!fileDropEnabled) return
   if (event.payload.type === 'enter') {
     postPluginEvent({ type: 'file-drag-enter' })
   } else if (event.payload.type === 'leave') {
     postPluginEvent({ type: 'file-drag-leave' })
   } else if (event.payload.type === 'drop') {
+    postPluginEvent({ type: 'file-drag-leave' })
+    const generation = ++fileDropRequestGeneration
     try {
       const drop = await invoke<DesktopDropSummary>('register_desktop_plugin_drop', {
         paths: event.payload.paths,
       })
-      postPluginEvent({ type: 'files-dropped', dropId: drop.dropId, files: drop.files })
+      registeredDropIds.add(drop.dropId)
+      if (generation !== fileDropRequestGeneration) {
+        await discardRegisteredDrop(drop.dropId)
+        return
+      }
+      const delivered = postPluginEvent({ type: 'files-dropped', dropId: drop.dropId, files: drop.files })
+      if (!delivered) await discardRegisteredDrop(drop.dropId)
     } catch (error) {
-      postPluginEvent({ type: 'file-drop-error', message: errorText(error) })
+      if (generation === fileDropRequestGeneration) {
+        postPluginEvent({ type: 'file-drop-error', message: errorText(error) })
+      }
     }
   }
 }
@@ -99,12 +123,16 @@ async function listenForWindowMoves(): Promise<void> {
 }
 
 window.addEventListener('beforeunload', () => {
+  fileDropRequestGeneration += 1
   unlistenFileDrop?.()
   unlistenFileDrop = undefined
   unlistenWindowMoved?.()
   unlistenWindowMoved = undefined
   if (placementSaveTimer !== undefined) window.clearTimeout(placementSaveTimer)
   placementSaveTimer = undefined
+  registeredDropIds.forEach((dropId) => {
+    void discardRegisteredDrop(dropId)
+  })
   void invoke('save_desktop_plugin_position').catch(() => undefined)
 })
 
@@ -182,10 +210,14 @@ window.addEventListener('message', async (event) => {
     if (!allowedCommands.has(message.command)) throw new Error(`桌面插件命令未获授权：${message.command}`)
     if (message.command === 'import_dropped_files') {
       if (!fileDropEnabled) throw new Error('当前桌面插件未获 fileDrop 能力')
-      response.result = await invoke('read_desktop_plugin_drop', commandArgs(message as PluginRequest))
+      const args = commandArgs(message as PluginRequest)
+      response.result = await invoke('read_desktop_plugin_drop', args)
+      registeredDropIds.delete(String(args.dropId || ''))
     } else if (message.command === 'discard_dropped_files') {
       if (!fileDropEnabled) throw new Error('当前桌面插件未获 fileDrop 能力')
-      response.result = await invoke('discard_desktop_plugin_drop', commandArgs(message as PluginRequest))
+      const args = commandArgs(message as PluginRequest)
+      response.result = await invoke('discard_desktop_plugin_drop', args)
+      registeredDropIds.delete(String(args.dropId || ''))
     } else {
       response.result = await invoke(message.command, commandArgs(message as PluginRequest))
     }
