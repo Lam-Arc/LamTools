@@ -164,8 +164,10 @@
           <button
             type="button"
             class="toggle-btn"
+            data-allow-outside-workdir
             :class="{ 'is-on': allowAccessOutsideWorkdir }"
             :aria-label="'允许访问工作目录以外'"
+            :aria-pressed="allowAccessOutsideWorkdir ? 'true' : 'false'"
             @click="toggleAllowOutsideWorkdir"
           >
             <ToggleRight v-if="allowAccessOutsideWorkdir" :size="16" :stroke-width="1.8" aria-hidden="true" />
@@ -303,7 +305,9 @@
             class="toggle-btn"
             :class="{ 'is-on': dreamingEnabled }"
             :aria-label="'自动记忆整理'"
-            @click="saveDreamingSettings"
+            :aria-pressed="dreamingEnabled ? 'true' : 'false'"
+            :disabled="dreamingSaving"
+            @click="toggleDreamingSettings"
           >
             <ToggleRight v-if="dreamingEnabled" :size="16" :stroke-width="1.8" aria-hidden="true" />
             <ToggleLeft v-else :size="16" :stroke-width="1.8" aria-hidden="true" />
@@ -419,8 +423,10 @@
           <button
             type="button"
             class="toggle-btn"
+            data-update-auto-check
             :class="{ 'is-on': updateAutoCheck }"
             :aria-label="'启动时自动检查更新'"
+            :aria-pressed="updateAutoCheck ? 'true' : 'false'"
             @click="toggleUpdateAutoCheck"
           >
             <ToggleRight v-if="updateAutoCheck" :size="16" :stroke-width="1.8" aria-hidden="true" />
@@ -552,6 +558,7 @@
                       class="toggle-btn"
                       :class="{ 'is-on': modelEditor.thinking_supported }"
                       aria-label="支持推理"
+                      :aria-pressed="modelEditor.thinking_supported ? 'true' : 'false'"
                       @click="modelEditor.thinking_supported = !modelEditor.thinking_supported"
                     >
                       <ToggleRight v-if="modelEditor.thinking_supported" :size="16" :stroke-width="1.8" aria-hidden="true" />
@@ -587,7 +594,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { RefreshCw, Star, X } from 'lucide-vue-next'
+import { RefreshCw, Star, ToggleLeft, ToggleRight, X } from 'lucide-vue-next'
 import { PROVIDER_PRESETS } from '../data/provider-presets'
 import { THEME_PRESETS } from '../data/theme-presets'
 import {
@@ -598,6 +605,7 @@ import {
   type ThemePreset,
   type ThemeStop,
 } from '../helpers/theme'
+import { openUpdatePage } from '../helpers/update'
 import SettingsShell, { type SettingsSection } from './SettingsShell.vue'
 import ThemeEditor from './ThemeEditor.vue'
 import CoreSubAgentEditor from './CoreSubAgentEditor.vue'
@@ -735,14 +743,12 @@ const sections: SettingsSection[] = [
 
 // ── Update check state (共享实例由 App.vue 传入以便启动时自动检查；缺省自建) ──
 const updateAutoCheck = ref(readUpdateAutoCheck())
-function toggleUpdateAutoCheck(event: Event) {
-  const input = event.target as HTMLInputElement
-  updateAutoCheck.value = input.checked
-  setUpdateAutoCheck(input.checked)
+function toggleUpdateAutoCheck() {
+  updateAutoCheck.value = !updateAutoCheck.value
+  setUpdateAutoCheck(updateAutoCheck.value)
 }
 async function openUpdateReleasePage() {
   if (updateReleaseUrl.value) {
-    const { openUpdatePage } = await import('../helpers/update')
     await openUpdatePage(updateReleaseUrl.value)
   }
 }
@@ -940,11 +946,19 @@ async function saveDreamingSettings() {
       value: { enabled: dreamingEnabled.value, min_turns: minTurns },
     })
     settingsDirty.value = false
+    return true
   } catch (e) {
     dreamingError.value = e instanceof Error ? e.message : String(e)
+    return false
   } finally {
     dreamingSaving.value = false
   }
+}
+
+async function toggleDreamingSettings() {
+  const previous = dreamingEnabled.value
+  dreamingEnabled.value = !previous
+  if (!await saveDreamingSettings()) dreamingEnabled.value = previous
 }
 
 function closeEditors() {
@@ -973,9 +987,8 @@ const {
 } = update
 
 const permissionMode = computed(() => props.permissionMode || 'full_edit')
-function toggleAllowOutsideWorkdir(event: Event) {
-  const input = event.target as HTMLInputElement
-  emit('update-allow-outside-workdir', input.checked)
+function toggleAllowOutsideWorkdir() {
+  emit('update-allow-outside-workdir', !props.allowAccessOutsideWorkdir)
 }
 const permissionTiers = [
   {
