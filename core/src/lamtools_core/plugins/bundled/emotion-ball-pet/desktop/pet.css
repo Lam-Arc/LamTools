@@ -357,6 +357,14 @@ button:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--orange) 76%, transparent);
   outline-offset: 2px;
 }
+textarea:focus-visible {
+  border-color: color-mix(in srgb, var(--orange) 76%, transparent);
+  outline: 2px solid color-mix(in srgb, var(--orange) 52%, transparent);
+  outline-offset: 1px;
+}
+textarea::placeholder {
+  color: color-mix(in srgb, var(--theme-composer-text) 65%, transparent);
+}
 .interaction-region {
   min-height: 0;
   flex: 0 1 auto;
@@ -502,7 +510,6 @@ button:focus-visible {
   font-size: .8125rem;
   line-height: 1.4;
 }
-.guidance-form textarea::placeholder { color: color-mix(in srgb, var(--theme-composer-text) 65%, transparent); }
 .guidance-form .button { flex: 0 0 auto; }
 
 .pet-composer {

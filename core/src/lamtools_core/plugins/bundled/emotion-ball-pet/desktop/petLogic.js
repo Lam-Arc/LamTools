@@ -91,6 +91,14 @@
     };
   }
 
+  function petToggleAccessibility(viewMode) {
+    var mode = String(viewMode || 'pet');
+    return {
+      expanded: mode !== 'pet',
+      label: mode === 'panel' ? '收起桌宠面板' : '打开桌宠面板'
+    };
+  }
+
   root.EmotionBallPetLogic = Object.freeze({
     CARD_PRIORITY: CARD_PRIORITY,
     cardPriority: cardPriority,
@@ -98,6 +106,7 @@
     normalizeDroppedFiles: normalizeDroppedFiles,
     pendingSourcesReady: pendingSourcesReady,
     panelDetailFromCard: panelDetailFromCard,
+    petToggleAccessibility: petToggleAccessibility,
     shouldCollapseAfterInteraction: shouldCollapseAfterInteraction,
     replySummary: replySummary
   });

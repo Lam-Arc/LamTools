@@ -10,9 +10,9 @@
   <body class="is-collapsed" data-view-mode="pet" data-file-drag="false">
     <main class="pet-shell" aria-label="LamTools 桌宠">
       <section class="pet-stage" aria-label="桌宠状态">
-        <button id="petToggle" class="pet-toggle" type="button" aria-expanded="false" aria-controls="petCard petPanel">
+        <button id="petToggle" class="pet-toggle" type="button" aria-label="打开桌宠面板" aria-expanded="false" aria-controls="petCard petPanel">
           <span id="ball" class="ball" aria-hidden="true"></span>
-          <span id="statusBadge" class="status-badge" data-pet-hit-surface data-tone="idle">正在连接</span>
+          <span id="statusBadge" class="status-badge" data-pet-hit-surface data-tone="idle" role="status" aria-live="polite" aria-atomic="true">正在连接</span>
           <span id="attentionDot" class="attention-dot" data-pet-hit-surface hidden aria-hidden="true"></span>
         </button>
       </section>
@@ -32,7 +32,7 @@
         </div>
         <div id="petCardActions" class="pet-card-actions"></div>
       </section>
-      <section id="petPanel" class="pet-panel" data-pet-hit-surface aria-label="待处理事项" hidden>
+      <section id="petPanel" class="pet-panel" data-pet-hit-surface aria-label="桌宠面板" hidden>
         <section id="panelDetail" class="panel-detail" hidden aria-labelledby="panelDetailTitle" aria-live="polite">
           <header class="panel-detail-heading">
             <p id="panelDetailTitle">最新结果</p>

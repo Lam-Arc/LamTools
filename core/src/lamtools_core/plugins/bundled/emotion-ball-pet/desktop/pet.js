@@ -617,7 +617,9 @@
     document.body.classList.toggle('is-collapsed', mode === VIEW_MODE.PET);
     document.body.classList.toggle('is-window-open', mode !== VIEW_MODE.PET);
     document.body.classList.toggle('is-card-visible', mode !== VIEW_MODE.PET);
-    elements.petToggle.setAttribute('aria-expanded', String(mode === VIEW_MODE.PANEL));
+    var toggleAccessibility = petLogic.petToggleAccessibility(mode);
+    elements.petToggle.setAttribute('aria-expanded', String(toggleAccessibility.expanded));
+    elements.petToggle.setAttribute('aria-label', toggleAccessibility.label);
     elements.petCard.hidden = mode !== VIEW_MODE.CARD;
     elements.petPanel.hidden = mode !== VIEW_MODE.PANEL;
     if (mode === VIEW_MODE.PANEL) elements.interactionCard.scrollTop = 0;

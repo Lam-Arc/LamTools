@@ -78,3 +78,18 @@ test('promotes only cards carrying full detail into panel content', () => {
     detailBody: '完整错误'
   })), JSON.stringify({ title: '错误详情', body: '完整错误', tone: 'error' }))
 })
+
+test('reports every visible surface as expanded to assistive technology', () => {
+  assert.equal(JSON.stringify(logic.petToggleAccessibility('pet')), JSON.stringify({
+    expanded: false,
+    label: '打开桌宠面板'
+  }))
+  assert.equal(JSON.stringify(logic.petToggleAccessibility('card')), JSON.stringify({
+    expanded: true,
+    label: '打开桌宠面板'
+  }))
+  assert.equal(JSON.stringify(logic.petToggleAccessibility('panel')), JSON.stringify({
+    expanded: true,
+    label: '收起桌宠面板'
+  }))
+})
