@@ -24,6 +24,8 @@ interface DesktopDropSummary {
   files: Array<{ name: string }>
 }
 
+const DESKTOP_PET_PLUGIN_NAME = 'emotion-ball-pet'
+
 const frame = document.querySelector<HTMLIFrameElement>('#plugin-frame')
 const errorRegion = document.querySelector<HTMLElement>('#host-error')
 
@@ -240,8 +242,8 @@ async function start(): Promise<void> {
   if (!response.ok) throw new Error(`读取桌面插件失败（HTTP ${response.status}）`)
 
   const payload = await response.json() as { plugins?: DesktopPluginDescriptor[] }
-  const plugin = payload.plugins?.[0]
-  if (!plugin?.entry_url) throw new Error('没有已启用的桌面插件')
+  const plugin = payload.plugins?.find((candidate) => candidate.name === DESKTOP_PET_PLUGIN_NAME)
+  if (!plugin?.entry_url) throw new Error('桌宠插件未启用或入口不可用')
 
   const entryUrl = new URL(plugin.entry_url, apiBase)
   if (entryUrl.origin !== new URL(apiBase).origin) throw new Error('桌面插件入口不属于 Core')

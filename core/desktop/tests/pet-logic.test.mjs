@@ -5,6 +5,7 @@ import vm from 'node:vm'
 
 const logicSource = await readFile(new URL('../../src/lamtools_core/plugins/bundled/emotion-ball-pet/desktop/petLogic.js', import.meta.url), 'utf8')
 const petSource = await readFile(new URL('../../src/lamtools_core/plugins/bundled/emotion-ball-pet/desktop/pet.js', import.meta.url), 'utf8')
+const hostSource = await readFile(new URL('../src/desktopPluginHost.ts', import.meta.url), 'utf8')
 const context = { window: {} }
 context.globalThis = context
 vm.runInNewContext(logicSource, context, { filename: 'petLogic.js' })
@@ -116,4 +117,10 @@ test('keeps interaction context while appending a retryable submission error', (
     logic.interactionBodyWithError('允许执行命令吗？', '  请求超时  '),
     '允许执行命令吗？\n\n提交失败：请求超时'
   )
+})
+
+test('desktop host selects the pet by identity instead of registry order', () => {
+  assert.match(hostSource, /DESKTOP_PET_PLUGIN_NAME = 'emotion-ball-pet'/)
+  assert.match(hostSource, /plugins\?\.find\(\(candidate\) => candidate\.name === DESKTOP_PET_PLUGIN_NAME\)/)
+  assert.doesNotMatch(hostSource, /plugins\?\.\[0\]/)
 })
