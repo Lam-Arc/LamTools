@@ -81,7 +81,7 @@
     }
     if (message.type === 'file-drop-error') {
       setFileDragActive(false);
-      showError(message.message || '读取拖放文件失败');
+      showError(message.message || '读取拖放文件失败', '文件添加失败');
       return;
     }
     var strictPending = strictHostRequests.get(message.id);
@@ -330,7 +330,7 @@
     fileInstruction = '';
     if (!pendingDropId || pendingFiles.length === 0) {
       pendingDropId = '';
-      showError('没有可用的拖放文件');
+      showError('没有可用的拖放文件', '文件添加失败');
       return;
     }
     showPendingFileCard();
@@ -736,10 +736,9 @@
     return error instanceof Error ? error.message : String(error || '未知错误');
   }
 
-  function showError(error) {
-    state.running = false;
+  function showError(error, statusText) {
     var message = errorMessage(error);
-    setStatus('连接或执行失败', 'error', '34');
+    setStatus(statusText || '连接或执行失败', 'error', '34');
     console.warn('[emotion-ball-pet]', message);
     setPanelDetail({ title: '处理失败', body: message, tone: 'error' });
     if (state.viewMode !== VIEW_MODE.PANEL) {
@@ -1008,7 +1007,7 @@
       });
       clearSentFiles();
     } catch (error) {
-      showError(error);
+      showError(error, '文件发送失败');
       showPendingFileCard({
         title: '文件发送失败',
         body: '文件和指令已保留，可修正后重试。\n' + errorMessage(error)
@@ -1034,7 +1033,7 @@
               setStatus('已固定在' + label, 'done', '33');
               hideCard('dock-confirmed');
             })
-            .catch(showError);
+            .catch(function (error) { showError(error, '固定位置失败'); });
         } }
       ]
     });
@@ -1055,7 +1054,7 @@
     try {
       message = JSON.parse(messageEvent.data);
     } catch (error) {
-      showError('收到无法解析的 App Server 消息');
+      showError('收到无法解析的 App Server 消息', '连接协议异常');
       return;
     }
     if (message.id !== undefined && typeof message.method === 'string') {
@@ -1165,7 +1164,8 @@
     } else if (kind === 'status') {
       applyRunStatus(payload.status || value.status || '', { announce: true, payload: payload });
     } else if (kind === 'error') {
-      showError(payload.message || value.message || 'Agent 执行失败');
+      state.running = false;
+      showError(payload.message || value.message || 'Agent 执行失败', '任务失败');
     }
   }
 
@@ -1185,7 +1185,7 @@
       setStatus('任务失败', 'error', '34');
       if (announce) {
         var failurePayload = options.payload && typeof options.payload === 'object' ? options.payload : {};
-        showError(failurePayload.message || failurePayload.error || failurePayload.raw_end_reason || 'Agent 执行失败');
+        showError(failurePayload.message || failurePayload.error || failurePayload.raw_end_reason || 'Agent 执行失败', '任务失败');
       }
     } else if (status === 'cancelled') {
       state.running = false;
@@ -1418,7 +1418,7 @@
       setStatus(decision === 'deny' ? '已拒绝请求' : successText, decision === 'deny' ? 'error' : 'done', decision === 'deny' ? '38' : '33');
       scheduleIdle();
     } catch (error) {
-      showError(error);
+      showError(error, interactionType === 'question' ? '回答提交失败' : '审批提交失败');
     } finally {
       elements.approveButton.disabled = false;
       elements.denyButton.disabled = false;
@@ -1491,7 +1491,7 @@
     elements.petComposerSend.disabled = true;
     sendPetTurn({ text: text })
       .then(function () { elements.petComposerInput.value = ''; })
-      .catch(showError)
+      .catch(function (error) { showError(error, '消息发送失败'); })
       .finally(function () { elements.petComposerSend.disabled = false; });
   });
   elements.guidanceForm.addEventListener('submit', function (event) {

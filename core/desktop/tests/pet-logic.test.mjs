@@ -4,6 +4,7 @@ import test from 'node:test'
 import vm from 'node:vm'
 
 const logicSource = await readFile(new URL('../../src/lamtools_core/plugins/bundled/emotion-ball-pet/desktop/petLogic.js', import.meta.url), 'utf8')
+const petSource = await readFile(new URL('../../src/lamtools_core/plugins/bundled/emotion-ball-pet/desktop/pet.js', import.meta.url), 'utf8')
 const context = { window: {} }
 context.globalThis = context
 vm.runInNewContext(logicSource, context, { filename: 'petLogic.js' })
@@ -92,4 +93,11 @@ test('reports every visible surface as expanded to assistive technology', () => 
     expanded: true,
     label: '收起桌宠面板'
   }))
+})
+
+test('generic UI errors do not overwrite the active run state', () => {
+  const showErrorSource = petSource.match(/function showError[\s\S]*?\n  function sendSocket/)?.[0] || ''
+  assert.notEqual(showErrorSource, '')
+  assert.doesNotMatch(showErrorSource, /state\.running\s*=/)
+  assert.match(petSource, /kind === 'error'\) \{\s+state\.running = false/)
 })
