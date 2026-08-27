@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     env,
     io::{Read, Write},
     net::{TcpListener, TcpStream},
@@ -34,7 +34,9 @@ const TRAY_ID: &str = "lamtools-tray";
 const TRAY_TOGGLE_PET_ID: &str = "tray-toggle-pet";
 const TRAY_OPEN_MAIN_ID: &str = "tray-open-main";
 const TRAY_QUIT_ID: &str = "tray-quit";
+const MAX_DESKTOP_DROP_FILES: usize = 20;
 const MAX_DESKTOP_DROP_FILE_BYTES: u64 = 50 * 1024 * 1024;
+const MAX_DESKTOP_DROP_TOTAL_BYTES: u64 = 100 * 1024 * 1024;
 const DESKTOP_PLUGIN_DOCK_THRESHOLD: i32 = 40;
 static NEXT_DESKTOP_DROP_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -395,19 +397,64 @@ fn set_desktop_plugin_dock(
     Ok(placement)
 }
 
+fn checked_desktop_drop_total(
+    current_file_count: usize,
+    current_total_bytes: u64,
+    next_file_bytes: u64,
+) -> Result<u64, String> {
+    if current_file_count >= MAX_DESKTOP_DROP_FILES {
+        return Err(format!("一次最多拖放 {MAX_DESKTOP_DROP_FILES} 个文件"));
+    }
+    if next_file_bytes > MAX_DESKTOP_DROP_FILE_BYTES {
+        return Err("单个拖放文件不能超过 50 MB".to_string());
+    }
+    let next_total = current_total_bytes
+        .checked_add(next_file_bytes)
+        .ok_or_else(|| "拖放文件总大小超出限制".to_string())?;
+    if next_total > MAX_DESKTOP_DROP_TOTAL_BYTES {
+        return Err("拖放文件总大小不能超过 100 MB".to_string());
+    }
+    Ok(next_total)
+}
+
+fn prepare_desktop_drop_paths(paths: Vec<String>) -> Result<Vec<PathBuf>, String> {
+    if paths.is_empty() {
+        return Err("没有可读取的拖放文件".to_string());
+    }
+    let mut files = Vec::new();
+    let mut seen = HashSet::new();
+    let mut total_bytes = 0;
+    for raw_path in paths {
+        let raw_path = raw_path.trim();
+        if raw_path.is_empty() {
+            return Err("拖放路径不能为空".to_string());
+        }
+        let path = std::fs::canonicalize(raw_path)
+            .map_err(|error| format!("无法读取拖放路径 {raw_path}：{error}"))?;
+        if !seen.insert(path.clone()) {
+            continue;
+        }
+        let metadata = std::fs::metadata(&path)
+            .map_err(|error| format!("无法读取拖放文件 {}：{error}", path.display()))?;
+        if !metadata.is_file() {
+            return Err(format!("仅支持拖放文件：{}", path.display()));
+        }
+        total_bytes = checked_desktop_drop_total(files.len(), total_bytes, metadata.len())
+            .map_err(|error| format!("{error}：{}", path.display()))?;
+        files.push(path);
+    }
+    if files.is_empty() {
+        return Err("没有可读取的拖放文件".to_string());
+    }
+    Ok(files)
+}
+
 #[tauri::command]
 fn register_desktop_plugin_drop(
     state: tauri::State<'_, BackendState>,
     paths: Vec<String>,
 ) -> Result<DesktopDropSummary, String> {
-    let files: Vec<PathBuf> = paths
-        .into_iter()
-        .filter_map(|path| std::fs::canonicalize(path).ok())
-        .filter(|path| path.is_file())
-        .collect();
-    if files.is_empty() {
-        return Err("没有可读取的拖放文件".to_string());
-    }
+    let files = prepare_desktop_drop_paths(paths)?;
 
     let drop_id = format!(
         "drop-{}",
@@ -450,16 +497,34 @@ fn read_desktop_plugin_drop(
         .cloned()
         .ok_or_else(|| "desktop drop not found or already imported".to_string())?;
 
-    let mut files = Vec::with_capacity(paths.len());
-    for path in paths {
-        let metadata = std::fs::metadata(&path).map_err(|error| error.to_string())?;
+    let mut expected_total_bytes = 0;
+    for (index, path) in paths.iter().enumerate() {
+        let metadata = std::fs::metadata(path)
+            .map_err(|error| format!("无法读取拖放文件 {}：{error}", path.display()))?;
         if !metadata.is_file() {
             return Err(format!("拖放文件已不可用：{}", path.display()));
         }
-        if metadata.len() > MAX_DESKTOP_DROP_FILE_BYTES {
-            return Err(format!("拖放文件超过 50 MB 限制：{}", path.display()));
-        }
-        let bytes = std::fs::read(&path).map_err(|error| error.to_string())?;
+        expected_total_bytes =
+            checked_desktop_drop_total(index, expected_total_bytes, metadata.len())
+                .map_err(|error| format!("{error}：{}", path.display()))?;
+    }
+
+    let mut files = Vec::with_capacity(paths.len());
+    let mut actual_total_bytes = 0;
+    for (index, path) in paths.into_iter().enumerate() {
+        let remaining_total = MAX_DESKTOP_DROP_TOTAL_BYTES.saturating_sub(actual_total_bytes);
+        let read_limit = MAX_DESKTOP_DROP_FILE_BYTES
+            .min(remaining_total)
+            .saturating_add(1);
+        let mut bytes = Vec::new();
+        std::fs::File::open(&path)
+            .map_err(|error| format!("无法打开拖放文件 {}：{error}", path.display()))?
+            .take(read_limit)
+            .read_to_end(&mut bytes)
+            .map_err(|error| format!("无法读取拖放文件 {}：{error}", path.display()))?;
+        actual_total_bytes =
+            checked_desktop_drop_total(index, actual_total_bytes, bytes.len() as u64)
+                .map_err(|error| format!("{error}：{}", path.display()))?;
         let name = path
             .file_name()
             .map(|value| value.to_string_lossy().into_owned())
@@ -1879,13 +1944,64 @@ fn anchored_position(
 #[cfg(test)]
 mod desktop_window_tests {
     use super::{
-        anchored_position, clamp_desktop_plugin_position, desktop_plugin_dock_zone_for_geometry,
-        desktop_plugin_position_from_placement, desktop_window_target_geometry,
-        horizontal_anchor_for_geometry, logical_cursor_position, normalize_desktop_plugin_position,
-        normalized_dock, physical_window_size, saved_monitor_index, scaled_viewport_dimension,
+        anchored_position, checked_desktop_drop_total, clamp_desktop_plugin_position,
+        desktop_plugin_dock_zone_for_geometry, desktop_plugin_position_from_placement,
+        desktop_window_target_geometry, horizontal_anchor_for_geometry, logical_cursor_position,
+        normalize_desktop_plugin_position, normalized_dock, physical_window_size,
+        prepare_desktop_drop_paths, saved_monitor_index, scaled_viewport_dimension,
         DesktopPluginPlacement, DesktopPluginViewMode, DesktopWindowGeometry, DesktopWindowSpec,
-        DesktopWorkArea, HorizontalAnchor, VerticalAnchor,
+        DesktopWorkArea, HorizontalAnchor, VerticalAnchor, MAX_DESKTOP_DROP_FILES,
+        MAX_DESKTOP_DROP_FILE_BYTES, MAX_DESKTOP_DROP_TOTAL_BYTES,
     };
+
+    #[test]
+    fn enforces_desktop_drop_count_and_byte_limits() {
+        assert_eq!(
+            checked_desktop_drop_total(
+                MAX_DESKTOP_DROP_FILES - 1,
+                MAX_DESKTOP_DROP_TOTAL_BYTES - 1,
+                1,
+            ),
+            Ok(MAX_DESKTOP_DROP_TOTAL_BYTES)
+        );
+        assert!(checked_desktop_drop_total(MAX_DESKTOP_DROP_FILES, 0, 0)
+            .unwrap_err()
+            .contains("最多拖放"));
+        assert!(
+            checked_desktop_drop_total(0, 0, MAX_DESKTOP_DROP_FILE_BYTES + 1)
+                .unwrap_err()
+                .contains("单个拖放文件")
+        );
+        assert!(
+            checked_desktop_drop_total(1, MAX_DESKTOP_DROP_TOTAL_BYTES, 1)
+                .unwrap_err()
+                .contains("总大小")
+        );
+    }
+
+    #[test]
+    fn canonicalizes_and_deduplicates_desktop_drop_paths() {
+        let path = std::env::temp_dir().join(format!(
+            "lamtools-pet-drop-test-{}-{}.txt",
+            std::process::id(),
+            super::NEXT_DESKTOP_DROP_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::write(&path, b"pet").expect("create desktop drop test file");
+        let raw = path.to_string_lossy().into_owned();
+        let prepared =
+            prepare_desktop_drop_paths(vec![raw.clone(), raw]).expect("prepare desktop drop paths");
+        assert_eq!(prepared.len(), 1);
+        assert_eq!(prepared[0], std::fs::canonicalize(&path).unwrap());
+        std::fs::remove_file(path).expect("remove desktop drop test file");
+    }
+
+    #[test]
+    fn rejects_directories_in_desktop_file_drops() {
+        let error =
+            prepare_desktop_drop_paths(vec![std::env::temp_dir().to_string_lossy().into_owned()])
+                .unwrap_err();
+        assert!(error.contains("仅支持拖放文件"));
+    }
 
     #[test]
     fn maps_physical_desktop_cursor_to_logical_webview_coordinates() {
