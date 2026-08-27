@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -61,3 +62,54 @@ def test_jsonc_comments_and_trailing_commas_are_tolerated(isolated_config_root: 
         encoding="utf-8",
     )
     assert get_setting("core.dreaming") == {"enabled": True}
+
+
+@pytest.mark.parametrize("content", ["{ broken", "[]"])
+def test_set_preserves_malformed_settings_before_recovery(
+    isolated_config_root: Path,
+    content: str,
+) -> None:
+    path = isolated_config_root / "settings.jsonc"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+
+    set_setting("core.dreaming", {"enabled": True})
+
+    backups = list(path.parent.glob("settings.jsonc.corrupt-*.bak"))
+    assert len(backups) == 1
+    assert backups[0].read_text(encoding="utf-8") == content
+    assert get_setting("core.dreaming") == {"enabled": True}
+
+
+def test_concurrent_updates_preserve_every_namespace(isolated_config_root: Path) -> None:
+    def write(index: int) -> None:
+        set_setting(f"concurrent.value_{index}", index)
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        list(executor.map(write, range(40)))
+
+    assert get_setting("concurrent") == {f"value_{index}": index for index in range(40)}
+
+
+def test_failed_corrupt_backup_blocks_overwrite(
+    isolated_config_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = isolated_config_root / "settings.jsonc"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{ broken", encoding="utf-8")
+
+    def fail_rename(self: Path, target: Path) -> Path:
+        raise PermissionError("backup denied")
+
+    monkeypatch.setattr(Path, "rename", fail_rename)
+    with pytest.raises(PermissionError, match="backup denied"):
+        set_setting("core.dreaming", {"enabled": True})
+    assert path.read_text(encoding="utf-8") == "{ broken"
+
+
+@pytest.mark.parametrize("namespace", ["", ".key", "   "])
+def test_empty_namespace_group_is_rejected(isolated_config_root: Path, namespace: str) -> None:
+    with pytest.raises(ValueError, match="must not be empty"):
+        set_setting(namespace, True)
+    assert not (isolated_config_root / "settings.jsonc").exists()
