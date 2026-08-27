@@ -82,12 +82,22 @@
     return summary || 'Agent 已完成回答。';
   }
 
+  function panelDetailFromCard(card) {
+    if (!card || typeof card !== 'object' || !String(card.detailBody || '')) return null;
+    return {
+      title: String(card.detailTitle || card.title || '桌宠提示'),
+      body: String(card.detailBody),
+      tone: String(card.kind || 'info')
+    };
+  }
+
   root.EmotionBallPetLogic = Object.freeze({
     CARD_PRIORITY: CARD_PRIORITY,
     cardPriority: cardPriority,
     cardReplacement: cardReplacement,
     normalizeDroppedFiles: normalizeDroppedFiles,
     pendingSourcesReady: pendingSourcesReady,
+    panelDetailFromCard: panelDetailFromCard,
     shouldCollapseAfterInteraction: shouldCollapseAfterInteraction,
     replySummary: replySummary
   });

@@ -364,6 +364,35 @@ button:focus-visible {
   flex-direction: column;
   overflow: auto;
 }
+.panel-detail {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: auto;
+}
+.panel-detail-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-2);
+}
+.panel-detail-heading p {
+  margin: 0;
+  font-size: .8125rem;
+  font-weight: 760;
+}
+.panel-detail-kind {
+  color: color-mix(in srgb, var(--text) 65%, transparent);
+  font-size: .75rem;
+}
+.panel-detail-body {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: .875rem;
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+.panel-detail[data-tone="error"] .panel-detail-kind { color: var(--red); }
 .interaction-heading {
   display: flex;
   align-items: baseline;

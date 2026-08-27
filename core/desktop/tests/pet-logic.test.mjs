@@ -62,3 +62,19 @@ test('summarizes replies to four non-empty lines and a bounded length', () => {
   assert.equal(logic.replySummary('x'.repeat(400)).length, 358)
   assert.equal(logic.replySummary('x'.repeat(400)).endsWith('…'), true)
 })
+
+test('promotes only cards carrying full detail into panel content', () => {
+  assert.equal(logic.panelDetailFromCard({ title: '摘要', body: '短内容' }), null)
+  assert.equal(JSON.stringify(logic.panelDetailFromCard({
+    kind: 'reply',
+    title: 'Agent 回复',
+    body: '摘要',
+    detailBody: '完整回复'
+  })), JSON.stringify({ title: 'Agent 回复', body: '完整回复', tone: 'reply' }))
+  assert.equal(JSON.stringify(logic.panelDetailFromCard({
+    kind: 'error',
+    title: '处理失败',
+    detailTitle: '错误详情',
+    detailBody: '完整错误'
+  })), JSON.stringify({ title: '错误详情', body: '完整错误', tone: 'error' }))
+})

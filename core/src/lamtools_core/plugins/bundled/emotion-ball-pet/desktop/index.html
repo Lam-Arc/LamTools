@@ -33,6 +33,13 @@
         <div id="petCardActions" class="pet-card-actions"></div>
       </section>
       <section id="petPanel" class="pet-panel" data-pet-hit-surface aria-label="待处理事项" hidden>
+        <section id="panelDetail" class="panel-detail" hidden aria-labelledby="panelDetailTitle" aria-live="polite">
+          <header class="panel-detail-heading">
+            <p id="panelDetailTitle">最新结果</p>
+            <span id="panelDetailKind" class="panel-detail-kind"></span>
+          </header>
+          <div id="panelDetailBody" class="panel-detail-body"></div>
+        </section>
         <section id="interactionCard" class="interaction-region" hidden aria-labelledby="interactionTitle">
           <header class="interaction-heading">
             <p id="interactionTitle">需要批准</p>

@@ -115,6 +115,9 @@
     interactionKind: $('interactionKind'),
     interactionMessage: $('interactionMessage'),
     interactionTitle: $('interactionTitle'),
+    panelDetail: $('panelDetail'),
+    panelDetailBody: $('panelDetailBody'),
+    panelDetailKind: $('panelDetailKind'),
     petCard: $('petCard'),
     petCardActions: $('petCardActions'),
     petCardBody: $('petCardBody'),
@@ -159,6 +162,7 @@
     running: false,
     interaction: null,
     interactionGuidance: '',
+    panelDetail: null,
     replyItemId: '',
     replyText: '',
     terminalCardShown: false,
@@ -420,7 +424,29 @@
     if (state.viewMode === VIEW_MODE.CARD) void setViewMode(VIEW_MODE.PET, { reason: reason || 'dismiss' });
   }
 
+  function renderPanelDetail() {
+    var detail = state.panelDetail;
+    var visible = !!detail && !state.interaction;
+    elements.panelDetail.hidden = !visible;
+    if (!visible) return;
+    elements.panelDetailKind.textContent = String(detail.title || '桌宠提示');
+    elements.panelDetailBody.textContent = String(detail.body || '');
+    elements.panelDetail.dataset.tone = String(detail.tone || 'info');
+    elements.panelDetail.scrollTop = 0;
+  }
+
+  function setPanelDetail(detail) {
+    state.panelDetail = detail && detail.body ? {
+      title: String(detail.title || '桌宠提示'),
+      body: String(detail.body),
+      tone: String(detail.tone || 'info')
+    } : null;
+    renderPanelDetail();
+  }
+
   function promoteCardToPanel() {
+    var detail = petLogic.panelDetailFromCard(activeCard);
+    if (detail) setPanelDetail(detail);
     clearCardVisual();
     if (state.viewMode !== VIEW_MODE.PANEL) void setViewMode(VIEW_MODE.PANEL, { reason: 'card-detail' });
   }
@@ -632,6 +658,7 @@
     state.replyItemId = '';
     state.replyText = '';
     state.terminalCardShown = false;
+    setPanelDetail(null);
   }
 
   function contentText(value) {
@@ -679,17 +706,20 @@
     state.terminalCardShown = true;
     var reply = state.replyText.trim();
     if (reply) {
+      setPanelDetail({ title: 'Agent 回复', body: reply, tone: 'reply' });
       if (state.viewMode !== VIEW_MODE.PANEL) {
         showCard({
           kind: 'reply',
           title: 'Agent 回复',
           body: replySummary(reply),
+          detailBody: reply,
           autoDismissMs: 8000,
           actions: [{ id: 'reply-details', label: '查看完整', onClick: promoteCardToPanel }]
         });
       }
       return;
     }
+    setPanelDetail({ title: '处理完成', body: '✓ 已完成', tone: 'success' });
     if (state.viewMode !== VIEW_MODE.PANEL) {
       showCard({
         kind: 'success',
@@ -709,11 +739,13 @@
     var message = errorMessage(error);
     setStatus('连接或执行失败', 'error', '34');
     console.warn('[emotion-ball-pet]', message);
+    setPanelDetail({ title: '处理失败', body: message, tone: 'error' });
     if (state.viewMode !== VIEW_MODE.PANEL) {
       showCard({
         kind: 'error',
         title: '处理失败',
         body: message,
+        detailBody: message,
         autoDismissMs: 10000,
         actions: [{ id: 'error-details', label: '查看详情', onClick: promoteCardToPanel }]
       });
@@ -1227,6 +1259,7 @@
       state.interactionGuidance = '';
     }
     elements.interactionCard.hidden = !state.interaction;
+    renderPanelDetail();
     elements.attentionDot.hidden = !state.interaction;
     elements.guidanceForm.hidden = true;
     elements.interactionDetail.hidden = true;
