@@ -162,6 +162,7 @@
     running: false,
     interaction: null,
     interactionGuidance: '',
+    interactionResponseInFlight: false,
     panelDetail: null,
     replyItemId: '',
     replyText: '',
@@ -1399,12 +1400,23 @@
   }
 
   async function respondApproval(decision, guidance) {
-    if (!state.interaction) return;
+    if (!state.interaction || state.interactionResponseInFlight) return;
+    state.interactionResponseInFlight = true;
     var interactionType = state.interaction.type;
     var requestId = state.interaction.requestId;
     elements.approveButton.disabled = true;
     elements.denyButton.disabled = true;
+    elements.guidanceInput.disabled = true;
     elements.guidanceSubmitButton.disabled = true;
+    elements.approvalOptions.querySelectorAll('button').forEach(function (button) {
+      button.disabled = true;
+    });
+    if (isInteractionCard(activeCard)) {
+      elements.petCardInput.disabled = true;
+      elements.petCardActions.querySelectorAll('button').forEach(function (button) {
+        button.disabled = true;
+      });
+    }
     try {
       var response = await rpcRequest('approval/respond', {
         thread_id: state.sessionId,
@@ -1420,9 +1432,20 @@
     } catch (error) {
       showError(error, interactionType === 'question' ? '回答提交失败' : '审批提交失败');
     } finally {
+      state.interactionResponseInFlight = false;
       elements.approveButton.disabled = false;
       elements.denyButton.disabled = false;
+      elements.guidanceInput.disabled = false;
       elements.guidanceSubmitButton.disabled = false;
+      elements.approvalOptions.querySelectorAll('button').forEach(function (button) {
+        button.disabled = false;
+      });
+      if (isInteractionCard(activeCard)) {
+        elements.petCardInput.disabled = false;
+        elements.petCardActions.querySelectorAll('button').forEach(function (button) {
+          button.disabled = false;
+        });
+      }
     }
   }
 

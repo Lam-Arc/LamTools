@@ -101,3 +101,11 @@ test('generic UI errors do not overwrite the active run state', () => {
   assert.doesNotMatch(showErrorSource, /state\.running\s*=/)
   assert.match(petSource, /kind === 'error'\) \{\s+state\.running = false/)
 })
+
+test('approval responses are guarded against duplicate submission', () => {
+  const respondSource = petSource.match(/async function respondApproval[\s\S]*?\n  elements\.petToggle/)?.[0] || ''
+  assert.notEqual(respondSource, '')
+  assert.match(respondSource, /if \(!state\.interaction \|\| state\.interactionResponseInFlight\) return/)
+  assert.match(respondSource, /state\.interactionResponseInFlight = true/)
+  assert.match(respondSource, /finally \{\s+state\.interactionResponseInFlight = false/)
+})
