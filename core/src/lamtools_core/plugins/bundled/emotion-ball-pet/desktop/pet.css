@@ -425,6 +425,16 @@ textarea::placeholder {
   line-height: 1.4;
   text-wrap: pretty;
 }
+.interaction-error {
+  margin: 0 0 var(--space-3);
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  color: color-mix(in srgb, var(--red) 82%, var(--theme-main-text) 18%);
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
+}
 .interaction-detail {
   margin-bottom: var(--space-3);
 }

@@ -99,10 +99,17 @@
     };
   }
 
+  function interactionBodyWithError(body, error) {
+    var content = String(body || '');
+    var message = String(error || '').trim();
+    return message ? content + '\n\n提交失败：' + message : content;
+  }
+
   root.EmotionBallPetLogic = Object.freeze({
     CARD_PRIORITY: CARD_PRIORITY,
     cardPriority: cardPriority,
     cardReplacement: cardReplacement,
+    interactionBodyWithError: interactionBodyWithError,
     normalizeDroppedFiles: normalizeDroppedFiles,
     pendingSourcesReady: pendingSourcesReady,
     panelDetailFromCard: panelDetailFromCard,

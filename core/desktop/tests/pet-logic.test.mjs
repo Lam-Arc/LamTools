@@ -109,3 +109,11 @@ test('approval responses are guarded against duplicate submission', () => {
   assert.match(respondSource, /state\.interactionResponseInFlight = true/)
   assert.match(respondSource, /finally \{\s+state\.interactionResponseInFlight = false/)
 })
+
+test('keeps interaction context while appending a retryable submission error', () => {
+  assert.equal(logic.interactionBodyWithError('允许执行命令吗？', ''), '允许执行命令吗？')
+  assert.equal(
+    logic.interactionBodyWithError('允许执行命令吗？', '  请求超时  '),
+    '允许执行命令吗？\n\n提交失败：请求超时'
+  )
+})

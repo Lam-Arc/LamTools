@@ -112,6 +112,7 @@
     interactionDetail: $('interactionDetail'),
     interactionDetailLabel: $('interactionDetailLabel'),
     interactionDetailValue: $('interactionDetailValue'),
+    interactionError: $('interactionError'),
     interactionKind: $('interactionKind'),
     interactionMessage: $('interactionMessage'),
     interactionTitle: $('interactionTitle'),
@@ -161,6 +162,7 @@
     clientMessageId: 1,
     running: false,
     interaction: null,
+    interactionError: '',
     interactionGuidance: '',
     interactionResponseInFlight: false,
     panelDetail: null,
@@ -351,7 +353,10 @@
       return;
     }
     elements.petCardTitle.textContent = String(card.title || '桌宠提示');
-    elements.petCardBody.textContent = String(card.body || '');
+    elements.petCardBody.textContent = petLogic.interactionBodyWithError(
+      card.body,
+      isInteractionCard(card) ? state.interactionError : ''
+    );
     elements.petCardFiles.replaceChildren();
     var files = Array.isArray(card.files) ? card.files : [];
     files.forEach(function (file, index) {
@@ -1262,6 +1267,18 @@
     return card;
   }
 
+  function setInteractionError(error) {
+    state.interactionError = String(error || '').trim();
+    elements.interactionError.textContent = state.interactionError ? '提交失败：' + state.interactionError : '';
+    elements.interactionError.hidden = !state.interactionError;
+    if (isInteractionCard(activeCard)) {
+      elements.petCardBody.textContent = petLogic.interactionBodyWithError(
+        activeCard.body,
+        state.interactionError
+      );
+    }
+  }
+
   function showInteraction(interaction) {
     var previousRequestId = state.interaction && state.interaction.requestId;
     var restoredCard = false;
@@ -1275,6 +1292,9 @@
       restoredCard = restoreSuspendedCard();
     }
     state.interaction = interaction && interaction.requestId ? interaction : null;
+    if (!state.interaction || previousRequestId !== state.interaction.requestId) {
+      setInteractionError('');
+    }
     if (state.interaction && previousRequestId !== state.interaction.requestId) {
       state.interactionGuidance = '';
     }
@@ -1402,6 +1422,7 @@
   async function respondApproval(decision, guidance) {
     if (!state.interaction || state.interactionResponseInFlight) return;
     state.interactionResponseInFlight = true;
+    setInteractionError('');
     var interactionType = state.interaction.type;
     var requestId = state.interaction.requestId;
     elements.approveButton.disabled = true;
@@ -1431,6 +1452,7 @@
       scheduleIdle();
     } catch (error) {
       showError(error, interactionType === 'question' ? '回答提交失败' : '审批提交失败');
+      setInteractionError(errorMessage(error));
     } finally {
       state.interactionResponseInFlight = false;
       elements.approveButton.disabled = false;
