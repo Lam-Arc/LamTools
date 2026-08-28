@@ -30,6 +30,42 @@
     </div>
 
     <section
+      v-if="!normalizedQuery && recentSessions.length > 0"
+      class="sidebar-section sidebar-recent-section"
+      data-sidebar-section="recent"
+    >
+      <h2 class="sidebar-section-title">最近</h2>
+      <div
+        v-for="entry in recentSessions"
+        :key="entry.key"
+        class="conversation session-row recent-session-row"
+        :class="{ active: entry.session.id === activeSessionId, 'is-active': entry.session.id === activeSessionId }"
+        :data-recent-session-row="entry.session.id"
+      >
+        <button
+          class="conversation-select session-main recent-session-select"
+          type="button"
+          :data-recent-session-select="entry.session.id"
+          :aria-label="`打开最近会话 ${entry.session.title || entry.session.id.slice(0, 8)}`"
+          @click="emit('select-session', entry.session.id)"
+        >
+          <span class="conversation-main">
+            <strong class="session-title">{{ entry.session.title || `Session ${entry.session.id.slice(0, 8)}` }}</strong>
+            <span class="recent-session-project">{{ entry.projectName }}</span>
+          </span>
+        </button>
+        <span
+          v-if="shouldShowStatus(entry.session)"
+          class="status session-status recent-session-status"
+          :class="statusClass(entry.session.status || '')"
+          :title="statusLabel(entry.session.status || '')"
+          :aria-label="`状态：${statusLabel(entry.session.status || '')}`"
+          role="img"
+        ></span>
+      </div>
+    </section>
+
+    <section
       v-for="section in projectSections"
       :key="section.id"
       class="sidebar-section"
@@ -311,6 +347,20 @@ const filteredGroups = computed(() => {
     if (!projectMatches && sessions.length === 0) return []
     return [{ ...group, sessions }]
   })
+})
+
+const recentSessions = computed(() => {
+  const entries = props.projectGroups.flatMap((group) => group.sessions
+    .filter((session) => Number.isFinite(sessionActivityTime(session)))
+    .map((session) => ({
+      key: `${group.id}:${session.id}`,
+      projectName: group.name,
+      session,
+    })))
+
+  return [...entries]
+    .sort((a, b) => sessionActivityTime(b.session) - sessionActivityTime(a.session))
+    .slice(0, 5)
 })
 
 const projectSections = computed(() => {

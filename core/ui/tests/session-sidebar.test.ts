@@ -54,6 +54,42 @@ describe('SessionSidebar sections', () => {
     expect(titleRule).not.toContain('border')
   })
 
+  it('shows up to five recent sessions without mutating project session order', async () => {
+    const recentGroups = [
+      {
+        id: 'alpha',
+        name: 'Alpha',
+        sessions: [
+          { id: 'alpha-old', title: 'Alpha old', createdAt: '2026-07-01T08:00:00Z' },
+          { id: 'alpha-new', title: 'Alpha new', updatedAt: '2026-07-13T08:00:00Z' },
+          { id: 'alpha-mid', title: 'Alpha mid', createdAt: '2026-07-08T08:00:00Z' },
+        ],
+      },
+      {
+        id: 'beta',
+        name: 'Beta',
+        sessions: [
+          { id: 'beta-1', title: 'Beta one', createdAt: '2026-07-12T08:00:00Z' },
+          { id: 'beta-2', title: 'Beta two', createdAt: '2026-07-11T08:00:00Z' },
+          { id: 'beta-3', title: 'Beta three', createdAt: '2026-07-10T08:00:00Z' },
+        ],
+      },
+    ]
+    const originalOrder = recentGroups[0].sessions.map((session) => session.id)
+    const wrapper = mount(SessionSidebar, { props: { projectGroups: recentGroups } })
+
+    const recent = wrapper.get('[data-sidebar-section="recent"]')
+    expect(recent.findAll('[data-recent-session-row]').map((row) => row.get('.session-title').text()))
+      .toEqual(['Alpha new', 'Beta one', 'Beta two', 'Beta three', 'Alpha mid'])
+
+    await recent.get('[data-recent-session-select="beta-1"]').trigger('click')
+    expect(wrapper.emitted('select-session')).toEqual([['beta-1']])
+    expect(recentGroups[0].sessions.map((session) => session.id)).toEqual(originalOrder)
+
+    await wrapper.get('[data-sidebar-search]').setValue('beta')
+    expect(wrapper.find('[data-sidebar-section="recent"]').exists()).toBe(false)
+  })
+
   it('filters project and session names locally without changing source groups', async () => {
     const wrapper = mount(SessionSidebar, { props: { projectGroups: groups } })
     const input = wrapper.get('[data-sidebar-search]')
@@ -275,7 +311,7 @@ describe('SessionSidebar sections', () => {
 
     await wrapper.get('[data-session-pin="newer"]').trigger('click')
 
-    const sessions = wrapper.findAll('.conversation')
+    const sessions = wrapper.findAll('.project-block .conversation')
     expect(sessions[0].text()).toContain('Newer')
     expect(sessions[0].find('.status.conversation-status.running').exists()).toBe(true)
     expect(localStorage.getItem('test.sidebar.pins.sessions')).toBe('["newer"]')

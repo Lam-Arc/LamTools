@@ -238,6 +238,10 @@
   cursor: pointer;
   position: relative;
 }
+.recent-session-row {
+  width: 100%;
+  margin-left: 0;
+}
 /* 行式高亮：hover/active 背景用 ::before 伪元素 + mask 左右渐隐，撑满侧栏两边，文字始终完整 */
 .conversation::before {
   content: ""; position: absolute; top: 0; bottom: 0; left: calc(var(--space-2) * -1); right: calc(var(--space-2) * -1); z-index: -1;
@@ -278,6 +282,10 @@
 }
 .session-main {
   min-width: 0;
+}
+.recent-session-status {
+  position: static;
+  margin-left: auto;
 }
 .conversation strong {
   display: block; min-width: 0;

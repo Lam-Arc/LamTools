@@ -298,7 +298,7 @@ describe('SessionSidebar numbering', () => {
       },
     });
 
-    expect(wrapper.findAll('.conversation strong').map((item) => item.text())).toEqual([
+    expect(wrapper.findAll('[data-session-row] strong').map((item) => item.text())).toEqual([
       'Session 4',
       'Session 3',
       'Session 2',
