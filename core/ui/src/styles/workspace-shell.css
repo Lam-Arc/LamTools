@@ -235,6 +235,12 @@
 }
 .pin-plain.active { color: var(--green); }
 
+.sidebar-scroll-shell {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
 .drawer-body {
   flex: 1 1 auto;
   min-height: 0;
@@ -242,14 +248,78 @@
   overflow: auto;
   padding: 8px calc(var(--sidebar-inline-padding) + var(--left-overlap)) 16px var(--sidebar-inline-padding);
 }
-.drawer-left > .drawer-body {
+.drawer-left > .sidebar-scroll-shell {
+  min-height: 0;
+}
+.drawer-left > .sidebar-scroll-shell > .drawer-body {
+  height: 100%;
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
 }
 .sidebar-body {
-  scrollbar-width: thin;
-  -ms-overflow-style: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.sidebar-body::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+.sidebar-scrollbar {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-1);
+  bottom: var(--space-2);
+  width: var(--space-2);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  opacity: 0;
+  pointer-events: none;
+  touch-action: none;
+  transition: opacity var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+.sidebar-scrollbar.is-visible {
+  opacity: .78;
+  pointer-events: auto;
+}
+.sidebar-scrollbar:hover,
+.sidebar-scrollbar.is-dragging,
+.sidebar-scrollbar:focus-visible {
+  opacity: 1;
+  background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-hover), transparent);
+}
+.sidebar-scrollbar:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--blue) 75%, transparent);
+  outline-offset: 1px;
+}
+.sidebar-scrollbar-thumb {
+  position: absolute;
+  top: 0;
+  right: 1px;
+  bottom: auto;
+  left: 1px;
+  display: block;
+  min-height: var(--space-6);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--theme-backdrop-text) 18%, transparent);
+  cursor: grab;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+.sidebar-scrollbar:hover .sidebar-scrollbar-thumb,
+.sidebar-scrollbar.is-dragging .sidebar-scrollbar-thumb,
+.sidebar-scrollbar:focus-visible .sidebar-scrollbar-thumb {
+  background: color-mix(in srgb, var(--theme-backdrop-text) 34%, transparent);
+}
+.sidebar-scrollbar.is-dragging .sidebar-scrollbar-thumb {
+  cursor: grabbing;
+}
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-scrollbar,
+  .sidebar-scrollbar-thumb {
+    transition: none;
+  }
 }
 .drawer-right > .drawer-body {
   scrollbar-width: none;

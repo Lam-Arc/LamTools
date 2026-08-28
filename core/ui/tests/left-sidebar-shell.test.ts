@@ -10,6 +10,10 @@ const workspaceShellCss = readFileSync(
   resolve(import.meta.dirname, '../src/styles/workspace-shell.css'),
   'utf8',
 )
+const leftSidebarShellSource = readFileSync(
+  resolve(import.meta.dirname, '../src/components/LeftSidebarShell.vue'),
+  'utf8',
+)
 
 describe('LeftSidebarShell', () => {
   it('renders its four regions and supports the new slot names', () => {
@@ -83,7 +87,17 @@ describe('LeftSidebarShell', () => {
   it('keeps only the left body scrollable', () => {
     expect(workspaceShellCss).toMatch(/\.drawer-left \{[\s\S]*?overflow: hidden;/)
     expect(workspaceShellCss).toMatch(/\.drawer-left \.drawer-head,[\s\S]*?\.drawer-left \.drawer-footer \{[\s\S]*?flex: 0 0 auto;/)
-    expect(workspaceShellCss).toMatch(/\.drawer-left > \.drawer-body \{[\s\S]*?min-height: 0;[\s\S]*?overflow-y: auto;[\s\S]*?overflow-x: hidden;/)
+    expect(workspaceShellCss).toMatch(/\.drawer-left > \.sidebar-scroll-shell > \.drawer-body \{[\s\S]*?height: 100%;[\s\S]*?overflow-y: auto;[\s\S]*?overflow-x: hidden;/)
+  })
+
+  it('uses a keyboard-accessible custom scrollbar instead of the native one', () => {
+    expect(leftSidebarShellSource).toContain('role="scrollbar"')
+    expect(leftSidebarShellSource).toContain('@pointerdown="handleScrollbarPointerDown"')
+    expect(leftSidebarShellSource).toContain('@keydown="handleScrollbarKeydown"')
+    expect(workspaceShellCss).toMatch(/\.sidebar-body \{[\s\S]*?scrollbar-width: none;[\s\S]*?-ms-overflow-style: none;/)
+    expect(workspaceShellCss).toMatch(/\.sidebar-body::-webkit-scrollbar \{[\s\S]*?display: none;/)
+    expect(workspaceShellCss).toMatch(/\.sidebar-scrollbar \{[\s\S]*?position: absolute;[\s\S]*?pointer-events: none;/)
+    expect(workspaceShellCss).toMatch(/\.sidebar-scrollbar\.is-visible \{[\s\S]*?pointer-events: auto;/)
   })
 
   it('uses the shared row recipe for fixed footer entries', () => {
