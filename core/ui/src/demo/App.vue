@@ -166,7 +166,35 @@
         @delete-project="deleteProject"
         @project-context-menu="openProjectActions"
         @delete-session="deleteSession"
-      />
+      >
+        <template #empty>
+          <div class="sidebar-empty-projects" data-sidebar-empty-projects>
+            <p>还没有项目</p>
+            <button
+              v-if="!workflowMode"
+              class="sidebar-create-project"
+              type="button"
+              data-sidebar-empty-create-project
+              title="新建项目"
+              aria-label="新建项目"
+              @click="openProjectCreate"
+            >
+              <span aria-hidden="true">＋</span><span>新建项目</span>
+            </button>
+            <button
+              v-else
+              class="sidebar-create-project"
+              type="button"
+              data-sidebar-empty-create-workflow
+              title="新建工作流"
+              aria-label="新建工作流"
+              @click="openWorkflowCreate"
+            >
+              <span aria-hidden="true">＋</span><span>新建工作流</span>
+            </button>
+          </div>
+        </template>
+      </SessionSidebar>
     </template>
 
     <template #sidebar-footer>

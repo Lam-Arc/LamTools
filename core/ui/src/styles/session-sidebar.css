@@ -422,6 +422,12 @@
   color: var(--muted);
   font-size: 13px;
 }
+.sidebar-empty-projects p {
+  margin: 0 0 var(--space-2);
+}
+.sidebar-empty-projects .sidebar-create-project {
+  justify-content: center;
+}
 .sidebar-search-empty p {
   margin: 0 0 var(--space-2);
 }
