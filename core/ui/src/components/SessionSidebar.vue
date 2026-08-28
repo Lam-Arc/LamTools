@@ -79,7 +79,7 @@
         :class="{ active: isGroupActive(group) }"
         :data-collapsed="isCollapsed(group.id) || undefined"
       >
-      <div class="project-top project-row">
+      <div class="project-row">
         <button
           class="project-action project-fold project-toggle"
           type="button"
