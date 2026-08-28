@@ -153,6 +153,15 @@ describe('SessionSidebar sections', () => {
     expect(css).toMatch(/\.session-row\.is-active \.session-title \{[\s\S]*?font-weight: 500;/)
   })
 
+  it('keeps project and session actions quiet until their row is active', () => {
+    const css = readFileSync(resolve(import.meta.dirname, '../src/styles/session-sidebar.css'), 'utf8')
+
+    expect(css).toMatch(/\.project-btns \{[\s\S]*?opacity: 0;[\s\S]*?pointer-events: none;/)
+    expect(css).toMatch(/\.project-block:hover \.project-btns,[\s\S]*?\.project-btns:has\(\.project-menu-button\[aria-expanded="true"\]\)/)
+    expect(css).toMatch(/\.conversation-hover-actions \{[\s\S]*?opacity: 0;[\s\S]*?pointer-events: none;/)
+    expect(css).toMatch(/\.conversation:hover \.conversation-hover-actions,[\s\S]*?\.conversation:focus-within \.conversation-hover-actions/)
+  })
+
   it('pins a session from its hover actions and keeps its original ordinal', async () => {
     const wrapper = mount(SessionSidebar, {
       props: {

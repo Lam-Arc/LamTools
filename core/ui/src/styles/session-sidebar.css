@@ -92,8 +92,8 @@
   flex: 0 0 28px;
 }
 .project-block:hover .project-btns,
-.project-block.active .project-btns,
-.project-btns:focus-within {
+.project-block:focus-within .project-btns,
+.project-btns:has(.project-menu-button[aria-expanded="true"]) {
   opacity: 1;
   pointer-events: auto;
 }
@@ -251,10 +251,6 @@
 .conversation.active::before { background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-active), transparent); }
 .session-row.is-active .session-title {
   font-weight: 500;
-}
-.conversation.active .conversation-hover-actions {
-  opacity: 1;
-  pointer-events: auto;
 }
 .conversation.active .conversation-status {
   opacity: 0;
