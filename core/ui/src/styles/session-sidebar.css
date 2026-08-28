@@ -422,6 +422,24 @@
   color: var(--muted);
   font-size: 13px;
 }
+.sidebar-search-empty p {
+  margin: 0 0 var(--space-2);
+}
+.sidebar-search-clear {
+  min-height: var(--sidebar-row-height);
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: var(--sidebar-row-radius);
+  background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-hover), transparent);
+  color: var(--theme-backdrop-text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.sidebar-search-clear:hover,
+.sidebar-search-clear:focus-visible {
+  background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-active), transparent);
+}
 
 @media (max-width: 640px) {
   .conversation-action {

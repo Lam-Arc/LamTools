@@ -13,6 +13,21 @@
     <div v-if="projectGroups.length === 0" class="sidebar-empty">
       <slot name="empty">暂无内容，创建一个开始。</slot>
     </div>
+    <div
+      v-else-if="normalizedQuery && filteredGroups.length === 0"
+      class="sidebar-empty sidebar-search-empty"
+      data-sidebar-search-empty
+    >
+      <p>未找到匹配的项目或会话</p>
+      <button
+        type="button"
+        class="sidebar-search-clear"
+        data-sidebar-search-clear
+        @click="searchQuery = ''"
+      >
+        清除搜索
+      </button>
+    </div>
 
     <section
       v-for="section in projectSections"

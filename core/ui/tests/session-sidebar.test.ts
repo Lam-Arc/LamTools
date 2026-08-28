@@ -60,6 +60,12 @@ describe('SessionSidebar sections', () => {
 
     await input.setValue('no matching item')
     expect(wrapper.find('.project-block').exists()).toBe(false)
+    expect(wrapper.get('[data-sidebar-search-empty]').text()).toContain('未找到匹配的项目或会话')
+    expect(wrapper.get('[data-sidebar-search-clear]').text()).toContain('清除搜索')
+
+    await wrapper.get('[data-sidebar-search-clear]').trigger('click')
+    expect(wrapper.find('[data-sidebar-search-empty]').exists()).toBe(false)
+    expect(wrapper.findAll('.project-block')).toHaveLength(3)
   })
 
   it('temporarily expands matching projects and restores their collapse state', async () => {
