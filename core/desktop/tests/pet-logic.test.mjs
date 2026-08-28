@@ -6,6 +6,7 @@ import vm from 'node:vm'
 const logicSource = await readFile(new URL('../../src/lamtools_core/plugins/bundled/emotion-ball-pet/desktop/petLogic.js', import.meta.url), 'utf8')
 const petSource = await readFile(new URL('../../src/lamtools_core/plugins/bundled/emotion-ball-pet/desktop/pet.js', import.meta.url), 'utf8')
 const hostSource = await readFile(new URL('../src/desktopPluginHost.ts', import.meta.url), 'utf8')
+const tauriSource = await readFile(new URL('../src-tauri/src/main.rs', import.meta.url), 'utf8')
 const context = { window: {} }
 context.globalThis = context
 vm.runInNewContext(logicSource, context, { filename: 'petLogic.js' })
@@ -189,4 +190,13 @@ test('passes measured surface dimensions through both view-mode host commands', 
   assert.match(petSource, /appliedViewportSignature/)
   assert.match(hostSource, /message\.command === 'set_desktop_plugin_view_mode'[\s\S]*\.\.\.measuredViewportArgs\(\)/)
   assert.match(hostSource, /message\.command === 'get_desktop_plugin_view_mode_transition'[\s\S]*\.\.\.measuredViewportArgs\(\)/)
+})
+
+test('waits for native mouse release before dock detection', () => {
+  assert.match(petSource, /invokeStrict\('start_window_dragging'\)[\s\S]*\.then\(function \(\) \{\s*scheduleDockDetection\(\)/)
+  assert.doesNotMatch(petSource, /if \(desktopDragInFlight\) scheduleDockDetection\(\)/)
+  assert.match(tauriSource, /async fn start_window_dragging/)
+  assert.match(tauriSource, /wait_for_primary_mouse_release/)
+  assert.match(tauriSource, /GetAsyncKeyState/)
+  assert.match(tauriSource, /desktop_window_size_matches/)
 })

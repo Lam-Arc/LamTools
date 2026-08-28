@@ -1647,18 +1647,23 @@
     desktopDragInFlight = true;
     requestPointerPassthroughUpdate();
     elements.petShell.classList.add('is-dragging');
-    invoke('start_window_dragging').finally(function () {
-      desktopDragInFlight = false;
-      requestPointerPassthroughUpdate();
-      elements.petShell.classList.remove('is-dragging');
-      scheduleDockDetection();
-    });
+    invokeStrict('start_window_dragging')
+      .then(function () {
+        scheduleDockDetection();
+      })
+      .catch(function (error) {
+        console.warn('[emotion-ball-pet] native window drag failed:', error);
+      })
+      .finally(function () {
+        desktopDragInFlight = false;
+        requestPointerPassthroughUpdate();
+        elements.petShell.classList.remove('is-dragging');
+      });
   });
   ['pointerup', 'pointercancel', 'lostpointercapture'].forEach(function (eventName) {
     elements.petShell.addEventListener(eventName, function () {
       dragGesture = null;
       elements.petShell.classList.remove('is-dragging');
-      if (desktopDragInFlight) scheduleDockDetection();
     });
   });
   elements.approveButton.addEventListener('click', function () { respondApproval('approve_once'); });
