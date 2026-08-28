@@ -103,6 +103,21 @@ describe('SessionSidebar sections', () => {
     expect(wrapper.findAll('[data-session-row^="alpha-"]')).toHaveLength(2)
   })
 
+  it('explains an expanded project with no sessions and reuses the new-session event', async () => {
+    const wrapper = mount(SessionSidebar, {
+      props: {
+        projectGroups: [{ id: 'empty', name: 'Empty project', sessions: [] }],
+      },
+    })
+
+    expect(wrapper.get('[data-project-empty]').text()).toContain('暂无会话')
+    await wrapper.get('[data-project-empty-new="empty"]').trigger('click')
+    expect(wrapper.emitted('new-session')).toEqual([['empty']])
+
+    await wrapper.get('[data-project-fold="empty"]').trigger('click')
+    expect(wrapper.find('[data-project-empty]').isVisible()).toBe(false)
+  })
+
   it('pins projects durably and restores them in the pinned section', async () => {
     const wrapper = mount(SessionSidebar, {
       props: { projectGroups: groups, pinStorageKey: 'test.sidebar.pins' },

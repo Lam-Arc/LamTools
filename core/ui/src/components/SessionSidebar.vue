@@ -85,6 +85,23 @@
 
       <div class="conversation-list" v-show="!isCollapsed(group.id)">
         <div
+          v-if="group.sessions.length === 0"
+          class="sidebar-project-empty"
+          data-project-empty
+        >
+          <span>暂无会话</span>
+          <button
+            v-if="allowProjectNewSession && group.canManage !== false"
+            class="sidebar-project-empty-action"
+            type="button"
+            :disabled="isProjectBusy(group.id)"
+            :data-project-empty-new="group.id"
+            @click.stop="emit('new-session', group.id)"
+          >
+            {{ isProjectBusy(group.id) ? '正在创建…' : `＋ ${newSessionLabel}` }}
+          </button>
+        </div>
+        <div
           v-for="s in visibleSessions(group)"
           :key="s.id"
           v-motion-enter="!initialSessionIds.has(s.id)"
@@ -512,6 +529,35 @@ function statusLabel(status: string): string {
 .conversation-more:hover {
   background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-hover), transparent);
   color: var(--theme-backdrop-text);
+}
+.sidebar-project-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+  margin-left: var(--sidebar-indent);
+  padding: var(--space-1) var(--space-2);
+  color: color-mix(in srgb, var(--theme-backdrop-text) 58%, transparent);
+  font-size: 12px;
+}
+.sidebar-project-empty-action {
+  min-height: var(--sidebar-row-height);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--sidebar-row-radius);
+  background: transparent;
+  color: var(--theme-backdrop-text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.sidebar-project-empty-action:hover,
+.sidebar-project-empty-action:focus-visible {
+  background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-hover), transparent);
+}
+.sidebar-project-empty-action:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 .project-name {
   width: 100%;
