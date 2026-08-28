@@ -1,0 +1,387 @@
+/**
+ * Session sidebar — project and conversation rows, menus, and status states.
+ *
+ * This file is imported by layout.css so the package keeps one public CSS entry.
+ */
+
+/* =========================================================================
+   Sidebar content — project blocks, sessions
+   ========================================================================= */
+.sidebar-section + .sidebar-section {
+  margin-top: var(--sidebar-section-gap);
+}
+.sidebar-section-title {
+  margin: 0 var(--space-2) var(--space-2);
+  color: color-mix(in srgb, var(--theme-backdrop-text) 54%, transparent);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: .055em;
+}
+.project-block {
+  position: relative;
+  border-radius: var(--sidebar-row-radius);
+  padding: var(--sidebar-padding-y) var(--space-2);
+  margin-bottom: var(--sidebar-row-gap);
+  background: transparent;
+  border: 0;
+}
+.project-block.active {
+  background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-hover), transparent);
+  outline: 0;
+}
+.project-top {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--space-2);
+  align-items: center;
+  min-height: var(--sidebar-row-height);
+}
+.project-name {
+  min-width: 0;
+  display: grid;
+  gap: var(--sidebar-item-gap);
+}
+.project-name strong,
+.project-name .work-root {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.project-name strong {
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.22;
+  color: var(--theme-backdrop-text);
+  white-space: normal;
+  opacity: 0.7;
+}
+.project-name .work-root {
+  font-size: 11px;
+  line-height: 1.35;
+  color: color-mix(in srgb, var(--theme-backdrop-text) 62%, transparent);
+  white-space: nowrap;
+}
+.project-name.clickable { cursor: pointer; }
+.project-name.clickable:hover strong { color: color-mix(in srgb, var(--theme-backdrop-text) 86%, var(--blue)); }
+
+.project-btns {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: var(--sidebar-item-gap);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur-fast) var(--ease-out);
+  grid-column: 3;
+}
+.project-block:hover .project-btns,
+.project-block.active .project-btns,
+.project-btns:focus-within {
+  opacity: 1;
+  pointer-events: auto;
+}
+.project-block.active .project-name strong {
+  color: var(--theme-backdrop-text);
+  opacity: 1;
+}
+.project-block.active .project-name .work-root {
+  color: color-mix(in srgb, var(--theme-backdrop-text) 72%, transparent);
+}
+
+.project-action {
+  width: 24px; height: 24px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: color-mix(in srgb, var(--theme-backdrop-text) 58%, transparent);
+  display: grid;
+  place-items: center;
+  font-size: 14px; font-weight: 700; line-height: 1;
+  transition: background .14s ease, color .14s ease;
+}
+.project-action:hover {
+  background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-hover), transparent);
+  color: var(--theme-backdrop-text);
+}
+.project-action:focus-visible {
+  opacity: 1;
+  outline: 2px solid color-mix(in srgb, var(--blue) 75%, transparent);
+  outline-offset: 1px;
+}
+.project-action.menu-trigger {
+  width: 28px;
+  font-size: 11px;
+  letter-spacing: 1px;
+}
+.project-fold svg {
+  width: 14px; height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform .16s ease;
+  transform: rotate(90deg);
+}
+.project-block[data-collapsed] .project-fold svg {
+  transform: rotate(0deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .project-fold svg,
+  .project-btns,
+  .conversation-hover-actions {
+    transition: none;
+  }
+}
+.project-menu {
+  position: absolute;
+  z-index: var(--z-popover);
+  top: 36px;
+  right: 4px;
+  width: 154px;
+  padding: 5px;
+  border: 1px solid color-mix(in srgb, var(--theme-backdrop-text) 12%, transparent);
+  border-radius: var(--radius);
+  background: var(--theme-backdrop-background);
+  box-shadow: var(--shadow-md);
+  /* 弹出入场：scale+淡入（popover-in 与 UiSelect 菜单同源） */
+  animation: popover-in var(--dur-base) var(--ease-out);
+  transform-origin: top right;
+}
+.project-menu button {
+  width: 100%;
+  min-height: var(--sidebar-item-height);
+  padding: 0 var(--space-2);
+  border-radius: 0;
+  background: transparent;
+  color: var(--theme-backdrop-text);
+  font-size: 12px;
+  text-align: left;
+  position: relative;
+}
+.project-menu button::before {
+  content: ""; position: absolute; inset: 0;
+  border-radius: 0; background: transparent; pointer-events: none;
+  -webkit-mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
+  mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
+}
+.project-menu button:hover::before,
+.project-menu button:focus-visible::before {
+  background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-hover), transparent);
+  outline: none;
+}
+.project-menu button:disabled {
+  opacity: .45;
+}
+.project-menu button.danger {
+  color: var(--red);
+}
+.project-menu-separator {
+  display: block;
+  height: 1px;
+  margin: 4px 5px;
+  background: color-mix(in srgb, var(--theme-backdrop-text) 10%, transparent);
+}
+.conversation-list {
+  margin-top: var(--sidebar-row-gap);
+  padding-left: var(--sidebar-indent);
+  display: grid;
+  gap: var(--sidebar-row-gap);
+}
+.conversation {
+  width: 100%; min-width: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: var(--sidebar-row-gap) var(--space-2);
+  min-height: var(--sidebar-row-height);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--sidebar-row-gap);
+  align-items: center;
+  text-align: left;
+  color: var(--theme-backdrop-text);
+  cursor: pointer;
+  position: relative;
+}
+/* 行式高亮：hover/active 背景用 ::before 伪元素 + mask 左右渐隐，撑满侧栏两边，文字始终完整 */
+.conversation::before {
+  content: ""; position: absolute; top: 0; bottom: 0; left: calc(var(--space-2) * -1); right: calc(var(--space-2) * -1); z-index: -1;
+  border-radius: 0; background: transparent; pointer-events: none;
+  -webkit-mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
+  mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
+}
+.conversation-select {
+  grid-column: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--sidebar-item-gap);
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.conversation-select:focus-visible { outline: none; }
+.conversation:hover::before { background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-hover), transparent); }
+.conversation:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--blue) 75%, transparent);
+  outline-offset: 2px;
+}
+.conversation.active::before { background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-active), transparent); }
+.conversation.active .conversation-hover-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+.conversation.active .conversation-status {
+  opacity: 0;
+  pointer-events: none;
+}
+.conversation-main {
+  min-width: 0;
+}
+.conversation strong {
+  display: block; min-width: 0;
+  font-size: 10px; line-height: 1.35;
+  color: var(--theme-backdrop-text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.conversation span span {
+  display: block; margin-top: 2px;
+  color: color-mix(in srgb, var(--theme-backdrop-text) 62%, transparent); font-size: 11px;
+}
+.conversation-actions {
+  position: relative;
+  min-width: 42px;
+  min-height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.conversation-hover-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .14s ease;
+}
+.conversation-status {
+  position: absolute;
+  right: 7px;
+  transition: opacity .12s ease;
+}
+.conversation:hover .conversation-status,
+.conversation:focus-within .conversation-status {
+  opacity: 0;
+  pointer-events: none;
+}
+.conversation:hover .conversation-hover-actions,
+.conversation:focus-within .conversation-hover-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+.conversation-action {
+  width: 21px;
+  height: 21px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: color-mix(in srgb, var(--theme-backdrop-text) 52%, transparent);
+  display: inline-grid;
+  place-items: center;
+  cursor: pointer;
+}
+.conversation-action svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.conversation-action:hover,
+.conversation-action:focus-visible {
+  background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-hover), transparent);
+  color: var(--theme-backdrop-text);
+  outline: none;
+}
+.conversation-action.pin.active {
+  color: var(--orange);
+}
+.conversation-action.delete:hover,
+.conversation-action.delete:focus-visible {
+  background: color-mix(in srgb, var(--red) var(--alpha-hover), transparent);
+  color: var(--red);
+}
+
+/* Session status indicators — 点色以 backdrop area 文字为底，靠动画/混合区分状态 */
+.conversation .status {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--theme-backdrop-text) 54%, transparent);
+  box-shadow: none;
+  justify-self: end;
+}
+/* 运行中：spinner 转圈——复用发送后等待回复的绿色圆环（stream-spinner）配方 */
+.conversation .status.running {
+  width: 9px; height: 9px;
+  border: 2px solid color-mix(in srgb, var(--theme-backdrop-text) 14%, transparent);
+  border-top-color: var(--green);
+  background: transparent;
+  border-radius: 50%;
+  box-shadow: none;
+  animation: stream-spin .9s linear infinite;
+}
+.conversation .status.completed {
+  background: var(--theme-backdrop-text);
+  box-shadow: none;
+}
+.conversation .status.failed {
+  background: color-mix(in srgb, var(--theme-backdrop-text) 30%, var(--red) 70%);
+  box-shadow: none;
+}
+.conversation .status.waiting {
+  background: color-mix(in srgb, var(--theme-backdrop-text) 30%, var(--orange) 70%);
+  box-shadow: none;
+  /* waiting = 呼吸（区别于 running 的转圈）；status-breathe 唯一消费者 */
+  animation: status-breathe 1.6s ease-in-out infinite;
+}
+.conversation .status.idle {
+  background: color-mix(in srgb, var(--theme-backdrop-text) 54%, transparent);
+}
+@keyframes status-breathe {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: .62;
+    transform: scale(.86);
+  }
+}
+/* 运行态 spinner 与等待回复的 stream-spinner 同源——后者本就无视 reduced-motion 始终转动，
+   此处保持一致，避免系统开"减少动画"时侧栏运行点静止而聊天区等待圆环仍转的割裂。 */
+
+/* Sidebar empty state */
+.sidebar-empty {
+  padding: 18px 12px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+@media (max-width: 640px) {
+  .conversation-action {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}

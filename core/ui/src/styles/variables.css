@@ -56,6 +56,20 @@
   --ease-inout: cubic-bezier(.2, .8, .2, 1);          /* 抽屉/面板往返 */
   --ease-emphasized: cubic-bezier(.16, 1, .3, 1);     /* 强调入场 */
 
-  --sidebar-width: 300px;
+  /* —— Core 左侧栏标尺（保持现有几何兼容）—— */
+  --sidebar-width: 244px;
+  --sidebar-padding-x: 12px;
+  --sidebar-padding-y: 8px;
+  --sidebar-row-height: 32px;
+  --sidebar-row-radius: var(--radius-sm);
+  --sidebar-row-gap: var(--space-1);
+  --sidebar-section-gap: 24px;
+  --sidebar-indent: 16px;
+
+  /* Legacy names kept as aliases for the shell frame. */
+  --sidebar-header-height: 66px;
+  --sidebar-inline-padding: var(--sidebar-padding-x);
+  --sidebar-item-gap: var(--sidebar-row-gap);
+  --sidebar-item-height: var(--sidebar-row-height);
   --right-panel-width: 320px;
 }
