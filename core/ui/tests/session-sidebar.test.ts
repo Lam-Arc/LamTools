@@ -43,6 +43,60 @@ describe('SessionSidebar sections', () => {
     expect(wrapper.find('[data-sidebar-section="pinned"]').exists()).toBe(false)
   })
 
+  it('filters project and session names locally without changing source groups', async () => {
+    const wrapper = mount(SessionSidebar, { props: { projectGroups: groups } })
+    const input = wrapper.get('[data-sidebar-search]')
+
+    await input.setValue('  RECENT NEW ')
+    expect(wrapper.findAll('.project-block')).toHaveLength(1)
+    expect(wrapper.get('.project-block').text()).toContain('Recent new')
+
+    await input.setValue('two')
+    expect(wrapper.findAll('.project-block')).toHaveLength(1)
+    expect(wrapper.get('.project-block').text()).toContain('Two')
+    expect(wrapper.find('[data-session-row="s1"]').exists()).toBe(false)
+    expect(groups[0].sessions).toHaveLength(1)
+    expect(groups[1].sessions).toHaveLength(1)
+
+    await input.setValue('no matching item')
+    expect(wrapper.find('.project-block').exists()).toBe(false)
+  })
+
+  it('temporarily expands matching projects and restores their collapse state', async () => {
+    const searchGroups = [
+      {
+        id: 'alpha',
+        name: 'Alpha',
+        sessions: [
+          { id: 'alpha-1', title: 'Alpha session' },
+          { id: 'alpha-2', title: 'Another alpha session' },
+        ],
+      },
+      {
+        id: 'beta',
+        name: 'Beta',
+        sessions: [{ id: 'beta-1', title: 'Needle session' }],
+      },
+    ]
+    const wrapper = mount(SessionSidebar, {
+      props: { projectGroups: searchGroups, pinStorageKey: 'search-collapse' },
+    })
+
+    const betaFold = wrapper.get('[data-project-fold="beta"]')
+    await betaFold.trigger('click')
+    expect(betaFold.attributes('aria-expanded')).toBe('false')
+
+    await wrapper.get('[data-sidebar-search]').setValue('needle')
+    expect(wrapper.find('[data-project-entry="beta"]').exists()).toBe(true)
+    expect(betaFold.attributes('aria-expanded')).toBe('true')
+
+    await wrapper.get('[data-sidebar-search]').setValue('')
+    expect(betaFold.attributes('aria-expanded')).toBe('false')
+
+    await wrapper.get('[data-sidebar-search]').setValue('alpha')
+    expect(wrapper.findAll('[data-session-row^="alpha-"]')).toHaveLength(2)
+  })
+
   it('pins projects durably and restores them in the pinned section', async () => {
     const wrapper = mount(SessionSidebar, {
       props: { projectGroups: groups, pinStorageKey: 'test.sidebar.pins' },

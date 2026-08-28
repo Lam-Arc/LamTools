@@ -1,5 +1,15 @@
 <template>
   <div class="session-sidebar-content">
+    <div v-if="projectGroups.length > 0" class="sidebar-search-wrap">
+      <input
+        v-model="searchQuery"
+        class="sidebar-search"
+        type="search"
+        placeholder="搜索项目和会话"
+        aria-label="搜索项目和会话"
+        data-sidebar-search
+      />
+    </div>
     <div v-if="projectGroups.length === 0" class="sidebar-empty">
       <slot name="empty">暂无内容，创建一个开始。</slot>
     </div>
@@ -249,15 +259,31 @@ const groupCollapsed = reactive<Record<string, boolean>>(loadCollapsedProjectIds
 const pinnedProjectIds = ref<string[]>(loadPinnedProjectIds())
 const pinnedSessionIds = ref<string[]>(loadPinnedSessionIds())
 const openProjectMenuId = ref<string | null>(null)
+const searchQuery = ref('')
+const normalizedQuery = computed(() => searchQuery.value.trim().toLocaleLowerCase())
 
 // ── 新会话条目入场（C14）：挂载时已在列表中的会话不播，之后新出现的会话淡入。
 //    集合 setup 期捕获、只读，不引入响应式状态（会话列表变更频率极低）。
 const initialSessionIds = new Set(props.projectGroups.flatMap((g) => g.sessions.map((s) => s.id)))
 const vMotionEnter = motionEnterDirective
 
+const filteredGroups = computed(() => {
+  const query = normalizedQuery.value
+  if (!query) return props.projectGroups
+
+  return props.projectGroups.flatMap((group) => {
+    const projectMatches = group.name.toLocaleLowerCase().includes(query)
+    const sessions = projectMatches
+      ? group.sessions
+      : group.sessions.filter((session) => (session.title || '').toLocaleLowerCase().includes(query))
+    if (!projectMatches && sessions.length === 0) return []
+    return [{ ...group, sessions }]
+  })
+})
+
 const projectSections = computed(() => {
-  const pinned = props.projectGroups.filter((group) => isPinned(group.id))
-  const others = props.projectGroups.filter((group) => !isPinned(group.id))
+  const pinned = filteredGroups.value.filter((group) => isPinned(group.id))
+  const others = filteredGroups.value.filter((group) => !isPinned(group.id))
   return [
     { id: 'pinned', label: 'PINNED', groups: pinned },
     { id: 'default', label: '', groups: others },
@@ -306,6 +332,7 @@ function loadCollapsedProjectIds(): Record<string, boolean> {
 }
 
 function isCollapsed(groupId: string): boolean {
+  if (normalizedQuery.value) return false
   return !!groupCollapsed[groupId]
 }
 
@@ -404,7 +431,7 @@ function visibleSessions(group: ProjectGroup): SessionItem[] {
     if (pa !== pb) return pb - pa
     return sessionActivityTime(b) - sessionActivityTime(a)
   })
-  if (props.projectSessionLimit <= 0 || groupExpanded[group.id]) return ordered
+  if (normalizedQuery.value || props.projectSessionLimit <= 0 || groupExpanded[group.id]) return ordered
   return ordered.slice(0, props.projectSessionLimit)
 }
 
@@ -417,7 +444,7 @@ function sessionActivityTime(session: SessionItem): number {
 }
 
 function hiddenCount(group: ProjectGroup): number {
-  if (props.projectSessionLimit <= 0 || groupExpanded[group.id]) return 0
+  if (normalizedQuery.value || props.projectSessionLimit <= 0 || groupExpanded[group.id]) return 0
   return Math.max(0, group.sessions.length - props.projectSessionLimit)
 }
 

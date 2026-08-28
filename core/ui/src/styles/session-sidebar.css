@@ -7,6 +7,25 @@
 /* =========================================================================
    Sidebar content — project blocks, sessions
    ========================================================================= */
+.sidebar-search-wrap {
+  flex: 0 0 auto;
+  margin-bottom: var(--space-2);
+}
+.sidebar-search {
+  width: 100%;
+  min-height: var(--sidebar-row-height);
+  box-sizing: border-box;
+  padding: 0 var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--theme-control-text) 12%, transparent);
+  border-radius: var(--sidebar-row-radius);
+  background: color-mix(in srgb, var(--theme-control-background) 70%, transparent);
+  color: var(--theme-control-text);
+  font: inherit;
+  font-size: 12px;
+}
+.sidebar-search::placeholder {
+  color: color-mix(in srgb, var(--theme-control-text) 52%, transparent);
+}
 .sidebar-section + .sidebar-section {
   margin-top: var(--sidebar-section-gap);
 }
