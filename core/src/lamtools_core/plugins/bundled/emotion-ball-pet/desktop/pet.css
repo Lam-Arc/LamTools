@@ -41,6 +41,9 @@
   --font-mono: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
   --pet-collapsed-width: 100vw;
   --pet-collapsed-height: 100vh;
+  /* The native CARD/PANEL widths include this rail in addition to the
+     376px surface area, preserving the intentional pet/surface overlap. */
+  --pet-overlap-rail: 130px;
 }
 
 * { box-sizing: border-box; }
@@ -142,7 +145,7 @@ body[data-file-drag="true"] .status-badge {
   position: absolute;
   z-index: var(--z-main-surface);
   top: auto;
-  right: calc(var(--space-2) + 130px);
+  right: calc(var(--space-2) + var(--pet-overlap-rail));
   bottom: var(--space-2);
   left: var(--space-2);
   height: auto;
@@ -170,7 +173,7 @@ body[data-file-drag="true"] .status-badge {
 body.anchor-left .pet-panel,
 body.anchor-left .pet-card {
   right: var(--space-2);
-  left: calc(var(--space-2) + 130px);
+  left: calc(var(--space-2) + var(--pet-overlap-rail));
   transform-origin: bottom left;
 }
 body[data-view-mode="panel"] .pet-panel,

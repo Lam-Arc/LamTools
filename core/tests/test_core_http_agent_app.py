@@ -1084,9 +1084,9 @@ def test_core_http_serves_enabled_desktop_plugin_assets(
         pet = next(item for item in listed.json()["plugins"] if item["name"] == "emotion-ball-pet")
         assert pet["window"]["collapsedWidth"] == 256
         assert pet["window"]["collapsedHeight"] == 288
-        assert pet["window"]["expandedWidth"] == 376
+        assert pet["window"]["expandedWidth"] == 506
         assert pet["window"]["expandedHeight"] == 680
-        assert pet["window"]["cardWidth"] == 376
+        assert pet["window"]["cardWidth"] == 506
         assert pet["window"]["cardHeight"] == 360
         assert pet["fileDrop"] is True
 

@@ -2134,6 +2134,60 @@ mod desktop_window_tests {
     }
 
     #[test]
+    fn bundled_pet_bottom_left_expansion_keeps_the_full_surface_width() {
+        let mut spec = geometry_test_spec();
+        spec.card_width = 506.0;
+        spec.expanded_width = 506.0;
+        let work_area = geometry_test_work_area();
+        let bottom_left_pet = DesktopWindowGeometry {
+            x: 0,
+            y: 792,
+            width: 256,
+            height: 288,
+        };
+
+        let card = desktop_window_target_geometry(
+            bottom_left_pet,
+            DesktopPluginViewMode::Card,
+            work_area,
+            &spec,
+            1.0,
+        );
+        assert_eq!(
+            card.geometry,
+            DesktopWindowGeometry {
+                x: 0,
+                y: 720,
+                width: 506,
+                height: 360,
+            }
+        );
+        assert_eq!(card.anchor, HorizontalAnchor::Left);
+        assert_eq!(card.vertical_anchor, VerticalAnchor::Bottom);
+        assert_eq!(card.geometry.width - 130 - 16, 360);
+
+        let panel = desktop_window_target_geometry(
+            bottom_left_pet,
+            DesktopPluginViewMode::Panel,
+            work_area,
+            &spec,
+            1.0,
+        );
+        assert_eq!(
+            panel.geometry,
+            DesktopWindowGeometry {
+                x: 0,
+                y: 400,
+                width: 506,
+                height: 680,
+            }
+        );
+        assert_eq!(panel.anchor, HorizontalAnchor::Left);
+        assert_eq!(panel.vertical_anchor, VerticalAnchor::Bottom);
+        assert_eq!(panel.geometry.width - 130 - 16, 360);
+    }
+
+    #[test]
     fn target_geometry_handles_card_and_panel_transitions_at_center() {
         let spec = geometry_test_spec();
         let work_area = geometry_test_work_area();
