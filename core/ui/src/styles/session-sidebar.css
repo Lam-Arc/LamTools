@@ -203,7 +203,6 @@
 .project-menu button:hover::before,
 .project-menu button:focus-visible::before {
   background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-hover), transparent);
-  outline: none;
 }
 .project-menu button:disabled {
   opacity: .45;
@@ -261,7 +260,6 @@
   text-align: left;
   cursor: pointer;
 }
-.conversation-select:focus-visible { outline: none; }
 .conversation:hover::before { background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-hover), transparent); }
 .conversation:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--blue) 75%, transparent);
@@ -355,7 +353,6 @@
 .conversation-action:focus-visible {
   background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-hover), transparent);
   color: var(--theme-backdrop-text);
-  outline: none;
 }
 .conversation-action.pin.active {
   color: var(--orange);

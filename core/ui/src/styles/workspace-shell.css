@@ -170,6 +170,10 @@
 .sidebar-header {
   gap: 8px;
 }
+.sidebar-root :focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--blue) 75%, transparent);
+  outline-offset: 1px;
+}
 .drawer-right .drawer-head { padding: 13px 14px; }
 .drawer-head strong { flex: 1; font-size: 20px; line-height: 1.2; letter-spacing: -.02em; }
 

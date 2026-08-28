@@ -248,6 +248,15 @@ describe('SessionSidebar sections', () => {
     expect(css).toMatch(/\.conversation:hover \.conversation-hover-actions,[\s\S]*?\.conversation:focus-within \.conversation-hover-actions/)
   })
 
+  it('keeps keyboard focus visible for session controls', () => {
+    const sidebarCss = readFileSync(resolve(import.meta.dirname, '../src/styles/session-sidebar.css'), 'utf8')
+    const shellCss = readFileSync(resolve(import.meta.dirname, '../src/styles/workspace-shell.css'), 'utf8')
+
+    expect(shellCss).toMatch(/\.sidebar-root :focus-visible \{[\s\S]*?outline: 2px solid/)
+    expect(sidebarCss).not.toMatch(/\.conversation-select:focus-visible \{[\s\S]*?outline:\s*none/)
+    expect(sidebarCss).not.toMatch(/\.conversation-action:hover,[\s\S]*?\.conversation-action:focus-visible \{[\s\S]*?outline:\s*none/)
+  })
+
   it('pins a session from its hover actions and keeps its original ordinal', async () => {
     const wrapper = mount(SessionSidebar, {
       props: {

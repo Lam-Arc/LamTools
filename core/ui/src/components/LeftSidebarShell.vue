@@ -2,7 +2,7 @@
   <aside
     :id="props.id"
     data-workspace-left-drawer
-    class="workspace-drawer drawer-left"
+    class="workspace-drawer drawer-left sidebar-root"
     :class="{ open: props.open, pinned: props.pinned }"
     :inert="!props.open || undefined"
     :aria-hidden="!props.open"
