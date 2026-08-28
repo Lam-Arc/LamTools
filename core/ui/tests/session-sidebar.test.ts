@@ -187,6 +187,32 @@ describe('SessionSidebar sections', () => {
     expect(wrapper.get('[data-session-pin="newer"]').attributes('aria-pressed')).toBe('true')
   })
 
+  it('shows status indicators only for active or failed sessions', () => {
+    const wrapper = mount(SessionSidebar, {
+      props: {
+        projectGroups: [{
+          id: 'status-project',
+          name: 'Status project',
+          sessions: [
+            { id: 'running', title: 'Running', status: 'running' },
+            { id: 'waiting', title: 'Waiting', status: 'waiting' },
+            { id: 'failed', title: 'Failed', status: 'failed' },
+            { id: 'completed', title: 'Completed', status: 'completed' },
+            { id: 'cancelled', title: 'Cancelled', status: 'cancelled' },
+            { id: 'idle', title: 'Idle', status: 'idle' },
+          ],
+        }],
+      },
+    })
+
+    for (const id of ['running', 'waiting', 'failed']) {
+      expect(wrapper.find(`[data-session-row="${id}"] .session-status`).exists()).toBe(true)
+    }
+    for (const id of ['completed', 'cancelled', 'idle']) {
+      expect(wrapper.find(`[data-session-row="${id}"] .session-status`).exists()).toBe(false)
+    }
+  })
+
   it('keeps session actions separate from the session selection button', async () => {
     const wrapper = mount(SessionSidebar, {
       props: {

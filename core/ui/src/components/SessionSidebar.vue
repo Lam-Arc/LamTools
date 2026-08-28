@@ -81,11 +81,11 @@
           </button>
           <span class="conversation-actions">
             <span
-              v-if="s.status"
+              v-if="shouldShowStatus(s)"
               class="status conversation-status session-status"
-              :class="statusClass(s.status)"
-              :title="statusLabel(s.status)"
-              :aria-label="`状态：${statusLabel(s.status)}`"
+              :class="statusClass(s.status || '')"
+              :title="statusLabel(s.status || '')"
+              :aria-label="`状态：${statusLabel(s.status || '')}`"
               role="img"
             ></span>
             <span class="conversation-hover-actions">
@@ -433,6 +433,15 @@ function statusClass(status: string): string {
   if (s === 'waiting' || s === 'pending') return 'waiting'
   if (s === 'idle' || s === 'active') return 'idle'
   return ''
+}
+
+function shouldShowStatus(session: SessionItem): boolean {
+  const status = session.status?.toLowerCase()
+  return status === 'running'
+    || status === 'waiting'
+    || status === 'pending'
+    || status === 'failed'
+    || status === 'error'
 }
 
 function statusLabel(status: string): string {
