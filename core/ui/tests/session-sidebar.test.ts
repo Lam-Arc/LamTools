@@ -1,4 +1,6 @@
 import { mount } from '@vue/test-utils'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import SessionSidebar from '../src/components/SessionSidebar.vue'
@@ -140,6 +142,15 @@ describe('SessionSidebar sections', () => {
 
     expect(wrapper.emitted('select-session')).toEqual([['s1']])
     expect(wrapper.find('.session-name-input').exists()).toBe(false)
+  })
+
+  it('keeps default, hover, and active row states visually distinct', () => {
+    const css = readFileSync(resolve(import.meta.dirname, '../src/styles/session-sidebar.css'), 'utf8')
+
+    expect(css).toMatch(/\.project-row,[\s\S]*?\.session-row \{[\s\S]*?background: transparent;/)
+    expect(css).toMatch(/\.project-row:hover \{[\s\S]*?var\(--alpha-hover\)/)
+    expect(css).toMatch(/\.conversation\.active::before \{[\s\S]*?var\(--alpha-active\)/)
+    expect(css).toMatch(/\.session-row\.is-active \.session-title \{[\s\S]*?font-weight: 500;/)
   })
 
   it('pins a session from its hover actions and keeps its original ordinal', async () => {

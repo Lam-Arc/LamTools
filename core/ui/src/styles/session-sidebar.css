@@ -37,6 +37,13 @@
   align-items: center;
   min-height: var(--sidebar-row-height);
 }
+.project-row,
+.session-row {
+  background: transparent;
+}
+.project-row:hover {
+  background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-hover), transparent);
+}
 .project-toggle {
   flex: 0 0 24px;
 }
@@ -242,6 +249,9 @@
   outline-offset: 2px;
 }
 .conversation.active::before { background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-active), transparent); }
+.session-row.is-active .session-title {
+  font-weight: 500;
+}
 .conversation.active .conversation-hover-actions {
   opacity: 1;
   pointer-events: auto;
