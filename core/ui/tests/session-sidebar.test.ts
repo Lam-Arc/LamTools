@@ -43,6 +43,17 @@ describe('SessionSidebar sections', () => {
     expect(wrapper.find('[data-sidebar-section="pinned"]').exists()).toBe(false)
   })
 
+  it('labels the default project section without adding panel chrome', () => {
+    const wrapper = mount(SessionSidebar, { props: { projectGroups: groups } })
+    expect(wrapper.get('[data-sidebar-section="default"] .sidebar-section-title').text()).toBe('项目')
+
+    const css = readFileSync(resolve(import.meta.dirname, '../src/styles/session-sidebar.css'), 'utf8')
+    const titleRule = css.match(/\.sidebar-section-title \{([\s\S]*?)\}/)?.[1] || ''
+    expect(titleRule).toContain('font-weight: 500;')
+    expect(titleRule).not.toContain('background')
+    expect(titleRule).not.toContain('border')
+  })
+
   it('filters project and session names locally without changing source groups', async () => {
     const wrapper = mount(SessionSidebar, { props: { projectGroups: groups } })
     const input = wrapper.get('[data-sidebar-search]')

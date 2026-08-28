@@ -318,7 +318,7 @@ const projectSections = computed(() => {
   const others = filteredGroups.value.filter((group) => !isPinned(group.id))
   return [
     { id: 'pinned', label: 'PINNED', groups: pinned },
-    { id: 'default', label: '', groups: others },
+    { id: 'default', label: '项目', groups: others },
   ].filter((section) => section.groups.length > 0)
 })
 
