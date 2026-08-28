@@ -92,6 +92,7 @@
     :density="density"
     :theme="theme"
     :content-width="contentWidth"
+    :show-sidebar-header-action="false"
     :composer-disabled="composerDisabled"
     :composer-action-mode="composerActionMode"
     :composer-active="latestStatus === 'running'"
@@ -104,10 +105,14 @@
     @composer-submit="submitComposer"
     @composer-drop="handleComposerDrop"
   >
-    <template #sidebar-header-action>
-      <div class="core-project-header-action">
-        <button v-if="!workflowMode" class="icon-btn" type="button" title="新建项目" aria-label="新建项目" @click="openProjectCreate">+</button>
-        <button v-else class="icon-btn" type="button" title="新建工作流" aria-label="新建工作流" @click="openWorkflowCreate">+</button>
+    <template #primary>
+      <div class="core-project-primary-actions">
+        <button v-if="!workflowMode" class="sidebar-create-project" type="button" data-sidebar-create-project title="新建项目" aria-label="新建项目" @click="openProjectCreate">
+          <span aria-hidden="true">＋</span><span>新建项目</span>
+        </button>
+        <button v-else class="sidebar-create-project" type="button" data-sidebar-create-workflow title="新建工作流" aria-label="新建工作流" @click="openWorkflowCreate">
+          <span aria-hidden="true">＋</span><span>新建工作流</span>
+        </button>
         <CoreProjectCreate
           v-if="showProjectCreate"
           :loading="projectCreateLoading"
@@ -2636,10 +2641,6 @@ onUnmounted(() => {
 @import '../styles/base.css';
 @import '../styles/layout.css';
 @import '../styles/theme-editor.css';
-
-.core-project-header-action {
-  position: relative;
-}
 
 .runtime-checklist-mobile {
   display: none;

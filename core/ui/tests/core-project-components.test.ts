@@ -145,6 +145,14 @@ describe('SessionSidebar compatibility groups', () => {
 })
 
 describe('Core project narrow layout contract', () => {
+  it('exposes the existing project creation flow from the sidebar primary area', () => {
+    const demoSource = readFileSync(resolve(process.cwd(), 'src/demo/App.vue'), 'utf8')
+
+    expect(demoSource).toMatch(/<template #primary>[\s\S]*data-sidebar-create-project[\s\S]*@click="openProjectCreate"/)
+    expect(demoSource).toContain(':show-sidebar-header-action="false"')
+    expect(demoSource).not.toContain('core-project-header-action')
+  })
+
   it('owns a viewport-safe centered dialog instead of a sidebar popover', () => {
     const createSource = readFileSync(resolve(process.cwd(), 'src/components/CoreProjectCreate.vue'), 'utf8')
     const demoSource = readFileSync(resolve(process.cwd(), 'src/demo/App.vue'), 'utf8')

@@ -1,30 +1,40 @@
 <template>
   <aside
-    :id="id"
+    :id="props.id"
     data-workspace-left-drawer
     class="workspace-drawer drawer-left"
-    :class="{ open, pinned }"
-    :inert="!open || undefined"
-    :aria-hidden="!open"
+    :class="{ open: props.open, pinned: props.pinned }"
+    :inert="!props.open || undefined"
+    :aria-hidden="!props.open"
     @mouseleave="emit('mouseleave', $event)"
   >
     <header class="drawer-head sidebar-header">
-      <div class="sidebar-title sidebar-label">{{ title || '项目' }}</div>
+      <div class="sidebar-title sidebar-label">{{ props.title || '项目' }}</div>
       <button
         class="sidebar-pin-button"
-        :class="{ 'is-active': pinned }"
+        :class="{ 'is-active': props.pinned }"
         type="button"
-        :title="pinned ? '取消固定左侧栏' : '固定左侧栏'"
-        :aria-label="pinned ? '取消固定左侧栏' : '固定左侧栏'"
-        :aria-pressed="pinned"
+        :title="props.pinned ? '取消固定左侧栏' : '固定左侧栏'"
+        :aria-label="props.pinned ? '取消固定左侧栏' : '固定左侧栏'"
+        :aria-pressed="props.pinned"
         @click="togglePinned"
       >
         <Pin :size="14" :stroke-width="1.8" aria-hidden="true" />
       </button>
-      <div class="sidebar-header-actions">
+      <div
+        v-if="$slots['sidebar-header-action'] || $slots['header-actions'] || props.showDefaultHeaderAction"
+        class="sidebar-header-actions"
+      >
         <slot name="sidebar-header-action">
           <slot name="header-actions">
-            <button class="icon-btn" type="button" title="新建" aria-label="新建会话" @click="emit('new-session')">+</button>
+            <button
+              v-if="props.showDefaultHeaderAction"
+              class="icon-btn"
+              type="button"
+              title="新建"
+              aria-label="新建会话"
+              @click="emit('new-session')"
+            >+</button>
           </slot>
         </slot>
       </div>
@@ -67,15 +77,17 @@
 <script setup lang="ts">
 import { Command, Pin, Puzzle, Search } from 'lucide-vue-next'
 
-withDefaults(
+const props = withDefaults(
   defineProps<{
     id: string
     open: boolean
     pinned: boolean
     title?: string
+    showDefaultHeaderAction?: boolean
   }>(),
   {
     title: '',
+    showDefaultHeaderAction: true,
   },
 )
 
