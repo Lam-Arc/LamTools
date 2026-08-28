@@ -710,18 +710,32 @@ fn get_desktop_plugin_view_mode_transition(
 #[tauri::command]
 fn get_desktop_plugin_cursor_position(
     window: tauri::WebviewWindow,
+    viewport_width: Option<f64>,
+    viewport_height: Option<f64>,
 ) -> Result<DesktopCursorPosition, String> {
     let cursor = window
         .cursor_position()
         .map_err(|error| error.to_string())?;
     let position = window.inner_position().map_err(|error| error.to_string())?;
+    let size = window.inner_size().map_err(|error| error.to_string())?;
     let scale = window.scale_factor().map_err(|error| error.to_string())?;
-    let (x, y) = logical_cursor_position(
+    let fallback_width = f64::from(size.width) / scale;
+    let fallback_height = f64::from(size.height) / scale;
+    let rendered_width = viewport_width
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .unwrap_or(fallback_width);
+    let rendered_height = viewport_height
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .unwrap_or(fallback_height);
+    let (x, y) = viewport_cursor_position(
         cursor.x,
         cursor.y,
         f64::from(position.x),
         f64::from(position.y),
-        scale,
+        f64::from(size.width),
+        f64::from(size.height),
+        rendered_width,
+        rendered_height,
     );
     Ok(DesktopCursorPosition { x, y })
 }
@@ -889,14 +903,20 @@ fn make_desktop_plugin_window_transparent(window: &WebviewWindow) -> Result<(), 
     window.set_shadow(false).map_err(|error| error.to_string())
 }
 
-fn logical_cursor_position(
+fn viewport_cursor_position(
     cursor_x: f64,
     cursor_y: f64,
     window_x: f64,
     window_y: f64,
-    scale: f64,
+    physical_width: f64,
+    physical_height: f64,
+    viewport_width: f64,
+    viewport_height: f64,
 ) -> (f64, f64) {
-    ((cursor_x - window_x) / scale, (cursor_y - window_y) / scale)
+    (
+        (cursor_x - window_x) * viewport_width / physical_width,
+        (cursor_y - window_y) * viewport_height / physical_height,
+    )
 }
 
 fn toggle_desktop_plugin_window(app: &tauri::AppHandle) {
@@ -1947,12 +1967,13 @@ mod desktop_window_tests {
     use super::{
         anchored_position, checked_desktop_drop_total, clamp_desktop_plugin_position,
         desktop_plugin_dock_zone_for_geometry, desktop_plugin_position_from_placement,
-        desktop_window_target_geometry, horizontal_anchor_for_geometry, logical_cursor_position,
+        desktop_window_target_geometry, horizontal_anchor_for_geometry,
         normalize_desktop_plugin_position, normalized_dock, physical_window_size,
         prepare_desktop_drop_paths, saved_monitor_index, scaled_viewport_dimension,
-        DesktopPluginPlacement, DesktopPluginViewMode, DesktopWindowGeometry, DesktopWindowSpec,
-        DesktopWorkArea, HorizontalAnchor, VerticalAnchor, MAX_DESKTOP_DROP_FILES,
-        MAX_DESKTOP_DROP_FILE_BYTES, MAX_DESKTOP_DROP_TOTAL_BYTES,
+        viewport_cursor_position, DesktopPluginPlacement, DesktopPluginViewMode,
+        DesktopWindowGeometry, DesktopWindowSpec, DesktopWorkArea, HorizontalAnchor,
+        VerticalAnchor, MAX_DESKTOP_DROP_FILES, MAX_DESKTOP_DROP_FILE_BYTES,
+        MAX_DESKTOP_DROP_TOTAL_BYTES,
     };
 
     #[test]
@@ -2005,14 +2026,18 @@ mod desktop_window_tests {
     }
 
     #[test]
-    fn maps_physical_desktop_cursor_to_logical_webview_coordinates() {
+    fn maps_physical_desktop_cursor_to_the_rendered_webview_viewport() {
         assert_eq!(
-            logical_cursor_position(1810.0, 910.0, 1600.0, 700.0, 1.5),
+            viewport_cursor_position(1810.0, 910.0, 1600.0, 700.0, 750.0, 450.0, 500.0, 300.0),
             (140.0, 140.0)
         );
         assert_eq!(
-            logical_cursor_position(140.0, 230.0, -160.0, -70.0, 2.0),
+            viewport_cursor_position(140.0, 230.0, -160.0, -70.0, 600.0, 600.0, 300.0, 300.0),
             (150.0, 150.0)
+        );
+        assert_eq!(
+            viewport_cursor_position(160.0, 180.0, 0.0, 0.0, 320.0, 360.0, 256.0, 288.0),
+            (128.0, 144.0)
         );
     }
 

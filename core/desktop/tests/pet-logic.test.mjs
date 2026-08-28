@@ -153,3 +153,9 @@ test('serializes passthrough updates and refreshes them across window transition
   assert.match(petSource, /function applyAnchor[\s\S]*?requestPointerPassthroughUpdate\(\)/)
   assert.match(petSource, /state\.expansionPending = false;\s+requestPointerPassthroughUpdate\(\)/)
 })
+
+test('calibrates cursor coordinates against the rendered plugin viewport', () => {
+  assert.match(petSource, /viewportWidth: window\.innerWidth/)
+  assert.match(petSource, /viewportHeight: window\.innerHeight/)
+  assert.match(hostSource, /message\.command === 'get_desktop_plugin_cursor_position'/)
+})

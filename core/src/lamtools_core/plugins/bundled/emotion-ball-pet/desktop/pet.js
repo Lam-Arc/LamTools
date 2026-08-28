@@ -202,7 +202,10 @@
   }
 
   async function updatePointerPassthrough() {
-    var cursor = await invoke('get_desktop_plugin_cursor_position');
+    var cursor = await invoke('get_desktop_plugin_cursor_position', {
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight
+    });
     if (cursor && Number.isFinite(cursor.x) && Number.isFinite(cursor.y)) {
       var nextPassthrough = petLogic.shouldPassCursorThrough({
         hitSurface: hitSurfaceAtPoint(cursor.x, cursor.y),

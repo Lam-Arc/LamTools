@@ -174,6 +174,14 @@ function commandArgs(message: PluginRequest): Record<string, unknown> {
       viewportHeight: Number.isFinite(viewportHeight) && viewportHeight > 0 ? viewportHeight : null,
     }
   }
+  if (message.command === 'get_desktop_plugin_cursor_position') {
+    const viewportWidth = Number(message.args?.viewportWidth)
+    const viewportHeight = Number(message.args?.viewportHeight)
+    return {
+      viewportWidth: Number.isFinite(viewportWidth) && viewportWidth > 0 ? viewportWidth : null,
+      viewportHeight: Number.isFinite(viewportHeight) && viewportHeight > 0 ? viewportHeight : null,
+    }
+  }
   if (message.command === 'set_desktop_plugin_view_mode') {
     const mode = String(message.args?.mode || '').trim().toLowerCase()
     return {
