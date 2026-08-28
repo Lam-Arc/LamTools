@@ -18,32 +18,21 @@
         :class="{ active: isGroupActive(group) }"
         :data-collapsed="isCollapsed(group.id) || undefined"
       >
-      <div class="project-top">
-        <div class="project-btns">
-          <button
-            class="project-action project-fold"
-            type="button"
-            :title="isCollapsed(group.id) ? '展开会话' : '收起会话'"
-            :aria-label="isCollapsed(group.id) ? `展开 ${group.name} 会话` : `收起 ${group.name} 会话`"
-            :aria-expanded="!isCollapsed(group.id)"
-            :data-project-fold="group.id"
-            @click.stop="toggleProjectCollapse(group.id)"
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
-          </button>
-          <button
-            class="project-action menu-trigger"
-            type="button"
-            title="项目操作"
-            :aria-label="`${group.name} 项目操作`"
-            :aria-expanded="openProjectMenuId === group.id"
-            :data-project-menu-trigger="group.id"
-            @click.stop="toggleProjectMenu(group.id)"
-          ><MoreHorizontal :size="14" :stroke-width="1.8" aria-hidden="true" /></button>
-        </div>
+      <div class="project-top project-row">
+        <button
+          class="project-action project-fold project-toggle"
+          type="button"
+          :title="isCollapsed(group.id) ? '展开会话' : '收起会话'"
+          :aria-label="isCollapsed(group.id) ? `展开 ${group.name} 会话` : `收起 ${group.name} 会话`"
+          :aria-expanded="!isCollapsed(group.id)"
+          :data-project-fold="group.id"
+          @click.stop="toggleProjectCollapse(group.id)"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
+        </button>
         <button
           type="button"
-          class="project-name"
+          class="project-name project-main"
           :class="{ clickable: allowProjectClick && group.canManage !== false }"
           :data-project-entry="group.id"
           :disabled="group.canManage === false"
@@ -56,6 +45,17 @@
           <span v-if="group.workRoot" class="work-root">{{ group.workRoot }}</span>
           <span v-else class="work-root">{{ group.sessions.length }} 个会话</span>
         </button>
+        <div class="project-btns">
+          <button
+            class="project-action menu-trigger project-menu-button"
+            type="button"
+            title="项目操作"
+            :aria-label="`${group.name} 项目操作`"
+            :aria-expanded="openProjectMenuId === group.id"
+            :data-project-menu-trigger="group.id"
+            @click.stop="toggleProjectMenu(group.id)"
+          ><MoreHorizontal :size="14" :stroke-width="1.8" aria-hidden="true" /></button>
+        </div>
       </div>
 
       <div class="conversation-list" v-show="!isCollapsed(group.id)">
@@ -458,7 +458,7 @@ function statusLabel(status: string): string {
   text-align: center;
 }
 .conversation-more:hover {
-  background: color-mix(in srgb, var(--theme-backdrop-text) 7%, transparent);
+  background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-hover), transparent);
   color: var(--theme-backdrop-text);
 }
 .project-name {

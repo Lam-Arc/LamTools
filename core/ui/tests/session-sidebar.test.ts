@@ -83,6 +83,26 @@ describe('SessionSidebar sections', () => {
     expect(menu.text()).toContain('删除项目')
   })
 
+  it('keeps project toggle, main action, and menu as separate row controls', async () => {
+    const wrapper = mount(SessionSidebar, {
+      props: {
+        projectGroups: groups,
+        allowProjectClick: true,
+      },
+    })
+
+    const row = wrapper.get('[data-project-entry="recent-new"]').element.parentElement!
+    expect(row.classList.contains('project-row')).toBe(true)
+    expect(row.querySelector('.project-toggle')).not.toBeNull()
+    expect(row.querySelector('.project-main')).not.toBeNull()
+    expect(row.querySelector('.project-menu-button')).not.toBeNull()
+    expect(row.querySelector('.project-main button')).toBeNull()
+
+    await wrapper.get('[data-project-menu-trigger="recent-new"]').trigger('click')
+    expect(wrapper.find('[data-project-menu="recent-new"]').exists()).toBe(true)
+    expect(wrapper.get('[data-project-fold="recent-new"]').attributes('aria-expanded')).toBe('true')
+  })
+
   it('keeps the menu mounted through pointerdown and dispatches every project action', async () => {
     const wrapper = mount(SessionSidebar, {
       props: {

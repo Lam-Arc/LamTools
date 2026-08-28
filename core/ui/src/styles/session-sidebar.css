@@ -30,14 +30,19 @@
   background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-hover), transparent);
   outline: 0;
 }
-.project-top {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+.project-top,
+.project-row {
+  display: flex;
   gap: var(--space-2);
   align-items: center;
   min-height: var(--sidebar-row-height);
 }
-.project-name {
+.project-toggle {
+  flex: 0 0 24px;
+}
+.project-name,
+.project-main {
+  flex: 1 1 auto;
   min-width: 0;
   display: grid;
   gap: var(--sidebar-item-gap);
@@ -54,7 +59,7 @@
   font-weight: 650;
   line-height: 1.22;
   color: var(--theme-backdrop-text);
-  white-space: normal;
+  white-space: nowrap;
   opacity: 0.7;
 }
 .project-name .work-root {
@@ -74,7 +79,10 @@
   opacity: 0;
   pointer-events: none;
   transition: opacity var(--dur-fast) var(--ease-out);
-  grid-column: 3;
+  flex: 0 0 28px;
+}
+.project-menu-button {
+  flex: 0 0 28px;
 }
 .project-block:hover .project-btns,
 .project-block.active .project-btns,
