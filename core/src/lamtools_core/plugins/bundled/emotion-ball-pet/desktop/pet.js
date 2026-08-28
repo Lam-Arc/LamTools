@@ -173,6 +173,7 @@
     suppressedRequestId: '',
     expansionGeneration: 0,
     expansionPending: false,
+    appliedViewportSignature: '',
     idleTimer: 0
   };
   var dragGesture = null;
@@ -188,6 +189,7 @@
   var isFileDragActive = false;
   var pendingFiles = [];
   var pendingDropId = '';
+  var surfaceSyncTimer = 0;
   var pendingImportedFiles = [];
   var fileInstruction = '';
   var fileSendInFlight = false;
@@ -708,10 +710,6 @@
     if (userInitiated && mode === VIEW_MODE.PET && state.interaction) {
       state.suppressedRequestId = state.interaction.requestId;
     }
-    if (state.viewMode === mode && !state.expansionPending) return;
-
-    var generation = ++state.expansionGeneration;
-    state.expansionPending = true;
     state.viewMode = mode;
     document.body.dataset.viewMode = mode;
     document.body.classList.toggle('is-collapsed', mode === VIEW_MODE.PET);
@@ -722,11 +720,21 @@
     elements.petToggle.setAttribute('aria-label', toggleAccessibility.label);
     elements.petCard.hidden = mode !== VIEW_MODE.CARD;
     elements.petPanel.hidden = mode !== VIEW_MODE.PANEL;
+    var targetViewport = measureViewModeViewport(mode);
+    var viewportSignature = [mode, targetViewport.width, targetViewport.height].join(':');
+    if (state.appliedViewportSignature === viewportSignature && !state.expansionPending) return;
+
+    var generation = ++state.expansionGeneration;
+    state.expansionPending = true;
     requestPointerPassthroughUpdate();
     if (mode === VIEW_MODE.PANEL) elements.interactionCard.scrollTop = 0;
     try {
       var preview = await invoke('get_desktop_plugin_view_mode_transition', {
-        mode: mode
+        mode: mode,
+        contentWidth: targetViewport.width,
+        contentHeight: targetViewport.height,
+        viewportWidth: window.innerWidth,
+        viewportHeight: window.innerHeight
       });
       if (generation !== state.expansionGeneration) return;
       if (preview && (preview.anchor || preview.verticalAnchor)) {
@@ -734,12 +742,17 @@
       }
       var transition = await invoke('set_desktop_plugin_view_mode', {
         mode: mode,
-        reducedMotion: reducedMotion.matches
+        reducedMotion: reducedMotion.matches,
+        contentWidth: targetViewport.width,
+        contentHeight: targetViewport.height,
+        viewportWidth: window.innerWidth,
+        viewportHeight: window.innerHeight
       });
       if (generation !== state.expansionGeneration) return;
       if (transition && (transition.anchor || transition.verticalAnchor)) {
         applyAnchor(transition.anchor, transition.verticalAnchor);
       }
+      state.appliedViewportSignature = viewportSignature;
       if (mode === VIEW_MODE.PANEL) syncQueueLayers();
     } finally {
       if (generation === state.expansionGeneration) {
@@ -752,6 +765,24 @@
   function setExpanded(expanded, options) {
     return setViewMode(expanded ? VIEW_MODE.PANEL : VIEW_MODE.PET, options);
   }
+
+  function scheduleSurfaceViewportSync() {
+    window.clearTimeout(surfaceSyncTimer);
+    surfaceSyncTimer = window.setTimeout(function () {
+      surfaceSyncTimer = 0;
+      if (state.viewMode === VIEW_MODE.PET || state.expansionPending) return;
+      void setViewMode(state.viewMode, { reason: 'surface-content-resize' });
+    }, 80);
+  }
+
+  var surfaceMutationObserver = new MutationObserver(scheduleSurfaceViewportSync);
+  [elements.petCard, elements.petPanel].forEach(function (surface) {
+    surfaceMutationObserver.observe(surface, {
+      childList: true,
+      characterData: true,
+      subtree: true
+    });
+  });
 
   function scheduleIdle() {
     clearTimeout(state.idleTimer);
@@ -1674,6 +1705,8 @@
   window.addEventListener('beforeunload', function () {
     window.clearTimeout(pointerPassthroughTimer);
     window.clearTimeout(dockDetectionTimer);
+    window.clearTimeout(surfaceSyncTimer);
+    surfaceMutationObserver.disconnect();
     closeSocket();
   });
 

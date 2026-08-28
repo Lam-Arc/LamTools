@@ -180,3 +180,13 @@ test('derives native window dimensions from the measured component surface', () 
   assert.match(petSource, /function measureViewModeViewport\(mode\)/)
   assert.match(petSource, /measurement\.getBoundingClientRect\(\)/)
 })
+
+test('passes measured surface dimensions through both view-mode host commands', () => {
+  assert.match(petSource, /contentWidth: targetViewport\.width/)
+  assert.match(petSource, /contentHeight: targetViewport\.height/)
+  assert.match(petSource, /viewportWidth: window\.innerWidth/)
+  assert.match(petSource, /viewportHeight: window\.innerHeight/)
+  assert.match(petSource, /appliedViewportSignature/)
+  assert.match(hostSource, /message\.command === 'set_desktop_plugin_view_mode'[\s\S]*\.\.\.measuredViewportArgs\(\)/)
+  assert.match(hostSource, /message\.command === 'get_desktop_plugin_view_mode_transition'[\s\S]*\.\.\.measuredViewportArgs\(\)/)
+})

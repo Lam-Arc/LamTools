@@ -650,6 +650,10 @@ fn set_desktop_plugin_view_mode(
     state: tauri::State<'_, BackendState>,
     mode: String,
     reduced_motion: bool,
+    content_width: Option<f64>,
+    content_height: Option<f64>,
+    viewport_width: Option<f64>,
+    viewport_height: Option<f64>,
 ) -> Result<DesktopWindowTransition, String> {
     let registration = state
         .desktop_windows
@@ -661,7 +665,26 @@ fn set_desktop_plugin_view_mode(
     let mode = mode.trim().to_ascii_lowercase();
     let mode = DesktopPluginViewMode::parse(&mode)
         .ok_or_else(|| format!("unknown desktop plugin view mode: {mode}"))?;
-    let (target, work_area) = desktop_plugin_view_mode_target(&window, &registration, mode)?;
+    let (requested_width, requested_height) = if mode == DesktopPluginViewMode::Pet {
+        (None, None)
+    } else {
+        adaptive_expanded_dimensions(
+            &window,
+            content_width,
+            content_height,
+            viewport_width,
+            viewport_height,
+            registration.spec.collapsed_width,
+            registration.spec.collapsed_height,
+        )?
+    };
+    let (target, work_area) = desktop_plugin_view_mode_target(
+        &window,
+        &registration,
+        mode,
+        requested_width,
+        requested_height,
+    )?;
     animate_window_to_geometry(
         &window,
         target.geometry,
@@ -689,6 +712,10 @@ fn get_desktop_plugin_view_mode_transition(
     window: tauri::WebviewWindow,
     state: tauri::State<'_, BackendState>,
     mode: String,
+    content_width: Option<f64>,
+    content_height: Option<f64>,
+    viewport_width: Option<f64>,
+    viewport_height: Option<f64>,
 ) -> Result<DesktopWindowTransition, String> {
     let registration = state
         .desktop_windows
@@ -700,7 +727,26 @@ fn get_desktop_plugin_view_mode_transition(
     let mode = mode.trim().to_ascii_lowercase();
     let mode = DesktopPluginViewMode::parse(&mode)
         .ok_or_else(|| format!("unknown desktop plugin view mode: {mode}"))?;
-    let (target, _) = desktop_plugin_view_mode_target(&window, &registration, mode)?;
+    let (requested_width, requested_height) = if mode == DesktopPluginViewMode::Pet {
+        (None, None)
+    } else {
+        adaptive_expanded_dimensions(
+            &window,
+            content_width,
+            content_height,
+            viewport_width,
+            viewport_height,
+            registration.spec.collapsed_width,
+            registration.spec.collapsed_height,
+        )?
+    };
+    let (target, _) = desktop_plugin_view_mode_target(
+        &window,
+        &registration,
+        mode,
+        requested_width,
+        requested_height,
+    )?;
     Ok(DesktopWindowTransition {
         anchor: target.anchor.as_str(),
         vertical_anchor: target.vertical_anchor.as_str(),
@@ -1684,19 +1730,24 @@ fn desktop_plugin_view_mode_target(
     window: &WebviewWindow,
     registration: &DesktopWindowRegistration,
     target_mode: DesktopPluginViewMode,
+    requested_width: Option<f64>,
+    requested_height: Option<f64>,
 ) -> Result<(DesktopWindowTargetGeometry, DesktopWorkArea), String> {
     let monitor = desktop_plugin_monitor(window)?;
     let work_area = desktop_work_area_from_monitor(&monitor);
-    let target = desktop_window_target_geometry(
+    let target = desktop_window_target_geometry_with_size(
         desktop_window_geometry(window)?,
         target_mode,
         work_area,
         &registration.spec,
         monitor.scale_factor(),
+        requested_width,
+        requested_height,
     );
     Ok((target, work_area))
 }
 
+#[cfg(test)]
 fn desktop_window_target_geometry(
     current_geometry: DesktopWindowGeometry,
     target_mode: DesktopPluginViewMode,
@@ -1704,7 +1755,41 @@ fn desktop_window_target_geometry(
     spec: &DesktopWindowSpec,
     scale: f64,
 ) -> DesktopWindowTargetGeometry {
-    let (logical_width, logical_height) = target_mode.logical_size(spec);
+    desktop_window_target_geometry_with_size(
+        current_geometry,
+        target_mode,
+        monitor_work_area,
+        spec,
+        scale,
+        None,
+        None,
+    )
+}
+
+fn desktop_window_target_geometry_with_size(
+    current_geometry: DesktopWindowGeometry,
+    target_mode: DesktopPluginViewMode,
+    monitor_work_area: DesktopWorkArea,
+    spec: &DesktopWindowSpec,
+    scale: f64,
+    requested_width: Option<f64>,
+    requested_height: Option<f64>,
+) -> DesktopWindowTargetGeometry {
+    let (default_width, default_height) = target_mode.logical_size(spec);
+    let measured_dimension = |requested: Option<f64>, fallback: f64, minimum: f64| {
+        requested
+            .filter(|value| value.is_finite() && *value > 0.0)
+            .unwrap_or(fallback)
+            .max(minimum)
+    };
+    let (logical_width, logical_height) = if target_mode == DesktopPluginViewMode::Pet {
+        (default_width, default_height)
+    } else {
+        (
+            measured_dimension(requested_width, default_width, spec.collapsed_width),
+            measured_dimension(requested_height, default_height, spec.collapsed_height),
+        )
+    };
     let (requested_width, requested_height) =
         physical_window_size(logical_width, logical_height, scale);
     let target_width = requested_width.min(monitor_work_area.width.max(1));
@@ -1967,12 +2052,12 @@ mod desktop_window_tests {
     use super::{
         anchored_position, checked_desktop_drop_total, clamp_desktop_plugin_position,
         desktop_plugin_dock_zone_for_geometry, desktop_plugin_position_from_placement,
-        desktop_window_target_geometry, horizontal_anchor_for_geometry,
-        normalize_desktop_plugin_position, normalized_dock, physical_window_size,
-        prepare_desktop_drop_paths, saved_monitor_index, scaled_viewport_dimension,
-        viewport_cursor_position, DesktopPluginPlacement, DesktopPluginViewMode,
-        DesktopWindowGeometry, DesktopWindowSpec, DesktopWorkArea, HorizontalAnchor,
-        VerticalAnchor, MAX_DESKTOP_DROP_FILES, MAX_DESKTOP_DROP_FILE_BYTES,
+        desktop_window_target_geometry, desktop_window_target_geometry_with_size,
+        horizontal_anchor_for_geometry, normalize_desktop_plugin_position, normalized_dock,
+        physical_window_size, prepare_desktop_drop_paths, saved_monitor_index,
+        scaled_viewport_dimension, viewport_cursor_position, DesktopPluginPlacement,
+        DesktopPluginViewMode, DesktopWindowGeometry, DesktopWindowSpec, DesktopWorkArea,
+        HorizontalAnchor, VerticalAnchor, MAX_DESKTOP_DROP_FILES, MAX_DESKTOP_DROP_FILE_BYTES,
         MAX_DESKTOP_DROP_TOTAL_BYTES,
     };
 
@@ -2211,6 +2296,88 @@ mod desktop_window_tests {
         assert_eq!(panel.anchor, HorizontalAnchor::Left);
         assert_eq!(panel.vertical_anchor, VerticalAnchor::Bottom);
         assert_eq!(panel.geometry.width - 130 - 16, 360);
+    }
+
+    #[test]
+    fn measured_surface_dimensions_drive_card_and_panel_geometry() {
+        let spec = geometry_test_spec();
+        let work_area = geometry_test_work_area();
+        let bottom_right_pet = DesktopWindowGeometry {
+            x: 1664,
+            y: 792,
+            width: 256,
+            height: 288,
+        };
+
+        let card = desktop_window_target_geometry_with_size(
+            bottom_right_pet,
+            DesktopPluginViewMode::Card,
+            work_area,
+            &spec,
+            1.25,
+            Some(506.0),
+            Some(360.0),
+        );
+        assert_eq!(card.geometry.width, 633);
+        assert_eq!(card.geometry.height, 450);
+        assert_eq!(card.geometry.right(), bottom_right_pet.right());
+        assert_eq!(card.geometry.bottom(), bottom_right_pet.bottom());
+        assert_eq!(card.anchor, HorizontalAnchor::Right);
+        assert_eq!(card.vertical_anchor, VerticalAnchor::Bottom);
+
+        let panel = desktop_window_target_geometry_with_size(
+            bottom_right_pet,
+            DesktopPluginViewMode::Panel,
+            work_area,
+            &spec,
+            1.0,
+            Some(506.0),
+            Some(680.0),
+        );
+        assert_eq!(panel.geometry.width, 506);
+        assert_eq!(panel.geometry.height, 680);
+    }
+
+    #[test]
+    fn measured_surface_dimensions_keep_minimums_and_clamp_to_work_area() {
+        let spec = geometry_test_spec();
+        let current = DesktopWindowGeometry {
+            x: 0,
+            y: 0,
+            width: 256,
+            height: 288,
+        };
+        let small = desktop_window_target_geometry_with_size(
+            current,
+            DesktopPluginViewMode::Card,
+            geometry_test_work_area(),
+            &spec,
+            1.0,
+            Some(120.0),
+            Some(100.0),
+        );
+        assert_eq!(small.geometry.width, 256);
+        assert_eq!(small.geometry.height, 288);
+
+        let work_area = DesktopWorkArea {
+            x: -100,
+            y: -50,
+            width: 300,
+            height: 200,
+        };
+        let oversized = desktop_window_target_geometry_with_size(
+            current,
+            DesktopPluginViewMode::Panel,
+            work_area,
+            &spec,
+            1.0,
+            Some(2000.0),
+            Some(1600.0),
+        );
+        assert_eq!(oversized.geometry.width, 300);
+        assert_eq!(oversized.geometry.height, 200);
+        assert_eq!(oversized.geometry.x, -100);
+        assert_eq!(oversized.geometry.y, -50);
     }
 
     #[test]
