@@ -8,6 +8,7 @@ const viteConfig = readFileSync(resolve(packageRoot, 'vite.config.ts'), 'utf8')
 const demoApp = readFileSync(resolve(packageRoot, 'src/demo/App.vue'), 'utf8')
 const stagePane = readFileSync(resolve(packageRoot, 'src/components/StagePane.vue'), 'utf8')
 const layoutCss = readFileSync(resolve(packageRoot, 'src/styles/layout.css'), 'utf8')
+const workspaceShellCss = readFileSync(resolve(packageRoot, 'src/styles/workspace-shell.css'), 'utf8')
 
 describe('Core UI package boundary', () => {
   it('builds declarations after the library output so the public type entry remains in dist', () => {
@@ -55,18 +56,18 @@ describe('Core UI package boundary', () => {
   it('keeps the shared composer inside the main workspace when a narrow viewport still has a pinned sidebar', () => {
     expect(layoutCss).toMatch(/@media \(max-width: 820px\)[\s\S]*?\.floating-composer \{ width: var\(--composer-full-width\); \}/)
     expect(layoutCss).toMatch(/\.send \{[\s\S]*?flex: 0 0 54px;/)
-    expect(layoutCss).toMatch(/\.drawer-right:not\(\.open\) \{[^}]*opacity: 0;[^}]*pointer-events: none;/)
+    expect(workspaceShellCss).toMatch(/\.drawer-right:not\(\.open\) \{[^}]*opacity: 0;[^}]*pointer-events: none;/)
   })
 
   it('keeps the right runtime toolbar reachable below 640px', () => {
-    const mobileCss = layoutCss.match(/@media \(max-width: 640px\) \{([\s\S]*?)@media \(max-width: 480px\)/)?.[1] || ''
+    const mobileCss = workspaceShellCss.match(/@media \(max-width: 640px\) \{([\s\S]*)/)?.[1] || ''
     const shellSource = readFileSync(resolve(packageRoot, 'src/components/WorkspaceShell.vue'), 'utf8')
 
     expect(mobileCss).toContain('--right-drawer-width: 100vw')
     expect(mobileCss).not.toMatch(/\.drawer-right \{[^}]*display: none/)
     // The drawer hides through opacity/pointer-events, and the mobile nav keeps
     // a dedicated right-panel toggle so the runtime toolbar stays reachable
-    expect(layoutCss).toMatch(/\.drawer-right:not\(\.open\) \{[^}]*opacity: 0;[^}]*pointer-events: none;/)
+    expect(workspaceShellCss).toMatch(/\.drawer-right:not\(\.open\) \{[^}]*opacity: 0;[^}]*pointer-events: none;/)
     expect(shellSource).toMatch(/data-mobile-right-toggle/)
   })
 })
