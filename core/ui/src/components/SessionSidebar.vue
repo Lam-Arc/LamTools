@@ -63,26 +63,26 @@
           v-for="s in visibleSessions(group)"
           :key="s.id"
           v-motion-enter="!initialSessionIds.has(s.id)"
-          class="conversation"
-          :class="{ active: s.id === activeSessionId }"
+          class="conversation session-row"
+          :class="{ active: s.id === activeSessionId, 'is-active': s.id === activeSessionId }"
           :data-session-row="s.id"
         >
           <button
-            class="conversation-select"
+            class="conversation-select session-main"
             type="button"
             :data-session-select="s.id"
             :aria-label="`打开会话 ${s.title || s.id.slice(0, 8)}`"
             @click="emit('select-session', s.id)"
           >
             <span class="conversation-main">
-              <strong>{{ s.title || `Session ${s.id.slice(0, 8)}` }}</strong>
+              <strong class="session-title">{{ s.title || `Session ${s.id.slice(0, 8)}` }}</strong>
               <span v-if="s.meta">{{ s.meta }}</span>
             </span>
           </button>
           <span class="conversation-actions">
             <span
               v-if="s.status"
-              class="status conversation-status"
+              class="status conversation-status session-status"
               :class="statusClass(s.status)"
               :title="statusLabel(s.status)"
               :aria-label="`状态：${statusLabel(s.status)}`"
@@ -449,7 +449,8 @@ function statusLabel(status: string): string {
 
 <style scoped>
 .conversation-more {
-  width: 100%;
+  width: calc(100% - var(--sidebar-indent));
+  margin-left: var(--sidebar-indent);
   padding: 6px 8px;
   border-radius: var(--radius-sm);
   background: transparent;

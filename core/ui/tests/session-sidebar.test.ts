@@ -131,7 +131,12 @@ describe('SessionSidebar sections', () => {
   it('selects a session when its title text is clicked', async () => {
     const wrapper = mount(SessionSidebar, { props: { projectGroups: groups } })
 
-    await wrapper.get('.conversation strong').trigger('click')
+    const row = wrapper.get('[data-session-row="s1"]')
+    expect(row.classes()).toContain('session-row')
+    expect(row.get('.session-main').classes()).toContain('session-main')
+    expect(row.get('.session-title').text()).toBe('One')
+
+    await row.get('.session-title').trigger('click')
 
     expect(wrapper.emitted('select-session')).toEqual([['s1']])
     expect(wrapper.find('.session-name-input').exists()).toBe(false)
