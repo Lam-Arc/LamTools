@@ -138,14 +138,18 @@
     var fxBack = el('g', { 'pointer-events': 'none' });
     svg.appendChild(fxBack);
 
-    var bodyG = el('g', { 'data-pet-hit-surface': '' });
+    var bodyG = el('g', {
+      'data-pet-hit-surface': '',
+      'data-pet-drag-surface': ''
+    });
     var head = el('path', {
       d: ringPath(headRing),
       fill: 'url(#' + id + 'g)',
       stroke: 'none',
       'stroke-width': '2',
       'pointer-events': 'visiblePainted',
-      'data-pet-hit-surface': ''
+      'data-pet-hit-surface': '',
+      'data-pet-drag-surface': ''
     });
     bodyG.appendChild(head);
 

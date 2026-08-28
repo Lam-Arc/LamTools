@@ -59,9 +59,10 @@ button { -webkit-tap-highlight-color: transparent; }
   border: 0;
   outline: 0;
   background: transparent;
-  cursor: grab;
+  cursor: default;
 }
-.pet-shell.is-dragging { cursor: grabbing; }
+[data-pet-drag-surface] { cursor: grab; }
+.pet-shell.is-dragging [data-pet-drag-surface] { cursor: grabbing; }
 .pet-stage {
   position: absolute;
   z-index: var(--z-stage);

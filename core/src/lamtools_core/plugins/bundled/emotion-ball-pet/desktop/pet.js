@@ -191,16 +191,17 @@
   var desktopDragInFlight = false;
   var dockDetectionTimer = 0;
 
-  function isInteractiveRenderedPoint(x, y) {
+  function hitSurfaceAtPoint(x, y) {
     if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
-    var target = document.elementFromPoint(x, y);
-    return target instanceof Element && !!target.closest('[data-pet-hit-surface]');
+    return document.elementsFromPoint(x, y).some(function (target) {
+      return target instanceof Element && !!target.closest('[data-pet-hit-surface]');
+    });
   }
 
   async function pollPointerPassthrough() {
     var cursor = await invoke('get_desktop_plugin_cursor_position');
     if (cursor && Number.isFinite(cursor.x) && Number.isFinite(cursor.y)) {
-      var nextPassthrough = !isInteractiveRenderedPoint(cursor.x, cursor.y);
+      var nextPassthrough = !hitSurfaceAtPoint(cursor.x, cursor.y);
       if (nextPassthrough !== pointerPassthrough) {
         var applied = await invoke('set_desktop_plugin_cursor_passthrough', {
           passthrough: nextPassthrough
@@ -1481,13 +1482,13 @@
   elements.petShell.addEventListener('pointerdown', function (event) {
     if (event.button !== 0) return;
     var target = event.target instanceof Element ? event.target : null;
-    var control = target && target.closest('button, textarea, input, select, a');
-    if (control && control !== elements.petToggle) return;
+    var dragSurface = target && target.closest('[data-pet-drag-surface]');
+    if (!dragSurface) return;
     dragGesture = {
       pointerId: event.pointerId,
       x: event.clientX,
       y: event.clientY,
-      fromPetToggle: !!(target && target.closest('#petToggle'))
+      fromPetToggle: true
     };
     elements.petShell.setPointerCapture(event.pointerId);
   });

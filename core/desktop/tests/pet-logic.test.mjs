@@ -124,3 +124,10 @@ test('desktop host selects the pet by identity instead of registry order', () =>
   assert.match(hostSource, /plugins\?\.find\(\(candidate\) => candidate\.name === DESKTOP_PET_PLUGIN_NAME\)/)
   assert.doesNotMatch(hostSource, /plugins\?\.\[0\]/)
 })
+
+test('desktop pet separates hit surfaces from window drag surfaces', () => {
+  assert.match(petSource, /document\.elementsFromPoint\(x, y\)/)
+  assert.match(petSource, /target\.closest\('\[data-pet-drag-surface\]'\)/)
+  assert.match(petSource, /if \(!dragSurface\) return/)
+  assert.doesNotMatch(petSource, /target\.closest\('button, textarea, input, select, a'\)/)
+})
