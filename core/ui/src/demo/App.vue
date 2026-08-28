@@ -92,6 +92,7 @@
     :density="density"
     :theme="theme"
     :content-width="contentWidth"
+    :show-sidebar-header="false"
     :show-sidebar-header-action="false"
     :composer-disabled="composerDisabled"
     :composer-action-mode="composerActionMode"

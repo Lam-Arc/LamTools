@@ -123,6 +123,15 @@ describe('WorkspaceShell responsive drawers', () => {
     expect(fallback.get('.sidebar-label').text()).toBe('项目')
   })
 
+  it('allows a host to remove the sidebar title and pin control', () => {
+    const wrapper = mount(WorkspaceShell, {
+      props: { productName: 'Core', sidebarTitle: 'Core', showSidebarHeader: false },
+    })
+
+    expect(wrapper.find('.sidebar-header').exists()).toBe(false)
+    expect(wrapper.find('.sidebar-pin-button').exists()).toBe(false)
+  })
+
   it('exposes the sidebar pin state and keeps the host state synchronized', async () => {
     const wrapper = mount(WorkspaceShell, { props: { productName: 'Sage' } })
     const pin = wrapper.get('.sidebar-pin-button')

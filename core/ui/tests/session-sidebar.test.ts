@@ -54,40 +54,42 @@ describe('SessionSidebar sections', () => {
     expect(titleRule).not.toContain('border')
   })
 
-  it('shows up to five recent sessions without mutating project session order', async () => {
-    const recentGroups = [
-      {
-        id: 'alpha',
-        name: 'Alpha',
-        sessions: [
-          { id: 'alpha-old', title: 'Alpha old', createdAt: '2026-07-01T08:00:00Z' },
-          { id: 'alpha-new', title: 'Alpha new', updatedAt: '2026-07-13T08:00:00Z' },
-          { id: 'alpha-mid', title: 'Alpha mid', createdAt: '2026-07-08T08:00:00Z' },
-        ],
-      },
-      {
-        id: 'beta',
-        name: 'Beta',
-        sessions: [
-          { id: 'beta-1', title: 'Beta one', createdAt: '2026-07-12T08:00:00Z' },
-          { id: 'beta-2', title: 'Beta two', createdAt: '2026-07-11T08:00:00Z' },
-          { id: 'beta-3', title: 'Beta three', createdAt: '2026-07-10T08:00:00Z' },
-        ],
-      },
-    ]
-    const originalOrder = recentGroups[0].sessions.map((session) => session.id)
-    const wrapper = mount(SessionSidebar, { props: { projectGroups: recentGroups } })
-
-    const recent = wrapper.get('[data-sidebar-section="recent"]')
-    expect(recent.findAll('[data-recent-session-row]').map((row) => row.get('.session-title').text()))
-      .toEqual(['Alpha new', 'Beta one', 'Beta two', 'Beta three', 'Alpha mid'])
-
-    await recent.get('[data-recent-session-select="beta-1"]').trigger('click')
-    expect(wrapper.emitted('select-session')).toEqual([['beta-1']])
-    expect(recentGroups[0].sessions.map((session) => session.id)).toEqual(originalOrder)
-
-    await wrapper.get('[data-sidebar-search]').setValue('beta')
+  it('does not render the removed recent-session section', () => {
+    const wrapper = mount(SessionSidebar, { props: { projectGroups: groups } })
     expect(wrapper.find('[data-sidebar-section="recent"]').exists()).toBe(false)
+    expect(wrapper.find('[data-sidebar-recent-toggle]').exists()).toBe(false)
+  })
+
+  it('keeps project rows limited to the project name', () => {
+    const wrapper = mount(SessionSidebar, {
+      props: {
+        projectGroups: [{
+          id: 'docs',
+          name: 'Docs',
+          workRoot: 'E:\\docs',
+          sessions: [{ id: 'session-1', title: 'Guide' }],
+        }],
+      },
+    })
+
+    const project = wrapper.get('[data-project-entry="docs"]')
+    expect(project.text().trim()).toBe('Docs')
+    expect(project.find('.work-root').exists()).toBe(false)
+    expect(project.text()).not.toContain('E:\\docs')
+  })
+
+  it('keeps search as a compact icon until it is focused or opened', async () => {
+    const wrapper = mount(SessionSidebar, { props: { projectGroups: groups } })
+    const searchWrap = wrapper.get('.sidebar-search-wrap')
+    const searchToggle = wrapper.get('[data-sidebar-search-toggle]')
+
+    expect(searchToggle.find('svg').exists()).toBe(true)
+    expect(searchWrap.classes()).not.toContain('is-expanded')
+    expect(searchToggle.attributes('aria-expanded')).toBe('false')
+
+    await searchToggle.trigger('click')
+    expect(searchWrap.classes()).toContain('is-expanded')
+    expect(searchToggle.attributes('aria-expanded')).toBe('true')
   })
 
   it('filters project and session names locally without changing source groups', async () => {
@@ -181,7 +183,6 @@ describe('SessionSidebar sections', () => {
 
     expect(wrapper.get('[data-explicit-empty]').text()).toBe('还没有项目')
     expect(wrapper.find('[data-sidebar-search]').exists()).toBe(false)
-    expect(wrapper.find('[data-sidebar-section="recent"]').exists()).toBe(false)
     expect(wrapper.find('.project-block').exists()).toBe(false)
   })
 
@@ -247,6 +248,30 @@ describe('SessionSidebar sections', () => {
     expect(wrapper.get('[data-project-fold="recent-new"]').attributes('aria-expanded')).toBe('true')
   })
 
+  it('opens only the clicked project menu when a project is projected in both sections', async () => {
+    const wrapper = mount(SessionSidebar, {
+      props: {
+        projectGroups: groups,
+        pinStorageKey: 'test.sidebar.pins',
+      },
+    })
+
+    await wrapper.get('[data-session-pin="s1"]').trigger('click')
+
+    const triggers = wrapper.findAll('[data-project-menu-trigger="recent-new"]')
+    expect(triggers).toHaveLength(2)
+
+    await triggers[0].trigger('click')
+    expect(wrapper.findAll('[data-project-menu="recent-new"]')).toHaveLength(1)
+    expect(wrapper.find('[data-sidebar-section="pinned"] [data-project-menu="recent-new"]').exists()).toBe(true)
+    expect(wrapper.find('[data-sidebar-section="default"] [data-project-menu="recent-new"]').exists()).toBe(false)
+
+    await triggers[1].trigger('click')
+    expect(wrapper.findAll('[data-project-menu="recent-new"]')).toHaveLength(1)
+    expect(wrapper.find('[data-sidebar-section="pinned"] [data-project-menu="recent-new"]').exists()).toBe(false)
+    expect(wrapper.find('[data-sidebar-section="default"] [data-project-menu="recent-new"]').exists()).toBe(true)
+  })
+
   it('keeps the menu mounted through pointerdown and dispatches every project action', async () => {
     const wrapper = mount(SessionSidebar, {
       props: {
@@ -286,13 +311,18 @@ describe('SessionSidebar sections', () => {
     expect(wrapper.find('.session-name-input').exists()).toBe(false)
   })
 
-  it('keeps default, hover, and active row states visually distinct', () => {
+  it('keeps project rows transparent while sessions retain row states', () => {
     const css = readFileSync(resolve(import.meta.dirname, '../src/styles/session-sidebar.css'), 'utf8')
 
     expect(css).toMatch(/\.project-row,[\s\S]*?\.session-row \{[\s\S]*?background: transparent;/)
-    expect(css).toMatch(/\.project-row:hover \{[\s\S]*?var\(--alpha-hover\)/)
+    expect(css).not.toMatch(/\.project-row:hover\s*\{[\s\S]*?background:/)
+    expect(css).not.toMatch(/\.project-block\.active\s*\{[\s\S]*?background:/)
     expect(css).toMatch(/\.conversation\.active::before \{[\s\S]*?var\(--alpha-active\)/)
-    expect(css).toMatch(/\.session-row\.is-active \.session-title \{[\s\S]*?font-weight: 500;/)
+    expect(css).toMatch(/\.conversation strong \{[\s\S]*?font-weight: 700;/)
+    expect(css).not.toMatch(/\.session-row\.is-active \.session-title\s*\{[\s\S]*?font-weight:/)
+    expect(css).toMatch(/\.sidebar-sort-move\s*\{[\s\S]*?transition: transform var\(--dur-base\) var\(--ease-out\);/)
+    expect(css).toMatch(/\.project-row\.is-dragging,[\s\S]*?\.conversation\.is-dragging\s*\{[\s\S]*?opacity: 1;/)
+    expect(css).not.toMatch(/\.is-drag-over::after/)
   })
 
   it('keeps project and session actions quiet until their row is active', () => {
@@ -304,6 +334,23 @@ describe('SessionSidebar sections', () => {
     expect(css).toMatch(/\.conversation:hover \.conversation-hover-actions,[\s\S]*?\.conversation:focus-within \.conversation-hover-actions/)
   })
 
+  it('uses a transparent native drag image while sorting', async () => {
+    const wrapper = mount(SessionSidebar, { props: { projectGroups: groups } })
+    const dataTransfer = {
+      effectAllowed: '',
+      setData: vi.fn(),
+      setDragImage: vi.fn(),
+    } as unknown as DataTransfer
+
+    await wrapper.get('[data-session-row="s1"]').trigger('dragstart', { dataTransfer })
+
+    expect(dataTransfer.setDragImage).toHaveBeenCalledWith(
+      wrapper.get('.sidebar-drag-image').element,
+      0,
+      0,
+    )
+  })
+
   it('keeps keyboard focus visible for session controls', () => {
     const sidebarCss = readFileSync(resolve(import.meta.dirname, '../src/styles/session-sidebar.css'), 'utf8')
     const shellCss = readFileSync(resolve(import.meta.dirname, '../src/styles/workspace-shell.css'), 'utf8')
@@ -313,7 +360,7 @@ describe('SessionSidebar sections', () => {
     expect(sidebarCss).not.toMatch(/\.conversation-action:hover,[\s\S]*?\.conversation-action:focus-visible \{[\s\S]*?outline:\s*none/)
   })
 
-  it('pins a session from its hover actions and keeps its original ordinal', async () => {
+  it('pins a session into a project-only pinned projection without reordering the source project', async () => {
     const wrapper = mount(SessionSidebar, {
       props: {
         pinStorageKey: 'test.sidebar.pins',
@@ -331,11 +378,108 @@ describe('SessionSidebar sections', () => {
 
     await wrapper.get('[data-session-pin="newer"]').trigger('click')
 
-    const sessions = wrapper.findAll('.project-block .conversation')
-    expect(sessions[0].text()).toContain('Newer')
-    expect(sessions[0].find('.status.conversation-status.running').exists()).toBe(true)
+    const pinned = wrapper.get('[data-sidebar-section="pinned"]')
+    expect(pinned.findAll('[data-project-entry="project"]')).toHaveLength(1)
+    expect(pinned.findAll('[data-session-row]')).toHaveLength(1)
+    expect(pinned.find('[data-session-row="newer"] .status.conversation-status.running').exists()).toBe(true)
+
+    const original = wrapper.get('[data-sidebar-section="default"]')
+    expect(original.findAll('[data-session-row]').map((row) => row.attributes('data-session-row')))
+      .toEqual(['older', 'newer'])
     expect(localStorage.getItem('test.sidebar.pins.sessions')).toBe('["newer"]')
-    expect(wrapper.get('[data-session-pin="newer"]').attributes('aria-pressed')).toBe('true')
+    expect(pinned.get('[data-session-pin="newer"]').attributes('aria-pressed')).toBe('true')
+  })
+
+  it('reorders projects and sessions by drag and persists both orders', async () => {
+    const projectGroups = [
+      { id: 'project-a', name: 'Project A', sessions: [{ id: 'a-1', title: 'A1' }] },
+      {
+        id: 'project-b',
+        name: 'Project B',
+        sessions: [
+          { id: 'b-1', title: 'B1' },
+          { id: 'b-2', title: 'B2' },
+          { id: 'b-3', title: 'B3' },
+        ],
+      },
+      { id: 'project-c', name: 'Project C', sessions: [{ id: 'c-1', title: 'C1' }] },
+    ]
+    const wrapper = mount(SessionSidebar, {
+      props: { projectGroups, pinStorageKey: 'test.sidebar.order' },
+    })
+
+    const projectTarget = wrapper.get('[data-project-row="project-a"]')
+    vi.spyOn(projectTarget.element, 'getBoundingClientRect').mockReturnValue({ top: 0, height: 100 } as DOMRect)
+    await wrapper.get('[data-project-row="project-c"]').trigger('dragstart')
+    await projectTarget.trigger('dragover', { clientY: 20 })
+    expect(wrapper.findAll('[data-sidebar-section="default"] [data-project-row]')
+      .map((row) => row.attributes('data-project-row')))
+      .toEqual(['project-c', 'project-a', 'project-b'])
+    await projectTarget.trigger('drop')
+    expect(wrapper.findAll('[data-sidebar-section="default"] [data-project-row]')
+      .map((row) => row.attributes('data-project-row')))
+      .toEqual(['project-c', 'project-a', 'project-b'])
+
+    const sessionTarget = wrapper.get('[data-session-row="b-1"]')
+    vi.spyOn(sessionTarget.element, 'getBoundingClientRect').mockReturnValue({ top: 0, height: 100 } as DOMRect)
+    await wrapper.get('[data-session-row="b-3"]').trigger('dragstart')
+    await sessionTarget.trigger('dragover', { clientY: 20 })
+    expect(wrapper.findAll('[data-sidebar-section="default"] [data-session-row]')
+      .map((row) => row.attributes('data-session-row')))
+      .toEqual(['c-1', 'a-1', 'b-3', 'b-1', 'b-2'])
+    await sessionTarget.trigger('drop')
+    expect(wrapper.findAll('[data-sidebar-section="default"] [data-session-row]')
+      .map((row) => row.attributes('data-session-row')))
+      .toEqual(['c-1', 'a-1', 'b-3', 'b-1', 'b-2'])
+
+    expect(JSON.parse(localStorage.getItem('test.sidebar.order.order.projects') || 'null'))
+      .toEqual(['project-c', 'project-a', 'project-b'])
+    expect(JSON.parse(localStorage.getItem('test.sidebar.order.order.sessions') || 'null'))
+      .toEqual({
+        'project-a': ['a-1'],
+        'project-b': ['b-3', 'b-1', 'b-2'],
+        'project-c': ['c-1'],
+      })
+
+    const restored = mount(SessionSidebar, {
+      props: { projectGroups, pinStorageKey: 'test.sidebar.order' },
+    })
+    expect(restored.findAll('[data-sidebar-section="default"] [data-project-row]')
+      .map((row) => row.attributes('data-project-row')))
+      .toEqual(['project-c', 'project-a', 'project-b'])
+    expect(restored.findAll('[data-sidebar-section="default"] [data-session-row]')
+      .map((row) => row.attributes('data-session-row')))
+      .toEqual(['c-1', 'a-1', 'b-3', 'b-1', 'b-2'])
+  })
+
+  it('keeps the original session order when refreshed metadata changes', async () => {
+    const wrapper = mount(SessionSidebar, {
+      props: {
+        projectGroups: [{
+          id: 'project',
+          name: 'Project',
+          sessions: [
+            { id: 'first', title: 'First', updatedAt: '2026-07-01T08:00:00Z' },
+            { id: 'second', title: 'Second', updatedAt: '2026-07-02T08:00:00Z' },
+          ],
+        }],
+      },
+    })
+
+    await wrapper.setProps({
+      projectGroups: [{
+        id: 'project',
+        name: 'Project',
+        sessions: [
+          { id: 'second', title: 'Second', updatedAt: '2026-08-02T08:00:00Z' },
+          { id: 'first', title: 'First', updatedAt: '2026-08-01T08:00:00Z' },
+        ],
+      }],
+    })
+
+    expect(wrapper.findAll('[data-sidebar-section="default"] [data-session-row]')
+      .map((row) => row.attributes('data-session-row')))
+      .toEqual(['first', 'second'])
   })
 
   it('shows status indicators only for active or failed sessions', () => {

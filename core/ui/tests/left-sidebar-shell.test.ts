@@ -62,6 +62,21 @@ describe('LeftSidebarShell', () => {
     expect(wrapper.get('.sidebar-label').text()).toBe('项目')
   })
 
+  it('can hide the optional header while keeping the drawer body and footer', () => {
+    const wrapper = mount(LeftSidebarShell, {
+      props: {
+        id: 'left-drawer',
+        open: true,
+        pinned: false,
+        showSidebarHeader: false,
+      },
+    })
+
+    expect(wrapper.find('.drawer-head').exists()).toBe(false)
+    expect(wrapper.get('.drawer-body')).toBeTruthy()
+    expect(wrapper.get('.drawer-footer')).toBeTruthy()
+  })
+
   it('emits host layout commands and keeps mouseleave at the shell root', async () => {
     const wrapper = mount(LeftSidebarShell, {
       props: {

@@ -8,7 +8,7 @@
     :aria-hidden="!props.open"
     @mouseleave="emit('mouseleave', $event)"
   >
-    <header class="drawer-head sidebar-header">
+    <header v-if="props.showSidebarHeader" class="drawer-head sidebar-header">
       <div class="sidebar-title sidebar-label">{{ props.title || '项目' }}</div>
       <button
         class="sidebar-pin-button"
@@ -117,10 +117,12 @@ const props = withDefaults(
     open: boolean
     pinned: boolean
     title?: string
+    showSidebarHeader?: boolean
     showDefaultHeaderAction?: boolean
   }>(),
   {
     title: '',
+    showSidebarHeader: true,
     showDefaultHeaderAction: true,
   },
 )

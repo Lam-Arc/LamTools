@@ -74,6 +74,7 @@
       :open="leftOpen || stageOpen"
       :pinned="leftPinned"
       :title="sidebarTitle"
+      :show-sidebar-header="showSidebarHeader"
       :show-default-header-action="showSidebarHeaderAction"
       @close="closeDrawers"
       @toggle-pinned="onSidebarTogglePinned"
@@ -232,6 +233,7 @@ const props = withDefaults(
   defineProps<{
     productName: string
     sidebarTitle?: string
+    showSidebarHeader?: boolean
     showSidebarHeaderAction?: boolean
     storageKey?: string
     density?: 'compact' | 'standard' | 'loose'
@@ -256,6 +258,7 @@ const props = withDefaults(
   {
     storageKey: 'lamtools.ui',
     sidebarTitle: '',
+    showSidebarHeader: true,
     showSidebarHeaderAction: true,
     density: 'standard',
     contentWidth: 780,
