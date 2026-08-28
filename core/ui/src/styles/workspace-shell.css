@@ -414,8 +414,14 @@
   }
   .pin-plain { display: none; }
   .icon-btn,
-  .drawer-footer .settings-entry {
+  .drawer-footer .settings-entry,
+  .drawer-footer .sidebar-action,
+  .sidebar-create-project {
     min-width: 44px;
     min-height: 44px;
+  }
+  .sidebar-root .sidebar-pin-button {
+    width: 44px;
+    height: 44px;
   }
 }

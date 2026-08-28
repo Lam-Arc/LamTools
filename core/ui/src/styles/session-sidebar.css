@@ -445,6 +445,31 @@
 }
 
 @media (max-width: 640px) {
+  .sidebar-search,
+  .sidebar-search-clear,
+  .sidebar-project-empty-action {
+    min-height: 44px;
+  }
+  .project-action {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .project-btns {
+    flex-basis: 44px;
+  }
+  .project-menu-button {
+    width: 44px;
+    flex-basis: 44px;
+  }
+  .project-menu {
+    width: min(154px, calc(100vw - var(--space-6)));
+    max-width: calc(100vw - var(--space-6));
+    max-height: calc(100dvh - var(--space-6));
+    overflow-y: auto;
+  }
+  .project-menu button {
+    min-height: 44px;
+  }
   .conversation-action {
     min-width: 44px;
     min-height: 44px;
