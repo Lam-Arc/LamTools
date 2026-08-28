@@ -125,6 +125,12 @@ test('desktop host selects the pet by identity instead of registry order', () =>
   assert.doesNotMatch(hostSource, /plugins\?\.\[0\]/)
 })
 
+test('desktop plugin host prevents persistent browser zoom drift', () => {
+  assert.match(hostSource, /event\.preventDefault\(\)/)
+  assert.match(hostSource, /\['\+', '-', '=', '0'\]\.includes\(event\.key\)/)
+  assert.match(hostSource, /\{ passive: false \}/)
+})
+
 test('desktop pet separates hit surfaces from window drag surfaces', () => {
   assert.match(petSource, /document\.elementsFromPoint\(x, y\)/)
   assert.match(petSource, /target\.closest\('\[data-pet-drag-surface\]'\)/)

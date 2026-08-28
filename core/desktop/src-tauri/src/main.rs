@@ -776,6 +776,7 @@ fn configure_desktop_plugin_window(
 ) -> Result<(), String> {
     let spec = spec.sanitized();
     make_desktop_plugin_window_transparent(&window)?;
+    window.set_zoom(1.0).map_err(|error| error.to_string())?;
     state
         .desktop_windows
         .lock()

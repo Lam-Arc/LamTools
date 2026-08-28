@@ -55,6 +55,15 @@ let placementSaveTimer: number | undefined
 let fileDropRequestGeneration = 0
 const registeredDropIds = new Set<string>()
 
+window.addEventListener('keydown', (event) => {
+  if ((event.ctrlKey || event.metaKey) && ['+', '-', '=', '0'].includes(event.key)) {
+    event.preventDefault()
+  }
+})
+window.addEventListener('wheel', (event) => {
+  if (event.ctrlKey || event.metaKey) event.preventDefault()
+}, { passive: false })
+
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error || '未知错误')
 }
