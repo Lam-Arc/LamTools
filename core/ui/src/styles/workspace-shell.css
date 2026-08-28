@@ -237,15 +237,21 @@
   max-height: none;
   overflow: auto;
   padding: 8px calc(var(--sidebar-inline-padding) + var(--left-overlap)) 16px var(--sidebar-inline-padding);
-  scrollbar-width: none;
-  -ms-overflow-style: none;
 }
 .drawer-left > .drawer-body {
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
 }
-.drawer-body::-webkit-scrollbar { width: 0; height: 0; display: none; }
+.sidebar-body {
+  scrollbar-width: thin;
+  -ms-overflow-style: auto;
+}
+.drawer-right > .drawer-body {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.drawer-right > .drawer-body::-webkit-scrollbar { width: 0; height: 0; display: none; }
 .right-body { max-height: none; padding: 12px 12px 14px; }
 
 .drawer-footer {

@@ -46,7 +46,7 @@
       </slot>
     </div>
 
-    <div class="drawer-body">
+    <div class="drawer-body sidebar-body">
       <slot name="sidebar-body">
         <slot>
           <div class="sidebar-empty">No content</div>
