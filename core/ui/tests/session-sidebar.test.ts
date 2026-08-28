@@ -165,6 +165,26 @@ describe('SessionSidebar sections', () => {
     expect(wrapper.find('[data-project-empty]').isVisible()).toBe(false)
   })
 
+  it('uses the explicit project boundary when compatibility sessions have no project', () => {
+    const wrapper = mount(SessionSidebar, {
+      props: {
+        hasProjects: false,
+        projectGroups: [{
+          id: 'unassigned',
+          name: 'Unassigned',
+          canManage: false,
+          sessions: [{ id: 'legacy-1', title: 'Legacy session', createdAt: '2026-07-12T08:00:00Z' }],
+        }],
+      },
+      slots: { empty: '<div data-explicit-empty>还没有项目</div>' },
+    })
+
+    expect(wrapper.get('[data-explicit-empty]').text()).toBe('还没有项目')
+    expect(wrapper.find('[data-sidebar-search]').exists()).toBe(false)
+    expect(wrapper.find('[data-sidebar-section="recent"]').exists()).toBe(false)
+    expect(wrapper.find('.project-block').exists()).toBe(false)
+  })
+
   it('pins projects durably and restores them in the pinned section', async () => {
     const wrapper = mount(SessionSidebar, {
       props: { projectGroups: groups, pinStorageKey: 'test.sidebar.pins' },

@@ -151,6 +151,7 @@
     <template #sidebar-body>
       <SessionSidebar
         :project-groups="projectGroups"
+        :has-projects="projects.length > 0"
         :project-session-limit="8"
         pin-storage-key="lamtools-core.sidebar.pinned-projects"
         :active-session-id="workflowMode ? (activeWorkflowName || undefined) : (activeSessionId || undefined)"

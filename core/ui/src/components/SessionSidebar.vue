@@ -1,6 +1,6 @@
 <template>
   <div class="session-sidebar-content">
-    <div v-if="projectGroups.length > 0" class="sidebar-search-wrap">
+    <div v-if="hasProjectData" class="sidebar-search-wrap">
       <input
         v-model="searchQuery"
         class="sidebar-search"
@@ -10,7 +10,7 @@
         data-sidebar-search
       />
     </div>
-    <div v-if="projectGroups.length === 0" class="sidebar-empty">
+    <div v-if="!hasProjectData" class="sidebar-empty">
       <slot name="empty">暂无内容，创建一个开始。</slot>
     </div>
     <div
@@ -30,7 +30,7 @@
     </div>
 
     <section
-      v-if="!normalizedQuery && recentSessions.length > 0"
+      v-if="hasProjectData && !normalizedQuery && recentSessions.length > 0"
       class="sidebar-section sidebar-recent-section"
       data-sidebar-section="recent"
     >
@@ -277,6 +277,8 @@ export interface ProjectGroup {
 const props = withDefaults(
   defineProps<{
     projectGroups: ProjectGroup[]
+    /** Whether real projects exist; separate from compatibility groups. */
+    hasProjects?: boolean
     activeSessionId?: string
     /** Max sessions visible per project before fold (0 = no limit) */
     projectSessionLimit?: number
@@ -298,6 +300,7 @@ const props = withDefaults(
     pinStorageKey?: string
   }>(),
   {
+    hasProjects: undefined,
     projectSessionLimit: 0,
     allowProjectNewSession: true,
     newSessionLabel: '新建会话',
@@ -329,6 +332,7 @@ const pinnedSessionIds = ref<string[]>(loadPinnedSessionIds())
 const openProjectMenuId = ref<string | null>(null)
 const searchQuery = ref('')
 const normalizedQuery = computed(() => searchQuery.value.trim().toLocaleLowerCase())
+const hasProjectData = computed(() => props.hasProjects ?? props.projectGroups.length > 0)
 
 // ── 新会话条目入场（C14）：挂载时已在列表中的会话不播，之后新出现的会话淡入。
 //    集合 setup 期捕获、只读，不引入响应式状态（会话列表变更频率极低）。
@@ -336,6 +340,8 @@ const initialSessionIds = new Set(props.projectGroups.flatMap((g) => g.sessions.
 const vMotionEnter = motionEnterDirective
 
 const filteredGroups = computed(() => {
+  if (!hasProjectData.value) return []
+
   const query = normalizedQuery.value
   if (!query) return props.projectGroups
 
@@ -350,6 +356,8 @@ const filteredGroups = computed(() => {
 })
 
 const recentSessions = computed(() => {
+  if (!hasProjectData.value) return []
+
   const entries = props.projectGroups.flatMap((group) => group.sessions
     .filter((session) => Number.isFinite(sessionActivityTime(session)))
     .map((session) => ({
@@ -364,6 +372,8 @@ const recentSessions = computed(() => {
 })
 
 const projectSections = computed(() => {
+  if (!hasProjectData.value) return []
+
   const pinned = filteredGroups.value.filter((group) => isPinned(group.id))
   const others = filteredGroups.value.filter((group) => !isPinned(group.id))
   return [
