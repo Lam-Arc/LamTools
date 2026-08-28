@@ -131,3 +131,19 @@ test('desktop pet separates hit surfaces from window drag surfaces', () => {
   assert.match(petSource, /if \(!dragSurface\) return/)
   assert.doesNotMatch(petSource, /target\.closest\('button, textarea, input, select, a'\)/)
 })
+
+test('keeps the native window interactive during active pointer workflows', () => {
+  assert.equal(logic.shouldPassCursorThrough({ hitSurface: true }), false)
+  assert.equal(logic.shouldPassCursorThrough({ pointerInteractionActive: true }), false)
+  assert.equal(logic.shouldPassCursorThrough({ fileDragActive: true }), false)
+  assert.equal(logic.shouldPassCursorThrough({ windowDragActive: true }), false)
+  assert.equal(logic.shouldPassCursorThrough({}), true)
+})
+
+test('serializes passthrough updates and refreshes them across window transitions', () => {
+  assert.match(petSource, /if \(pointerPassthroughInFlight\) \{\s+pointerPassthroughRequested = true/)
+  assert.match(petSource, /activePointerIds\.add\(event\.pointerId\)/)
+  assert.match(petSource, /activePointerIds\.delete\(event\.pointerId\)/)
+  assert.match(petSource, /function applyAnchor[\s\S]*?requestPointerPassthroughUpdate\(\)/)
+  assert.match(petSource, /state\.expansionPending = false;\s+requestPointerPassthroughUpdate\(\)/)
+})

@@ -105,6 +105,14 @@
     return message ? content + '\n\n提交失败：' + message : content;
   }
 
+  function shouldPassCursorThrough(options) {
+    var state = options && typeof options === 'object' ? options : {};
+    return !state.hitSurface
+      && !state.pointerInteractionActive
+      && !state.fileDragActive
+      && !state.windowDragActive;
+  }
+
   root.EmotionBallPetLogic = Object.freeze({
     CARD_PRIORITY: CARD_PRIORITY,
     cardPriority: cardPriority,
@@ -115,6 +123,7 @@
     panelDetailFromCard: panelDetailFromCard,
     petToggleAccessibility: petToggleAccessibility,
     shouldCollapseAfterInteraction: shouldCollapseAfterInteraction,
-    replySummary: replySummary
+    replySummary: replySummary,
+    shouldPassCursorThrough: shouldPassCursorThrough
   });
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -179,6 +179,9 @@
   var suppressPetToggleClick = false;
   var pointerPassthrough = null;
   var pointerPassthroughTimer = 0;
+  var pointerPassthroughInFlight = false;
+  var pointerPassthroughRequested = false;
+  var activePointerIds = new Set();
   var activeCard = null;
   var suspendedCard = null;
   var cardDismissTimer = 0;
@@ -198,10 +201,15 @@
     });
   }
 
-  async function pollPointerPassthrough() {
+  async function updatePointerPassthrough() {
     var cursor = await invoke('get_desktop_plugin_cursor_position');
     if (cursor && Number.isFinite(cursor.x) && Number.isFinite(cursor.y)) {
-      var nextPassthrough = !hitSurfaceAtPoint(cursor.x, cursor.y);
+      var nextPassthrough = petLogic.shouldPassCursorThrough({
+        hitSurface: hitSurfaceAtPoint(cursor.x, cursor.y),
+        pointerInteractionActive: activePointerIds.size > 0,
+        fileDragActive: isFileDragActive,
+        windowDragActive: desktopDragInFlight
+      });
       if (nextPassthrough !== pointerPassthrough) {
         var applied = await invoke('set_desktop_plugin_cursor_passthrough', {
           passthrough: nextPassthrough
@@ -209,7 +217,30 @@
         if (applied === nextPassthrough) pointerPassthrough = nextPassthrough;
       }
     }
-    pointerPassthroughTimer = window.setTimeout(pollPointerPassthrough, 16);
+  }
+
+  async function pollPointerPassthrough() {
+    if (pointerPassthroughInFlight) {
+      pointerPassthroughRequested = true;
+      return;
+    }
+    pointerPassthroughInFlight = true;
+    try {
+      do {
+        pointerPassthroughRequested = false;
+        await updatePointerPassthrough();
+      } while (pointerPassthroughRequested);
+    } finally {
+      pointerPassthroughInFlight = false;
+      pointerPassthroughTimer = window.setTimeout(pollPointerPassthrough, 16);
+    }
+  }
+
+  function requestPointerPassthroughUpdate() {
+    pointerPassthroughRequested = true;
+    if (pointerPassthroughInFlight) return;
+    window.clearTimeout(pointerPassthroughTimer);
+    pointerPassthroughTimer = window.setTimeout(pollPointerPassthrough, 0);
   }
 
   function setEmotion(id) {
@@ -253,6 +284,7 @@
   function setFileDragActive(active) {
     isFileDragActive = !!active;
     document.body.dataset.fileDrag = isFileDragActive ? 'true' : 'false';
+    requestPointerPassthroughUpdate();
     if (isFileDragActive) {
       setStatus('释放以添加文件', 'waiting', '35');
       return;
@@ -604,6 +636,7 @@
     document.body.classList.toggle('anchor-right', normalized === 'right');
     document.body.classList.toggle('anchor-top', normalizedVertical === 'top');
     document.body.classList.toggle('anchor-bottom', normalizedVertical === 'bottom');
+    requestPointerPassthroughUpdate();
   }
 
   async function setViewMode(nextMode, options) {
@@ -629,6 +662,7 @@
     elements.petToggle.setAttribute('aria-label', toggleAccessibility.label);
     elements.petCard.hidden = mode !== VIEW_MODE.CARD;
     elements.petPanel.hidden = mode !== VIEW_MODE.PANEL;
+    requestPointerPassthroughUpdate();
     if (mode === VIEW_MODE.PANEL) elements.interactionCard.scrollTop = 0;
     try {
       var preview = await invoke('get_desktop_plugin_view_mode_transition', {
@@ -648,7 +682,10 @@
       }
       if (mode === VIEW_MODE.PANEL) syncQueueLayers();
     } finally {
-      if (generation === state.expansionGeneration) state.expansionPending = false;
+      if (generation === state.expansionGeneration) {
+        state.expansionPending = false;
+        requestPointerPassthroughUpdate();
+      }
     }
   }
 
@@ -1479,6 +1516,22 @@
     }
     setViewMode(state.viewMode === VIEW_MODE.PANEL ? VIEW_MODE.PET : VIEW_MODE.PANEL, { userInitiated: true });
   });
+  document.addEventListener('pointerdown', function (event) {
+    var target = event.target instanceof Element ? event.target : null;
+    if (!target || !target.closest('[data-pet-hit-surface]')) return;
+    activePointerIds.add(event.pointerId);
+    requestPointerPassthroughUpdate();
+  }, true);
+  ['pointerup', 'pointercancel'].forEach(function (eventName) {
+    document.addEventListener(eventName, function (event) {
+      activePointerIds.delete(event.pointerId);
+      requestPointerPassthroughUpdate();
+    }, true);
+  });
+  window.addEventListener('blur', function () {
+    activePointerIds.clear();
+    requestPointerPassthroughUpdate();
+  });
   elements.petShell.addEventListener('pointerdown', function (event) {
     if (event.button !== 0) return;
     var target = event.target instanceof Element ? event.target : null;
@@ -1501,9 +1554,11 @@
     }
     dragGesture = null;
     desktopDragInFlight = true;
+    requestPointerPassthroughUpdate();
     elements.petShell.classList.add('is-dragging');
     invoke('start_window_dragging').finally(function () {
       desktopDragInFlight = false;
+      requestPointerPassthroughUpdate();
       elements.petShell.classList.remove('is-dragging');
       scheduleDockDetection();
     });
