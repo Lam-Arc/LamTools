@@ -101,4 +101,29 @@ describe('WorkspaceShell responsive drawers', () => {
     expect(scopedStyle).not.toMatch(/\.mobile-shell-nav[\s\S]*?display:\s*none/)
     expect(scopedStyle).not.toMatch(/\.mobile-drawer-backdrop[\s\S]*?display:\s*none/)
   })
+
+  it('renders the configured sidebar title and keeps the default fallback', () => {
+    const configured = mount(WorkspaceShell, {
+      props: { productName: 'Sage', sidebarTitle: '工作区' },
+    })
+    expect(configured.get('.sidebar-label').text()).toBe('工作区')
+
+    const fallback = mount(WorkspaceShell, { props: { productName: 'Sage' } })
+    expect(fallback.get('.sidebar-label').text()).toBe('项目')
+  })
+
+  it('exposes the sidebar pin state and keeps the host state synchronized', async () => {
+    const wrapper = mount(WorkspaceShell, { props: { productName: 'Sage' } })
+    const pin = wrapper.get('.sidebar-pin-button')
+    await wrapper.vm.$nextTick()
+
+    expect(pin.classes()).not.toContain('is-active')
+    expect(pin.attributes('aria-pressed')).toBe('false')
+
+    await pin.trigger('click')
+
+    expect(pin.classes()).toContain('is-active')
+    expect(pin.attributes('aria-pressed')).toBe('true')
+    expect(wrapper.emitted('update:left-pinned')).toEqual([[true]])
+  })
 })

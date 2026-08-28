@@ -97,6 +97,7 @@
     :composer-active="latestStatus === 'running'"
     v-model:stage-open="stageOpen"
     @new-session="openProjectCreate"
+    @update:left-pinned="syncLeftPinned"
     @settings="openSettings"
     @plugins="openPlugins"
     @search="showSearch = true"
@@ -723,6 +724,9 @@ const composerDisabled = computed(() => {
 function toggleLeftPinned() {
   leftPinned.value = !leftPinned.value
   shellRef.value?.toggleLeftPinned()
+}
+function syncLeftPinned(value: boolean) {
+  leftPinned.value = value
 }
 function toggleRightPinned() {
   rightPinned.value = !rightPinned.value
