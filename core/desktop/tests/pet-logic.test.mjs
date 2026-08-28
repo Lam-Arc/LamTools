@@ -159,3 +159,24 @@ test('calibrates cursor coordinates against the rendered plugin viewport', () =>
   assert.match(petSource, /viewportHeight: window\.innerHeight/)
   assert.match(hostSource, /message\.command === 'get_desktop_plugin_cursor_position'/)
 })
+
+test('derives native window dimensions from the measured component surface', () => {
+  assert.equal(JSON.stringify(logic.surfaceWindowSize({
+    surfaceWidth: 360,
+    surfaceHeight: 344,
+    overlapRail: 130,
+    edgeInset: 8,
+    minimumWidth: 256,
+    minimumHeight: 288,
+  })), JSON.stringify({ width: 506, height: 360 }))
+  assert.equal(JSON.stringify(logic.surfaceWindowSize({
+    surfaceWidth: 180,
+    surfaceHeight: 120,
+    overlapRail: 40,
+    edgeInset: 8,
+    minimumWidth: 256,
+    minimumHeight: 288,
+  })), JSON.stringify({ width: 256, height: 288 }))
+  assert.match(petSource, /function measureViewModeViewport\(mode\)/)
+  assert.match(petSource, /measurement\.getBoundingClientRect\(\)/)
+})

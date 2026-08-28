@@ -642,6 +642,63 @@
     requestPointerPassthroughUpdate();
   }
 
+  function cssLength(name, fallback) {
+    var value = parseFloat(getComputedStyle(document.documentElement).getPropertyValue(name));
+    return Number.isFinite(value) && value >= 0 ? value : fallback;
+  }
+
+  function measureViewModeViewport(mode) {
+    var surface = mode === VIEW_MODE.CARD
+      ? elements.petCard
+      : mode === VIEW_MODE.PANEL
+        ? elements.petPanel
+        : null;
+    if (!surface) {
+      return { width: collapsedViewportWidth, height: collapsedViewportHeight };
+    }
+    var edgeInset = cssLength('--space-2', 8);
+    var overlapRail = cssLength('--pet-overlap-rail', 130);
+    var surfaceWidth = cssLength('--pet-surface-width', 360);
+    var measurement = surface.cloneNode(true);
+    measurement.removeAttribute('id');
+    measurement.removeAttribute('hidden');
+    measurement.setAttribute('aria-hidden', 'true');
+    measurement.style.position = 'fixed';
+    measurement.style.inset = 'auto';
+    measurement.style.top = '0';
+    measurement.style.left = '-10000px';
+    measurement.style.width = surfaceWidth + 'px';
+    measurement.style.minWidth = '0';
+    measurement.style.maxWidth = 'none';
+    measurement.style.opacity = '0';
+    measurement.style.visibility = 'hidden';
+    measurement.style.transform = 'none';
+    measurement.style.transition = 'none';
+    measurement.style.pointerEvents = 'none';
+    if (mode === VIEW_MODE.PANEL) {
+      measurement.style.height = cssLength('--pet-panel-height', 664) + 'px';
+      measurement.style.maxHeight = 'none';
+    } else {
+      measurement.style.height = 'auto';
+      measurement.style.maxHeight = cssLength('--pet-card-max-height', 344) + 'px';
+    }
+    document.body.appendChild(measurement);
+    var rect = measurement.getBoundingClientRect();
+    var measuredHeight = mode === VIEW_MODE.CARD
+      ? Math.min(measurement.scrollHeight, cssLength('--pet-card-max-height', 344))
+      : rect.height;
+    var size = petLogic.surfaceWindowSize({
+      surfaceWidth: rect.width || surfaceWidth,
+      surfaceHeight: measuredHeight,
+      overlapRail: overlapRail,
+      edgeInset: edgeInset,
+      minimumWidth: collapsedViewportWidth,
+      minimumHeight: collapsedViewportHeight
+    });
+    measurement.remove();
+    return size;
+  }
+
   async function setViewMode(nextMode, options) {
     var mode = String(nextMode || '').trim().toLowerCase();
     if (![VIEW_MODE.PET, VIEW_MODE.CARD, VIEW_MODE.PANEL].includes(mode)) {

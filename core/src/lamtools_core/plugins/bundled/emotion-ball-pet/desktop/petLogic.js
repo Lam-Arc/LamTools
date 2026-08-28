@@ -113,6 +113,20 @@
       && !state.windowDragActive;
   }
 
+  function surfaceWindowSize(options) {
+    var value = options && typeof options === 'object' ? options : {};
+    var surfaceWidth = Math.max(1, Number(value.surfaceWidth) || 0);
+    var surfaceHeight = Math.max(1, Number(value.surfaceHeight) || 0);
+    var overlapRail = Math.max(0, Number(value.overlapRail) || 0);
+    var edgeInset = Math.max(0, Number(value.edgeInset) || 0);
+    var minimumWidth = Math.max(1, Number(value.minimumWidth) || 0);
+    var minimumHeight = Math.max(1, Number(value.minimumHeight) || 0);
+    return {
+      width: Math.ceil(Math.max(minimumWidth, surfaceWidth + overlapRail + edgeInset * 2)),
+      height: Math.ceil(Math.max(minimumHeight, surfaceHeight + edgeInset * 2))
+    };
+  }
+
   root.EmotionBallPetLogic = Object.freeze({
     CARD_PRIORITY: CARD_PRIORITY,
     cardPriority: cardPriority,
@@ -124,6 +138,7 @@
     petToggleAccessibility: petToggleAccessibility,
     shouldCollapseAfterInteraction: shouldCollapseAfterInteraction,
     replySummary: replySummary,
-    shouldPassCursorThrough: shouldPassCursorThrough
+    shouldPassCursorThrough: shouldPassCursorThrough,
+    surfaceWindowSize: surfaceWindowSize
   });
 })(typeof window !== 'undefined' ? window : globalThis);

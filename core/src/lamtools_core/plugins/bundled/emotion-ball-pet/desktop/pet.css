@@ -44,6 +44,9 @@
   /* The native CARD/PANEL widths include this rail in addition to the
      376px surface area, preserving the intentional pet/surface overlap. */
   --pet-overlap-rail: 130px;
+  --pet-surface-width: 360px;
+  --pet-panel-height: 664px;
+  --pet-card-max-height: 344px;
 }
 
 * { box-sizing: border-box; }
