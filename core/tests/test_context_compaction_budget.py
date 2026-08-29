@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import pytest
 
-from lamtools_core.context_compaction_budget import TokenBudget
+from lamtools_core.context_compaction_budget import (
+    TokenBudget,
+    TokenMeasurement,
+    measure_for_compaction_trigger,
+)
+from lamtools_core.llm import ChatMessage
 
 
 def test_budget_from_ratios():
@@ -54,3 +59,54 @@ def test_negative_reserve_rejected():
             target_tokens=6_000,
             reserved_output_tokens=-1,
         )
+
+
+def test_cjk_context_triggers_exact_measurement():
+    measurement = measure_for_compaction_trigger(
+        [ChatMessage(role="user", content="中" * 1500)],
+        trigger_tokens=1_000,
+    )
+
+    assert measurement.exact is True
+    assert measurement.tokens >= 1_000
+
+
+def test_emoji_context_triggers_exact_measurement():
+    measurement = measure_for_compaction_trigger(
+        [ChatMessage(role="user", content="🙂" * 500)],
+        trigger_tokens=1_000,
+    )
+
+    assert measurement.exact is True
+    assert measurement.tokens >= 1_000
+
+
+def test_small_ascii_context_uses_fast_path():
+    measurement = measure_for_compaction_trigger(
+        [ChatMessage(role="user", content="small prompt")],
+        trigger_tokens=2_000,
+    )
+
+    assert measurement.exact is False
+
+
+def test_custom_request_estimator_is_used_for_exact_measurement():
+    calls: list[str] = []
+
+    def fast(messages: list[ChatMessage]) -> int:
+        calls.append("fast")
+        return len(messages) * 20
+
+    def exact(messages: list[ChatMessage]) -> int:
+        calls.append("exact")
+        return 101
+
+    measurement = measure_for_compaction_trigger(
+        [ChatMessage(role="user", content="payload")],
+        trigger_tokens=100,
+        fast_estimate=fast,
+        exact_estimate=exact,
+    )
+
+    assert measurement == TokenMeasurement(tokens=101, exact=True)
+    assert calls == ["fast", "exact"]

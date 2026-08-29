@@ -3075,6 +3075,45 @@ class TestKernelContextCompaction:
         assert "[Compacted Context]" in part_events[-1].payload["content"]
 
     @pytest.mark.asyncio
+    async def test_cjk_context_uses_exact_estimate_for_compaction_trigger(self):
+        class CjkRequestKit(MockRuntimeKit):
+            async def build_model_request(self, state, context):
+                return LLMRequest(
+                    messages=[
+                        ChatMessage(role="system", content="stable prefix"),
+                        ChatMessage(role="user", content="中" * 1500),
+                        ChatMessage(role="user", content="latest task"),
+                    ],
+                    model="mock-model",
+                )
+
+        sink = CollectingEventSink()
+        llm = CapturingLLMClient()
+        kernel = _make_kernel(
+            CjkRequestKit(steps=[MockKitStep(decision="done")]),
+            llm_client=llm,
+            event_sink=sink,
+            policy=LoopPolicy(
+                context_window_tokens=2_000,
+                compact_trigger_ratio=0.8,
+                compact_limit_ratio=0.6,
+            ),
+        )
+
+        result = await kernel.run(_make_turn_input())
+
+        assert result.decision == "done"
+        assert llm.last_request is not None
+        assert llm.last_request.metadata["context_compacted"] is True
+        assert any(
+            event.payload["runtime_metrics"]["estimated_prompt_tokens"] >= 1_600
+            for event in sink.events
+            if event.name == "runtime.metrics"
+            and "runtime_metrics" in event.payload
+        )
+        assert any(_is_compaction_request(request) for request in llm.requests)
+
+    @pytest.mark.asyncio
     async def test_compaction_limit_ratio_is_a_hard_upper_bound(self):
         class OversizedSummaryKit(MockRuntimeKit):
             async def build_model_request(self, state, context):
@@ -3417,7 +3456,10 @@ class TestKernelContextCompaction:
             state_store=store,  # type: ignore[arg-type]
             event_sink=sink,
             policy=LoopPolicy(
-                context_window_tokens=2_000,
+                # Keep the second request below the new exact trigger so this
+                # test isolates resume-boundary loading rather than triggering
+                # a second, legitimate compaction.
+                context_window_tokens=3_000,
                 compact_trigger_ratio=0.8,
                 compact_limit_ratio=0.6,
             ),

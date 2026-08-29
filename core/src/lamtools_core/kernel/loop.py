@@ -33,6 +33,7 @@ from lamtools_core.context_compaction import (
     compact_context,
     compaction_segment_input_limit,
 )
+from lamtools_core.context_compaction_budget import measure_for_compaction_trigger
 from lamtools_core.event import CoreEvent, EventCategory, EventSink
 from lamtools_core.llm import ChatMessage, LLMClient, LLMRequest, LLMResponse, LLMStreamEvent, LLMToolCall
 from lamtools_core.llm.helpers import merge_tool_call_deltas, resolve_tool_calls
@@ -2795,22 +2796,23 @@ class CoreLoopKernel:
             summary["reply_preview"] = step.turn.reply[:200]
         return summary
 
-    def _estimate_request_tokens(self, request: LLMRequest) -> int:
+    def _estimate_request_tokens(self, request: LLMRequest, *, fast: bool = True) -> int:
         """Estimate full request tokens, including tool definitions.
 
-        Uses the fast estimation path because the result is only used for
-        context-window trigger checks — ±20 % is acceptable here.
+        The fast path is used for cheap metrics by default.  Trigger checks
+        switch to the exact path near the threshold so Unicode-heavy prompts
+        cannot be delayed by a fast-estimator undercount.
         """
         total = estimate_message_tokens(
-            [m.to_dict() for m in request.messages], fast=True
+            [m.to_dict() for m in request.messages], fast=fast
         )
         if request.tools:
             total += estimate_text_tokens(
-                json.dumps(request.tools, ensure_ascii=False), fast=True
+                json.dumps(request.tools, ensure_ascii=False), fast=fast
             )
         if request.response_format:
             total += estimate_text_tokens(
-                json.dumps(request.response_format, ensure_ascii=False), fast=True
+                json.dumps(request.response_format, ensure_ascii=False), fast=fast
             )
         return total
 
@@ -2867,7 +2869,21 @@ class CoreLoopKernel:
         limit_tokens = int(self.policy.compact_limit_tokens or int(window * limit_ratio))
         trigger_tokens = min(max(1, trigger_tokens), window)
         limit_tokens = min(max(1, limit_tokens), trigger_tokens)
-        before_tokens = self._estimate_request_tokens(request)
+        def estimate_request_messages(messages: list[ChatMessage], *, fast: bool) -> int:
+            original_messages = request.messages
+            request.messages = messages
+            try:
+                return self._estimate_request_tokens(request, fast=fast)
+            finally:
+                request.messages = original_messages
+
+        measurement = measure_for_compaction_trigger(
+            request.messages,
+            trigger_tokens=trigger_tokens,
+            fast_estimate=lambda messages: estimate_request_messages(messages, fast=True),
+            exact_estimate=lambda messages: estimate_request_messages(messages, fast=False),
+        )
+        before_tokens = measurement.tokens
         request.metadata["estimated_prompt_tokens"] = before_tokens
         request.metadata["context_window_tokens"] = window
         request.metadata["context_compaction_trigger_tokens"] = trigger_tokens
@@ -2897,12 +2913,7 @@ class CoreLoopKernel:
         request_messages_before_compaction = list(request.messages)
 
         def estimate_compaction_tokens(messages: list[ChatMessage]) -> int:
-            original_messages = request.messages
-            request.messages = messages
-            try:
-                return self._estimate_request_tokens(request)
-            finally:
-                request.messages = original_messages
+            return estimate_request_messages(messages, fast=True)
 
         async def attempt_compaction(
             *,
