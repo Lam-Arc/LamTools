@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from lamtools_core.context_compaction_budget import (
+    DEFAULT_SUMMARY_OUTPUT_TOKENS,
     SummaryTokenBudget,
     TokenBudget,
     TokenMeasurement,
@@ -167,6 +168,8 @@ class ContextCompactionController:
         model_timeout_seconds: float | None = None,
         retry_policy: RetryPolicy | None = None,
         on_model_retry: ModelRetrySink | None = None,
+        summary_output_tokens: int | None = None,
+        safety_margin_tokens: int | None = None,
     ) -> None:
         self._llm_client = llm_client
         self._estimate_request_tokens = estimate_request_tokens
@@ -176,6 +179,8 @@ class ContextCompactionController:
         self._model_timeout_seconds = model_timeout_seconds
         self._retry_policy = retry_policy or RetryPolicy()
         self._on_model_retry = on_model_retry
+        self._summary_output_tokens = summary_output_tokens
+        self._safety_margin_tokens = safety_margin_tokens
 
     def measure(
         self,
@@ -229,14 +234,16 @@ class ContextCompactionController:
             strategy: str,
             fallback_on_terminal: bool,
         ) -> ContextCompactionResult:
-            summary_output_tokens = max(
-                256,
-                min(
-                    4096,
-                    limit_tokens // 3 if limit_tokens > 0 else 4096,
-                    max(256, model_window // 8),
-                ),
-            )
+            summary_output_tokens = self._summary_output_tokens
+            if summary_output_tokens is None:
+                summary_output_tokens = max(
+                    256,
+                    min(
+                        DEFAULT_SUMMARY_OUTPUT_TOKENS,
+                        limit_tokens // 3 if limit_tokens > 0 else DEFAULT_SUMMARY_OUTPUT_TOKENS,
+                        max(256, model_window // 8),
+                    ),
+                )
             summary_budget = SummaryTokenBudget.for_context_window(
                 context_window=model_window,
                 output_tokens=summary_output_tokens,
@@ -249,7 +256,9 @@ class ContextCompactionController:
                     else 0
                 ),
                 safety_margin_tokens=(
-                    int(model_window * 0.03) if model_window >= 8_192 else 0
+                    self._safety_margin_tokens
+                    if self._safety_margin_tokens is not None
+                    else (int(model_window * 0.03) if model_window >= 8_192 else 0)
                 ),
             )
 

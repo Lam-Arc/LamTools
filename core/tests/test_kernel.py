@@ -580,6 +580,8 @@ class TestKernelTypes:
         assert policy.context_window_tokens is None
         assert policy.compact_trigger_ratio == 0.8
         assert policy.compact_limit_ratio == 0.6
+        assert policy.compact_summary_output_tokens is None
+        assert policy.compact_safety_margin_tokens is None
         assert policy.max_identical_tool_results == 10
         assert policy.consecutive_failure_rounds_threshold == 3
         assert policy.metadata == {}

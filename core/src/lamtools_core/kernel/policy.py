@@ -46,6 +46,11 @@ class LoopPolicy:
     compact_limit_ratio: float = 0.6
     compact_trigger_tokens: int | None = None
     compact_limit_tokens: int | None = None
+    # Summary request reserves. None preserves the controller defaults; set
+    # these when a model/provider needs an explicit output cap or safety
+    # margin instead of the derived policy.
+    compact_summary_output_tokens: int | None = None
+    compact_safety_margin_tokens: int | None = None
     # Tool execution parallelism (OpenAI Codex defaults to sequential for
     # shell-safety; Agents SDK defaults to parallel with optional cap).
     # parallel_tool_calls=False (default) executes tools strictly in order.
@@ -82,6 +87,14 @@ class LoopPolicy:
     # Minimum turns since the last dream before auto-dreaming fires again.
     dream_min_turns: int = 3
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if self.compact_summary_output_tokens is not None:
+            if isinstance(self.compact_summary_output_tokens, bool) or self.compact_summary_output_tokens <= 0:
+                raise ValueError("compact_summary_output_tokens must be positive")
+        if self.compact_safety_margin_tokens is not None:
+            if isinstance(self.compact_safety_margin_tokens, bool) or self.compact_safety_margin_tokens < 0:
+                raise ValueError("compact_safety_margin_tokens cannot be negative")
 
 
 __all__ = [

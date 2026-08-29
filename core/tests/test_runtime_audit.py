@@ -11,6 +11,8 @@ def test_kernel_audit_records_effective_policy_without_arbitrary_metadata(tmp_pa
         max_identical_tool_results=7,
         identical_tool_result_window=19,
         max_tool_only_rounds_without_progress=11,
+        compact_summary_output_tokens=2048,
+        compact_safety_margin_tokens=128,
         metadata={"api_key": "must-not-leak"},
     )
 
@@ -21,4 +23,6 @@ def test_kernel_audit_records_effective_policy_without_arbitrary_metadata(tmp_pa
     assert audit["loop_policy"]["max_identical_tool_results"] == 7
     assert audit["loop_policy"]["identical_tool_result_window"] == 19
     assert audit["loop_policy"]["max_tool_only_rounds_without_progress"] == 11
+    assert audit["loop_policy"]["compact_summary_output_tokens"] == 2048
+    assert audit["loop_policy"]["compact_safety_margin_tokens"] == 128
     assert "must-not-leak" not in repr(audit)
