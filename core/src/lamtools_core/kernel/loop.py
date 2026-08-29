@@ -21,23 +21,17 @@ import logging
 import re
 import uuid
 import time as time_module
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from typing import Any, TYPE_CHECKING
 
 _logger = logging.getLogger(__name__)
 
 from lamtools_core.context_compaction import (
-    CompactionOptions,
+    ContextCompactionController,
     ContextCompactionError,
-    ContextCompactor,
-    ContextCompactionResult,
-    compaction_segment_input_limit,
 )
-from lamtools_core.context_compaction_budget import (
-    SummaryTokenBudget,
-    TokenBudget,
-    measure_for_compaction_trigger,
-)
+from lamtools_core.context_compaction_budget import TokenBudget
 from lamtools_core.event import CoreEvent, EventCategory, EventSink
 from lamtools_core.llm import ChatMessage, LLMClient, LLMRequest, LLMResponse, LLMStreamEvent, LLMToolCall
 from lamtools_core.llm.helpers import merge_tool_call_deltas, resolve_tool_calls
@@ -262,6 +256,10 @@ class CoreLoopKernel:
     backup_tool_names: tuple[str, ...] = ("write_file", "edit_file")
     completion_gate: CompletionGate | None = None
     memory_store: Any | None = None  # MemoryStoreProtocol; Any to avoid import cycle
+    # Called after the final request context is assembled and cleaned, just
+    # before the request crosses into the LLM client.  The callback is
+    # observational: failures must never prevent the actual model call.
+    model_context_sink: Callable[[RuntimeState, LLMRequest], Awaitable[None] | None] | None = field(default=None, repr=False)
     _cancel_event: asyncio.Event = field(default_factory=asyncio.Event, init=False, repr=False)
     # External cancel signal source (e.g. RuntimeTaskRegistry.get_cancel_event).
     # When set by the app layer's turn.cancel path, the kernel can detect it
@@ -553,6 +551,17 @@ class CoreLoopKernel:
                 # marker) before the request reaches the model — the shared
                 # objects in `history` keep their tags for later compactions.
                 request.messages = _strip_internal_message_metadata(request.messages)
+                if self.model_context_sink is not None:
+                    try:
+                        captured = self.model_context_sink(state, request)
+                        if captured is not None:
+                            await captured
+                    except Exception:  # noqa: BLE001 — capture must not break a run
+                        _logger.exception(
+                            "[kernel:_run] model context capture failed sid=%s step=%d",
+                            state.session_id,
+                            index,
+                        )
 
                 # 5.4 Call model — try streaming first
                 _step_start = time_module.time()
@@ -2867,12 +2876,10 @@ class CoreLoopKernel:
         if window is None or window <= 0:
             return
 
-        trigger_ratio = min(max(self.policy.compact_trigger_ratio, 0.01), 1.0)
-        limit_ratio = min(max(self.policy.compact_limit_ratio, 0.01), trigger_ratio)
-        trigger_tokens = int(self.policy.compact_trigger_tokens or int(window * trigger_ratio))
-        limit_tokens = int(self.policy.compact_limit_tokens or int(window * limit_ratio))
-        trigger_tokens = min(max(1, trigger_tokens), window)
-        limit_tokens = min(max(1, limit_tokens), trigger_tokens)
+        budget = self._resolve_compaction_budget(window)
+        trigger_tokens = budget.trigger_tokens
+        limit_tokens = budget.target_tokens
+
         def estimate_request_messages(messages: list[ChatMessage], *, fast: bool) -> int:
             original_messages = request.messages
             request.messages = messages
@@ -2881,11 +2888,33 @@ class CoreLoopKernel:
             finally:
                 request.messages = original_messages
 
-        measurement = measure_for_compaction_trigger(
+        compaction_controller = ContextCompactionController(
+            llm_client=self.llm_client,
+            estimate_request_tokens=lambda messages, fast: estimate_request_messages(
+                messages, fast=fast
+            ),
+            on_delta=lambda delta: self._emit_stream_part(
+                state,
+                part_id=f"{state.run_id}:context-compaction",
+                part_type="compaction",
+                status="running",
+                label="正在压缩上下文",
+                delta=delta,
+                transient=True,
+            ),
+            on_event=lambda payload: self._emit_compaction_part_event(state, payload),
+            model_retries=self.policy.model_retries,
+            model_timeout_seconds=self.policy.model_timeout_seconds,
+            retry_policy=self.retry_policy,
+            on_model_retry=lambda retry: self._emit_model_retry_from_event(
+                retry,
+                state=state,
+                response_index=None,
+            ),
+        )
+        measurement = compaction_controller.measure(
             request.messages,
             trigger_tokens=trigger_tokens,
-            fast_estimate=lambda messages: estimate_request_messages(messages, fast=True),
-            exact_estimate=lambda messages: estimate_request_messages(messages, fast=False),
         )
         before_tokens = measurement.tokens
         request.metadata["estimated_prompt_tokens"] = before_tokens
@@ -2915,149 +2944,24 @@ class CoreLoopKernel:
 
         before_messages = len(request.messages)
         request_messages_before_compaction = list(request.messages)
-
-        def estimate_compaction_tokens(messages: list[ChatMessage]) -> int:
-            return estimate_request_messages(messages, fast=True)
-
-        def estimate_compaction_tokens_exact(messages: list[ChatMessage]) -> int:
-            return estimate_request_messages(messages, fast=False)
-
-        async def attempt_compaction(
-            *,
-            model: str,
-            model_window: int,
-            strategy: str,
-            fallback_on_terminal: bool,
-        ) -> ContextCompactionResult:
-            summary_output_tokens = max(
-                256,
-                min(
-                    4096,
-                    limit_tokens // 3 if limit_tokens > 0 else 4096,
-                    max(256, model_window // 8),
-                ),
-            )
-            summary_budget = SummaryTokenBudget.for_context_window(
-                context_window=model_window,
-                output_tokens=summary_output_tokens,
-                # The request estimator already accounts for message framing
-                # and the compaction prompt; retain a bounded protocol reserve
-                # for provider-side envelope differences without starving
-                # small test windows.
-                protocol_tokens=(
-                    min(1024, max(0, model_window // 10))
-                    if model_window >= 8_192
-                    else 0
-                ),
-                safety_margin_tokens=(
-                    int(model_window * 0.03) if model_window >= 8_192 else 0
-                ),
-            )
-
-            async def on_compaction_delta(delta: str) -> None:
-                await self._emit_stream_part(
-                    state,
-                    part_id=f"{state.run_id}:context-compaction",
-                    part_type="compaction",
-                    status="running",
-                    label="正在压缩上下文",
-                    delta=delta,
-                    transient=True,
-                )
-
-            async def on_compaction_event(payload: dict[str, Any]) -> None:
-                event_payload = dict(payload)
-                if event_payload.get("status") == "running" and event_payload.get("delta"):
-                    return
-                if fallback_on_terminal and event_payload.get("status") in {"failed", "not_needed"}:
-                    event_payload.update(
-                        {
-                            "status": "running",
-                            "phase": "fallback",
-                            "label": "原模型压缩未完成 · 正在改用当前模型",
-                        }
-                    )
-                await self.event_sink.emit(
-                    CoreEvent(
-                        name="runtime.part",
-                        category="message",
-                        payload={
-                            "part_id": f"{state.run_id}:context-compaction",
-                            "part_type": "compaction",
-                            "execution_model": model,
-                            "strategy": strategy,
-                            **event_payload,
-                        },
-                        session_id=state.session_id,
-                        run_id=state.run_id,
-                        tags=["stream", "compaction"],
-                    )
-                )
-
-            compactor = ContextCompactor(
-                llm_client=self.llm_client,
-                model=model,
-                timeout=request.timeout,
-                input_limit_tokens=compaction_segment_input_limit(model_window),
-                estimate_tokens=estimate_compaction_tokens,
-                estimate_exact_tokens=estimate_compaction_tokens_exact,
-                summary_budget=summary_budget,
-                on_delta=on_compaction_delta,
-                on_event=on_compaction_event,
-                model_retries=self.policy.model_retries,
-                model_timeout_seconds=self.policy.model_timeout_seconds,
-                retry_policy=self.retry_policy,
-                on_model_retry=lambda retry: self._emit_model_retry_from_event(
-                    retry,
-                    state=state,
-                    response_index=None,
-                ),
-            )
-            # The kernel already measured the full request, including tools
-            # and response format, before selecting this attempt.  The
-            # controller still receives the automatic option so manual and
-            # automatic entrypoints share the same request/pipeline shape.
-            budget_window = max(1, model_window, limit_tokens)
-            return await compactor.compact(
-                list(request.messages),
-                budget=TokenBudget(
-                    context_window=budget_window,
-                    trigger_tokens=max(1, limit_tokens),
-                    target_tokens=limit_tokens,
-                ),
-                options=CompactionOptions(force=False, target_tokens=limit_tokens),
-                trigger="model_switch" if model_switched else "auto",
-                _skip_trigger_check=True,
-            )
-
         allow_previous = request.metadata.get("allow_previous_model_compaction") is not False
-        used_previous_model = (
-            model_switched
-            and allow_previous
-            and previous_window > 0
-            and before_tokens <= previous_window
+        execution = await compaction_controller.compact(
+            list(request.messages),
+            budget=budget,
+            timeout=request.timeout,
+            current_model=current_model,
+            previous_model=previous_model,
+            previous_window=previous_window,
+            model_switched=model_switched,
+            allow_previous_model=allow_previous,
+            trigger="model_switch" if model_switched else "auto",
+            measurement=measurement,
         )
-        if used_previous_model:
-            result = await attempt_compaction(
-                model=previous_model,
-                model_window=previous_window,
-                strategy="previous_model_once",
-                fallback_on_terminal=True,
-            )
-        else:
-            result = None
-        if result is None or result.status != "compacted":
-            result = await attempt_compaction(
-                model=current_model,
-                model_window=window,
-                strategy="segmented_current_model" if model_switched else "current_model",
-                fallback_on_terminal=False,
-            )
-            execution_model = current_model
-            compaction_strategy = "segmented_current_model" if model_switched else "current_model"
-        else:
-            execution_model = previous_model
-            compaction_strategy = "previous_model_once"
+        result = execution.result
+        execution_model = execution.execution_model
+        compaction_strategy = execution.strategy
+        if result is None:
+            return
         if result.status == "failed":
             raise ContextCompactionError(
                 str(result.display_payload.get("message") or "Context compaction failed")
@@ -3177,6 +3081,41 @@ class CoreLoopKernel:
             trigger="auto",
             compacted_message_ids=_message_reference_ids(result.compacted_messages),
             retained_message_ids=_message_reference_ids(result.retained_messages),
+        )
+
+    def _resolve_compaction_budget(self, window: int) -> TokenBudget:
+        """Resolve user-facing ratio policy into concrete compaction limits."""
+        trigger_ratio = min(max(self.policy.compact_trigger_ratio, 0.01), 1.0)
+        limit_ratio = min(max(self.policy.compact_limit_ratio, 0.01), trigger_ratio)
+        trigger_tokens = int(
+            self.policy.compact_trigger_tokens or int(window * trigger_ratio)
+        )
+        limit_tokens = int(
+            self.policy.compact_limit_tokens or int(window * limit_ratio)
+        )
+        return TokenBudget(
+            context_window=window,
+            trigger_tokens=min(max(1, trigger_tokens), window),
+            target_tokens=min(max(1, limit_tokens), min(max(1, trigger_tokens), window)),
+        )
+
+    async def _emit_compaction_part_event(
+        self, state: RuntimeState, payload: dict[str, Any]
+    ) -> None:
+        """Adapt controller progress payloads to kernel runtime-part events."""
+        await self.event_sink.emit(
+            CoreEvent(
+                name="runtime.part",
+                category="message",
+                payload={
+                    "part_id": f"{state.run_id}:context-compaction",
+                    "part_type": "compaction",
+                    **payload,
+                },
+                session_id=state.session_id,
+                run_id=state.run_id,
+                tags=["stream", "compaction"],
+            )
         )
 
     async def _emit_state_event(self, state: RuntimeState, name: str, message: str) -> None:

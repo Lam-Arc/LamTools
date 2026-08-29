@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Any
 
 from lamtools_core.context_compaction_budget import (
     SummaryTokenBudget,
     TokenBudget,
+    TokenMeasurement,
     measure_for_compaction_trigger,
 )
 from lamtools_core.llm import ChatMessage, LLMClient
@@ -34,11 +35,21 @@ from .models import (
     ContextCompactionRequest,
     ContextCompactionResult,
 )
-from .planner import select_context_compaction_layout
+from .planner import compaction_segment_input_limit, select_context_compaction_layout
 from .summarizer import (
     emit_event_sink as _emit_event_sink,
     summarize_context_messages,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class CompactionExecution:
+    """A request-level compaction decision plus the pipeline result."""
+
+    result: ContextCompactionResult | None
+    measurement: TokenMeasurement
+    execution_model: str = ""
+    strategy: str = ""
 
 
 class ContextCompactor:
@@ -134,6 +145,210 @@ class ContextCompactor:
         if self._pipeline is not None:
             return await self._pipeline(request)
         return await compact_context(request)
+
+
+class ContextCompactionController:
+    """Coordinate request measurement and model-selection fallback.
+
+    The controller knows how to invoke the context pipeline, but it does not
+    know runtime state, persistence, or kernel events.  Callers provide a
+    request-level estimator so tool definitions and response-format overhead
+    participate in the same trigger decision as message content.
+    """
+
+    def __init__(
+        self,
+        *,
+        llm_client: LLMClient | None,
+        estimate_request_tokens: Callable[[list[ChatMessage], bool], int],
+        on_delta: CompactionDeltaSink | None = None,
+        on_event: CompactionEventSink | None = None,
+        model_retries: int = 1,
+        model_timeout_seconds: float | None = None,
+        retry_policy: RetryPolicy | None = None,
+        on_model_retry: ModelRetrySink | None = None,
+    ) -> None:
+        self._llm_client = llm_client
+        self._estimate_request_tokens = estimate_request_tokens
+        self._on_delta = on_delta
+        self._on_event = on_event
+        self._model_retries = model_retries
+        self._model_timeout_seconds = model_timeout_seconds
+        self._retry_policy = retry_policy or RetryPolicy()
+        self._on_model_retry = on_model_retry
+
+    def measure(
+        self,
+        messages: list[ChatMessage],
+        *,
+        trigger_tokens: int,
+    ) -> TokenMeasurement:
+        """Measure a full request using the shared safe trigger policy."""
+        return measure_for_compaction_trigger(
+            messages,
+            trigger_tokens=trigger_tokens,
+            fast_estimate=lambda current: self._estimate_request_tokens(
+                list(current), True
+            ),
+            exact_estimate=lambda current: self._estimate_request_tokens(
+                list(current), False
+            ),
+        )
+
+    async def compact(
+        self,
+        messages: list[ChatMessage],
+        *,
+        budget: TokenBudget,
+        timeout: float | None,
+        current_model: str,
+        previous_model: str = "",
+        previous_window: int = 0,
+        model_switched: bool = False,
+        allow_previous_model: bool = True,
+        trigger: str = "auto",
+        measurement: TokenMeasurement | None = None,
+    ) -> CompactionExecution:
+        """Run bounded compaction, retrying once with the current model."""
+        resolved_measurement = measurement or self.measure(
+            messages,
+            trigger_tokens=budget.trigger_tokens,
+        )
+        if resolved_measurement.tokens < budget.trigger_tokens:
+            return CompactionExecution(
+                result=None,
+                measurement=resolved_measurement,
+            )
+
+        limit_tokens = budget.target_tokens
+
+        async def attempt(
+            *,
+            model: str,
+            model_window: int,
+            strategy: str,
+            fallback_on_terminal: bool,
+        ) -> ContextCompactionResult:
+            summary_output_tokens = max(
+                256,
+                min(
+                    4096,
+                    limit_tokens // 3 if limit_tokens > 0 else 4096,
+                    max(256, model_window // 8),
+                ),
+            )
+            summary_budget = SummaryTokenBudget.for_context_window(
+                context_window=model_window,
+                output_tokens=summary_output_tokens,
+                # Request-level estimators already account for message framing
+                # and the compaction prompt. Keep a bounded provider reserve
+                # for larger production windows without starving small tests.
+                protocol_tokens=(
+                    min(1024, max(0, model_window // 10))
+                    if model_window >= 8_192
+                    else 0
+                ),
+                safety_margin_tokens=(
+                    int(model_window * 0.03) if model_window >= 8_192 else 0
+                ),
+            )
+
+            async def on_attempt_event(payload: dict[str, Any]) -> None:
+                event_payload = dict(payload)
+                # Deltas are delivered through on_delta as transient stream
+                # parts; do not duplicate them as regular progress events.
+                if event_payload.get("status") == "running" and event_payload.get("delta"):
+                    return
+                if fallback_on_terminal and event_payload.get("status") in {
+                    "failed",
+                    "not_needed",
+                }:
+                    event_payload.update(
+                        {
+                            "status": "running",
+                            "phase": "fallback",
+                            "label": "原模型压缩未完成 · 正在改用当前模型",
+                        }
+                    )
+                await _emit_event_sink(
+                    self._on_event,
+                    {
+                        "execution_model": model,
+                        "strategy": strategy,
+                        **event_payload,
+                    },
+                )
+
+            fast_estimate = lambda current: self._estimate_request_tokens(
+                list(current), True
+            )
+            exact_estimate = lambda current: self._estimate_request_tokens(
+                list(current), False
+            )
+            compactor = ContextCompactor(
+                llm_client=self._llm_client,
+                model=model,
+                timeout=timeout,
+                input_limit_tokens=compaction_segment_input_limit(model_window),
+                estimate_tokens=fast_estimate,
+                estimate_exact_tokens=exact_estimate,
+                summary_budget=summary_budget,
+                on_delta=self._on_delta,
+                on_event=on_attempt_event,
+                model_retries=self._model_retries,
+                model_timeout_seconds=self._model_timeout_seconds,
+                retry_policy=self._retry_policy,
+                on_model_retry=self._on_model_retry,
+            )
+            attempt_window = max(1, model_window, limit_tokens)
+            return await compactor.compact(
+                list(messages),
+                budget=TokenBudget(
+                    context_window=attempt_window,
+                    trigger_tokens=max(1, limit_tokens),
+                    target_tokens=limit_tokens,
+                ),
+                options=CompactionOptions(force=False, target_tokens=limit_tokens),
+                trigger=trigger,
+                _skip_trigger_check=True,
+            )
+
+        used_previous_model = (
+            model_switched
+            and allow_previous_model
+            and previous_window > 0
+            and resolved_measurement.tokens <= previous_window
+        )
+        if used_previous_model:
+            result = await attempt(
+                model=previous_model,
+                model_window=previous_window,
+                strategy="previous_model_once",
+                fallback_on_terminal=True,
+            )
+        else:
+            result = None
+
+        if result is None or result.status != "compacted":
+            result = await attempt(
+                model=current_model,
+                model_window=budget.context_window,
+                strategy=(
+                    "segmented_current_model" if model_switched else "current_model"
+                ),
+                fallback_on_terminal=False,
+            )
+            execution_model = current_model
+            strategy = "segmented_current_model" if model_switched else "current_model"
+        else:
+            execution_model = previous_model
+            strategy = "previous_model_once"
+        return CompactionExecution(
+            result=result,
+            measurement=resolved_measurement,
+            execution_model=execution_model,
+            strategy=strategy,
+        )
 
 
 async def compact_context(request: ContextCompactionRequest) -> ContextCompactionResult:
@@ -418,4 +633,9 @@ async def _emit_compaction_event(
     )
 
 
-__all__ = ["ContextCompactor", "compact_context"]
+__all__ = [
+    "CompactionExecution",
+    "ContextCompactionController",
+    "ContextCompactor",
+    "compact_context",
+]

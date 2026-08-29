@@ -38,13 +38,19 @@ from .planner import (
 )
 from .fitter import CompactionFitter, MAX_FIT_ATTEMPTS, truncate_text_to_tokens
 from .summarizer import summarize_context_messages
-from .controller import ContextCompactor, compact_context
+from .controller import (
+    CompactionExecution,
+    ContextCompactionController,
+    ContextCompactor,
+    compact_context,
+)
 
 
 __all__ = [
     "COMPACTION_PREFIX",
     "COMPACTION_PROMPT",
     "CompactionBudgetExceeded",
+    "CompactionExecution",
     "CompactionFitInput",
     "CompactionFitResult",
     "CompactionFitter",
@@ -53,6 +59,7 @@ __all__ = [
     "CompactionPlanner",
     "CompactionSummary",
     "ContextCompactionError",
+    "ContextCompactionController",
     "ContextCompactor",
     "ContextCompactionRequest",
     "ContextCompactionResult",
