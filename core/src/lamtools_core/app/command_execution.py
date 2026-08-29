@@ -10,6 +10,7 @@ from lamtools_core.context_compaction import (
     compact_context,
     compaction_segment_input_limit,
 )
+from lamtools_core.context_compaction_budget import SummaryTokenBudget
 from lamtools_core.llm import ChatMessage, LLMClient, LLMToolCall
 from lamtools_core.mem import MemoryStoreProtocol
 from lamtools_core.mem.dreaming import dream_session
@@ -76,6 +77,13 @@ async def compact_runtime_history(
     existing_summary = str(compaction_meta.get("summary") or "")
     raw_history = await runtime_state_store.get_history(thread_id)
     messages = [message for item in raw_history if (message := _chat_message_from_dict(item)) is not None]
+    summary_budget = None
+    if context_window_tokens > 0:
+        summary_budget = SummaryTokenBudget.for_context_window(
+            context_window=context_window_tokens,
+            output_tokens=max(256, min(4096, MANUAL_COMPACTION_LIMIT_TOKENS // 3)),
+            protocol_tokens=min(1024, max(0, context_window_tokens // 10)),
+        )
     result = await compact_context(
         ContextCompactionRequest(
             trigger="manual",
@@ -84,6 +92,7 @@ async def compact_runtime_history(
             model=active_model,
             limit_tokens=MANUAL_COMPACTION_LIMIT_TOKENS,
             input_limit_tokens=compaction_segment_input_limit(context_window_tokens),
+            summary_budget=summary_budget,
             existing_summary=existing_summary,
             on_event=on_event,
         )

@@ -14,8 +14,10 @@ from lamtools_core.context_compaction import (
     compact_context,
     compress_structured_compaction_summary,
     select_context_compaction_layout,
+    summarize_context_messages,
     truncate_text_to_tokens,
 )
+from lamtools_core.context_compaction_budget import SummaryTokenBudget
 from lamtools_core.llm import ChatMessage, LLMResponse, LLMStreamEvent, LLMToolCall
 from lamtools_core.tokens import estimate_message_tokens, estimate_text_tokens
 
@@ -461,6 +463,40 @@ async def test_compact_context_segments_oversized_history_within_model_input_lim
     assert result.after_tokens <= 1200
     assert any(event["phase"] == "segment" for event in progress)
     assert progress[-1]["status"] == "compacted"
+
+
+@pytest.mark.asyncio
+async def test_summary_budget_limits_segment_and_merge_requests():
+    llm = _SegmentingCompactionClient()
+    budget = SummaryTokenBudget(
+        context_window=2_000,
+        output_tokens=200,
+        protocol_tokens=100,
+        safety_margin_tokens=0,
+    )
+    messages = [
+        ChatMessage(role="user", content=f"segment {index} " + ("x" * 300))
+        for index in range(20)
+    ]
+
+    summary, segment_count = await summarize_context_messages(
+        messages,
+        llm_client=llm,
+        model="mock-model",
+        limit_tokens=1_200,
+        input_limit_tokens=99_999,
+        summary_budget=budget,
+    )
+
+    assert summary.startswith(COMPACTION_PREFIX)
+    assert segment_count > 1
+    assert len(llm.requests) > segment_count
+    assert all(
+        estimate_message_tokens([message.to_dict() for message in request.messages])
+        <= budget.max_input_tokens
+        for request in llm.requests
+    )
+    assert all(request.max_tokens == budget.output_tokens for request in llm.requests)
 
 
 @pytest.mark.asyncio

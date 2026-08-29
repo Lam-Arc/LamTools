@@ -10,6 +10,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from typing import Any
 
+from lamtools_core.context_compaction_budget import SummaryTokenBudget
 from lamtools_core.llm import ChatMessage, LLMClient, LLMRequest
 from lamtools_core.llm.policy import RetryPolicy
 from lamtools_core.llm.retry import ModelRetryExhausted, ModelRetrySink, complete_with_retry, stream_with_retry
@@ -90,6 +91,7 @@ class ContextCompactionRequest:
     preserve_latest_user: bool = True
     estimate_tokens: CompactionTokenEstimator | None = None
     estimate_exact_tokens: CompactionTokenEstimator | None = None
+    summary_budget: SummaryTokenBudget | None = None
     model_retries: int = 1
     model_timeout_seconds: float | None = None
     retry_policy: RetryPolicy = field(default_factory=RetryPolicy)
@@ -436,6 +438,7 @@ async def compact_context(request: ContextCompactionRequest) -> ContextCompactio
             timeout=request.timeout,
             limit_tokens=request.limit_tokens,
             input_limit_tokens=request.input_limit_tokens,
+            summary_budget=request.summary_budget,
             existing_summary=request.existing_summary,
             on_delta=request.on_delta,
             on_event=lambda payload: _emit_compaction_event(request, payload),
@@ -710,6 +713,7 @@ async def summarize_context_messages(
     timeout: float | None = None,
     limit_tokens: int = 4096,
     input_limit_tokens: int = 0,
+    summary_budget: SummaryTokenBudget | None = None,
     existing_summary: str = "",
     on_delta: CompactionDeltaSink | None = None,
     on_event: CompactionEventSink | None = None,
@@ -719,9 +723,17 @@ async def summarize_context_messages(
     on_model_retry: ModelRetrySink | None = None,
 ) -> tuple[str, int]:
     """Return a structured summary and the number of source segments used."""
+    summary_input_limit = (
+        summary_budget.max_input_tokens
+        if summary_budget is not None
+        else input_limit_tokens
+    )
+    summary_output_tokens = _summary_output_limit(limit_tokens)
+    if summary_budget is not None:
+        summary_output_tokens = min(summary_output_tokens, summary_budget.output_tokens)
     chunks = _split_compaction_messages(
         messages,
-        input_limit_tokens=input_limit_tokens,
+        input_limit_tokens=summary_input_limit,
         existing_summary=existing_summary,
     )
     segment_count = len(chunks)
@@ -743,8 +755,8 @@ async def summarize_context_messages(
             llm_client=llm_client,
             model=model,
             timeout=timeout,
-            output_tokens=_summary_output_limit(limit_tokens),
-            input_limit_tokens=input_limit_tokens,
+            output_tokens=summary_output_tokens,
+            input_limit_tokens=summary_input_limit,
             existing_summary=existing_summary if index == 1 else "",
             on_delta=on_delta,
             on_event=on_event,
@@ -773,11 +785,11 @@ async def summarize_context_messages(
         ]
         merge_chunks = _split_compaction_messages(
             summary_messages,
-            input_limit_tokens=input_limit_tokens,
+            input_limit_tokens=summary_input_limit,
             existing_summary="",
         )
         if len(merge_chunks) >= len(summaries):
-            merge_chunks = _pair_compaction_messages(summary_messages, input_limit_tokens)
+            merge_chunks = _pair_compaction_messages(summary_messages, summary_input_limit)
         await _emit_event_sink(
             on_event,
             {
@@ -797,8 +809,8 @@ async def summarize_context_messages(
                     llm_client=llm_client,
                     model=model,
                     timeout=timeout,
-                    output_tokens=_summary_output_limit(limit_tokens),
-                    input_limit_tokens=input_limit_tokens,
+                    output_tokens=summary_output_tokens,
+                    input_limit_tokens=summary_input_limit,
                     existing_summary="",
                     on_delta=on_delta,
                     on_event=on_event,

@@ -17,6 +17,9 @@ from lamtools_core.tokens import estimate_message_tokens
 
 
 FAST_ESTIMATE_SAFETY_FACTOR = 8.0
+DEFAULT_SUMMARY_OUTPUT_TOKENS = 4_096
+DEFAULT_SUMMARY_PROTOCOL_TOKENS = 1_024
+DEFAULT_SUMMARY_SAFETY_RATIO = 0.03
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,6 +87,59 @@ class TokenBudget:
 
 
 @dataclass(frozen=True, slots=True)
+class SummaryTokenBudget:
+    """Input/output budget for one model-backed summary request."""
+
+    context_window: int
+    output_tokens: int
+    protocol_tokens: int
+    safety_margin_tokens: int
+
+    def __post_init__(self) -> None:
+        if self.context_window <= 0:
+            raise ValueError("context_window must be positive")
+        if self.output_tokens < 0:
+            raise ValueError("output_tokens cannot be negative")
+        if self.protocol_tokens < 0:
+            raise ValueError("protocol_tokens cannot be negative")
+        if self.safety_margin_tokens < 0:
+            raise ValueError("safety_margin_tokens cannot be negative")
+
+    @property
+    def max_input_tokens(self) -> int:
+        """Return the input budget after output and protocol reserves."""
+        return max(
+            0,
+            self.context_window
+            - self.output_tokens
+            - self.protocol_tokens
+            - self.safety_margin_tokens,
+        )
+
+    @classmethod
+    def for_context_window(
+        cls,
+        *,
+        context_window: int,
+        output_tokens: int = DEFAULT_SUMMARY_OUTPUT_TOKENS,
+        protocol_tokens: int = DEFAULT_SUMMARY_PROTOCOL_TOKENS,
+        safety_margin_tokens: int | None = None,
+    ) -> "SummaryTokenBudget":
+        """Build a conservative budget with a three-percent safety reserve."""
+        resolved_safety = (
+            int(context_window * DEFAULT_SUMMARY_SAFETY_RATIO)
+            if safety_margin_tokens is None
+            else safety_margin_tokens
+        )
+        return cls(
+            context_window=context_window,
+            output_tokens=output_tokens,
+            protocol_tokens=protocol_tokens,
+            safety_margin_tokens=resolved_safety,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class TokenMeasurement:
     """A token estimate and whether it used the exact estimator."""
 
@@ -130,7 +186,11 @@ def measure_for_compaction_trigger(
 
 
 __all__ = [
+    "DEFAULT_SUMMARY_OUTPUT_TOKENS",
+    "DEFAULT_SUMMARY_PROTOCOL_TOKENS",
+    "DEFAULT_SUMMARY_SAFETY_RATIO",
     "FAST_ESTIMATE_SAFETY_FACTOR",
+    "SummaryTokenBudget",
     "TokenBudget",
     "TokenMeasurement",
     "measure_for_compaction_trigger",

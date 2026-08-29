@@ -33,7 +33,10 @@ from lamtools_core.context_compaction import (
     compact_context,
     compaction_segment_input_limit,
 )
-from lamtools_core.context_compaction_budget import measure_for_compaction_trigger
+from lamtools_core.context_compaction_budget import (
+    SummaryTokenBudget,
+    measure_for_compaction_trigger,
+)
 from lamtools_core.event import CoreEvent, EventCategory, EventSink
 from lamtools_core.llm import ChatMessage, LLMClient, LLMRequest, LLMResponse, LLMStreamEvent, LLMToolCall
 from lamtools_core.llm.helpers import merge_tool_call_deltas, resolve_tool_calls
@@ -2925,6 +2928,31 @@ class CoreLoopKernel:
             strategy: str,
             fallback_on_terminal: bool,
         ) -> ContextCompactionResult:
+            summary_output_tokens = max(
+                256,
+                min(
+                    4096,
+                    limit_tokens // 3 if limit_tokens > 0 else 4096,
+                    max(256, model_window // 8),
+                ),
+            )
+            summary_budget = SummaryTokenBudget.for_context_window(
+                context_window=model_window,
+                output_tokens=summary_output_tokens,
+                # The request estimator already accounts for message framing
+                # and the compaction prompt; retain a bounded protocol reserve
+                # for provider-side envelope differences without starving
+                # small test windows.
+                protocol_tokens=(
+                    min(1024, max(0, model_window // 10))
+                    if model_window >= 8_192
+                    else 0
+                ),
+                safety_margin_tokens=(
+                    int(model_window * 0.03) if model_window >= 8_192 else 0
+                ),
+            )
+
             async def on_compaction_delta(delta: str) -> None:
                 await self._emit_stream_part(
                     state,
@@ -2976,6 +3004,7 @@ class CoreLoopKernel:
                     input_limit_tokens=compaction_segment_input_limit(model_window),
                     estimate_tokens=estimate_compaction_tokens,
                     estimate_exact_tokens=estimate_compaction_tokens_exact,
+                    summary_budget=summary_budget,
                     on_delta=on_compaction_delta,
                     on_event=on_compaction_event,
                     model_retries=self.policy.model_retries,
