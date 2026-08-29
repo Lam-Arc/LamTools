@@ -12,6 +12,7 @@ from lamtools_core.context_compaction import (
     CompactionFitter,
     CompactionOptions,
     CompactionSummary,
+    ContextCompactionController,
     ContextCompactor,
     ContextCompactionRequest,
     compact_context,
@@ -297,6 +298,61 @@ async def test_context_compactor_auto_waits_for_trigger_but_force_bypasses_it():
 
     assert forced is not None
     assert forced.trigger == "manual"
+
+
+@pytest.mark.asyncio
+async def test_context_controller_owns_trigger_and_reports_execution_metadata():
+    def estimate_request(messages: list[ChatMessage], fast: bool) -> int:
+        return estimate_message_tokens(
+            [message.to_dict() for message in messages],
+            fast=fast,
+        )
+
+    controller = ContextCompactionController(
+        llm_client=_CompactionClient(),
+        estimate_request_tokens=estimate_request,
+    )
+    budget = TokenBudget(context_window=12_000, trigger_tokens=1_200, target_tokens=1_200)
+
+    execution = await controller.compact(
+        [
+            ChatMessage(role="user", content="old request " + ("x" * 6_000)),
+            ChatMessage(role="assistant", content="old result " + ("y" * 6_000)),
+            ChatMessage(role="user", content="latest request"),
+        ],
+        budget=budget,
+        timeout=None,
+        current_model="mock-model",
+    )
+
+    assert execution.result is not None
+    assert execution.result.status == "compacted"
+    assert execution.execution_model == "mock-model"
+    assert execution.strategy == "current_model"
+    assert execution.measurement.exact is True
+
+
+@pytest.mark.asyncio
+async def test_context_controller_skips_small_request_without_calling_pipeline():
+    client = _CompactionClient()
+    controller = ContextCompactionController(
+        llm_client=client,
+        estimate_request_tokens=lambda messages, fast: estimate_message_tokens(
+            [message.to_dict() for message in messages],
+            fast=fast,
+        ),
+    )
+
+    execution = await controller.compact(
+        [ChatMessage(role="user", content="small request")],
+        budget=TokenBudget(context_window=8_000, trigger_tokens=8_000, target_tokens=1_200),
+        timeout=None,
+        current_model="mock-model",
+    )
+
+    assert execution.result is None
+    assert execution.measurement.exact is False
+    assert client.last_request is None
 
 
 @pytest.mark.asyncio
