@@ -1161,11 +1161,28 @@ def _line_is_in_numbered_sections(lines: list[str], index: int, numbers: set[int
 
 
 def truncate_text_to_tokens(text: str, max_tokens: int) -> str:
-    if estimate_text_tokens(text) <= max_tokens:
-        return text
     if max_tokens <= 0:
         return ""
-    return text[: max_tokens * 3] + "\n...[compaction summary truncated to fit budget]"
+    if estimate_text_tokens(text) <= max_tokens:
+        return text
+
+    marker = "\n...[compaction summary truncated to fit budget]"
+    marker_tokens = estimate_text_tokens(marker)
+    if marker_tokens >= max_tokens:
+        marker = ""
+        marker_tokens = 0
+
+    available_tokens = max_tokens - marker_tokens
+    low = 0
+    high = len(text)
+    while low < high:
+        middle = (low + high + 1) // 2
+        if estimate_text_tokens(text[:middle]) <= available_tokens:
+            low = middle
+        else:
+            high = middle - 1
+
+    return f"{text[:low]}{marker}"
 
 
 __all__ = [

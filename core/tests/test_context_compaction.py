@@ -10,9 +10,10 @@ from lamtools_core.context_compaction import (
     compact_context,
     compress_structured_compaction_summary,
     select_context_compaction_layout,
+    truncate_text_to_tokens,
 )
 from lamtools_core.llm import ChatMessage, LLMResponse, LLMStreamEvent, LLMToolCall
-from lamtools_core.tokens import estimate_message_tokens
+from lamtools_core.tokens import estimate_message_tokens, estimate_text_tokens
 
 
 class _CompactionClient:
@@ -854,3 +855,41 @@ async def test_resume_boundary_restores_recent_tail():
         "recent answer",
         "latest request",
     ]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "a" * 10_000,
+        "中" * 10_000,
+        "🙂" * 3_000,
+        "abc中文🙂" * 1_000,
+    ],
+    ids=["ascii", "cjk", "emoji", "mixed"],
+)
+def test_truncate_never_exceeds_token_limit(text: str):
+    result = truncate_text_to_tokens(text, 100)
+
+    assert estimate_text_tokens(result) <= 100
+    assert len(result) < len(text)
+
+
+def test_truncate_returns_original_text_when_already_within_budget():
+    assert truncate_text_to_tokens("abc", 100) == "abc"
+
+
+def test_truncate_returns_empty_text_for_zero_budget():
+    assert truncate_text_to_tokens("abc", 0) == ""
+
+
+def test_truncate_budget_includes_marker_when_marker_fits():
+    result = truncate_text_to_tokens("a" * 10_000, 20)
+
+    assert estimate_text_tokens(result) <= 20
+    assert "compaction summary truncated to fit budget" in result
+
+
+def test_truncate_omits_marker_when_marker_cannot_fit():
+    result = truncate_text_to_tokens("a" * 10_000, 1)
+
+    assert estimate_text_tokens(result) <= 1
