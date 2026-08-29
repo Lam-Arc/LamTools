@@ -10,11 +10,13 @@ import {
   writeStoredCoreThinkingMode,
   type CoreExecutionModelSource,
   type CoreExecutionProviderSource,
+  type CorePermissionPreset,
   type CoreSelectOption,
   type CoreThinkingLabels,
   type CoreThinkingMode,
   type CoreThinkingModeOption,
   type CoreThinkingPayload,
+  normalizeCorePermissionPreset,
 } from '../composer/execution'
 
 export interface CoreExecutionControlsStorage {
@@ -34,6 +36,7 @@ export interface CoreExecutionControlsStateInitial {
   thinkingMode?: CoreThinkingMode
   shallowThinkingEnabled?: boolean
   activeMode?: string
+  permissionPreset?: CorePermissionPreset
 }
 
 export interface CoreExecutionControlsStateLabels {
@@ -54,6 +57,7 @@ export interface UseCoreExecutionControlsStateOptions<
   initial?: CoreExecutionControlsStateInitial
   labels?: CoreExecutionControlsStateLabels
   onModelSelected?(model: TModel): void | Promise<void>
+  onPermissionPresetSelected?(preset: CorePermissionPreset): void | Promise<void>
 }
 
 export interface CoreExecutionControlsState<TModel extends CoreExecutionModelSource, TProvider extends CoreExecutionProviderSource> {
@@ -61,6 +65,7 @@ export interface CoreExecutionControlsState<TModel extends CoreExecutionModelSou
   selectedThinkingMode: Ref<CoreThinkingMode>
   shallowThinkingEnabled: Ref<boolean>
   activeMode: Ref<string>
+  permissionPreset: Ref<CorePermissionPreset>
   modelOptions: ComputedRef<CoreSelectOption[]>
   thinkingModeOptions: ComputedRef<CoreThinkingModeOption[]>
   activeModel: ComputedRef<TModel | null>
@@ -69,6 +74,8 @@ export interface CoreExecutionControlsState<TModel extends CoreExecutionModelSou
   selectModel(modelId: string): void
   selectThinkingMode(mode: string): void
   selectMode(mode: string): void
+  selectPermissionPreset(preset: string): void
+  restorePermissionPreset(preset: unknown): void
   turnOptions(): Record<string, unknown>
 }
 
@@ -96,6 +103,7 @@ export function useCoreExecutionControlsState<
     options.initial?.shallowThinkingEnabled === true,
   ))
   const activeMode = ref(options.initial?.activeMode || 'execute')
+  const permissionPreset = ref<CorePermissionPreset>(normalizeCorePermissionPreset(options.initial?.permissionPreset))
   const activeModel = computed(() => {
     const configuredDefault = options.defaultModel.value
     const currentDefault = configuredDefault
@@ -185,6 +193,26 @@ export function useCoreExecutionControlsState<
     try { options.storage?.setItem(storageKeys.activeMode, mode) } catch { /* noop */ }
   }
 
+  function selectPermissionPreset(preset: string): void {
+    const normalized = normalizeCorePermissionPreset(preset)
+    if (permissionPreset.value === normalized) return
+    permissionPreset.value = normalized
+    try {
+      const result = options.onPermissionPresetSelected?.(normalized)
+      if (result && typeof (result as Promise<void>).catch === 'function') {
+        void (result as Promise<void>).catch(() => {
+          // Persistence is product-owned; keep the local Composer selection.
+        })
+      }
+    } catch {
+      // Keep the local selection even when the host persistence callback fails.
+    }
+  }
+
+  function restorePermissionPreset(preset: unknown): void {
+    permissionPreset.value = normalizeCorePermissionPreset(preset)
+  }
+
   // Restore persisted activeMode on mount
   try {
     const stored = options.storage?.getItem(storageKeys.activeMode)
@@ -196,6 +224,7 @@ export function useCoreExecutionControlsState<
     selectedThinkingMode,
     shallowThinkingEnabled,
     activeMode,
+    permissionPreset,
     modelOptions,
     thinkingModeOptions,
     activeModel,
@@ -204,6 +233,8 @@ export function useCoreExecutionControlsState<
     selectModel,
     selectThinkingMode,
     selectMode,
+    selectPermissionPreset,
+    restorePermissionPreset,
     turnOptions: () => ({
       ...payload.value,
       ...(activeModel.value?.id ? { model_id: activeModel.value.id } : {}),
@@ -211,6 +242,7 @@ export function useCoreExecutionControlsState<
         ? { context_window_tokens: Number(activeModel.value?.context_window) }
         : {}),
       active_mode: activeMode.value,
+      permission_preset: permissionPreset.value,
     }),
   }
 }

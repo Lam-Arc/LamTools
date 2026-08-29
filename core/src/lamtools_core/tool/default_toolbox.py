@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import inspect
 from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
@@ -26,10 +27,6 @@ from lamtools_core.tool.mcp_tools import MCPToolCaller, execute_mcp_tool_call
 from lamtools_core.tool.permission import ASK_USER, AUTO_ALLOW, HARD_BLOCK, PermissionTier
 from lamtools_core.tool.web_tools import make_web_fetch_handler
 from lamtools_core.tool.search import build_web_search_handler
-from lamtools_core.tool.workflow_build_tools import (
-    workflow_build_tool_handlers,
-    workflow_build_tool_specs,
-)
 from lamtools_core.tool.workspace_files import (
     DEFAULT_MAX_LIST_ITEMS,
     DEFAULT_MAX_SEARCH_RESULTS,
@@ -592,7 +589,7 @@ def core_model_tools(
                     "description": spec.description,
                     "strict": True,
                     # Every model-facing function is advertised as strict.
-                    # Normalize injected/durable/workflow schemas here as well
+                    # Normalize injected, durable, and plugin schemas here as well
                     # as the built-in schemas so every property is required,
                     # optional values are nullable, and objects reject extras.
                     "parameters": strict_tool_schema(spec.input_schema),
@@ -609,8 +606,8 @@ def strict_tool_schema(schema: dict[str, Any]) -> dict[str, Any]:
     every declared property to be required.  Tool sources are intentionally
     allowed to use ordinary JSON Schema (including optional fields), so this
     adapter also converts optional fields to nullable fields.  The final
-    normalization is the single guard for built-in, plugin, MCP, durable, and
-    workflow tools.
+    normalization is the single guard for built-in, plugin, MCP, and durable
+    tools.
     """
 
     normalized = deepcopy(schema) if isinstance(schema, dict) else {}
@@ -643,8 +640,8 @@ def strict_tool_schema(schema: dict[str, Any]) -> dict[str, Any]:
             node["anyOf"] = [original, {"type": "null"}]
         else:
             # A property without a type is not a valid strict schema.  Use a
-            # scalar fallback for third-party/generic declarations; workflow
-            # schemas that genuinely need other types declare them explicitly.
+            # scalar fallback for third-party/generic declarations; schemas
+            # that genuinely need other types declare them explicitly.
             node["type"] = ["string", "null"]
 
     def infer_type(node: dict[str, Any]) -> None:
@@ -872,16 +869,18 @@ class CoreToolbox:
         operation_executor: OperationExecutor | None = None,
         enable_goal_tool: bool = False,
         enable_arrange_tool: bool = False,
-        workflow_build: bool = False,
         imagegen_config: dict | None = None,
         active_tier: "PermissionMode | None" = None,
         tier_tools: "TierTools | None" = None,
         load_tools: LoadTools | None = None,
         active_mode: str | None = None,
         activated_mcp_servers: set[str] | None = None,
-        workflow_tool_provider: Callable[[], Any] | None = None,
+        plugin_tool_providers: list[Callable[..., Any]] | None = None,
         allow_access_outside_workdir: bool = False,
         plugin_tool_specs: list[ToolSpec] | None = None,
+        plugin_tool_handlers: dict[str, ToolHandler] | None = None,
+        plugin_mode_tool_sets: dict[str, set[str]] | None = None,
+        plugin_availability: Callable[[str], bool] | None = None,
         skill_state_store: Any | None = None,
         permission_overrides: dict[str, str] | None = None,
         enable_plugin_manager: bool = False,
@@ -895,19 +894,35 @@ class CoreToolbox:
         self.sub_agent_runner = sub_agent_runner
         self._failed_sub_agent_calls: dict[tuple[str, str], dict[str, Any]] = {}
         self.approval_policy = approval_policy
+        self.active_tier = active_tier
+        self.tier_tools = tier_tools
         self.disabled_tools = set(disabled_tools or set())
         self.load_tools = load_tools or {}
         self.active_mode = active_mode
         self.activated_mcp_servers = activated_mcp_servers or set()
         self.imagegen_config = imagegen_config
         self.tool_permissions = dict(DEFAULT_TOOL_PERMISSIONS)
+        # Manifest permissions are a separate authority from user overrides.
+        # In particular, a manifest hard_block must remain present even when
+        # the corresponding ToolSpec is intentionally hidden from the model.
+        self.manifest_tool_permissions: dict[str, PermissionTier] = {}
+        self.manifest_hard_block_tools: set[str] = set()
         self.skill_registry = skill_registry or SkillRegistry(explicit_roots=self.loaded_skill_roots)
         self.skill_state_store = skill_state_store
         self.data_dir = Path(data_dir) if data_dir else None
-        self.workflow_tool_provider = workflow_tool_provider
+        # Generic plugin contributions. Plugin implementations are discovered
+        # and supplied by the host's plugin assembly; Core does not name a
+        # concrete plugin here.
+        self.plugin_tool_providers = list(plugin_tool_providers or [])
+        self.plugin_tool_handlers = dict(plugin_tool_handlers or {})
+        self.plugin_availability = plugin_availability
+        self.plugin_mode_tool_sets = {
+            str(mode): {str(name) for name in names}
+            for mode, names in (plugin_mode_tool_sets or {}).items()
+        }
         self.allow_access_outside_workdir = allow_access_outside_workdir
-        # B8 共识：工具名全局唯一——与已注入工具（基础 15/MCP/durable/
-        # workflow）同名的插件工具报不可用；插件之间同名同样互斥
+        # B8 共识：工具名全局唯一——与已注入工具（基础/MCP/durable）同名
+        # 的插件工具报不可用；插件之间同名同样互斥
         # （先声明的保留，后者报冲突）。bundled_core_tool_specs 是内置
         # 插件自己的补全源，不算冲突（内置插件工具经装配注入）。
         self.plugin_tool_specs = list(plugin_tool_specs or [])
@@ -920,14 +935,15 @@ class CoreToolbox:
                 goal=enable_goal_tool and operation_executor is not None,
                 arrange=enable_arrange_tool and operation_executor is not None,
             )
-        } | {
-            spec.name for spec in (
-                workflow_build_tool_specs() if (workflow_build and operation_executor is not None) else []
-            )
         }
         resolved_plugin_specs: list[ToolSpec] = []
         plugin_seen: dict[str, str] = {}
         for spec in self.plugin_tool_specs:
+            if spec.name not in self.manifest_tool_permissions:
+                self.manifest_tool_permissions[spec.name] = spec.permission  # type: ignore[assignment]
+            if spec.permission == HARD_BLOCK:
+                self.manifest_hard_block_tools.add(spec.name)
+                self.tool_permissions[spec.name] = HARD_BLOCK
             if spec.name in core_spec_names:
                 self._plugin_conflicts[spec.name] = (
                     f"tool name '{spec.name}' conflicts with a core tool"
@@ -961,9 +977,6 @@ class CoreToolbox:
         )
         for spec in durable_specs:
             self.tool_permissions[spec.name] = spec.permission  # type: ignore[assignment]
-        workflow_build_specs = workflow_build_tool_specs() if (workflow_build and operation_executor is not None) else []
-        for spec in workflow_build_specs:
-            self.tool_permissions[spec.name] = spec.permission  # type: ignore[assignment]
         for spec in self.plugin_tool_specs:
             self.tool_permissions[spec.name] = spec.permission  # type: ignore[assignment]
         from lamtools_core.plugins.manager_tools import plugin_manager_tool_specs
@@ -978,13 +991,13 @@ class CoreToolbox:
         # 用户权限覆盖（E3 共识：用户可升降级插件工具 permission）。
         # 不覆盖显式 disabled 的工具——禁用语义优先于覆盖。
         for name, tier in (permission_overrides or {}).items():
-            if name in self.disabled_tools:
+            if name in self.disabled_tools or name in self.manifest_tool_permissions:
                 continue
             self.tool_permissions[name] = tier  # type: ignore[assignment]
-        # Dynamic (exposed-workflow) specs declare their own permission; prime
+        # Dynamic plugin specs declare their own permission; prime
         # the permission map BEFORE the approval gate snapshots it, so those
         # tools are gated per declaration instead of defaulting to HARD_BLOCK.
-        self._workflow_specs()
+        self._dynamic_plugin_specs()
         self.approval_gate = ApprovalGate(
             work_root=self.work_root,
             tool_permissions=self.tool_permissions,
@@ -992,12 +1005,14 @@ class CoreToolbox:
             active_tier=active_tier,
             tier_tools=tier_tools,
             allow_access_outside_workdir=allow_access_outside_workdir,
+            approval_policy=approval_policy,
+            manifest_tool_permissions=self.manifest_tool_permissions,
+            manifest_hard_block_tools=self.manifest_hard_block_tools | self.disabled_tools,
         )
         self._specs = [
             *default_core_tool_specs(),
             *list(mcp_tool_specs or []),
             *durable_specs,
-            *workflow_build_specs,
             *plugin_manager_specs,
             *self.plugin_tool_specs,
         ]
@@ -1008,41 +1023,116 @@ class CoreToolbox:
             max_search_results=max_search_results,
             core_event_callback=core_event_callback,
             operation_executor=operation_executor,
-            workflow_build=workflow_build,
             imagegen_config=imagegen_config,
             allow_access_outside_workdir=allow_access_outside_workdir,
             plugin_tool_specs=self.plugin_tool_specs,
             plugin_manager_specs=plugin_manager_specs,
         )
 
-    def _workflow_specs(self) -> list[ToolSpec]:
-        if self.workflow_tool_provider is None:
-            return []
+    @staticmethod
+    def _invoke_plugin_provider(provider: Callable[..., Any], work_root: Path) -> Any:
+        """Ask a plugin provider for the current project-scoped bundle.
+
+        Providers written before project-scoped plugin contexts were added are
+        still zero-argument callables. Signature inspection keeps those
+        providers compatible while allowing long-lived runtimes to receive the
+        active root on every toolbox refresh.
+        """
         try:
-            bundle = self.workflow_tool_provider()
-        except Exception:  # noqa: BLE001 — workflow tools must never break the toolbox
-            return []
-        specs = list(getattr(bundle, "specs", []) or [])
-        # Dynamic (exposed-workflow) tools carry their own permission on the
+            parameters = inspect.signature(provider).parameters
+        except (TypeError, ValueError):
+            parameters = {}
+        work_root_parameter = parameters.get("work_root")
+        accepts_kwargs = any(
+            item.kind == inspect.Parameter.VAR_KEYWORD
+            for item in parameters.values()
+        )
+        if work_root_parameter is not None and work_root_parameter.kind != inspect.Parameter.POSITIONAL_ONLY:
+            return provider(work_root=str(work_root))
+        if accepts_kwargs:
+            return provider(work_root=str(work_root))
+        if work_root_parameter is not None:
+            return provider(str(work_root))
+        return provider()
+
+    @staticmethod
+    def _call_work_root(call: ToolCall, fallback: Path) -> Path:
+        metadata = call.metadata if isinstance(call.metadata, dict) else {}
+        raw = metadata.get("work_root")
+        if raw:
+            try:
+                return Path(str(raw)).expanduser().resolve()
+            except OSError:
+                pass
+        return fallback
+
+    def _dynamic_plugin_specs(self, *, work_root: Path | None = None) -> list[ToolSpec]:
+        specs: list[ToolSpec] = []
+        effective_root = work_root or self.work_root
+        for provider in self.plugin_tool_providers:
+            try:
+                bundle = self._invoke_plugin_provider(provider, effective_root)
+            except Exception:  # noqa: BLE001 — plugin tools must never break the toolbox
+                continue
+            specs.extend(list(getattr(bundle, "specs", []) or []))
+        specs = [spec for spec in specs if self._plugin_spec_available(spec)]
+        # Dynamic plugin tools carry their own permission on the
         # spec; register it so the approval gate treats them per declaration
         # instead of defaulting unknown names to HARD_BLOCK.
         for spec in specs:
-            if spec.name not in self.tool_permissions:
+            self.manifest_tool_permissions.setdefault(spec.name, spec.permission)  # type: ignore[assignment]
+            if spec.permission == HARD_BLOCK:
+                # Keep this union monotonic for the lifetime of the toolbox:
+                # a later dynamic registration cannot downgrade a previously
+                # hard-blocked tool.
+                self.manifest_hard_block_tools.add(spec.name)
+                self.tool_permissions[spec.name] = HARD_BLOCK
+            elif spec.name not in self.tool_permissions:
                 self.tool_permissions[spec.name] = spec.permission
+            approval_gate = getattr(self, "approval_gate", None)
+            if approval_gate is not None:
+                approval_gate.manifest_tool_permissions.setdefault(spec.name, spec.permission)
+                if spec.permission == HARD_BLOCK:
+                    approval_gate.manifest_hard_block_tools.add(spec.name)
+                    approval_gate.tool_permissions[spec.name] = HARD_BLOCK
+                elif spec.name not in approval_gate.tool_permissions:
+                    approval_gate.tool_permissions[spec.name] = spec.permission
         return specs
+
+    def _plugin_spec_available(self, spec: ToolSpec) -> bool:
+        """Apply the host lifecycle gate to a plugin contribution.
+
+        Toolboxes can outlive a plugin enable/disable operation for one turn.
+        The generic callback keeps those stale snapshots from advertising or
+        executing a stopped plugin while leaving Core unaware of plugin names.
+        """
+        plugin_name = str(spec.metadata.get("plugin") or "").strip()
+        if not plugin_name or self.plugin_availability is None:
+            return True
+        try:
+            return bool(self.plugin_availability(plugin_name))
+        except Exception:  # noqa: BLE001 — a broken lifecycle gate is closed
+            return False
 
     def tool_specs(self) -> list[ToolSpec]:
         specs = [
-            replace(spec, permission=self.tool_permissions.get(spec.name, HARD_BLOCK))
+            replace(spec, permission=self._effective_tool_permission(spec.name, HARD_BLOCK))
             for spec in self._specs
-            if spec.name not in self.disabled_tools
+            if spec.name not in self.disabled_tools and self._plugin_spec_available(spec)
         ]
-        workflow_specs = [
-            replace(spec, permission=self.tool_permissions.get(spec.name, spec.permission))
-            for spec in self._workflow_specs()
-            if spec.name not in self.disabled_tools
+        plugin_specs = [
+            replace(spec, permission=self._effective_tool_permission(spec.name, spec.permission))
+            for spec in self._dynamic_plugin_specs()
+            if spec.name not in self.disabled_tools and spec.name not in self.manifest_hard_block_tools
         ]
-        return [*specs, *workflow_specs]
+        return [*specs, *plugin_specs]
+
+    def _effective_tool_permission(self, name: str, fallback: PermissionTier | str) -> str:
+        if name in self.manifest_hard_block_tools:
+            return HARD_BLOCK
+        if name in self.manifest_tool_permissions:
+            return self.manifest_tool_permissions[name]
+        return self.tool_permissions.get(name, fallback)
 
     def model_tools(
         self,
@@ -1054,17 +1144,13 @@ class CoreToolbox:
         effective_exclude = set(exclude_tools or set())
         # Apply loadtools active_mode filtering
         if active_mode and self.load_tools:
-            allowed = mode_tool_set(self.load_tools, active_mode)
+            allowed = self._mode_tool_set(active_mode)
             if allowed is not None:
                 all_specs = self.tool_specs()
                 all_names = {spec.name for spec in all_specs}
-                # In workflow mode, also allow dynamic workflow tools by category
-                # (exposed-workflow run tools whose names aren't in the static whitelist).
-                if active_mode == "workflow":
-                    allowed = set(allowed) | {
-                        spec.name for spec in all_specs
-                        if str(spec.metadata.get("category")) == "workflow"
-                    }
+                # A plugin may contribute dynamic tools for its own mode.  The
+                # mode/category match is generic; Core does not name a plugin.
+                allowed = set(allowed) | self._plugin_mode_tool_names(active_mode, all_specs)
                 # Build exclude set = all tool names NOT in allowed set
                 effective_exclude |= (all_names - allowed)
         # Filter out MCP tools from non-activated servers
@@ -1100,18 +1186,14 @@ class CoreToolbox:
 
         Mirrors the advertisement filter in :meth:`model_tools`: an unknown
         mode or a full-access mode (empty whitelist) never blocks; the
-        workflow mode additionally allows dynamic workflow-category tools.
+        plugin modes additionally allow their dynamic plugin-contributed tools.
         """
         if not self.active_mode or not self.load_tools:
             return None
-        allowed = mode_tool_set(self.load_tools, self.active_mode)
+        allowed = self._mode_tool_set(self.active_mode)
         if allowed is None:
             return None
-        if self.active_mode == "workflow":
-            allowed = set(allowed) | {
-                spec.name for spec in self.tool_specs()
-                if str(spec.metadata.get("category")) == "workflow"
-            }
+        allowed = set(allowed) | self._plugin_mode_tool_names(self.active_mode, self.tool_specs())
         if name in allowed:
             return None
         return (
@@ -1119,12 +1201,49 @@ class CoreToolbox:
             "Please make the plan prepared and ask user to switch mode."
         )
 
+    def _mode_tool_set(self, active_mode: str) -> set[str] | None:
+        if active_mode in self.plugin_mode_tool_sets:
+            return set(self.plugin_mode_tool_sets[active_mode])
+        return mode_tool_set(self.load_tools, active_mode)
+
+    def _plugin_mode_tool_names(self, active_mode: str, specs: list[ToolSpec]) -> set[str]:
+        configured = self.plugin_mode_tool_sets.get(active_mode)
+        if configured is not None:
+            plugin_id = active_mode.split(":", 1)[0]
+            return set(configured) | {
+                spec.name
+                for spec in specs
+                if spec.metadata.get("plugin_dynamic") is True
+                and str(spec.metadata.get("plugin") or "") == plugin_id
+            }
+        return {
+            spec.name
+            for spec in specs
+            if str(spec.metadata.get("plugin_mode") or spec.metadata.get("category") or "") == active_mode
+        }
+
     def prepare_call(self, call: ToolCall) -> ToolCall:
         # Plugin handlers have no closure-injected workspace context (core
         # tools receive work_root/data_dir via factory closures); inject it
         # into call.metadata so plugin tools are first-class citizens.
         call.metadata.setdefault("work_root", str(self.work_root))
         call.metadata.setdefault("data_dir", str(self.data_dir))
+        # Manifest hard blocks are independent of active mode and approval
+        # preset.  Evaluate them before mode/capability filtering so the
+        # strongest reason cannot be hidden by a weaker mode denial.
+        if call.name in self.manifest_hard_block_tools or call.name in self.disabled_tools:
+            decision = self.approval_gate.check(call.name, call.arguments if isinstance(call.arguments, dict) else {})
+            approval = {
+                "tier": decision.permission_tier,
+                "reason": decision.reason,
+                "blocked": True,
+                "requires_approval": False,
+            }
+            return replace(
+                call,
+                requires_approval=False,
+                metadata={**dict(call.metadata or {}), "approval": approval},
+            )
         # Mode enforcement runs first: the toolset advertised to the model is
         # mode-filtered, and the same filter must hold at execution time — a
         # model with stale context (e.g. the mode changed between turns) must
@@ -1174,9 +1293,12 @@ class CoreToolbox:
             "requires_approval": decision.requires_approval,
         }
         requires_approval = bool(decision.requires_approval)
-        if self.approval_policy == "auto_approve" and requires_approval and not decision.blocked:
-            requires_approval = False
-            approval["requires_approval"] = False
+        if self.approval_policy == "auto_approve" and not decision.blocked:
+            if requires_approval:
+                requires_approval = False
+                approval["requires_approval"] = False
+            # Keep an explicit audit marker for every decision made by the
+            # automatic preset, including tools that were already auto-allow.
             approval["auto_approved"] = True
         metadata = {**dict(call.metadata or {}), "approval": approval}
         return replace(
@@ -1185,7 +1307,54 @@ class CoreToolbox:
             metadata=metadata,
         )
 
+    def prepare_approved_call(self, call: ToolCall) -> ToolCall:
+        """Re-check a call before executing an externally approved request.
+
+        Approval continuations cannot simply execute the serialized call:
+        plugin manifests, lifecycle state, mode, tier, and path arguments may
+        have changed while the approval card was open.  Re-run the same
+        preparation boundary against the frozen toolbox, then suppress only
+        the already-resolved user approval requirement.  A hard block remains
+        a hard block.
+        """
+        prepared = self.prepare_call(call)
+        approval = prepared.metadata.get("approval")
+        if not isinstance(approval, dict) or approval.get("blocked"):
+            return prepared
+        approval = {
+            **approval,
+            "approved": True,
+            "auto_approved": True,
+            "requires_approval": False,
+        }
+        return replace(
+            prepared,
+            requires_approval=False,
+            metadata={**dict(prepared.metadata or {}), "approval": approval},
+        )
+
     async def execute(self, call: ToolCall, context: ToolContext | None = None) -> ToolResult:
+        # Refresh dynamic declarations before any direct execution path.  This
+        # keeps a newly registered manifest hard_block effective even when a
+        # caller presents a serialized call without going through
+        # ``prepare_call`` first.
+        provider_root = self._call_work_root(call, self.work_root)
+        self._dynamic_plugin_specs(work_root=provider_root)
+        if call.name in self.manifest_hard_block_tools:
+            return ToolResult(
+                call_id=call.id,
+                name=call.name,
+                status="blocked",
+                error=f"Tool '{call.name}' is hard-blocked by its manifest",
+                metadata={
+                    "approval": {
+                        "tier": HARD_BLOCK,
+                        "reason": f"Tool '{call.name}' is hard-blocked by its manifest",
+                        "blocked": True,
+                        "requires_approval": False,
+                    }
+                },
+            )
         approval = call.metadata.get("approval") if isinstance(call.metadata, dict) else None
         if isinstance(approval, dict) and approval.get("blocked"):
             return ToolResult(
@@ -1195,17 +1364,57 @@ class CoreToolbox:
                 error=str(approval.get("reason") or "Tool call blocked"),
                 metadata={"approval": approval},
             )
+        # The Kernel normally prepares model calls during parse_model_output,
+        # but CoreToolbox is also a public low-level entry point used by
+        # plugin/runtime callers.  When a runtime capability snapshot is
+        # configured, an unprepared direct call must pass the same tier and
+        # approval gate; otherwise an ``auto_allow`` plugin could bypass the
+        # active capability boundary simply by calling execute() directly.
+        if not isinstance(approval, dict) and self.active_tier is not None and self.tier_tools is not None:
+            call = self.prepare_call(call)
+            approval = call.metadata.get("approval") if isinstance(call.metadata, dict) else None
+            if isinstance(approval, dict) and approval.get("blocked"):
+                return ToolResult(
+                    call_id=call.id,
+                    name=call.name,
+                    status="blocked",
+                    error=str(approval.get("reason") or "Tool call blocked"),
+                    metadata={"approval": approval},
+                )
+        # A prepared ask_user call is a waiting-gate contract, not permission
+        # to execute.  Only prepare_approved_call() clears this flag for an
+        # approval continuation.
+        if call.requires_approval:
+            return ToolResult(
+                call_id=call.id,
+                name=call.name,
+                status="blocked",
+                error="Tool requires approval and was not routed through a waiting request.",
+                metadata={"approval": approval} if isinstance(approval, dict) else {},
+            )
         if call.name in self.disabled_tools:
             return ToolResult(call_id=call.id, name=call.name, status="blocked", error=f"Tool disabled: {call.name}")
+        static_spec = next((spec for spec in self._specs if spec.name == call.name), None)
+        if static_spec is not None and not self._plugin_spec_available(static_spec):
+            plugin_name = str(static_spec.metadata.get("plugin") or "plugin")
+            return ToolResult(
+                call_id=call.id,
+                name=call.name,
+                status="blocked",
+                error=f"Plugin disabled: {plugin_name}",
+            )
         handler = self._handlers.get(call.name)
         if handler is None and call.name in self._dynamic_mcp_tool_names:
             handler = self._handlers.get("mcp_tool")
-        if handler is None and self.workflow_tool_provider is not None:
-            try:
-                bundle = self.workflow_tool_provider()
-                handler = (getattr(bundle, "handlers", {}) or {}).get(call.name)
-            except Exception:  # noqa: BLE001
-                handler = None
+        if handler is None:
+            for provider in self.plugin_tool_providers:
+                try:
+                    bundle = self._invoke_plugin_provider(provider, provider_root)
+                    handler = (getattr(bundle, "handlers", {}) or {}).get(call.name)
+                except Exception:  # noqa: BLE001
+                    handler = None
+                if handler is not None:
+                    break
         if handler is None:
             return ToolResult(call_id=call.id, name=call.name, status="blocked", error=f"Unknown tool: {call.name}")
         timeout = self._plugin_timeouts.get(call.name)
@@ -1234,7 +1443,6 @@ class CoreToolbox:
         max_search_results: int,
         core_event_callback: Callable[[CoreEvent], Awaitable[None]] | None,
         operation_executor: OperationExecutor | None,
-        workflow_build: bool = False,
         imagegen_config: dict | None = None,
         allow_access_outside_workdir: bool = False,
         plugin_tool_specs: list[ToolSpec] | None = None,
@@ -1254,6 +1462,7 @@ class CoreToolbox:
             command_timeout=command_timeout,
             loaded_skill_roots=self.loaded_skill_roots,
             core_event_callback=core_event_callback,
+            allow_access_outside_workdir=allow_access_outside_workdir,
         )
 
         async def call_mcp(call: ToolCall) -> ToolResult:
@@ -1500,8 +1709,6 @@ class CoreToolbox:
         }
         if operation_executor is not None:
             handlers.update(durable_tool_handlers(operation_executor, work_root=self.work_root))
-            if workflow_build:
-                handlers.update(workflow_build_tool_handlers(operation_executor, work_root=self.work_root))
         # 插件原生工具 handler：动态导入 module:function（§3 定点 #4）。
         # 导入失败 = 该工具不可用（不注册，执行走 Unknown tool；错误记录
         # 供 plugin.list 报状态与诊断）。
@@ -1527,12 +1734,14 @@ class CoreToolbox:
                     self._plugin_handler_errors[spec.name] = error
                     handlers[spec.name] = _missing_dependency_handler(spec.name, error)
                     continue
-            handler = self._bundled_plugin_handler(
+            handler = (self.plugin_tool_handlers or {}).get(spec.name)
+            if handler is None:
+                handler = self._bundled_plugin_handler(
                 spec,
                 command_timeout=command_timeout,
                 max_text_length=max_text_length,
                 imagegen_config=imagegen_config,
-            )
+                )
             if handler is None:
                 handler = self._import_plugin_handler(spec)
             if handler is not None:

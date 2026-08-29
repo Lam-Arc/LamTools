@@ -11,6 +11,7 @@ from lamtools_core.tool.permission import AUTO_ALLOW, ASK_USER, HARD_BLOCK, Perm
 CommandPermissionGroup = Literal["regular", "dangerous"]
 CommandApprovalPolicy = Literal["auto_allow", "ask_user"]
 PermissionMode = Literal["read_only", "limited_edit", "full_edit"]
+RuntimeApprovalPolicy = Literal["require", "auto_approve"]
 
 DANGEROUS_COMMAND_RE = re.compile(
     r"(?ix)"
@@ -156,6 +157,9 @@ class ApprovalGate:
         active_tier: PermissionMode | None = None,
         tier_tools: TierTools | None = None,
         allow_access_outside_workdir: bool = False,
+        approval_policy: RuntimeApprovalPolicy | None = None,
+        manifest_tool_permissions: dict[str, PermissionTier] | None = None,
+        manifest_hard_block_tools: set[str] | None = None,
     ) -> None:
         self.work_root = Path(work_root).resolve()
         self.tool_permissions = dict(tool_permissions)
@@ -163,12 +167,35 @@ class ApprovalGate:
         self.blocked_file_patterns = blocked_file_patterns
         self.command_policies = normalize_command_policies(command_policies)
         self.active_tier = active_tier
-        self.tier_tools = tier_tools or {"read_only": set(), "limited_edit": set(), "full_edit": set()}
+        # ``None`` means the legacy caller did not provide a capability map.
+        # An explicit empty map is meaningful: ``full_edit`` uses an empty
+        # access list as its all-tools capability, while a restricted tier
+        # with an empty list exposes no tools.
+        self.tier_tools = tier_tools
         self.allow_access_outside_workdir = allow_access_outside_workdir
+        self.approval_policy = approval_policy
+        self.manifest_tool_permissions = dict(manifest_tool_permissions or {})
+        self.manifest_hard_block_tools = set(manifest_hard_block_tools or set())
 
     def check(self, tool_name: str, params: dict[str, Any] | None = None) -> ToolApprovalDecision:
         params = params or {}
-        base_tier = self.tool_permissions.get(tool_name, HARD_BLOCK)
+        if tool_name in self.manifest_hard_block_tools:
+            return ToolApprovalDecision(
+                False,
+                f"Tool '{tool_name}' is hard-blocked by its manifest",
+                HARD_BLOCK,
+                blocked=True,
+            )
+
+        # A manifest declaration is a higher-precedence source than user
+        # overrides/defaults.  This is intentionally resolved here as well as
+        # in CoreToolbox so direct ApprovalGate users get the same boundary.
+        base_tier = self.manifest_tool_permissions.get(
+            tool_name,
+            self.tool_permissions.get(tool_name, HARD_BLOCK),
+        )
+        if base_tier == HARD_BLOCK:
+            return ToolApprovalDecision(False, f"Action '{tool_name}' is hard-blocked", base_tier, blocked=True)
 
         block_reason = self._check_hard_blocks(tool_name, params)
         if block_reason:
@@ -182,34 +209,20 @@ class ApprovalGate:
             if path_check:
                 return ToolApprovalDecision(False, path_check, base_tier, blocked=True)
 
-        # Tier-based override: if active_tier is set, use access list to determine auto-allow
-        if self.active_tier is not None:
+        # Capability/tier access is a hard boundary.  It is evaluated before
+        # manifest approval and before the Composer approval preset.  A
+        # full_edit empty list is the documented all-tools sentinel; for
+        # read_only/limited_edit an empty list grants nothing.
+        if self.active_tier is not None and self.tier_tools is not None:
             access_set = self.tier_tools.get(self.active_tier, set())
-            if tool_name in access_set:
-                if tool_name == "run_command":
-                    # The tier list must not short-circuit command-level
-                    # classification (audit 06 S2): a dangerous command stays
-                    # ask_user even when run_command is in the tier access list.
-                    command = params.get("command", "")
-                    if isinstance(command, str) and command.strip():
-                        decision = command_permission_decision(command, self.command_policies)
-                        if decision.requires_approval:
-                            return ToolApprovalDecision(
-                                False,
-                                decision.reason or "Command requires user confirmation",
-                                base_tier,
-                                requires_approval=True,
-                            )
-                return ToolApprovalDecision(True, f"Auto-approved ({self.active_tier})", base_tier)
-            elif len(access_set) > 0:
-                # Non-empty access list: tools not in list require approval
+            tier_allows = self.active_tier == "full_edit" and not access_set
+            if not tier_allows and tool_name not in access_set:
                 return ToolApprovalDecision(
                     False,
-                    f"Action '{tool_name}' requires user confirmation",
-                    ASK_USER,
-                    requires_approval=True,
+                    f"Action '{tool_name}' is outside the {self.active_tier} capability tier",
+                    base_tier,
+                    blocked=True,
                 )
-            # Empty access list: fall through to default behavior (full_edit → global auto_approve)
 
         if tool_name == "run_command":
             command = params.get("command", "")
@@ -222,12 +235,15 @@ class ApprovalGate:
                         base_tier,
                         requires_approval=True,
                     )
-                return ToolApprovalDecision(True, f"Auto-approved {decision.group} command", base_tier)
+                if base_tier == AUTO_ALLOW:
+                    return ToolApprovalDecision(True, f"Auto-approved {decision.group} command", base_tier)
 
         if self.auto_approve_read and base_tier == AUTO_ALLOW:
             return ToolApprovalDecision(True, "Auto-approved (read-only)", base_tier)
 
         if base_tier == ASK_USER:
+            if self.approval_policy == "auto_approve":
+                return ToolApprovalDecision(True, "Auto-approved by permission preset", base_tier)
             return ToolApprovalDecision(
                 False,
                 f"Action '{tool_name}' requires user confirmation",

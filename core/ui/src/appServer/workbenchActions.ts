@@ -13,7 +13,7 @@ export interface SubmitCoreComposerTaskOptions {
   attachments?: CoreInputItem[]
   executeCommand?: (command: string) => Promise<boolean>
   steerTurn?: (threadId: string, turnId: string, inputItems: CoreInputItem[]) => Promise<void>
-  queueInput: (threadId: string, inputItems: CoreInputItem[]) => Promise<void>
+  queueInput: (threadId: string, inputItems: CoreInputItem[], turnOptions?: Record<string, unknown>) => Promise<void>
   startTurn: (threadId: string, inputItems: CoreInputItem[], workRoot?: string, turnOptions?: Record<string, unknown>) => Promise<boolean>
   workRoot?: string
   turnOptions?: Record<string, unknown>
@@ -95,7 +95,7 @@ export async function submitCoreComposerTask(
       await options.steerTurn(options.threadId, options.activeTurnId, inputItems)
       return { status: 'guided', inputItems }
     }
-    await options.queueInput(options.threadId, inputItems)
+    await options.queueInput(options.threadId, inputItems, options.turnOptions)
     return { status: 'queued', inputItems }
   }
 

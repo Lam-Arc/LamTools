@@ -265,13 +265,12 @@ describe('CoreExecutionControls', () => {
       },
     });
 
-    const triggers = wrapper.findAll('.ui-select-trigger');
-    await triggers[0].trigger('click');
-    await wrapper.findAll('.ui-select-option')[1].trigger('click');
-    await triggers[1].trigger('click');
-    await wrapper.findAll('.ui-select-option')[1].trigger('click');
-    await triggers[1].trigger('click');
-    await wrapper.findAll('.ui-select-option').at(-1)!.trigger('click');
+    await wrapper.get('[data-core-model-thinking-menu] .core-model-thinking-menu__trigger').trigger('click');
+    await wrapper.findAll('[data-model-thinking-model-option]')[1].trigger('click');
+    await wrapper.get('[data-core-model-thinking-menu] .core-model-thinking-menu__trigger').trigger('click');
+    await wrapper.findAll('[data-model-thinking-level-option]')[1].trigger('click');
+    await wrapper.get('[data-core-model-thinking-menu] .core-model-thinking-menu__trigger').trigger('click');
+    await wrapper.get('[data-model-thinking-shallow-option]').trigger('click');
 
     expect(wrapper.emitted('update:modelValue')?.[0]).toEqual(['model-1']);
     expect(wrapper.emitted('update:thinkingMode')?.[0]).toEqual(['max']);
@@ -321,9 +320,18 @@ describe('SessionSidebar numbering', () => {
         allowRename: false,
         allowSessionDelete: true,
       },
+      attachTo: document.body,
     });
 
-    await wrapper.find('[data-session-delete="s1"]').trigger('click');
+    await wrapper.get('[data-session-row="s1"]').trigger('contextmenu', {
+      clientX: 120,
+      clientY: 80,
+    });
+    await nextTick();
+    const deleteButton = document.body.querySelector<HTMLElement>('[data-session-menu-delete="s1"]');
+    expect(deleteButton).not.toBeNull();
+    deleteButton!.click();
+    await nextTick();
 
     expect(wrapper.emitted('delete-session')).toEqual([['s1']]);
     expect(wrapper.emitted('select-session')).toBeUndefined();

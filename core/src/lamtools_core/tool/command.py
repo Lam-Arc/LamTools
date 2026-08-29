@@ -403,7 +403,13 @@ def format_running_command_output(
     return result
 
 
-def validate_command_paths(args: list[str], work_root: Path, resource_roots: tuple[Path, ...] = ()) -> None:
+def validate_command_paths(
+    args: list[str],
+    work_root: Path,
+    resource_roots: tuple[Path, ...] = (),
+    *,
+    allow_outside: bool = False,
+) -> None:
     for i, arg in enumerate(args):
         if i == 0:
             continue
@@ -424,6 +430,8 @@ def validate_command_paths(args: list[str], work_root: Path, resource_roots: tup
             or "/" in value
             or "\\" in value
         ):
+            if allow_outside:
+                continue
             # Tilde / parameter / command expansion cannot be statically
             # resolved — the shell would expand the token outside work_root
             # (``cat ~/.ssh/id_rsa``, ``cat $HOME/.ssh/id_rsa``,

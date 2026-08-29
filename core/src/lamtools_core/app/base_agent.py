@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from copy import deepcopy
 
 from lamtools_core.event import (
     CoreEvent,
@@ -208,6 +209,18 @@ class CoreBaseAgentKit:
     async def on_run_start(self, state: RuntimeState, turn_input: RuntimeTurnInput) -> None:
         state.metadata["agent_id"] = self.config.agent_id
         state.metadata["work_root"] = str(self.work_root)
+        incoming_snapshot = turn_input.metadata.get("runtime_snapshot")
+        # A normal accepted turn explicitly marks its snapshot as fresh and
+        # may replace the previous turn's state.  Approval continuations and
+        # other resumes do not set that marker, so they retain the snapshot
+        # already persisted with the paused turn.
+        if isinstance(incoming_snapshot, dict) and (
+            bool(turn_input.metadata.get("runtime_snapshot_fresh"))
+            or not isinstance(state.metadata.get("runtime_snapshot"), dict)
+        ):
+            state.metadata["runtime_snapshot"] = deepcopy(incoming_snapshot)
+            for key, value in incoming_snapshot.items():
+                state.metadata[key] = deepcopy(value)
         for key in ("model_id", "thinking_enabled", "thinking_budget", "shallow_thinking_enabled", "capability", "deferred_attachments", "context_window_tokens", "compact_trigger_tokens", "compact_limit_tokens"):
             if key in turn_input.metadata:
                 state.metadata[key] = turn_input.metadata[key]
@@ -450,6 +463,9 @@ class CoreBaseAgentKit:
 
         call.metadata["_runtime_session_id"] = state.session_id
         call.metadata["_runtime_run_id"] = state.run_id
+        session_metadata = state.metadata.get("session_metadata") if isinstance(state.metadata, dict) else None
+        if isinstance(session_metadata, dict):
+            call.metadata["_runtime_session_metadata"] = dict(session_metadata)
         if call.name == "sub_agent":
             call.metadata["parent_run_id"] = state.run_id
             call.metadata["parent_turn_id"] = str(state.metadata.get("turn_id") or state.run_id)
@@ -844,6 +860,9 @@ def assemble_core_agent_plugins(
     work_root: str | Path,
     plugin_roots: list[Path | str] | tuple[Path | str, ...] | None,
     include_user_plugins: bool = True,
+    context: Any | None = None,
+    plugin_runtimes: list[Any] | None = None,
+    start_lifecycle: bool = False,
 ) -> dict[str, Any]:
     from lamtools_core.plugins.engine import HookEngine
     from lamtools_core.plugins.hook_config import HookRegistry
@@ -871,6 +890,48 @@ def assemble_core_agent_plugins(
     state_store = PluginStateStore(Path(data_dir) / "plugins.jsonc")
     plugins = PluginRegistry(plugin_roots=roots, state_store=state_store).discover()
     enabled_plugins = [plugin for plugin in plugins if plugin.enabled]
+    plugin_mode_tool_sets: dict[str, set[str]] = {}
+    plugin_mode_ids: dict[str, list[str]] = {}
+    for plugin in enabled_plugins:
+        contribution = plugin.ui
+        if contribution is None:
+            continue
+        for mode in contribution.modes:
+            full_mode_id = f"{plugin.name}:{mode.id}"
+            plugin_mode_tool_sets[full_mode_id] = set(mode.tools)
+            plugin_mode_ids.setdefault(mode.id, []).append(full_mode_id)
+    # A short mode id is convenient for existing hosts, but only expose it
+    # when exactly one enabled plugin owns that id. Hosts with multiple
+    # contributors use the fully-qualified pluginId:modeId key.
+    for mode_id, full_ids in plugin_mode_ids.items():
+        if len(full_ids) == 1:
+            plugin_mode_tool_sets[mode_id] = set(plugin_mode_tool_sets[full_ids[0]])
+    from lamtools_core.plugins.context import PluginContext
+    from lamtools_core.plugins.lifecycle import load_enabled_plugin_backends
+
+    plugin_context = context or PluginContext(work_root=Path(work_root), data_dir=Path(data_dir))
+    if plugin_runtimes is None:
+        plugin_runtimes = load_enabled_plugin_backends(
+            enabled_plugins,
+            plugin_context,
+            start=start_lifecycle,
+        )
+    plugin_tool_handlers: dict[str, Any] = {}
+    plugin_tool_providers: list[Any] = []
+    plugin_runtime_specs: list[Any] = []
+    for handle in plugin_runtimes:
+        plugin_tool_handlers.update(handle.tool_handlers)
+        plugin_tool_providers.extend(handle.tool_providers)
+        runtime_specs = getattr(handle.value, "tool_specs", [])
+        if callable(runtime_specs):
+            runtime_specs = runtime_specs()
+        if isinstance(runtime_specs, (list, tuple)):
+            for spec in runtime_specs:
+                metadata = getattr(spec, "metadata", None)
+                if isinstance(metadata, dict):
+                    metadata.setdefault("plugin", handle.plugin.name)
+                    metadata.setdefault("plugin_mode", handle.plugin.name)
+            plugin_runtime_specs.extend(runtime_specs)
     # Plugin code must be importable: handler entries (module:function) are
     # resolved via importlib at toolbox build time, before any plugin code
     # runs — so the enabled plugin roots go on sys.path here (append to the
@@ -934,6 +995,12 @@ def assemble_core_agent_plugins(
         "skill_roots": skill_roots,
         "plugin_tool_groups": plugin_tool_groups,
         "plugin_tool_errors": plugin_tool_errors,
+        "plugin_context": plugin_context,
+        "plugin_runtimes": plugin_runtimes,
+        "plugin_tool_handlers": plugin_tool_handlers,
+        "plugin_tool_providers": plugin_tool_providers,
+        "plugin_runtime_specs": plugin_runtime_specs,
+        "plugin_mode_tool_sets": plugin_mode_tool_sets,
         "mcp_files": [
             path
             for plugin in enabled_plugins
@@ -974,6 +1041,9 @@ def build_core_plugin_operation_catalog(
     work_root: str | Path,
     plugin_roots: list[Path | str] | tuple[Path | str, ...] | None = None,
     include_user_plugins: bool = True,
+    context: Any | None = None,
+    plugin_runtimes: list[Any] | None = None,
+    start_lifecycle: bool = False,
 ):
     from lamtools_core.plugins.hook_config import HookRegistry
     from lamtools_core.plugins.operations import build_plugin_operation_catalog
@@ -1003,6 +1073,21 @@ def build_core_plugin_operation_catalog(
     hook_trust_store = HookTrustStore(data_path / "hook_trust.json")
     skill_state_store = SkillStateStore(data_path / "skill_state.json")
     plugin_registry = PluginRegistry(plugin_roots=roots, state_store=plugin_state_store)
+    from lamtools_core.plugins.context import PluginContext
+    from lamtools_core.plugins.lifecycle import load_enabled_plugin_backends
+
+    plugin_context = context or PluginContext(work_root=Path(work_root), data_dir=data_path)
+    plugins = plugin_registry.discover()
+    # Hosts that already assembled the generic plugin runtime (for example
+    # run-local CLI) can hand the handles back here.  Re-loading a backend
+    # would create a second store/watcher and make resource/session binding
+    # split across two plugin instances.
+    if plugin_runtimes is None:
+        plugin_runtimes = load_enabled_plugin_backends(
+            [item for item in plugins if item.enabled],
+            plugin_context,
+            start=start_lifecycle,
+        )
 
     def hook_registry_factory() -> HookRegistry:
         return HookRegistry(
@@ -1019,7 +1104,7 @@ def build_core_plugin_operation_catalog(
             ],
         )
 
-    return build_plugin_operation_catalog(
+    catalog = build_plugin_operation_catalog(
         plugin_registry=plugin_registry,
         plugin_state_store=plugin_state_store,
         hook_registry_factory=hook_registry_factory,
@@ -1029,7 +1114,14 @@ def build_core_plugin_operation_catalog(
         work_root=work_root,
         data_dir=data_path,
         install_root=default_user_plugin_root(),
+        context=plugin_context,
+        plugin_runtimes=plugin_runtimes,
     )
+    if plugin_context.operation_catalog is None:
+        plugin_context.operation_catalog = catalog
+    catalog.plugin_context = plugin_context
+    catalog.plugin_runtimes = plugin_runtimes
+    return catalog
 
 
 __all__ = [

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import sys
 import time as time_module
 import uuid
 from collections.abc import Callable
+from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -56,6 +58,16 @@ from .turn_acceptance import (
     CoreAppEventSpec,
     build_cancelled_turn_event,
     build_turn_acceptance_plan,
+)
+from .runtime_permissions import (
+    load_global_runtime_controls,
+    normalize_permission_preset,
+    normalize_permission_mode,
+    permissions_from_snapshot,
+    resolve_permission_preset,
+    runtime_snapshot as build_runtime_snapshot,
+    session_runtime_preferences,
+    with_session_runtime_preferences,
 )
 
 
@@ -481,6 +493,20 @@ async def handle_turn_start_operation(
     user_item_id = str(params.get("user_item_id") or params.get("userItemId") or f"{turn_id}:user")
     run_claimed = False
 
+    # Resolve once, before acceptance.  The result is copied into the
+    # acceptance event and is the only permission source for this turn.
+    try:
+        resolved = await _resolve_turn_approval_policy(context=context, params={**params, "thread_id": thread_id})
+    except ValueError as exc:
+        return CoreLiveOperationOutcome(
+            response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc))
+        )
+    turn_runtime_snapshot = _runtime_snapshot_with_turn_options(
+        resolved["runtime_snapshot"],
+        params=params,
+        active_mode=resolved.get("active_mode"),
+    )
+
     async def write(db):
         nonlocal run_claimed
         _w0 = time_module.perf_counter()
@@ -556,7 +582,10 @@ async def handle_turn_start_operation(
                 client_message_id=client_message_id,
                 input_items=prepared.visible_input,
                 work_root=prepared.work_root,
-                turn_payload_extra=materialized.turn_payload_extra,
+                turn_payload_extra={
+                    **materialized.turn_payload_extra,
+                    "runtime_snapshot": turn_runtime_snapshot,
+                },
                 user_payload_extra=materialized.user_payload_extra,
                 include_turn_status=materialized.include_turn_status,
             )
@@ -610,7 +639,6 @@ async def handle_turn_start_operation(
             model_id=str(params.get("model_id") or params.get("modelId") or "").strip(),
         ))
 
-    resolved = await _resolve_turn_approval_policy(context=context, params=params)
     imagegen_config = await _resolve_imagegen_config(context=context)
     runtime_start = {
         "thread_id": thread_id,
@@ -619,11 +647,13 @@ async def handle_turn_start_operation(
         "text": prepared.runtime_text,
         "input": prepared.runtime_input,
         "work_root": prepared.work_root,
-        "approval_policy": resolved["approval_policy"],
-        "active_tier": resolved["active_tier"],
+        "approval_policy": turn_runtime_snapshot["approval_policy"],
+        "active_tier": turn_runtime_snapshot["active_tier"],
         "tier_tools": resolved["tier_tools"],
         "active_mode": resolved["active_mode"],
-        "allow_access_outside_workdir": resolved.get("allow_access_outside_workdir", False),
+        "allow_access_outside_workdir": turn_runtime_snapshot["allow_access_outside_workdir"],
+        "permission_preset": turn_runtime_snapshot["permission_preset"],
+        "runtime_snapshot": turn_runtime_snapshot,
         "imagegen_config": imagegen_config,
         "model_id": str(params.get("model_id") or params.get("modelId") or ""),
         "thinking_enabled": params.get("thinking_enabled") if isinstance(params.get("thinking_enabled"), bool) else None,
@@ -707,50 +737,183 @@ async def _resolve_turn_approval_policy(*, context: "CoreLiveContext", params: d
     Returns dict with keys: approval_policy, active_tier, tier_tools, active_mode, load_tools
     """
     explicit = params.get("approval_policy") or params.get("approvalPolicy")
+    thread_id = str(
+        params.get("thread_id")
+        or params.get("threadId")
+        or params.get("session_id")
+        or params.get("sessionId")
+        or ""
+    ).strip()
     active_mode = params.get("active_mode")
     if isinstance(active_mode, str) and active_mode.strip():
         active_mode = active_mode.strip()
     else:
         active_mode = None
     load_tools = _load_load_tools(context)
-    default_result: dict[str, Any] = {
-        "approval_policy": "require",
+    global_controls: dict[str, Any] = load_global_runtime_controls()
+    global_value: dict[str, Any] = {}
+    if context.operations.has("settings.get"):
+        try:
+            result = await context.operations.execute(
+                "settings.get",
+                {"namespace": "core.runtimeControls"},
+                metadata={"source": "core_live"},
+            )
+            value = result.payload.get("value") if result.status == "ok" and isinstance(result.payload, dict) else None
+            if isinstance(value, dict):
+                global_value = dict(value)
+                global_controls = {
+                    **global_controls,
+                    **{
+                        "base_tier": normalize_permission_mode(
+                            value.get("permission_mode"),
+                            default=global_controls["base_tier"],
+                        ),
+                        "base_allow_access_outside_workdir": (
+                            value.get("allow_access_outside_workdir")
+                            if isinstance(value.get("allow_access_outside_workdir"), bool)
+                            else global_controls["base_allow_access_outside_workdir"]
+                        ),
+                    },
+                }
+        except Exception:
+            global_value = {}
+
+    session_metadata: dict[str, Any] = {}
+    session_store = getattr(getattr(context, "host", None), "session_store", None)
+    if thread_id and session_store is not None:
+        try:
+            session = session_store.get(thread_id)
+            if inspect.isawaitable(session):
+                session = await session
+            raw_metadata = getattr(session, "metadata", None)
+            if isinstance(raw_metadata, dict):
+                session_metadata = dict(raw_metadata)
+                if "runtime_preferences" not in session_metadata:
+                    canonical = with_session_runtime_preferences(
+                        session_metadata,
+                        global_controls=global_value or global_controls,
+                    )
+                    patch = getattr(session_store, "patch", None)
+                    if callable(patch):
+                        patched = patch(thread_id, metadata=canonical)
+                        if inspect.isawaitable(patched):
+                            await patched
+                    session_metadata = canonical
+        except Exception:
+            session_metadata = {}
+
+    preferences = session_runtime_preferences(
+        session_metadata,
+        global_controls=global_value or global_controls,
+    )
+    # New clients submit only the preset.  Legacy callers may still provide
+    # the expanded fields; those are accepted only when no new preset exists.
+    raw_preset = params.get("permission_preset")
+    legacy_active_tier = params.get("active_tier")
+    legacy_outside = params.get("allow_access_outside_workdir")
+    if raw_preset is not None:
+        preset = normalize_permission_preset(raw_preset)
+        base_tier = preferences["base_tier"]
+        base_outside = preferences["base_allow_access_outside_workdir"]
+    elif explicit is not None or legacy_active_tier is not None or isinstance(legacy_outside, bool):
+        policy = "auto_approve" if explicit == "auto_approve" else "require"
+        preset = "auto" if policy == "auto_approve" else "ask"
+        base_tier = normalize_permission_mode(legacy_active_tier, default=preferences["base_tier"])
+        base_outside = legacy_outside if isinstance(legacy_outside, bool) else preferences[
+            "base_allow_access_outside_workdir"
+        ]
+    else:
+        preset = preferences["permission_preset"]
+        base_tier = preferences["base_tier"]
+        base_outside = preferences["base_allow_access_outside_workdir"]
+
+    tier_tools = _load_tier_tools(context)
+    permissions = resolve_permission_preset(
+        preset=preset,
+        base_tier=base_tier,
+        base_allow_access_outside_workdir=base_outside,
+        tier_tools=tier_tools,
+    )
+    return {
+        **permissions.to_dict(),
+        "tier_tools": permissions.tier_tools,
+        "active_mode": active_mode,
+        "runtime_snapshot": build_runtime_snapshot(permissions=permissions, active_mode=active_mode),
+    }
+
+
+def _runtime_snapshot_with_turn_options(
+    permission_snapshot: dict[str, Any],
+    *,
+    params: dict[str, Any],
+    active_mode: str | None,
+) -> dict[str, Any]:
+    """Add model/thinking options to an already-resolved permission snapshot."""
+    result = dict(permission_snapshot)
+    result["active_mode"] = active_mode
+    scalar_keys = (
+        "model_id",
+        "thinking_enabled",
+        "thinking_budget",
+        "reasoning_effort",
+        "shallow_thinking_enabled",
+        "context_window_tokens",
+        "max_tokens",
+        "temperature",
+        "compact_trigger_tokens",
+        "compact_limit_tokens",
+    )
+    for key in scalar_keys:
+        value = params.get(key)
+        if value is not None and not (isinstance(value, str) and not value.strip()):
+            result[key] = value
+    from copy import deepcopy
+
+    return deepcopy(result)
+
+
+def _queue_runtime_snapshot(item: dict[str, Any]) -> dict[str, Any]:
+    """Return the queue item's frozen runtime snapshot.
+
+    New queue records always contain the canonical snapshot written by
+    ``queue/create``.  Older records may not have one; their compatibility
+    fallback is deliberately conservative and does not consult the current
+    Composer or global settings during dispatch.
+    """
+    raw = item.get("runtime_snapshot") if isinstance(item, dict) else None
+    if isinstance(raw, dict):
+        permissions = permissions_from_snapshot(raw)
+        if permissions is not None:
+            snapshot = build_runtime_snapshot(
+                permissions=permissions,
+                active_mode=(
+                    str(raw.get("active_mode") or "").strip()
+                    if raw.get("active_mode") is not None
+                    else None
+                ),
+            )
+            for key in (
+                "model_id",
+                "thinking_enabled",
+                "thinking_budget",
+                "reasoning_effort",
+                "shallow_thinking_enabled",
+                "context_window_tokens",
+                "max_tokens",
+                "temperature",
+                "compact_trigger_tokens",
+                "compact_limit_tokens",
+            ):
+                if key in raw and raw[key] is not None:
+                    snapshot[key] = deepcopy(raw[key])
+            return snapshot
+    return {
+        "permission_preset": "ask",
         "active_tier": None,
         "tier_tools": None,
-        "active_mode": active_mode,
+        "approval_policy": "require",
         "allow_access_outside_workdir": False,
-    }
-    if explicit is not None:
-        default_result["approval_policy"] = "auto_approve" if explicit == "auto_approve" else "require"
-        return default_result
-    if not context.operations.has("settings.get"):
-        return default_result
-    try:
-        result = await context.operations.execute(
-            "settings.get",
-            {"namespace": "core.runtimeControls"},
-            metadata={"source": "core_live"},
-        )
-    except Exception:
-        return default_result
-    if result.status != "ok":
-        return default_result
-    value = result.payload.get("value") if isinstance(result.payload, dict) else None
-    if not isinstance(value, dict):
-        return default_result
-    permission_mode = value.get("permission_mode")
-    if permission_mode not in ("read_only", "limited_edit", "full_edit"):
-        return default_result
-    active_tier: PermissionMode = permission_mode  # type: ignore[assignment]
-    tier_tools = _load_tier_tools(context)
-    approval_policy = "auto_approve" if active_tier == "full_edit" else "require"
-    allow_access_outside_workdir = bool(value.get("allow_access_outside_workdir"))
-    return {
-        "approval_policy": approval_policy,
-        "active_tier": active_tier,
-        "tier_tools": tier_tools,
-        "active_mode": active_mode,
-        "allow_access_outside_workdir": allow_access_outside_workdir,
     }
 
 
@@ -1137,14 +1300,40 @@ async def handle_approval_respond_operation(
         thread_id = ""
         run_id = ""
         try:
-            resolved = await _resolve_turn_approval_policy(context=context, params={})
-            approval_params = {
-                **params,
-                "approval_policy": resolved["approval_policy"],
-                "active_tier": resolved["active_tier"],
-                "tier_tools": resolved["tier_tools"],
-                "allow_access_outside_workdir": resolved.get("allow_access_outside_workdir", False),
-            }
+            # Approval continuation must use the snapshot persisted by the
+            # paused runtime state.  Never resolve against current Composer or
+            # global settings here; those may have changed since the request
+            # was presented.
+            approval_params = dict(params)
+            approval_params.setdefault("approval_policy", "require")
+            approval_params.setdefault("active_tier", None)
+            approval_params.setdefault("tier_tools", None)
+            approval_params.setdefault("allow_access_outside_workdir", False)
+            state_store = context.host.runtime_state_store
+            if state_store is not None:
+                approval_thread_id = _thread_id_from_params(approval_params)
+                approval_state = None
+                if approval_thread_id:
+                    approval_state = await state_store.get(approval_thread_id)
+                if approval_state is None:
+                    approval_request_id = str(
+                        approval_params.get("request_id")
+                        or approval_params.get("requestId")
+                        or ""
+                    ).strip()
+                    finder = getattr(state_store, "find_pending_approval", None)
+                    if approval_request_id and callable(finder):
+                        approval_state = await finder(approval_request_id)
+                raw_snapshot = (
+                    approval_state.metadata.get("runtime_snapshot")
+                    if approval_state is not None and isinstance(approval_state.metadata, dict)
+                    else None
+                )
+                if isinstance(raw_snapshot, dict):
+                    approval_params["runtime_snapshot"] = deepcopy(raw_snapshot)
+                    parsed_permissions = permissions_from_snapshot(raw_snapshot)
+                    if parsed_permissions is not None:
+                        approval_params.update(parsed_permissions.to_dict())
             result = await context.operations.execute(
                 "approval.respond",
                 approval_params,
@@ -1234,11 +1423,27 @@ async def handle_queue_create_operation(
         return CoreLiveOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
     queue_item_id = str(params.get("queue_item_id") or params.get("queueItemId") or f"queue:{uuid.uuid4().hex[:12]}")
     client_message_id = str(params.get("client_message_id") or params.get("clientMessageId") or uuid.uuid4().hex)
+    # Resolve permissions at queue acceptance time.  The queue item must carry
+    # its own immutable runtime snapshot because Composer/session settings may
+    # change before this item is dispatched.
+    try:
+        resolved = await _resolve_turn_approval_policy(
+            context=context,
+            params={**params, "thread_id": thread_id},
+        )
+    except ValueError as exc:
+        return CoreLiveOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
+    queue_runtime_snapshot = _runtime_snapshot_with_turn_options(
+        resolved["runtime_snapshot"],
+        params=params,
+        active_mode=resolved.get("active_mode"),
+    )
     payload = queue_item_payload(
         queue_item_id=queue_item_id,
         input_items=prepared.visible_input,
         runtime_input_items=prepared.runtime_input,
         mode=str(params.get("mode") or "next_turn"),
+        runtime_snapshot=queue_runtime_snapshot,
     )
     async def write(db: AsyncSession):
         existing = await context.persistence.find_client_event(
@@ -1892,10 +2097,10 @@ async def _dispatch_next_queue_item(
 ) -> None:
     async with context.session_factory() as db:
         current_snapshot = await context.persistence.load(db, thread_id)
-    if next_dispatchable_queue_item(current_snapshot) is None:
+    queued_candidate = next_dispatchable_queue_item(current_snapshot)
+    if queued_candidate is None:
         return
     context.host.runtime_task_registry.release_run(thread_id, run_id=completed_turn_id)
-    resolved = await _resolve_turn_approval_policy(context=context, params={})
     claimed_turn_id = ""
 
     async def write(db: AsyncSession):
@@ -1913,6 +2118,7 @@ async def _dispatch_next_queue_item(
         claimed_turn_id = turn_id
         try:
             queued_work_root = str(queued.get("work_root") or work_root)
+            runtime_snapshot = _queue_runtime_snapshot(queued)
             prepared = PreparedLiveInput(
                 visible_input=visible_input,
                 runtime_input=runtime_input,
@@ -1927,7 +2133,7 @@ async def _dispatch_next_queue_item(
                 user_item_id=user_item_id,
                 client_message_id=f"dispatch:{queue_item_id}",
                 prepared=prepared,
-                params={"work_root": work_root},
+                params={"work_root": queued_work_root, **runtime_snapshot},
             )
             dispatched_input = AppEventInput(
                 thread_id=thread_id,
@@ -1943,7 +2149,10 @@ async def _dispatch_next_queue_item(
                 client_message_id=f"dispatch:{queue_item_id}",
                 input_items=prepared.visible_input,
                 work_root=prepared.work_root,
-                turn_payload_extra=materialized.turn_payload_extra,
+                turn_payload_extra={
+                    **materialized.turn_payload_extra,
+                    "runtime_snapshot": runtime_snapshot,
+                },
                 user_payload_extra=materialized.user_payload_extra,
                 include_turn_status=materialized.include_turn_status,
             )
@@ -1960,13 +2169,32 @@ async def _dispatch_next_queue_item(
                 "text": prepared.runtime_text,
                 "input": prepared.runtime_input,
                 "work_root": prepared.work_root,
-                "approval_policy": resolved["approval_policy"],
-                "active_tier": resolved["active_tier"],
-                "tier_tools": resolved["tier_tools"],
-                "active_mode": resolved["active_mode"],
-                                **prepared.runtime_extras,
+                "approval_policy": runtime_snapshot.get("approval_policy", "require"),
+                "active_tier": runtime_snapshot.get("active_tier"),
+                "tier_tools": runtime_snapshot.get("tier_tools"),
+                "active_mode": runtime_snapshot.get("active_mode"),
+                "allow_access_outside_workdir": bool(
+                    runtime_snapshot.get("allow_access_outside_workdir", False)
+                ),
+                "permission_preset": runtime_snapshot.get("permission_preset", "ask"),
+                "runtime_snapshot": runtime_snapshot,
+                **prepared.runtime_extras,
                 **materialized.runtime_extras,
             }
+            for key in (
+                "model_id",
+                "thinking_enabled",
+                "thinking_budget",
+                "reasoning_effort",
+                "shallow_thinking_enabled",
+                "context_window_tokens",
+                "max_tokens",
+                "temperature",
+                "compact_trigger_tokens",
+                "compact_limit_tokens",
+            ):
+                if key in runtime_snapshot:
+                    runtime_start[key] = runtime_snapshot[key]
             return [dispatched, accepted, user, running], runtime_start
         except BaseException:
             context.host.runtime_task_registry.release_run(thread_id, run_id=turn_id)

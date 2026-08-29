@@ -2,10 +2,12 @@
   <TitleBar
     :left-pinned="leftPinned"
     :right-pinned="rightPinned"
-    :workflow-mode="workflowMode"
+    :mode-label="activeAppMode.title"
+    :mode-title="nextAppModeTitle"
+    :can-toggle-mode="appModes.length > 1"
     @toggle-left-pinned="toggleLeftPinned"
     @toggle-right-pinned="toggleRightPinned"
-    @toggle-workflow-mode="toggleWorkflowMode"
+    @cycle-mode="cycleAppMode"
   />
   <div v-if="backendCrashed" class="core-update-banner" role="alert" data-backend-crashed-banner>
     <span class="core-update-banner-text">后端进程已停止响应（可能已崩溃）。请重启应用以恢复。</span>
@@ -25,8 +27,6 @@
     :permission-mode="permissionMode"
     :allow-access-outside-workdir="allowAccessOutsideWorkdir"
     :request-rpc="requestConfigOperation"
-    :workflows="settingsWorkflowList"
-    :workflow-list-loading="settingsWorkflowLoading"
     :update-state="updateState"
     @close="showSettings = false"
     @update:density="uiPreferences.setDensity"
@@ -45,19 +45,17 @@
     @create-provider="createProvider"
     @update-provider="updateProvider"
     @delete-provider="deleteProvider"
-@create-model="createModel"
+	@create-model="createModel"
 	    @update-model="updateModel"
 	    @delete-model="deleteModel"
 	    @set-default-model="setDefaultModel"
     @reopen-onboarding="reopenOnboarding"
-    @refresh-workflows="loadSettingsWorkflows"
-    @toggle-workflow-exposed="onToggleWorkflowExposed"
   />
   <PluginsShell
     v-if="showPlugins"
     :request-rpc="requestConfigOperation"
     :theme="theme"
-    @close="showPlugins = false"
+    @close="closePlugins"
   />
   <CoreArrangeManager
     v-if="showArrange"
@@ -95,10 +93,11 @@
     :show-sidebar-header="false"
     :show-sidebar-header-action="false"
     :composer-disabled="composerDisabled"
+    :composer-placeholder="composerPlaceholder"
     :composer-action-mode="composerActionMode"
     :composer-active="latestStatus === 'running'"
     v-model:stage-open="stageOpen"
-    @new-session="openProjectCreate"
+    @new-session="handleShellNewSession"
     @update:left-pinned="syncLeftPinned"
     @settings="openSettings"
     @plugins="openPlugins"
@@ -108,72 +107,57 @@
   >
     <template #primary>
       <div class="core-project-primary-actions">
-        <button v-if="!workflowMode" class="sidebar-create-project" type="button" data-sidebar-create-project title="新建项目" aria-label="新建项目" @click="openProjectCreate">
-          <span aria-hidden="true">＋</span><span>新建项目</span>
-        </button>
-        <button v-else class="sidebar-create-project" type="button" data-sidebar-create-workflow title="新建工作流" aria-label="新建工作流" @click="openWorkflowCreate">
-          <span aria-hidden="true">＋</span><span>新建工作流</span>
+        <button
+          v-if="sidebarPrimaryActionLabel"
+          class="sidebar-create-project"
+          type="button"
+          data-sidebar-primary-action
+          :title="sidebarPrimaryActionLabel"
+          :aria-label="sidebarPrimaryActionLabel"
+          @click="invokeSidebarPrimaryAction"
+        >
+          <span aria-hidden="true">＋</span><span>{{ sidebarPrimaryActionLabel }}</span>
         </button>
         <CoreProjectCreate
-          v-if="showProjectCreate"
+          v-if="showProjectCreate && !activePluginMode"
           :loading="projectCreateLoading"
           :error="projectCreateError"
           :api-base="apiBase"
           @submit="createProject"
           @cancel="closeProjectCreate"
         />
-        <Teleport v-if="showWorkflowCreate" defer to=".workspace-shell">
-          <div class="wf-create-backdrop" @mousedown.self="closeWorkflowCreate">
-            <div class="wf-create-card" role="dialog" aria-modal="true" aria-label="新建工作流">
-              <header class="wf-create-head"><h2>新建工作流</h2></header>
-              <input
-                v-model="workflowNameDraft"
-                class="wf-create-input"
-                type="text"
-                placeholder="工作流名称"
-                autocomplete="off"
-                :disabled="workflowCreateLoading"
-                @keydown.enter.prevent="createWorkflowFromCard"
-                @keydown.esc.prevent="closeWorkflowCreate"
-              />
-              <p v-if="workflowCreateError" class="wf-create-error">{{ workflowCreateError }}</p>
-              <div class="wf-create-actions">
-                <button type="button" class="text-btn" :disabled="workflowCreateLoading" @click="closeWorkflowCreate">取消</button>
-                <button type="button" class="primary-btn" :disabled="workflowCreateLoading || !workflowNameDraft.trim()" @click="createWorkflowFromCard">
-                  {{ workflowCreateLoading ? '创建中' : '创建' }}
-                </button>
-              </div>
-            </div>
-          </div>
-        </Teleport>
       </div>
     </template>
 
     <template #sidebar-body>
       <SessionSidebar
-        :project-groups="projectGroups"
-        :has-projects="projects.length > 0"
+        :project-groups="sidebarGroups"
+        :has-projects="sidebarHasProjects"
         :project-session-limit="8"
         pin-storage-key="lamtools-core.sidebar.pinned-projects"
-        :active-session-id="workflowMode ? (activeWorkflowName || undefined) : (activeSessionId || undefined)"
-        :busy-project-ids="busyProjectIds"
-        :allow-project-delete="!workflowMode"
-        :allow-project-click="true"
-        :allow-project-context-menu="!workflowMode"
-        :allow-session-delete="!workflowMode"
-        :new-session-label="workflowMode ? '新建工作流' : '新建会话'"
-        @select-session="workflowMode ? selectWorkflow($event) : selectSession($event)"
-        @select-project="workflowMode ? selectWorkflowProject($event) : openProjectActions($event)"
-        @new-session="workflowMode ? openWorkflowCreate() : createProjectSession($event)"
+        :active-session-id="sidebarActiveSessionId"
+        :busy-project-ids="sidebarBusyProjectIds"
+        :allow-project-new-session="sidebarAllowProjectNewSession"
+        :allow-project-delete="sidebarAllowProjectDelete"
+        :allow-project-click="sidebarAllowProjectClick"
+        :allow-project-context-menu="sidebarAllowProjectContextMenu"
+        :allow-session-delete="sidebarAllowSessionDelete"
+        :allow-session-context-menu="sidebarAllowSessionContextMenu"
+        :new-session-label="sidebarNewSessionLabel"
+        @select-session="handleSidebarSession"
+        @select-project="handleSidebarProject"
+        @new-session="handleSidebarNewSession"
         @delete-project="deleteProject"
         @project-context-menu="openProjectActions"
         @delete-session="deleteSession"
+        @rename-session="renameSessionFromSidebar"
+        @export-session="exportSession"
       >
         <template #empty>
           <div class="sidebar-empty-projects" data-sidebar-empty-projects>
             <p>还没有项目</p>
             <button
-              v-if="!workflowMode"
+              v-if="!activePluginMode"
               class="sidebar-create-project"
               type="button"
               data-sidebar-empty-create-project
@@ -182,17 +166,6 @@
               @click="openProjectCreate"
             >
               <span aria-hidden="true">＋</span><span>新建项目</span>
-            </button>
-            <button
-              v-else
-              class="sidebar-create-project"
-              type="button"
-              data-sidebar-empty-create-workflow
-              title="新建工作流"
-              aria-label="新建工作流"
-              @click="openWorkflowCreate"
-            >
-              <span aria-hidden="true">＋</span><span>新建工作流</span>
             </button>
           </div>
         </template>
@@ -206,23 +179,7 @@
     </template>
 
     <template #main-header>
-      <div v-if="workflowMode" class="thread-header wf-floating-header">
-        <CoreSessionTitleEditor
-          :title="workflowDefinition?.name || ''"
-          :session-id="workflowDefinition?.name || ''"
-          :rename="renameWorkflow"
-        />
-        <button
-          type="button"
-          class="stage-toggle-btn"
-          :class="{ active: canvasLocked }"
-          :title="canvasLocked ? '解锁画布' : '锁定画布'"
-          @click="canvasLocked = !canvasLocked"
-        >
-          <svg v-if="canvasLocked" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
-          <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.5-2"/></svg>
-        </button>
-      </div>
+      <div v-if="activePluginMode" class="workspace-plugin-header" data-plugin-header></div>
       <div v-else-if="activeSessionId" class="thread-header">
         <CoreSessionTitleEditor
           :title="activeSessionTitle"
@@ -243,18 +200,10 @@
     </template>
 
     <template #main-content>
-      <WorkflowCanvas
-        v-if="workflowMode"
-        :definition="workflowDefinition || emptyWorkflow"
-        :node-states="workflowNodeStates"
-        :selected-node-id="selectedNodeId || undefined"
-        :available-tools="availableTools"
-        :available-models="availableModels"
-        :locked="canvasLocked"
-        @update:definition="onWorkflowUpdate"
-        @select-node="onSelectNode"
-        @run-from="runFromNode"
-        @run-node="runSingleNode"
+      <PluginModeHost
+        v-if="activePluginMode"
+        :plugin-id="activePluginMode.pluginId"
+        :mode-id="activePluginMode.id"
       />
       <section
         v-else
@@ -308,14 +257,13 @@
     </template>
 
     <template #modals>
+      <div v-if="activePluginMode" class="workspace-plugin-modal" data-plugin-modal></div>
       <CoreProjectSettings
-        v-if="showProjectSettings && selectedProject && !workflowMode"
+        v-if="showProjectSettings && selectedProject && !activePluginMode"
         :project="{ id: selectedProject.id, name: selectedProject.name, workRoot: selectedProject.workRoot }"
         :theme="theme"
         :request-rpc="requestConfigOperation"
         :models="availableModels"
-        :workflows="settingsWorkflowList"
-        :workflow-list-loading="settingsWorkflowLoading"
         :project-name-draft="projectNameDraft"
         :agents-content="agentsContent"
         :agents-loading="agentsLoading"
@@ -327,13 +275,11 @@
         @rename-project="renameProject"
         @save-agents="saveAgents"
         @refresh-agents="refreshAgentsContent"
-        @refresh-workflows="reloadProjectSettingsWorkflows"
-        @toggle-workflow-exposed="(name, exposed) => onToggleWorkflowExposed(name, exposed, selectedProject?.workRoot)"
       />
     </template>
 
     <template #runtime-overlay>
-      <RuntimeChecklistCard v-if="!workflowMode" :step-groups="stepGroups" />
+      <RuntimeChecklistCard v-if="!activePluginMode" :step-groups="stepGroups" />
     </template>
 
     <template #composer-preamble>
@@ -393,8 +339,8 @@
         <textarea
           ref="composerTextareaEl"
           v-model="composerText"
-          :disabled="workflowMode ? false : !activeSessionId"
-          :placeholder="workflowMode ? '用自然语言编辑工作流图…' : '给 Core Agent 发送任务...'"
+          :disabled="composerDisabled"
+          :placeholder="composerPlaceholder"
           rows="1"
           @input="handleComposerInput"
           @click="updateComposerCursor"
@@ -412,6 +358,8 @@
         :shallow-thinking-enabled="shallowThinkingEnabled"
         :active-mode="activeMode"
         :mode-options="modeOptions"
+        :runtime-mode-label="runtimeModeLabel"
+        :permission-preset="permissionPreset"
         :model-options="modelOptions"
         :thinking-mode-options="thinkingModeOptions"
         shallow-label="Shallow"
@@ -419,6 +367,7 @@
         @update:thinking-mode="executionControls.selectThinkingMode"
         @update:shallow-thinking-enabled="setShallowThinking"
         @update:active-mode="executionControls.selectMode"
+        @update:permission-preset="executionControls.selectPermissionPreset"
       >
         <template #leading>
           <button class="composer-attachment-button" type="button" title="添加附件" aria-label="添加附件" @click="attachmentFileInput?.click()">+</button>
@@ -441,103 +390,9 @@
     </template>
 
     <template #right-panel>
-      <template v-if="workflowMode">
-        <div class="wf-right-panel">
-          <!-- Upper half: node list -->
-          <section class="wf-right-nodes">
-            <h3>节点</h3>
-            <ul v-if="workflowDefinition?.nodes.length" class="wf-node-list">
-              <li
-                v-for="n in workflowDefinition.nodes"
-                :key="n.id"
-                class="wf-node-list-item"
-                :class="{ active: n.id === selectedNodeId }"
-                @click="onSelectNode(n.id)"
-              >
-                <span class="wf-node-list-kind" aria-hidden="true">
-                  <component :is="nodeKindIcon(n.kind)" :size="12" :stroke-width="1.8" />
-                </span>
-                <span class="wf-node-list-title" :title="n.title || n.id">{{ n.title || n.id }}</span>
-              </li>
-            </ul>
-            <p v-else class="wf-right-empty">暂无节点</p>
-          </section>
-          <!-- Lower half: global NL edit conversation or selected-node info -->
-          <section class="wf-right-info">
-            <template v-if="selectedNodeId">
-              <div class="wf-right-info-head">
-                <h3>{{ selectedNode?.title || selectedNodeId }}</h3>
-                <button type="button" class="text-btn" title="返回对话" @click="onSelectNode(null)">
-                  <ArrowLeft :size="14" :stroke-width="1.8" aria-hidden="true" />
-                </button>
-              </div>
-              <div v-if="selectedNode" class="wf-node-info-body">
-                <p class="wf-node-info-row"><span>类型</span><strong>{{ selectedNode.kind }}</strong></p>
-                <div v-if="selectedNode.config.instruction" class="wf-node-info-block">
-                  <span>指令</span><pre>{{ String(selectedNode.config.instruction) }}</pre>
-                </div>
-                <div v-if="selectedNode.config.command" class="wf-node-info-block">
-                  <span>命令</span><code>{{ String(selectedNode.config.command) }}</code>
-                </div>
-                <p v-if="selectedNode.config.model_id" class="wf-node-info-row"><span>模型</span><strong>{{ String(selectedNode.config.model_id) }}</strong></p>
-                <p v-if="selectedNode.config.mode" class="wf-node-info-row"><span>模式</span><strong>{{ String(selectedNode.config.mode) }}</strong></p>
-                <p class="wf-node-info-row"><span>端口</span><strong>{{ selectedNode.ports.map((p) => p.name).join(', ') || '—' }}</strong></p>
-              </div>
-            </template>
-            <template v-else>
-              <div class="wf-convo-card">
-                <header class="wf-convo-head">
-                  <h3>对话</h3>
-                  <button type="button" class="text-btn" title="放大" @click="conversationExpanded = true">⤢</button>
-                </header>
-                <div class="wf-convo-body">
-                  <ChatThread
-                    :messages="messages"
-                    :process-expanded-ids="processExpandedIds"
-                    :message-actions="true"
-                    :api-base="apiBase"
-                    :project-id="activeProjectId ?? selectedProjectId"
-                    :work-root="activeProject?.workRoot"
-                    :active-turn-id="activeTurnId"
-                    :turn-active="activeTurnRunning"
-                    :checkpoint-turn-ids="checkpointTurnIds"
-                    @toggle-process="toggleProcess"
-                    @decision-select="approvalController.handleDecision"
-                    @fork-message="handleForkMessage"
-                    @rollback-message="handleRollbackMessage"
-                    @edit-message="handleEditMessage"
-                  />
-                </div>
-              </div>
-            </template>
-          </section>
-        </div>
+      <template v-if="activePluginMode">
+        <div class="workspace-plugin-right-panel" data-plugin-right-panel></div>
       </template>
-      <Teleport v-if="workflowMode && conversationExpanded" defer to=".workspace-shell">
-        <section class="wf-convo-float" role="dialog" aria-modal="false" aria-label="工作流对话">
-          <header class="wf-convo-float-head">
-            <h3>{{ activeWorkflowName || '工作流' }} · 对话</h3>
-            <button type="button" class="text-btn" title="收起" @click="conversationExpanded = false">
-              <X :size="14" :stroke-width="1.8" aria-hidden="true" />
-            </button>
-          </header>
-          <div class="wf-convo-float-body">
-            <ChatThread
-              :messages="messages"
-              :process-expanded-ids="processExpandedIds"
-              :message-actions="true"
-              :active-turn-id="activeTurnId"
-              :turn-active="activeTurnRunning"
-              :checkpoint-turn-ids="checkpointTurnIds"
-              @toggle-process="toggleProcess"
-              @decision-select="approvalController.handleDecision"
-              @fork-message="handleForkMessage"
-              @rollback-message="handleRollbackMessage"
-              @edit-message="handleEditMessage"
-            />
-          </div>
-        </section>
-      </Teleport>
       <FileTreePanel
         v-else-if="stageOpen && activeProjectId"
         :project-id="activeProjectId"
@@ -545,7 +400,7 @@
         @open-file="openFileInStage"
       />
       <template v-else>
-        <RuntimeChecklistCard v-if="!workflowMode" class="runtime-checklist-mobile" :step-groups="stepGroups" />
+        <RuntimeChecklistCard class="runtime-checklist-mobile" :step-groups="stepGroups" />
         <CoreResourceStats
           :messages="messages"
           :context-window="executionControls.activeModel.value?.context_window"
@@ -587,7 +442,7 @@ import {
   shallowRef,
   watch,
 } from 'vue'
-import { ArrowDown, ArrowLeft, Boxes, CalendarClock, ChevronDown, ChevronUp, Command, Cpu, FileCode2, FileText, Upload, X, type LucideIcon } from 'lucide-vue-next'
+import { ArrowDown, CalendarClock, ChevronDown, ChevronUp, Upload } from 'lucide-vue-next'
 import type {
   CoreAttachment,
   CoreSessionListItem,
@@ -609,24 +464,13 @@ import {
   selectCoreQueuedInputs,
   selectLatestActiveTurnId,
   selectLatestTurnStatus,
+  type CoreAppEvent,
   type CoreAppSnapshot,
   type CoreQueuedInput,
 } from '../appServer'
 import { buildCoreComposerHighlightSegments } from '../composer/inputItems'
 import { buildCurrentTurnChecklistGroups } from '../runtime/checklist'
 import { listArrangeJobs, updateArrangeJob } from '../durable/api'
-import {
-  listWorkflows,
-  listGroupedWorkflows,
-  getWorkflow,
-  createWorkflow,
-  updateWorkflow,
-  deleteWorkflow,
-  runWorkflow as runWorkflowApi,
-  setWorkflowExposed,
-  listToolNames,
-} from '../workflow/api'
-import type { WorkflowDef, WorkflowNodeData, NodeStateStatus } from '../workflow/types'
 import {
   readUpdateAutoCheck,
   useCoreApprovalController,
@@ -644,7 +488,6 @@ import {
 
 import AttachmentTray from '../components/AttachmentTray.vue'
 import ChatThread from '../components/ChatThread.vue'
-import UiSelect from '../components/UiSelect.vue'
 import CommandPalette from '../components/CommandPalette.vue'
 import CoreExecutionControls from '../components/CoreExecutionControls.vue'
 import CoreResourceStats from '../components/CoreResourceStats.vue'
@@ -665,13 +508,23 @@ import type {
 } from '../components/CoreSettings.vue'
 import CoreProjectSettings from '../components/CoreProjectSettings.vue'
 import RuntimeChecklistCard from '../components/RuntimeChecklistCard.vue'
-import SessionSidebar from '../components/SessionSidebar.vue'
+import SessionSidebar, { type SessionExportFormat } from '../components/SessionSidebar.vue'
 import WorkspaceShell from '../components/WorkspaceShell.vue'
 import TitleBar from '../components/TitleBar.vue'
+import PluginModeHost from '../components/PluginModeHost.vue'
+import { refreshPluginUIModes } from '../plugins/api'
+import { listModes } from '../plugins/registry'
+import {
+  provideCorePluginModeContext,
+  readPluginSurface,
+  createPluginModeRuntime,
+} from '../plugins/context'
+import type { PluginModeSurface } from '../plugins/context'
+import type { PluginMode } from '../plugins/types'
+import type { CorePermissionPreset } from '../composer/execution'
 
 const CoreSettings = defineAsyncComponent(() => import('../components/CoreSettings.vue'))
 const StagePane = defineAsyncComponent(() => import('../components/StagePane.vue'))
-const WorkflowCanvas = defineAsyncComponent(() => import('../components/WorkflowCanvas.vue'))
 
 type StagePaneInstance = InstanceType<(typeof import('../components/StagePane.vue'))['default']>
 
@@ -685,6 +538,8 @@ type RawSession = {
   updatedAt?: string
   metadata?: Record<string, unknown>
 }
+
+type SessionExportExtension = 'md' | 'txt' | 'jsonl' | 'json' | 'zip'
 
 type RawModel = {
   id: string
@@ -749,12 +604,6 @@ const shellRef = ref<InstanceType<typeof WorkspaceShell> | null>(null)
 const leftPinned = ref(true)
 const rightPinned = ref(false)
 const sendingDisabled = ref(false)
-const composerDisabled = computed(() => {
-  if (workflowMode.value) {
-    return workflowRunning.value || (!composerText.value.trim())
-  }
-  return composerActionMode.value === 'send' && (sendingDisabled.value || !activeSessionId.value || (!composerText.value.trim() && pendingAttachments.value.length === 0))
-})
 
 function toggleLeftPinned() {
   leftPinned.value = !leftPinned.value
@@ -784,52 +633,69 @@ const showArrange = ref(false)
 const showOnboarding = ref(false)
 const wizardLoading = ref(false)
 const wizardError = ref('')
-const workflowMode = ref(false)
 // Rust 监视线程发现后端进程退出时置位，顶部横幅提示（audit 20 S3）。
 const backendCrashed = ref(false)
-const canvasLocked = ref(false)
-const workflows = ref<WorkflowDef[]>([])
-const workflowGroups = ref<Record<string, WorkflowDef[]>>({})
-const activeWorkflowName = ref<string>('')
-const workflowDefinition = ref<WorkflowDef | null>(null)
-const workflowNodeStates = ref<Record<string, NodeStateStatus>>({})
-const workflowRunning = ref(false)
-const workflowStatusText = ref('')
-const selectedNodeId = ref<string | null>(null)
-const settingsWorkflowList = ref<WorkflowDef[]>([])
-const settingsWorkflowLoading = ref(false)
-const showWorkflowCreate = ref(false)
-const workflowCreateLoading = ref(false)
-const workflowCreateError = ref('')
-const workflowNameDraft = ref('')
-// Available tool specs for node tool-set selection (checkbox list).
-const availableTools = ref<Array<{ name: string; description: string }>>([])
-// Conversation card expanded into a right-half floating window.
-const conversationExpanded = ref(false)
-let autosaveTimer: ReturnType<typeof setTimeout> | null = null
-// Timestamp of the last save we initiated — used to suppress the file-watcher
-// "workflow/changed" refetch that our own save triggers (avoids a feedback
-// loop that resets dragged node positions during interaction).
-let lastSelfSaveAt = 0
+const lastEvent = ref<CoreAppEvent | null>(null)
+const pluginModeRuntime = createPluginModeRuntime()
+const pluginModes = ref<PluginMode[]>([])
+const coreAppMode = {
+  pluginId: 'core',
+  id: 'agent',
+  title: 'Agent',
+  entry: '',
+  icon: 'agent',
+  enabled: true,
+  load: async () => ({}) as never,
+} as PluginMode
+const appModes = computed<PluginMode[]>(() => [coreAppMode, ...pluginModes.value])
+const activeAppModeKey = ref('core:agent')
+const activeAppMode = computed(() => (
+  appModes.value.find((mode) => mode.pluginId + ':' + mode.id === activeAppModeKey.value)
+    || coreAppMode
+))
+const activePluginMode = computed(() => (
+  activeAppMode.value.pluginId === 'core' ? null : activeAppMode.value
+))
+const activePluginSurface = computed<PluginModeSurface | undefined>(() => {
+  const mode = activePluginMode.value
+  return mode ? pluginModeRuntime.get(mode.pluginId + ':' + mode.id) : undefined
+})
+const nextAppModeTitle = computed(() => {
+  const modes = appModes.value
+  if (modes.length < 2) return '没有可切换的插件模式'
+  const index = modes.findIndex((mode) => mode.pluginId + ':' + mode.id === activeAppModeKey.value)
+  return '切换到 ' + (modes[(index + 1) % modes.length]?.title || '下一个模式')
+})
 
-const emptyWorkflow: WorkflowDef = {
-  name: '',
-  description: '',
-  nodes: [],
-  edges: [],
-  input_params: [],
-  output_port: '',
-  exposed: false,
-  tool_name: '',
-  work_root: '',
-  map: '',
-  created_at: '',
-  updated_at: '',
+function modeKey(mode: PluginMode): string {
+  return mode.pluginId + ':' + mode.id
 }
 
-const workflowSelectOptions = computed(() =>
-  workflows.value.map((w) => ({ value: w.name, label: w.name })),
-)
+function isPluginOwnedSession(session: CoreSessionListItem | undefined): boolean {
+  return typeof session?.metadata?.owner_plugin === 'string'
+    && Boolean(session.metadata.owner_plugin)
+}
+
+function isActivePluginSession(): boolean {
+  return isPluginOwnedSession(sessions.value.find((session) => session.id === activeSessionId.value))
+}
+
+const composerPlaceholder = computed(() => (
+  activePluginMode.value
+    ? readPluginSurface(activePluginSurface.value?.composerPlaceholder, '输入内容…')
+    : '给 Core Agent 发送任务...'
+))
+
+const composerDisabled = computed(() => {
+  if (activePluginMode.value) {
+    return readPluginSurface(activePluginSurface.value?.composerDisabled, true)
+  }
+  return composerActionMode.value === 'send' && (
+    sendingDisabled.value
+    || !activeSessionId.value
+    || (!composerText.value.trim() && pendingAttachments.value.length === 0)
+  )
+})
 
 // --- Stage pane state ---
 const stageOpen = ref(false)
@@ -973,6 +839,7 @@ const executionControls = useCoreExecutionControlsState({
   defaultModel,
   storage: window.localStorage,
   initial: { thinkingMode: 'medium' },
+  onPermissionPresetSelected: persistSessionPermissionPreset,
 })
 const {
   modelOptions,
@@ -981,116 +848,82 @@ const {
   shallowThinkingEnabled,
   thinkingModeOptions,
   activeMode,
+  permissionPreset,
   selectMode,
 } = executionControls
 
 const modeOptions = computed(() =>
-  workflowMode.value ? [] : [
+  activePluginMode.value ? [] : [
     { value: 'consider', label: 'consider' },
     { value: 'execute', label: 'execute' },
   ]
 )
+const runtimeModeLabel = computed(() => (
+  activePluginMode.value?.title
+    || modeOptions.value.find((option) => option.value === activeMode.value)?.label
+    || activeMode.value
+    || '模式'
+))
 
 const latestStatus = computed(() => snapshot.value ? selectLatestTurnStatus(snapshot.value) : 'idle')
 const activeTurnId = computed(() => snapshot.value ? selectLatestActiveTurnId(snapshot.value) : '')
 const activeTurnRunning = computed(() => isCoreActiveTurnStatus(latestStatus.value))
 const rollbackActiveTurn = computed(() => ['running', 'waiting'].includes(latestStatus.value))
 
-const projectGroups = computed(() =>
-  workflowMode.value ? workflowProjectGroups.value : buildCoreProjectGroups(projects.value, sessions.value),
-)
-// In workflow mode the sidebar shows Project → Workflows (no sessions).
-const workflowProjectGroups = computed(() => {
-  type WfSessionItem = {
-    id: string
-    title: string
-    status?: string
-    meta?: string
-    createdAt?: string
-    updatedAt?: string
-  }
-  type WfGroup = {
-    id: string
-    name: string
-    workRoot?: string
-    sessions: WfSessionItem[]
-    canManage?: boolean
-  }
-  const groups: WfGroup[] = []
-  for (const project of projects.value) {
-    const defs = workflowGroups.value[project.workRoot] || []
-    groups.push({
-      id: project.id,
-      name: project.name,
-      workRoot: project.workRoot,
-      canManage: true,
-      sessions: defs.map((w) => ({
-        id: w.name,
-        title: w.name,
-        status: w.exposed ? 'completed' : 'idle',
-        meta: w.exposed ? '已暴露' : '',
-        updatedAt: w.updated_at || undefined,
-        createdAt: w.created_at || undefined,
-      })),
-    })
-  }
-  // Personal/global workflows land in a synthetic "个人" group.
-  const globalDefs = workflowGroups.value['global'] || []
-  if (globalDefs.length) {
-    groups.push({
-      id: 'global',
-      name: '个人',
-      canManage: false,
-      sessions: globalDefs.map((w) => ({
-        id: w.name,
-        title: w.name,
-        status: w.exposed ? 'completed' : 'idle',
-        meta: w.exposed ? '已暴露' : '',
-        updatedAt: w.updated_at || undefined,
-        createdAt: w.created_at || undefined,
-      })),
-    })
-  }
-  return groups
+const coreSessions = computed(() => sessions.value.filter((session) => !isPluginOwnedSession(session)))
+const coreProjectGroups = computed(() => buildCoreProjectGroups(projects.value, coreSessions.value))
+const sidebarGroups = computed(() => {
+  const sidebar = activePluginSurface.value?.sidebar
+  return sidebar ? readPluginSurface(sidebar.groups, []) : coreProjectGroups.value
 })
+const sidebarHasProjects = computed(() => {
+  const sidebar = activePluginSurface.value?.sidebar
+  return sidebar
+    ? readPluginSurface(sidebar.hasProjects, sidebarGroups.value.length > 0)
+    : projects.value.length > 0
+})
+const sidebarActiveSessionId = computed(() => {
+  const sidebar = activePluginSurface.value?.sidebar
+  return sidebar
+    ? readPluginSurface(sidebar.activeSessionId, undefined)
+    : (activeSessionId.value || undefined)
+})
+const sidebarNewSessionLabel = computed(() => {
+  const sidebar = activePluginSurface.value?.sidebar
+  return sidebar ? readPluginSurface(sidebar.newSessionLabel, '新建') : '新建会话'
+})
+const sidebarAllowProjectNewSession = computed(() => {
+  const sidebar = activePluginSurface.value?.sidebar
+  return sidebar ? readPluginSurface(sidebar.allowProjectNewSession, false) : true
+})
+const sidebarAllowProjectDelete = computed(() => {
+  const sidebar = activePluginSurface.value?.sidebar
+  return sidebar ? readPluginSurface(sidebar.allowProjectDelete, false) : true
+})
+const sidebarAllowProjectClick = computed(() => {
+  const sidebar = activePluginSurface.value?.sidebar
+  return sidebar ? readPluginSurface(sidebar.allowProjectClick, false) : true
+})
+const sidebarAllowProjectContextMenu = computed(() => {
+  const sidebar = activePluginSurface.value?.sidebar
+  return sidebar ? readPluginSurface(sidebar.allowProjectContextMenu, false) : true
+})
+const sidebarAllowSessionDelete = computed(() => {
+  const sidebar = activePluginSurface.value?.sidebar
+  return sidebar ? readPluginSurface(sidebar.allowSessionDelete, false) : true
+})
+const sidebarAllowSessionContextMenu = computed(() => {
+  const sidebar = activePluginSurface.value?.sidebar
+  return sidebar ? readPluginSurface(sidebar.allowSessionContextMenu, false) : true
+})
+const sidebarPrimaryActionLabel = computed(() => (
+  activePluginSurface.value?.sidebar
+    ? readPluginSurface(activePluginSurface.value.sidebar.primaryActionLabel, '')
+    : '新建项目'
+))
 const activeSessionTitle = computed(() => (
   sessions.value.find((session) => session.id === activeSessionId.value)?.title || 'Session'
 ))
-const selectedNode = computed(() => (
-  workflowDefinition.value?.nodes.find((n) => n.id === selectedNodeId.value) || null
-))
-// System-instruction override for workflow-mode turns: tells the agent it is
-// operating on a LamTools workflow graph (not GitHub Actions etc.) and which
-// tools it has for editing the graph.
-const workflowModeInstructions = computed(() => {
-  const name = activeWorkflowName.value || ''
-  return [
-    '你是 LamTools 工作流模式的助手。用户说的"workflow/工作流/建工作流"一律指画布上的工作流节点图（WorkflowDef），不是 GitHub Actions、CI 或其它外部工作流。',
-    '节点类型有五种：ai、command、script、content、subgraph。',
-    '- ai：AI 处理。config.mode 区分 single（单次生成）/ loop（自判断反复迭代）/ agent（多轮自主+工具）。有命名输出端口→强制 JSON 输出，端口名=字段名。指令支持 {{端口名}} 插值。',
-    '- command：跑 shell 命令调用 CLI 工具（curl/git/ffmpeg 等）。config.command 是 shell 命令，用与 run_command 相同的 shell（Windows 下 Git Bash）。stdin 收 {\"inputs\":{端口名:值}} JSON，同时设 INPUT_<端口名> 环境变量。stdout 是 JSON 对象则按 key 拆到同名输出端口，否则整段放默认端口。command 图灵完备，http/file-data 一律用 command（curl/cat/jq）。',
-    '- script：写 Python 代码。config.script 是纯 Python，输入端口名直接当变量用（节点 IN a、IN b → 代码里用 a、b），给输出端口名赋值即输出（OUT y → 代码里 y=...）。不要 print、不要解析 stdin（运行时把输入绑成局部变量、从局部变量读输出）。新建 script 节点会自动生成带端口变量注释的脚手架。',
-    '- content：仅有输出端口，每个配常量值，不执行任何操作。用来注入常量。',
-    '- subgraph：引用外部工作流。config.iterate 区分 none（调用一次）/ loop（循环到 condition 满足）/ map（遍历数组）。config.workflow_name 指定目标工作流。',
-    '修饰符：condition（边级 Python 表达式，不满足该边传哨兵→下游跳过）/ transform（边上 $.field 提取子值）/ on_error（节点级 abort/fallback/skip）。',
-    '每个节点有输入/输出端口，节点间通过 out→in 端口连线。一个输入端口可接多条边→聚合成数组。端口类型校验：同类型/any 通配/number→string 兼容。',
-    '你可用以下工具操作当前工作流图：',
-    '- workflow_graph：查看当前图的完整 JSON（含节点 id、端口、连线）。',
-    '- workflow_add_node：加节点（kind/title/config/ports/position）。',
-    '- workflow_connect：连线（source/source_port/target/target_port）。',
-    '- workflow_delete_node：按 node_id 删节点（连带删相关连线）。',
-    '- workflow_update_node：按 node_id 改节点的 title/config/ports/position。',
-    '改图前先 workflow_graph 看现状，确认节点 id 和端口名后再加/连/删，避免引用不存在的 id。当前工作流名：' + (name || '（未选中）'),
-  ].join('\n')
-})
-function nodeKindIcon(kind: string): LucideIcon {
-  if (kind === 'ai') return Cpu
-  if (kind === 'command') return Command
-  if (kind === 'script') return FileCode2
-  if (kind === 'content') return FileText
-  if (kind === 'subgraph') return Boxes
-  return Command
-}
 const selectedProject = computed(() => (
   projects.value.find((project) => project.id === selectedProjectId.value) || null
 ))
@@ -1112,6 +945,9 @@ const projectWorkspace = createCoreProjectWorkspaceActions({
   selectSession,
 })
 const busyProjectIds = projectWorkspace.busyProjectIds
+const sidebarBusyProjectIds = computed(() => (
+  activePluginMode.value ? [] : busyProjectIds.value
+))
 
 const runtimeController = createCoreAppServerRuntimeController(runtime, {
     hydrateSnapshot,
@@ -1121,22 +957,7 @@ const runtimeController = createCoreAppServerRuntimeController(runtime, {
       url: appServerUrl(frontendBase, { path: '/api/core/app-server' }),
       clientInfo: { name: 'lamtools_core_frontend', title: 'LamTools Core Frontend', version: '0.1.0' },
       onEvent: (event) => {
-        // Intercept workflow/changed broadcasts from the file watcher —
-        // refetch the active workflow definition so the canvas auto-updates.
-        // Skip the refetch for ~3s after our own save to avoid a feedback
-        // loop that resets dragged node positions during interaction.
-        if (event.method === 'workflow/changed') {
-          if (Date.now() - lastSelfSaveAt < 3000) return
-          if (workflowMode.value && activeWorkflowName.value) {
-            const wr = (event.payload as Record<string, unknown> | undefined)?.work_root
-            if (!wr || wr === (currentWorkRoot() || '')) {
-              getWorkflow(activeWorkflowName.value, currentWorkRoot() || undefined)
-                .then((fresh) => { workflowDefinition.value = fresh })
-                .catch(() => {})
-            }
-          }
-          return
-        }
+        lastEvent.value = event
         onEvent(event)
       },
       onSnapshot,
@@ -1160,7 +981,7 @@ const liveComposerController = useCoreLiveComposerController({
   interruptTurn: (threadId, turnId) => runtimeController.interruptTurn(threadId, turnId),
   forceResetTurn: (threadId, turnId) => runtimeController.forceResetTurn(threadId, turnId),
   steerTurn: (threadId, turnId, input) => runtimeController.steerTurn(threadId, turnId, input),
-  queueInput: (threadId, input) => runtimeController.queueInput(threadId, input),
+  queueInput: (threadId, input, options) => runtimeController.queueInput(threadId, input, options),
   listCommands: (workRoot) => runtimeController.listCommands(workRoot),
   getWorkRoot: currentWorkRoot,
   executeCommand: async (threadId, command, workRoot) => {
@@ -1168,13 +989,21 @@ const liveComposerController = useCoreLiveComposerController({
     return true
   },
   canExecuteCommand: () => latestStatus.value !== 'running' && latestStatus.value !== 'waiting',
-  turnOptions: () => ({
-    ...executionControls.turnOptions(),
-    ...(workflowMode.value ? {
-      active_mode: 'workflow',
-      instructions: workflowModeInstructions.value,
-    } : {}),
-  }),
+  turnOptions: () => {
+    const pluginOptions = activePluginSurface.value?.turnOptions?.() || {}
+    // Plugin surfaces may add product-specific turn options, but the runtime
+    // permission snapshot belongs to Core. Do not let a plugin mode replace
+    // the Composer-selected preset or inject expanded permission fields.
+    const {
+      permission_preset: _permissionPreset,
+      active_tier: _activeTier,
+      tier_tools: _tierTools,
+      approval_policy: _approvalPolicy,
+      allow_access_outside_workdir: _allowOutsideWorkdir,
+      ...safePluginOptions
+    } = pluginOptions
+    return { ...executionControls.turnOptions(), ...safePluginOptions }
+  },
   clearComposer: clearComposerAfterPersisted,
   clearAttachments,
   focusComposer,
@@ -1261,6 +1090,56 @@ const approvalController = useCoreApprovalController({
   },
 })
 approvalControllerRef.value = approvalController
+
+// ── Assistant message actions: fork / roll back at a turn's checkpoint ──
+const checkpointsByTurnId = ref<Record<string, string>>({})
+
+/** Turn ids that currently have a checkpoint — rollback/fork/edit buttons hide when absent */
+const checkpointTurnIds = computed(() => new Set(Object.keys(checkpointsByTurnId.value)))
+
+provideCorePluginModeContext({
+  apiBase,
+  requestRpc: requestConfigOperation,
+  projectClient,
+  projects,
+  sessions,
+  selectedProjectId,
+  activeSessionId,
+  selectedProject,
+  activeProjectId,
+  activeProject,
+  currentWorkRoot,
+  setSelectedProjectId: (id) => { selectedProjectId.value = id },
+  selectSession,
+  refreshSessions,
+  setRuntimeStatus,
+  availableModels,
+  composerText,
+  ensureRightPanelOpen,
+  lastEvent,
+  chat: {
+    messages,
+    processExpandedIds,
+    toggleProcess,
+    activeTurnId,
+    activeTurnRunning,
+    checkpointTurnIds,
+    onDecisionSelect: async (payload) => {
+      await approvalController.handleDecision(
+        payload as Parameters<typeof approvalController.handleDecision>[0],
+      )
+    },
+    onForkMessage: (payload) => handleForkMessage(
+      payload as Parameters<typeof handleForkMessage>[0],
+    ),
+    onRollbackMessage: (payload) => handleRollbackMessage(
+      payload as Parameters<typeof handleRollbackMessage>[0],
+    ),
+    onEditMessage: (payload) => handleEditMessage(
+      payload as Parameters<typeof handleEditMessage>[0],
+    ),
+  },
+}, pluginModeRuntime)
 // Each error source feeds the toast service via watch; the service handles
 // auto-expiry (8s for errors) and de-duplication, so nothing stays pinned.
 watch(loadError, (value) => { if (value) showToast('error', value, 8000) })
@@ -1314,7 +1193,8 @@ async function loadInitialData() {
   try {
     loadError.value = null
     await Promise.all([loadModelOptions(), loadPermissionMode(), refreshProjects(), refreshSessions()])
-    if (sessions.value[0]) await selectSession(sessions.value[0].id)
+    await refreshPluginModes()
+    if (coreSessions.value[0]) await selectSession(coreSessions.value[0].id)
   } catch (error) {
     setLoadError(error instanceof Error ? error.message : String(error))
   }
@@ -1327,11 +1207,7 @@ async function refreshProjects() {
 async function refreshSessions() {
   const loaded = (await requestJson<RawSession[]>('/sessions')).map(toSession)
   const currentId = activeSessionId.value
-  // Workflow mode reuses Core sessions (thread id = wf_<name>) for its
-  // conversation, but those shouldn't clutter the normal agent session list.
-  // Filter them out unless we're actively in workflow mode.
-  const visible = workflowMode.value ? loaded : loaded.filter((s) => !s.id.startsWith('wf_'))
-  sessions.value = visible.map((session) => (
+  sessions.value = loaded.map((session) => (
     session.id === currentId ? { ...session, status: latestStatus.value } : session
   ))
 }
@@ -1378,8 +1254,6 @@ function openProjectActions(projectId: string) {
   showProjectSettings.value = true
   // Load AGENTS.md content for the in-place editor inside project settings.
   void loadAgentsForProject(project.id)
-  // Load project-scoped workflows for the 工作流 section.
-  void loadProjectSettingsWorkflows(project.workRoot)
 }
 
 async function loadAgentsForProject(projectId: string) {
@@ -1393,18 +1267,6 @@ async function loadAgentsForProject(projectId: string) {
     agentsError.value = messageFromError(error)
   } finally {
     agentsLoading.value = false
-  }
-}
-
-async function loadProjectSettingsWorkflows(workRoot?: string) {
-  settingsWorkflowLoading.value = true
-  try {
-    settingsWorkflowList.value = await listWorkflows(workRoot)
-  } catch (err) {
-    console.error('[project-settings] list workflows failed', err)
-    settingsWorkflowList.value = []
-  } finally {
-    settingsWorkflowLoading.value = false
   }
 }
 
@@ -1459,11 +1321,6 @@ async function refreshAgentsContent() {
   await loadAgentsForProject(projectId)
 }
 
-async function reloadProjectSettingsWorkflows() {
-  const workRoot = selectedProject.value?.workRoot
-  await loadProjectSettingsWorkflows(workRoot)
-}
-
 async function saveAgents(content: string) {
   const projectId = agentsProjectId.value
   if (!projectId) return
@@ -1488,12 +1345,82 @@ async function renameSession(sessionId: string, title: string) {
   sessions.value = sessions.value.map((session) => session.id === sessionId ? updated : session)
 }
 
+async function renameSessionFromSidebar(sessionId: string, title: string): Promise<void> {
+  try {
+    await renameSession(sessionId, title)
+    setRuntimeStatus('会话已重命名')
+  } catch (error) {
+    composerErrorText.value = messageFromError(error)
+  }
+}
+
 async function renameActiveSession(title: string) {
   if (!activeSessionId.value) return
   await renameSession(activeSessionId.value, title)
 }
 
+function sessionExportExtension(format: SessionExportFormat): SessionExportExtension {
+  if (format === 'markdown') return 'md'
+  if (format === 'handoff') return 'json'
+  return format
+}
+
+function exportFileStem(title: string, sessionId: string): string {
+  const fallback = `Session-${sessionId.slice(0, 8)}`
+  const clean = title
+    .trim()
+    .replace(/[<>:"/\\|?*\u0000-\u001F]/g, '_')
+    .replace(/[. ]+$/g, '')
+    .slice(0, 80)
+  return clean && clean !== '.' && clean !== '..' ? clean : fallback
+}
+
+function localDateStamp(date = new Date()): string {
+  const pad = (value: number) => String(value).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+}
+
+async function exportSession(sessionId: string, format: SessionExportFormat): Promise<void> {
+  const session = sessions.value.find((item) => item.id === sessionId)
+  const title = session?.title || `Session ${sessionId.slice(0, 8)}`
+  const mode = format === 'zip' ? 'full' : format === 'handoff' ? 'handoff' : 'transcript'
+  const outputFormat = format === 'zip' ? 'zip' : format === 'handoff' ? 'json' : format
+
+  try {
+    const response = await fetch(`${apiBase}/sessions/${encodeURIComponent(sessionId)}/export`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode, format: outputFormat }),
+    })
+    if (!response.ok) {
+      const errorText = await response.text()
+      throw new Error(errorText || `${response.status} ${response.statusText}`)
+    }
+
+    const blob = await response.blob()
+    const extension = sessionExportExtension(format)
+    const suffix = format === 'handoff' ? '-handoff' : ''
+    const filename = `${exportFileStem(title, sessionId)}-${localDateStamp()}${suffix}.${extension}`
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = filename
+    link.style.display = 'none'
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    window.setTimeout(() => URL.revokeObjectURL(url), 0)
+    setRuntimeStatus(`已导出：${filename}`)
+  } catch (error) {
+    composerErrorText.value = messageFromError(error)
+  }
+}
+
 async function deleteSession(sessionId: string) {
+  const session = sessions.value.find((item) => item.id === sessionId)
+  const title = session?.title || `Session ${sessionId.slice(0, 8)}`
+  if (!window.confirm(`确定删除会话「${title}」？会话、历史、checkpoint、附件记录都会删除。此操作不可撤销。`)) return
+
   try {
     await requestJson(`/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' })
   } catch (error) {
@@ -1513,6 +1440,7 @@ async function deleteSession(sessionId: string) {
 async function selectSession(id: string) {
   activeSessionId.value = id
   restoreSessionModel(id)
+  restoreSessionPermissionPreset(id)
   runtimeController.disconnect()
   liveComposerController.resetForThreadChange()
   composerErrorText.value = ''
@@ -1561,8 +1489,8 @@ async function locateMessage(messageId: string): Promise<void> {
 // single global selection. The chosen model is persisted into the session's
 // metadata by the selectedModelId watcher below.
 function restoreSessionModel(id: string) {
-  if (id.startsWith('wf_')) return
   const session = sessions.value.find((item) => item.id === id)
+  if (isPluginOwnedSession(session)) return
   const storedModelId = session?.metadata?.model_id
   if (
     typeof storedModelId === 'string'
@@ -1579,12 +1507,6 @@ async function refreshAfterRollback() {
   await refreshSessions()
   await selectSession(sessionId)
 }
-
-// ── Assistant message actions: fork / roll back at a turn's checkpoint ──
-const checkpointsByTurnId = ref<Record<string, string>>({})
-
-/** Turn ids that currently have a checkpoint — rollback/fork/edit buttons hide when absent */
-const checkpointTurnIds = computed(() => new Set(Object.keys(checkpointsByTurnId.value)))
 
 function onCheckpointGraphLoaded(nodes: Array<{
   id: string
@@ -1787,7 +1709,7 @@ function handleComposerDrop(event: DragEvent) {
 const dragActive = ref(false)
 
 function handleWindowDragOver(event: DragEvent) {
-  // 仅拦截文件拖拽；WorkflowCanvas 节点内部拖拽、文本拖选等不干预
+  // 仅拦截文件拖拽；插件视图内部拖拽、文本拖选等不干预
   if (event.dataTransfer?.types.includes('Files')) {
     event.preventDefault()
     dragActive.value = true
@@ -2119,324 +2041,179 @@ function dismissUpdateBanner() {
 }
 
 function currentWorkRoot(): string {
-  if (workflowMode.value) {
-    // Workflow mode has no sessions — derive work_root from the selected project.
-    const project = selectedProject.value
-    if (project?.workRoot) return project.workRoot
-    return ''
-  }
   const session = sessions.value.find((item) => item.id === activeSessionId.value)
   const workRoot = session?.metadata?.work_root
   return typeof workRoot === 'string' ? workRoot : ''
 }
 
-// ---------------------------------------------------------------------------
-// Workflow mode
-// ---------------------------------------------------------------------------
-
-async function refreshWorkflows() {
-  try {
-    const projectRoots = projects.value.map((p) => p.workRoot).filter(Boolean) as string[]
-    workflowGroups.value = await listGroupedWorkflows(projectRoots)
-    // Flattened list (global + selected project) for backward-compat selectors.
-    const flat: WorkflowDef[] = []
-    for (const defs of Object.values(workflowGroups.value)) flat.push(...defs)
-    workflows.value = flat
-  } catch (err) {
-    console.error('[workflow] list failed', err)
-    workflowGroups.value = {}
-    workflows.value = []
-  }
+function restoreSessionPermissionPreset(id: string): void {
+  const session = sessions.value.find((item) => item.id === id)
+  const preferences = session?.metadata?.runtime_preferences
+  const preset = preferences && typeof preferences === 'object' && !Array.isArray(preferences)
+    ? (preferences as Record<string, unknown>).permission_preset
+    : undefined
+  // A legacy session is canonicalized by the backend on listing. If an old
+  // client still returns no preference block, use the safe UI default; never
+  // copy the currently selected session's preset across the boundary.
+  executionControls.restorePermissionPreset(preset ?? 'ask')
 }
 
-function toggleWorkflowMode() {
-  workflowMode.value = !workflowMode.value
-  if (workflowMode.value) {
-    void refreshWorkflows()
-    void loadAvailableTools()
-    // Open the right panel so the node list + NL conversation are visible.
-    if (!rightPinned.value) toggleRightPinned()
-  } else {
-    // Leaving workflow mode: drop the bound wf_* session so the agent-mode
-    // sidebar (which filters wf_* out) isn't left pointing at a hidden thread.
-    activeWorkflowName.value = ''
-    workflowDefinition.value = null
-    if (activeSessionId.value && activeSessionId.value.startsWith('wf_')) {
-      activeSessionId.value = null
+let permissionPersistence = Promise.resolve()
+let permissionPersistenceGeneration = 0
+
+function persistSessionPermissionPreset(preset: CorePermissionPreset): Promise<void> {
+  const sessionId = activeSessionId.value
+  const session = sessions.value.find((item) => item.id === sessionId)
+  if (!sessionId || !session) return Promise.resolve()
+
+  const metadata: Record<string, unknown> = { ...(session.metadata || {}) }
+  const existing = metadata.runtime_preferences
+  const preferences = existing && typeof existing === 'object' && !Array.isArray(existing)
+    ? { ...(existing as Record<string, unknown>) }
+    : {}
+  preferences.permission_preset = preset
+  metadata.runtime_preferences = preferences
+  const generation = ++permissionPersistenceGeneration
+
+  permissionPersistence = permissionPersistence.then(async () => {
+    // Keep writes ordered so a quick ask → auto → full_access sequence cannot
+    // leave the session with an older response that arrived last.
+    try {
+      const updated = await requestJson<RawSession>(`/sessions/${encodeURIComponent(sessionId)}`, {
+        method: 'PATCH',
+        body: { metadata },
+      })
+      if (generation !== permissionPersistenceGeneration) return
+      sessions.value = sessions.value.map((item) => (
+        item.id === sessionId ? { ...item, metadata: updated.metadata } : item
+      ))
+    } catch (error) {
+      // Keep the chain usable for a later selection and surface the failed
+      // session write without touching global runtimeControls.
+      if (generation === permissionPersistenceGeneration) {
+        composerErrorText.value = `权限偏好保存失败：${messageFromError(error)}`
+      }
+    }
+  })
+  return permissionPersistence
+}
+
+async function refreshPluginModes(): Promise<void> {
+  try {
+    await refreshPluginUIModes(requestConfigOperation)
+    pluginModes.value = listModes()
+    if (!appModes.value.some((mode) => modeKey(mode) === activeAppModeKey.value)) {
+      activeAppModeKey.value = 'core:agent'
+      if (isActivePluginSession()) {
+        runtimeController.disconnect()
+        liveComposerController.resetForThreadChange()
+        activeSessionId.value = null
+        if (coreSessions.value[0]) await selectSession(coreSessions.value[0].id)
+      }
+    }
+  } catch (error) {
+    console.error('[plugins] UI mode list failed', error)
+    pluginModes.value = []
+    if (activePluginMode.value) {
+      activeAppModeKey.value = 'core:agent'
+      if (isActivePluginSession()) {
+        runtimeController.disconnect()
+        liveComposerController.resetForThreadChange()
+        activeSessionId.value = null
+        if (coreSessions.value[0]) await selectSession(coreSessions.value[0].id)
+      }
     }
   }
 }
 
-async function loadAvailableTools() {
-  if (availableTools.value.length) return
-  try {
-    availableTools.value = await listToolNames()
-  } catch (err) {
-    console.error('[workflow] list tools failed', err)
-    availableTools.value = []
+async function selectAppMode(mode: PluginMode): Promise<void> {
+  if (!appModes.value.some((candidate) => modeKey(candidate) === modeKey(mode))) return
+  activeAppModeKey.value = modeKey(mode)
+  if (mode.pluginId === 'core' && isActivePluginSession()) {
+    runtimeController.disconnect()
+    liveComposerController.resetForThreadChange()
+    activeSessionId.value = null
+    if (coreSessions.value[0]) await selectSession(coreSessions.value[0].id)
   }
 }
 
-function openSettings() {
-  showSettings.value = true
-  void loadSettingsWorkflows()
+function cycleAppMode(): void {
+  const modes = appModes.value
+  if (modes.length < 2) return
+  const index = modes.findIndex((mode) => modeKey(mode) === activeAppModeKey.value)
+  void selectAppMode(modes[(index + 1) % modes.length])
 }
 
-function openPlugins() {
+function invokeSidebarPrimaryAction(): void {
+  const action = activePluginSurface.value?.sidebar?.onPrimaryAction
+  if (action) {
+    void Promise.resolve(action()).catch((error) => {
+      composerErrorText.value = messageFromError(error)
+    })
+    return
+  }
+  openProjectCreate()
+}
+
+function handleShellNewSession(): void {
+  invokeSidebarPrimaryAction()
+}
+
+function handleSidebarSession(id: string): void {
+  const action = activePluginSurface.value?.sidebar?.onSelectSession
+  if (action) {
+    void Promise.resolve(action(id)).catch((error) => {
+      composerErrorText.value = messageFromError(error)
+    })
+    return
+  }
+  void selectSession(id)
+}
+
+function handleSidebarProject(id: string): void {
+  const action = activePluginSurface.value?.sidebar?.onSelectProject
+  if (action) {
+    void Promise.resolve(action(id)).catch((error) => {
+      composerErrorText.value = messageFromError(error)
+    })
+    return
+  }
+  openProjectActions(id)
+}
+
+function handleSidebarNewSession(projectGroupId: string): void {
+  const action = activePluginSurface.value?.sidebar?.onNewSession
+  if (action) {
+    void Promise.resolve(action(projectGroupId)).catch((error) => {
+      composerErrorText.value = messageFromError(error)
+    })
+    return
+  }
+  void createProjectSession(projectGroupId)
+}
+
+function openSettings(): void {
+  showSettings.value = true
+}
+
+function openPlugins(): void {
   showPlugins.value = true
 }
 
-async function selectWorkflow(name: string) {
-  if (!name) {
-    workflowDefinition.value = null
-    activeWorkflowName.value = ''
-    return
+function closePlugins(): void {
+  showPlugins.value = false
+  void refreshPluginModes()
+}
+
+function ensureRightPanelOpen(): void {
+  if (!rightPinned.value) toggleRightPinned()
+}
+
+watch(pluginModes, () => {
+  if (!appModes.value.some((mode) => modeKey(mode) === activeAppModeKey.value)) {
+    activeAppModeKey.value = 'core:agent'
   }
-  activeWorkflowName.value = name
-  try {
-    workflowDefinition.value = await getWorkflow(name, currentWorkRoot() || undefined)
-    workflowNodeStates.value = {}
-  } catch (err) {
-    console.error('[workflow] get failed', err)
-    workflowDefinition.value = null
-  }
-  // Reuse the normal conversation: connect a Core session thread bound to this
-  // workflow so the composer + ChatThread (rendered in the right panel) show
-  // the workflow's own conversation. Thread id is stable per workflow.
-  await selectSession(workflowThreadId(name))
-}
-
-function workflowThreadId(name: string): string {
-  const safe = name.replace(/[^a-zA-Z0-9_-]/g, '_')
-  return `wf_${safe}`
-}
-
-function newWorkflow() {
-  // 5C: the sidebar header "+" opens a create card instead of a random name.
-  openWorkflowCreate()
-}
-
-function openWorkflowCreate() {
-  workflowNameDraft.value = ''
-  workflowCreateError.value = ''
-  showWorkflowCreate.value = true
-}
-
-function selectWorkflowProject(projectId: string) {
-  // In workflow mode, selecting a project just sets the active work_root
-  // (no session-style action overlay). Workflows for that project are already
-  // in workflowGroups; the sidebar re-renders from the computed.
-  const project = projects.value.find((p) => p.id === projectId)
-  if (!project) return
-  selectedProjectId.value = project.id
-}
-
-function closeWorkflowCreate() {
-  showWorkflowCreate.value = false
-  workflowCreateError.value = ''
-}
-
-async function createWorkflowFromCard() {
-  const name = workflowNameDraft.value.trim()
-  if (!name) return
-  const workRoot = currentWorkRoot() || ''
-  if (!workRoot && workflowGroups.value['global'] === undefined) {
-    // No project selected and no global bucket — fall back to empty work_root.
-  }
-  const draft: WorkflowDef = {
-    ...emptyWorkflow,
-    name,
-    work_root: workRoot,
-    nodes: [],
-    edges: [],
-  }
-  workflowCreateLoading.value = true
-  workflowCreateError.value = ''
-  try {
-    const saved = await createWorkflow({ ...draft, work_root: workRoot })
-    workflowDefinition.value = saved
-    activeWorkflowName.value = saved.name
-    selectedNodeId.value = null
-    workflowNodeStates.value = {}
-    await refreshWorkflows()
-    closeWorkflowCreate()
-    setRuntimeStatus(`已创建：${saved.name}`, 2500)
-  } catch (err) {
-    workflowCreateError.value = `创建失败：${(err as Error).message}`
-  } finally {
-    workflowCreateLoading.value = false
-  }
-}
-
-function onWorkflowUpdate(def: WorkflowDef) {
-  workflowDefinition.value = def
-  scheduleAutosave()
-}
-
-function scheduleAutosave() {
-  if (autosaveTimer) clearTimeout(autosaveTimer)
-  autosaveTimer = setTimeout(() => { lastSelfSaveAt = Date.now(); void saveWorkflow(true) }, 800)
-}
-
-async function renameWorkflow(title: string): Promise<void> {
-  const def = workflowDefinition.value
-  if (!def) return
-  const oldName = def.name
-  const newName = title.trim()
-  if (!newName || newName === oldName) return
-  const renamed = { ...def, name: newName }
-  // Workflow key == file name; update_fields cannot rename. Delete the old
-  // file then create the renamed one to avoid leaving a stale duplicate.
-  const existed = workflows.value.some((w) => w.name === oldName)
-  const workRoot = currentWorkRoot() || undefined
-  try {
-    if (existed && oldName) await deleteWorkflow(oldName, workRoot)
-    const saved = await createWorkflow({ ...renamed, work_root: workRoot || '' })
-    workflowDefinition.value = saved
-    activeWorkflowName.value = saved.name
-    await refreshWorkflows()
-    setRuntimeStatus(`已重命名：${saved.name}`, 2500)
-  } catch (err) {
-    console.error('[workflow] rename failed', err)
-    setRuntimeStatus(`重命名失败：${(err as Error).message}`, 4000)
-    throw err
-  }
-}
-
-function onSelectNode(id: string | null) {
-  selectedNodeId.value = id
-}
-
-async function runFromNode(nodeId: string) {
-  await executeWorkflowRun(undefined, { startNode: nodeId })
-}
-
-async function runSingleNode(nodeId: string) {
-  await executeWorkflowRun(undefined, { singleNode: nodeId })
-}
-
-async function saveWorkflow(silent = false) {
-  const def = workflowDefinition.value
-  if (!def) return
-  const workRoot = currentWorkRoot() || undefined
-  try {
-    const saved = await (def.name && workflows.value.some((w) => w.name === def.name)
-      ? updateWorkflow(def.name, {
-          description: def.description,
-          nodes: def.nodes as unknown as Record<string, unknown>[],
-          edges: def.edges as unknown as Record<string, unknown>[],
-          input_params: def.input_params as unknown as Record<string, unknown>[],
-          output_port: def.output_port,
-          exposed: def.exposed,
-          tool_name: def.tool_name,
-        }, workRoot)
-      : createWorkflow({
-          ...def,
-          work_root: workRoot || '',
-        }))
-    workflowDefinition.value = saved
-    activeWorkflowName.value = saved.name
-    await refreshWorkflows()
-    if (!silent) setRuntimeStatus(`已保存：${saved.name}`, 2500)
-  } catch (err) {
-    console.error('[workflow] save failed', err)
-    if (!silent) setRuntimeStatus(`保存失败：${(err as Error).message}`, 4000)
-  }
-}
-
-async function runWorkflow() {
-  await executeWorkflowRun(undefined)
-}
-
-async function stepWorkflow() {
-  await executeWorkflowRun(1)
-}
-
-async function executeWorkflowRun(maxSteps: number | undefined, options: { startNode?: string; singleNode?: string } = {}) {
-  const def = workflowDefinition.value
-  if (!def || !def.name) {
-    setRuntimeStatus('先保存工作流再运行', 3000)
-    return
-  }
-  workflowRunning.value = true
-  workflowStatusText.value = options.singleNode ? '运行节点…' : options.startNode ? '从此节点运行…' : '运行中…'
-  // Mark all nodes idle before running.
-  workflowNodeStates.value = def.nodes.reduce(
-    (acc, n) => ({ ...acc, [n.id]: 'idle' as NodeStateStatus }),
-    {},
-  )
-  try {
-    const result = await runWorkflowApi(def.name, {
-      workRoot: currentWorkRoot() || undefined,
-      maxSteps,
-      startNode: options.startNode,
-      singleNode: options.singleNode,
-    })
-    const states = result.run.node_states || {}
-    const mapped: Record<string, NodeStateStatus> = {}
-    for (const [nid, s] of Object.entries(states)) {
-      const status = (s as { status?: NodeStateStatus } | undefined)?.status
-      mapped[nid] = status ?? 'idle'
-    }
-    workflowNodeStates.value = mapped
-    if (result.run.status === 'paused') {
-      workflowStatusText.value = '已暂停（单步）'
-    } else if (result.run.status === 'completed') {
-      workflowStatusText.value = '完成'
-    } else {
-      workflowStatusText.value = result.run.status
-    }
-  } catch (err) {
-    console.error('[workflow] run failed', err)
-    workflowStatusText.value = `运行失败：${(err as Error).message}`
-  } finally {
-    workflowRunning.value = false
-  }
-}
-
-async function toggleExpose() {
-  const def = workflowDefinition.value
-  if (!def) return
-  try {
-    const updated = await setWorkflowExposed(
-      def.name,
-      !def.exposed,
-      currentWorkRoot() || undefined,
-    )
-    workflowDefinition.value = updated
-    await refreshWorkflows()
-    setRuntimeStatus(updated.exposed ? `已暴露：${updated.tool_name || 'workflow_' + updated.name}` : '已取消暴露', 2500)
-  } catch (err) {
-    console.error('[workflow] expose failed', err)
-    setRuntimeStatus(`操作失败：${(err as Error).message}`, 4000)
-  }
-}
-
-async function loadSettingsWorkflows() {
-  settingsWorkflowLoading.value = true
-  try {
-    settingsWorkflowList.value = await listWorkflows(currentWorkRoot() || undefined)
-  } catch (err) {
-    console.error('[workflow] settings list failed', err)
-    settingsWorkflowList.value = []
-  } finally {
-    settingsWorkflowLoading.value = false
-  }
-}
-
-async function onToggleWorkflowExposed(name: string, exposed: boolean, workRootOverride?: string) {
-  try {
-    const workRoot = workRootOverride ?? (currentWorkRoot() || undefined)
-    await setWorkflowExposed(name, exposed, workRoot)
-    if (workRootOverride !== undefined) {
-      await loadProjectSettingsWorkflows(workRootOverride)
-    } else {
-      await loadSettingsWorkflows()
-    }
-  } catch (err) {
-    console.error('[workflow] settings toggle expose failed', err)
-  }
-}
+})
 
 function syncActiveSessionStatus(status: string) {
   const sessionId = activeSessionId.value
@@ -2473,7 +2250,7 @@ function syncThreadResizeObserver() {
   const element = threadScrollEl.value
   if (!element) return
   // Rebuild only when the observed element actually changed. The .thread
-  // element is replaced when toggling workflow mode (v-if/v-else) or when
+  // element is replaced when switching the top-level mode (v-if/v-else) or when
   // the app re-mounts it — pointing the observer at a dead old element would
   // silently kill auto-follow. Cheap guard: compare against the current
   // observer's captured element target.
@@ -2539,9 +2316,8 @@ watch(composerText, () => {
 // failed save must not undo the local selection.
 watch(selectedModelId, (modelId) => {
   const sessionId = activeSessionId.value
-  if (!sessionId || sessionId.startsWith('wf_')) return
   const session = sessions.value.find((item) => item.id === sessionId)
-  if (!session) return
+  if (!sessionId || !session || isPluginOwnedSession(session)) return
   const metadata: Record<string, unknown> = { ...(session.metadata || {}) }
   if (modelId) metadata.model_id = modelId
   else delete metadata.model_id
@@ -2570,46 +2346,6 @@ watch([activeSessionId, messages, latestStatus], ([threadId]) => {
   void refreshGoal(threadId)
 })
 
-// Workflow mode: the agent edits the graph via build tools (workflow_add_node
-// etc.) during a turn. Each tool result lands in the message stream, so when
-// messages change we debounce-reload the workflow definition — the canvas
-// updates in near-realtime as the agent edits. We also reload when the turn
-// finishes (status leaves running/waiting): the agent's last batch of edits
-// often lands right as the turn ends, and without this final reload the canvas
-// would stay frozen on the pre-turn graph ("暂无节点" after a build turn).
-let graphReloadTimer: ReturnType<typeof setTimeout> | null = null
-let prevStatus = ''
-function reloadWorkflowGraph() {
-  if (!workflowMode.value || !activeWorkflowName.value) return
-  if (graphReloadTimer) clearTimeout(graphReloadTimer)
-  graphReloadTimer = setTimeout(() => {
-    void (async () => {
-      try {
-        const fresh = await getWorkflow(activeWorkflowName.value, currentWorkRoot() || undefined)
-        workflowDefinition.value = fresh
-      } catch (err) {
-        console.error('[workflow] live graph reload failed', err)
-      }
-    })()
-  }, 400)
-}
-watch(() => messages.value.length, () => {
-  // Reload on each new message while a turn is active (live edit streaming).
-  if (latestStatus.value === 'running' || latestStatus.value === 'waiting') {
-    reloadWorkflowGraph()
-  }
-})
-// Final reload when the turn transitions out of running/waiting — catches the
-// last edits that arrived as the turn ended (the message-stream watcher above
-// would have skipped them because status already flipped to done/idle).
-watch(latestStatus, (status, prev) => {
-  if (!workflowMode.value || !activeWorkflowName.value) return
-  if (prev && (prev === 'running' || prev === 'waiting') && prev !== status) {
-    reloadWorkflowGraph()
-  }
-  prevStatus = status
-})
-
 // Sync pin state from WorkspaceShell when it mounts
 watch(shellRef, (shell) => {
   if (shell) {
@@ -2627,7 +2363,7 @@ onMounted(() => {
   // Ctrl+K 全局搜索（与侧边栏「搜索」同一个 SearchShell——统一入口）
   window.addEventListener('keydown', handleGlobalSearchKeydown)
   // 滚动跟随唯一通道：容器高度变化 -> 控制器 gating（易错点 5/9/10）。
-  // 线程元素在 workflow 模式切换时会被 Vue 销毁重建（v-if/v-else），
+  // 线程元素在顶层模式切换时会被 Vue 销毁重建（v-if/v-else），
   // 因此这里用 watch(threadScrollEl) 跟随元素生命周期重建 observer，
   // 而不是 app 生命周期一次性建立。
   watch(threadScrollEl, () => {
@@ -2852,224 +2588,6 @@ onUnmounted(() => {
 .stage-toggle-btn.active {
   background: color-mix(in srgb, var(--theme-main-text) var(--alpha-active), transparent);
   color: var(--text, #f2efeb);
-}
-
-/* Workflow mode */
-.thread-header .wf-mode-label {
-  font-size: 13px;
-  font-weight: 650;
-  color: var(--text);
-  opacity: 0.85;
-  letter-spacing: -0.02em;
-  margin-right: 4px;
-}
-.thread-header:has(.wf-mode-label) {
-  gap: 8px;
-}
-
-/* Workflow mode: the whole main area is the canvas; the thin title floats
-   over it transparently (no card chrome) instead of taking vertical space. */
-.wf-floating-header {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  z-index: var(--z-popover, 60);
-  pointer-events: auto;
-  background: transparent;
-  border: 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 10px 16px;
-}
-
-/* ---- Workflow right panel (Phase 5E) ---- */
-.wf-right-panel {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  min-height: 0;
-}
-.wf-right-panel > section {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-.wf-right-panel > section > h3 {
-  margin: 0 0 8px;
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: color-mix(in srgb, var(--theme-main-text, #f2efeb) 50%, transparent);
-}
-.wf-right-nodes {
-  flex: 0 0 auto;
-  max-height: 45%;
-  padding: 12px;
-  border-bottom: 1px solid var(--theme-main-border);
-  overflow: auto;
-}
-.wf-node-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: 2px;
-}
-.wf-node-list-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 8px;
-  border-radius: 7px;
-  cursor: pointer;
-  font-size: 13px;
-  color: var(--theme-main-text);
-  transition: background 0.12s;
-}
-.wf-node-list-item:hover {
-  background: var(--theme-main-soft-background);
-}
-.wf-node-list-item.active {
-  background: color-mix(in srgb, var(--blue) 22%, transparent);
-}
-.wf-node-list-kind {
-  opacity: 0.7;
-  font-size: 12px;
-}
-.wf-node-list-title {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.wf-right-info {
-  flex: 1 1 auto;
-  padding: 12px;
-  overflow: auto;
-}
-
-/* Conversation card in the right panel */
-.wf-convo-card {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  min-height: 0;
-  border-radius: 12px;
-  background: var(--theme-main-background);
-  border: 1px solid var(--theme-main-border);
-  overflow: hidden;
-}
-.wf-convo-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--theme-main-border);
-}
-.wf-convo-head h3 {
-  margin: 0;
-  font-size: 13px;
-  font-weight: 600;
-}
-.wf-convo-body {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: auto;
-  padding: 8px;
-}
-
-/* Right-half floating window */
-/* Centered floating conversation card (no full-screen overlay; the canvas
-   and composer remain interactive). 0.8 opacity so the graph stays visible. */
-.wf-convo-float {
-  position: fixed;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  z-index: var(--z-modal, 80);
-  width: min(640px, 70vw);
-  height: min(560px, 76vh);
-  display: flex;
-  flex-direction: column;
-  background: var(--theme-main-background);
-  border: 1px solid var(--theme-main-border);
-  border-radius: 16px;
-  box-shadow: var(--shadow);
-  pointer-events: auto;
-}
-.wf-convo-float-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--theme-main-border);
-}
-.wf-convo-float-head h3 {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 700;
-}
-.wf-convo-float-body {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: auto;
-  padding: 16px;
-}
-.wf-right-info-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 8px;
-}
-.wf-right-info-head h3 {
-  margin: 0;
-  font-size: 13px;
-  font-weight: 600;
-}
-.wf-right-empty {
-  margin: 0;
-  font-size: 12px;
-  color: color-mix(in srgb, var(--theme-main-text) 40%, transparent);
-}
-.wf-node-info-body {
-  display: grid;
-  gap: 8px;
-  font-size: 12px;
-}
-.wf-node-info-row {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  margin: 0;
-}
-.wf-node-info-row > span {
-  color: color-mix(in srgb, var(--theme-main-text) 50%, transparent);
-}
-.wf-node-info-block {
-  margin: 0;
-  display: grid;
-  gap: 4px;
-}
-.wf-node-info-block > span {
-  color: color-mix(in srgb, var(--theme-main-text) 50%, transparent);
-}
-.wf-node-info-block pre {
-  margin: 0;
-  padding: 8px;
-  border-radius: 7px;
-  background: var(--theme-main-subtle-background);
-  font-size: 11px;
-  white-space: pre-wrap;
-  word-break: break-word;
-  max-height: 160px;
-  overflow: auto;
-}
-.wf-node-info-block code {
-  font-size: 11px;
-  word-break: break-all;
 }
 
 /* ── "回到最新" floating affordance ──

@@ -44,7 +44,14 @@ async def test_create_makes_normalized_workspace_without_initializing_git(tmp_pa
         assert requested_root.resolve().is_dir()
         assert not (requested_root.resolve() / ".git").exists()
         assert [session.metadata for session in await db.project_store.list_sessions(project.id)] == [
-            {"work_root": str(requested_root.resolve())}
+            {
+                "work_root": str(requested_root.resolve()),
+                "runtime_preferences": {
+                    "base_tier": "full_edit",
+                    "base_allow_access_outside_workdir": False,
+                    "permission_preset": "ask",
+                },
+            }
         ]
     finally:
         await db.close()
@@ -136,6 +143,11 @@ async def test_create_with_initial_session_returns_the_public_initial_session(tm
         assert created is True
         assert initial_session.metadata == {
             "work_root": str(root.resolve()),
+            "runtime_preferences": {
+                "base_tier": "full_edit",
+                "base_allow_access_outside_workdir": False,
+                "permission_preset": "ask",
+            },
         }
         assert await db.project_store.list_sessions(project.id) == [initial_session]
 
@@ -150,7 +162,14 @@ async def test_project_session_creation_uses_canonical_project_and_rejects_missi
         project, _ = await db.project_store.create(tmp_path / "workspace")
         session = await db.project_store.create_session(project.id, title="Follow-up")
 
-        assert session.metadata == {"work_root": project.work_root}
+        assert session.metadata == {
+            "work_root": project.work_root,
+            "runtime_preferences": {
+                "base_tier": "full_edit",
+                "base_allow_access_outside_workdir": False,
+                "permission_preset": "ask",
+            },
+        }
         assert session.title == "Follow-up"
         with pytest.raises(LookupError, match="Project not found"):
             await db.project_store.create_session("missing-project")
@@ -233,6 +252,11 @@ async def test_session_store_enforces_project_metadata_without_http_guards(tmp_p
         assert persisted.metadata == {
             "source": "updated",
             "work_root": project.work_root,
+            "runtime_preferences": {
+                "base_tier": "full_edit",
+                "base_allow_access_outside_workdir": False,
+                "permission_preset": "ask",
+            },
         }
     finally:
         await db.close()

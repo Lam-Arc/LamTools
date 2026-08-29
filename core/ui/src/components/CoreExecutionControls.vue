@@ -1,46 +1,43 @@
 <template>
   <div class="core-execution-controls composer-model-row">
+    <CoreRuntimeMenu
+      v-if="showRuntimeMenu"
+      :active-mode="activeMode"
+      :active-mode-label="runtimeModeLabel"
+      :mode-options="modeOptions"
+      :permission-preset="permissionPreset"
+      :disabled="disabled"
+      @update:active-mode="$emit('update:activeMode', $event)"
+      @update:permission-preset="$emit('update:permissionPreset', $event)"
+    />
     <slot name="leading" />
-    <UiSelect
-      v-if="modelOptions.length > 0"
-      class="composer-model-select"
+    <CoreModelThinkingMenu
       :model-value="modelValue"
-      :options="modelOptions"
-      :placeholder="modelAriaLabel"
-      :aria-label="modelAriaLabel"
-      direction="up"
-      hide-arrow
+      :model-options="modelOptions"
+      :thinking-mode="thinkingMode"
+      :thinking-mode-options="thinkingModeOptions"
+      :shallow-thinking-enabled="shallowThinkingEnabled"
+      :model-aria-label="modelAriaLabel"
+      :thinking-aria-label="thinkingAriaLabel"
+      :shallow-label="shallowLabel"
+      :disabled="disabled"
       @update:model-value="$emit('update:modelValue', $event)"
-    />
-    <UiSelect
-      class="composer-thinking-select"
-      :model-value="thinkingMode"
-      :options="combinedThinkingOptions"
-      :placeholder="thinkingAriaLabel"
-      :aria-label="thinkingAriaLabel"
-      direction="up"
-      hide-arrow
-      @update:model-value="selectThinkingOption"
-    />
-    <UiSelect
-      v-if="modeOptions.length > 0"
-      class="composer-mode-select"
-      :model-value="activeMode"
-      :options="modeOptions"
-      :placeholder="'模式'"
-      aria-label="操作模式"
-      direction="up"
-      hide-arrow
-      @update:model-value="$emit('update:activeMode', $event)"
+      @update:thinking-mode="$emit('update:thinkingMode', $event)"
+      @update:shallow-thinking-enabled="$emit('update:shallowThinkingEnabled', $event)"
     />
     <slot name="trailing" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
-import type { CoreSelectOption, CoreThinkingMode, CoreThinkingModeOption } from '../composer/execution'
-import UiSelect from './UiSelect.vue'
+import type {
+  CorePermissionPreset,
+  CoreSelectOption,
+  CoreThinkingMode,
+  CoreThinkingModeOption,
+} from '../composer/execution'
+import CoreModelThinkingMenu from './CoreModelThinkingMenu.vue'
+import CoreRuntimeMenu from './CoreRuntimeMenu.vue'
 
 const props = withDefaults(defineProps<{
   modelValue?: string
@@ -50,6 +47,10 @@ const props = withDefaults(defineProps<{
   shallowThinkingEnabled?: boolean
   activeMode?: string
   modeOptions?: CoreSelectOption[]
+  permissionPreset?: CorePermissionPreset | string
+  runtimeModeLabel?: string
+  showRuntimeMenu?: boolean
+  disabled?: boolean
   modelAriaLabel?: string
   thinkingAriaLabel?: string
   shallowLabel?: string
@@ -60,6 +61,10 @@ const props = withDefaults(defineProps<{
   shallowThinkingEnabled: false,
   activeMode: '',
   modeOptions: () => [],
+  permissionPreset: 'ask',
+  runtimeModeLabel: '',
+  showRuntimeMenu: true,
+  disabled: false,
   modelAriaLabel: '模型',
   thinkingAriaLabel: '思考模式',
   shallowLabel: 'Shallow',
@@ -71,27 +76,8 @@ const emit = defineEmits<{
   'update:thinkingMode': [value: string]
   'update:shallowThinkingEnabled': [value: boolean]
   'update:activeMode': [value: string]
+  'update:permissionPreset': [value: CorePermissionPreset]
 }>()
-
-const SHALLOW_OPTION_VALUE = '__shallow__'
-const combinedThinkingOptions = computed(() => [
-  ...props.thinkingModeOptions,
-  {
-    value: SHALLOW_OPTION_VALUE,
-    label: props.shallowLabel,
-    selected: props.shallowThinkingEnabled,
-    separatorBefore: true,
-    activeAccent: true,
-  },
-])
-
-function selectThinkingOption(value: string) {
-  if (value === SHALLOW_OPTION_VALUE) {
-    emit('update:shallowThinkingEnabled', !props.shallowThinkingEnabled)
-    return
-  }
-  emit('update:thinkingMode', value)
-}
 </script>
 
 <style scoped>
@@ -102,51 +88,14 @@ function selectThinkingOption(value: string) {
   gap: 0;
 }
 
-.core-execution-controls :deep(.ui-select) {
+.core-execution-controls :deep(.core-runtime-menu),
+.core-execution-controls :deep(.core-model-thinking-menu) {
   min-width: 0;
-  width: auto;
+  flex: 0 1 auto;
 }
 
-:deep(.ui-select-trigger) {
-  width: auto;
-  min-width: 0;
-  max-width: min(260px, 42vw);
-  min-height: 28px;
-  height: 28px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  padding: 0 8px;
-  color: color-mix(in srgb, var(--theme-composer-text, currentColor) 76%, transparent);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-:deep(.ui-select-trigger:hover),
-:deep(.ui-select.open .ui-select-trigger) {
-  background: color-mix(in srgb, var(--theme-composer-text, currentColor) 8%, transparent);
-  color: var(--theme-composer-text, currentColor);
-}
-
-:deep(.ui-select-trigger:focus-visible) {
-  outline: 2px solid color-mix(in srgb, var(--theme-composer-text, currentColor) 26%, transparent);
-  outline-offset: 2px;
-}
-
-:deep(.ui-select-menu) {
-  z-index: var(--z-popover, 60);
-  width: max-content;
-  min-width: 100%;
-  max-width: min(280px, calc(100vw - 24px));
-}
-
-:global(.floating-composer:has(.core-execution-controls .ui-select.open)) {
+:global(.floating-composer:has(.core-execution-controls [data-core-runtime-menu]),
+.floating-composer:has(.core-execution-controls [data-core-model-thinking-menu])) {
   overflow: visible;
-}
-
-@media (max-width: 560px) {
-  :deep(.ui-select-trigger) {
-    max-width: 34vw;
-  }
 }
 </style>

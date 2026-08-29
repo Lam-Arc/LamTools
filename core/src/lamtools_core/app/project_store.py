@@ -16,6 +16,7 @@ from lamtools_core.session import SessionRecord
 from .core_db import CoreProject, CoreThreadSnapshot
 from .core_session_store import delete_session_records, session_record_from_snapshot, session_snapshot
 from .sqlite_write import SQLiteWriteCoordinator
+from .runtime_permissions import with_session_runtime_preferences
 
 
 @dataclass(frozen=True)
@@ -182,7 +183,7 @@ class CoreProjectStore:
                     member_id="core",
                     title=session_title,
                     status="idle",
-                    metadata={"work_root": project.work_root},
+                    metadata=with_session_runtime_preferences({"work_root": project.work_root}),
                 )
                 db.add(
                     CoreThreadSnapshot(
@@ -200,6 +201,7 @@ class CoreProjectStore:
                     **session.metadata,
                     "work_root": project.work_root,
                 }
+                session.metadata = with_session_runtime_preferences(session.metadata)
                 state = dict(row.snapshot_json or {})
                 state["session"] = {
                     "member_id": session.member_id,
@@ -305,7 +307,7 @@ async def _create_project_session(db: Any, project: CoreProject, *, title: str) 
         member_id="core",
         title=title,
         status="idle",
-        metadata={"work_root": project.work_root},
+        metadata=with_session_runtime_preferences({"work_root": project.work_root}),
     )
     db.add(
         CoreThreadSnapshot(

@@ -48,31 +48,6 @@ export type {
 
 export type { CoreGoal, CoreArrangeJob } from './durable/types';
 
-export type {
-  WorkflowNodeKind,
-  PortDirection,
-  NodeStateStatus,
-  WorkflowPort,
-  WorkflowNodeData,
-  WorkflowEdge,
-  WorkflowInputParam,
-  WorkflowDef,
-  WorkflowNodeState,
-  WorkflowRunStatus,
-  WorkflowRunResult,
-} from './workflow/types';
-
-export {
-  listWorkflows,
-  getWorkflow,
-  createWorkflow,
-  updateWorkflow,
-  deleteWorkflow,
-  runWorkflow,
-  setWorkflowExposed,
-  listToolNames,
-} from './workflow/api';
-
 export {
   listGoals,
   updateGoal,
@@ -101,6 +76,8 @@ export { default as SessionSidebar } from './components/SessionSidebar.vue';
 export { default as ChatThread } from './components/ChatThread.vue';
 export { default as ComposerBar } from './components/ComposerBar.vue';
 export { default as CoreExecutionControls } from './components/CoreExecutionControls.vue';
+export { default as CoreRuntimeMenu } from './components/CoreRuntimeMenu.vue';
+export { default as CoreModelThinkingMenu } from './components/CoreModelThinkingMenu.vue';
 export { default as CoreSubAgentPanel } from './components/CoreSubAgentPanel.vue';
 export { default as CoreSubAgentDialog } from './components/CoreSubAgentDialog.vue';
 export { default as CoreResourceStats } from './components/CoreResourceStats.vue';
@@ -116,6 +93,7 @@ export { default as ThemeEditor } from './components/ThemeEditor.vue';
 export { default as ThemeAreaEditor } from './components/ThemeAreaEditor.vue';
 export { default as CoreSettings } from './components/CoreSettings.vue';
 export { default as PluginsShell } from './components/PluginsShell.vue';
+export { default as PluginModeHost } from './components/PluginModeHost.vue';
 export { default as CoreProjectSettings } from './components/CoreProjectSettings.vue';
 export type { CoreProjectSettingsProject } from './components/CoreProjectSettings.vue';
 export { default as CoreProjectCreate } from './components/CoreProjectCreate.vue';
@@ -131,10 +109,22 @@ export type {
 export { default as CoreAgentsEditor } from './components/CoreAgentsEditor.vue';
 export { default as CoreArrangeManager } from './components/CoreArrangeManager.vue';
 export { default as CoreGoalStrip } from './components/CoreGoalStrip.vue';
-export { default as WorkflowCanvas } from './components/WorkflowCanvas.vue';
-export { default as WorkflowNode } from './components/WorkflowNode.vue';
-export { default as NodeEditCard } from './components/NodeEditCard.vue';
-export { default as WorkflowControlBar } from './components/WorkflowControlBar.vue';
+export {
+  PluginUIRegistry,
+  pluginUIRegistry,
+  registerMode,
+  getMode,
+  listModes,
+  unregisterPlugin,
+} from './plugins/registry';
+export { listPluginUI, refreshPluginUIModes } from './plugins/api';
+export type {
+  PluginMode,
+  PluginModeLoader,
+  PluginRpc,
+  PluginUIEntry,
+  PluginUIListPayload,
+} from './plugins/types';
 export { default as StagePane } from './components/StagePane.vue';
 export { default as StageCodeEditor } from './components/StageCodeEditor.vue';
 export { default as StageImagePreview } from './components/StageImagePreview.vue';
@@ -149,7 +139,6 @@ export type {
   CoreSettingsModelPayload,
   CoreSettingsProvider,
   CoreSettingsProviderPayload,
-  WorkflowListItem,
 } from './components/CoreSettings.vue';
 
 // Helpers
@@ -280,11 +269,15 @@ export {
 export {
   CORE_THINKING_BUDGETS,
   CORE_THINKING_LABELS,
+  CORE_PERMISSION_PRESET_DESCRIPTIONS,
+  CORE_PERMISSION_PRESET_LABELS,
   coreModelDisplayLabel,
   coreModelSelectOptions,
   coreThinkingModeOptions,
   coreThinkingPayload,
   normalizeCoreThinkingMode,
+  normalizeCorePermissionPreset,
+  corePermissionPresetLabel,
   readStoredCoreShallowThinking,
   readStoredCoreThinkingMode,
   selectCoreExecutionModel,
@@ -292,6 +285,7 @@ export {
   writeStoredCoreThinkingMode,
   type CoreExecutionModelSource,
   type CoreExecutionProviderSource,
+  type CorePermissionPreset,
   type CoreSelectOption,
   type CoreThinkingLabels,
   type CoreThinkingMode,
@@ -338,6 +332,7 @@ export {
   type CoreAppInputItem,
   type CoreAppItem,
   type CoreAppQueueItem,
+  type CoreAppRuntimeSnapshot,
   type CoreAppRequestState,
   type CoreAppServerChatMessage,
   type CoreAppServerClientOptions,

@@ -56,8 +56,16 @@ from lamtools_core.config.model_store import ModelConfig, ModelStore
 from lamtools_core.config.provider_store import ProviderConfig, ProviderStore
 from lamtools_core.config.settings_store import delete_setting, get_setting, set_setting
 from lamtools_core.config.root import ensure_projects_root
+from lamtools_core.export import ConversationExportService, build_handoff_context
+from lamtools_core.export.serializers import full_to_zip, to_json, transcript_to_jsonl, transcript_to_markdown, transcript_to_text
 from lamtools_core.runtime import RuntimeTurnInput
 from lamtools_core.tool.default_toolbox import ApprovalPolicy, build_core_toolbox
+from lamtools_core.app.runtime_permissions import (
+    load_global_runtime_controls,
+    resolve_permission_preset,
+    runtime_snapshot as build_runtime_snapshot,
+    session_runtime_preferences,
+)
 
 # Process-level model-store context. The HTTP app (create_core_agent_http_app)
 # configures the shared work_root so load_llm_config can resolve project-scoped
@@ -95,20 +103,21 @@ class CoreCliRunOptions:
     compact_trigger_tokens: int | None = None
     compact_limit_tokens: int | None = None
     temperature: float = 0.2
-    approval_policy: ApprovalPolicy = "require"
+    # ``None`` means "use the frozen Session preference".  Keeping the
+    # absence distinct from ``require`` prevents repeated CLI runs from
+    # silently resetting an existing Session's Composer choice.
+    approval_policy: ApprovalPolicy | None = None
+    permission_preset: str | None = None
     # Allow file tools to access paths outside work_root (default: read from
     # settings core.runtimeControls.allow_access_outside_workdir).
     allow_outside_workdir: bool | None = None
     raw: bool = False
     verbose: bool = False
-    # --- Workflow mode (mirrors the frontend "工作流模式" path) ---
-    # When set, the build tools (workflow_graph/add_node/connect/...) become
-    # available and loadtools "workflow" whitelist is applied — identical to the
-    # HTTP app's active_mode="workflow". An operation_catalog may be supplied
-    # directly; otherwise one is assembled from workflow_store + the runner.
+    # Optional plugin mode and host services.  Plugin-specific behavior is
+    # contributed by manifests and runtime handles, not named by Core.
     active_mode: str = ""
     instructions: str = ""
-    workflow_store: Any = None
+    plugin_services: dict[str, Any] = field(default_factory=dict)
     operation_catalog: Any = None
 
     def __post_init__(self) -> None:
@@ -331,10 +340,70 @@ async def run_core_cli_task(
         llm_client = ShallowThinkingClient(llm_client)
 
     sink = CollectingEventSink()
+    # Resolve the same permission preset used by the live host.  The CLI is a
+    # first-class client, so it also freezes one expanded snapshot for this
+    # run instead of letting individual tools reinterpret the flags.
+    global_controls = load_global_runtime_controls()
+    from lamtools_core.config.root import core_config_file
+    from lamtools_core.tool.approval import load_access_tools
+
+    tier_tools = load_access_tools(core_config_file("access_tools.jsonc"))
+    core_db = await open_core_app_db(core_db_path)
+
+    # Establish/read the Session before resolving runtime permissions.  Global
+    # runtimeControls initialize new Sessions only; an existing Session owns
+    # its persisted preference until the caller explicitly changes it.
+    _, session, _ = await core_db.project_store.ensure_session(
+        work_root,
+        thread_id,
+        title=options.message,
+    )
+    session_preferences = session_runtime_preferences(
+        session.metadata,
+        global_controls=global_controls,
+    )
+    if options.allow_outside_workdir is None:
+        base_allow_outside = bool(session_preferences["base_allow_access_outside_workdir"])
+    else:
+        base_allow_outside = bool(options.allow_outside_workdir)
+    if options.permission_preset is not None:
+        requested_preset = options.permission_preset
+    elif options.approval_policy == "auto_approve":
+        requested_preset = "auto"
+    else:
+        requested_preset = str(session_preferences["permission_preset"])
+    resolved_permissions = resolve_permission_preset(
+        preset=requested_preset,
+        base_tier=session_preferences["base_tier"],
+        base_allow_access_outside_workdir=base_allow_outside,
+        tier_tools=tier_tools,
+    )
+    allow_outside_workdir = resolved_permissions.allow_access_outside_workdir
+
+    from lamtools_core.plugins.context import PluginContext
+    from lamtools_core.runtime import RuntimeTaskRegistry
+    from lamtools_core.tool.approval import ApprovalGate
+    from lamtools_core.tool.permission import ASK_USER
+
+    runtime_task_registry = RuntimeTaskRegistry()
+    plugin_permission_service = ApprovalGate(
+        work_root=work_root,
+        tool_permissions={"run_command": ASK_USER},
+        allow_access_outside_workdir=allow_outside_workdir,
+    )
+
+    plugin_context = PluginContext(
+        work_root=work_root,
+        data_dir=run_dir,
+        permission_service=plugin_permission_service,
+        runtime_task_registry=runtime_task_registry,
+        services=dict(options.plugin_services),
+    )
     plugin_assembly = assemble_core_agent_plugins(
         data_dir=run_dir,
         work_root=work_root,
         plugin_roots=options.plugin_roots or None,
+        context=plugin_context,
     )
     from lamtools_core.mcp import MCPToolRegistry
 
@@ -345,12 +414,10 @@ async def run_core_cli_task(
         plugin_assembly["hook_engine"].set_mcp_caller(mcp_registry if mcp_tool_specs else None)
     from lamtools_core.tool.sub_agent_runner import KernelSubAgentRunner
 
-    core_db = await open_core_app_db(core_db_path)
-    await core_db.project_store.ensure_session(
-        work_root,
-        thread_id,
-        title=options.message,
-    )
+    async def capture_model_context(state: Any, request: Any) -> None:
+        payload = build_handoff_context(getattr(request, "messages", []))
+        await core_db.handoff_context_store.save(state.session_id, payload)
+
     run_id = uuid.uuid4().hex[:12]
     turn_id = f"{thread_id}:turn:{run_id}"
     await persist_core_run_items(
@@ -377,6 +444,19 @@ async def run_core_cli_task(
     if options.instructions:
         core_instructions = options.instructions
     context_window_tokens = int(getattr(llm_client, "context_window", 0) or 0) or context_window_tokens
+    runtime_snapshot = build_runtime_snapshot(
+        permissions=resolved_permissions,
+        active_mode=options.active_mode or None,
+        model_id=resolved_model_id,
+        thinking_enabled=options.thinking_enabled,
+        thinking_budget=options.thinking_budget,
+        shallow_thinking_enabled=options.shallow_thinking_enabled,
+        context_window_tokens=context_window_tokens,
+        max_tokens=options.max_tokens,
+        temperature=options.temperature,
+        compact_trigger_tokens=options.compact_trigger_tokens,
+        compact_limit_tokens=options.compact_limit_tokens,
+    )
 
     sub_agent_runner = KernelSubAgentRunner(
         work_root=work_root,
@@ -387,7 +467,11 @@ async def run_core_cli_task(
         max_tokens=options.max_tokens,
         thinking_enabled=options.thinking_enabled,
         thinking_budget=options.thinking_budget,
-        approval_policy=options.approval_policy,
+        approval_policy=resolved_permissions.approval_policy,
+        permission_preset=resolved_permissions.permission_preset,
+        active_tier=resolved_permissions.active_tier,
+        tier_tools=resolved_permissions.tier_tools,
+        runtime_snapshot=runtime_snapshot,
         loaded_skill_roots=set(plugin_assembly["skill_roots"]),
         mcp_caller=mcp_registry if mcp_tool_specs else None,
         mcp_tool_specs=mcp_tool_specs,
@@ -395,74 +479,84 @@ async def run_core_cli_task(
         state_store=core_db.runtime_state_store,
         session_prefix=thread_id,
         parent_event_sink=sink,
+        model_context_sink=capture_model_context,
     )
 
-    # --- Workflow mode assembly (mirrors http_agent_app's active_mode="workflow") ---
-    # When a workflow_store is supplied, register the workflow.* operations and
-    # expose the 5 graph-editing build tools so the agent can build a workflow
-    # from natural language — identical to the frontend "工作流模式" path.
-    workflow_store = options.workflow_store
+    # Every local run uses the same plugin operation loader as the HTTP app.
+    # Reuse the already-loaded backend handles so one plugin owns one runtime
+    # instance (and one store) for the whole task.
     operation_catalog = options.operation_catalog
+    if operation_catalog is None:
+        from lamtools_core.app.base_agent import build_core_plugin_operation_catalog
+
+        operation_catalog = build_core_plugin_operation_catalog(
+            data_dir=run_dir,
+            work_root=work_root,
+            plugin_roots=options.plugin_roots or None,
+            context=plugin_context,
+            plugin_runtimes=plugin_assembly.get("plugin_runtimes") or [],
+        )
+    plugin_context.operation_catalog = operation_catalog
+    plugin_context.llm_client = llm_client
+    plugin_context.set_service("sub_agent_runner", sub_agent_runner)
+    plugin_context.set_service("sub_agent_runner_factory", lambda: sub_agent_runner)
+    for runtime_handle in plugin_assembly.get("plugin_runtimes") or []:
+        runner = getattr(runtime_handle.value, "runner", None)
+        if runner is not None:
+            runner.sub_agent_runner = sub_agent_runner
+
     load_tools_obj = None
     active_mode = options.active_mode or None
-    if workflow_store is not None:
+    if active_mode:
         from lamtools_core.tool.loadtools import default_load_tools
 
-        from lamtools_core.runtime.workflow import WorkflowManager, WorkflowRunner
-        from lamtools_core.app.workflow_operations import register_workflow_operations
-        from lamtools_core.app.operation_catalog import OperationCatalog
-
         load_tools_obj = default_load_tools()
-        if operation_catalog is None:
-            operation_catalog = OperationCatalog()
-        workflow_manager = WorkflowManager(workflow_store)
-        if not operation_catalog.has("workflow.run"):
-            workflow_runner = WorkflowRunner(
-                llm_client=llm_client,
-                sub_agent_runner=sub_agent_runner,
-                workflow_store=workflow_store,
-            )
-            register_workflow_operations(
-                operation_catalog,
-                workflow_manager=workflow_manager,
-                runner=workflow_runner,
-                runtime_task_registry=None,
-                list_tool_specs=lambda: [],
-            )
-        if active_mode is None:
-            active_mode = "workflow"
 
     async def execute_operation(name: str, payload: dict[str, Any], metadata: dict[str, Any]) -> Any:
         if operation_catalog is None:
             raise RuntimeError("operation catalog is not configured")
         return await operation_catalog.execute(name, payload, metadata=metadata)
 
-    workflow_provider = None
-    if workflow_store is not None and operation_catalog is not None:
-        from lamtools_core.tool.workflow_tools import workflow_tool_provider
+    # Complete declarative plugin tool manifests using the same generic
+    # loader path as the HTTP/GUI hosts.  Backend-provided specs win when a
+    # runtime intentionally supplies the implementation.
+    from lamtools_core.plugins.tools import complete_plugin_tool_specs
+    from lamtools_core.tool.default_toolbox import bundled_core_tool_specs, default_core_tool_specs
 
-        workflow_provider = workflow_tool_provider(workflow_store, execute_operation, work_root=work_root)
-
-    # 显式 --allow-outside-workdir 优先，否则读 settings core.runtimeControls
-    if options.allow_outside_workdir is None:
-        _runtime_controls = get_setting("core.runtimeControls")
-        allow_outside_workdir = bool(
-            (_runtime_controls or {}).get("allow_access_outside_workdir")
-        ) if isinstance(_runtime_controls, dict) else False
-    else:
-        allow_outside_workdir = options.allow_outside_workdir
+    runtime_plugin_specs = list(plugin_assembly.get("plugin_runtime_specs") or [])
+    runtime_plugin_names = {str(getattr(spec, "name", "")) for spec in runtime_plugin_specs}
+    base_specs = {
+        spec.name: spec
+        for spec in [*default_core_tool_specs(), *bundled_core_tool_specs()]
+    }
+    plugin_tool_specs: list[Any] = []
+    for group in plugin_assembly.get("plugin_tool_groups") or []:
+        declared = complete_plugin_tool_specs(
+            group.get("tools") or [],
+            plugin_name=str(group.get("name") or ""),
+            plugin_root=group.get("root"),
+            base_specs_by_name=base_specs,
+            dependencies=group.get("dependencies") or None,
+        )
+        plugin_tool_specs.extend(spec for spec in declared if spec.name not in runtime_plugin_names)
+    plugin_tool_specs.extend(runtime_plugin_specs)
 
     toolbox = build_core_toolbox(
         work_root=work_root,
-        approval_policy=options.approval_policy,
+        approval_policy=resolved_permissions.approval_policy,
+        active_tier=resolved_permissions.active_tier,
+        tier_tools=resolved_permissions.tier_tools,
         loaded_skill_roots=set(plugin_assembly["skill_roots"]),
         mcp_caller=mcp_registry if mcp_tool_specs else None,
         mcp_tool_specs=mcp_tool_specs,
         sub_agent_runner=sub_agent_runner,
         operation_executor=execute_operation if operation_catalog is not None else None,
-        workflow_build=workflow_store is not None,
-        workflow_tool_provider=workflow_provider,
         load_tools=load_tools_obj,
+        active_mode=active_mode,
+        plugin_tool_providers=plugin_assembly.get("plugin_tool_providers") or [],
+        plugin_tool_handlers=plugin_assembly.get("plugin_tool_handlers") or {},
+        plugin_tool_specs=plugin_tool_specs,
+        data_dir=run_dir,
         allow_access_outside_workdir=allow_outside_workdir,
     )
     kit = CoreBaseAgentKit(
@@ -474,7 +568,7 @@ async def run_core_cli_task(
             max_tokens=options.max_tokens,
             thinking_enabled=options.thinking_enabled,
             thinking_budget=options.thinking_budget,
-            approval_policy=options.approval_policy,
+            approval_policy=resolved_permissions.approval_policy,
             active_mode=active_mode,
         ),
         toolbox=toolbox,
@@ -505,6 +599,7 @@ async def run_core_cli_task(
             ),
             retry_policy=retry_policy_from_config(_retry_config),
             hook_engine=plugin_assembly["hook_engine"],
+            model_context_sink=capture_model_context,
         )
         result = await kernel.run(
             RuntimeTurnInput(
@@ -517,6 +612,8 @@ async def run_core_cli_task(
                     "thinking_enabled": options.thinking_enabled,
                     "thinking_budget": options.thinking_budget,
                     "shallow_thinking_enabled": options.shallow_thinking_enabled,
+                    "runtime_snapshot": runtime_snapshot,
+                    "runtime_snapshot_fresh": True,
                     **(
                         {"context_window_tokens": context_window_tokens}
                         if context_window_tokens is not None
@@ -530,6 +627,10 @@ async def run_core_cli_task(
             core_events_to_run_items(sink.events, thread_id=result.session_id),
         )
     finally:
+        from lamtools_core.plugins.lifecycle import shutdown_plugin_backends
+
+        await shutdown_plugin_backends(plugin_assembly.get("plugin_runtimes") or [])
+        await runtime_task_registry.shutdown()
         await mcp_registry.close()
         await core_db.close()
 
@@ -674,7 +775,11 @@ def list_llm_model_configs(*, work_root: str | None = None) -> list[dict[str, An
     return resolved
 
 
-def build_parser() -> argparse.ArgumentParser:
+def build_parser(
+    *,
+    plugin_roots: list[Path | str] | tuple[Path | str, ...] | None = None,
+    plugin_state_path: Path | str | None = None,
+) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="core", description="LamTools Core Agent CLI")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -715,6 +820,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--no-thinking", action="store_true")
     run.add_argument("--shallow-thinking", action="store_true", help="Require a prompt-based shallow thinking block")
     run.add_argument("--auto-approve", action="store_true", help="Run approval-gated Core tools without prompting")
+    run.add_argument("--allow-outside-workdir", action="store_true", default=None, help="Allow file tools to access paths outside work_root")
+    run.add_argument("--permission-preset", choices=("ask", "auto", "full_access"), default=None)
     run.add_argument("--max-tokens", type=int, default=None)
     run.add_argument("--compact-trigger-tokens", type=int, default=None, help="Session-only automatic compaction trigger")
     run.add_argument("--compact-limit-tokens", type=int, default=None, help="Session-only post-compaction upper limit")
@@ -740,7 +847,8 @@ def build_parser() -> argparse.ArgumentParser:
     run_local.add_argument("--no-thinking", action="store_true")
     run_local.add_argument("--shallow-thinking", action="store_true", help="Require a prompt-based shallow thinking block")
     run_local.add_argument("--auto-approve", action="store_true", help="Run approval-gated tools without prompting")
-    run_local.add_argument("--allow-outside-workdir", action="store_true", help="Allow file tools to access paths outside work_root")
+    run_local.add_argument("--allow-outside-workdir", action="store_true", default=None, help="Allow file tools to access paths outside work_root")
+    run_local.add_argument("--permission-preset", choices=("ask", "auto", "full_access"), default=None)
     run_local.add_argument("--max-tokens", type=int, default=None)
     run_local.add_argument("--compact-trigger-tokens", type=int, default=None, help="Session-only automatic compaction trigger")
     run_local.add_argument("--compact-limit-tokens", type=int, default=None, help="Session-only post-compaction upper limit")
@@ -773,7 +881,10 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--thinking", choices=("enabled", "disabled"), default="enabled")
     start.add_argument("--thinking-budget", type=int, default=10000)
     start.add_argument("--shallow", action="store_true")
+    start.add_argument("--auto-approve", action="store_true", help="Run approval-gated Core tools without prompting")
     start.add_argument("--approval-policy", choices=("require", "auto_approve"), default=None)
+    start.add_argument("--allow-outside-workdir", action="store_true", default=None, help="Allow file tools to access paths outside work_root")
+    start.add_argument("--permission-preset", choices=("ask", "auto", "full_access"), default=None)
     start.add_argument("--client-message-id", default="")
     start.add_argument("--watch", action="store_true")
     start.add_argument("--raw", action="store_true")
@@ -806,6 +917,10 @@ def build_parser() -> argparse.ArgumentParser:
     queue_create.add_argument("thread_id")
     queue_create.add_argument("message", nargs="+")
     _add_live_connection_arguments(queue_create)
+    queue_create.add_argument("--auto-approve", action="store_true", help="Run approval-gated tools without prompting")
+    queue_create.add_argument("--approval-policy", choices=("require", "auto_approve"), default=None)
+    queue_create.add_argument("--allow-outside-workdir", action="store_true", default=None, help="Allow file tools to access paths outside work_root")
+    queue_create.add_argument("--permission-preset", choices=("ask", "auto", "full_access"), default=None)
     queue_create.add_argument("--raw", action="store_true")
     queue_create.set_defaults(func=cmd_queue_create)
     queue_update = queue_sub.add_parser("update", help="Update queued input")
@@ -979,6 +1094,23 @@ def build_parser() -> argparse.ArgumentParser:
     session_show.add_argument("--core-db", default="", help="Core-owned SQLite runtime database")
     session_show.add_argument("--raw", action="store_true")
     session_show.set_defaults(func=cmd_session_show)
+    session_export = session_sub.add_parser("export", help="Export a Core Agent session")
+    session_export.add_argument("thread_id")
+    session_export.add_argument(
+        "--mode",
+        choices=("transcript", "handoff", "full"),
+        default="",
+        help="Export tier: transcript, handoff, or full",
+    )
+    session_export.add_argument(
+        "--format",
+        choices=("markdown", "md", "txt", "jsonl", "json", "zip"),
+        default="",
+        help="Transcript format; handoff and full choose JSON/ZIP automatically",
+    )
+    session_export.add_argument("--output", default="", help="Destination file; omit for text stdout")
+    session_export.add_argument("--core-db", default="", help="Core-owned SQLite runtime database")
+    session_export.set_defaults(func=cmd_session_export)
     session_checkpoints = session_sub.add_parser("checkpoints", help="List session rollback checkpoints")
     session_checkpoints.add_argument("thread_id")
     _add_live_connection_arguments(session_checkpoints)
@@ -1109,56 +1241,6 @@ def build_parser() -> argparse.ArgumentParser:
     arrange_edit.add_argument("--token", default=os.environ.get("LAMTOOLS_CORE_TOKEN", ""))
     arrange_edit.set_defaults(func=cmd_arrange_edit, raw=False)
 
-    workflow = sub.add_parser("workflow", help="Manage workflow node graphs")
-    workflow_sub = workflow.add_subparsers(dest="workflow_command", required=True)
-    wf_new = workflow_sub.add_parser("new", help="Create a workflow from a JSON definition file")
-    wf_new.add_argument("--name", default="", help="Workflow name (overrides the name in --from-file)")
-    wf_new.add_argument("--from-file", required=True, help="Path to a JSON workflow definition")
-    wf_new.add_argument("--work-root", required=True, default="", help="Project work root absolute path (required)")
-    wf_new.add_argument("--exposed", action="store_true", help="Expose this workflow as an agent tool immediately")
-    wf_new.add_argument("--base-url", default=os.environ.get("LAMTOOLS_CORE_API_URL", "http://127.0.0.1:5172"))
-    wf_new.add_argument("--ws-path", default=os.environ.get("LAMTOOLS_CORE_WS_PATH", "/api/core/app-server"))
-    wf_new.add_argument("--token", default=os.environ.get("LAMTOOLS_CORE_TOKEN", ""))
-    wf_new.set_defaults(func=cmd_workflow_new, raw=False)
-    wf_list = workflow_sub.add_parser("ls", help="List workflows")
-    wf_list.add_argument("--work-root", default="", help="Filter by project work_root")
-    wf_list.add_argument("--base-url", default=os.environ.get("LAMTOOLS_CORE_API_URL", "http://127.0.0.1:5172"))
-    wf_list.add_argument("--ws-path", default=os.environ.get("LAMTOOLS_CORE_WS_PATH", "/api/core/app-server"))
-    wf_list.add_argument("--token", default=os.environ.get("LAMTOOLS_CORE_TOKEN", ""))
-    wf_list.set_defaults(func=cmd_workflow_list, raw=False)
-    wf_show = workflow_sub.add_parser("describe", help="Show a workflow definition")
-    wf_show.add_argument("name", help="Workflow name")
-    wf_show.add_argument("--work-root", default="", help="Project work root")
-    wf_show.add_argument("--base-url", default=os.environ.get("LAMTOOLS_CORE_API_URL", "http://127.0.0.1:5172"))
-    wf_show.add_argument("--ws-path", default=os.environ.get("LAMTOOLS_CORE_WS_PATH", "/api/core/app-server"))
-    wf_show.add_argument("--token", default=os.environ.get("LAMTOOLS_CORE_TOKEN", ""))
-    wf_show.set_defaults(func=cmd_workflow_describe, raw=False)
-    wf_run = workflow_sub.add_parser("run", help="Run a workflow")
-    wf_run.add_argument("name", help="Workflow name")
-    wf_run.add_argument("--work-root", default="", help="Project work root")
-    wf_run.add_argument("--input", action="append", default=[], metavar="KEY=VALUE", help="Workflow input (repeatable; VALUE parsed as JSON if possible)")
-    wf_run.add_argument("--max-steps", type=int, default=None, help="Run at most N nodes (single-step debugging)")
-    wf_run.add_argument("--start-node", default=None, help="Start running from this node (sub-graph; nodes before it are skipped)")
-    wf_run.add_argument("--single-node", default=None, help="Run exactly this one node in isolation")
-    wf_run.add_argument("--base-url", default=os.environ.get("LAMTOOLS_CORE_API_URL", "http://127.0.0.1:5172"))
-    wf_run.add_argument("--ws-path", default=os.environ.get("LAMTOOLS_CORE_WS_PATH", "/api/core/app-server"))
-    wf_run.add_argument("--token", default=os.environ.get("LAMTOOLS_CORE_TOKEN", ""))
-    wf_run.set_defaults(func=cmd_workflow_run, raw=False)
-    wf_expose = workflow_sub.add_parser("expose", help="Expose a workflow as an agent tool")
-    wf_expose.add_argument("name", help="Workflow name")
-    wf_expose.add_argument("--work-root", default="", help="Project work root")
-    wf_expose.add_argument("--base-url", default=os.environ.get("LAMTOOLS_CORE_API_URL", "http://127.0.0.1:5172"))
-    wf_expose.add_argument("--ws-path", default=os.environ.get("LAMTOOLS_CORE_WS_PATH", "/api/core/app-server"))
-    wf_expose.add_argument("--token", default=os.environ.get("LAMTOOLS_CORE_TOKEN", ""))
-    wf_expose.set_defaults(func=cmd_workflow_expose, raw=False)
-    wf_unexpose = workflow_sub.add_parser("unexpose", help="Unexpose a workflow (no longer an agent tool)")
-    wf_unexpose.add_argument("name", help="Workflow name")
-    wf_unexpose.add_argument("--work-root", default="", help="Project work root")
-    wf_unexpose.add_argument("--base-url", default=os.environ.get("LAMTOOLS_CORE_API_URL", "http://127.0.0.1:5172"))
-    wf_unexpose.add_argument("--ws-path", default=os.environ.get("LAMTOOLS_CORE_WS_PATH", "/api/core/app-server"))
-    wf_unexpose.add_argument("--token", default=os.environ.get("LAMTOOLS_CORE_TOKEN", ""))
-    wf_unexpose.set_defaults(func=cmd_workflow_unexpose, raw=False)
-
     subagent = sub.add_parser("subagent", help="Manage sub-agent delegation guide")
     subagent_sub = subagent.add_subparsers(dest="subagent_command", required=True)
     sa_guide = subagent_sub.add_parser("guide", help="Show or edit the sub-agent delegation guide")
@@ -1249,6 +1331,13 @@ def build_parser() -> argparse.ArgumentParser:
     load_context_set = load_context_sub.add_parser("set", help="Write global load_context from a JSON file or stdin")
     load_context_set.add_argument("source_file", help="Path to a JSON file, or '-' for stdin")
     load_context_set.set_defaults(func=cmd_load_context_set)
+    from lamtools_core.plugins.cli import load_plugin_cli_commands
+
+    load_plugin_cli_commands(
+        sub,
+        plugin_roots=(plugin_roots if plugin_roots is not None else _default_cli_plugin_roots()),
+        state_path=plugin_state_path if plugin_state_path is not None else _default_cli_plugin_state_path(),
+    )
     return parser
 
 
@@ -1339,19 +1428,32 @@ async def cmd_migrate_projects(args: argparse.Namespace) -> int:
 
 
 async def cmd_start(args: argparse.Namespace) -> int:
+    permission_preset = getattr(args, "permission_preset", None)
+    legacy_approval_policy = getattr(args, "approval_policy", None)
+    if permission_preset is None and legacy_approval_policy is None and bool(getattr(args, "auto_approve", False)):
+        legacy_approval_policy = "auto_approve"
+
     async def start(client: CoreAppServerClient) -> dict[str, Any]:
-        return await client.start_turn(
-            thread_id=args.thread_id,
-            input_items=[{"type": "text", "text": " ".join(args.message)}],
-            work_root=args.work_root,
-            model_id=args.model_id or None,
-            goal_id=args.goal_id or None,
-            thinking_enabled=args.thinking == "enabled",
-            thinking_budget=args.thinking_budget,
-            shallow_thinking_enabled=bool(args.shallow),
-            approval_policy=args.approval_policy,
-            client_message_id=args.client_message_id or None,
-        )
+        params: dict[str, Any] = {
+            "thread_id": args.thread_id,
+            "input_items": [{"type": "text", "text": " ".join(args.message)}],
+            "work_root": args.work_root,
+            "model_id": args.model_id or None,
+            "goal_id": args.goal_id or None,
+            "thinking_enabled": args.thinking == "enabled",
+            "thinking_budget": args.thinking_budget,
+            "shallow_thinking_enabled": bool(args.shallow),
+            # Keep this legacy key in the Python call shape for compatibility;
+            # CoreAppServerClient omits it from the wire when it is None.
+            "approval_policy": legacy_approval_policy,
+            "client_message_id": args.client_message_id or None,
+        }
+        if permission_preset is not None:
+            params["permission_preset"] = permission_preset
+        allow_outside = getattr(args, "allow_outside_workdir", None)
+        if allow_outside is not None:
+            params["allow_access_outside_workdir"] = bool(allow_outside)
+        return await client.start_turn(**params)
 
     if args.watch:
         return await _watch_live_cli(args, thread_id=args.thread_id, on_connected=start)
@@ -1380,12 +1482,24 @@ async def cmd_steer(args: argparse.Namespace) -> int:
 
 
 async def cmd_queue_create(args: argparse.Namespace) -> int:
+    permission_preset = getattr(args, "permission_preset", None)
+    legacy_approval_policy = getattr(args, "approval_policy", None)
+    if permission_preset is None and legacy_approval_policy is None and bool(getattr(args, "auto_approve", False)):
+        legacy_approval_policy = "auto_approve"
+    params: dict[str, Any] = {
+        "thread_id": args.thread_id,
+        "input_items": [{"type": "text", "text": " ".join(args.message)}],
+    }
+    if permission_preset is not None:
+        params["permission_preset"] = permission_preset
+    if legacy_approval_policy is not None:
+        params["approval_policy"] = legacy_approval_policy
+    allow_outside = getattr(args, "allow_outside_workdir", None)
+    if allow_outside is not None:
+        params["allow_access_outside_workdir"] = bool(allow_outside)
     result = await _invoke_live(
         args,
-        lambda client: client.create_queue_input(
-            thread_id=args.thread_id,
-            input_items=[{"type": "text", "text": " ".join(args.message)}],
-        ),
+        lambda client: client.create_queue_input(**params),
     )
     _print_live_result(args, result, f"queued {args.thread_id}")
     return 0
@@ -1690,22 +1804,33 @@ async def cmd_run(args: argparse.Namespace) -> int:
     if not args.raw:
         print(f"[session] {thread_id}", flush=True)
     async def start(client: CoreAppServerClient) -> dict[str, Any]:
-        return await client.start_turn(
-            thread_id=thread_id,
-            input_items=[{"type": "text", "text": " ".join(args.message)}],
-            work_root=str(args.work_root or _default_work_root()),
-            model_id=args.model_id or None,
-            goal_id=args.goal_id or None,
-            thinking_enabled=not bool(args.no_thinking),
-            thinking_budget=args.thinking_budget,
-            shallow_thinking_enabled=bool(args.shallow_thinking),
-            max_tokens=int(args.max_tokens) if args.max_tokens is not None else None,
-            temperature=float(args.temperature),
-            compact_trigger_tokens=compact_trigger_tokens,
-            compact_limit_tokens=compact_limit_tokens,
-            context_window_tokens=context_window_tokens,
-            approval_policy="auto_approve" if bool(args.auto_approve) else "require",
-        )
+        params: dict[str, Any] = {
+            "thread_id": thread_id,
+            "input_items": [{"type": "text", "text": " ".join(args.message)}],
+            "work_root": str(args.work_root or _default_work_root()),
+            "model_id": args.model_id or None,
+            "goal_id": args.goal_id or None,
+            "thinking_enabled": not bool(args.no_thinking),
+            "thinking_budget": args.thinking_budget,
+            "shallow_thinking_enabled": bool(args.shallow_thinking),
+            "max_tokens": int(args.max_tokens) if args.max_tokens is not None else None,
+            "temperature": float(args.temperature),
+            "compact_trigger_tokens": compact_trigger_tokens,
+            "compact_limit_tokens": compact_limit_tokens,
+            "context_window_tokens": context_window_tokens,
+        }
+        permission_preset = getattr(args, "permission_preset", None)
+        if permission_preset is not None:
+            params["permission_preset"] = permission_preset
+        elif bool(getattr(args, "auto_approve", False)):
+            # Omit the legacy field when the user did not request it.  The
+            # server then reads the existing Session preference instead of
+            # resetting it to ``require``.
+            params["approval_policy"] = "auto_approve"
+        allow_outside = getattr(args, "allow_outside_workdir", None)
+        if allow_outside is not None:
+            params["allow_access_outside_workdir"] = bool(allow_outside)
+        return await client.start_turn(**params)
 
 
     return await _watch_live_cli(args, thread_id=thread_id, on_connected=start)
@@ -1740,8 +1865,9 @@ async def cmd_run_local(args: argparse.Namespace) -> int:
         compact_trigger_tokens=compact_trigger_tokens,
         compact_limit_tokens=compact_limit_tokens,
         temperature=float(args.temperature),
-        approval_policy="auto_approve" if bool(args.auto_approve) else "require",
-        allow_outside_workdir=bool(args.allow_outside_workdir) if hasattr(args, "allow_outside_workdir") else None,
+        approval_policy="auto_approve" if bool(args.auto_approve) else None,
+        permission_preset=getattr(args, "permission_preset", None),
+        allow_outside_workdir=getattr(args, "allow_outside_workdir", None),
         raw=bool(args.raw),
         verbose=bool(args.verbose),
     )
@@ -1862,6 +1988,68 @@ async def cmd_session_show(args: argparse.Namespace) -> int:
         print(f"[status] {snapshot.get('status') or '-'} seq={snapshot.get('snapshot_seq') or 0}", flush=True)
         print(f"[events] {len(detail.get('events') or [])}", flush=True)
     return 0
+
+
+async def cmd_session_export(args: argparse.Namespace) -> int:
+    mode = str(getattr(args, "mode", "") or "").strip().lower()
+    output_format = str(getattr(args, "format", "") or "").strip().lower()
+    if not mode:
+        # Keep old scripts working while making --mode the explicit public
+        # spelling for the three export tiers.
+        mode = "full" if output_format == "zip" else "transcript"
+    if mode == "transcript":
+        if output_format in {"", "md"}:
+            output_format = "markdown"
+        elif output_format == "json":
+            raise ValueError("Transcript JSON is no longer supported; use --format jsonl")
+        elif output_format not in {"markdown", "txt", "jsonl"}:
+            raise ValueError("Transcript export requires --format markdown, txt, or jsonl")
+    elif mode == "handoff":
+        if output_format not in {"", "json"}:
+            raise ValueError("Handoff export only supports JSON")
+        output_format = "json"
+    elif mode == "full":
+        if output_format not in {"", "zip"}:
+            raise ValueError("Full Archive export only supports ZIP")
+        output_format = "zip"
+    else:
+        raise ValueError(f"Unsupported session export mode: {mode}")
+    db = await open_core_app_db(_resolve_core_db(args.core_db or None))
+    try:
+        service = ConversationExportService(
+            db.session_factory,
+            handoff_context_store=db.handoff_context_store,
+        )
+        if mode == "transcript" and output_format == "markdown":
+            payload: str | bytes = transcript_to_markdown(await service.transcript(args.thread_id))
+        elif mode == "transcript" and output_format == "txt":
+            payload = transcript_to_text(await service.transcript(args.thread_id))
+        elif mode == "transcript" and output_format == "jsonl":
+            payload = transcript_to_jsonl(await service.transcript(args.thread_id))
+        elif mode == "handoff":
+            payload = to_json(await service.handoff(args.thread_id)) + "\n"
+        elif mode == "full" and output_format == "zip":
+            payload = full_to_zip(await service.full(args.thread_id))
+        else:
+            raise ValueError(f"Unsupported session export mode/format: {mode}/{output_format}")
+
+        destination = str(args.output or "").strip()
+        if destination and destination != "-":
+            path = Path(destination)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if isinstance(payload, bytes):
+                path.write_bytes(payload)
+            else:
+                path.write_text(payload, encoding="utf-8")
+            print(f"[session export] {path}", flush=True)
+            return 0
+
+        if isinstance(payload, bytes):
+            raise ValueError("Full Archive ZIP requires --output PATH")
+        print(payload, end="" if payload.endswith("\n") else "\n", flush=True)
+        return 0
+    finally:
+        await db.close()
 
 
 async def list_core_cli_sessions(*, core_db: Path | str | None = None) -> list[dict[str, Any]]:
@@ -2146,161 +2334,6 @@ async def cmd_arrange_edit(args: argparse.Namespace) -> int:
     job = result.get("job", {}) if isinstance(result, dict) else {}
     jid = str(job.get("id") or args.job_id)
     print(f"[arrange] {jid} updated")
-    return 0
-
-
-def _parse_workflow_inputs(items: list[str]) -> dict[str, Any]:
-    inputs: dict[str, Any] = {}
-    for item in items or []:
-        if "=" not in item:
-            print(f"warning: ignoring malformed --input '{item}' (expected KEY=VALUE)", file=sys.stderr)
-            continue
-        key, value = item.split("=", 1)
-        key = key.strip()
-        if not key:
-            continue
-        parsed: Any = value
-        stripped = value.strip()
-        if stripped and stripped[0] in "{[" and stripped[-1] in "}]":
-            try:
-                parsed = json.loads(stripped)
-            except json.JSONDecodeError:
-                parsed = value  # keep raw string
-        elif stripped.lower() in {"true", "false"}:
-            parsed = stripped.lower() == "true"
-        elif _looks_like_int(stripped):
-            parsed = int(stripped)
-        inputs[key] = parsed
-    return inputs
-
-
-def _looks_like_int(text: str) -> bool:
-    try:
-        int(text)
-        return True
-    except ValueError:
-        return False
-
-
-async def cmd_workflow_new(args: argparse.Namespace) -> int:
-    with open(args.from_file, "r", encoding="utf-8") as fh:
-        definition = json.loads(fh.read())
-    if not isinstance(definition, dict):
-        print("error: --from-file must contain a JSON object", file=sys.stderr)
-        return 1
-    if args.name:
-        definition["name"] = args.name
-    definition["work_root"] = args.work_root
-    if args.exposed:
-        definition["exposed"] = True
-    async def op(client: CoreAppServerClient) -> dict[str, Any]:
-        return await client.request("workflow.create", definition)
-    result = await _invoke_live(args, op)
-    wf = result.get("workflow", {}) if isinstance(result, dict) else {}
-    print(f"[workflow] created {wf.get('name', '?')}")
-    print(f"  nodes: {len(wf.get('nodes') or [])}  edges: {len(wf.get('edges') or [])}")
-    if wf.get("exposed"):
-        print(f"  exposed as tool: {wf.get('tool_name') or ''}")
-    return 0
-
-
-async def cmd_workflow_list(args: argparse.Namespace) -> int:
-    params: dict[str, Any] = {}
-    if args.work_root:
-        params["work_root"] = args.work_root
-    async def op(client: CoreAppServerClient) -> dict[str, Any]:
-        return await client.request("workflow.list", params)
-    result = await _invoke_live(args, op)
-    workflows = result.get("workflows", []) if isinstance(result, dict) else []
-    if isinstance(workflows, list):
-        for w in workflows:
-            if isinstance(w, dict):
-                name = str(w.get("name") or "?")[:32]
-                nodes = len(w.get("nodes") or [])
-                exposed = "exposed" if w.get("exposed") else "-"
-                print(f"{name:32s}  nodes={nodes:<3d} {exposed}")
-    return 0
-
-
-async def cmd_workflow_describe(args: argparse.Namespace) -> int:
-    params: dict[str, Any] = {"name": args.name}
-    if args.work_root:
-        params["work_root"] = args.work_root
-    async def op(client: CoreAppServerClient) -> dict[str, Any]:
-        return await client.request("workflow.get", params)
-    result = await _invoke_live(args, op)
-    wf = result.get("workflow", {}) if isinstance(result, dict) else {}
-    if isinstance(wf, dict):
-        print(f"  name: {wf.get('name')}")
-        print(f"  description: {wf.get('description', '')}")
-        print(f"  nodes: {len(wf.get('nodes') or [])}")
-        for n in (wf.get("nodes") or []):
-            if isinstance(n, dict):
-                print(f"    - [{n.get('kind')}] {n.get('id')} {n.get('title') or ''}")
-        print(f"  edges: {len(wf.get('edges') or [])}")
-        print(f"  output_port: {wf.get('output_port', '')}")
-        print(f"  exposed: {wf.get('exposed', False)}")
-        if wf.get("exposed"):
-            print(f"  tool_name: {wf.get('tool_name', '')}")
-    return 0
-
-
-async def cmd_workflow_run(args: argparse.Namespace) -> int:
-    payload: dict[str, Any] = {"name": args.name}
-    if args.work_root:
-        payload["work_root"] = args.work_root
-    if args.max_steps is not None:
-        payload["max_steps"] = args.max_steps
-    if getattr(args, "start_node", None):
-        payload["start_node"] = args.start_node
-    if getattr(args, "single_node", None):
-        payload["single_node"] = args.single_node
-    inputs = _parse_workflow_inputs(args.input)
-    if inputs:
-        payload["inputs"] = inputs
-    async def op(client: CoreAppServerClient) -> dict[str, Any]:
-        return await client.request("workflow.run", payload)
-    result = await _invoke_live(args, op)
-    run = result.get("run", {}) if isinstance(result, dict) else {}
-    status = str(run.get("status") or "?")
-    print(f"[workflow] run status={status} run_id={run.get('run_id', '')}")
-    states = run.get("node_states") or {}
-    if isinstance(states, dict):
-        for nid, state in states.items():
-            if isinstance(state, dict):
-                print(f"  {nid}: {state.get('status')} attempts={state.get('attempts')}" + (f" error={state.get('error')}" if state.get("error") else ""))
-    if run.get("error"):
-        print(f"  error: {run['error']}", file=sys.stderr)
-    output = run.get("output")
-    if output is not None:
-        if isinstance(output, str) and len(output) > 500:
-            print(f"  output: {output[:500]}…")
-        else:
-            print(f"  output: {json.dumps(output, ensure_ascii=False) if not isinstance(output, str) else output}")
-    return 0 if status == "completed" else (0 if status == "paused" else 1)
-
-
-async def cmd_workflow_expose(args: argparse.Namespace) -> int:
-    payload: dict[str, Any] = {"name": args.name}
-    if args.work_root:
-        payload["work_root"] = args.work_root
-    async def op(client: CoreAppServerClient) -> dict[str, Any]:
-        return await client.request("workflow.expose", payload)
-    result = await _invoke_live(args, op)
-    wf = result.get("workflow", {}) if isinstance(result, dict) else {}
-    print(f"[workflow] {wf.get('name', args.name)} exposed as tool: {wf.get('tool_name', '')}")
-    return 0
-
-
-async def cmd_workflow_unexpose(args: argparse.Namespace) -> int:
-    payload: dict[str, Any] = {"name": args.name}
-    if args.work_root:
-        payload["work_root"] = args.work_root
-    async def op(client: CoreAppServerClient) -> dict[str, Any]:
-        return await client.request("workflow.unexpose", payload)
-    result = await _invoke_live(args, op)
-    wf = result.get("workflow", {}) if isinstance(result, dict) else {}
-    print(f"[workflow] {wf.get('name', args.name)} unexposed")
     return 0
 
 
@@ -3037,6 +3070,24 @@ def _repo_root() -> Path:
 
 def _default_run_dir() -> Path:
     return _repo_root() / "tmp" / f"core-cli-run-{time.strftime('%Y%m%d-%H%M%S')}"
+
+
+def _default_cli_plugin_roots() -> list[Path]:
+    """Resolve the same plugin roots used by the Core HTTP/GUI host."""
+    from lamtools_core.app.base_agent import default_core_agent_plugin_roots
+    from lamtools_core.config.root import default_projects_root
+
+    configured_work_root = os.environ.get("LAMTOOLS_CORE_WORK_ROOT")
+    work_root = Path(configured_work_root) if configured_work_root else default_projects_root() / "default"
+    return default_core_agent_plugin_roots(work_root)
+
+
+def _default_cli_plugin_state_path() -> Path:
+    """Resolve the persistent plugin state location used by the HTTP host."""
+    data_dir = os.environ.get("LAMTOOLS_CORE_DATA_DIR")
+    if data_dir:
+        return Path(data_dir) / "plugins.jsonc"
+    return _resolve_core_db(None).resolve().parent / "core-agent" / "plugins.jsonc"
 
 
 def _default_work_root() -> Path:

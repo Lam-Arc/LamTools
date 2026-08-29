@@ -66,7 +66,7 @@ async def test_resolve_turn_approval_policy_reads_allow_access_outside_workdir()
     )
 
     assert resolved["allow_access_outside_workdir"] is True
-    assert resolved["approval_policy"] == "auto_approve"
+    assert resolved["approval_policy"] == "require"
 
 
 @pytest.mark.asyncio
@@ -79,3 +79,33 @@ async def test_resolve_turn_approval_policy_defaults_outside_workdir_false() -> 
     )
 
     assert resolved["allow_access_outside_workdir"] is False
+
+
+def test_full_access_preset_expands_to_full_edit_auto_approve_and_outside_access() -> None:
+    from lamtools_core.app.runtime_permissions import resolve_permission_preset
+
+    resolved = resolve_permission_preset(
+        preset="full_access",
+        base_tier="read_only",
+        base_allow_access_outside_workdir=False,
+        tier_tools={"read_only": {"read_file"}, "limited_edit": set(), "full_edit": set()},
+    )
+
+    assert resolved.active_tier == "full_edit"
+    assert resolved.approval_policy == "auto_approve"
+    assert resolved.allow_access_outside_workdir is True
+
+
+def test_auto_preset_keeps_the_session_capability_tier() -> None:
+    from lamtools_core.app.runtime_permissions import resolve_permission_preset
+
+    resolved = resolve_permission_preset(
+        preset="auto",
+        base_tier="read_only",
+        base_allow_access_outside_workdir=False,
+        tier_tools={"read_only": {"read_file"}, "limited_edit": set(), "full_edit": set()},
+    )
+
+    assert resolved.active_tier == "read_only"
+    assert resolved.approval_policy == "auto_approve"
+    assert resolved.allow_access_outside_workdir is False

@@ -41,7 +41,7 @@ export interface UseCoreLiveComposerControllerOptions {
   interruptTurn(threadId: string, turnId?: string): Promise<void>
   forceResetTurn(threadId: string, turnId?: string): Promise<void>
   steerTurn?(threadId: string, turnId: string, input: CoreInputItem[]): Promise<void>
-  queueInput(threadId: string, input: CoreInputItem[]): Promise<void>
+  queueInput(threadId: string, input: CoreInputItem[], options?: Record<string, unknown>): Promise<void>
   listCommands(workRoot?: string): Promise<unknown[]>
   getWorkRoot(): string
   executeCommand(threadId: string, command: string, workRoot?: string): Promise<boolean>

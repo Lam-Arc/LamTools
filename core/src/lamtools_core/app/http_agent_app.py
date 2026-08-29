@@ -30,22 +30,21 @@ from lamtools_core.config.provider_store import ProviderConfig, ProviderStore, m
 from lamtools_core.config.root import ensure_projects_root
 from lamtools_core.update.operations import build_update_operation_catalog
 from lamtools_core.attachment import CoreAttachmentStore
+from lamtools_core.export import ConversationExportService, build_handoff_context
 from lamtools_core.attachment.service import MAX_ATTACHMENT_BYTES
 from lamtools_core.runtime import RuntimeTaskRegistry
 from lamtools_core.runtime.arrange import ArrangeManager, ArrangeRunner, arranged_operation_payload
 from lamtools_core.runtime.goal import GoalManager
 from lamtools_core.runtime.observer import ObserverSupervisor
-from lamtools_core.runtime.workflow import WorkflowManager, WorkflowRunner
-from lamtools_core.project.workflow_store import WorkflowStore
 from lamtools_core.member import MemberKit, MemberManifest
 from lamtools_core.session import build_session_record
+from lamtools_core.plugins.lifecycle import shutdown_plugin_backends
 
 from .core_db import open_core_app_db
 from .core_session_store import CoreDbSessionStore
 from .desktop_plugin_session_store import DesktopPluginSessionStore
 from .default_agent import CoreAgentPaths, CoreAgentSpec, create_core_agent_operations
 from .durable_operations import register_durable_operations
-from .workflow_operations import register_workflow_operations
 from .event_store import AppEventInput
 from .factory import add_spa_fallback, create_app
 from .live_hub import CoreAppEventHub
@@ -302,6 +301,11 @@ def create_core_agent_http_app(
         goal_manager = GoalManager(core_db_handle.goal_store)
         arrange_manager = ArrangeManager(core_db_handle.arrange_store)
 
+        async def capture_model_context(state: Any, request: Any) -> None:
+            """Persist the exact semantic request context before model I/O."""
+            payload = build_handoff_context(getattr(request, "messages", []))
+            await core_db_handle.handoff_context_store.save(state.session_id, payload)
+
         def _resolve_model_display(model_id: str) -> str:
             # jsonc-only: resolve "<provider>/<model>" from the model store.
             try:
@@ -316,7 +320,6 @@ def create_core_agent_http_app(
             except Exception:
                 return ""
 
-        workflow_store = WorkflowStore()
         agent_operations = create_core_agent_operations(
             spec=runtime_spec,
             member_kit=member_kit,
@@ -331,11 +334,12 @@ def create_core_agent_http_app(
             runtime_task_registry=runtime_task_registry,
             goal_manager=goal_manager,
             arrange_manager=arrange_manager,
-            workflow_store=workflow_store,
+            start_plugin_lifecycle=True,
             enable_turn_checkpoints=True,
             model_display_resolver=_resolve_model_display,
             attachment_service=app_state.get("attachment_store"),
             memory_store=core_db_handle.memory_store,
+            model_context_sink=capture_model_context,
         )
         _register_core_project_operations(agent_operations, project_store=core_db_handle.project_store)
         _register_core_artifact_operations(agent_operations, project_store=core_db_handle.project_store)
@@ -471,91 +475,13 @@ def create_core_agent_http_app(
         await arrange_runner.start()
         await observer_supervisor.start()
 
-        # Workflow mode: file-backed definitions + deterministic runner. The
-        # runner streams per-node state as core/runItem events (the existing
-        # GUI reducer renders them with no new channel) and cooperatively
-        # cancels via the same runtime_task_registry the kernel uses. The
-        # toolbox (built per-turn) reads enrolled workflows from the same store
-        # via a cached provider so exposing one makes it callable next turn.
-        workflow_manager = WorkflowManager(workflow_store)
-
-        async def _emit_workflow_event(event: Any) -> None:
-            async def _write(db: Any) -> Any:
-                return await core_db_handle.persistence.append(
-                    db,
-                    AppEventInput(
-                        thread_id=event.thread_id,
-                        method="core/runItem",
-                        turn_id=event.turn_id,
-                        item_id=event.item_id,
-                        client_message_id=uuid.uuid4().hex,
-                        payload=event.to_dict(),
-                    ),
-                )
-
-            try:
-                envelope = await core_db_handle.persistence.write(_write)
-                await live_hub.publish(envelope)
-            except Exception:  # noqa: BLE001 — streaming must never break a run
-                pass
-
-        # Build a sub-agent runner for workflow Agent nodes. Lightweight: the
-        # runner spins up a per-call CoreLoopKernel with the same LLM client and
-        # work_root; Agent node configs may override model/mode per call.
-        from lamtools_core.tool.sub_agent_runner import KernelSubAgentRunner
-
-        workflow_sub_agent_runner = KernelSubAgentRunner(
-            work_root=str(resolved_work_root),
-            llm_client=llm_client,
-            model_id=config.model_id,
-            approval_policy="require",
-            session_prefix="workflow-sub-agent",
-        )
-
-        workflow_runner = WorkflowRunner(
-            llm_client=llm_client,
-            sub_agent_runner=workflow_sub_agent_runner,
-            emit=_emit_workflow_event,
-            runtime_task_registry=runtime_task_registry,
-            workflow_store=workflow_store,
-        )
-
-        def _list_tool_specs() -> list[Any]:
-            try:
-                from lamtools_core.tool.default_toolbox import default_core_tool_specs
-
-                return default_core_tool_specs()
-            except Exception:  # noqa: BLE001
-                return []
-
-        register_workflow_operations(
-            agent_operations,
-            workflow_manager=workflow_manager,
-            runner=workflow_runner,
-            runtime_task_registry=runtime_task_registry,
-            list_tool_specs=_list_tool_specs,
-        )
-        app_state["workflow_store"] = workflow_store
-        app_state["workflow_manager"] = workflow_manager
-        app_state["workflow_runner"] = workflow_runner
-
-        # File watcher: poll the workflow store mtime signature and broadcast
-        # workflow/changed events so canvases refresh on external edits.
-        from lamtools_core.runtime.workflow_watcher import WorkflowFileWatcher
-
-        workflow_watcher = WorkflowFileWatcher(
-            workflow_store,
-            live_hub,
-            poll_interval=2.0,
-            work_roots=[str(resolved_work_root)],
-        )
-        await workflow_watcher.start()
-        app_state["workflow_watcher"] = workflow_watcher
+        # Optional plugin backends are loaded and started by
+        # create_core_agent_operations via the generic plugin lifecycle. Keep
+        # only the handles in app state so shutdown uses the same boundary.
+        app_state["plugin_runtimes"] = getattr(agent_operations, "plugin_runtimes", [])
 
     async def shutdown_core_agent() -> None:
-        workflow_watcher = app_state.get("workflow_watcher")
-        if workflow_watcher is not None:
-            await workflow_watcher.stop()
+        await shutdown_plugin_backends(app_state.get("plugin_runtimes") or [])
         observer_supervisor = app_state.get("observer_supervisor")
         if observer_supervisor is not None:
             await observer_supervisor.stop()
@@ -611,6 +537,10 @@ def create_core_agent_http_app(
             operations=operations,
             project_store=lambda: app_state["core_db"].project_store,
             publish_event=live_hub.publish,
+            export_service=lambda: ConversationExportService(
+                app_state["core_db"].session_factory,
+                handoff_context_store=app_state["core_db"].handoff_context_store,
+            ),
         ),
         prefix="/api/core",
     )
@@ -1125,7 +1055,6 @@ def _register_loadtools_operations(catalog: OperationCatalog) -> None:
         load_loadtools,
         serialize_loadtools,
     )
-    from lamtools_core.tool.workflow_build_tools import workflow_build_tool_specs
 
     def _config_path() -> Path:
         return core_config_file("loadtools.jsonc")
@@ -1142,8 +1071,16 @@ def _register_loadtools_operations(catalog: OperationCatalog) -> None:
         specs = [
             *default_core_tool_specs(),
             *durable_tool_specs(goal=True, arrange=True),
-            *workflow_build_tool_specs(),
         ]
+        # Plugin backends contribute their own model-facing tools. Read the
+        # normalized runtime handles exposed by the generic operation catalog
+        # instead of importing any plugin implementation from Core.
+        for handle in getattr(catalog, "plugin_runtimes", []) or []:
+            runtime_specs = getattr(handle.value, "tool_specs", [])
+            if callable(runtime_specs):
+                runtime_specs = runtime_specs()
+            if isinstance(runtime_specs, (list, tuple)):
+                specs.extend(runtime_specs)
         seen: set[str] = set()
         result: list[dict[str, str]] = []
         for spec in specs:

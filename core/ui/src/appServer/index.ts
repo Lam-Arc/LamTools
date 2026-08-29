@@ -15,6 +15,7 @@ export {
   type CoreAppInputItem,
   type CoreAppItem,
   type CoreAppQueueItem,
+  type CoreAppRuntimeSnapshot,
   type CoreAppRequestState,
   type CoreAppSnapshot,
   type CoreAppThreadStatus,

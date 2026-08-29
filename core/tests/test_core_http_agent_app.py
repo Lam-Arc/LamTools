@@ -540,7 +540,14 @@ def test_core_http_sessions_survive_app_restart(tmp_path: Path, isolated_config_
             "member_id": "core",
             "title": "Renamed thread",
             "status": "idle",
-            "metadata": {"source": "restart-test"},
+            "metadata": {
+                "source": "restart-test",
+                "runtime_preferences": {
+                    "base_tier": "full_edit",
+                    "base_allow_access_outside_workdir": False,
+                    "permission_preset": "ask",
+                },
+            },
             "created_at": created.json()["created_at"],
             "updated_at": updated.json()["updated_at"],
         }
@@ -617,6 +624,11 @@ def test_project_http_round_trip_survives_restart_and_uses_agents_md(tmp_path: P
         project_id = result["project"]["id"]
         assert result["session"]["metadata"] == {
             "work_root": str(root.resolve()),
+            "runtime_preferences": {
+                "base_tier": "full_edit",
+                "base_allow_access_outside_workdir": False,
+                "permission_preset": "ask",
+            },
         }
 
         content = "# Project instructions\n\nUse UTF-8.\n"
@@ -636,6 +648,11 @@ def test_project_http_round_trip_survives_restart_and_uses_agents_md(tmp_path: P
         assert created_session.status_code == 201
         assert created_session.json()["metadata"] == {
             "work_root": str(root.resolve()),
+            "runtime_preferences": {
+                "base_tier": "full_edit",
+                "base_allow_access_outside_workdir": False,
+                "permission_preset": "ask",
+            },
         }
         assert client.post(
             "/api/core/sessions",
@@ -720,6 +737,11 @@ def test_project_http_delete_rejects_active_session_and_app_server_uses_project_
         assert protected.json()["metadata"] == {
             "work_root": str((tmp_path / "workspace").resolve()),
             "note": "kept",
+            "runtime_preferences": {
+                "base_tier": "full_edit",
+                "base_allow_access_outside_workdir": False,
+                "permission_preset": "ask",
+            },
         }
         assert client.patch(f"/api/core/sessions/{session_id}", json={"status": "running"}).status_code == 200
         assert client.delete(f"/api/core/projects/{project_id}").status_code == 409

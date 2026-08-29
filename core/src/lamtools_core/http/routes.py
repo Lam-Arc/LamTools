@@ -14,6 +14,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+from lamtools_core.export import ConversationExportService
+from lamtools_core.export.serializers import full_to_zip, handoff_to_json, transcript_to_jsonl, transcript_to_markdown, transcript_to_text
 
 from ..app.operation_catalog import OperationCatalog
 from ..app.project_store import ActiveProjectSessionsError, CoreProjectStore
@@ -35,6 +37,7 @@ from ..usage import (
     UsageLedger,
     UsageRecord,
 )
+from ..app.runtime_permissions import merge_session_runtime_preferences
 
 
 # ---------------------------------------------------------------------------
@@ -96,6 +99,11 @@ class EventCreateRequest(BaseModel):
     run_id: str = ""
 
 
+class ExportRequest(BaseModel):
+    mode: str = "transcript"
+    format: str = ""
+
+
 class ProviderCreateRequest(BaseModel):
     id: str = Field(min_length=1)
     kind: str
@@ -134,6 +142,7 @@ def create_core_router(
     operations: OperationCatalog | None = None,
     project_store: CoreProjectStore | Callable[[], CoreProjectStore] | None = None,
     publish_event: Callable[[dict[str, Any]], Awaitable[None] | None] | None = None,
+    export_service: ConversationExportService | Callable[[], ConversationExportService] | None = None,
 ) -> APIRouter:
     """Create an APIRouter with all core LamTools routes.
 
@@ -171,6 +180,60 @@ def create_core_router(
         return resolved
 
     router = APIRouter()
+
+    def require_export_service() -> ConversationExportService:
+        resolved = export_service() if callable(export_service) else export_service
+        if resolved is None:
+            raise HTTPException(status_code=503, detail="Export service is not configured")
+        return resolved
+
+    @router.get("/sessions/{session_id}/export/capabilities")
+    async def export_capabilities(session_id: str) -> dict[str, Any]:
+        del session_id
+        require_export_service()
+        return {
+            "transcript": ["markdown", "txt", "jsonl"],
+            "handoff": ["json"],
+            "full": ["zip"],
+        }
+
+    @router.post("/sessions/{session_id}/export")
+    async def export_session(session_id: str, body: ExportRequest) -> Response:
+        service = require_export_service()
+        mode = body.mode.strip().lower()
+        output_format = body.format.strip().lower()
+        try:
+            if mode == "transcript":
+                exported = await service.transcript(session_id)
+                if output_format == "markdown":
+                    return Response(transcript_to_markdown(exported), media_type="text/markdown")
+                if output_format == "txt":
+                    return Response(transcript_to_text(exported), media_type="text/plain")
+                if output_format == "jsonl":
+                    return Response(transcript_to_jsonl(exported), media_type="application/x-ndjson")
+            elif mode == "full" and output_format == "zip":
+                exported = await service.full(session_id)
+            elif mode == "handoff" and output_format == "json":
+                exported = await service.handoff(session_id)
+            else:
+                raise HTTPException(status_code=422, detail="Unsupported export mode or format")
+            if mode == "full" and output_format == "zip":
+                return Response(full_to_zip(exported), media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="{session_id}.zip"'})
+            if mode == "handoff":
+                return Response(handoff_to_json(exported), media_type="application/json")
+            raise HTTPException(status_code=422, detail="Unsupported export mode or format")
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    # The public protocol calls sessions "threads"; retain both spellings
+    # while the older session endpoints remain supported.
+    @router.get("/threads/{thread_id}/export/capabilities")
+    async def export_thread_capabilities(thread_id: str) -> dict[str, Any]:
+        return await export_capabilities(thread_id)
+
+    @router.post("/threads/{thread_id}/export")
+    async def export_thread(thread_id: str, body: ExportRequest) -> Response:
+        return await export_session(thread_id, body)
 
     # ==================================================================
     # Session routes
@@ -1047,7 +1110,13 @@ def _validated_session_metadata(existing: dict[str, Any], requested: dict[str, A
     if not isinstance(work_root, str) or not work_root:
         if _has_project_metadata(requested):
             raise HTTPException(status_code=422, detail="Use the project session endpoint for project-owned sessions")
-        return dict(requested)
+        try:
+            return merge_session_runtime_preferences(existing, requested)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     metadata = dict(requested)
     metadata["work_root"] = str(work_root)
-    return metadata
+    try:
+        return merge_session_runtime_preferences(existing, metadata)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc

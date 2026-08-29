@@ -59,6 +59,7 @@
           </template>
           <template #tools>
             <CoreExecutionControls
+              :show-runtime-menu="false"
               :model-value="selectedModelId"
               :thinking-mode="thinkingMode"
               :shallow-thinking-enabled="shallowThinkingEnabled"

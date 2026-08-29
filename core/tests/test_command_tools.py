@@ -241,6 +241,14 @@ def test_validate_command_paths_blocks_escape(tmp_path: Path):
         validate_command_paths(["py", "-m", "pytest", "../outside"], tmp_path)
 
 
+def test_validate_command_paths_allows_escape_when_outside_access_is_enabled(tmp_path: Path):
+    validate_command_paths(
+        ["py", "-m", "pytest", "../outside"],
+        tmp_path,
+        allow_outside=True,
+    )
+
+
 def test_validate_command_paths_allows_resource_roots(tmp_path: Path):
     skill_root = tmp_path.parent / "skill-root"
     script = skill_root / "scripts" / "check.py"

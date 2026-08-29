@@ -91,6 +91,8 @@ class CoreAppServerClient:
         compact_trigger_tokens: int | None = None,
         compact_limit_tokens: int | None = None,
         approval_policy: str | None = None,
+        permission_preset: str | None = None,
+        allow_access_outside_workdir: bool | None = None,
         client_message_id: str | None = None,
         goal_id: str | None = None,
     ) -> dict[str, Any]:
@@ -127,6 +129,10 @@ class CoreAppServerClient:
             params["compact_limit_tokens"] = compact_limit_tokens
         if approval_policy:
             params["approval_policy"] = approval_policy
+        if permission_preset:
+            params["permission_preset"] = permission_preset
+        if allow_access_outside_workdir is not None:
+            params["allow_access_outside_workdir"] = allow_access_outside_workdir
         response = await self.request("turn.start", params)
         for event in response.get("events") or []:
             await self.put_app_server_event(event)
@@ -181,6 +187,9 @@ class CoreAppServerClient:
         queue_item_id: str | None = None,
         client_message_id: str | None = None,
         mode: str = "next_turn",
+        permission_preset: str | None = None,
+        approval_policy: str | None = None,
+        allow_access_outside_workdir: bool | None = None,
     ) -> dict[str, Any]:
         params: dict[str, Any] = {
             "thread_id": thread_id,
@@ -191,6 +200,12 @@ class CoreAppServerClient:
             params["queue_item_id"] = queue_item_id
         if client_message_id:
             params["client_message_id"] = client_message_id
+        if permission_preset:
+            params["permission_preset"] = permission_preset
+        if approval_policy:
+            params["approval_policy"] = approval_policy
+        if allow_access_outside_workdir is not None:
+            params["allow_access_outside_workdir"] = allow_access_outside_workdir
         return await self._request_with_events("queue/create", params)
 
     async def update_queue_input(
