@@ -27,14 +27,15 @@ from typing import Any, TYPE_CHECKING
 _logger = logging.getLogger(__name__)
 
 from lamtools_core.context_compaction import (
+    CompactionOptions,
     ContextCompactionError,
-    ContextCompactionRequest,
+    ContextCompactor,
     ContextCompactionResult,
-    compact_context,
     compaction_segment_input_limit,
 )
 from lamtools_core.context_compaction_budget import (
     SummaryTokenBudget,
+    TokenBudget,
     measure_for_compaction_trigger,
 )
 from lamtools_core.event import CoreEvent, EventCategory, EventSink
@@ -2993,29 +2994,40 @@ class CoreLoopKernel:
                     )
                 )
 
-            return await compact_context(
-                ContextCompactionRequest(
-                    trigger="model_switch" if model_switched else "auto",
-                    messages=list(request.messages),
-                    llm_client=self.llm_client,
-                    model=model,
-                    timeout=request.timeout,
-                    limit_tokens=limit_tokens,
-                    input_limit_tokens=compaction_segment_input_limit(model_window),
-                    estimate_tokens=estimate_compaction_tokens,
-                    estimate_exact_tokens=estimate_compaction_tokens_exact,
-                    summary_budget=summary_budget,
-                    on_delta=on_compaction_delta,
-                    on_event=on_compaction_event,
-                    model_retries=self.policy.model_retries,
-                    model_timeout_seconds=self.policy.model_timeout_seconds,
-                    retry_policy=self.retry_policy,
-                    on_model_retry=lambda retry: self._emit_model_retry_from_event(
-                        retry,
-                        state=state,
-                        response_index=None,
-                    ),
-                )
+            compactor = ContextCompactor(
+                llm_client=self.llm_client,
+                model=model,
+                timeout=request.timeout,
+                input_limit_tokens=compaction_segment_input_limit(model_window),
+                estimate_tokens=estimate_compaction_tokens,
+                estimate_exact_tokens=estimate_compaction_tokens_exact,
+                summary_budget=summary_budget,
+                on_delta=on_compaction_delta,
+                on_event=on_compaction_event,
+                model_retries=self.policy.model_retries,
+                model_timeout_seconds=self.policy.model_timeout_seconds,
+                retry_policy=self.retry_policy,
+                on_model_retry=lambda retry: self._emit_model_retry_from_event(
+                    retry,
+                    state=state,
+                    response_index=None,
+                ),
+            )
+            # The kernel already measured the full request, including tools
+            # and response format, before selecting this attempt.  The
+            # controller still receives the automatic option so manual and
+            # automatic entrypoints share the same request/pipeline shape.
+            budget_window = max(1, model_window, limit_tokens)
+            return await compactor.compact(
+                list(request.messages),
+                budget=TokenBudget(
+                    context_window=budget_window,
+                    trigger_tokens=max(1, limit_tokens),
+                    target_tokens=limit_tokens,
+                ),
+                options=CompactionOptions(force=False, target_tokens=limit_tokens),
+                trigger="model_switch" if model_switched else "auto",
+                _skip_trigger_check=True,
             )
 
         allow_previous = request.metadata.get("allow_previous_model_compaction") is not False

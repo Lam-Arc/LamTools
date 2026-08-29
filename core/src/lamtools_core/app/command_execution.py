@@ -6,11 +6,12 @@ from pathlib import Path
 from typing import Any
 
 from lamtools_core.context_compaction import (
-    ContextCompactionRequest,
+    CompactionOptions,
+    ContextCompactor,
     compact_context,
     compaction_segment_input_limit,
 )
-from lamtools_core.context_compaction_budget import SummaryTokenBudget
+from lamtools_core.context_compaction_budget import SummaryTokenBudget, TokenBudget
 from lamtools_core.llm import ChatMessage, LLMClient, LLMToolCall
 from lamtools_core.mem import MemoryStoreProtocol
 from lamtools_core.mem.dreaming import dream_session
@@ -84,19 +85,31 @@ async def compact_runtime_history(
             output_tokens=max(256, min(4096, MANUAL_COMPACTION_LIMIT_TOKENS // 3)),
             protocol_tokens=min(1024, max(0, context_window_tokens // 10)),
         )
-    result = await compact_context(
-        ContextCompactionRequest(
-            trigger="manual",
-            messages=messages,
-            llm_client=llm_client,
-            model=active_model,
-            limit_tokens=MANUAL_COMPACTION_LIMIT_TOKENS,
-            input_limit_tokens=compaction_segment_input_limit(context_window_tokens),
-            summary_budget=summary_budget,
-            existing_summary=existing_summary,
-            on_event=on_event,
-        )
+    budget_window = max(context_window_tokens, MANUAL_COMPACTION_LIMIT_TOKENS)
+    budget = TokenBudget(
+        context_window=budget_window,
+        trigger_tokens=budget_window,
+        target_tokens=min(MANUAL_COMPACTION_LIMIT_TOKENS, budget_window),
     )
+    compactor = ContextCompactor(
+        llm_client=llm_client,
+        model=active_model,
+        input_limit_tokens=compaction_segment_input_limit(context_window_tokens),
+        summary_budget=summary_budget,
+        existing_summary=existing_summary,
+        on_event=on_event,
+        pipeline=compact_context,
+    )
+    result = await compactor.compact(
+        messages,
+        budget=budget,
+        options=CompactionOptions(
+            force=True,
+            target_tokens=MANUAL_COMPACTION_LIMIT_TOKENS,
+        ),
+        trigger="manual",
+    )
+    assert result is not None
     if result.status != "compacted":
         return {
             **result.display_payload,

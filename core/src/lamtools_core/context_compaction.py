@@ -10,7 +10,11 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from lamtools_core.context_compaction_budget import SummaryTokenBudget
+from lamtools_core.context_compaction_budget import (
+    SummaryTokenBudget,
+    TokenBudget,
+    measure_for_compaction_trigger,
+)
 from lamtools_core.llm import ChatMessage, LLMClient, LLMRequest
 from lamtools_core.llm.policy import RetryPolicy
 from lamtools_core.llm.retry import ModelRetryExhausted, ModelRetrySink, complete_with_retry, stream_with_retry
@@ -172,6 +176,19 @@ MAX_COMPACTION_SEGMENT_INPUT_TOKENS = 64_000
 MAX_FIT_ATTEMPTS = 8
 
 
+@dataclass(frozen=True, slots=True)
+class CompactionOptions:
+    """Per-invocation controls shared by automatic and manual compaction."""
+
+    force: bool = False
+    target_tokens: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.target_tokens is not None:
+            if isinstance(self.target_tokens, bool) or self.target_tokens <= 0:
+                raise ValueError("target_tokens must be positive when provided")
+
+
 @dataclass(frozen=True)
 class ContextCompactionRequest:
     """Input for the single Core context compaction interface."""
@@ -194,6 +211,109 @@ class ContextCompactionRequest:
     model_timeout_seconds: float | None = None
     retry_policy: RetryPolicy = field(default_factory=RetryPolicy)
     on_model_retry: ModelRetrySink | None = None
+    options: CompactionOptions = field(default_factory=CompactionOptions)
+
+
+class ContextCompactor:
+    """Facade shared by automatic and manual context-compaction entrypoints.
+
+    The existing ``compact_context`` function remains the compatibility
+    implementation of the planner/summarizer/fitter pipeline.  This facade
+    resolves the concrete budget and invocation options before entering that
+    pipeline, so callers do not maintain separate manual and automatic
+    request construction paths.
+    """
+
+    def __init__(
+        self,
+        *,
+        llm_client: LLMClient | None = None,
+        model: str = "",
+        timeout: float | None = None,
+        input_limit_tokens: int | None = None,
+        existing_summary: str = "",
+        on_delta: CompactionDeltaSink | None = None,
+        on_event: CompactionEventSink | None = None,
+        estimate_tokens: CompactionTokenEstimator | None = None,
+        estimate_exact_tokens: CompactionTokenEstimator | None = None,
+        summary_budget: SummaryTokenBudget | None = None,
+        model_retries: int = 1,
+        model_timeout_seconds: float | None = None,
+        retry_policy: RetryPolicy | None = None,
+        on_model_retry: ModelRetrySink | None = None,
+        pipeline: Callable[..., Awaitable[ContextCompactionResult]] | None = None,
+    ) -> None:
+        self._llm_client = llm_client
+        self._model = model
+        self._timeout = timeout
+        self._input_limit_tokens = input_limit_tokens
+        self._existing_summary = existing_summary
+        self._on_delta = on_delta
+        self._on_event = on_event
+        self._estimate_tokens = estimate_tokens
+        self._estimate_exact_tokens = estimate_exact_tokens
+        self._summary_budget = summary_budget
+        self._model_retries = model_retries
+        self._model_timeout_seconds = model_timeout_seconds
+        self._retry_policy = retry_policy
+        self._on_model_retry = on_model_retry
+        self._pipeline = pipeline
+
+    async def compact(
+        self,
+        messages: list[ChatMessage],
+        *,
+        budget: TokenBudget,
+        options: CompactionOptions | None = None,
+        trigger: str | None = None,
+        _skip_trigger_check: bool = False,
+    ) -> ContextCompactionResult | None:
+        """Run the common compaction pipeline when the invocation warrants it.
+
+        Automatic calls return ``None`` while still below the trigger.  A
+        forced call bypasses that check and preserves the existing manual
+        behavior.  ``_skip_trigger_check`` is for callers that already had to
+        measure a request with provider-specific overhead (the kernel); it
+        does not change the compaction pipeline itself.
+        """
+        resolved_options = options or CompactionOptions()
+        target_tokens = resolved_options.target_tokens or budget.target_tokens
+        if not resolved_options.force and not _skip_trigger_check:
+            measurement = measure_for_compaction_trigger(
+                messages,
+                trigger_tokens=budget.trigger_tokens,
+                fast_estimate=self._estimate_tokens,
+                exact_estimate=self._estimate_exact_tokens,
+            )
+            if measurement.tokens < budget.trigger_tokens:
+                return None
+
+        input_limit_tokens = self._input_limit_tokens
+        if input_limit_tokens is None:
+            input_limit_tokens = budget.max_input_tokens or budget.context_window
+        request = ContextCompactionRequest(
+            trigger=trigger or ("manual" if resolved_options.force else "auto"),
+            messages=list(messages),
+            llm_client=self._llm_client,
+            model=self._model,
+            timeout=self._timeout,
+            limit_tokens=target_tokens,
+            input_limit_tokens=input_limit_tokens,
+            existing_summary=self._existing_summary,
+            on_delta=self._on_delta,
+            on_event=self._on_event,
+            estimate_tokens=self._estimate_tokens,
+            estimate_exact_tokens=self._estimate_exact_tokens,
+            summary_budget=self._summary_budget,
+            model_retries=self._model_retries,
+            model_timeout_seconds=self._model_timeout_seconds,
+            retry_policy=self._retry_policy or RetryPolicy(),
+            on_model_retry=self._on_model_retry,
+            options=resolved_options,
+        )
+        if self._pipeline is not None:
+            return await self._pipeline(request)
+        return await compact_context(request)
 
 
 @dataclass(frozen=True)
@@ -468,6 +588,9 @@ class _ContextCompactionLayout:
 
 async def compact_context(request: ContextCompactionRequest) -> ContextCompactionResult:
     """Compact context and return both replacement messages and display data."""
+    options = request.options
+    if options.target_tokens is not None and options.target_tokens != request.limit_tokens:
+        request = replace(request, limit_tokens=options.target_tokens)
     await _emit_compaction_event(
         request,
         {
@@ -1594,8 +1717,10 @@ __all__ = [
     "CompactionFitInput",
     "CompactionFitResult",
     "CompactionFitter",
+    "CompactionOptions",
     "CompactionSummary",
     "ContextCompactionError",
+    "ContextCompactor",
     "ContextCompactionRequest",
     "ContextCompactionResult",
     "compact_context",

@@ -10,7 +10,9 @@ from lamtools_core.context_compaction import (
     CompactionBudgetExceeded,
     CompactionFitInput,
     CompactionFitter,
+    CompactionOptions,
     CompactionSummary,
+    ContextCompactor,
     ContextCompactionRequest,
     compact_context,
     compress_structured_compaction_summary,
@@ -19,7 +21,7 @@ from lamtools_core.context_compaction import (
     summarize_context_messages,
     truncate_text_to_tokens,
 )
-from lamtools_core.context_compaction_budget import SummaryTokenBudget
+from lamtools_core.context_compaction_budget import SummaryTokenBudget, TokenBudget
 from lamtools_core.llm import ChatMessage, LLMResponse, LLMStreamEvent, LLMToolCall
 from lamtools_core.tokens import estimate_message_tokens, estimate_text_tokens
 
@@ -217,6 +219,84 @@ def test_summary_render_round_trip():
     )
 
     assert parse_compaction_summary(summary.render()) == summary
+
+
+def test_compaction_options_reject_non_positive_target():
+    with pytest.raises(ValueError, match="target_tokens"):
+        CompactionOptions(target_tokens=0)
+
+
+@pytest.mark.asyncio
+async def test_context_compactor_auto_and_manual_share_the_same_pipeline():
+    messages = [
+        ChatMessage(role="user", content="old request " + ("x" * 6_000)),
+        ChatMessage(role="assistant", content="old result " + ("y" * 6_000)),
+        ChatMessage(role="user", content="latest request"),
+    ]
+    budget = TokenBudget(context_window=12_000, trigger_tokens=1_200, target_tokens=1_200)
+
+    auto_client = _CompactionClient()
+    auto_result = await ContextCompactor(
+        llm_client=auto_client,
+        model="mock-model",
+        estimate_tokens=_estimate,
+    ).compact(
+        messages,
+        budget=budget,
+        options=CompactionOptions(force=False),
+    )
+    manual_client = _CompactionClient()
+    manual_result = await ContextCompactor(
+        llm_client=manual_client,
+        model="mock-model",
+        estimate_tokens=_estimate,
+    ).compact(
+        messages,
+        budget=budget,
+        options=CompactionOptions(force=True, target_tokens=1_200),
+    )
+
+    assert auto_result is not None
+    assert manual_result is not None
+    assert auto_result.status == manual_result.status == "compacted"
+    assert auto_result.compacted_count == manual_result.compacted_count
+    assert auto_result.retained_count == manual_result.retained_count
+    assert auto_result.after_tokens == manual_result.after_tokens
+    assert auto_result.trigger == "auto"
+    assert manual_result.trigger == "manual"
+    assert auto_client.last_request is not None
+    assert manual_client.last_request is not None
+    assert auto_client.last_request.messages[-1].content == manual_client.last_request.messages[-1].content
+
+
+@pytest.mark.asyncio
+async def test_context_compactor_auto_waits_for_trigger_but_force_bypasses_it():
+    messages = [
+        ChatMessage(role="user", content="old request"),
+        ChatMessage(role="assistant", content="old result"),
+        ChatMessage(role="user", content="latest request"),
+    ]
+    budget = TokenBudget(context_window=8_000, trigger_tokens=8_000, target_tokens=1_200)
+    client = _CompactionClient()
+    compactor = ContextCompactor(
+        llm_client=client,
+        model="mock-model",
+        estimate_tokens=_estimate,
+    )
+
+    assert await compactor.compact(
+        messages,
+        budget=budget,
+        options=CompactionOptions(force=False),
+    ) is None
+    forced = await compactor.compact(
+        messages,
+        budget=budget,
+        options=CompactionOptions(force=True),
+    )
+
+    assert forced is not None
+    assert forced.trigger == "manual"
 
 
 @pytest.mark.asyncio
