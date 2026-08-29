@@ -9,8 +9,9 @@ from lamtools_core.context_compaction import (
     ContextCompactionRequest,
     compact_context,
     compress_structured_compaction_summary,
+    select_context_compaction_layout,
 )
-from lamtools_core.llm import ChatMessage, LLMResponse, LLMStreamEvent
+from lamtools_core.llm import ChatMessage, LLMResponse, LLMStreamEvent, LLMToolCall
 from lamtools_core.tokens import estimate_message_tokens
 
 
@@ -700,3 +701,156 @@ async def test_auto_compaction_transcript_includes_prior_summary_and_excludes_re
     assert "recent user 2" not in transcript
     assert "recent assistant 3" not in transcript
     assert "latest request" not in transcript
+
+
+def test_preserves_leading_system_prefix():
+    prefix = [
+        ChatMessage(role="system", content="stable policy"),
+        ChatMessage(role="system", content="workspace policy"),
+    ]
+    messages = [
+        *prefix,
+        ChatMessage(role="user", content="old context " + ("x " * 1600)),
+        ChatMessage(role="assistant", content="old result " + ("y " * 1600)),
+        ChatMessage(role="user", content="latest request"),
+    ]
+
+    layout = select_context_compaction_layout(
+        messages,
+        limit_tokens=1200,
+        estimate_tokens=_estimate,
+    )
+
+    assert layout is not None
+    assert layout.prefix_messages == prefix
+
+
+def test_preserves_latest_user_turn():
+    messages = [
+        ChatMessage(role="user", content="old context " + ("x " * 1600)),
+        ChatMessage(role="assistant", content="old result " + ("y " * 1600)),
+        ChatMessage(role="user", content="latest explicit request"),
+    ]
+
+    layout = select_context_compaction_layout(
+        messages,
+        limit_tokens=1200,
+        estimate_tokens=_estimate,
+    )
+
+    assert layout is not None
+    assert layout.retained_messages[-1].content == "latest explicit request"
+
+
+def test_preserves_recent_complete_turns():
+    messages = [
+        ChatMessage(role="user", content="old context " + ("x " * 1600)),
+        ChatMessage(role="assistant", content="old result " + ("y " * 1600)),
+        ChatMessage(role="user", content="recent request"),
+        ChatMessage(role="assistant", content="recent answer"),
+        ChatMessage(role="user", content="latest request"),
+    ]
+
+    layout = select_context_compaction_layout(
+        messages,
+        limit_tokens=1200,
+        estimate_tokens=_estimate,
+    )
+
+    assert layout is not None
+    assert [message.content for message in layout.retained_messages] == [
+        "recent request",
+        "recent answer",
+        "latest request",
+    ]
+
+
+def test_tool_call_and_result_stay_together():
+    tool_call = LLMToolCall(
+        id="call-1",
+        name="read_file",
+        arguments={"path": "notes.txt"},
+    )
+    messages = [
+        ChatMessage(role="user", content="old context " + ("x " * 1600)),
+        ChatMessage(role="assistant", content="old result " + ("y " * 1600)),
+        ChatMessage(role="user", content="read the notes"),
+        ChatMessage(role="assistant", tool_calls=[tool_call]),
+        ChatMessage(
+            role="tool",
+            tool_call_id="call-1",
+            content="notes content",
+        ),
+    ]
+
+    layout = select_context_compaction_layout(
+        messages,
+        limit_tokens=1200,
+        estimate_tokens=_estimate,
+    )
+
+    assert layout is not None
+    assert layout.retained_messages[-2].tool_calls == [tool_call]
+    assert layout.retained_messages[-1].tool_call_id == "call-1"
+
+
+@pytest.mark.asyncio
+async def test_compaction_summary_does_not_enter_raw_history():
+    messages = [
+        ChatMessage(role="user", content="old requirement " + ("x " * 1600)),
+        ChatMessage(role="assistant", content="old result " + ("y " * 1600)),
+        ChatMessage(role="user", content="latest request"),
+    ]
+    original = [message.to_dict() for message in messages]
+
+    result = await compact_context(
+        ContextCompactionRequest(
+            trigger="auto",
+            messages=messages,
+            llm_client=_CompactionClient(),
+            model="mock-model",
+            limit_tokens=1200,
+            estimate_tokens=_estimate,
+        )
+    )
+
+    assert result.status == "compacted"
+    assert [message.to_dict() for message in messages] == original
+    assert all(
+        message.metadata.get("key") != "context_compaction_summary"
+        for message in messages
+    )
+
+
+@pytest.mark.asyncio
+async def test_resume_boundary_restores_recent_tail():
+    messages = [
+        ChatMessage(role="user", content="old request " + ("x " * 1600)),
+        ChatMessage(role="assistant", content="old answer " + ("y " * 1600)),
+        ChatMessage(role="user", content="recent request"),
+        ChatMessage(role="assistant", content="recent answer"),
+        ChatMessage(role="user", content="latest request"),
+    ]
+
+    result = await compact_context(
+        ContextCompactionRequest(
+            trigger="manual",
+            messages=messages,
+            llm_client=_CompactionClient(),
+            model="mock-model",
+            limit_tokens=1200,
+            estimate_tokens=_estimate,
+        )
+    )
+
+    assert result.status == "compacted"
+    assert [message.content for message in result.retained_messages] == [
+        "recent request",
+        "recent answer",
+        "latest request",
+    ]
+    assert [message.content for message in result.replacement_messages[-3:]] == [
+        "recent request",
+        "recent answer",
+        "latest request",
+    ]
