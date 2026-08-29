@@ -1,6 +1,6 @@
 """Background file-watcher for workflow definition folders.
 
-Polls the :class:`~lamtools_core.project.workflow_store.WorkflowStore` mtime
+Polls the :class:`~lamtools_core.plugins.bundled.workflow.backend.store.WorkflowStore` mtime
 signature on a timer and broadcasts a ``workflow/changed`` event through the
 app event hub when an external edit is detected, so connected canvases refresh
 automatically.

@@ -148,7 +148,7 @@ describe('Core project narrow layout contract', () => {
   it('exposes the existing project creation flow from the sidebar primary area', () => {
     const demoSource = readFileSync(resolve(process.cwd(), 'src/demo/App.vue'), 'utf8')
 
-    expect(demoSource).toMatch(/<template #primary>[\s\S]*data-sidebar-create-project[\s\S]*@click="openProjectCreate"/)
+    expect(demoSource).toMatch(/<template #primary>[\s\S]*data-sidebar-primary-action[\s\S]*@click="invokeSidebarPrimaryAction"/)
     expect(demoSource).toMatch(/<template #empty>[\s\S]*data-sidebar-empty-projects[\s\S]*还没有项目[\s\S]*data-sidebar-empty-create-project[\s\S]*@click="openProjectCreate"/)
     expect(demoSource).toContain(':show-sidebar-header="false"')
     expect(demoSource).toContain(':show-sidebar-header-action="false"')

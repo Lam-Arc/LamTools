@@ -23,12 +23,29 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from lamtools_core.runtime.workflow import WorkflowDef
+from lamtools_core.plugins.bundled.workflow.backend.runtime import WorkflowDef
 from lamtools_core.tool import ToolCall, ToolResult, ToolSpec
-from lamtools_core.tool.permission import AUTO_ALLOW
+from lamtools_core.tool.permission import ASK_USER
 
 
 OperationExecutor = Callable[[str, dict[str, Any], dict[str, Any]], Awaitable[Any]]
+
+
+async def workflow_manifest_tool_handler(call: ToolCall) -> ToolResult:
+    """Safe manifest fallback when the plugin backend is not initialized.
+
+    The normal plugin lifecycle supplies the context-bound handlers through
+    the generic runtime contribution map. Keeping a real ``module:function``
+    target in ``tools.jsonc`` means the manifest remains valid even for hosts
+    that only load declarative plugin tools; such hosts receive a clear,
+    bounded failure instead of an import error.
+    """
+    return ToolResult(
+        call_id=call.id,
+        name=call.name,
+        status="failed",
+        error="Workflow plugin runtime is not available",
+    )
 
 
 @dataclass
@@ -50,7 +67,7 @@ def workflow_tool_specs(enrolled: list[WorkflowDef]) -> list[ToolSpec]:
         # Workflow inputs come from each node's orphaned input ports
         # (in-ports no edge feeds), named "{nodeId}.{portName}".
         input_ports = _workflow_input_ports(wf)
-        for name, ptype, desc in input_ports:
+        for name, ptype, desc, is_required, default in input_ports:
             entry: dict[str, Any] = {}
             if desc:
                 entry["description"] = desc
@@ -58,8 +75,11 @@ def workflow_tool_specs(enrolled: list[WorkflowDef]) -> list[ToolSpec]:
             # type.  Use a concrete, provider-compatible fallback at the
             # model boundary instead of emitting an untyped property.
             entry["type"] = _json_type(ptype)
+            if default is not None:
+                entry["default"] = deepcopy(default)
             properties[name] = entry
-            required.append(name)
+            if is_required and default is None:
+                required.append(name)
         schema: dict[str, Any] = {
             "type": "object",
             "additionalProperties": False,
@@ -74,23 +94,32 @@ def workflow_tool_specs(enrolled: list[WorkflowDef]) -> list[ToolSpec]:
                     or f"Run the '{wf.name}' workflow ({len(wf.nodes)} nodes) and return its output."
                 ),
                 input_schema=schema,
-                permission=AUTO_ALLOW,
-                metadata={"category": "workflow", "workflow_name": wf.name},
+                # A workflow can execute command/script/AI nodes.  Exposing it
+                # as a model tool must therefore use the normal approval gate.
+                permission=ASK_USER,
+                metadata={
+                    "category": "workflow",
+                    "workflow_name": wf.name,
+                    "plugin": "workflow",
+                    "plugin_dynamic": True,
+                    "plugin_mode": "workflow:workflow",
+                },
             )
         )
     return specs
 
 
-def _workflow_input_ports(wf: WorkflowDef) -> list[tuple[str, str, str]]:
-    """Return (name, type, description) for workflow inputs.
+def _workflow_input_ports(wf: WorkflowDef) -> list[tuple[str, str, str, bool, Any]]:
+    """Return ``(name, type, description, required, default)`` inputs.
 
     An input is any node input port that no edge feeds (an orphaned in-port),
     named ``{nodeId}.{portName}``. The legacy ``input_params`` array is merged
     in for backward compatibility.
     """
     fed: set[tuple[str, str]] = {(e.target, e.target_port) for e in wf.edges}
+    params = {param.name: param for param in wf.input_params if param.name}
     seen: set[str] = set()
-    result: list[tuple[str, str, str]] = []
+    result: list[tuple[str, str, str, bool, Any]] = []
     for node in wf.nodes:
         for port in node.input_ports():
             if (node.id, port.name) in fed:
@@ -98,11 +127,28 @@ def _workflow_input_ports(wf: WorkflowDef) -> list[tuple[str, str, str]]:
             name = f"{node.id}.{port.name}"
             if name not in seen:
                 seen.add(name)
-                result.append((name, port.type, port.description))
+                param = params.get(name)
+                result.append(
+                    (
+                        name,
+                        port.type,
+                        port.description or (param.description if param else ""),
+                        bool(param.required) if param is not None else True,
+                        param.default if param is not None else None,
+                    )
+                )
     for param in wf.input_params:
         if param.name and param.name not in seen:
             seen.add(param.name)
-            result.append((param.name, param.type, param.description))
+            result.append(
+                (
+                    param.name,
+                    param.type,
+                    param.description,
+                    bool(param.required),
+                    param.default,
+                )
+            )
     return result
 
 
@@ -130,12 +176,20 @@ def _make_workflow_handler(
         # All call arguments become workflow inputs.
         inputs = {k: v for k, v in args.items()}
         payload: dict[str, Any] = {"name": workflow_name, "inputs": inputs}
-        if work_root:
-            payload["work_root"] = str(work_root)
+        metadata = call.metadata if isinstance(call.metadata, dict) else {}
+        active_root_raw = metadata.get("work_root") or metadata.get("workRoot")
+        if not active_root_raw:
+            session_metadata = metadata.get("_runtime_session_metadata")
+            if isinstance(session_metadata, dict):
+                active_root_raw = session_metadata.get("work_root") or session_metadata.get("workRoot")
+        active_root = str(active_root_raw or work_root or "").strip()
+        if active_root:
+            payload["work_root"] = active_root
         metadata = {
             "source": "agent_tool",
-            "run_id": str(call.metadata.get("_runtime_run_id") or ""),
+            "run_id": str(metadata.get("_runtime_run_id") or ""),
             "tool_call_id": call.id,
+            **({"work_root": active_root} if active_root else {}),
         }
         result = await execute_operation("workflow.run", payload, metadata)
         return _from_operation(call, result)
@@ -228,6 +282,7 @@ def _failed(call: ToolCall, error: str, *, payload: dict[str, Any] | None = None
 __all__ = [
     "OperationExecutor",
     "WorkflowToolBundle",
+    "workflow_manifest_tool_handler",
     "workflow_tool_handlers",
     "workflow_tool_provider",
     "workflow_tool_specs",

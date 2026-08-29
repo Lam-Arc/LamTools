@@ -19,6 +19,7 @@ import ast
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import tempfile
@@ -66,6 +67,30 @@ def _utcnow() -> datetime:
 
 def _new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:12]}"
+
+
+class WorkflowValidationError(ValueError):
+    """Raised when a workflow graph cannot be executed safely."""
+
+
+class WorkflowPermissionError(PermissionError):
+    """Raised when a command/script node is not allowed by the host gate."""
+
+
+def ensure_workflow_id(definition: "WorkflowDef", *, seed: str = "") -> str:
+    """Assign and return the stable identity of a workflow.
+
+    New definitions receive a UUID.  Legacy files are given a deterministic
+    UUID by the store, using their resolved path as the seed, so merely
+    reading an old workflow never changes the session it is bound to.
+    """
+    if definition.id:
+        return definition.id
+    if seed:
+        definition.id = uuid.uuid5(uuid.NAMESPACE_URL, seed).hex
+    else:
+        definition.id = uuid.uuid4().hex
+    return definition.id
 
 
 # ---------------------------------------------------------------------------
@@ -239,6 +264,9 @@ class WorkflowDef:
     """A complete workflow definition. ``exposed`` gates tool availability."""
 
     name: str
+    # Stable resource identity.  The display/file name may change during a
+    # rename; sessions and run events bind to this id instead.
+    id: str = ""
     description: str = ""
     nodes: list[WorkflowNode] = field(default_factory=list)
     edges: list[WorkflowEdge] = field(default_factory=list)
@@ -255,6 +283,7 @@ class WorkflowDef:
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "id": self.id,
             "name": self.name,
             "description": self.description,
             "nodes": [n.to_dict() for n in self.nodes],
@@ -273,6 +302,7 @@ class WorkflowDef:
     def from_dict(cls, value: dict[str, Any]) -> "WorkflowDef":
         return cls(
             name=str(value.get("name") or ""),
+            id=str(value.get("id") or value.get("workflow_id") or ""),
             description=str(value.get("description") or ""),
             nodes=[WorkflowNode.from_dict(n) for n in (value.get("nodes") or []) if isinstance(n, dict)],
             edges=[WorkflowEdge.from_dict(e) for e in (value.get("edges") or []) if isinstance(e, dict)],
@@ -345,6 +375,18 @@ class WorkflowRunResult:
         }
 
 
+@dataclass
+class _ActiveWorkflowRun:
+    """Mutable snapshot used to turn an external task cancel into a result."""
+
+    workflow: WorkflowDef
+    order: list[str]
+    node_states: dict[str, WorkflowNodeState]
+    values: dict[str, Any]
+    current_node_id: str = ""
+    steps_taken: int = 0
+
+
 def _json_copy(value: Any) -> Any:
     try:
         return json.loads(json.dumps(value, default=str, ensure_ascii=False))
@@ -364,6 +406,135 @@ def _parse_dt(value: Any) -> datetime | None:
         return None
 
 
+def validate_workflow(
+    workflow: WorkflowDef,
+    *,
+    start_node: str | None = None,
+    single_node: str | None = None,
+) -> None:
+    """Validate graph structure and typed connections before execution.
+
+    The validator is intentionally independent of storage and model services.
+    Subgraph target existence is checked by the runner at execution time,
+    because it depends on the active project scope.
+    """
+    if not isinstance(workflow, WorkflowDef):
+        raise WorkflowValidationError("workflow must be a WorkflowDef")
+    if not workflow.name.strip():
+        raise WorkflowValidationError("workflow name is required")
+
+    nodes_by_id: dict[str, WorkflowNode] = {}
+    for node in workflow.nodes:
+        node_id = str(node.id or "").strip()
+        if not node_id:
+            raise WorkflowValidationError("node id is required")
+        if node_id in nodes_by_id:
+            raise WorkflowValidationError(f"duplicate node id: {node_id}")
+        if node.kind not in {"ai", "command", "script", "content", "subgraph"}:
+            raise WorkflowValidationError(f"unsupported node kind: {node.kind}")
+        ports: set[str] = set()
+        for port in node.ports:
+            port_name = str(port.name or "").strip()
+            if not port_name:
+                raise WorkflowValidationError(f"node '{node_id}' has a port without a name")
+            if port_name in ports:
+                raise WorkflowValidationError(f"node '{node_id}' has duplicate port: {port_name}")
+            ports.add(port_name)
+            if port.direction not in {"in", "out"}:
+                raise WorkflowValidationError(
+                    f"node '{node_id}' port '{port_name}' has invalid direction"
+                )
+        nodes_by_id[node_id] = node
+
+    edge_ids: set[str] = set()
+    routes: set[tuple[str, str, str, str]] = set()
+    for edge in workflow.edges:
+        edge_id = str(edge.id or "").strip()
+        if not edge_id:
+            raise WorkflowValidationError("edge id is required")
+        if edge_id in edge_ids:
+            raise WorkflowValidationError(f"duplicate edge id: {edge_id}")
+        edge_ids.add(edge_id)
+        route = (edge.source, edge.source_port, edge.target, edge.target_port)
+        if route in routes:
+            raise WorkflowValidationError(
+                f"duplicate edge: {edge.source}.{edge.source_port} -> "
+                f"{edge.target}.{edge.target_port}"
+            )
+        routes.add(route)
+        source = nodes_by_id.get(edge.source)
+        target = nodes_by_id.get(edge.target)
+        if source is None or target is None:
+            raise WorkflowValidationError(
+                f"edge '{edge_id}' references an unknown node"
+            )
+        source_port = next((p for p in source.ports if p.name == edge.source_port), None)
+        target_port = next((p for p in target.ports if p.name == edge.target_port), None)
+        if source_port is None:
+            raise WorkflowValidationError(
+                f"edge '{edge_id}' source port not found: {edge.source}.{edge.source_port}"
+            )
+        if target_port is None:
+            raise WorkflowValidationError(
+                f"edge '{edge_id}' target port not found: {edge.target}.{edge.target_port}"
+            )
+        if source_port.direction != "out" or target_port.direction != "in":
+            raise WorkflowValidationError(
+                f"edge '{edge_id}' must connect an output to an input"
+            )
+        if not _types_compatible(source_port.type, target_port.type):
+            raise WorkflowValidationError(
+                f"edge '{edge_id}' has incompatible types: "
+                f"{source_port.type} -> {target_port.type}"
+            )
+
+    params_seen: set[str] = set()
+    for param in workflow.input_params:
+        name = str(param.name or "").strip()
+        if not name:
+            raise WorkflowValidationError("workflow input name is required")
+        if name in params_seen:
+            raise WorkflowValidationError(f"duplicate workflow input: {name}")
+        params_seen.add(name)
+        if param.required and param.default is None:
+            # The absence is checked against run inputs; this marks the
+            # contract without rejecting a valid definition at save time.
+            continue
+
+    if workflow.output_port:
+        parts = workflow.output_port.split(".", 1)
+        output_node = nodes_by_id.get(parts[0])
+        if output_node is None:
+            raise WorkflowValidationError(
+                f"output_port references unknown node: {workflow.output_port}"
+            )
+        if len(parts) == 2:
+            output = next((p for p in output_node.ports if p.name == parts[1]), None)
+            if output is None or output.direction != "out":
+                raise WorkflowValidationError(
+                    f"output_port must reference an output port: {workflow.output_port}"
+                )
+
+    for selected in (start_node, single_node):
+        if selected and selected not in nodes_by_id:
+            raise WorkflowValidationError(f"unknown node: {selected}")
+
+
+def _validate_run_inputs(
+    workflow: WorkflowDef,
+    inputs: dict[str, Any],
+    prior_values: dict[str, Any],
+) -> None:
+    for param in workflow.input_params:
+        if not param.required or param.default is not None:
+            continue
+        if param.name in inputs or f"__input__.{param.name}" in prior_values:
+            continue
+        raise WorkflowValidationError(
+            f"required workflow input is missing: {param.name}"
+        )
+
+
 # ---------------------------------------------------------------------------
 # WorkflowManager — create / get / list / update / delete over a store
 # ---------------------------------------------------------------------------
@@ -377,13 +548,15 @@ class WorkflowManager:
 
     The store protocol mirrors :class:`ArrangeStore`: async ``list`` / ``get`` /
     ``save`` / ``delete``. The file-backed implementation lives in
-    :mod:`lamtools_core.project.workflow_store`.
+    :mod:`lamtools_core.plugins.bundled.workflow.backend.store`.
     """
 
     def __init__(self, store: Any) -> None:
         self.store = store
 
     async def create(self, definition: WorkflowDef) -> WorkflowDef:
+        ensure_workflow_id(definition)
+        validate_workflow(definition)
         return await self.store.save(definition)
 
     async def get(self, name: str, *, work_root: str | None = None) -> WorkflowDef | None:
@@ -430,6 +603,31 @@ class WorkflowManager:
         if tool_name is not None:
             current.tool_name = tool_name
         current.updated_at = _utcnow()
+        validate_workflow(current)
+        return await self.store.save(current)
+
+    async def rename(
+        self,
+        name: str,
+        new_name: str,
+        *,
+        work_root: str | None = None,
+    ) -> WorkflowDef:
+        """Rename a workflow while preserving its stable resource id."""
+        clean_name = str(new_name or "").strip()
+        if not clean_name:
+            raise ValueError("new workflow name is required")
+        current = await self.store.get(name, work_root=work_root)
+        if current is None:
+            raise LookupError(f"Workflow not found: {name}")
+        if clean_name == current.name:
+            return current
+        collision = await self.store.get(clean_name, work_root=work_root)
+        if collision is not None and collision.id != current.id:
+            raise ValueError(f"Workflow already exists: {clean_name}")
+        current.name = clean_name
+        current.updated_at = _utcnow()
+        validate_workflow(current)
         return await self.store.save(current)
 
     async def delete(self, name: str, *, work_root: str | None = None) -> bool:
@@ -467,6 +665,7 @@ class WorkflowRunner:
         emit: WorkflowEventCallback | None = None,
         runtime_task_registry: Any = None,
         workflow_store: Any = None,
+        permission_service: Any = None,
         clock: Callable[[], datetime] = _utcnow,
     ) -> None:
         self.llm_client = llm_client
@@ -476,9 +675,59 @@ class WorkflowRunner:
         # ``workflow_store`` enables subworkflow nodes to resolve and run other
         # workflow definitions by name.
         self.workflow_store = workflow_store
+        self.permission_service = permission_service
         self.clock = clock
+        self._active_runs: dict[tuple[str, str], _ActiveWorkflowRun] = {}
+        self._active_tasks: dict[tuple[str, str], asyncio.Task[Any]] = {}
 
     async def run(
+        self,
+        workflow: WorkflowDef,
+        *,
+        inputs: dict[str, Any] | None = None,
+        work_root: str = "",
+        thread_id: str = "",
+        run_id: str = "",
+        prior_values: dict[str, Any] | None = None,
+        prior_node_states: dict[str, WorkflowNodeState] | None = None,
+        max_steps: int | None = None,
+        start_node: str | None = None,
+        single_node: str | None = None,
+    ) -> WorkflowRunResult:
+        """Run a workflow and convert caller cancellation to a stable result.
+
+        The operation layer deliberately uses task cancellation for prompt
+        interruption (especially while a command/script subprocess is
+        blocked).  Keeping this conversion at the public Runner boundary
+        means callers still receive the same ``status=cancelled`` contract and
+        the node state that was in flight is not lost.
+        """
+        effective_run_id = run_id or _new_id("wfrun")
+        effective_thread_id = thread_id or f"workflow_thread_{uuid.uuid4().hex}"
+        key = (effective_thread_id, effective_run_id)
+        current_task = asyncio.current_task()
+        if current_task is not None:
+            self._active_tasks[key] = current_task
+        try:
+            return await self._run_impl(
+                workflow,
+                inputs=inputs,
+                work_root=work_root,
+                thread_id=effective_thread_id,
+                run_id=effective_run_id,
+                prior_values=prior_values,
+                prior_node_states=prior_node_states,
+                max_steps=max_steps,
+                start_node=start_node,
+                single_node=single_node,
+            )
+        except asyncio.CancelledError:
+            return self._cancelled_result(key)
+        finally:
+            self._active_tasks.pop(key, None)
+            self._active_runs.pop(key, None)
+
+    async def _run_impl(
         self,
         workflow: WorkflowDef,
         *,
@@ -505,17 +754,28 @@ class WorkflowRunner:
         work_root = work_root or workflow.work_root
         run_id = run_id or _new_id("wfrun")
         thread_id = thread_id or f"workflow_thread_{uuid.uuid4().hex}"
+        workflow_id = ensure_workflow_id(workflow)
+
+        try:
+            validate_workflow(
+                workflow,
+                start_node=start_node,
+                single_node=single_node,
+            )
+            _validate_run_inputs(workflow, inputs, dict(prior_values or {}))
+        except WorkflowValidationError as exc:
+            return WorkflowRunResult(
+                status="failed",
+                error=str(exc),
+                run_id=run_id,
+            )
 
         order = _topological_order(workflow)
         if order is None:
             return WorkflowRunResult(status="failed", error="workflow graph has a cycle", run_id=run_id)
         if single_node:
-            if single_node not in order:
-                return WorkflowRunResult(status="failed", error=f"unknown node: {single_node}", run_id=run_id)
             order = [single_node]
         elif start_node:
-            if start_node not in order:
-                return WorkflowRunResult(status="failed", error=f"unknown node: {start_node}", run_id=run_id)
             idx = order.index(start_node)
             order = order[idx:]
 
@@ -536,10 +796,20 @@ class WorkflowRunner:
         for node in workflow.nodes:
             node_states.setdefault(node.id, WorkflowNodeState(node_id=node.id))
 
+        active = _ActiveWorkflowRun(
+            workflow=workflow,
+            order=order,
+            node_states=node_states,
+            values=values,
+        )
+        active_key = (thread_id, run_id)
+        self._active_runs[active_key] = active
         cancel_event = self._cancel_event(thread_id)
         steps_taken = 0
 
         for node_id in order:
+            active.current_node_id = node_id
+            active.steps_taken = steps_taken
             if cancel_event is not None and cancel_event.is_set():
                 _mark_cancelled(node_states, workflow, order, node_id)
                 return WorkflowRunResult(
@@ -576,10 +846,10 @@ class WorkflowRunner:
                 state.finished_at = self.clock()
                 for port in node.output_ports():
                     values[f"{node.id}.{port.name}"] = SKIP_SENTINEL
-                await self._emit_state(node, "skipped", thread_id, run_id)
+                await self._emit_state(node, "skipped", thread_id, run_id, workflow_id=workflow_id)
                 continue
 
-            await self._emit_state(node, "running", thread_id, run_id)
+            await self._emit_state(node, "running", thread_id, run_id, workflow_id=workflow_id)
             state.status = "running"
             state.started_at = self.clock()
 
@@ -591,7 +861,11 @@ class WorkflowRunner:
             except asyncio.CancelledError:
                 state.status = "cancelled"
                 state.finished_at = self.clock()
-                await self._emit_state(node, "cancelled", thread_id, run_id, error="cancelled")
+                _mark_cancelled(node_states, workflow, order, order.index(node_id) + 1)
+                await self._emit_state(
+                    node, "cancelled", thread_id, run_id,
+                    workflow_id=workflow_id, error="cancelled",
+                )
                 return WorkflowRunResult(
                     status="cancelled",
                     node_states=node_states,
@@ -613,7 +887,10 @@ class WorkflowRunner:
                     state.status = "done"
                     state.error = error_msg
                     state.finished_at = self.clock()
-                    await self._emit_state(node, "completed", thread_id, run_id, error=error_msg)
+                    await self._emit_state(
+                        node, "completed", thread_id, run_id,
+                        workflow_id=workflow_id, error=error_msg,
+                    )
                     for port_name, value in outputs.items():
                         values[f"{node.id}.{port_name}"] = value
                     steps_taken += 1
@@ -624,13 +901,19 @@ class WorkflowRunner:
                     state.finished_at = self.clock()
                     for port in node.output_ports():
                         values[f"{node.id}.{port.name}"] = SKIP_SENTINEL
-                    await self._emit_state(node, "skipped", thread_id, run_id, error=error_msg)
+                    await self._emit_state(
+                        node, "skipped", thread_id, run_id,
+                        workflow_id=workflow_id, error=error_msg,
+                    )
                     continue
                 # Default: abort the whole run.
                 state.status = "error"
                 state.error = error_msg
                 state.finished_at = self.clock()
-                await self._emit_state(node, "failed", thread_id, run_id, error=error_msg)
+                await self._emit_state(
+                    node, "failed", thread_id, run_id,
+                    workflow_id=workflow_id, error=error_msg,
+                )
                 return WorkflowRunResult(
                     status="failed",
                     node_states=node_states,
@@ -648,7 +931,7 @@ class WorkflowRunner:
                 outputs[next(iter(outputs))] if outputs else None
             )
             state.finished_at = self.clock()
-            await self._emit_state(node, "completed", thread_id, run_id)
+            await self._emit_state(node, "completed", thread_id, run_id, workflow_id=workflow_id)
             steps_taken += 1
 
         output = _resolve_output(workflow, values)
@@ -660,6 +943,57 @@ class WorkflowRunner:
             run_id=run_id,
             steps_remaining=0,
         )
+
+    def _cancelled_result(self, key: tuple[str, str]) -> WorkflowRunResult:
+        """Build a complete cancellation result from the in-flight snapshot."""
+        active = self._active_runs.get(key)
+        if active is None:
+            return WorkflowRunResult(
+                status="cancelled",
+                error="cancelled",
+                run_id=key[1],
+            )
+        current_id = active.current_node_id
+        current = active.node_states.get(current_id)
+        if current is not None and current.status in {"idle", "running"}:
+            current.status = "cancelled"
+            current.error = current.error or "cancelled"
+            current.finished_at = current.finished_at or self.clock()
+        for node_id in active.order:
+            state = active.node_states.get(node_id)
+            if state is not None and state.status == "idle":
+                state.status = "cancelled"
+                state.error = state.error or "cancelled"
+                state.finished_at = state.finished_at or self.clock()
+        remaining = sum(
+            1
+            for node_id in active.order
+            if active.node_states.get(node_id) is not None
+            and active.node_states[node_id].status not in {"done", "skipped", "error"}
+        )
+        return WorkflowRunResult(
+            status="cancelled",
+            node_states=active.node_states,
+            values=active.values,
+            error="cancelled",
+            run_id=key[1],
+            steps_remaining=remaining,
+        )
+
+    async def shutdown(self) -> None:
+        """Cancel and join Runner-owned workflow tasks during plugin unload."""
+        current = asyncio.current_task()
+        tasks = [
+            task
+            for task in self._active_tasks.values()
+            if task is not current and not task.done()
+        ]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._active_tasks.clear()
+        self._active_runs.clear()
 
     # -- node execution ----------------------------------------------------
 
@@ -921,6 +1255,13 @@ class WorkflowRunner:
                 sub_inputs = self._map_entry_inputs(sub_def, {"__item__": item})
                 sub = await self.run(sub_def, inputs=sub_inputs, work_root=work_root,
                                       thread_id=f"{thread_id}.map{i}", run_id=f"{run_id}.map{i}")
+                if sub.status == "cancelled":
+                    raise asyncio.CancelledError()
+                if sub.status != "completed":
+                    raise RuntimeError(
+                        f"subgraph workflow '{target_name}' failed: "
+                        f"{sub.error or sub.status}"
+                    )
                 results.append(sub.output)
             return {out_port: results}
 
@@ -934,8 +1275,13 @@ class WorkflowRunner:
                 sub = await self.run(sub_def, inputs=sub_inputs, work_root=work_root,
                                       thread_id=f"{thread_id}.loop{i}", run_id=f"{run_id}.loop{i}")
                 output = sub.output
+                if sub.status == "cancelled":
+                    raise asyncio.CancelledError()
                 if sub.status != "completed":
-                    break
+                    raise RuntimeError(
+                        f"subgraph workflow '{target_name}' failed: "
+                        f"{sub.error or sub.status}"
+                    )
                 # Exit condition: evaluate against the output wrapped as locals.
                 if condition_expr:
                     cond_locals = output if isinstance(output, dict) else {"value": output}
@@ -943,15 +1289,27 @@ class WorkflowRunner:
                         break
                 # Feed output back for next iteration.
                 if isinstance(output, dict):
-                    sub_inputs = {**self._map_entry_inputs(sub_def, bound_inputs), **output}
+                    # The previous implementation merged the original input
+                    # first and then relied on the child's port names.  For a
+                    # single-input child that selected the stale seed on every
+                    # iteration.  Feed the actual iteration output as the new
+                    # input source.
+                    sub_inputs = self._map_entry_inputs(sub_def, output)
                 else:
-                    sub_inputs = self._map_entry_inputs(sub_def, {**bound_inputs, "__value__": output})
+                    sub_inputs = self._map_entry_inputs(sub_def, {"__value__": output})
             return {out_port: output}
 
         # iterate == "none": run once.
         sub_inputs = self._map_entry_inputs(sub_def, bound_inputs)
         result = await self.run(sub_def, inputs=sub_inputs, work_root=work_root,
                                 thread_id=f"{thread_id}.sub", run_id=f"{run_id}.sub")
+        if result.status == "cancelled":
+            raise asyncio.CancelledError()
+        if result.status != "completed":
+            raise RuntimeError(
+                f"subgraph workflow '{target_name}' failed: "
+                f"{result.error or result.status}"
+            )
         output = result.output
         out_ports = node.output_ports()
         if out_ports and isinstance(output, dict):
@@ -966,7 +1324,7 @@ class WorkflowRunner:
         are flattened into it (first non-sentinel). Otherwise, bound input port
         names are matched directly to sub-workflow input names.
         """
-        from lamtools_core.runtime.workflow import _workflow_input_names  # local import; defined later
+        from lamtools_core.plugins.bundled.workflow.backend.runtime import _workflow_input_names  # local import; defined later
         input_names = _workflow_input_names(sub_def)
         # Flatten: pick first non-sentinel value for single-input sub-workflows.
         first_val: Any = None
@@ -996,6 +1354,11 @@ class WorkflowRunner:
         feeds bound inputs as stdin JSON + INPUT_<PORT> env vars, and splits
         JSON stdout to same-named output ports (else whole stdout to default).
         """
+        await self._check_execution_permission(
+            str(node.config.get("command") or ""),
+            work_root=work_root,
+            node=node,
+        )
         raw = await self._run_command(node.config, bound_inputs, work_root)
         return self._split_or_fallback(node, raw)
 
@@ -1047,20 +1410,19 @@ class WorkflowRunner:
                 env["PATH"] = str(shim_dir) + os.pathsep + env.get("PATH", "")
         else:
             argv = ["sh", "-lc", command]
-        proc = await asyncio.create_subprocess_exec(
-            *argv,
+        proc = await _create_workflow_process(
+            argv,
             cwd=cwd,
             env=env,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
         )
         try:
             stdout, stderr = await asyncio.wait_for(proc.communicate(stdin_payload), timeout=timeout)
         except asyncio.TimeoutError:
-            proc.kill()
-            await proc.communicate()
+            await _terminate_workflow_process(proc)
             raise RuntimeError(f"shell command timed out after {timeout}s")
+        except asyncio.CancelledError:
+            await _terminate_workflow_process(proc)
+            raise
         text_out = stdout.decode("utf-8", errors="replace") if stdout else ""
         text_err = stderr.decode("utf-8", errors="replace") if stderr else ""
         if proc.returncode != 0:
@@ -1076,6 +1438,11 @@ class WorkflowRunner:
         that binds input-port names as locals and reads output-port names back;
         stdout JSON flows through _split_or_fallback to the output ports.
         """
+        await self._check_execution_permission(
+            str(node.config.get("script") or ""),
+            work_root=work_root,
+            node=node,
+        )
         raw = await self._run_script(node, node.config, bound_inputs, work_root)
         return self._split_or_fallback(node, raw)
 
@@ -1136,19 +1503,19 @@ class WorkflowRunner:
             env[f"INPUT_{name.upper()}"] = str(value)
         stdin_payload = json.dumps(bound_inputs, ensure_ascii=False, default=str).encode("utf-8")
 
-        proc = await asyncio.create_subprocess_exec(
-            sys.executable, str(runner_path),
-            cwd=cwd, env=env,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+        proc = await _create_workflow_process(
+            [sys.executable, str(runner_path)],
+            cwd=cwd,
+            env=env,
         )
         try:
             stdout, stderr = await asyncio.wait_for(proc.communicate(stdin_payload), timeout=timeout)
         except asyncio.TimeoutError:
-            proc.kill()
-            await proc.communicate()
+            await _terminate_workflow_process(proc)
             raise RuntimeError(f"script timed out after {timeout}s")
+        except asyncio.CancelledError:
+            await _terminate_workflow_process(proc)
+            raise
         text_out = stdout.decode("utf-8", errors="replace") if stdout else ""
         text_err = stderr.decode("utf-8", errors="replace") if stderr else ""
         if proc.returncode != 0:
@@ -1156,6 +1523,52 @@ class WorkflowRunner:
         return text_out.strip()
 
     # -- streaming + cancel helpers ---------------------------------------
+
+    async def _check_execution_permission(
+        self,
+        command: str,
+        *,
+        work_root: str,
+        node: WorkflowNode,
+    ) -> None:
+        service = self.permission_service
+        if service is None:
+            return
+        payload = {
+            "command": command,
+            "work_root": work_root,
+            "source": "workflow",
+            "node_id": node.id,
+            "node_kind": node.kind,
+        }
+        checker = getattr(service, "check", None)
+        if callable(checker):
+            decision = checker("run_command", payload)
+        elif callable(service):
+            decision = service("run_command", payload)
+        else:
+            raise WorkflowPermissionError("Workflow execution permission service is invalid")
+        if asyncio.iscoroutine(decision):
+            decision = await decision
+        allowed = bool(getattr(decision, "allowed", decision.get("allowed", False) if isinstance(decision, dict) else decision))
+        blocked = bool(getattr(decision, "blocked", decision.get("blocked", False) if isinstance(decision, dict) else False))
+        requires_approval = bool(
+            getattr(
+                decision,
+                "requires_approval",
+                decision.get("requires_approval", False) if isinstance(decision, dict) else False,
+            )
+        )
+        if not allowed or blocked or requires_approval:
+            reason = str(
+                getattr(
+                    decision,
+                    "reason",
+                    decision.get("reason", "") if isinstance(decision, dict) else "",
+                )
+                or "workflow command requires permission",
+            )
+            raise WorkflowPermissionError(reason)
 
     def _cancel_event(self, thread_id: str) -> Any:
         if self.runtime_task_registry is None or not thread_id:
@@ -1172,6 +1585,7 @@ class WorkflowRunner:
         thread_id: str,
         run_id: str,
         *,
+        workflow_id: str = "",
         error: str = "",
     ) -> None:
         if self.emit is None:
@@ -1183,8 +1597,23 @@ class WorkflowRunner:
             turn_id=run_id,
             item_id=node.id,
             status=status,
-            payload={"node_id": node.id, "title": node.title, "kind": node.kind, "error": error} if error else {"node_id": node.id, "title": node.title, "kind": node.kind},
-            source="workflow",
+            payload={
+                "plugin_id": "workflow",
+                "workflow_id": workflow_id,
+                "run_id": run_id,
+                "node_id": node.id,
+                "status": status,
+                "title": node.title,
+                "kind": node.kind,
+                **({"error": error} if error else {}),
+            },
+            source="plugin:workflow",
+            metadata={
+                "plugin_id": "workflow",
+                "workflow_id": workflow_id,
+                "run_id": run_id,
+                "node_id": node.id,
+            },
         )
         try:
             result = self.emit(event)
@@ -1550,6 +1979,72 @@ def _python3_shim_dir() -> str | None:
         return d
     except OSError:
         return None
+
+
+async def _create_workflow_process(
+    argv: list[str],
+    *,
+    cwd: str,
+    env: dict[str, str],
+) -> asyncio.subprocess.Process:
+    """Start a node process in its own group so cancellation reaches children."""
+    kwargs: dict[str, Any] = {
+        "cwd": cwd,
+        "env": env,
+        "stdin": asyncio.subprocess.PIPE,
+        "stdout": asyncio.subprocess.PIPE,
+        "stderr": asyncio.subprocess.PIPE,
+    }
+    if sys.platform == "win32":
+        kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    else:
+        kwargs["start_new_session"] = True
+    return await asyncio.create_subprocess_exec(*argv, **kwargs)
+
+
+async def _terminate_workflow_process(proc: asyncio.subprocess.Process) -> None:
+    """Terminate a command/script process tree and drain its pipes."""
+    if proc.returncode is None:
+        if sys.platform == "win32" and getattr(proc, "pid", None):
+            try:
+                killer = await asyncio.create_subprocess_exec(
+                    "taskkill",
+                    "/PID",
+                    str(proc.pid),
+                    "/T",
+                    "/F",
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                await killer.communicate()
+            except (OSError, ValueError):
+                try:
+                    proc.kill()
+                except ProcessLookupError:
+                    pass
+        else:
+            try:
+                # ``start_new_session=True`` gives the command its own process
+                # group.  Killing only the shell would leave descendants such
+                # as ``sleep``/``python`` alive after a cancelled workflow.
+                if getattr(proc, "pid", None):
+                    os.killpg(proc.pid, signal.SIGKILL)
+                else:
+                    proc.kill()
+            except ProcessLookupError:
+                pass
+            except OSError:
+                try:
+                    proc.kill()
+                except ProcessLookupError:
+                    pass
+    try:
+        await asyncio.wait_for(proc.communicate(), timeout=2.0)
+    except (asyncio.TimeoutError, ProcessLookupError):
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
 
 
 # ---------------------------------------------------------------------------

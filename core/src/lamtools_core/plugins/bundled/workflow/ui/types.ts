@@ -46,6 +46,8 @@ export interface WorkflowInputParam {
 }
 
 export interface WorkflowDef {
+  /** Stable resource identity; the display name may be renamed. */
+  id: string
   name: string
   description: string
   nodes: WorkflowNode[]

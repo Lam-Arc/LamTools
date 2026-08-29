@@ -196,10 +196,22 @@ def workflow_build_tool_handlers(
 ) -> dict[str, Callable[[ToolCall], Awaitable[ToolResult]]]:
     """Handlers that edit the current workflow graph via workflow.get/update."""
 
-    async def _get_graph(name: str) -> dict[str, Any] | None:
+    def _call_work_root(call: ToolCall) -> str:
+        metadata = call.metadata if isinstance(call.metadata, dict) else {}
+        raw = metadata.get("work_root") or metadata.get("workRoot")
+        if not raw:
+            session_metadata = metadata.get("_runtime_session_metadata")
+            if isinstance(session_metadata, dict):
+                raw = session_metadata.get("work_root") or session_metadata.get("workRoot")
+        if raw:
+            return str(raw)
+        return str(work_root or "")
+
+    async def _get_graph(name: str, call: ToolCall) -> dict[str, Any] | None:
         payload: dict[str, Any] = {"name": name}
-        if work_root:
-            payload["work_root"] = str(work_root)
+        active_root = _call_work_root(call)
+        if active_root:
+            payload["work_root"] = active_root
         result = await execute_operation("workflow.get", payload, {})
         status = str(getattr(result, "status", "error") or "error")
         if status == "ok":
@@ -214,21 +226,22 @@ def workflow_build_tool_handlers(
             return None
         raise RuntimeError(err or "workflow.get failed")
 
-    async def _ensure_graph(name: str) -> dict[str, Any]:
+    async def _ensure_graph(name: str, call: ToolCall) -> dict[str, Any]:
         """Return the named graph, lazy-creating an empty one if it is missing.
 
         Used by every write tool (add_node/connect/delete/update) so the agent
         can build a workflow from zero with its natural graph→add→connect flow —
         no separate "create" step or tool required.
         """
-        wf = await _get_graph(name)
+        wf = await _get_graph(name, call)
         if wf is not None:
             return wf
         # Bootstrap: create an empty workflow, then re-read it (workflow.create
         # returns the created definition, but re-reading keeps one code path).
         create_payload: dict[str, Any] = {"name": name}
-        if work_root:
-            create_payload["work_root"] = str(work_root)
+        active_root = _call_work_root(call)
+        if active_root:
+            create_payload["work_root"] = active_root
         result = await execute_operation("workflow.create", create_payload, {})
         status = str(getattr(result, "status", "error") or "error")
         if status != "ok":
@@ -237,7 +250,7 @@ def workflow_build_tool_handlers(
         wf = (getattr(result, "payload", {}) or {}).get("workflow")
         return wf if isinstance(wf, dict) else {"name": name, "nodes": [], "edges": []}
 
-    async def _save_graph(name: str, wf: dict[str, Any]) -> dict[str, Any]:
+    async def _save_graph(name: str, wf: dict[str, Any], call: ToolCall) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "name": name,
             "description": wf.get("description") or "",
@@ -248,8 +261,9 @@ def workflow_build_tool_handlers(
             "exposed": bool(wf.get("exposed")),
             "tool_name": wf.get("tool_name") or "",
         }
-        if work_root:
-            payload["work_root"] = str(work_root)
+        active_root = _call_work_root(call)
+        if active_root:
+            payload["work_root"] = active_root
         result = await execute_operation("workflow.update", payload, {})
         status = str(getattr(result, "status", "error") or "error")
         if status != "ok":
@@ -258,19 +272,37 @@ def workflow_build_tool_handlers(
         saved = (getattr(result, "payload", {}) or {}).get("workflow")
         return saved if isinstance(saved, dict) else wf
 
-    def _resolve_name(call: ToolCall) -> str:
+    async def _resolve_name(call: ToolCall) -> str:
+        session_metadata = call.metadata.get("_runtime_session_metadata")
+        if isinstance(session_metadata, dict):
+            resource_id = str(session_metadata.get("resource_id") or "").strip()
+            if (
+                session_metadata.get("owner_plugin") == "workflow"
+                and session_metadata.get("resource_type") == "workflow"
+                and resource_id
+            ):
+                payload: dict[str, Any] = {"workflow_id": resource_id}
+                scoped_root = str(session_metadata.get("work_root") or _call_work_root(call) or "").strip()
+                if scoped_root:
+                    payload["work_root"] = scoped_root
+                result = await execute_operation("workflow.get", payload, {})
+                if str(getattr(result, "status", "error") or "error") == "ok":
+                    workflow = (getattr(result, "payload", {}) or {}).get("workflow")
+                    if isinstance(workflow, dict):
+                        return str(workflow.get("name") or "").strip()
         session = str(call.metadata.get("_runtime_session_id") or "").strip()
-        # thread id is wf_<name>; strip the prefix.
+        # Legacy sessions used wf_<name>; keep resolving those while old
+        # clients migrate to metadata-bound workflow:<id> sessions.
         if session.startswith("wf_"):
             return session[3:]
-        return session
+        return ""
 
     async def workflow_graph(call: ToolCall) -> ToolResult:
-        name = _resolve_name(call)
+        name = await _resolve_name(call)
         if not name:
             return _failed(call, "no active workflow (session id missing)")
         try:
-            wf = await _get_graph(name)
+            wf = await _get_graph(name, call)
         except RuntimeError as exc:
             return _failed(call, str(exc))
         if wf is None:
@@ -281,9 +313,11 @@ def workflow_build_tool_handlers(
 
     async def workflow_add_node(call: ToolCall) -> ToolResult:
         args = _args(call)
-        name = _resolve_name(call)
+        name = await _resolve_name(call)
+        if not name:
+            return _failed(call, "no active workflow (session metadata missing)")
         try:
-            wf = await _ensure_graph(name)
+            wf = await _ensure_graph(name, call)
         except RuntimeError as exc:
             return _failed(call, str(exc))
         nodes = list(wf.get("nodes") or [])
@@ -310,14 +344,16 @@ def workflow_build_tool_handlers(
         }
         nodes.append(node)
         wf["nodes"] = nodes
-        saved = await _save_graph(name, wf)
+        saved = await _save_graph(name, wf, call)
         return _ok(call, {"added": node, "workflow": saved})
 
     async def workflow_connect(call: ToolCall) -> ToolResult:
         args = _args(call)
-        name = _resolve_name(call)
+        name = await _resolve_name(call)
+        if not name:
+            return _failed(call, "no active workflow (session metadata missing)")
         try:
-            wf = await _ensure_graph(name)
+            wf = await _ensure_graph(name, call)
         except RuntimeError as exc:
             return _failed(call, str(exc))
         source = str(args.get("source") or "")
@@ -340,27 +376,31 @@ def workflow_build_tool_handlers(
             "target_port": target_port,
         })
         wf["edges"] = edges
-        saved = await _save_graph(name, wf)
+        saved = await _save_graph(name, wf, call)
         return _ok(call, {"connected": edge_id, "workflow": saved})
 
     async def workflow_delete_node(call: ToolCall) -> ToolResult:
         args = _args(call)
-        name = _resolve_name(call)
+        name = await _resolve_name(call)
+        if not name:
+            return _failed(call, "no active workflow (session metadata missing)")
         try:
-            wf = await _ensure_graph(name)
+            wf = await _ensure_graph(name, call)
         except RuntimeError as exc:
             return _failed(call, str(exc))
         node_id = str(args.get("node_id") or "")
         wf["nodes"] = [n for n in (wf.get("nodes") or []) if isinstance(n, dict) and str(n.get("id")) != node_id]
         wf["edges"] = [e for e in (wf.get("edges") or []) if isinstance(e, dict) and str(e.get("source")) != node_id and str(e.get("target")) != node_id]
-        saved = await _save_graph(name, wf)
+        saved = await _save_graph(name, wf, call)
         return _ok(call, {"deleted": node_id, "workflow": saved})
 
     async def workflow_update_node(call: ToolCall) -> ToolResult:
         args = _args(call)
-        name = _resolve_name(call)
+        name = await _resolve_name(call)
+        if not name:
+            return _failed(call, "no active workflow (session metadata missing)")
         try:
-            wf = await _ensure_graph(name)
+            wf = await _ensure_graph(name, call)
         except RuntimeError as exc:
             return _failed(call, str(exc))
         node_id = str(args.get("node_id") or "")
@@ -381,7 +421,7 @@ def workflow_build_tool_handlers(
         if not found:
             return _failed(call, f"node not found: {node_id}")
         wf["nodes"] = nodes
-        saved = await _save_graph(name, wf)
+        saved = await _save_graph(name, wf, call)
         return _ok(call, {"updated": node_id, "workflow": saved})
 
     return {

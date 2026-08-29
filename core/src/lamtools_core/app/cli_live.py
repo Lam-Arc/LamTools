@@ -640,8 +640,6 @@ def tool_tag(tool_name: str) -> str:
         return "子代理"
     if "skill" in normalized:
         return "技能"
-    if "workflow" in normalized:
-        return "工作流"
     if "goal" in normalized:
         return "目标"
     if "arrange" in normalized:

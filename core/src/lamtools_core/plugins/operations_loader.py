@@ -13,7 +13,6 @@
 """
 from __future__ import annotations
 
-import functools
 import logging
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -114,6 +113,8 @@ def register_plugin_operations(
     plugin_name: str,
     work_root: Path | None = None,
     data_dir: Path | None = None,
+    context: Any | None = None,
+    availability: Callable[[], bool] | None = None,
 ) -> list[dict[str, Any]]:
     """把插件 operations 注册进 catalog；返回错误列表（hard_block/导入失败/同名冲突）。
 
@@ -141,10 +142,98 @@ def register_plugin_operations(
             )
             continue
         try:
+            bound = _bind_operation_handler(
+                handler,
+                context=context,
+                work_root=work_root,
+                data_dir=data_dir,
+            )
             catalog.register(
                 spec.name,
-                functools.partial(handler, work_root=work_root, data_dir=data_dir),
+                bound,
+                owner=plugin_name,
+                availability=availability,
             )
         except ValueError as exc:
             errors.append({"name": spec.name, "error": str(exc)})
     return errors
+
+
+def _bind_operation_handler(
+    handler: Callable[..., Any],
+    *,
+    context: Any | None,
+    work_root: Path | None,
+    data_dir: Path | None,
+) -> Callable[[OperationRequest], Awaitable[OperationResult]]:
+    """Bind the stable context arguments while retaining old plugin handlers.
+
+    Existing plugins generally accept ``work_root``/``data_dir``.  New
+    backends can request the generic ``context`` only; signature inspection
+    keeps the loader source-compatible with both forms.
+    """
+    import inspect
+
+    try:
+        parameters = inspect.signature(handler).parameters
+        accepts_kwargs = any(item.kind == inspect.Parameter.VAR_KEYWORD for item in parameters.values())
+    except (TypeError, ValueError):
+        parameters = {}
+        accepts_kwargs = False
+    accepts_context = context is not None and ("context" in parameters or accepts_kwargs)
+    accepts_work_root = "work_root" in parameters or accepts_kwargs
+    accepts_data_dir = "data_dir" in parameters or accepts_kwargs
+
+    async def bound(request: OperationRequest) -> OperationResult:
+        """Invoke the handler with a project-scoped context view.
+
+        Operation catalogs are long-lived, while a desktop session may switch
+        projects between calls.  A context view keeps the shared services and
+        plugin runtime identity intact but gives the handler the work root from
+        this request, so plugins do not accidentally keep the startup project.
+        """
+        requested_root: Path | None = None
+        request_metadata = getattr(request, "metadata", None)
+        if isinstance(request_metadata, dict):
+            raw_root = request_metadata.get("work_root") or request_metadata.get("workRoot")
+            if not raw_root:
+                session_metadata = request_metadata.get("_runtime_session_metadata")
+                if isinstance(session_metadata, dict):
+                    raw_root = session_metadata.get("work_root") or session_metadata.get("workRoot")
+            if raw_root:
+                requested_root = Path(str(raw_root)).expanduser().resolve()
+        payload = getattr(request, "payload", None)
+        if requested_root is None and isinstance(payload, dict):
+            raw_root = payload.get("work_root") or payload.get("workRoot")
+            if raw_root:
+                requested_root = Path(str(raw_root)).expanduser().resolve()
+        effective_root = requested_root or work_root
+        # Keep the request payload and the scoped PluginContext consistent for
+        # legacy handlers that read work_root only from request.payload.
+        if requested_root and isinstance(payload, dict):
+            # Request metadata is the authoritative project scope.  Always
+            # overwrite a conflicting payload value so a legacy handler that
+            # only reads request.payload cannot accidentally touch another
+            # project's resources.
+            request = OperationRequest(
+                name=request.name,
+                payload={**payload, "work_root": str(requested_root)},
+                metadata=dict(request_metadata or {}),
+            )
+        kwargs: dict[str, Any] = {}
+        if accepts_context:
+            if context is not None and requested_root:
+                scoped_context = context.for_work_root(requested_root)
+            else:
+                scoped_context = context
+            kwargs["context"] = scoped_context
+        if accepts_work_root:
+            kwargs["work_root"] = effective_root
+        if accepts_data_dir:
+            kwargs["data_dir"] = data_dir
+        result = handler(request, **kwargs)
+        if inspect.isawaitable(result):
+            result = await result
+        return result
+
+    return bound

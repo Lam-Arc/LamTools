@@ -107,8 +107,8 @@ import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
 import WorkflowNodeComp from './WorkflowNode.vue'
 import NodeEditCard from './NodeEditCard.vue'
-import AutoTextarea from './AutoTextarea.vue'
-import type { WorkflowDef, WorkflowNodeKind, WorkflowNodeData, NodeStateStatus, WorkflowPort } from '../workflow/types'
+import AutoTextarea from '../../../../../../ui/src/components/AutoTextarea.vue'
+import type { WorkflowDef, WorkflowNodeKind, WorkflowNodeData, NodeStateStatus, WorkflowPort } from './types'
 
 const props = defineProps<{
   definition: WorkflowDef

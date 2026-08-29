@@ -104,13 +104,12 @@ const CATEGORY_LABELS: Record<string, string> = {
   mcp: 'MCP',
   agent: '子代理',
   control: '控制',
-  workflow: '工作流',
   other: '其他',
 }
 
 const CATEGORY_ORDER = [
   'file_read', 'file_write', 'command', 'git', 'web', 'image',
-  'skill', 'mcp', 'agent', 'control', 'workflow', 'other',
+  'skill', 'mcp', 'agent', 'control', 'other',
 ]
 
 const modes = reactive<ModeDraft[]>([])
@@ -141,7 +140,13 @@ const catalogGroups = computed(() => {
   for (const tool of catalog.value) {
     ;(grouped[tool.category] ??= []).push(tool)
   }
-  return CATEGORY_ORDER
+  const orderedCategories = [
+    ...CATEGORY_ORDER,
+    ...Object.keys(grouped)
+      .filter(category => !CATEGORY_ORDER.includes(category))
+      .sort((a, b) => a.localeCompare(b, 'zh')),
+  ]
+  return orderedCategories
     .filter(category => grouped[category]?.length)
     .map(category => ({
       category,

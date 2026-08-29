@@ -1,0 +1,120 @@
+{
+  "id": "workflow",
+  "name": "workflow",
+  "version": "1.0.0",
+  "description": "Deterministic node-graph workflows",
+  "builtin": true,
+  "backend": "./backend/__init__.py",
+  "tools": ["./tools.jsonc"],
+  "operations": ["./operations.jsonc"],
+  "cli": {
+    "commands": [
+      {
+        "name": "workflow",
+        "help": "Manage workflow node graphs",
+        "commands": [
+          {
+            "name": "new",
+            "help": "Create a workflow from a JSON definition file",
+            "handler": "lamtools_core.plugins.bundled.workflow.backend.cli:workflow_new",
+            "arguments": [
+              {"flags": ["--name"], "default": "", "help": "Workflow name (overrides the name in --from-file)"},
+              {"flags": ["--from-file"], "required": true, "help": "Path to a JSON workflow definition"},
+              {"flags": ["--work-root"], "required": true, "default": "", "help": "Project work root absolute path (required)"},
+              {"flags": ["--exposed"], "action": "store_true", "default": false, "help": "Expose this workflow as an agent tool immediately"},
+              {"flags": ["--base-url"], "default": ""},
+              {"flags": ["--ws-path"], "default": ""},
+              {"flags": ["--token"], "default": ""},
+              {"flags": ["--raw"], "action": "store_true", "default": false}
+            ]
+          },
+          {
+            "name": "ls",
+            "help": "List workflows",
+            "handler": "lamtools_core.plugins.bundled.workflow.backend.cli:workflow_list",
+            "arguments": [
+              {"flags": ["--work-root"], "default": "", "help": "Filter by project work_root"},
+              {"flags": ["--base-url"], "default": ""},
+              {"flags": ["--ws-path"], "default": ""},
+              {"flags": ["--token"], "default": ""},
+              {"flags": ["--raw"], "action": "store_true", "default": false}
+            ]
+          },
+          {
+            "name": "describe",
+            "help": "Show a workflow definition",
+            "handler": "lamtools_core.plugins.bundled.workflow.backend.cli:workflow_describe",
+            "arguments": [
+              {"flags": ["name"], "help": "Workflow name"},
+              {"flags": ["--work-root"], "default": "", "help": "Project work root"},
+              {"flags": ["--base-url"], "default": ""},
+              {"flags": ["--ws-path"], "default": ""},
+              {"flags": ["--token"], "default": ""},
+              {"flags": ["--raw"], "action": "store_true", "default": false}
+            ]
+          },
+          {
+            "name": "run",
+            "help": "Run a workflow",
+            "handler": "lamtools_core.plugins.bundled.workflow.backend.cli:workflow_run",
+            "arguments": [
+              {"flags": ["name"], "help": "Workflow name"},
+              {"flags": ["--work-root"], "default": "", "help": "Project work root"},
+              {"flags": ["--input"], "action": "append", "default": [], "metavar": "KEY=VALUE", "help": "Workflow input (repeatable; VALUE parsed as JSON if possible)"},
+              {"flags": ["--max-steps"], "type": "int", "default": null, "help": "Run at most N nodes (single-step debugging)"},
+              {"flags": ["--start-node"], "default": null, "help": "Start running from this node (sub-graph; nodes before it are skipped)"},
+              {"flags": ["--single-node"], "default": null, "help": "Run exactly this one node in isolation"},
+              {"flags": ["--base-url"], "default": ""},
+              {"flags": ["--ws-path"], "default": ""},
+              {"flags": ["--token"], "default": ""},
+              {"flags": ["--raw"], "action": "store_true", "default": false}
+            ]
+          },
+          {
+            "name": "expose",
+            "help": "Expose a workflow as an agent tool",
+            "handler": "lamtools_core.plugins.bundled.workflow.backend.cli:workflow_expose",
+            "arguments": [
+              {"flags": ["name"], "help": "Workflow name"},
+              {"flags": ["--work-root"], "default": "", "help": "Project work root"},
+              {"flags": ["--base-url"], "default": ""},
+              {"flags": ["--ws-path"], "default": ""},
+              {"flags": ["--token"], "default": ""},
+              {"flags": ["--raw"], "action": "store_true", "default": false}
+            ]
+          },
+          {
+            "name": "unexpose",
+            "help": "Unexpose a workflow (no longer an agent tool)",
+            "handler": "lamtools_core.plugins.bundled.workflow.backend.cli:workflow_unexpose",
+            "arguments": [
+              {"flags": ["name"], "help": "Workflow name"},
+              {"flags": ["--work-root"], "default": "", "help": "Project work root"},
+              {"flags": ["--base-url"], "default": ""},
+              {"flags": ["--ws-path"], "default": ""},
+              {"flags": ["--token"], "default": ""},
+              {"flags": ["--raw"], "action": "store_true", "default": false}
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "ui": {
+    "modes": [
+      {
+        "id": "workflow",
+        "title": "Workflow",
+        "entry": "./ui/index.ts",
+        "icon": "workflow",
+        "tools": [
+          "workflow_graph",
+          "workflow_add_node",
+          "workflow_connect",
+          "workflow_delete_node",
+          "workflow_update_node"
+        ]
+      }
+    ]
+  }
+}

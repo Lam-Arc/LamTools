@@ -78,50 +78,6 @@
               />
             </section>
 
-            <!-- 工作流分区：项目作用域 -->
-            <section v-else-if="activeSection === 'workflow'" class="settings-panel">
-              <header class="settings-title">
-                <h1>工作流</h1>
-                <p class="settings-subhead">当前项目下的工作流，可控制是否暴露为 Agent 工具。</p>
-              </header>
-              <article class="setting-card">
-                <div class="subhead">
-                  <h3>已创建的工作流</h3>
-                  <div class="subhead-actions">
-                    <button class="small-btn" type="button" @click="emit('refresh-workflows')">
-                      <RefreshCw :size="13" :stroke-width="1.8" aria-hidden="true" /> 刷新
-                    </button>
-                  </div>
-                </div>
-                <div v-if="workflowListLoading" class="model-empty">加载中…</div>
-                <div v-else-if="workflowList.length" class="provider-list">
-                  <div v-for="wf in workflowList" :key="wf.name" class="provider-group">
-                    <div class="provider-head">
-                      <strong>{{ wf.name }}</strong>
-                      <span v-if="wf.exposed" class="tool-status ok">已暴露</span>
-                      <span v-else class="tool-status">未暴露</span>
-                      <div class="row-actions">
-                        <button
-                          type="button"
-                          class="text-btn"
-                          :class="{ 'is-on': wf.exposed }"
-                          @click="emit('toggle-workflow-exposed', wf.name, !wf.exposed)"
-                        >{{ wf.exposed ? '取消暴露' : '暴露为工具' }}</button>
-                      </div>
-                    </div>
-                    <div class="model-list">
-                      <div class="model-row">
-                        <div class="model-identity">
-                          <span>{{ wf.nodes.length }} 个节点 · {{ wf.edges.length }} 条连线</span>
-                          <span v-if="wf.description" class="hook-meta">{{ wf.description }}</span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-                <p v-else class="model-empty">当前项目下暂无工作流。</p>
-              </article>
-            </section>
           </template>
         </SettingsShell>
       </div>
@@ -131,7 +87,6 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { RefreshCw } from 'lucide-vue-next'
 import {
   gradientFromStops,
   relativeLuminance,
@@ -139,7 +94,7 @@ import {
 } from '../helpers/theme'
 import SettingsShell, { type SettingsSection } from './SettingsShell.vue'
 import CoreSubAgentEditor from './CoreSubAgentEditor.vue'
-import type { CoreSettingsModel, WorkflowListItem } from './CoreSettings.vue'
+import type { CoreSettingsModel } from './CoreSettings.vue'
 
 export interface CoreProjectSettingsProject {
   id: string
@@ -152,8 +107,6 @@ const props = defineProps<{
   theme: ThemeData
   requestRpc: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>
   models?: CoreSettingsModel[]
-  workflows?: WorkflowListItem[]
-  workflowListLoading?: boolean
   projectNameDraft: string
   agentsContent: string
   agentsLoading: boolean
@@ -168,17 +121,12 @@ const emit = defineEmits<{
   'rename-project': [name: string]
   'save-agents': [content: string]
   'refresh-agents': []
-  'refresh-workflows': []
-  'toggle-workflow-exposed': [name: string, exposed: boolean]
 }>()
 
 const sections: SettingsSection[] = [
   { id: 'project', label: '项目', icon: 'folder' },
   { id: 'subagent', label: 'Sub agent', icon: 'bot' },
-  { id: 'workflow', label: '工作流', icon: 'workflow' },
 ]
-
-const workflowList = computed(() => props.workflows ?? [])
 
 // Local mirrors of draft inputs so editing doesn't mutate parent state per keystroke.
 const projectNameInput = ref(props.projectNameDraft)

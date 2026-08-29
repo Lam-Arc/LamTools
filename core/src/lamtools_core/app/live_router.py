@@ -277,7 +277,7 @@ class CoreLiveConnection:
             # client never observes state out of order.
             await self._flush_run_item_buffer()
             await self._send(event_notification(event))
-            if event_method in (CORE_RUN_ITEM_METHOD, "session/created", "session/updated", "workflow/changed"):
+            if event_method in (CORE_RUN_ITEM_METHOD, "session/created", "session/updated"):
                 continue
             if event_method not in SNAPSHOT_TRIGGER_EVENTS:
                 continue

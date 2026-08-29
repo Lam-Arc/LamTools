@@ -18,7 +18,7 @@ from lamtools_core.event import CoreEvent
 from lamtools_core.llm import LLMRequest, LLMResponse, LLMStreamEvent, LLMToolCall
 from lamtools_core.llm.shallow_thinking import SHALLOW_THINKING_PROMPT
 from lamtools_core.plugins.hook_config import HookRegistry
-from lamtools_core.plugins.registry import PluginRegistry
+from lamtools_core.plugins.registry import PluginRegistry, PluginStateStore
 from lamtools_core.plugins.trust import HookTrustStore
 from lamtools_core.runtime import InMemoryRuntimeStateStore, RuntimeState
 
@@ -281,6 +281,32 @@ async def test_core_agent_operations_expose_turn_start(tmp_path):
 
     assert catalog.has("turn.start")
     assert "turn.start" in catalog.list()
+
+
+@pytest.mark.asyncio
+async def test_disabled_workflow_operation_is_mounted_for_live_reenable(tmp_path, monkeypatch):
+    """The host catalog must expose a disabled plugin after it is re-enabled."""
+    monkeypatch.setenv("LAMTOOLS_HOME", str(tmp_path / "home"))
+    data_dir = tmp_path / "data"
+    PluginStateStore(data_dir / "plugins.jsonc").set_enabled("workflow", False)
+    catalog = create_core_agent_operations(
+        spec=CoreAgentSpec(),
+        paths=CoreAgentPaths(data_dir=data_dir, work_root=tmp_path / "work"),
+        model_provider=_fake_model,
+    )
+
+    assert not catalog.has("workflow.run")
+    enabled = await catalog.execute("plugin.enable", {"name": "workflow"})
+    assert enabled.payload["enabled"] is True
+    assert catalog.has("workflow.run")
+
+    created = await catalog.execute("workflow.create", {"name": "live-reenable", "nodes": []})
+    assert created.status == "ok"
+    run = await catalog.execute("workflow.run", {"name": "live-reenable", "run_id": "live-run"})
+    assert run.payload["run"]["status"] == "completed"
+
+    await catalog.execute("plugin.disable", {"name": "workflow"})
+    assert not catalog.has("workflow.run")
 
 
 def test_core_agent_operations_include_core_plugin_and_hook_catalog(tmp_path):

@@ -20,10 +20,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from lamtools_core.cli import CoreCliRunOptions, run_core_cli_task
-from lamtools_core.project.workflow_store import WorkflowStore
-from lamtools_core.runtime.workflow import WorkflowManager, WorkflowRunner
-from lamtools_core.app.operation_catalog import OperationCatalog
-from lamtools_core.app.workflow_operations import register_workflow_operations
+from lamtools_core.app.base_agent import build_core_plugin_operation_catalog
+from lamtools_core.plugins.bundled.workflow.backend.store import WorkflowStore
+from lamtools_core.plugins.context import PluginContext
+from lamtools_core.plugins.registry import bundled_plugins_dir
 
 DEFAULT_PROMPT = "帮我建一个新闻聚合工作流：从多个来源抓取新闻，去重翻译，质检后按质量分流，最后生成日报"
 THREAD_ID = "wf_build"  # session prefix; the model names the workflow itself
@@ -53,7 +53,7 @@ async def main(model_id: str, prompt: str) -> int:
         run_dir=Path(tmp) / "run",
         thread_id=THREAD_ID,
         active_mode="workflow",
-        workflow_store=store,
+        plugin_services={"workflow_store": store},
         approval_policy="auto_approve",
         thinking_enabled=True,
         temperature=0.2,
@@ -86,10 +86,17 @@ async def main(model_id: str, prompt: str) -> int:
     print(f"\nvalid kinds: {'OK' if not bad_kinds else f'BAD {bad_kinds}'} | edge refs: {'OK' if edge_refs_ok else 'BROKEN'}")
 
     _section("RUN the agent-built workflow")
-    catalog = OperationCatalog()
-    runner = WorkflowRunner(llm_client=None, sub_agent_runner=None, workflow_store=store)
-    register_workflow_operations(catalog, workflow_manager=WorkflowManager(store),
-                                 runner=runner, list_tool_specs=lambda: [])
+    plugin_context = PluginContext(
+        work_root=work_root,
+        data_dir=Path(tmp) / "data",
+        services={"workflow_store": store},
+    )
+    catalog = build_core_plugin_operation_catalog(
+        data_dir=Path(tmp) / "data",
+        work_root=work_root,
+        plugin_roots=[bundled_plugins_dir()],
+        context=plugin_context,
+    )
     rr = await catalog.execute("workflow.run", {"name": wf.name, "work_root": str(work_root)}, metadata={})
     status = str(getattr(rr, "status", "error") or "error")
     payload = getattr(rr, "payload", {}) or {}

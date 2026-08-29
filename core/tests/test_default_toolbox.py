@@ -166,7 +166,7 @@ def _assert_strict_schema(node, path="schema"):
 
 
 def test_all_model_tool_schemas_are_strict_compatible(tmp_path):
-    from lamtools_core.runtime.workflow import (
+    from lamtools_core.plugins.bundled.workflow.backend.runtime import (
         WorkflowDef,
         WorkflowInputParam,
         WorkflowNode,
@@ -179,8 +179,8 @@ def test_all_model_tool_schemas_are_strict_compatible(tmp_path):
         default_core_tool_specs,
     )
     from lamtools_core.tool.durable_tools import durable_tool_specs
-    from lamtools_core.tool.workflow_build_tools import workflow_build_tool_specs
-    from lamtools_core.tool.workflow_tools import workflow_tool_specs
+    from lamtools_core.plugins.bundled.workflow.backend.build_tools import workflow_build_tool_specs
+    from lamtools_core.plugins.bundled.workflow.backend.tools import workflow_tool_specs
     from lamtools_core.plugins.manager_tools import plugin_manager_tool_specs
 
     workflow = WorkflowDef(
@@ -823,7 +823,8 @@ def test_core_toolbox_workflow_mode_allows_dynamic_workflow_tools(tmp_path):
         work_root=tmp_path,
         load_tools=default_load_tools(),
         active_mode="workflow",
-        workflow_tool_provider=lambda: FakeWorkflowBundle,
+        plugin_tool_providers=[lambda: FakeWorkflowBundle],
+        plugin_mode_tool_sets={"workflow": {"wf_run_dynamic"}},
     )
 
     dynamic = toolbox.prepare_call(ToolCall(id="wf-dyn", name="wf_run_dynamic", arguments={}))
@@ -845,7 +846,8 @@ def test_core_toolbox_consider_mode_blocks_dynamic_workflow_tools(tmp_path):
         work_root=tmp_path,
         load_tools=default_load_tools(),
         active_mode="consider",
-        workflow_tool_provider=lambda: FakeWorkflowBundle,
+        plugin_tool_providers=[lambda: FakeWorkflowBundle],
+        plugin_mode_tool_sets={"workflow": {"wf_run_dynamic"}},
     )
 
     call = toolbox.prepare_call(ToolCall(id="wf-dyn-consider", name="wf_run_dynamic", arguments={}))

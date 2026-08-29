@@ -65,8 +65,8 @@ import { computed, inject, ref, watch } from 'vue'
 import { Circle, CircleCheck, CircleDot, CircleX, type LucideIcon } from 'lucide-vue-next'
 import { Handle, Position } from '@vue-flow/core'
 import WfSelect from './WfSelect.vue'
-import AutoTextarea from './AutoTextarea.vue'
-import type { WorkflowNode, WorkflowNodeKind, NodeStateStatus, WorkflowPort } from '../workflow/types'
+import AutoTextarea from '../../../../../../ui/src/components/AutoTextarea.vue'
+import type { WorkflowNode, WorkflowNodeKind, NodeStateStatus, WorkflowPort } from './types'
 
 const props = defineProps<{
   data: { node: WorkflowNode; state?: NodeStateStatus; onToggle?: () => void }

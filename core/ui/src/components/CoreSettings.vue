@@ -337,50 +337,6 @@
         </article>
       </section>
 
-      <section v-if="activeSection === 'workflow'" class="settings-panel">
-        <header class="settings-title">
-          <h1>工作流</h1>
-          <p class="settings-subhead">管理与创建 Workflow，并控制是否暴露为 Agent 工具。</p>
-        </header>
-        <article class="setting-card">
-          <div class="subhead">
-            <h3>已创建的工作流</h3>
-            <div class="subhead-actions">
-              <button class="small-btn" type="button" @click="refreshWorkflowList">
-                <RefreshCw :size="13" :stroke-width="1.8" aria-hidden="true" /> 刷新
-              </button>
-            </div>
-          </div>
-          <div v-if="workflowListLoading" class="model-empty">加载中…</div>
-          <div v-else-if="workflowList.length" class="provider-list">
-            <div v-for="wf in workflowList" :key="wf.name" class="provider-group">
-              <div class="provider-head">
-                <strong>{{ wf.name }}</strong>
-                <span v-if="wf.exposed" class="tool-status ok">已暴露</span>
-                <span v-else class="tool-status">未暴露</span>
-                <div class="row-actions">
-                  <button
-                    type="button"
-                    class="text-btn"
-                    :class="{ 'is-on': wf.exposed }"
-                    @click="$emit('toggle-workflow-exposed', wf.name, !wf.exposed)"
-                  >{{ wf.exposed ? '取消暴露' : '暴露为工具' }}</button>
-                </div>
-              </div>
-              <div class="model-list">
-                <div class="model-row">
-                  <div class="model-identity">
-                    <span>{{ wf.nodes.length }} 个节点 · {{ wf.edges.length }} 条连线</span>
-                    <span v-if="wf.description" class="hook-meta">{{ wf.description }}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-          <p v-else class="model-empty">暂无工作流。在侧栏点击「工作流」进入画布模式创建。</p>
-        </article>
-      </section>
-
       <section v-if="activeSection === 'subagent'" class="settings-panel">
         <KeepAlive>
           <CoreSubAgentEditor :request-rpc="requestRpc || defaultRequestRpc" :models="models" />
@@ -594,7 +550,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { RefreshCw, Star, ToggleLeft, ToggleRight, X } from 'lucide-vue-next'
+import { Star, ToggleLeft, ToggleRight, X } from 'lucide-vue-next'
 import { PROVIDER_PRESETS } from '../data/provider-presets'
 import { THEME_PRESETS } from '../data/theme-presets'
 import {
@@ -683,8 +639,6 @@ const props = defineProps<{
   permissionMode?: 'read_only' | 'limited_edit' | 'full_edit'
   allowAccessOutsideWorkdir?: boolean
   requestRpc?: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>
-  workflows?: WorkflowListItem[]
-  workflowListLoading?: boolean
   updateState?: CoreUpdateState
 }>()
 
@@ -712,23 +666,7 @@ const emit = defineEmits<{
   'update-model': [payload: CoreSettingsModelPayload]
   'delete-model': [modelRecordId: string]
   'set-default-model': [modelId: string]
-  'refresh-workflows': []
-  'toggle-workflow-exposed': [name: string, exposed: boolean]
 }>()
-
-export interface WorkflowListItem {
-  name: string
-  description: string
-  nodes: { id: string }[]
-  edges: { id: string }[]
-  exposed: boolean
-  tool_name: string
-}
-
-const workflowList = computed(() => props.workflows ?? [])
-function refreshWorkflowList() {
-  emit('refresh-workflows')
-}
 
 const sections: SettingsSection[] = [
   { id: 'models', label: '模型与供应商', icon: 'database' },
@@ -736,7 +674,6 @@ const sections: SettingsSection[] = [
   { id: 'loadtools', label: '工具模式', icon: 'list-checks' },
   { id: 'permissions', label: '权限', icon: 'lock' },
   { id: 'agents', label: '上下文与记忆', icon: 'file-code' },
-  { id: 'workflow', label: '工作流', icon: 'workflow' },
   { id: 'subagent', label: 'Sub agent', icon: 'bot' },
   { id: 'about', label: '关于与更新', icon: 'info' },
 ]

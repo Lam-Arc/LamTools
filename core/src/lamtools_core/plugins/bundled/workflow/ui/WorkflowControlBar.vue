@@ -1,8 +1,11 @@
 <template>
   <div class="wf-control-bar">
-    <button class="small-btn primary" type="button" :disabled="running" @click="$emit('run')" title="运行整个工作流">
-      <Play v-if="!running" :size="12" :stroke-width="2" aria-hidden="true" />
-      {{ running ? '运行中…' : '运行' }}
+    <button v-if="!running" class="small-btn primary" type="button" @click="$emit('run')" title="运行整个工作流">
+      <Play :size="12" :stroke-width="2" aria-hidden="true" />
+      运行
+    </button>
+    <button v-else class="small-btn danger" type="button" @click="$emit('cancel')" title="停止工作流">
+      停止
     </button>
     <button class="small-btn" type="button" :disabled="running" @click="$emit('step')" title="单步调试">
       <StepForward :size="12" :stroke-width="2" aria-hidden="true" /> 步进
@@ -10,36 +13,27 @@
     <button class="small-btn" type="button" :disabled="running" @click="$emit('save')" title="保存">
       <Save :size="12" :stroke-width="2" aria-hidden="true" /> 保存
     </button>
-    <button class="small-btn quiet" type="button" @click="$emit('add-node')" title="添加节点">
-      <Plus :size="12" :stroke-width="2" aria-hidden="true" /> 节点
-    </button>
-    <span class="wf-control-sep" aria-hidden="true"></span>
-    <button class="small-btn quiet" type="button" @click="$emit('zoom-out')" title="缩小">
-      <ZoomOut :size="12" :stroke-width="2" aria-hidden="true" />
-    </button>
-    <button class="small-btn quiet" type="button" @click="$emit('zoom-reset')" title="重置缩放">1:1</button>
-    <button class="small-btn quiet" type="button" @click="$emit('zoom-in')" title="放大">
-      <ZoomIn :size="12" :stroke-width="2" aria-hidden="true" />
+    <button class="small-btn quiet" type="button" :class="{ 'is-on': exposed }" :disabled="running" @click="$emit('toggle-exposed')" :title="exposed ? '取消暴露为工具' : '暴露为 Agent 工具'">
+      {{ exposed ? '已暴露' : '暴露为工具' }}
     </button>
     <span v-if="statusText" class="wf-control-status">{{ statusText }}</span>
   </div>
 </template>
 
 <script setup lang="ts">
-import { Play, Plus, Save, StepForward, ZoomIn, ZoomOut } from 'lucide-vue-next'
+import { Play, Save, StepForward } from 'lucide-vue-next'
 
 defineProps<{
   running?: boolean
+  exposed?: boolean
   statusText?: string
 }>()
 defineEmits<{
   run: []
+  cancel: []
   step: []
   save: []
-  'add-node': []
-  'zoom-in': []
-  'zoom-out': []
-  'zoom-reset': []
+  'toggle-exposed': []
 }>()
 </script>
 
@@ -61,6 +55,7 @@ defineEmits<{
   backdrop-filter: blur(8px);
 }
 .wf-control-bar .small-btn { font-size: 12px; padding: 6px 12px; }
-.wf-control-sep { width: 1px; height: 18px; background: color-mix(in srgb, var(--theme-composer-text, #fff) 16%, transparent); }
+.wf-control-bar .small-btn.danger { color: var(--red); }
+.wf-control-bar .small-btn.is-on { color: var(--green); }
 .wf-control-status { font-size: 11px; opacity: 0.6; margin-left: 4px; }
 </style>

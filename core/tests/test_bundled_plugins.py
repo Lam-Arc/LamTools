@@ -47,8 +47,8 @@ def test_assemble_discovers_bundled_plugins(tmp_path):
     assert {"git", "websearch", "imagegen"} <= group_names
 
 
-def test_default_assembly_toolbox_19_tools(tmp_path):
-    """默认装配 = 基础 15 + 内置插件 4（D6 验收）。"""
+def test_default_assembly_toolbox_includes_bundled_plugin_tools(tmp_path):
+    """默认装配包含基础工具和所有已启用 bundled plugin 工具。"""
     from lamtools_core.app.base_agent import assemble_core_agent_plugins
 
     assembly = assemble_core_agent_plugins(
@@ -69,8 +69,17 @@ def test_default_assembly_toolbox_19_tools(tmp_path):
         )
     toolbox = build_core_toolbox(work_root=tmp_path, plugin_tool_specs=plugin_specs)
     names = {spec.name for spec in toolbox.tool_specs()}
-    assert len(names) == 19
+    # Workflow contributes its five declarative build tools in addition to
+    # the four git/websearch/imagegen tools.
+    assert len(names) == 24
     assert {"git_status", "git_diff", "web_search", "generate_image"} <= names
+    assert {
+        "workflow_graph",
+        "workflow_add_node",
+        "workflow_connect",
+        "workflow_delete_node",
+        "workflow_update_node",
+    } <= names
     # 半声明式补全：内置插件工具描述从 core 常量来
     git_spec = next(spec for spec in toolbox.tool_specs() if spec.name == "git_status")
     assert "git status" in git_spec.description.lower()

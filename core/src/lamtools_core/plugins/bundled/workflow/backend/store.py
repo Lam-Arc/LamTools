@@ -27,9 +27,10 @@ from pathlib import Path
 from typing import Any
 
 from lamtools_core.config.root import lam_home
-from lamtools_core.runtime.workflow import (
+from lamtools_core.plugins.bundled.workflow.backend.runtime import (
     WorkflowDef,
     WorkflowNode,
+    ensure_workflow_id,
     _json_copy,
     _parse_map,
     _ports_to_io,
@@ -184,7 +185,6 @@ class WorkflowStore:
                 grouped[wr] = []
         home_lam = lam_home().resolve()
         explicit = {p.resolve() for p in self._explicit_roots}
-        seen_names: set[str] = set()
         candidates: list[Path] = []
         for p in self._workflow_entries(None):
             candidates.append(p)
@@ -216,9 +216,6 @@ class WorkflowStore:
                     if lam_dir in resolved.parents:
                         key = wr
                         break
-            if definition.name in seen_names:
-                continue
-            seen_names.add(definition.name)
             grouped.setdefault(key, []).append(definition)
         for bucket in grouped.values():
             bucket.sort(key=lambda item: item.name)
@@ -264,11 +261,22 @@ class WorkflowStore:
     async def save(self, definition: WorkflowDef) -> WorkflowDef:
         if not definition.name:
             raise ValueError("workflow name is required")
+        ensure_workflow_id(definition)
         self._cached.clear()
         definition.updated_at = _now()
         workflows_dir = self._writable_dir(definition.work_root)
         target_dir = workflows_dir / self._unique_writable_name(workflows_dir, definition.name)
         await asyncio.to_thread(self._write_folder, target_dir, definition)
+        # A rename writes to a new name-derived folder. Remove the previous
+        # folder only after the new definition is durable, and only when its
+        # stable id matches. This keeps rename atomic from the reader's point
+        # of view and never deletes an unrelated same-named workflow.
+        for path in self._scoped_workflow_entries(definition.work_root):
+            if path.resolve() == target_dir.resolve() or path.parent.resolve() != workflows_dir.resolve():
+                continue
+            existing = await self._read_entry_async(path)
+            if existing is not None and existing.id == definition.id:
+                await self._remove_entry(path)
         # Remove a legacy single-JSON if it lingers from a pre-folder version.
         legacy = workflows_dir / (_safe_filename(definition.name) + ".json")
         if legacy.is_file():
@@ -387,7 +395,9 @@ class WorkflowStore:
             if isinstance(node_data, dict):
                 node_dicts.append(node_data)
         merged = {**data, "nodes": node_dicts, "edges": edges_data}
-        return WorkflowDef.from_dict(merged)
+        definition = WorkflowDef.from_dict(merged)
+        ensure_workflow_id(definition, seed=str(folder.resolve()))
+        return definition
 
     def _read_legacy_file(self, path: Path) -> WorkflowDef | None:
         """Read a legacy single-JSON file and lazily migrate it to a folder."""
@@ -398,6 +408,7 @@ class WorkflowStore:
         if not isinstance(data, dict):
             return None
         definition = WorkflowDef.from_dict(data)
+        ensure_workflow_id(definition, seed=str(path.resolve()))
         if definition.name:
             # Migrate to folder layout (best-effort, never breaks on failure).
             folder = path.parent / _safe_filename(definition.name)
@@ -414,6 +425,7 @@ class WorkflowStore:
         # config.json — meta + full edges array (source of truth, preserves
         # condition/transform) + human-readable map text (derived rendering).
         config: dict[str, Any] = {
+            "id": definition.id,
             "name": definition.name,
             "description": definition.description,
             "input_params": [p.to_dict() for p in definition.input_params],

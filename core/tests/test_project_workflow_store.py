@@ -7,7 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from lamtools_core.project.workflow_store import WorkflowDef, WorkflowStore
+from lamtools_core.plugins.bundled.workflow.backend.runtime import WorkflowDef
+from lamtools_core.plugins.bundled.workflow.backend.store import WorkflowStore
 
 
 def _make_definition(name: str, *, work_root: str | None) -> WorkflowDef:

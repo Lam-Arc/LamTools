@@ -1,4 +1,5 @@
 from .engine import HookEngine
+from .context import PluginContext
 from .hook_config import HookRegistry, default_project_hooks_path, default_user_hooks_path
 from .models import (
     HookDecision,
@@ -6,7 +7,13 @@ from .models import (
     HookEvent,
     HookHandler,
     PluginManifest,
+    PluginCLIArgument,
+    PluginCLICommand,
+    PluginCLIContribution,
     PluginResource,
+    PluginUIContribution,
+    PluginUIMode,
+    PluginUIView,
     # canonical hook event names
     HOOK_EVENT_PRE_TOOL_USE,
     HOOK_EVENT_POST_TOOL_USE,
@@ -24,6 +31,16 @@ from .registry import (
     default_user_plugin_root,
 )
 from .trust import HookTrustStore
+from .lifecycle import (
+    PluginRuntimeManager,
+    PluginRuntimeHandle,
+    attach_plugin_runtime,
+    load_enabled_plugin_backends,
+    load_plugin_backend,
+    start_plugin_backend,
+    stop_plugin_backend,
+    shutdown_plugin_backends,
+)
 
 __all__ = [
     "HookDecision",
@@ -34,10 +51,25 @@ __all__ = [
     "HookRegistry",
     "HookTrustStore",
     "PluginManifest",
+    "PluginCLIArgument",
+    "PluginCLICommand",
+    "PluginCLIContribution",
+    "PluginContext",
+    "PluginRuntimeHandle",
+    "PluginRuntimeManager",
+    "PluginUIContribution",
+    "PluginUIMode",
+    "PluginUIView",
     "PluginRegistry",
     "PluginResource",
     "PluginStateStore",
     "build_plugin_operation_catalog",
+    "load_enabled_plugin_backends",
+    "load_plugin_backend",
+    "attach_plugin_runtime",
+    "start_plugin_backend",
+    "stop_plugin_backend",
+    "shutdown_plugin_backends",
     "default_project_hooks_path",
     "default_project_plugin_root",
     "default_user_hooks_path",

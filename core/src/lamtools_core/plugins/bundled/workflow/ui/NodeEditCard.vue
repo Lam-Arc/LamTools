@@ -167,9 +167,9 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { X } from 'lucide-vue-next'
-import UiSelect from './UiSelect.vue'
-import AutoTextarea from './AutoTextarea.vue'
-import type { WorkflowNode, WorkflowNodeKind, WorkflowPort } from '../workflow/types'
+import UiSelect from '../../../../../../ui/src/components/UiSelect.vue'
+import AutoTextarea from '../../../../../../ui/src/components/AutoTextarea.vue'
+import type { WorkflowNode, WorkflowNodeKind, WorkflowPort } from './types'
 
 interface SelectOption {
   value: string

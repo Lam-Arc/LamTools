@@ -1,0 +1,17 @@
+{
+  "operations": [
+    { "name": "workflow.create", "permission": "auto_allow", "handler": "lamtools_core.plugins.bundled.workflow.backend.operations:workflow_create" },
+    { "name": "workflow.get", "permission": "auto_allow", "handler": "lamtools_core.plugins.bundled.workflow.backend.operations:workflow_get" },
+    { "name": "workflow.list", "permission": "auto_allow", "handler": "lamtools_core.plugins.bundled.workflow.backend.operations:workflow_list" },
+    { "name": "workflow.list_grouped", "permission": "auto_allow", "handler": "lamtools_core.plugins.bundled.workflow.backend.operations:workflow_list_grouped" },
+    { "name": "workflow.save", "permission": "auto_allow", "handler": "lamtools_core.plugins.bundled.workflow.backend.operations:workflow_save" },
+    { "name": "workflow.rename", "permission": "auto_allow", "handler": "lamtools_core.plugins.bundled.workflow.backend.operations:workflow_rename" },
+    { "name": "workflow.update", "permission": "auto_allow", "handler": "lamtools_core.plugins.bundled.workflow.backend.operations:workflow_update" },
+    { "name": "workflow.delete", "permission": "auto_allow", "handler": "lamtools_core.plugins.bundled.workflow.backend.operations:workflow_delete" },
+    { "name": "workflow.run", "permission": "auto_allow", "handler": "lamtools_core.plugins.bundled.workflow.backend.operations:workflow_run" },
+    { "name": "workflow.cancel", "permission": "auto_allow", "handler": "lamtools_core.plugins.bundled.workflow.backend.operations:workflow_cancel" },
+    { "name": "workflow.expose", "permission": "auto_allow", "handler": "lamtools_core.plugins.bundled.workflow.backend.operations:workflow_expose" },
+    { "name": "workflow.unexpose", "permission": "auto_allow", "handler": "lamtools_core.plugins.bundled.workflow.backend.operations:workflow_unexpose" },
+    { "name": "workflow.tools.list", "permission": "auto_allow", "handler": "lamtools_core.plugins.bundled.workflow.backend.operations:workflow_tools_list" }
+  ]
+}

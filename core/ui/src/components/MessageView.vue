@@ -1766,7 +1766,6 @@ function readableToolTitle(name: string, target: string): string {
   if (/question|ask/.test(name)) return '提问'
   if (/sub_agent|subagent/.test(name)) return target ? `委派子代理：${target}` : '委派子代理'
   if (/skill/.test(name)) return target ? `加载技能 ${target}` : '加载技能'
-  if (/workflow/.test(name)) return '编辑工作流'
   if (/goal/.test(name)) return '管理目标'
   if (/arrange/.test(name)) return '管理定时任务'
   if (/mcp/.test(name)) return '调用 MCP 工具'

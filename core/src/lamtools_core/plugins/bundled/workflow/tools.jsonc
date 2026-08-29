@@ -1,0 +1,9 @@
+{
+  "tools": [
+    { "name": "workflow_graph", "permission": "auto_allow", "handler": "lamtools_core.plugins.bundled.workflow.backend.tools:workflow_manifest_tool_handler" },
+    { "name": "workflow_add_node", "permission": "ask_user", "handler": "lamtools_core.plugins.bundled.workflow.backend.tools:workflow_manifest_tool_handler" },
+    { "name": "workflow_connect", "permission": "ask_user", "handler": "lamtools_core.plugins.bundled.workflow.backend.tools:workflow_manifest_tool_handler" },
+    { "name": "workflow_delete_node", "permission": "ask_user", "handler": "lamtools_core.plugins.bundled.workflow.backend.tools:workflow_manifest_tool_handler" },
+    { "name": "workflow_update_node", "permission": "ask_user", "handler": "lamtools_core.plugins.bundled.workflow.backend.tools:workflow_manifest_tool_handler" }
+  ]
+}
