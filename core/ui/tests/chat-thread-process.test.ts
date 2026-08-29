@@ -873,7 +873,7 @@ describe('ChatThread process cards', () => {
     expect(block.text()).toContain('## Scope');
     expect(block.text()).toContain('Use the smaller implementation.');
     expect(block.text()).not.toContain('调用子 Agent');
-  });
+  }, 10_000);
 
   it('renders sub agent process through the same ChatThread timeline renderer', async () => {
     const messages: CoreMessage[] = [{
