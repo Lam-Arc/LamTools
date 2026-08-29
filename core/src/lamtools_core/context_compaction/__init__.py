@@ -6,7 +6,7 @@ import asyncio
 import inspect
 import logging
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field, replace
+from dataclasses import replace
 from typing import Any
 
 from lamtools_core.context_compaction_budget import (
@@ -48,11 +48,21 @@ from .fallback import (
     compress_structured_compaction_summary,
     fallback_structured_compaction_summary,
 )
+from .planner import (
+    CompactionPlanner,
+    _compaction_request_tokens,
+    _pair_compaction_messages,
+    _semantic_message_groups,
+    _split_compaction_messages,
+    _split_oversized_semantic_group,
+    _summary_output_limit,
+    compaction_segment_input_limit,
+    select_context_compaction_layout,
+)
 
 _logger = logging.getLogger(__name__)
 
 
-MAX_COMPACTION_SEGMENT_INPUT_TOKENS = 64_000
 MAX_FIT_ATTEMPTS = 8
 
 
@@ -358,29 +368,6 @@ class CompactionFitter:
         return _minimal_compaction_summary(), self._required_recent_messages(recent)
 
 
-def compaction_segment_input_limit(context_window_tokens: int) -> int:
-    """Return the per-request input ceiling used by every compaction entrypoint.
-
-    Segmentation is only meaningful when the model's context window itself
-    cannot hold the full compaction input (e.g. switching from a 1M model to
-    a 200k model).  Within the same window the model can always accept its own
-    window worth of input, so we return the window itself rather than an
-    arbitrary cap.  ``MAX_COMPACTION_SEGMENT_INPUT_TOKENS`` is only a fallback
-    when the window is unknown.
-    """
-    window = max(0, int(context_window_tokens or 0))
-    if window <= 0:
-        return MAX_COMPACTION_SEGMENT_INPUT_TOKENS
-    return window
-
-
-@dataclass(frozen=True)
-class _ContextCompactionLayout:
-    prefix_messages: list[ChatMessage]
-    compacted_messages: list[ChatMessage]
-    retained_messages: list[ChatMessage]
-
-
 async def compact_context(request: ContextCompactionRequest) -> ContextCompactionResult:
     """Compact context and return both replacement messages and display data."""
     options = request.options
@@ -634,77 +621,6 @@ def _failed_compaction_result(
     )
 
 
-def select_context_compaction_layout(
-    messages: list[ChatMessage],
-    *,
-    preserve_latest_user: bool = True,
-    limit_tokens: int = 0,
-    estimate_tokens: CompactionTokenEstimator | None = None,
-) -> _ContextCompactionLayout | None:
-    """Return stable prefix, compacted messages, and raw retained messages."""
-    prefix_end = 0
-    for index, message in enumerate(messages):
-        if message.role != "system":
-            break
-        if message.metadata.get("key") == "context_compaction_summary":
-            break
-        prefix_end = index + 1
-
-    body = list(messages[prefix_end:])
-    if not body:
-        return None
-
-    estimator = estimate_tokens or (
-        lambda values: estimate_message_tokens([message.to_dict() for message in values])
-    )
-    prefix_messages = list(messages[:prefix_end])
-    fixed_tokens = estimator(prefix_messages)
-    retained_budget = max(0, limit_tokens - fixed_tokens - _summary_output_limit(limit_tokens))
-    groups = _semantic_message_groups(body)
-    retained_ids: set[int] = set()
-
-    def retained_values(extra: list[ChatMessage] | None = None) -> list[ChatMessage]:
-        selected = set(retained_ids)
-        selected.update(id(message) for message in (extra or []))
-        return [message for message in body if id(message) in selected]
-
-    def retained_token_count(extra: list[ChatMessage] | None = None) -> int:
-        return max(0, estimator([*prefix_messages, *retained_values(extra)]) - fixed_tokens)
-
-    latest_group_index = len(groups) - 1
-    if preserve_latest_user:
-        latest_user = next((message for message in reversed(body) if message.role == "user"), None)
-        if latest_user is not None:
-            latest_group_index = next(
-                index for index, group in enumerate(groups) if any(message is latest_user for message in group)
-            )
-            latest_group = groups[latest_group_index]
-            required = (
-                latest_group
-                if retained_token_count(latest_group) <= retained_budget
-                else [latest_user]
-            )
-            retained_ids.update(id(message) for message in required)
-
-    start_index = latest_group_index if preserve_latest_user else len(groups)
-    for group in reversed(groups[:start_index]):
-        if len(retained_ids) + len(group) >= len(body):
-            continue
-        if retained_token_count(group) > retained_budget:
-            break
-        retained_ids.update(id(message) for message in group)
-
-    retained_messages = retained_values()
-    compacted_messages = [message for message in body if id(message) not in retained_ids]
-    if not compacted_messages:
-        return None
-    return _ContextCompactionLayout(
-        prefix_messages=prefix_messages,
-        compacted_messages=compacted_messages,
-        retained_messages=retained_messages,
-    )
-
-
 def _estimate_compaction_tokens(
     request: ContextCompactionRequest,
     messages: list[ChatMessage],
@@ -852,120 +768,6 @@ async def summarize_context_messages(
     if parsed_summary is None:
         raise ContextCompactionError("Context compaction failed: invalid structured summary")
     return parsed_summary.render(), max(1, segment_count)
-
-
-def _summary_output_limit(limit_tokens: int) -> int:
-    return max(256, min(4096, limit_tokens // 3 if limit_tokens > 0 else 4096))
-
-
-def _semantic_message_groups(messages: list[ChatMessage]) -> list[list[ChatMessage]]:
-    groups: list[list[ChatMessage]] = []
-    current: list[ChatMessage] = []
-    for message in messages:
-        starts_group = message.role == "user" or message.metadata.get("key") == "compaction_segment_summary"
-        if starts_group and current:
-            groups.append(current)
-            current = []
-        current.append(message)
-    if current:
-        groups.append(current)
-    return groups
-
-
-def _compaction_request_tokens(messages: list[ChatMessage], existing_summary: str = "") -> int:
-    transcript = format_messages_for_compaction(messages, existing_summary=existing_summary)
-    return estimate_message_tokens(
-        [
-            ChatMessage(role="system", content=COMPACTION_PROMPT).to_dict(),
-            ChatMessage(role="user", content=transcript).to_dict(),
-        ]
-    )
-
-
-def _split_compaction_messages(
-    messages: list[ChatMessage],
-    *,
-    input_limit_tokens: int,
-    existing_summary: str,
-) -> list[list[ChatMessage]]:
-    if not messages:
-        return [[]]
-    if input_limit_tokens <= 0 or _compaction_request_tokens(messages, existing_summary) <= input_limit_tokens:
-        return [list(messages)]
-
-    chunks: list[list[ChatMessage]] = []
-    current: list[ChatMessage] = []
-    semantic_groups: list[list[ChatMessage]] = []
-    for group in _semantic_message_groups(messages):
-        group_existing = existing_summary if not semantic_groups else ""
-        if _compaction_request_tokens(group, group_existing) > input_limit_tokens:
-            semantic_groups.extend(_split_oversized_semantic_group(group))
-        else:
-            semantic_groups.append(group)
-
-    for group in semantic_groups:
-        candidate = [*current, *group]
-        candidate_existing = existing_summary if not chunks else ""
-        if current and _compaction_request_tokens(candidate, candidate_existing) > input_limit_tokens:
-            chunks.append(current)
-            current = list(group)
-        else:
-            current = candidate
-        current_existing = existing_summary if not chunks else ""
-        if _compaction_request_tokens(current, current_existing) > input_limit_tokens:
-            raise ContextCompactionError(
-                "Context compaction failed: one complete conversation turn exceeds the model input limit"
-            )
-    if current:
-        chunks.append(current)
-    return chunks
-
-
-def _split_oversized_semantic_group(messages: list[ChatMessage]) -> list[list[ChatMessage]]:
-    """Split one oversized turn while keeping assistant/tool-result units intact."""
-    groups: list[list[ChatMessage]] = []
-    index = 0
-    while index < len(messages):
-        message = messages[index]
-        if message.role != "assistant":
-            groups.append([message])
-            index += 1
-            continue
-        unit = [message]
-        index += 1
-        while index < len(messages) and messages[index].role == "tool":
-            unit.append(messages[index])
-            index += 1
-        groups.append(unit)
-    return groups
-
-
-def _pair_compaction_messages(
-    messages: list[ChatMessage], input_limit_tokens: int
-) -> list[list[ChatMessage]]:
-    pairs: list[list[ChatMessage]] = []
-    for index in range(0, len(messages), 2):
-        pair = messages[index : index + 2]
-        if input_limit_tokens > 0 and _compaction_request_tokens(pair) > input_limit_tokens:
-            source_pair = pair
-            budget = max(16, (input_limit_tokens - _compaction_request_tokens([])) // max(1, len(pair)))
-            while True:
-                pair = [
-                    ChatMessage(
-                        role=message.role,
-                        content=compress_structured_compaction_summary(str(message.content or ""), budget),
-                    )
-                    for message in source_pair
-                ]
-                if _compaction_request_tokens(pair) <= input_limit_tokens or budget <= 16:
-                    break
-                budget = max(16, budget - max(8, budget // 8))
-        if input_limit_tokens > 0 and _compaction_request_tokens(pair) > input_limit_tokens:
-            raise ContextCompactionError(
-                "Context compaction failed: intermediate summaries exceed the model input limit"
-            )
-        pairs.append(pair)
-    return pairs
 
 
 async def _summarize_compaction_chunk(
@@ -1176,6 +978,7 @@ __all__ = [
     "CompactionFitter",
     "CompactionOptions",
     "CompactionPlan",
+    "CompactionPlanner",
     "CompactionSummary",
     "ContextCompactionError",
     "ContextCompactor",

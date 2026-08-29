@@ -203,6 +203,21 @@ class CompactionPlan:
     messages_to_summarize: list[ChatMessage]
     recent_messages: list[ChatMessage]
 
+    @property
+    def prefix_messages(self) -> list[ChatMessage]:
+        """Compatibility name used by the pre-package controller."""
+        return self.system_prefix
+
+    @property
+    def compacted_messages(self) -> list[ChatMessage]:
+        """Compatibility name used by the pre-package controller."""
+        return self.messages_to_summarize
+
+    @property
+    def retained_messages(self) -> list[ChatMessage]:
+        """Compatibility name used by the pre-package controller."""
+        return self.recent_messages
+
 
 @dataclass(slots=True)
 class CompactionFitInput:
