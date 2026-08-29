@@ -116,37 +116,37 @@ async def compact_runtime_history(
             "session_id": thread_id,
             "summary": result.summary,
         }
-    # Resume boundary = the row seq of the first retained message MINUS one
-    # (never the history tail, otherwise the retained span is dropped on the
-    # next run).  The marker travels with that message through a full history
-    # rewrite so later replaces can re-anchor the boundary after renumbering.
+    # Resume boundary is the zero-based position of the first retained message
+    # in the replacement history.  The marker travels with that message
+    # through a full history rewrite so later replaces can re-anchor it.
     compaction_boundary = 0
     retained_messages = result.retained_messages
     if retained_messages:
         first_retained = retained_messages[0]
-        first_seq = (
-            first_retained.metadata.get("history_seq")
-            if isinstance(first_retained.metadata, dict)
-            else None
-        )
-        if isinstance(first_seq, int) and first_seq > 0:
-            compaction_boundary = first_seq - 1
-        else:
-            compaction_boundary = next(
-                (
-                    index
-                    for index, message in enumerate(messages)
-                    if id(message) == id(first_retained)
-                ),
-                0,
-            )
         if isinstance(first_retained.metadata, dict):
             first_retained.metadata["lam_compaction_resume"] = True
+        replacement_messages = [
+            message for message in result.replacement_messages
+            if not (
+                isinstance(message.metadata, dict)
+                and message.metadata.get("key") == "context_compaction_summary"
+            )
+        ]
+        compaction_boundary = next(
+            (
+                index
+                for index, message in enumerate(replacement_messages)
+                if id(message) == id(first_retained)
+            ),
+            0,
+        )
+    else:
+        replacement_messages = list(result.replacement_messages)
     # Persist the resume marker (and keep row numbering stable) so later full
     # replaces can re-anchor the boundary after rows are renumbered.
     if isinstance(runtime_state_store, RuntimeCheckpointStore):
         await runtime_state_store.replace_history(
-            thread_id, [message.to_dict() for message in messages]
+            thread_id, [message.to_dict() for message in replacement_messages]
         )
     if not isinstance(state.metadata, dict):
         state.metadata = {}

@@ -2906,6 +2906,8 @@ class CoreLoopKernel:
             model_retries=self.policy.model_retries,
             model_timeout_seconds=self.policy.model_timeout_seconds,
             retry_policy=self.retry_policy,
+            summary_output_tokens=self.policy.compact_summary_output_tokens,
+            safety_margin_tokens=self.policy.compact_safety_margin_tokens,
             on_model_retry=lambda retry: self._emit_model_retry_from_event(
                 retry,
                 state=state,
