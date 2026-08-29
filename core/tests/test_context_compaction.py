@@ -10,9 +10,11 @@ from lamtools_core.context_compaction import (
     CompactionBudgetExceeded,
     CompactionFitInput,
     CompactionFitter,
+    CompactionSummary,
     ContextCompactionRequest,
     compact_context,
     compress_structured_compaction_summary,
+    parse_compaction_summary,
     select_context_compaction_layout,
     summarize_context_messages,
     truncate_text_to_tokens,
@@ -152,6 +154,69 @@ class _LosesPriorUserInstructionsClient:
 
 def _estimate(messages: list[ChatMessage]) -> int:
     return estimate_message_tokens([message.to_dict() for message in messages])
+
+
+def _canonical_summary_text() -> str:
+    return CompactionSummary(
+        goals="- Finish the export task.",
+        active_user_instructions="- Keep the public interface unchanged.",
+        external_action_authorization="- Do not deploy without confirmation.",
+        confirmed_facts_and_decisions="- The route is implemented.",
+        current_execution_state="- Tests are running.",
+        verification_evidence="- The unit suite is green.",
+        open_issues_risks_and_hypotheses="- Recheck the integration test.",
+        rejected_or_superseded_directions="- None.",
+        next_actions="- Run the integration test.",
+    ).render()
+
+
+def test_summary_parser_accepts_expected_sections():
+    parsed = parse_compaction_summary(_canonical_summary_text())
+
+    assert parsed is not None
+    assert parsed.goals == "- Finish the export task."
+    assert parsed.next_actions == "- Run the integration test."
+
+
+def test_summary_parser_rejects_wrong_title():
+    text = _canonical_summary_text().replace(
+        "2. Active User Instructions",
+        "2. Wrong Title",
+    )
+
+    assert parse_compaction_summary(text) is None
+
+
+def test_summary_parser_rejects_missing_section():
+    text = _canonical_summary_text().replace(
+        "6. Verification Evidence\n- The unit suite is green.\n\n",
+        "",
+    )
+
+    assert parse_compaction_summary(text) is None
+
+
+def test_summary_parser_rejects_reordered_sections():
+    sections = _canonical_summary_text().split("\n\n")
+    sections[1], sections[2] = sections[2], sections[1]
+
+    assert parse_compaction_summary("\n\n".join(sections)) is None
+
+
+def test_summary_render_round_trip():
+    summary = CompactionSummary(
+        goals="- Goal.",
+        active_user_instructions="- Constraint.",
+        external_action_authorization="- Permission.",
+        confirmed_facts_and_decisions="- Fact.",
+        current_execution_state="- State.",
+        verification_evidence="- Evidence.",
+        open_issues_risks_and_hypotheses="- Risk.",
+        rejected_or_superseded_directions="- Rejected.",
+        next_actions="- Next.",
+    )
+
+    assert parse_compaction_summary(summary.render()) == summary
 
 
 @pytest.mark.asyncio

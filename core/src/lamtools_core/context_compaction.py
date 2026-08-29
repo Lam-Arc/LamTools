@@ -48,6 +48,104 @@ COMPACTION_PROMPT = (
 )
 
 
+_COMPACTION_SUMMARY_FIELDS = (
+    "goals",
+    "active_user_instructions",
+    "external_action_authorization",
+    "confirmed_facts_and_decisions",
+    "current_execution_state",
+    "verification_evidence",
+    "open_issues_risks_and_hypotheses",
+    "rejected_or_superseded_directions",
+    "next_actions",
+)
+_COMPACTION_SUMMARY_TITLES = (
+    "1. Current Objective And Done Criteria",
+    "2. Active User Instructions",
+    "3. External Action Authorization",
+    "4. Confirmed Facts And Decisions",
+    "5. Current Execution State",
+    "6. Verification Evidence",
+    "7. Open Issues, Risks, And Hypotheses",
+    "8. Rejected Or Superseded Directions",
+    "9. Next Actions",
+)
+_LEGACY_SUMMARY_TITLES = (
+    "1. Current Goal",
+    "2. User History, Instructions, And Decisions",
+    "3. Completed Work",
+    "4. Key Decisions And Constraints",
+    "5. Files, APIs, Commands, And Results",
+    "6. Open Issues Or Risks",
+    "7. Next Best Actions",
+    "8. Rejected Or Superseded Directions",
+    "9. Next Actions",
+)
+
+
+@dataclass(slots=True)
+class CompactionSummary:
+    """Canonical internal representation of the nine-part summary contract."""
+
+    goals: str = ""
+    active_user_instructions: str = ""
+    external_action_authorization: str = ""
+    confirmed_facts_and_decisions: str = ""
+    current_execution_state: str = ""
+    verification_evidence: str = ""
+    open_issues_risks_and_hypotheses: str = ""
+    rejected_or_superseded_directions: str = ""
+    next_actions: str = ""
+
+    def render(self) -> str:
+        """Render the canonical external text format, including its prefix."""
+        sections = []
+        for title, field_name in zip(_COMPACTION_SUMMARY_TITLES, _COMPACTION_SUMMARY_FIELDS):
+            content = str(getattr(self, field_name) or "").strip() or "- None."
+            sections.append(f"{title}\n{content}")
+        return with_compaction_prefix("\n\n".join(sections))
+
+
+def parse_compaction_summary(text: str) -> CompactionSummary | None:
+    """Parse only the exact ordered nine-section summary contract."""
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+    lines = raw.splitlines()
+    if lines and lines[0].strip() == COMPACTION_PREFIX:
+        lines = lines[1:]
+
+    headings = [
+        (index, line.strip())
+        for index, line in enumerate(lines)
+        if _numbered_section_number(line) is not None
+    ]
+    if [title for _, title in headings] != list(_COMPACTION_SUMMARY_TITLES):
+        return None
+
+    values: dict[str, str] = {}
+    for position, (start, _) in enumerate(headings):
+        end = headings[position + 1][0] if position + 1 < len(headings) else len(lines)
+        values[_COMPACTION_SUMMARY_FIELDS[position]] = "\n".join(
+            lines[start + 1 : end]
+        ).strip()
+    return CompactionSummary(**values)
+
+
+def _normalize_legacy_compaction_summary(text: str) -> str:
+    """Canonicalize the pre-contract fixture format during migration."""
+    lines = str(text or "").strip().splitlines()
+    headings = [
+        line.strip()
+        for line in lines
+        if _numbered_section_number(line) is not None
+    ]
+    if headings != list(_LEGACY_SUMMARY_TITLES):
+        return text
+    replacements = dict(zip(_LEGACY_SUMMARY_TITLES, _COMPACTION_SUMMARY_TITLES))
+    return "\n".join(replacements.get(line.strip(), line) for line in lines)
+
+
 class ContextCompactionError(RuntimeError):
     """Raised when model-backed context compaction cannot produce a summary."""
 
@@ -146,22 +244,7 @@ class CompactionFitResult:
 
 
 def _minimal_compaction_summary() -> str:
-    return with_compaction_prefix(
-        "\n\n".join(
-            f"{number}. {title}\n- None."
-            for number, title in (
-                (1, "Current Objective And Done Criteria"),
-                (2, "Active User Instructions"),
-                (3, "External Action Authorization"),
-                (4, "Confirmed Facts And Decisions"),
-                (5, "Current Execution State"),
-                (6, "Verification Evidence"),
-                (7, "Open Issues, Risks, And Hypotheses"),
-                (8, "Rejected Or Superseded Directions"),
-                (9, "Next Actions"),
-            )
-        )
-    )
+    return CompactionSummary().render()
 
 
 class CompactionFitter:
@@ -472,6 +555,17 @@ async def compact_context(request: ContextCompactionRequest) -> ContextCompactio
             if message.metadata.get("key") == "context_compaction_summary"
         )],
     )
+    parsed_summary = parse_compaction_summary(summary)
+    if parsed_summary is None:
+        parsed_summary = parse_compaction_summary(
+            fallback_structured_compaction_summary(
+                layout.compacted_messages,
+                existing_summary=request.existing_summary,
+            )
+        )
+    if parsed_summary is None:
+        raise ContextCompactionError("Context compaction failed: invalid structured summary")
+    summary = parsed_summary.render()
     summary_message = ChatMessage(
         role="system",
         content=summary,
@@ -825,10 +919,21 @@ async def summarize_context_messages(
             )
         summaries = merged
 
-    summary = summaries[0] if summaries else with_compaction_prefix(
-        fallback_structured_compaction_summary(messages, existing_summary=existing_summary)
+    summary_text = summaries[0] if summaries else fallback_structured_compaction_summary(
+        messages,
+        existing_summary=existing_summary,
     )
-    return summary, max(1, segment_count)
+    parsed_summary = parse_compaction_summary(summary_text)
+    if parsed_summary is None:
+        parsed_summary = parse_compaction_summary(
+            fallback_structured_compaction_summary(
+                messages,
+                existing_summary=existing_summary,
+            )
+        )
+    if parsed_summary is None:
+        raise ContextCompactionError("Context compaction failed: invalid structured summary")
+    return parsed_summary.render(), max(1, segment_count)
 
 
 def _summary_output_limit(limit_tokens: int) -> int:
@@ -1047,9 +1152,21 @@ async def _summarize_compaction_chunk(
                 raise ContextCompactionError(f"Context compaction failed: {exc}") from exc
         if not content:
             raise ContextCompactionError("Context compaction failed: model returned an empty summary")
-    if not content or not _has_structured_sections(content):
-        content = fallback_structured_compaction_summary(messages, existing_summary=existing_summary)
-    summary = with_compaction_prefix(content)
+    parsed_summary = parse_compaction_summary(content)
+    if parsed_summary is None:
+        parsed_summary = parse_compaction_summary(
+            _normalize_legacy_compaction_summary(content)
+        )
+    if parsed_summary is None:
+        parsed_summary = parse_compaction_summary(
+            fallback_structured_compaction_summary(
+                messages,
+                existing_summary=existing_summary,
+            )
+        )
+    if parsed_summary is None:
+        raise ContextCompactionError("Context compaction failed: invalid structured summary")
+    summary = parsed_summary.render()
     if estimate_text_tokens(summary) > output_tokens:
         summary = compress_structured_compaction_summary(summary, output_tokens)
     if not emitted_delta:
@@ -1141,8 +1258,7 @@ def with_compaction_prefix(content: str) -> str:
 
 def _has_structured_sections(content: str) -> bool:
     """Return whether the content contains all nine numbered compaction sections."""
-    text = str(content or "")
-    return all(_numbered_summary_section_title(text, number) for number in range(1, 10))
+    return parse_compaction_summary(content) is not None
 
 
 def _inherit_prior_protected_context(summary: str, prior_summaries: list[str]) -> str:
@@ -1303,28 +1419,31 @@ def fallback_structured_compaction_summary(
             user_snippets.append(f"- {text[:500]}")
     body = "\n".join(snippets) if snippets else "- No compactable details captured."
     user_body = "\n".join(user_snippets) if user_snippets else "- No prior user instructions in compacted span."
-    return (
-        "1. Current Objective And Done Criteria\n"
-        "- Continue the active user task using the latest uncompressed user message.\n"
-        "- Completion criteria were not independently reconstructed by the local fallback.\n\n"
-        "2. Active User Instructions\n"
-        f"{user_body}\n\n"
-        "3. External Action Authorization\n"
-        "- Preserve explicit approval and prohibition language from the active user instructions.\n"
-        "- Do not infer permission for commits, pushes, pull requests, deployments, messages, purchases, or destructive actions.\n\n"
-        "4. Confirmed Facts And Decisions\n"
-        "- Only details present in the compacted messages are confirmed; do not promote guesses to facts.\n\n"
-        "5. Current Execution State\n"
-        f"{body}\n\n"
-        "6. Verification Evidence\n"
-        "- Preserve exact paths, identifiers, commands, errors, and test results from the execution-state snippets above.\n\n"
-        "7. Open Issues, Risks, And Hypotheses\n"
-        "- This summary was generated by local fallback; inferred causes remain unverified.\n\n"
-        "8. Rejected Or Superseded Directions\n"
-        "- Retain only rejected or superseded directions explicitly present in the compacted messages.\n\n"
-        "9. Next Actions\n"
-        "- Continue from the latest user request and verify with tests where applicable."
-    )
+    return CompactionSummary(
+        goals=(
+            "- Continue the active user task using the latest uncompressed user message.\n"
+            "- Completion criteria were not independently reconstructed by the local fallback."
+        ),
+        active_user_instructions=user_body,
+        external_action_authorization=(
+            "- Preserve explicit approval and prohibition language from the active user instructions.\n"
+            "- Do not infer permission for commits, pushes, pull requests, deployments, messages, purchases, or destructive actions."
+        ),
+        confirmed_facts_and_decisions=(
+            "- Only details present in the compacted messages are confirmed; do not promote guesses to facts."
+        ),
+        current_execution_state=body,
+        verification_evidence=(
+            "- Preserve exact paths, identifiers, commands, errors, and test results from the execution-state snippets above."
+        ),
+        open_issues_risks_and_hypotheses=(
+            "- This summary was generated by local fallback; inferred causes remain unverified."
+        ),
+        rejected_or_superseded_directions=(
+            "- Retain only rejected or superseded directions explicitly present in the compacted messages."
+        ),
+        next_actions="- Continue from the latest user request and verify with tests where applicable.",
+    ).render()
 
 
 def compress_structured_compaction_summary(text: str, max_tokens: int) -> str:
@@ -1475,6 +1594,7 @@ __all__ = [
     "CompactionFitInput",
     "CompactionFitResult",
     "CompactionFitter",
+    "CompactionSummary",
     "ContextCompactionError",
     "ContextCompactionRequest",
     "ContextCompactionResult",
@@ -1483,6 +1603,7 @@ __all__ = [
     "compaction_segment_input_limit",
     "fallback_structured_compaction_summary",
     "format_messages_for_compaction",
+    "parse_compaction_summary",
     "select_context_compaction_layout",
     "summarize_context_messages",
     "truncate_text_to_tokens",
