@@ -56,6 +56,14 @@ class _CompactionClient:
         raise NotImplementedError
 
 
+class _AttributeErrorStreamingCompactionClient(_CompactionClient):
+    async def complete(self, request):
+        raise AssertionError("an AttributeError from streaming must not fall back")
+
+    async def stream(self, request):
+        raise AttributeError("stream implementation bug")
+
+
 class _SegmentingCompactionClient:
     def __init__(self) -> None:
         self.requests = []
@@ -144,6 +152,45 @@ class _LosesPriorUserInstructionsClient:
 
 def _estimate(messages: list[ChatMessage]) -> int:
     return estimate_message_tokens([message.to_dict() for message in messages])
+
+
+@pytest.mark.asyncio
+async def test_stream_not_implemented_falls_back_to_complete():
+    result = await compact_context(
+        ContextCompactionRequest(
+            trigger="manual",
+            messages=[
+                ChatMessage(role="user", content="old request " + ("x" * 2_000)),
+                ChatMessage(role="assistant", content="old result " + ("y" * 2_000)),
+                ChatMessage(role="user", content="latest request"),
+            ],
+            llm_client=_CompactionClient(),
+            model="mock-model",
+            limit_tokens=1_200,
+            estimate_tokens=_estimate,
+        )
+    )
+
+    assert result.status == "compacted"
+
+
+@pytest.mark.asyncio
+async def test_attribute_error_from_stream_is_not_swallowed():
+    with pytest.raises(AttributeError, match="stream implementation bug"):
+        await compact_context(
+            ContextCompactionRequest(
+                trigger="manual",
+                messages=[
+                    ChatMessage(role="user", content="old request " + ("x" * 2_000)),
+                    ChatMessage(role="assistant", content="old result " + ("y" * 2_000)),
+                    ChatMessage(role="user", content="latest request"),
+                ],
+                llm_client=_AttributeErrorStreamingCompactionClient(),
+                model="mock-model",
+                limit_tokens=1_200,
+                estimate_tokens=_estimate,
+            )
+        )
 
 
 @pytest.mark.asyncio

@@ -1018,8 +1018,10 @@ async def _summarize_compaction_chunk(
             )
             if streamed:
                 content = streamed
-        except (AttributeError, NotImplementedError):
+        except NotImplementedError:
             content = ""
+        except AttributeError:
+            raise
         except ModelRetryExhausted as exc:
             detail = exc.last_error if exc.attempts <= 1 else exc
             raise ContextCompactionError(f"Context compaction failed: {detail}") from exc
