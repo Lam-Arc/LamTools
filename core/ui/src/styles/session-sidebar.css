@@ -231,7 +231,6 @@
   .sidebar-search,
   .project-fold svg,
   .project-btns,
-  .conversation-hover-actions,
   .sidebar-sort-move {
     transition: none;
   }
@@ -334,15 +333,14 @@
   outline-offset: 2px;
 }
 .conversation.active::before { background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-active), transparent); }
-.conversation.active .conversation-status {
-  opacity: 0;
-  pointer-events: none;
-}
 .conversation-main {
   min-width: 0;
 }
 .session-main {
   min-width: 0;
+}
+.session-editing {
+  cursor: text;
 }
 .conversation strong {
   display: block; min-width: 0;
@@ -355,77 +353,153 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.session-name-input {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--theme-backdrop-text);
+  caret-color: var(--theme-backdrop-text);
+  font: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+.session-name-input:focus {
+  border: 0;
+  outline: 0;
+  background: transparent;
+}
+.session-name-input:disabled {
+  opacity: .62;
+}
 .conversation span span {
   display: block; margin-top: 2px;
   color: color-mix(in srgb, var(--theme-backdrop-text) 62%, transparent); font-size: 11px;
 }
 .conversation-actions {
   position: relative;
-  min-width: 42px;
+  min-width: 22px;
   min-height: 22px;
   display: inline-flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 6px;
 }
 .session-status {
   flex: 0 0 auto;
-}
-.conversation-hover-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity .14s ease;
 }
 .conversation-status {
   position: absolute;
   right: 7px;
   transition: opacity .12s ease;
 }
-.conversation:hover .conversation-status,
-.conversation:focus-within .conversation-status {
-  opacity: 0;
-  pointer-events: none;
+
+/* Session context menus are teleported out of the clipped sidebar body. */
+.session-context-menu,
+.session-export-menu {
+  position: fixed;
+  z-index: var(--z-popover);
+  box-sizing: border-box;
+  padding: var(--space-1);
+  border: 1px solid color-mix(in srgb, var(--theme-backdrop-text) 12%, transparent);
+  border-radius: var(--radius);
+  background: var(--theme-backdrop-background);
+  color: var(--theme-backdrop-text);
+  box-shadow: var(--shadow-md);
+  animation: popover-in var(--dur-base) var(--ease-out);
+  max-width: calc(100vw - var(--space-4));
+  max-height: calc(100dvh - var(--space-4));
+  overflow-y: auto;
 }
-.conversation:hover .conversation-hover-actions,
-.conversation:focus-within .conversation-hover-actions {
-  opacity: 1;
-  pointer-events: auto;
+.session-context-menu {
+  width: 192px;
 }
-.conversation-action {
-  width: 21px;
-  height: 21px;
+.session-export-menu {
+  width: 176px;
+}
+.session-context-menu[data-placement="up"],
+.session-export-menu[data-placement="left"] {
+  transform-origin: bottom right;
+}
+.session-context-menu button,
+.session-export-menu button {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: var(--sidebar-item-height);
+  padding: 0 var(--space-2);
   border: 0;
-  border-radius: 6px;
+  border-radius: 0;
   background: transparent;
-  color: color-mix(in srgb, var(--theme-backdrop-text) 52%, transparent);
-  display: inline-grid;
-  place-items: center;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
   cursor: pointer;
 }
-.conversation-action svg {
-  width: 13px;
-  height: 13px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.7;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+.session-context-menu button::before,
+.session-export-menu button::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 0;
+  background: transparent;
+  pointer-events: none;
+  -webkit-mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
+  mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
 }
-.conversation-action:hover,
-.conversation-action:focus-visible {
+.session-context-menu button:hover::before,
+.session-context-menu button:focus-visible::before,
+.session-export-menu button:hover::before,
+.session-export-menu button:focus-visible::before {
   background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-hover), transparent);
-  color: var(--theme-backdrop-text);
 }
-.conversation-action.pin.active {
-  color: var(--orange);
+.session-context-menu button:focus-visible,
+.session-export-menu button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--blue) 75%, transparent);
+  outline-offset: -1px;
 }
-.conversation-action.delete:hover,
-.conversation-action.delete:focus-visible {
-  background: color-mix(in srgb, var(--red) var(--alpha-hover), transparent);
+.session-context-menu button.danger {
   color: var(--red);
+}
+.session-menu-chevron {
+  flex: 0 0 auto;
+  color: color-mix(in srgb, var(--theme-backdrop-text) 58%, transparent);
+}
+.session-menu-separator {
+  display: block;
+  height: 1px;
+  margin: var(--space-1) var(--space-2);
+  background: color-mix(in srgb, var(--theme-backdrop-text) 10%, transparent);
+}
+.session-export-group-label {
+  min-height: var(--sidebar-item-height);
+  display: flex;
+  align-items: center;
+  padding: 0 var(--space-2);
+  color: color-mix(in srgb, var(--theme-backdrop-text) 54%, transparent);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .02em;
+}
+.session-export-menu button[data-session-export-format="markdown"],
+.session-export-menu button[data-session-export-format="txt"],
+.session-export-menu button[data-session-export-format="jsonl"] {
+  padding-left: var(--space-3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-context-menu,
+  .session-export-menu {
+    animation: none;
+  }
 }
 
 /* Session status indicators — 点色以 backdrop area 文字为底，靠动画/混合区分状态 */
@@ -551,10 +625,6 @@
     overflow-y: auto;
   }
   .project-menu button {
-    min-height: 44px;
-  }
-  .conversation-action {
-    min-width: 44px;
     min-height: 44px;
   }
   .conversation,

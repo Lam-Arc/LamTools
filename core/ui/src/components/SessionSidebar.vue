@@ -149,19 +149,38 @@
             @dragover.prevent="handleSessionDragOver(group.id, s.id, section.id, $event)"
             @drop.prevent="dropSession(group.id, s.id, section.id)"
             @dragend="finishDrag"
+            @contextmenu.prevent.stop="handleSessionContextMenu(s.id, $event)"
           >
           <button
+            v-if="editingSessionId !== s.id"
             class="conversation-select session-main"
             type="button"
             :data-session-select="s.id"
             :aria-label="`打开会话 ${s.title || s.id.slice(0, 8)}`"
-            @click="emit('select-session', s.id)"
+            @click="selectSession(s.id)"
           >
             <span class="conversation-main">
               <strong class="session-title">{{ s.title || `Session ${s.id.slice(0, 8)}` }}</strong>
               <span v-if="s.meta">{{ s.meta }}</span>
             </span>
           </button>
+          <div v-else class="conversation-select session-main session-editing" @click.stop>
+            <span class="conversation-main">
+              <input
+                v-model="sessionNameDraft"
+                class="session-name-input"
+                type="text"
+                :data-session-name-input="s.id"
+                :aria-label="`重命名会话 ${s.title || s.id.slice(0, 8)}`"
+                autocomplete="off"
+                spellcheck="false"
+                @click.stop
+                @keydown.enter.prevent.stop="commitSessionRename(s.id)"
+                @keydown.esc.prevent.stop="cancelSessionRename"
+              />
+              <span v-if="s.meta">{{ s.meta }}</span>
+            </span>
+          </div>
           <span class="conversation-actions">
             <span
               v-if="shouldShowStatus(s)"
@@ -171,31 +190,6 @@
               :aria-label="`状态：${statusLabel(s.status || '')}`"
               role="img"
             ></span>
-            <span class="conversation-hover-actions">
-              <button
-                class="conversation-action pin"
-                :class="{ active: isSessionPinned(s.id) }"
-                type="button"
-                :title="isSessionPinned(s.id) ? '取消置顶' : '置顶会话'"
-                :aria-label="`${isSessionPinned(s.id) ? '取消置顶' : '置顶'}会话 ${s.title || s.id.slice(0, 8)}`"
-                :aria-pressed="isSessionPinned(s.id)"
-                :data-session-pin="s.id"
-                @click="toggleSessionPin(s.id)"
-              >
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 4 6 6-3 1-3 4 1 3-1 1-4-4-5 5-1-1 5-5-4-4 1-1 3 1 4-3 1-3Z" /></svg>
-              </button>
-              <button
-                v-if="allowSessionDelete"
-                class="conversation-action delete"
-                type="button"
-                title="删除会话"
-                :aria-label="`删除会话 ${s.title || s.id.slice(0, 8)}`"
-                :data-session-delete="s.id"
-                @click="emit('delete-session', s.id)"
-              >
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M9 7V4h6v3m2 0-1 13H8L7 7m3 4v5m4-5v5" /></svg>
-              </button>
-            </span>
           </span>
           </div>
         </TransitionGroup>
@@ -249,12 +243,85 @@
         </article>
       </TransitionGroup>
     </section>
+
+    <Teleport to="body">
+      <div
+        v-if="openSessionMenuState"
+        ref="sessionMenuRef"
+        class="session-context-menu"
+        role="menu"
+        :aria-label="`${sessionMenuTitle} 会话操作`"
+        :data-session-menu="openSessionId"
+        :data-placement="sessionMenuPlacement"
+        :style="sessionMenuPosition"
+        @pointerdown.stop
+        @click.stop
+        @keydown.escape.prevent="closeSessionMenus"
+      >
+        <button
+          type="button"
+          role="menuitem"
+          :aria-pressed="isSessionPinned(openSessionId)"
+          :data-session-menu-pin="openSessionId"
+          @click="runSessionAction('pin', openSessionId)"
+        >{{ isSessionPinned(openSessionId) ? '取消置顶' : '置顶会话' }}</button>
+        <button
+          type="button"
+          role="menuitem"
+          :data-session-menu-rename="openSessionId"
+          @click="runSessionAction('rename', openSessionId)"
+        >重命名</button>
+        <button
+          ref="sessionExportTriggerRef"
+          type="button"
+          role="menuitem"
+          aria-haspopup="menu"
+          :aria-expanded="sessionExportMenuOpen"
+          :data-session-menu-export="openSessionId"
+          @click="runSessionAction('export', openSessionId)"
+        >
+          <span>导出</span>
+          <ChevronRight class="session-menu-chevron" :size="14" :stroke-width="1.8" aria-hidden="true" />
+        </button>
+        <span v-if="allowSessionDelete" class="session-menu-separator" aria-hidden="true"></span>
+        <button
+          v-if="allowSessionDelete"
+          class="danger"
+          type="button"
+          role="menuitem"
+          :data-session-menu-delete="openSessionId"
+          @click="runSessionAction('delete', openSessionId)"
+        >删除</button>
+      </div>
+
+      <div
+        v-if="openSessionMenuState && sessionExportMenuOpen"
+        ref="sessionExportMenuRef"
+        class="session-export-menu"
+        role="menu"
+        aria-label="导出"
+        :data-session-export-menu="openSessionId"
+        :data-placement="sessionExportPlacement"
+        :style="sessionExportMenuPosition"
+        @pointerdown.stop
+        @click.stop
+        @keydown.escape.prevent="closeSessionMenus"
+      >
+        <div class="session-export-group-label" role="presentation">文本记录</div>
+        <button type="button" role="menuitem" data-session-export-format="markdown" @click="exportSession(openSessionId, 'markdown')">Markdown</button>
+        <button type="button" role="menuitem" data-session-export-format="txt" @click="exportSession(openSessionId, 'txt')">TXT</button>
+        <button type="button" role="menuitem" data-session-export-format="jsonl" @click="exportSession(openSessionId, 'jsonl')">JSONL</button>
+        <button type="button" role="menuitem" data-session-export-format="handoff" :data-session-export-handoff="openSessionId" @click="exportSession(openSessionId, 'handoff')">Agent Handoff</button>
+        <span class="session-menu-separator" aria-hidden="true"></span>
+        <button type="button" role="menuitem" data-session-export-format="zip" :data-session-export-full="openSessionId" @click="exportSession(openSessionId, 'zip')">完整归档</button>
+      </div>
+    </Teleport>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, ref, reactive, onBeforeUnmount, onMounted, watch } from 'vue'
-import { MoreHorizontal, Search } from 'lucide-vue-next'
+import { ChevronRight, MoreHorizontal, Search } from 'lucide-vue-next'
 import { motionEnterDirective } from '../directives/motionEnter'
 
 // ---------------------------------------------------------------------------
@@ -305,12 +372,14 @@ const props = withDefaults(
     projectSessionLimit?: number
     /** Show + button per project */
     allowProjectNewSession?: boolean
-    /** Label for the per-project new-session button (e.g. '新建工作流' in workflow mode). */
+    /** Label for the per-project new-session button. */
     newSessionLabel?: string
     /** Show × delete button per project */
     allowProjectDelete?: boolean
     /** Show × delete button per session */
     allowSessionDelete?: boolean
+    /** Allow right-click session actions (rename/export/pin/delete). */
+    allowSessionContextMenu?: boolean
     /** Allow clicking project name to select */
     allowProjectClick?: boolean
     /** Allow right-click on project name */
@@ -327,6 +396,7 @@ const props = withDefaults(
     newSessionLabel: '新建会话',
     allowProjectDelete: false,
     allowSessionDelete: false,
+    allowSessionContextMenu: true,
     allowProjectClick: false,
     allowProjectContextMenu: false,
     busyProjectIds: () => [],
@@ -340,8 +410,12 @@ const emit = defineEmits<{
   'new-session': [projectGroupId: string]
   'delete-project': [projectGroupId: string]
   'delete-session': [sessionId: string]
+  'rename-session': [sessionId: string, title: string]
+  'export-session': [sessionId: string, format: SessionExportFormat]
   'project-context-menu': [projectGroupId: string]
 }>()
+
+export type SessionExportFormat = 'markdown' | 'txt' | 'jsonl' | 'handoff' | 'zip'
 
 // ---------------------------------------------------------------------------
 // Group expand/collapse
@@ -355,12 +429,36 @@ const sessionOrderIds = ref<Record<string, string[]>>(loadSessionOrderIds())
 const dragState = ref<DragState | null>(null)
 const dragOverTarget = ref<DragOverTarget | null>(null)
 const openProjectMenuKey = ref<string | null>(null)
+type SessionMenuAction = 'pin' | 'rename' | 'export' | 'delete'
+interface SessionMenuState {
+  sessionId: string
+  clientX: number
+  clientY: number
+}
+type FixedMenuPosition = { left: string; top: string }
+
+const openSessionMenuState = ref<SessionMenuState | null>(null)
+const sessionMenuPosition = ref<FixedMenuPosition>({ left: '0px', top: '0px' })
+const sessionExportMenuPosition = ref<FixedMenuPosition>({ left: '0px', top: '0px' })
+const sessionMenuPlacement = ref<'down' | 'up'>('down')
+const sessionExportPlacement = ref<'right' | 'left'>('right')
+const sessionExportMenuOpen = ref(false)
+const sessionMenuRef = ref<HTMLElement | null>(null)
+const sessionExportTriggerRef = ref<HTMLButtonElement | null>(null)
+const sessionExportMenuRef = ref<HTMLElement | null>(null)
+const editingSessionId = ref<string | null>(null)
+const sessionNameDraft = ref('')
 const searchQuery = ref('')
 const searchExpanded = ref(false)
 const searchInputRef = ref<HTMLInputElement | null>(null)
 const dragImageRef = ref<HTMLElement | null>(null)
 const normalizedQuery = computed(() => searchQuery.value.trim().toLocaleLowerCase())
 const hasProjectData = computed(() => props.hasProjects ?? props.projectGroups.length > 0)
+const openSessionId = computed(() => openSessionMenuState.value?.sessionId || '')
+const sessionMenuTitle = computed(() => {
+  const session = findSession(openSessionId.value)
+  return session?.title || (openSessionId.value ? `Session ${openSessionId.value.slice(0, 8)}` : '会话')
+})
 
 // ── 新会话条目入场（C14）：挂载时已在列表中的会话不播，之后新出现的会话淡入。
 //    集合 setup 期捕获、只读，不引入响应式状态（会话列表变更频率极低）。
@@ -618,11 +716,181 @@ function toggleSessionPin(sessionId: string) {
   }
 }
 
+function findSession(sessionId: string): SessionItem | undefined {
+  for (const group of props.projectGroups) {
+    const session = group.sessions.find((item) => item.id === sessionId)
+    if (session) return session
+  }
+  return undefined
+}
+
+function selectSession(sessionId: string): void {
+  closeSessionMenus()
+  cancelSessionRename()
+  emit('select-session', sessionId)
+}
+
+function handleSessionContextMenu(sessionId: string, event: MouseEvent): void {
+  if (!props.allowSessionContextMenu) return
+  closeProjectMenu()
+  cancelSessionRename()
+  openSessionMenuState.value = {
+    sessionId,
+    clientX: event.clientX,
+    clientY: event.clientY,
+  }
+  sessionExportMenuOpen.value = false
+  sessionMenuPosition.value = {
+    left: `${event.clientX}px`,
+    top: `${event.clientY}px`,
+  }
+  void nextTick(positionSessionMenu)
+}
+
+function closeSessionMenus(): void {
+  openSessionMenuState.value = null
+  sessionExportMenuOpen.value = false
+}
+
+function viewportSize(): { width: number; height: number } {
+  return {
+    width: Math.max(window.innerWidth || 0, document.documentElement?.clientWidth || 0),
+    height: Math.max(window.innerHeight || 0, document.documentElement?.clientHeight || 0),
+  }
+}
+
+function clampMenuPosition(value: number, size: number, viewport: number, margin: number): number {
+  const maximum = Math.max(margin, viewport - size - margin)
+  return Math.min(Math.max(value, margin), maximum)
+}
+
+function positionSessionMenu(): void {
+  const state = openSessionMenuState.value
+  const menu = sessionMenuRef.value
+  if (!state || !menu) return
+
+  const { width: viewportWidth, height: viewportHeight } = viewportSize()
+  if (viewportWidth <= 0 || viewportHeight <= 0) return
+
+  const rect = menu.getBoundingClientRect()
+  const width = rect.width || 192
+  const height = rect.height || (props.allowSessionDelete ? 184 : 144)
+  const margin = 8
+  let left = state.clientX
+  let top = state.clientY
+  sessionMenuPlacement.value = 'down'
+
+  if (left + width + margin > viewportWidth) {
+    left = state.clientX - width
+  }
+  if (top + height + margin > viewportHeight) {
+    top = state.clientY - height
+    sessionMenuPlacement.value = 'up'
+  }
+
+  sessionMenuPosition.value = {
+    left: `${Math.round(clampMenuPosition(left, width, viewportWidth, margin))}px`,
+    top: `${Math.round(clampMenuPosition(top, height, viewportHeight, margin))}px`,
+  }
+  if (sessionExportMenuOpen.value) void nextTick(positionSessionExportMenu)
+}
+
+function toggleSessionExportMenu(): void {
+  sessionExportMenuOpen.value = !sessionExportMenuOpen.value
+  if (sessionExportMenuOpen.value) void nextTick(positionSessionExportMenu)
+}
+
+function positionSessionExportMenu(): void {
+  const menu = sessionExportMenuRef.value
+  const trigger = sessionExportTriggerRef.value
+  if (!menu || !trigger) return
+
+  const { width: viewportWidth, height: viewportHeight } = viewportSize()
+  if (viewportWidth <= 0 || viewportHeight <= 0) return
+
+  const triggerRect = trigger.getBoundingClientRect()
+  const menuRect = menu.getBoundingClientRect()
+  const width = menuRect.width || 176
+  const height = menuRect.height || 232
+  const margin = 8
+  const gap = 4
+  let left = triggerRect.right + gap
+  let top = triggerRect.top
+  sessionExportPlacement.value = 'right'
+
+  if (left + width + margin > viewportWidth) {
+    left = triggerRect.left - width - gap
+    sessionExportPlacement.value = 'left'
+  }
+  if (top + height + margin > viewportHeight) {
+    top = triggerRect.bottom - height
+  }
+
+  sessionExportMenuPosition.value = {
+    left: `${Math.round(clampMenuPosition(left, width, viewportWidth, margin))}px`,
+    top: `${Math.round(clampMenuPosition(top, height, viewportHeight, margin))}px`,
+  }
+}
+
+function runSessionAction(action: SessionMenuAction, sessionId: string): void {
+  if (!sessionId) return
+  if (action === 'pin') {
+    closeSessionMenus()
+    toggleSessionPin(sessionId)
+    return
+  }
+  if (action === 'rename') {
+    startSessionRename(sessionId)
+    return
+  }
+  if (action === 'export') {
+    toggleSessionExportMenu()
+    return
+  }
+  closeSessionMenus()
+  emit('delete-session', sessionId)
+}
+
+function exportSession(sessionId: string, format: SessionExportFormat): void {
+  closeSessionMenus()
+  emit('export-session', sessionId, format)
+}
+
+function startSessionRename(sessionId: string): void {
+  const session = findSession(sessionId)
+  if (!session) return
+  closeSessionMenus()
+  editingSessionId.value = sessionId
+  sessionNameDraft.value = session.title || `Session ${sessionId.slice(0, 8)}`
+  void nextTick(() => {
+    const input = document.querySelector<HTMLInputElement>('[data-session-name-input]')
+    input?.focus()
+    input?.select()
+  })
+}
+
+function cancelSessionRename(): void {
+  editingSessionId.value = null
+  sessionNameDraft.value = ''
+}
+
+function commitSessionRename(sessionId: string): void {
+  const session = findSession(sessionId)
+  const title = sessionNameDraft.value.trim()
+  if (!session || !title || title === (session.title || `Session ${sessionId.slice(0, 8)}`)) {
+    cancelSessionRename()
+    return
+  }
+  cancelSessionRename()
+  emit('rename-session', sessionId, title)
+}
+
 function projectMenuKey(sectionId: string, groupId: string): string {
   return `${sectionId}:${groupId}`
 }
 
 function toggleProjectMenu(sectionId: string, groupId: string) {
+  closeSessionMenus()
   const key = projectMenuKey(sectionId, groupId)
   openProjectMenuKey.value = openProjectMenuKey.value === key ? null : key
 }
@@ -633,20 +901,41 @@ function closeProjectMenu() {
 
 function handleDocumentPointerDown() {
   closeProjectMenu()
+  closeSessionMenus()
 }
 
 function handleDocumentKeyDown(event: KeyboardEvent) {
-  if (event.key === 'Escape') closeProjectMenu()
+  if (event.key === 'Escape') {
+    closeProjectMenu()
+    closeSessionMenus()
+  }
+}
+
+function handleDocumentScroll() {
+  closeProjectMenu()
+  closeSessionMenus()
 }
 
 onMounted(() => {
   document.addEventListener('pointerdown', handleDocumentPointerDown)
   document.addEventListener('keydown', handleDocumentKeyDown)
+  document.addEventListener('scroll', handleDocumentScroll, true)
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener('pointerdown', handleDocumentPointerDown)
   document.removeEventListener('keydown', handleDocumentKeyDown)
+  document.removeEventListener('scroll', handleDocumentScroll, true)
+})
+
+watch(() => props.activeSessionId, () => {
+  closeSessionMenus()
+  cancelSessionRename()
+})
+
+watch(() => props.projectGroups, () => {
+  if (openSessionId.value && !findSession(openSessionId.value)) closeSessionMenus()
+  if (editingSessionId.value && !findSession(editingSessionId.value)) cancelSessionRename()
 })
 
 function runProjectAction(groupId: string, action: 'new-session' | 'pin' | 'fold' | 'settings' | 'delete') {

@@ -1,6 +1,7 @@
 import { mount } from '@vue/test-utils'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { nextTick } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import SessionSidebar from '../src/components/SessionSidebar.vue'
@@ -23,8 +24,25 @@ const groups = [
   },
 ]
 
+async function openSessionMenu(wrapper: ReturnType<typeof mount>, sessionId: string) {
+  await wrapper.get(`[data-session-row="${sessionId}"]`).trigger('contextmenu', {
+    clientX: 120,
+    clientY: 80,
+  })
+  await nextTick()
+  const menus = document.body.querySelectorAll<HTMLElement>(`[data-session-menu="${sessionId}"]`)
+  const menu = menus[menus.length - 1]
+  expect(menu).not.toBeNull()
+  return menu!
+}
+
+function dispatchClick(element: Element): void {
+  ;(element as HTMLElement).click()
+}
+
 describe('SessionSidebar sections', () => {
   beforeEach(() => {
+    document.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
     localStorage.clear()
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-07-13T08:00:00Z'))
@@ -256,7 +274,9 @@ describe('SessionSidebar sections', () => {
       },
     })
 
-    await wrapper.get('[data-session-pin="s1"]').trigger('click')
+    const menu = await openSessionMenu(wrapper, 's1')
+    dispatchClick(menu.querySelector('[data-session-menu-pin="s1"]')!)
+    await nextTick()
 
     const triggers = wrapper.findAll('[data-project-menu-trigger="recent-new"]')
     expect(triggers).toHaveLength(2)
@@ -330,8 +350,8 @@ describe('SessionSidebar sections', () => {
 
     expect(css).toMatch(/\.project-btns \{[\s\S]*?opacity: 0;[\s\S]*?pointer-events: none;/)
     expect(css).toMatch(/\.project-block:hover \.project-btns,[\s\S]*?\.project-btns:has\(\.project-menu-button\[aria-expanded="true"\]\)/)
-    expect(css).toMatch(/\.conversation-hover-actions \{[\s\S]*?opacity: 0;[\s\S]*?pointer-events: none;/)
-    expect(css).toMatch(/\.conversation:hover \.conversation-hover-actions,[\s\S]*?\.conversation:focus-within \.conversation-hover-actions/)
+    expect(css).not.toContain('.conversation-hover-actions')
+    expect(css).toMatch(/\.session-context-menu,[\s\S]*?\.session-export-menu\s*\{[\s\S]*?position: fixed;[\s\S]*?z-index: var\(--z-popover\)/)
   })
 
   it('uses a transparent native drag image while sorting', async () => {
@@ -376,7 +396,9 @@ describe('SessionSidebar sections', () => {
       },
     })
 
-    await wrapper.get('[data-session-pin="newer"]').trigger('click')
+    const menu = await openSessionMenu(wrapper, 'newer')
+    dispatchClick(menu.querySelector('[data-session-menu-pin="newer"]')!)
+    await nextTick()
 
     const pinned = wrapper.get('[data-sidebar-section="pinned"]')
     expect(pinned.findAll('[data-project-entry="project"]')).toHaveLength(1)
@@ -387,7 +409,7 @@ describe('SessionSidebar sections', () => {
     expect(original.findAll('[data-session-row]').map((row) => row.attributes('data-session-row')))
       .toEqual(['older', 'newer'])
     expect(localStorage.getItem('test.sidebar.pins.sessions')).toBe('["newer"]')
-    expect(pinned.get('[data-session-pin="newer"]').attributes('aria-pressed')).toBe('true')
+    expect(pinned.get('[data-session-row="newer"]')).toBeTruthy()
   })
 
   it('reorders projects and sessions by drag and persists both orders', async () => {
@@ -508,22 +530,114 @@ describe('SessionSidebar sections', () => {
     }
   })
 
-  it('keeps session actions separate from the session selection button', async () => {
+  it('keeps session actions in the context menu instead of the selection button', async () => {
     const wrapper = mount(SessionSidebar, {
       props: {
         projectGroups: groups,
         allowSessionDelete: true,
       },
+      attachTo: document.body,
     })
 
     const row = wrapper.get('[data-session-row="s1"]')
     const selector = row.get('[data-session-select="s1"]')
-    const pin = row.get('[data-session-pin="s1"]')
 
     expect(selector.element.tagName).toBe('BUTTON')
-    expect(selector.find('[data-session-pin="s1"]').exists()).toBe(false)
+    expect(selector.find('[data-session-menu-pin="s1"]').exists()).toBe(false)
 
-    await pin.trigger('keydown', { key: 'Enter' })
+    const menu = await openSessionMenu(wrapper, 's1')
+    expect(menu.querySelector('[data-session-menu-pin="s1"]')).not.toBeNull()
+    await row.trigger('keydown', { key: 'Enter' })
     expect(wrapper.emitted('select-session')).toBeUndefined()
+  })
+
+  it('supports pin, rename, export submenu, and delete from the session context menu', async () => {
+    const wrapper = mount(SessionSidebar, {
+      props: {
+        projectGroups: groups,
+        allowSessionDelete: true,
+        pinStorageKey: 'session-actions',
+      },
+      attachTo: document.body,
+    })
+
+    let menu = await openSessionMenu(wrapper, 's1')
+    expect([...menu.querySelectorAll('button')].map((button) => button.textContent?.trim())).toEqual([
+      '置顶会话',
+      '重命名',
+      '导出',
+      '删除',
+    ])
+
+    dispatchClick(menu.querySelector('[data-session-menu-pin="s1"]')!)
+    await nextTick()
+    expect(localStorage.getItem('session-actions.sessions')).toBe('["s1"]')
+
+    menu = await openSessionMenu(wrapper, 's1')
+    dispatchClick(menu.querySelector('[data-session-menu-rename="s1"]')!)
+    await nextTick()
+    const input = wrapper.get('[data-session-name-input="s1"]')
+    await input.setValue('Renamed')
+    await input.trigger('keydown.enter')
+    expect(wrapper.emitted('rename-session')).toEqual([['s1', 'Renamed']])
+
+    menu = await openSessionMenu(wrapper, 's1')
+    dispatchClick(menu.querySelector('[data-session-menu-export="s1"]')!)
+    await nextTick()
+    const exportMenu = document.body.querySelector<HTMLElement>('[data-session-export-menu="s1"]')!
+    expect(exportMenu).not.toBeNull()
+    expect(exportMenu.textContent).toContain('文本记录')
+    expect(exportMenu.textContent).toContain('Agent Handoff')
+    expect(exportMenu.textContent).toContain('完整归档')
+    const markdown = document.body.querySelector<HTMLElement>('[data-session-export-format="markdown"]')!
+    dispatchClick(markdown)
+    expect(wrapper.emitted('export-session')).toEqual([['s1', 'markdown']])
+
+    menu = await openSessionMenu(wrapper, 's1')
+    dispatchClick(menu.querySelector('[data-session-menu-export="s1"]')!)
+    await nextTick()
+    dispatchClick(document.body.querySelector('[data-session-export-format="handoff"]')!)
+    expect(wrapper.emitted('export-session')).toEqual([['s1', 'markdown'], ['s1', 'handoff']])
+
+    menu = await openSessionMenu(wrapper, 's1')
+    dispatchClick(menu.querySelector('[data-session-menu-export="s1"]')!)
+    await nextTick()
+    dispatchClick(document.body.querySelector('[data-session-export-format="zip"]')!)
+    expect(wrapper.emitted('export-session')).toEqual([
+      ['s1', 'markdown'],
+      ['s1', 'handoff'],
+      ['s1', 'zip'],
+    ])
+
+    menu = await openSessionMenu(wrapper, 's1')
+    dispatchClick(menu.querySelector('[data-session-menu-delete="s1"]')!)
+    expect(wrapper.emitted('delete-session')).toEqual([['s1']])
+  })
+
+  it('closes the session menu on outside pointerdown, Escape, scroll, and session change', async () => {
+    const wrapper = mount(SessionSidebar, {
+      props: { projectGroups: groups, activeSessionId: 's1' },
+      attachTo: document.body,
+    })
+
+    await openSessionMenu(wrapper, 's1')
+    document.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+    await nextTick()
+    expect(document.body.querySelector('[data-session-menu="s1"]')).toBeNull()
+
+    await openSessionMenu(wrapper, 's1')
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await nextTick()
+    expect(document.body.querySelector('[data-session-menu="s1"]')).toBeNull()
+
+    await openSessionMenu(wrapper, 's1')
+    document.dispatchEvent(new Event('scroll', { bubbles: true }))
+    await nextTick()
+    expect(document.body.querySelector('[data-session-menu="s1"]')).toBeNull()
+
+    await openSessionMenu(wrapper, 's1')
+    await wrapper.setProps({ activeSessionId: 's2' })
+    await nextTick()
+    expect(document.body.querySelector('[data-session-menu="s1"]')).toBeNull()
   })
 })

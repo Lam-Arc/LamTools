@@ -101,6 +101,22 @@ class CoreRuntimeSession(CoreDbBase):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
 
 
+class CoreHandoffContext(CoreDbBase):
+    """Latest provider-neutral context captured at the model boundary.
+
+    This is separate from ``core_runtime_sessions`` so the runtime state
+    schema remains stable and the handoff payload can never be mistaken for
+    resumable process state.  Only the latest context per thread is needed;
+    the full historical transcript remains in the fact tables.
+    """
+
+    __tablename__ = "core_handoff_contexts"
+
+    thread_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    context_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+
+
 class CoreHistoryEntry(CoreDbBase):
     """Incremental conversation history — one row per message (append-only).
 
@@ -212,6 +228,110 @@ class CoreCheckpoint(CoreDbBase):
     conversation_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="ready")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+
+
+class CoreCheckpointV2(CoreDbBase):
+    """Metadata-only checkpoint index.
+
+    Unlike ``core_checkpoints``, this table never contains a serialized
+    conversation, event list, snapshot, or history blob.  The sequence
+    numbers point back to the append-only fact tables and are sufficient to
+    reconstruct a conversation at restore/export time.
+    """
+
+    __tablename__ = "core_checkpoints_v2"
+    __table_args__ = (
+        Index("idx_core_checkpoints_v2_root_created", "root_session_id", "created_at"),
+        Index("idx_core_checkpoints_v2_session_created", "session_id", "created_at"),
+        Index("idx_core_checkpoints_v2_parent", "parent_checkpoint_id"),
+        Index("idx_core_checkpoints_v2_turn", "turn_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    root_session_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    session_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    parent_checkpoint_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    turn_id: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    actor_kind: Mapped[str] = mapped_column(String(32), nullable=False, default="main")
+    reason: Mapped[str] = mapped_column(String(256), nullable=False, default="")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="ready")
+    event_seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    history_seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    runtime_state_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    base_checkpoint_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    is_base_snapshot: Mapped[bool] = mapped_column(nullable=False, default=False)
+    workspace_manifest_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    metadata_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+
+
+class CoreCheckpointV2Materialized(CoreDbBase):
+    """Checkpoint-local recovery material for migrated legacy branches.
+
+    The append-only fact tables are authoritative for new checkpoints, but
+    old checkpoints were captured while those tables were mutable (rollback,
+    fork, and compaction could replace the rows at the same sequence).  This
+    small, explicit base snapshot keeps only the data needed to recover such a
+    historical branch after ``CoreCheckpoint.conversation_json`` is cleared.
+    It is deliberately separate from the legacy row and is never read as a
+    fallback once the V2 row has been materialized.
+    """
+
+    __tablename__ = "core_checkpoint_v2_materialized"
+
+    checkpoint_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    runtime_present: Mapped[bool] = mapped_column(nullable=False, default=False)
+    runtime_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    history_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    projection_present: Mapped[bool] = mapped_column(nullable=False, default=False)
+    projection_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    events_present: Mapped[bool] = mapped_column(nullable=False, default=False)
+    events_json: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+
+
+class CoreCheckpointV2SessionMessages(CoreDbBase):
+    """Checkpoint-local copy of the small session-store message list.
+
+    These records are separate from the event projection because the legacy
+    session adapter allowed UI messages to be written directly into the
+    snapshot.  Keeping this list here preserves that API without copying the
+    large event-derived projection into every new V2 checkpoint.
+    """
+
+    __tablename__ = "core_checkpoint_v2_session_messages"
+
+    checkpoint_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    messages_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+
+
+class CoreCheckpointV2SessionHistory(CoreDbBase):
+    """Exact LLM history captured at a V2 checkpoint boundary.
+
+    Normally history can be read from ``core_history_entries`` by watermark.
+    This compact boundary record also covers older/runtime-only sessions whose
+    history had not yet been promoted to that table when the checkpoint was
+    created.
+    """
+
+    __tablename__ = "core_checkpoint_v2_session_history"
+
+    checkpoint_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    history_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+
+
+class CoreCheckpointAttachmentRef(CoreDbBase):
+    __tablename__ = "core_checkpoint_attachment_refs"
+    checkpoint_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    attachment_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+
+
+class CoreCheckpointBlobRef(CoreDbBase):
+    __tablename__ = "core_checkpoint_blob_refs"
+    checkpoint_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    blob_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
 
 
 class CoreWorkspaceManifest(CoreDbBase):
@@ -529,6 +649,37 @@ class SqlAlchemyRuntimeStateStore:
         except IntegrityError as exc:
             raise RuntimeStateConflictError(f"Runtime state revision conflict for {state.session_id}") from exc
         setattr(state, "_runtime_store_revision", next_revision)
+
+
+class SqlAlchemyHandoffContextStore:
+    """Durable store for the last captured semantic model context."""
+
+    def __init__(self, session_factory: async_sessionmaker, write_coordinator: SQLiteWriteCoordinator) -> None:
+        self.session_factory = session_factory
+        self.write_coordinator = write_coordinator
+
+    async def get(self, thread_id: str) -> dict[str, Any] | None:
+        async with self.session_factory() as db:
+            row = await db.get(CoreHandoffContext, thread_id)
+        if row is None or not isinstance(row.context_json, dict):
+            return None
+        return _json_safe(row.context_json)
+
+    async def save(self, thread_id: str, context: dict[str, Any]) -> None:
+        if not thread_id:
+            return
+        payload = _json_safe(context)
+        now = datetime.now()
+
+        async def write(db: Any) -> None:
+            row = await db.get(CoreHandoffContext, thread_id)
+            if row is None:
+                db.add(CoreHandoffContext(thread_id=thread_id, context_json=payload, updated_at=now))
+            else:
+                row.context_json = payload
+                row.updated_at = now
+
+        await self.write_coordinator.run(write)
 
 
 class SqlAlchemyGoalStore:
@@ -1101,6 +1252,7 @@ class CoreAppDb:
     event_store: SqlAlchemyAppEventStore
     snapshot_store: SqlAlchemyThreadSnapshotStore
     runtime_state_store: SqlAlchemyRuntimeStateStore
+    handoff_context_store: SqlAlchemyHandoffContextStore
     goal_store: GoalStore
     arrange_store: ArrangeStore
     project_store: CoreProjectStore
@@ -1148,6 +1300,7 @@ async def open_core_app_db(path: Path | str, *, member_defaults: dict | None = N
         event_store=event_store,
         snapshot_store=snapshot_store,
         runtime_state_store=SqlAlchemyRuntimeStateStore(session_factory, write_coordinator),
+        handoff_context_store=SqlAlchemyHandoffContextStore(session_factory, write_coordinator),
         goal_store=SqlAlchemyGoalStore(session_factory, write_coordinator),
         arrange_store=SqlAlchemyArrangeStore(session_factory, write_coordinator),
         project_store=CoreProjectStore(session_factory, write_coordinator),
@@ -1466,6 +1619,7 @@ __all__ = [
     "CoreCheckpoint",
     "CoreCheckpointBlob",
     "CoreGoal",
+    "CoreHandoffContext",
     "CoreProject",
     "CoreRestoreOperation",
     "CoreRuntimeSession",
@@ -1474,6 +1628,7 @@ __all__ = [
     "CoreWorkspaceManifest",
     "RuntimeStateConflictError",
     "SqlAlchemyRuntimeStateStore",
+    "SqlAlchemyHandoffContextStore",
     "SqlAlchemyArrangeStore",
     "SqlAlchemyGoalStore",
     "list_core_sessions",

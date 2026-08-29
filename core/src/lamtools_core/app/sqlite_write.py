@@ -4,7 +4,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any, TypeVar
-from weakref import WeakValueDictionary
+from weakref import WeakKeyDictionary, WeakValueDictionary
 
 from sqlalchemy import event, text
 from sqlalchemy.exc import OperationalError
@@ -17,7 +17,28 @@ SQLITE_WRITE_RETRY_DELAYS = (0.05, 0.15, 0.35)
 T = TypeVar("T")
 WriteAction = Callable[[Any], Awaitable[T]]
 
-_WRITE_LOCKS: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
+# asyncio.Lock instances are bound to the event loop that first contends on
+# them. The desktop app normally has one loop, but Starlette TestClient and
+# embedding hosts can reuse one database from several loops. Keep one lock
+# per (database, loop), while SQLite's BEGIN IMMEDIATE + retry policy still
+# handles cross-loop/process contention.
+_WRITE_LOCKS: WeakKeyDictionary[
+    asyncio.AbstractEventLoop,
+    WeakValueDictionary[str, asyncio.Lock],
+] = WeakKeyDictionary()
+
+
+def _write_lock(identity: str) -> asyncio.Lock:
+    loop = asyncio.get_running_loop()
+    locks = _WRITE_LOCKS.get(loop)
+    if locks is None:
+        locks = WeakValueDictionary()
+        _WRITE_LOCKS[loop] = locks
+    lock = locks.get(identity)
+    if lock is None:
+        lock = asyncio.Lock()
+        locks[identity] = lock
+    return lock
 
 
 def configure_sqlite_engine(engine: AsyncEngine, *, busy_timeout_ms: int = SQLITE_BUSY_TIMEOUT_MS) -> None:
@@ -52,14 +73,8 @@ class SQLiteWriteCoordinator:
         self.session_factory = session_factory
         self.identity = identity or database_identity(session_factory)
         self.retry_delays = retry_delays
-        lock = _WRITE_LOCKS.get(self.identity)
-        if lock is None:
-            lock = asyncio.Lock()
-            _WRITE_LOCKS[self.identity] = lock
-        self._lock = lock
-
     async def run(self, action: WriteAction[T]) -> T:
-        async with self._lock:
+        async with _write_lock(self.identity):
             for attempt in range(len(self.retry_delays) + 1):
                 try:
                     async with self.session_factory() as session:
