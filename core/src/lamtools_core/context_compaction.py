@@ -5,14 +5,17 @@ from __future__ import annotations
 import asyncio
 import json
 import inspect
+import logging
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from lamtools_core.llm import ChatMessage, LLMClient, LLMRequest
 from lamtools_core.llm.policy import RetryPolicy
 from lamtools_core.llm.retry import ModelRetryExhausted, ModelRetrySink, complete_with_retry, stream_with_retry
 from lamtools_core.tokens import estimate_message_tokens, estimate_text_tokens
+
+_logger = logging.getLogger(__name__)
 
 COMPACTION_PREFIX = "[Compacted Context]"
 
@@ -48,10 +51,26 @@ class ContextCompactionError(RuntimeError):
     """Raised when model-backed context compaction cannot produce a summary."""
 
 
+class CompactionBudgetExceeded(ContextCompactionError):
+    """Raised when required context cannot fit the compaction target."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        estimated_tokens: int = 0,
+        target_tokens: int = 0,
+    ) -> None:
+        super().__init__(message)
+        self.estimated_tokens = estimated_tokens
+        self.target_tokens = target_tokens
+
+
 CompactionDeltaSink = Callable[[str], Awaitable[None] | None]
 CompactionEventSink = Callable[[dict[str, Any]], Awaitable[None] | None]
 CompactionTokenEstimator = Callable[[list[ChatMessage]], int]
 MAX_COMPACTION_SEGMENT_INPUT_TOKENS = 64_000
+MAX_FIT_ATTEMPTS = 8
 
 
 @dataclass(frozen=True)
@@ -70,6 +89,7 @@ class ContextCompactionRequest:
     on_event: CompactionEventSink | None = None
     preserve_latest_user: bool = True
     estimate_tokens: CompactionTokenEstimator | None = None
+    estimate_exact_tokens: CompactionTokenEstimator | None = None
     model_retries: int = 1
     model_timeout_seconds: float | None = None
     retry_policy: RetryPolicy = field(default_factory=RetryPolicy)
@@ -101,6 +121,241 @@ class ContextCompactionResult:
     @property
     def retained_count(self) -> int:
         return len(self.retained_messages)
+
+
+@dataclass(slots=True)
+class CompactionFitInput:
+    """Inputs to the bounded replacement-message fitter."""
+
+    system_prefix: list[ChatMessage]
+    summary_message: ChatMessage
+    recent_messages: list[ChatMessage]
+    target_tokens: int
+
+
+@dataclass(slots=True)
+class CompactionFitResult:
+    """A replacement that the exact estimator proved fits its target."""
+
+    messages: list[ChatMessage]
+    estimated_tokens: int
+    attempts: int
+    strategy: str
+
+
+def _minimal_compaction_summary() -> str:
+    return with_compaction_prefix(
+        "\n\n".join(
+            f"{number}. {title}\n- None."
+            for number, title in (
+                (1, "Current Objective And Done Criteria"),
+                (2, "Active User Instructions"),
+                (3, "External Action Authorization"),
+                (4, "Confirmed Facts And Decisions"),
+                (5, "Current Execution State"),
+                (6, "Verification Evidence"),
+                (7, "Open Issues, Risks, And Hypotheses"),
+                (8, "Rejected Or Superseded Directions"),
+                (9, "Next Actions"),
+            )
+        )
+    )
+
+
+class CompactionFitter:
+    """Fit a summary and recent tail with a bounded deterministic strategy."""
+
+    def __init__(self, estimate_tokens: CompactionTokenEstimator) -> None:
+        self._estimate_tokens = estimate_tokens
+
+    def fit(self, fit_input: CompactionFitInput) -> CompactionFitResult:
+        if fit_input.target_tokens <= 0:
+            raise CompactionBudgetExceeded(
+                "required context target must be positive",
+                estimated_tokens=self._estimate_tokens(
+                    [*fit_input.system_prefix, *fit_input.recent_messages]
+                ),
+                target_tokens=fit_input.target_tokens,
+            )
+
+        prefix = list(fit_input.system_prefix)
+        recent = list(fit_input.recent_messages)
+        summary_content = str(fit_input.summary_message.content or "")
+        required_recent = self._required_recent_messages(recent)
+        required_tokens = self._estimate_tokens([*prefix, *required_recent])
+        if required_tokens > fit_input.target_tokens:
+            raise CompactionBudgetExceeded(
+                "required latest turn exceeds target token budget",
+                estimated_tokens=required_tokens,
+                target_tokens=fit_input.target_tokens,
+            )
+
+        def candidate(content: str, retained: list[ChatMessage]) -> list[ChatMessage]:
+            summary = replace(fit_input.summary_message, content=content)
+            return [*prefix, summary, *retained]
+
+        current_messages = candidate(summary_content, recent)
+        current_tokens = self._estimate_tokens(current_messages)
+        attempts = 1
+        if current_tokens <= fit_input.target_tokens:
+            return CompactionFitResult(
+                messages=current_messages,
+                estimated_tokens=current_tokens,
+                attempts=attempts,
+                strategy="original",
+            )
+
+        strategies = (
+            ("compress_summary_once", self._compress_summary),
+            ("compress_summary_twice", self._compress_summary),
+            ("drop_oldest_recent_turn", self._drop_oldest_recent_turn),
+            ("drop_oldest_recent_turn_again", self._drop_oldest_recent_turn),
+            ("truncate_summary", self._truncate_summary),
+            ("minimal_summary", self._minimal_summary),
+            ("latest_user_only", self._latest_user_only),
+        )
+        for strategy, shrink in strategies:
+            if attempts >= MAX_FIT_ATTEMPTS:
+                break
+            next_content, next_recent = shrink(
+                summary_content,
+                recent,
+                prefix=prefix,
+                target_tokens=fit_input.target_tokens,
+            )
+            next_messages = candidate(next_content, next_recent)
+            next_tokens = self._estimate_tokens(next_messages)
+            attempts += 1
+            if next_tokens >= current_tokens:
+                _logger.warning(
+                    "compaction fitter strategy did not reduce exact token count "
+                    "strategy=%s attempt=%d current=%d next=%d",
+                    strategy,
+                    attempts,
+                    current_tokens,
+                    next_tokens,
+                )
+            else:
+                summary_content = next_content
+                recent = next_recent
+                current_messages = next_messages
+                current_tokens = next_tokens
+            if current_tokens <= fit_input.target_tokens:
+                return CompactionFitResult(
+                    messages=current_messages,
+                    estimated_tokens=current_tokens,
+                    attempts=attempts,
+                    strategy=strategy,
+                )
+
+        raise CompactionBudgetExceeded(
+            "required context remains over the compaction target after bounded fitting",
+            estimated_tokens=current_tokens,
+            target_tokens=fit_input.target_tokens,
+        )
+
+    @staticmethod
+    def _required_recent_messages(recent: list[ChatMessage]) -> list[ChatMessage]:
+        groups = _semantic_message_groups(recent)
+        latest_user = next(
+            (message for message in reversed(recent) if message.role == "user"),
+            None,
+        )
+        if latest_user is not None:
+            for group in groups:
+                if any(message is latest_user for message in group):
+                    return list(group)
+        return list(groups[-1] if groups else [])
+
+    def _compress_summary(
+        self,
+        content: str,
+        recent: list[ChatMessage],
+        *,
+        prefix: list[ChatMessage],
+        target_tokens: int,
+    ) -> tuple[str, list[ChatMessage]]:
+        base_tokens = self._estimate_tokens(
+            [*prefix, ChatMessage(role="system", content=""), *recent]
+        )
+        current_text_tokens = estimate_text_tokens(content)
+        available_tokens = target_tokens - base_tokens
+        if available_tokens <= 0 or current_text_tokens <= available_tokens:
+            return content, list(recent)
+        next_budget = max(1, current_text_tokens - max(1, current_text_tokens // 3))
+        next_budget = min(next_budget, available_tokens)
+        next_content = compress_structured_compaction_summary(content, next_budget)
+        if next_content == content or estimate_text_tokens(next_content) >= current_text_tokens:
+            next_content = truncate_text_to_tokens(content, next_budget)
+        return next_content, list(recent)
+
+    def _drop_oldest_recent_turn(
+        self,
+        content: str,
+        recent: list[ChatMessage],
+        *,
+        prefix: list[ChatMessage],
+        target_tokens: int,
+    ) -> tuple[str, list[ChatMessage]]:
+        _ = content, prefix, target_tokens
+        groups = _semantic_message_groups(recent)
+        required = self._required_recent_messages(recent)
+        for index, group in enumerate(groups):
+            if any(message is required_message for message in required for required_message in group):
+                continue
+            return content, [message for group in groups[index + 1 :] for message in group]
+        return content, list(recent)
+
+    def _truncate_summary(
+        self,
+        content: str,
+        recent: list[ChatMessage],
+        *,
+        prefix: list[ChatMessage],
+        target_tokens: int,
+    ) -> tuple[str, list[ChatMessage]]:
+        _ = self
+        high = estimate_text_tokens(content)
+        low = 0
+        best = ""
+        while low <= high:
+            middle = (low + high) // 2
+            candidate_content = compress_structured_compaction_summary(content, middle)
+            if estimate_text_tokens(candidate_content) > middle:
+                candidate_content = truncate_text_to_tokens(candidate_content, middle)
+            candidate = [
+                *prefix,
+                ChatMessage(role="system", content=candidate_content),
+                *recent,
+            ]
+            if self._estimate_tokens(candidate) <= target_tokens:
+                best = candidate_content
+                low = middle + 1
+            else:
+                high = middle - 1
+        return best, list(recent)
+
+    @staticmethod
+    def _minimal_summary(
+        content: str,
+        recent: list[ChatMessage],
+        *,
+        prefix: list[ChatMessage],
+        target_tokens: int,
+    ) -> tuple[str, list[ChatMessage]]:
+        _ = content, prefix, target_tokens
+        return _minimal_compaction_summary(), list(recent)
+
+    def _latest_user_only(
+        self,
+        content: str,
+        recent: list[ChatMessage],
+        *,
+        prefix: list[ChatMessage],
+        target_tokens: int,
+    ) -> tuple[str, list[ChatMessage]]:
+        _ = content, prefix, target_tokens
+        return _minimal_compaction_summary(), self._required_recent_messages(recent)
 
 
 def compaction_segment_input_limit(context_window_tokens: int) -> int:
@@ -143,7 +398,11 @@ async def compact_context(request: ContextCompactionRequest) -> ContextCompactio
         limit_tokens=request.limit_tokens,
         estimate_tokens=lambda messages: _estimate_compaction_tokens(request, messages),
     )
-    before_tokens = _estimate_compaction_tokens(request, request.messages)
+    before_tokens = _estimate_compaction_tokens(
+        request,
+        request.messages,
+        exact=request.estimate_exact_tokens is not None,
+    )
     if layout is None:
         result = ContextCompactionResult(
             status="not_needed",
@@ -220,16 +479,37 @@ async def compact_context(request: ContextCompactionRequest) -> ContextCompactio
             "compacted_messages": len(layout.compacted_messages),
         },
     )
-    replacement_messages = [
-        *layout.prefix_messages,
-        summary_message,
-        *layout.retained_messages,
-    ]
-    after_tokens = _fit_replacement_to_limit(
-        request,
-        replacement_messages,
-        summary_message,
+    fitter = CompactionFitter(
+        lambda messages: _estimate_compaction_tokens(request, messages, exact=True)
     )
+    try:
+        fit_result = fitter.fit(
+            CompactionFitInput(
+                system_prefix=list(layout.prefix_messages),
+                summary_message=summary_message,
+                recent_messages=list(layout.retained_messages),
+                target_tokens=request.limit_tokens,
+            )
+        )
+    except CompactionBudgetExceeded as exc:
+        estimated_tokens = max(0, int(exc.estimated_tokens))
+        result = _failed_compaction_result(
+            request,
+            before_tokens=before_tokens,
+            reason="over_limit",
+            message=(
+                "Context compaction failed to fit within limit: "
+                f"{estimated_tokens} > {request.limit_tokens} tokens"
+            ),
+        )
+        await _emit_compaction_event(request, result.display_payload)
+        return result
+
+    replacement_messages = fit_result.messages
+    prefix_count = len(layout.prefix_messages)
+    summary_message = replacement_messages[prefix_count]
+    retained_messages = replacement_messages[prefix_count + 1 :]
+    after_tokens = fit_result.estimated_tokens
     if after_tokens >= before_tokens:
         result = ContextCompactionResult(
             status="not_needed",
@@ -281,8 +561,10 @@ async def compact_context(request: ContextCompactionRequest) -> ContextCompactio
         "limit_tokens": request.limit_tokens,
         "segments": segment_count,
         "compacted_messages": len(layout.compacted_messages),
-        "retained_messages": len(layout.retained_messages),
-        "removed_messages": len(layout.compacted_messages),
+        "retained_messages": len(retained_messages),
+        "removed_messages": len(layout.compacted_messages)
+        + len(layout.retained_messages)
+        - len(retained_messages),
     }
     result = ContextCompactionResult(
         status="compacted",
@@ -291,7 +573,7 @@ async def compact_context(request: ContextCompactionRequest) -> ContextCompactio
         summary_message=summary_message,
         prefix_messages=layout.prefix_messages,
         compacted_messages=layout.compacted_messages,
-        retained_messages=layout.retained_messages,
+        retained_messages=retained_messages,
         replacement_messages=replacement_messages,
         before_tokens=before_tokens,
         after_tokens=after_tokens,
@@ -411,39 +693,13 @@ def select_context_compaction_layout(
 def _estimate_compaction_tokens(
     request: ContextCompactionRequest,
     messages: list[ChatMessage],
+    *,
+    exact: bool = False,
 ) -> int:
-    if request.estimate_tokens is not None:
-        return request.estimate_tokens(messages)
+    estimator = request.estimate_exact_tokens if exact else request.estimate_tokens
+    if estimator is not None:
+        return max(0, int(estimator(messages)))
     return estimate_message_tokens([message.to_dict() for message in messages])
-
-
-def _fit_replacement_to_limit(
-    request: ContextCompactionRequest,
-    replacement_messages: list[ChatMessage],
-    summary_message: ChatMessage,
-) -> int:
-    after_tokens = _estimate_compaction_tokens(request, replacement_messages)
-    while request.limit_tokens > 0 and after_tokens > request.limit_tokens:
-        summary_tokens = estimate_text_tokens(str(summary_message.content or ""))
-        if summary_tokens <= 0:
-            break
-        next_budget = max(0, summary_tokens - (after_tokens - request.limit_tokens) - 64)
-        next_content = compress_structured_compaction_summary(
-            str(summary_message.content or ""),
-            next_budget,
-        )
-        if next_content == summary_message.content:
-            next_content = truncate_text_to_tokens(str(summary_message.content or ""), next_budget)
-        summary_message.content = next_content
-        next_tokens = _estimate_compaction_tokens(request, replacement_messages)
-        if next_tokens >= after_tokens:
-            summary_message.content = truncate_text_to_tokens(
-                str(summary_message.content or ""),
-                max(0, next_budget - 128),
-            )
-            next_tokens = _estimate_compaction_tokens(request, replacement_messages)
-        after_tokens = next_tokens
-    return after_tokens
 
 
 async def summarize_context_messages(
@@ -1115,33 +1371,46 @@ def compress_structured_compaction_summary(text: str, max_tokens: int) -> str:
 
     lines = candidate.splitlines()
     while lines and estimate_text_tokens("\n".join(lines)) > max_tokens:
-        removable = next(
+        def can_remove(index: int, *, headings: bool = False) -> bool:
+            stripped = lines[index].strip()
+            if stripped == COMPACTION_PREFIX or _line_is_in_numbered_sections(lines, index, {2, 3}):
+                return False
+            return headings or _numbered_section_number(stripped) is None
+
+        remove_index = next(
             (
                 index
                 for index in range(len(lines) - 1, -1, -1)
                 if lines[index].startswith("- ")
-                and not _line_is_in_numbered_sections(lines, index, {2, 3})
+                and can_remove(index)
             ),
             next(
                 (
                     index
                     for index in range(len(lines) - 1, -1, -1)
-                    if _numbered_section_number(lines[index]) not in {None, 2, 3}
+                    if can_remove(index)
                 ),
                 next(
-                    (index for index in range(len(lines) - 1, -1, -1) if lines[index].startswith("- ")),
+                    (
+                        index
+                        for index in range(len(lines) - 1, -1, -1)
+                        if lines[index].startswith("- ")
+                        and can_remove(index, headings=True)
+                    ),
                     next(
                         (
                             index
                             for index in range(len(lines) - 1, -1, -1)
-                            if _line_is_in_numbered_sections(lines, index, {2, 3})
+                            if can_remove(index, headings=True)
                         ),
-                        len(lines) - 1,
+                        -1,
                     ),
                 ),
             ),
         )
-        lines.pop(removable)
+        if remove_index < 0:
+            break
+        lines.pop(remove_index)
     return "\n".join(lines).strip()
 
 
@@ -1188,6 +1457,10 @@ def truncate_text_to_tokens(text: str, max_tokens: int) -> str:
 __all__ = [
     "COMPACTION_PREFIX",
     "COMPACTION_PROMPT",
+    "CompactionBudgetExceeded",
+    "CompactionFitInput",
+    "CompactionFitResult",
+    "CompactionFitter",
     "ContextCompactionError",
     "ContextCompactionRequest",
     "ContextCompactionResult",

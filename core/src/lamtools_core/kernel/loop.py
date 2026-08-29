@@ -2915,6 +2915,9 @@ class CoreLoopKernel:
         def estimate_compaction_tokens(messages: list[ChatMessage]) -> int:
             return estimate_request_messages(messages, fast=True)
 
+        def estimate_compaction_tokens_exact(messages: list[ChatMessage]) -> int:
+            return estimate_request_messages(messages, fast=False)
+
         async def attempt_compaction(
             *,
             model: str,
@@ -2972,6 +2975,7 @@ class CoreLoopKernel:
                     limit_tokens=limit_tokens,
                     input_limit_tokens=compaction_segment_input_limit(model_window),
                     estimate_tokens=estimate_compaction_tokens,
+                    estimate_exact_tokens=estimate_compaction_tokens_exact,
                     on_delta=on_compaction_delta,
                     on_event=on_compaction_event,
                     model_retries=self.policy.model_retries,
@@ -3071,12 +3075,27 @@ class CoreLoopKernel:
                     for message in request_messages_before_compaction
                     if id(message) not in history_message_ids
                 }
-                history[:] = [
+                compacted_ids = {id(message) for message in result.compacted_messages}
+                retained_ids = {id(message) for message in result.retained_messages}
+                source_ids = {id(item) for item in request_messages_before_compaction}
+                # A fitter may drop a previously retained tail turn to satisfy
+                # the exact target. Keep that turn before the resume marker in
+                # persisted history; the marker makes it invisible to the
+                # next context load while preserving the original row span.
+                dropped_before_resume = [
+                    message
+                    for message in history
+                    if id(message) in source_ids
+                    and id(message) not in compacted_ids
+                    and id(message) not in retained_ids
+                ]
+                compacted_history = [
                     message
                     for message in result.replacement_messages
                     if id(message) not in request_only_ids
                     and message.metadata.get("key") != "context_compaction_summary"
                 ]
+                history[:] = [*dropped_before_resume, *compacted_history]
         request.metadata["estimated_prompt_tokens"] = result.after_tokens
 
         request.metadata["context_compacted"] = True

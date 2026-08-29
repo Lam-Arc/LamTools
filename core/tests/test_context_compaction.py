@@ -6,6 +6,10 @@ import pytest
 
 from lamtools_core.context_compaction import (
     COMPACTION_PREFIX,
+    MAX_FIT_ATTEMPTS,
+    CompactionBudgetExceeded,
+    CompactionFitInput,
+    CompactionFitter,
     ContextCompactionRequest,
     compact_context,
     compress_structured_compaction_summary,
@@ -855,6 +859,107 @@ async def test_resume_boundary_restores_recent_tail():
         "recent answer",
         "latest request",
     ]
+
+
+def test_fitter_finishes_within_max_attempts():
+    calls = 0
+
+    def never_shrinks(messages: list[ChatMessage]) -> int:
+        nonlocal calls
+        calls += 1
+        return 10_000 if messages else 0
+
+    fitter = CompactionFitter(never_shrinks)
+    with pytest.raises(CompactionBudgetExceeded):
+        fitter.fit(
+            CompactionFitInput(
+                system_prefix=[],
+                summary_message=ChatMessage(role="system", content="summary"),
+                recent_messages=[],
+                target_tokens=100,
+            )
+        )
+
+    assert calls >= MAX_FIT_ATTEMPTS
+
+
+def test_fitter_never_returns_over_target():
+    result = CompactionFitter(_estimate).fit(
+        CompactionFitInput(
+            system_prefix=[ChatMessage(role="system", content="stable prefix")],
+            summary_message=ChatMessage(role="system", content="summary " + ("中" * 1_000)),
+            recent_messages=[ChatMessage(role="user", content="latest request")],
+            target_tokens=1_200,
+        )
+    )
+
+    assert result.estimated_tokens <= 1_200
+    assert _estimate(result.messages) == result.estimated_tokens
+    assert result.attempts <= MAX_FIT_ATTEMPTS
+
+
+def test_fitter_drops_oldest_recent_turn_first():
+    result = CompactionFitter(_estimate).fit(
+        CompactionFitInput(
+            system_prefix=[],
+            summary_message=ChatMessage(role="system", content="summary"),
+            recent_messages=[
+                ChatMessage(role="user", content="old request"),
+                ChatMessage(role="assistant", content="old answer"),
+                ChatMessage(role="user", content="recent request"),
+                ChatMessage(role="assistant", content="recent answer"),
+                ChatMessage(role="user", content="latest request"),
+            ],
+            target_tokens=1_000,
+        )
+    )
+
+    assert [message.content for message in result.messages[-3:]] == [
+        "recent request",
+        "recent answer",
+        "latest request",
+    ]
+
+
+def test_fitter_preserves_latest_user_turn():
+    result = CompactionFitter(_estimate).fit(
+        CompactionFitInput(
+            system_prefix=[],
+            summary_message=ChatMessage(role="system", content="summary" + ("x" * 200)),
+            recent_messages=[ChatMessage(role="user", content="latest user instruction")],
+            target_tokens=600,
+        )
+    )
+
+    assert result.messages[-1].role == "user"
+    assert result.messages[-1].content == "latest user instruction"
+
+
+def test_fitter_raises_when_required_messages_exceed_budget():
+    with pytest.raises(CompactionBudgetExceeded, match="required latest turn"):
+        CompactionFitter(_estimate).fit(
+            CompactionFitInput(
+                system_prefix=[ChatMessage(role="system", content="stable prefix")],
+                summary_message=ChatMessage(role="system", content="summary"),
+                recent_messages=[ChatMessage(role="user", content="中" * 2_000)],
+                target_tokens=1_000,
+            )
+        )
+
+
+@pytest.mark.parametrize("summary", ["中" * 1_000, "🙂" * 500], ids=["cjk", "emoji"])
+def test_fitter_handles_unicode_summary(summary: str):
+    result = CompactionFitter(_estimate).fit(
+        CompactionFitInput(
+            system_prefix=[],
+            summary_message=ChatMessage(role="system", content=summary),
+            recent_messages=[ChatMessage(role="user", content="latest request")],
+            target_tokens=1_400,
+        )
+    )
+
+    assert result.estimated_tokens <= 1_400
+    assert estimate_message_tokens([message.to_dict() for message in result.messages]) <= 1_400
 
 
 @pytest.mark.parametrize(
