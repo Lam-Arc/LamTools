@@ -12,7 +12,7 @@
       <span class="core-model-thinking-menu__model">{{ modelLabel }}</span>
       <span class="core-model-thinking-menu__thinking">{{ thinkingLabel }}</span>
       <ChevronDown class="core-model-thinking-menu__chevron" :size="14" :stroke-width="2" aria-hidden="true" />
-      <BrainCircuit class="core-model-thinking-menu__compact-icon" :size="16" :stroke-width="2" aria-hidden="true" />
+      <Brain class="core-model-thinking-menu__compact-icon" :size="16" :stroke-width="2" aria-hidden="true" />
     </button>
 
     <div v-if="open" class="core-model-thinking-menu__panel" role="menu">
@@ -147,7 +147,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
-import { BrainCircuit, ChevronDown, ChevronRight } from 'lucide-vue-next'
+import { Brain, ChevronDown, ChevronRight } from 'lucide-vue-next'
 import { coreModelDisplayLabel, normalizeCoreThinkingMode, type CoreSelectOption, type CoreThinkingMode, type CoreThinkingModeOption } from '../composer/execution'
 
 const props = withDefaults(defineProps<{
