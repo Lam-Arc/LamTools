@@ -2066,7 +2066,8 @@
 .reply-label {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-1);
+  flex-wrap: wrap;
   min-height: 22px;
   margin-bottom: 6px;
   color: color-mix(in srgb, var(--theme-main-text, #fff) 42%, transparent);
@@ -2333,14 +2334,14 @@
 .process-summary {
   width: fit-content;
   max-width: 100%;
-  min-height: 30px;
+  min-height: 22px;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  margin: 2px 0 8px;
-  padding: 4px 9px;
-  border: 1px solid color-mix(in srgb, var(--theme-main-text, #fff) 8%, transparent);
-  border-radius: 999px;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
   background: transparent;
   color: color-mix(in srgb, var(--theme-main-text, #fff) 54%, transparent);
   font-size: 12px;
@@ -2349,13 +2350,11 @@
   transition: background .14s ease, border-color .14s ease, color .14s ease;
 }
 .process-summary:hover {
-  background: color-mix(in srgb, var(--theme-main-text, #fff) 5%, transparent);
-  border-color: color-mix(in srgb, var(--theme-main-text, #fff) 14%, transparent);
   color: color-mix(in srgb, var(--theme-main-text, #fff) 72%, transparent);
 }
 .process-summary-icon {
-  width: 7px;
-  height: 7px;
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
   background: color-mix(in srgb, var(--theme-main-text, #fff) 30%, transparent);
   flex: 0 0 auto;

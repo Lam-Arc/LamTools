@@ -108,6 +108,21 @@
               <span class="stream-spinner" />
               {{ liveStatusText(msg) }}
             </span>
+            <button
+              v-if="(isLiveMessage(msg) || processSummary(msg).count > 0) && !isCompactionOnlyMessage(msg)"
+              type="button"
+              class="process-summary"
+              @click="emit('toggle-process', msg.id)"
+            >
+              <span v-if="isLiveMessage(msg) && !isInitialWaitingMessage(msg)" class="process-summary-state">
+                <span class="stream-spinner" />
+                <span>{{ liveStatusText(msg) }}</span>
+              </span>
+              <span v-if="isLiveMessage(msg) && liveDetailText(msg)" class="process-summary-detail">{{ liveDetailText(msg) }}</span>
+              <span class="process-summary-icon" :class="processBarStatus(msg)" />
+              <span class="process-summary-text">{{ isLiveMessage(msg) ? liveStatusText(msg) : processSummary(msg).text }}</span>
+              <span class="process-summary-hint">{{ isProcessExpanded(msg) ? '收起过程' : '查看过程' }}</span>
+            </button>
           </div>
 
           <div v-if="terminalErrorText(msg)" class="assistant-terminal-error" role="alert">
@@ -135,22 +150,6 @@
                 </span>
               </div>
             </div>
-
-              <button
-                v-if="(isLiveMessage(msg) || processSummary(msg).count > 0) && !isCompactionOnlyMessage(msg)"
-                type="button"
-                class="process-summary"
-                @click="emit('toggle-process', msg.id)"
-              >
-                <span v-if="isLiveMessage(msg) && !isInitialWaitingMessage(msg)" class="process-summary-state">
-                  <span class="stream-spinner" />
-                  <span>{{ liveStatusText(msg) }}</span>
-                </span>
-                <span v-if="isLiveMessage(msg) && liveDetailText(msg)" class="process-summary-detail">{{ liveDetailText(msg) }}</span>
-                <span class="process-summary-icon" :class="processBarStatus(msg)" />
-                <span class="process-summary-text">{{ isLiveMessage(msg) ? liveStatusText(msg) : processSummary(msg).text }}</span>
-                <span class="process-summary-hint">{{ isProcessExpanded(msg) ? '收起过程' : '查看过程' }}</span>
-              </button>
 
             <Transition :css="false" @enter="panelEnter" @leave="panelLeave">
             <div
