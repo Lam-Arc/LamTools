@@ -123,6 +123,7 @@ import {
   type CorePermissionPreset,
   type CoreSelectOption,
 } from '../composer/execution'
+import { useComposerMenuMotion } from '../motion/composerMenu'
 
 const props = withDefaults(defineProps<{
   activeMode: string
@@ -146,6 +147,7 @@ const submenuSide = ref<'left' | 'right'>('right')
 const root = ref<HTMLElement | null>(null)
 const parameterCard = ref<HTMLElement | null>(null)
 const submenuCard = ref<HTMLElement | null>(null)
+const { animatePrimaryCard, animateSubmenuCard, cancel } = useComposerMenuMotion(root)
 
 const permissionOptions = computed(() => (
   (['ask', 'auto', 'full_access'] as CorePermissionPreset[]).map((value) => ({
@@ -173,11 +175,24 @@ function toggle(): void {
   if (props.disabled) return
   open.value = !open.value
   activeSection.value = null
+  if (!open.value) {
+    cancel()
+    return
+  }
+  void nextTick(() => animatePrimaryCard(parameterCard.value, ':scope > .core-runtime-menu__option'))
 }
 
 function activateSection(section: 'mode' | 'permission'): void {
+  if (activeSection.value === section) return
   activeSection.value = section
-  void nextTick(updateSubmenuSide)
+  void nextTick(() => {
+    updateSubmenuSide()
+    animateSubmenuCard(
+      submenuCard.value,
+      submenuSide.value,
+      ':scope > .core-runtime-menu__heading, :scope > .core-runtime-menu__option, :scope > .core-runtime-menu__empty, :scope > .core-runtime-menu__warning',
+    )
+  })
 }
 
 function updateSubmenuSide(): void {
@@ -196,6 +211,7 @@ function updateSubmenuSide(): void {
 }
 
 function close(): void {
+  cancel()
   open.value = false
   activeSection.value = null
 }
@@ -305,7 +321,6 @@ onUnmounted(() => {
   width: max-content;
   max-width: calc(100vw - 24px);
   color: var(--text);
-  animation: core-runtime-menu-in var(--dur-base) var(--ease-out);
   transform: translateX(-50%);
   transform-origin: bottom center;
 }
@@ -328,12 +343,10 @@ onUnmounted(() => {
 
 .core-runtime-menu__card--submenu-right {
   left: calc(100% + var(--space-2));
-  animation: core-runtime-menu-submenu-right-in var(--dur-base) var(--ease-out);
 }
 
 .core-runtime-menu__card--submenu-left {
   right: calc(100% + var(--space-2));
-  animation: core-runtime-menu-submenu-left-in var(--dur-base) var(--ease-out);
 }
 
 .core-runtime-menu__heading {
@@ -486,21 +499,6 @@ onUnmounted(() => {
   line-height: 1.4;
 }
 
-@keyframes core-runtime-menu-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-@keyframes core-runtime-menu-submenu-right-in {
-  from { opacity: 0; transform: translateX(calc(var(--space-1) * -1)); }
-  to { opacity: 1; transform: translateX(0); }
-}
-
-@keyframes core-runtime-menu-submenu-left-in {
-  from { opacity: 0; transform: translateX(var(--space-1)); }
-  to { opacity: 1; transform: translateX(0); }
-}
-
 @container composer (max-width: 480px) {
   .core-runtime-menu__trigger {
     width: 28px;
@@ -520,8 +518,4 @@ onUnmounted(() => {
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .core-runtime-menu__panel,
-  .core-runtime-menu__card--submenu { animation: none; }
-}
 </style>

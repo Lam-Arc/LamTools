@@ -149,6 +149,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { Brain, ChevronDown, ChevronRight } from 'lucide-vue-next'
 import { coreModelDisplayLabel, normalizeCoreThinkingMode, type CoreSelectOption, type CoreThinkingMode, type CoreThinkingModeOption } from '../composer/execution'
+import { useComposerMenuMotion } from '../motion/composerMenu'
 
 const props = withDefaults(defineProps<{
   modelValue?: string
@@ -183,6 +184,7 @@ const submenuSide = ref<'left' | 'right'>('right')
 const root = ref<HTMLElement | null>(null)
 const parameterCard = ref<HTMLElement | null>(null)
 const submenuCard = ref<HTMLElement | null>(null)
+const { animatePrimaryCard, animateSubmenuCard, cancel } = useComposerMenuMotion(root)
 const COLLAPSED_PROVIDER_GROUPS_STORAGE_KEY = 'lamtools.core.modelMenu.collapsedProviders'
 const collapsedProviderGroups = ref<Record<string, boolean>>(readCollapsedProviderGroups())
 
@@ -213,11 +215,24 @@ function toggle(): void {
   if (props.disabled) return
   open.value = !open.value
   activeSection.value = null
+  if (!open.value) {
+    cancel()
+    return
+  }
+  void nextTick(() => animatePrimaryCard(parameterCard.value, ':scope > .core-model-thinking-menu__option'))
 }
 
 function activateSection(section: 'model' | 'thinking'): void {
+  if (activeSection.value === section) return
   activeSection.value = section
-  void nextTick(updateSubmenuSide)
+  void nextTick(() => {
+    updateSubmenuSide()
+    animateSubmenuCard(
+      submenuCard.value,
+      submenuSide.value,
+      ':scope > .core-model-thinking-menu__heading, :scope > .core-model-thinking-menu__model-list > .core-model-thinking-menu__model-group, :scope > .core-model-thinking-menu__option, :scope > .core-model-thinking-menu__empty',
+    )
+  })
 }
 
 function isProviderCollapsed(label: string): boolean {
@@ -249,6 +264,7 @@ function updateSubmenuSide(): void {
 }
 
 function close(): void {
+  cancel()
   open.value = false
   activeSection.value = null
 }
@@ -380,7 +396,6 @@ function persistCollapsedProviderGroups(groups: Record<string, boolean>): void {
   width: max-content;
   max-width: calc(100vw - 24px);
   color: var(--text);
-  animation: core-model-thinking-menu-in var(--dur-base) var(--ease-out);
   transform: translateX(-50%);
   transform-origin: bottom center;
 }
@@ -403,12 +418,10 @@ function persistCollapsedProviderGroups(groups: Record<string, boolean>): void {
 
 .core-model-thinking-menu__card--submenu-right {
   left: calc(100% + var(--space-2));
-  animation: core-model-thinking-submenu-right-in var(--dur-base) var(--ease-out);
 }
 
 .core-model-thinking-menu__card--submenu-left {
   right: calc(100% + var(--space-2));
-  animation: core-model-thinking-submenu-left-in var(--dur-base) var(--ease-out);
 }
 
 .core-model-thinking-menu__card--submenu .core-model-thinking-menu__option > span:first-child {
@@ -587,21 +600,6 @@ function persistCollapsedProviderGroups(groups: Record<string, boolean>): void {
   font-size: 11px;
 }
 
-@keyframes core-model-thinking-menu-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-@keyframes core-model-thinking-submenu-right-in {
-  from { opacity: 0; transform: translateX(calc(var(--space-1) * -1)); }
-  to { opacity: 1; transform: translateX(0); }
-}
-
-@keyframes core-model-thinking-submenu-left-in {
-  from { opacity: 0; transform: translateX(var(--space-1)); }
-  to { opacity: 1; transform: translateX(0); }
-}
-
 @container composer (max-width: 480px) {
   .core-model-thinking-menu__trigger {
     width: 28px;
@@ -620,8 +618,4 @@ function persistCollapsedProviderGroups(groups: Record<string, boolean>): void {
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .core-model-thinking-menu__panel,
-  .core-model-thinking-menu__card--submenu { animation: none; }
-}
 </style>
