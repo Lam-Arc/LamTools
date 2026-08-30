@@ -16,8 +16,49 @@
     </button>
 
     <div v-if="open" class="core-runtime-menu__panel" role="menu">
-      <section class="core-runtime-menu__card" aria-labelledby="runtime-mode-heading">
-        <div id="runtime-mode-heading" class="core-runtime-menu__heading">运行模式</div>
+      <section ref="parameterCard" class="core-runtime-menu__card core-runtime-menu__card--parameters" aria-label="运行模式与权限参数">
+        <button
+          class="core-runtime-menu__option core-runtime-menu__parameter"
+          type="button"
+          role="menuitem"
+          aria-haspopup="menu"
+          :aria-expanded="activeSection === 'mode'"
+          data-runtime-section="mode"
+          @mouseenter="activateSection('mode')"
+          @focus="activateSection('mode')"
+          @click="activateSection('mode')"
+        >
+          <span class="core-runtime-menu__parameter-label">运行模式</span>
+          <span class="core-runtime-menu__parameter-value">{{ activeModeLabel }}</span>
+          <ChevronRight class="core-runtime-menu__parameter-chevron" :size="15" :stroke-width="2" aria-hidden="true" />
+        </button>
+        <button
+          class="core-runtime-menu__option core-runtime-menu__parameter"
+          type="button"
+          role="menuitem"
+          aria-haspopup="menu"
+          :aria-expanded="activeSection === 'permission'"
+          data-runtime-section="permission"
+          @mouseenter="activateSection('permission')"
+          @focus="activateSection('permission')"
+          @click="activateSection('permission')"
+        >
+          <span class="core-runtime-menu__parameter-label">权限审批</span>
+          <span class="core-runtime-menu__parameter-value">{{ permissionLabel }}</span>
+          <ChevronRight class="core-runtime-menu__parameter-chevron" :size="15" :stroke-width="2" aria-hidden="true" />
+        </button>
+      </section>
+
+      <section
+        v-if="activeSection === 'mode'"
+        ref="submenuCard"
+        class="core-runtime-menu__card core-runtime-menu__card--submenu"
+        :class="'core-runtime-menu__card--submenu-' + submenuSide"
+        role="menu"
+        aria-label="运行模式选项"
+        data-runtime-submenu="mode"
+      >
+        <div class="core-runtime-menu__heading">运行模式</div>
         <button
           v-for="option in modeOptions"
           :key="option.value"
@@ -36,8 +77,16 @@
         <div v-if="modeOptions.length === 0" class="core-runtime-menu__empty">当前模式由插件提供</div>
       </section>
 
-      <section class="core-runtime-menu__card" aria-labelledby="runtime-permission-heading">
-        <div id="runtime-permission-heading" class="core-runtime-menu__heading">权限审批</div>
+      <section
+        v-else-if="activeSection === 'permission'"
+        ref="submenuCard"
+        class="core-runtime-menu__card core-runtime-menu__card--submenu"
+        :class="'core-runtime-menu__card--submenu-' + submenuSide"
+        role="menu"
+        aria-label="权限审批选项"
+        data-runtime-submenu="permission"
+      >
+        <div class="core-runtime-menu__heading">权限审批</div>
         <button
           v-for="option in permissionOptions"
           :key="option.value"
@@ -64,8 +113,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { ChevronDown } from 'lucide-vue-next'
+import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { ChevronDown, ChevronRight } from 'lucide-vue-next'
 import {
   CORE_PERMISSION_PRESET_DESCRIPTIONS,
   CORE_PERMISSION_PRESET_LABELS,
@@ -91,7 +140,11 @@ const emit = defineEmits<{
 }>()
 
 const open = ref(false)
+const activeSection = ref<'mode' | 'permission' | null>(null)
+const submenuSide = ref<'left' | 'right'>('right')
 const root = ref<HTMLElement | null>(null)
+const parameterCard = ref<HTMLElement | null>(null)
+const submenuCard = ref<HTMLElement | null>(null)
 
 const permissionOptions = computed(() => (
   (['ask', 'auto', 'full_access'] as CorePermissionPreset[]).map((value) => ({
@@ -116,40 +169,67 @@ const permissionLabel = computed(() => (
 const ariaLabel = computed(() => `运行模式与权限：${activeModeLabel.value} · ${permissionLabel.value}`)
 
 function toggle(): void {
-  if (!props.disabled) open.value = !open.value
+  if (props.disabled) return
+  open.value = !open.value
+  activeSection.value = null
+}
+
+function activateSection(section: 'mode' | 'permission'): void {
+  activeSection.value = section
+  void nextTick(updateSubmenuSide)
+}
+
+function updateSubmenuSide(): void {
+  if (!parameterCard.value || !submenuCard.value) return
+  const mainRect = parameterCard.value.getBoundingClientRect()
+  const submenuWidth = submenuCard.value.getBoundingClientRect().width
+  const spaceValue = getComputedStyle(parameterCard.value).getPropertyValue('--space-2')
+  const gap = Number.parseFloat(spaceValue) || 8
+  const required = submenuWidth + gap
+  const roomLeft = mainRect.left
+  const roomRight = window.innerWidth - mainRect.right
+
+  if (roomRight >= required) submenuSide.value = 'right'
+  else if (roomLeft >= required) submenuSide.value = 'left'
+  else submenuSide.value = roomRight >= roomLeft ? 'right' : 'left'
+}
+
+function close(): void {
+  open.value = false
+  activeSection.value = null
 }
 
 function selectMode(option: CoreSelectOption): void {
   if (option.disabled) return
   emit('update:activeMode', option.value)
-  open.value = false
+  close()
 }
 
 function selectPermission(value: string): void {
   emit('update:permissionPreset', normalizeCorePermissionPreset(value))
-  open.value = false
+  close()
 }
 
 function onPointerDown(event: PointerEvent): void {
   const target = event.target as Node | null
   if (!target || !root.value || root.value.contains(target)) return
-  open.value = false
+  close()
 }
 
 function onKeydown(event: KeyboardEvent): void {
-  if (event.key === 'Escape' && open.value) {
-    open.value = false
-  }
+  if (event.key === 'Escape' && open.value) close()
 }
 
 onMounted(() => {
   document.addEventListener('pointerdown', onPointerDown)
   document.addEventListener('keydown', onKeydown)
+  window.addEventListener('resize', updateSubmenuSide)
 })
 
 onUnmounted(() => {
   document.removeEventListener('pointerdown', onPointerDown)
   document.removeEventListener('keydown', onKeydown)
+  window.removeEventListener('resize', updateSubmenuSide)
 })
 </script>
 
@@ -214,28 +294,41 @@ onUnmounted(() => {
 
 .core-runtime-menu__panel {
   position: absolute;
-  left: 0;
+  left: 50%;
   bottom: calc(100% + 8px);
   z-index: var(--z-popover, 60);
-  width: min(330px, calc(100vw - 24px));
-  padding: var(--space-2);
-  display: grid;
-  gap: var(--space-2);
-  border: 1px solid color-mix(in srgb, var(--text) var(--alpha-active), transparent);
-  border-radius: var(--radius);
-  background: var(--theme-composer-background);
+  width: max-content;
+  max-width: calc(100vw - 24px);
   color: var(--text);
-  box-shadow: var(--shadow-md);
   animation: core-runtime-menu-in var(--dur-base) var(--ease-out);
-  transform-origin: bottom left;
+  transform: translateX(-50%);
+  transform-origin: bottom center;
 }
 
 .core-runtime-menu__card {
   min-width: 0;
-  padding: var(--space-1);
-  border: 1px solid color-mix(in srgb, var(--text) var(--alpha-hover), transparent);
-  border-radius: var(--radius-sm);
-  background: var(--theme-composer-soft-background);
+  width: max-content;
+  max-width: 240px;
+  padding: var(--space-2);
+  border: 1px solid color-mix(in srgb, var(--text) var(--alpha-active), transparent);
+  border-radius: var(--radius);
+  background: var(--theme-composer-background);
+  box-shadow: var(--shadow-md);
+}
+
+.core-runtime-menu__card--submenu {
+  position: absolute;
+  bottom: 0;
+}
+
+.core-runtime-menu__card--submenu-right {
+  left: calc(100% + var(--space-2));
+  animation: core-runtime-menu-submenu-right-in var(--dur-base) var(--ease-out);
+}
+
+.core-runtime-menu__card--submenu-left {
+  right: calc(100% + var(--space-2));
+  animation: core-runtime-menu-submenu-left-in var(--dur-base) var(--ease-out);
 }
 
 .core-runtime-menu__heading {
@@ -288,8 +381,12 @@ onUnmounted(() => {
 }
 
 .core-runtime-menu__option.active::before {
+  opacity: 0;
+}
+
+.core-runtime-menu__option.active:hover::before {
   opacity: 1;
-  background: color-mix(in srgb, var(--text) var(--alpha-active), transparent);
+  background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent);
 }
 
 .core-runtime-menu__option:disabled::before {
@@ -301,8 +398,43 @@ onUnmounted(() => {
   z-index: 1;
 }
 
+.core-runtime-menu__card--submenu .core-runtime-menu__option > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.core-runtime-menu__parameter {
+  grid-template-columns: auto minmax(0, max-content) auto;
+  width: max-content;
+  max-width: 224px;
+  min-height: 40px;
+  display: grid;
+  align-items: center;
+}
+
+.core-runtime-menu__parameter-label {
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.core-runtime-menu__parameter-value {
+  overflow: hidden;
+  color: color-mix(in srgb, var(--text) 58%, transparent);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.core-runtime-menu__parameter-chevron {
+  flex: 0 0 auto;
+  color: color-mix(in srgb, var(--text) 58%, transparent);
+}
+
 .core-runtime-menu__option.active {
-  color: var(--green, #32d17d);
+  color: var(--green);
 }
 
 .core-runtime-menu__option:focus-visible {
@@ -350,16 +482,26 @@ onUnmounted(() => {
 }
 
 @keyframes core-runtime-menu-in {
-  from { opacity: 0; transform: translateY(var(--space-1)) scale(.98); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes core-runtime-menu-submenu-right-in {
+  from { opacity: 0; transform: translateX(calc(var(--space-1) * -1)); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes core-runtime-menu-submenu-left-in {
+  from { opacity: 0; transform: translateX(var(--space-1)); }
+  to { opacity: 1; transform: translateX(0); }
 }
 
 @media (max-width: 560px) {
   .core-runtime-menu__trigger { max-width: 42vw; }
-  .core-runtime-menu__panel { left: -4px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .core-runtime-menu__panel { animation: none; }
+  .core-runtime-menu__panel,
+  .core-runtime-menu__card--submenu { animation: none; }
 }
 </style>
