@@ -13,6 +13,7 @@
       <span class="core-runtime-menu__separator" aria-hidden="true">·</span>
       <span class="core-runtime-menu__permission">{{ permissionLabel }}</span>
       <ChevronDown class="core-runtime-menu__chevron" :size="14" :stroke-width="2" aria-hidden="true" />
+      <ShieldCheck class="core-runtime-menu__compact-icon" :size="16" :stroke-width="2" aria-hidden="true" />
     </button>
 
     <div v-if="open" class="core-runtime-menu__panel" role="menu">
@@ -114,7 +115,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
-import { ChevronDown, ChevronRight } from 'lucide-vue-next'
+import { ChevronDown, ChevronRight, ShieldCheck } from 'lucide-vue-next'
 import {
   CORE_PERMISSION_PRESET_DESCRIPTIONS,
   CORE_PERMISSION_PRESET_LABELS,
@@ -290,6 +291,10 @@ onUnmounted(() => {
 .core-runtime-menu__chevron {
   flex: 0 0 auto;
   color: color-mix(in srgb, var(--text) 58%, transparent);
+}
+
+.core-runtime-menu__compact-icon {
+  display: none;
 }
 
 .core-runtime-menu__panel {
@@ -496,8 +501,23 @@ onUnmounted(() => {
   to { opacity: 1; transform: translateX(0); }
 }
 
-@media (max-width: 560px) {
-  .core-runtime-menu__trigger { max-width: 42vw; }
+@media (max-width: 720px) {
+  .core-runtime-menu__trigger {
+    width: 28px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .core-runtime-menu__mode,
+  .core-runtime-menu__permission,
+  .core-runtime-menu__separator,
+  .core-runtime-menu__chevron {
+    display: none;
+  }
+
+  .core-runtime-menu__compact-icon {
+    display: block;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
