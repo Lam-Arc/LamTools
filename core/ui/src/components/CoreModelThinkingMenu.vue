@@ -521,8 +521,8 @@ function persistCollapsedProviderGroups(groups: Record<string, boolean>): void {
 }
 
 .core-model-thinking-menu__parameter {
-  grid-template-columns: auto minmax(0, max-content) auto;
-  width: max-content;
+  grid-template-columns: minmax(0, 1fr) minmax(0, max-content) auto;
+  width: 100%;
   max-width: 224px;
   min-height: 40px;
   display: grid;
