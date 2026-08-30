@@ -403,6 +403,11 @@ async def handle_thread_read_operation(
         return CoreLiveOperationOutcome(
             response=rpc_error(request_id, code=INVALID_REQUEST, message="thread_id is required")
         )
+    session_store = getattr(getattr(context, "host", None), "session_store", None)
+    if session_store is not None and await session_store.get(thread_id) is None:
+        return CoreLiveOperationOutcome(
+            response=rpc_error(request_id, code=INVALID_REQUEST, message="thread not found")
+        )
     async with context.session_factory() as db:
         snapshot = await context.persistence.load(db, thread_id)
         events = await context.persistence.list_thread(db, thread_id=thread_id)

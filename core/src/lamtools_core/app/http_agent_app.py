@@ -39,7 +39,11 @@ from lamtools_core.runtime.observer import ObserverSupervisor
 from lamtools_core.member import MemberKit, MemberManifest
 from lamtools_core.session import build_session_record
 from lamtools_core.plugins.lifecycle import shutdown_plugin_backends
+from lamtools_core.plugins.registry import PluginStateStore, bundled_plugins_dir
+from lamtools_core.plugins.session_visibility import PluginSessionVisibility
+from lamtools_core.config.root import core_plugins_root
 
+from .base_agent import default_core_agent_plugin_roots
 from .core_db import open_core_app_db
 from .core_session_store import CoreDbSessionStore
 from .desktop_plugin_session_store import DesktopPluginSessionStore
@@ -247,11 +251,32 @@ def create_core_agent_http_app(
     # model jsonc files (models/providers are jsonc-only).
     configure_model_store_context(work_root=str(resolved_work_root))
 
+    # A session may belong to an optional plugin resource rather than Core
+    # chat. Keep such sessions out of every normal session read path unless
+    # their owning plugin is currently enabled. The gate is generic; Core
+    # never names a concrete plugin type here.
+    session_plugin_roots = (
+        [Path(item) for item in plugin_roots]
+        if plugin_roots
+        else default_core_agent_plugin_roots(resolved_work_root)
+    )
+    if core_plugins_root() not in session_plugin_roots:
+        session_plugin_roots.insert(0, core_plugins_root())
+    if bundled_plugins_dir() not in session_plugin_roots:
+        session_plugin_roots.append(bundled_plugins_dir())
+    plugin_session_visibility = PluginSessionVisibility(
+        plugin_roots=session_plugin_roots,
+        state_store=PluginStateStore(resolved_data_dir / "plugins.jsonc"),
+    )
+
     operations = OperationCatalog()
     app_state: dict[str, Any] = {}
     live_hub = CoreAppEventHub()
     runtime_task_registry = RuntimeTaskRegistry()
-    session_store = CoreDbSessionStore(lambda: app_state["core_db"])
+    session_store = CoreDbSessionStore(
+        lambda: app_state["core_db"],
+        session_visible=plugin_session_visibility,
+    )
     desktop_plugin_session_store = DesktopPluginSessionStore(resolved_data_dir / "desktop-plugin-sessions.json")
     desktop_plugin_session_lock = asyncio.Lock()
 
@@ -297,6 +322,7 @@ def create_core_agent_http_app(
             member_defaults={"session": {"member_id": runtime_spec.member_id}},
         )
         app_state["core_db"] = core_db_handle
+        core_db_handle.project_store.set_session_visibility(plugin_session_visibility)
         app_state["attachment_store"] = CoreAttachmentStore(core_db_handle.session_factory, resolved_data_dir)
         goal_manager = GoalManager(core_db_handle.goal_store)
         arrange_manager = ArrangeManager(core_db_handle.arrange_store)

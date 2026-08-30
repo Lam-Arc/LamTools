@@ -7,6 +7,9 @@
   "backend": "./backend/__init__.py",
   "tools": ["./tools.jsonc"],
   "operations": ["./operations.jsonc"],
+  "session": {
+    "legacyPrefixes": ["wf_"]
+  },
   "cli": {
     "commands": [
       {

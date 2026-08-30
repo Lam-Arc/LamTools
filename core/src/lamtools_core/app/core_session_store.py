@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from sqlalchemy import delete, select
 
@@ -25,11 +25,31 @@ from .runtime_permissions import merge_session_runtime_preferences, with_session
 
 
 class CoreDbSessionStore:
-    def __init__(self, db_provider: Callable[[], CoreAppDb]) -> None:
+    def __init__(
+        self,
+        db_provider: Callable[[], CoreAppDb],
+        *,
+        session_visible: Callable[[str, dict[str, Any]], bool] | None = None,
+    ) -> None:
         self._db_provider = db_provider
+        self._session_visible = session_visible or (lambda _session_id, _metadata: True)
+
+    def _is_visible(self, session_id: str, metadata: dict[str, Any]) -> bool:
+        try:
+            return bool(self._session_visible(session_id, metadata))
+        except Exception:  # noqa: BLE001 — unavailable plugin sessions stay isolated
+            # A broken visibility resolver must not leak a plugin-owned
+            # resource into the generic chat surface. Regular sessions remain
+            # usable so a plugin discovery failure cannot hide Core itself.
+            return not bool(str(metadata.get("owner_plugin") or "").strip())
+
+    def _row_is_visible(self, row: CoreThreadSnapshot) -> bool:
+        return self._is_visible(str(row.thread_id), _session_metadata(row.snapshot_json))
 
     async def create(self, session: SessionRecord) -> SessionRecord:
         db = self._db_provider()
+        if not self._is_visible(session.id, session.metadata):
+            raise ValueError("Session owner plugin is disabled or unavailable")
         session.metadata = with_session_runtime_preferences(session.metadata)
 
         async def write(connection):
@@ -55,6 +75,8 @@ class CoreDbSessionStore:
             row = await connection.get(CoreThreadSnapshot, session_id)
             if row is None:
                 return None
+            if not self._row_is_visible(row):
+                return None
             record = session_record_from_snapshot(row)
         if "runtime_preferences" in record.metadata:
             return record
@@ -74,7 +96,11 @@ class CoreDbSessionStore:
                     select(CoreThreadSnapshot).order_by(CoreThreadSnapshot.updated_at.desc())
                 )
             ).scalars().all()
-        records = [session_record_from_snapshot(row) for row in rows]
+        records = [
+            session_record_from_snapshot(row)
+            for row in rows
+            if self._row_is_visible(row)
+        ]
         legacy_records = [record for record in records if "runtime_preferences" not in record.metadata]
         for record in legacy_records:
             record.metadata = with_session_runtime_preferences(record.metadata)
@@ -84,11 +110,15 @@ class CoreDbSessionStore:
 
     async def update(self, session: SessionRecord) -> SessionRecord:
         db = self._db_provider()
+        if not self._is_visible(session.id, session.metadata):
+            raise KeyError(session.id)
         session.updated_at = datetime.now()
 
         async def write(connection):
             row = await connection.get(CoreThreadSnapshot, session.id)
             if row is None:
+                raise KeyError(session.id)
+            if not self._row_is_visible(row):
                 raise KeyError(session.id)
             existing = session_record_from_snapshot(row)
             session.metadata = _canonicalize_project_metadata(existing.metadata, session.metadata)
@@ -116,6 +146,8 @@ class CoreDbSessionStore:
         async def write(connection):
             row = await connection.get(CoreThreadSnapshot, session_id)
             if row is None:
+                return None
+            if not self._row_is_visible(row):
                 return None
             record = session_record_from_snapshot(row)
             if (
@@ -152,6 +184,8 @@ class CoreDbSessionStore:
             row = await connection.get(CoreThreadSnapshot, session_id)
             if row is None:
                 return False
+            if not self._row_is_visible(row):
+                return False
             await delete_session_records(connection, [session_id])
             return True
 
@@ -163,6 +197,8 @@ class CoreDbSessionStore:
         async def write(connection):
             row = await connection.get(CoreThreadSnapshot, message.session_id)
             if row is None:
+                raise KeyError(message.session_id)
+            if not self._row_is_visible(row):
                 raise KeyError(message.session_id)
             state = dict(row.snapshot_json or {})
             messages = list(state.get("messages") or [])
@@ -180,6 +216,8 @@ class CoreDbSessionStore:
         async with db.session_factory() as connection:
             row = await connection.get(CoreThreadSnapshot, session_id)
         if row is None:
+            return []
+        if not self._row_is_visible(row):
             return []
         raw_messages = (row.snapshot_json or {}).get("messages") or []
         records = [_message_from_dict(item) for item in raw_messages if isinstance(item, dict)]
@@ -200,6 +238,18 @@ def _session_state(session: SessionRecord, *, messages=None) -> dict:
     if messages is not None:
         state["messages"] = messages
     return state
+
+
+def _session_metadata(snapshot: object) -> dict[str, Any]:
+    """Extract metadata without materializing the session resource.
+
+    Plugin-owned sessions must be gated before runtime-preference migration or
+    any other normal session hydration is attempted.
+    """
+    state = snapshot if isinstance(snapshot, dict) else {}
+    session = state.get("session") if isinstance(state.get("session"), dict) else {}
+    metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
+    return dict(metadata)
 
 
 async def _persist_legacy_runtime_preferences(db: CoreAppDb, *records: SessionRecord) -> None:
