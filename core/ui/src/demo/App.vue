@@ -913,8 +913,8 @@ const {
 
 const modeOptions = computed(() =>
   activePluginMode.value ? [] : [
-    { value: 'consider', label: 'consider' },
-    { value: 'execute', label: 'execute' },
+    { value: 'consider', label: '思索' },
+    { value: 'execute', label: '执行' },
   ]
 )
 const runtimeModeLabel = computed(() => (
