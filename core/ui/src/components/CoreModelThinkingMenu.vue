@@ -602,7 +602,7 @@ function persistCollapsedProviderGroups(groups: Record<string, boolean>): void {
   to { opacity: 1; transform: translateX(0); }
 }
 
-@media (max-width: 720px) {
+@container composer (max-width: 480px) {
   .core-model-thinking-menu__trigger {
     width: 28px;
     padding: 0;

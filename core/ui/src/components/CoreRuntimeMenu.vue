@@ -501,7 +501,7 @@ onUnmounted(() => {
   to { opacity: 1; transform: translateX(0); }
 }
 
-@media (max-width: 720px) {
+@container composer (max-width: 480px) {
   .core-runtime-menu__trigger {
     width: 28px;
     padding: 0;

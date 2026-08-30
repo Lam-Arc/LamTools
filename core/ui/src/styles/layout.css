@@ -133,6 +133,7 @@
   --text: var(--theme-composer-text);
   --composer-side-width: 58px;
   --composer-full-width: min(var(--content-width), calc(100vw - var(--main-left) - var(--main-right) - var(--main-x-padding) - var(--main-x-padding) - 2px));
+  container: composer / inline-size;
   position: fixed;
   left: calc(var(--main-left) + (100vw - var(--main-left) - var(--main-right)) / 2);
   bottom: 16px;
