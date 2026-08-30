@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from uuid import uuid4
 
 from sqlalchemy import select
@@ -16,6 +16,7 @@ from lamtools_core.session import SessionRecord
 from .core_db import CoreProject, CoreThreadSnapshot
 from .core_session_store import delete_session_records, session_record_from_snapshot, session_snapshot
 from .sqlite_write import SQLiteWriteCoordinator
+from .runtime_permissions import with_session_runtime_preferences
 
 
 @dataclass(frozen=True)
@@ -75,9 +76,26 @@ def write_workspace_agents_md(work_root: Path | str, content: str) -> dict[str, 
 
 
 class CoreProjectStore:
-    def __init__(self, session_factory: async_sessionmaker, write_coordinator: SQLiteWriteCoordinator) -> None:
+    def __init__(
+        self,
+        session_factory: async_sessionmaker,
+        write_coordinator: SQLiteWriteCoordinator,
+        *,
+        session_visible: Callable[[str, dict[str, Any]], bool] | None = None,
+    ) -> None:
         self.session_factory = session_factory
         self.write_coordinator = write_coordinator
+        self._session_visible = session_visible or (lambda _session_id, _metadata: True)
+
+    def set_session_visibility(self, session_visible: Callable[[str, dict[str, Any]], bool]) -> None:
+        """Attach the host's live plugin-session gate after database startup."""
+        self._session_visible = session_visible
+
+    def _is_session_visible(self, session: SessionRecord) -> bool:
+        try:
+            return bool(self._session_visible(session.id, session.metadata))
+        except Exception:  # noqa: BLE001 — keep unavailable plugin resources out of chat UI
+            return not bool(str(session.metadata.get("owner_plugin") or "").strip())
 
     async def create(self, work_root: Path | str, name: str | None = None) -> tuple[CoreProjectRecord, bool]:
         name = _normalize_project_name(name)
@@ -182,7 +200,7 @@ class CoreProjectStore:
                     member_id="core",
                     title=session_title,
                     status="idle",
-                    metadata={"work_root": project.work_root},
+                    metadata=with_session_runtime_preferences({"work_root": project.work_root}),
                 )
                 db.add(
                     CoreThreadSnapshot(
@@ -200,6 +218,7 @@ class CoreProjectStore:
                     **session.metadata,
                     "work_root": project.work_root,
                 }
+                session.metadata = with_session_runtime_preferences(session.metadata)
                 state = dict(row.snapshot_json or {})
                 state["session"] = {
                     "member_id": session.member_id,
@@ -222,7 +241,8 @@ class CoreProjectStore:
             project = await db.get(CoreProject, project_id)
             if project is None:
                 return []
-            return await _project_sessions(db, project.work_root)
+            sessions = await _project_sessions(db, project.work_root)
+        return [session for session in sessions if self._is_session_visible(session)]
 
     async def delete_with_sessions(self, project_id: str) -> bool:
         return await self._delete_with_sessions(project_id)
@@ -305,7 +325,7 @@ async def _create_project_session(db: Any, project: CoreProject, *, title: str) 
         member_id="core",
         title=title,
         status="idle",
-        metadata={"work_root": project.work_root},
+        metadata=with_session_runtime_preferences({"work_root": project.work_root}),
     )
     db.add(
         CoreThreadSnapshot(

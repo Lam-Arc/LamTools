@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
 import sys
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from lamtools_core import cli as core_cli
+from lamtools_core.app.core_db import CoreHandoffContext, CoreHistoryEntry, open_core_app_db
+from lamtools_core.export import build_handoff_context
 from lamtools_core.cli import CoreCliRunOptions, build_parser, load_llm_config, main, run_core_cli_task
 from lamtools_core.llm import LLMRequest, LLMResponse, LLMStreamEvent, LLMToolCall, LLMUsage
 from lamtools_core.llm.shallow_thinking import SHALLOW_THINKING_PROMPT
@@ -196,6 +200,19 @@ def test_core_cli_parser_exposes_session_query_commands(tmp_path: Path) -> None:
     show_args = parser.parse_args(
         ["session", "show", "thread-cli", "--core-db", str(tmp_path / "core.db"), "--raw"]
     )
+    export_args = parser.parse_args(
+        [
+            "session",
+            "export",
+            "thread-cli",
+            "--format",
+            "zip",
+            "--output",
+            str(tmp_path / "thread.zip"),
+            "--core-db",
+            str(tmp_path / "core.db"),
+        ]
+    )
 
     assert list_args.command == "session"
     assert list_args.session_command == "list"
@@ -210,6 +227,97 @@ def test_core_cli_parser_exposes_session_query_commands(tmp_path: Path) -> None:
     assert show_args.thread_id == "thread-cli"
     assert show_args.core_db == str(tmp_path / "core.db")
     assert show_args.raw is True
+    assert export_args.command == "session"
+    assert export_args.session_command == "export"
+    assert export_args.thread_id == "thread-cli"
+    assert export_args.format == "zip"
+    assert export_args.output == str(tmp_path / "thread.zip")
+    assert export_args.core_db == str(tmp_path / "core.db")
+
+
+def test_core_cli_session_export_writes_transcript_and_full_zip(tmp_path: Path, capsys) -> None:
+    core_db = tmp_path / "core.db"
+
+    async def seed() -> None:
+        db = await open_core_app_db(core_db)
+        try:
+            async with db.session_factory() as connection:
+                connection.add(CoreHistoryEntry(
+                    thread_id="thread-export",
+                    seq=1,
+                    message_json={"role": "user", "content": "hello from CLI"},
+                ))
+                await connection.commit()
+        finally:
+            await db.close()
+
+    asyncio.run(seed())
+    markdown = tmp_path / "thread.md"
+    assert main([
+        "session", "export", "thread-export", "--format", "markdown",
+        "--output", str(markdown), "--core-db", str(core_db),
+    ]) == 0
+    assert "hello from CLI" in markdown.read_text(encoding="utf-8")
+    assert "[session export]" in capsys.readouterr().out
+
+    archive = tmp_path / "thread.zip"
+    assert main([
+        "session", "export", "thread-export", "--format", "zip",
+        "--output", str(archive), "--core-db", str(core_db),
+    ]) == 0
+    assert zipfile.is_zipfile(archive)
+    with zipfile.ZipFile(archive) as exported:
+        assert "manifest.json" in exported.namelist()
+        assert json.loads(exported.read("manifest.json"))["thread_id"] == "thread-export"
+
+
+def test_core_cli_session_export_supports_explicit_three_tier_modes(tmp_path: Path, capsys) -> None:
+    core_db = tmp_path / "core.db"
+
+    async def seed() -> None:
+        db = await open_core_app_db(core_db)
+        try:
+            async with db.session_factory() as connection:
+                connection.add(CoreHistoryEntry(
+                    thread_id="thread-export-modes",
+                    seq=1,
+                    message_json={"role": "user", "content": "hello from modes"},
+                ))
+                connection.add(CoreHandoffContext(
+                    thread_id="thread-export-modes",
+                    context_json=build_handoff_context([
+                        {"role": "user", "content": "continue from modes"},
+                    ]),
+                ))
+                await connection.commit()
+        finally:
+            await db.close()
+
+    asyncio.run(seed())
+
+    transcript = tmp_path / "modes.jsonl"
+    assert main([
+        "session", "export", "thread-export-modes",
+        "--mode", "transcript", "--format", "jsonl",
+        "--output", str(transcript), "--core-db", str(core_db),
+    ]) == 0
+    assert json.loads(transcript.read_text(encoding="utf-8"))["text"] == "hello from modes"
+    capsys.readouterr()
+
+    handoff = tmp_path / "modes-handoff.json"
+    assert main([
+        "session", "export", "thread-export-modes",
+        "--mode", "handoff", "--output", str(handoff), "--core-db", str(core_db),
+    ]) == 0
+    assert json.loads(handoff.read_text(encoding="utf-8"))["schema"] == "lamtools.handoff.v1"
+    capsys.readouterr()
+
+    archive = tmp_path / "modes.zip"
+    assert main([
+        "session", "export", "thread-export-modes",
+        "--mode", "full", "--output", str(archive), "--core-db", str(core_db),
+    ]) == 0
+    assert zipfile.is_zipfile(archive)
 
 
 def test_core_project_cli_creates_workspace_and_round_trips_agents(monkeypatch, tmp_path: Path, capsys) -> None:
@@ -226,6 +334,11 @@ def test_core_project_cli_creates_workspace_and_round_trips_agents(monkeypatch, 
     assert created["project"]["work_root"] == str(workspace.resolve())
     assert created["session"]["metadata"] == {
         "work_root": str(workspace.resolve()),
+        "runtime_preferences": {
+            "base_tier": "full_edit",
+            "base_allow_access_outside_workdir": False,
+            "permission_preset": "ask",
+        },
     }
 
     assert main(["project", "agents", "set", project_id, str(rules)]) == 0

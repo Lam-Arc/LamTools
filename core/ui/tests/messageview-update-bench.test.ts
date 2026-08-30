@@ -33,7 +33,7 @@ function bigLiveMessage(text: string) {
 describe('big live message update bench', () => {
 	it('measures per-tick update cost for a 300-part live message', async () => {
 		const base = bigLiveMessage('')
-		const wrapper = mount(MessageView, { props: { msg: base, processExpandedIds: new Set<string>(), typingMessageIds: new Set<string>() } })
+		const wrapper = mount(MessageView, { props: { msg: base, processExpandedIds: new Set<string>() } })
 		await wrapper.vm.$nextTick()
 
 		const runs = 30

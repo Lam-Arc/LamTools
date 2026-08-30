@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
@@ -121,6 +122,11 @@ def build_queue_update_plan(
             input_items=input_items,
             runtime_input_items=runtime_input_items,
             mode=mode or str(item.get("mode") or "next_turn"),
+            runtime_snapshot=(
+                dict(item.get("runtime_snapshot"))
+                if isinstance(item.get("runtime_snapshot"), dict)
+                else None
+            ),
         ),
     )
 
@@ -157,9 +163,10 @@ def queue_item_payload(
     runtime_input_items: list[dict[str, Any]] | None = None,
     mode: str = "next_turn",
     status: str = "queued",
+    runtime_snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     runtime_items = runtime_input_items if runtime_input_items is not None else input_items
-    return {
+    payload = {
         "type": "queue",
         "queue_item_id": queue_item_id,
         "status": status,
@@ -167,6 +174,12 @@ def queue_item_payload(
         "input": input_items,
         "runtime_input": runtime_items,
     }
+    # A queue item owns the exact runtime configuration captured when it was
+    # accepted.  Keep this optional for old callers/old queue events, while
+    # ensuring new snapshots do not alias mutable request dictionaries.
+    if isinstance(runtime_snapshot, dict):
+        payload["runtime_snapshot"] = deepcopy(runtime_snapshot)
+    return payload
 
 
 def queue_delete_payload(*, queue_item_id: str, status: str = "cancelled") -> dict[str, Any]:
@@ -193,6 +206,11 @@ def queue_dispatch_payload(
         runtime_input_items=runtime_input_items,
         mode=str(item.get("mode") or "next_turn"),
         status="dispatched",
+        runtime_snapshot=(
+            dict(item.get("runtime_snapshot"))
+            if isinstance(item.get("runtime_snapshot"), dict)
+            else None
+        ),
     )
     return queue_item_id, input_items, runtime_input_items, payload
 

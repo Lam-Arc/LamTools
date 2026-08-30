@@ -53,6 +53,32 @@ export interface CoreSkillInputItem {
 
 export type CoreAppInputItem = CoreTextInputItem | CoreAttachmentInputItem | CoreSkillInputItem
 
+/**
+ * Immutable runtime configuration captured when a turn or queue item is
+ * accepted. Permission fields are intentionally explicit so consumers do not
+ * fall back to the current Composer/global settings while dispatching or
+ * continuing work.
+ */
+export interface CoreAppRuntimeSnapshot {
+  permission_preset?: 'ask' | 'auto' | 'full_access'
+  active_tier?: 'read_only' | 'limited_edit' | 'full_edit' | null
+  tier_tools?: Record<string, string[]> | null
+  approval_policy?: 'require' | 'auto_approve'
+  allow_access_outside_workdir?: boolean
+  active_mode?: string | null
+  model_id?: string | null
+  thinking_enabled?: boolean
+  thinking_budget?: number
+  reasoning_effort?: string
+  shallow_thinking_enabled?: boolean
+  context_window_tokens?: number
+  max_tokens?: number
+  temperature?: number
+  compact_trigger_tokens?: number
+  compact_limit_tokens?: number
+  [key: string]: unknown
+}
+
 export interface CoreAppCommandCatalogItem {
   name: string
   title?: string
@@ -70,6 +96,7 @@ export interface CoreAppTurn {
   last_seq?: number
   items: string[]
   input?: CoreAppInputItem[] | unknown
+  runtime_snapshot?: CoreAppRuntimeSnapshot
   [key: string]: unknown
 }
 
@@ -97,6 +124,7 @@ export interface CoreAppQueueItem {
   input?: CoreAppInputItem[] | unknown
   seq?: number
   last_method?: string
+  runtime_snapshot?: CoreAppRuntimeSnapshot
   [key: string]: unknown
 }
 
@@ -128,6 +156,7 @@ export interface CoreRuntimeTurn {
   status: string
   items?: string[]
   usage?: Record<string, unknown>
+  runtime_snapshot?: CoreAppRuntimeSnapshot
   [key: string]: unknown
 }
 

@@ -1,5 +1,9 @@
 import type { CoreMessage, MessagePart } from '../types'
-import { coreAppItemPartStatus, coreAppItemToMessagePart } from './messageParts.ts'
+import {
+  coreAppItemPartStatus,
+  coreAppItemToMessagePart,
+  projectAssistantMessageParts,
+} from './messageParts.ts'
 import type {
   CoreAppItem,
   CoreAppQueueItem,
@@ -196,12 +200,18 @@ function buildWorkbenchMessage(
   options: CoreWorkbenchMessageOptions,
   activeAssistant: boolean,
 ): CoreMessage {
+  const answerProjection = projectAssistantMessageParts(parts, shallow.content, {
+    live: activeAssistant || message.metadata?.live === true,
+  })
   return {
     id: message.id,
     role: message.role,
     content: shallow.content,
     timestamp: '',
     parts,
+    processParts: answerProjection.processParts,
+    answerPart: answerProjection.answerPart,
+    answerText: answerProjection.answerText,
     metadata: {
       ...(options.source ? { source: options.source } : {}),
       ...(message.metadata || {}),

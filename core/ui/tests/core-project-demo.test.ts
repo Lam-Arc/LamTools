@@ -56,7 +56,7 @@ function createWorkspace() {
 }
 
 describe('Core project workspace grouping', () => {
-  it('groups sessions by persisted project and displays its path', () => {
+  it('groups sessions by persisted project while retaining its workspace root', () => {
     const groups = buildCoreProjectGroups([project], [initialSession])
 
     expect(groups[0]).toMatchObject({ id: 'project-1', name: 'Docs', workRoot: 'E:\\docs' })

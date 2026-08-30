@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import uuid
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 import logging
+from urllib.parse import quote
 
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
@@ -28,20 +30,25 @@ from lamtools_core.config.provider_store import ProviderConfig, ProviderStore, m
 from lamtools_core.config.root import ensure_projects_root
 from lamtools_core.update.operations import build_update_operation_catalog
 from lamtools_core.attachment import CoreAttachmentStore
+from lamtools_core.export import ConversationExportService, build_handoff_context
 from lamtools_core.attachment.service import MAX_ATTACHMENT_BYTES
 from lamtools_core.runtime import RuntimeTaskRegistry
 from lamtools_core.runtime.arrange import ArrangeManager, ArrangeRunner, arranged_operation_payload
 from lamtools_core.runtime.goal import GoalManager
 from lamtools_core.runtime.observer import ObserverSupervisor
-from lamtools_core.runtime.workflow import WorkflowManager, WorkflowRunner
-from lamtools_core.project.workflow_store import WorkflowStore
 from lamtools_core.member import MemberKit, MemberManifest
+from lamtools_core.session import build_session_record
+from lamtools_core.plugins.lifecycle import shutdown_plugin_backends
+from lamtools_core.plugins.registry import PluginStateStore, bundled_plugins_dir
+from lamtools_core.plugins.session_visibility import PluginSessionVisibility
+from lamtools_core.config.root import core_plugins_root
 
+from .base_agent import default_core_agent_plugin_roots
 from .core_db import open_core_app_db
 from .core_session_store import CoreDbSessionStore
+from .desktop_plugin_session_store import DesktopPluginSessionStore
 from .default_agent import CoreAgentPaths, CoreAgentSpec, create_core_agent_operations
 from .durable_operations import register_durable_operations
-from .workflow_operations import register_workflow_operations
 from .event_store import AppEventInput
 from .factory import add_spa_fallback, create_app
 from .live_hub import CoreAppEventHub
@@ -244,11 +251,34 @@ def create_core_agent_http_app(
     # model jsonc files (models/providers are jsonc-only).
     configure_model_store_context(work_root=str(resolved_work_root))
 
+    # A session may belong to an optional plugin resource rather than Core
+    # chat. Keep such sessions out of every normal session read path unless
+    # their owning plugin is currently enabled. The gate is generic; Core
+    # never names a concrete plugin type here.
+    session_plugin_roots = (
+        [Path(item) for item in plugin_roots]
+        if plugin_roots
+        else default_core_agent_plugin_roots(resolved_work_root)
+    )
+    if core_plugins_root() not in session_plugin_roots:
+        session_plugin_roots.insert(0, core_plugins_root())
+    if bundled_plugins_dir() not in session_plugin_roots:
+        session_plugin_roots.append(bundled_plugins_dir())
+    plugin_session_visibility = PluginSessionVisibility(
+        plugin_roots=session_plugin_roots,
+        state_store=PluginStateStore(resolved_data_dir / "plugins.jsonc"),
+    )
+
     operations = OperationCatalog()
     app_state: dict[str, Any] = {}
     live_hub = CoreAppEventHub()
     runtime_task_registry = RuntimeTaskRegistry()
-    session_store = CoreDbSessionStore(lambda: app_state["core_db"])
+    session_store = CoreDbSessionStore(
+        lambda: app_state["core_db"],
+        session_visible=plugin_session_visibility,
+    )
+    desktop_plugin_session_store = DesktopPluginSessionStore(resolved_data_dir / "desktop-plugin-sessions.json")
+    desktop_plugin_session_lock = asyncio.Lock()
 
     async def execute_core_operation(request: OperationRequest) -> OperationResult:
         actual = app_state.get("operations")
@@ -292,9 +322,15 @@ def create_core_agent_http_app(
             member_defaults={"session": {"member_id": runtime_spec.member_id}},
         )
         app_state["core_db"] = core_db_handle
+        core_db_handle.project_store.set_session_visibility(plugin_session_visibility)
         app_state["attachment_store"] = CoreAttachmentStore(core_db_handle.session_factory, resolved_data_dir)
         goal_manager = GoalManager(core_db_handle.goal_store)
         arrange_manager = ArrangeManager(core_db_handle.arrange_store)
+
+        async def capture_model_context(state: Any, request: Any) -> None:
+            """Persist the exact semantic request context before model I/O."""
+            payload = build_handoff_context(getattr(request, "messages", []))
+            await core_db_handle.handoff_context_store.save(state.session_id, payload)
 
         def _resolve_model_display(model_id: str) -> str:
             # jsonc-only: resolve "<provider>/<model>" from the model store.
@@ -310,7 +346,6 @@ def create_core_agent_http_app(
             except Exception:
                 return ""
 
-        workflow_store = WorkflowStore()
         agent_operations = create_core_agent_operations(
             spec=runtime_spec,
             member_kit=member_kit,
@@ -325,11 +360,12 @@ def create_core_agent_http_app(
             runtime_task_registry=runtime_task_registry,
             goal_manager=goal_manager,
             arrange_manager=arrange_manager,
-            workflow_store=workflow_store,
+            start_plugin_lifecycle=True,
             enable_turn_checkpoints=True,
             model_display_resolver=_resolve_model_display,
             attachment_service=app_state.get("attachment_store"),
             memory_store=core_db_handle.memory_store,
+            model_context_sink=capture_model_context,
         )
         _register_core_project_operations(agent_operations, project_store=core_db_handle.project_store)
         _register_core_artifact_operations(agent_operations, project_store=core_db_handle.project_store)
@@ -465,91 +501,13 @@ def create_core_agent_http_app(
         await arrange_runner.start()
         await observer_supervisor.start()
 
-        # Workflow mode: file-backed definitions + deterministic runner. The
-        # runner streams per-node state as core/runItem events (the existing
-        # GUI reducer renders them with no new channel) and cooperatively
-        # cancels via the same runtime_task_registry the kernel uses. The
-        # toolbox (built per-turn) reads enrolled workflows from the same store
-        # via a cached provider so exposing one makes it callable next turn.
-        workflow_manager = WorkflowManager(workflow_store)
-
-        async def _emit_workflow_event(event: Any) -> None:
-            async def _write(db: Any) -> Any:
-                return await core_db_handle.persistence.append(
-                    db,
-                    AppEventInput(
-                        thread_id=event.thread_id,
-                        method="core/runItem",
-                        turn_id=event.turn_id,
-                        item_id=event.item_id,
-                        client_message_id=uuid.uuid4().hex,
-                        payload=event.to_dict(),
-                    ),
-                )
-
-            try:
-                envelope = await core_db_handle.persistence.write(_write)
-                await live_hub.publish(envelope)
-            except Exception:  # noqa: BLE001 — streaming must never break a run
-                pass
-
-        # Build a sub-agent runner for workflow Agent nodes. Lightweight: the
-        # runner spins up a per-call CoreLoopKernel with the same LLM client and
-        # work_root; Agent node configs may override model/mode per call.
-        from lamtools_core.tool.sub_agent_runner import KernelSubAgentRunner
-
-        workflow_sub_agent_runner = KernelSubAgentRunner(
-            work_root=str(resolved_work_root),
-            llm_client=llm_client,
-            model_id=config.model_id,
-            approval_policy="require",
-            session_prefix="workflow-sub-agent",
-        )
-
-        workflow_runner = WorkflowRunner(
-            llm_client=llm_client,
-            sub_agent_runner=workflow_sub_agent_runner,
-            emit=_emit_workflow_event,
-            runtime_task_registry=runtime_task_registry,
-            workflow_store=workflow_store,
-        )
-
-        def _list_tool_specs() -> list[Any]:
-            try:
-                from lamtools_core.tool.default_toolbox import default_core_tool_specs
-
-                return default_core_tool_specs()
-            except Exception:  # noqa: BLE001
-                return []
-
-        register_workflow_operations(
-            agent_operations,
-            workflow_manager=workflow_manager,
-            runner=workflow_runner,
-            runtime_task_registry=runtime_task_registry,
-            list_tool_specs=_list_tool_specs,
-        )
-        app_state["workflow_store"] = workflow_store
-        app_state["workflow_manager"] = workflow_manager
-        app_state["workflow_runner"] = workflow_runner
-
-        # File watcher: poll the workflow store mtime signature and broadcast
-        # workflow/changed events so canvases refresh on external edits.
-        from lamtools_core.runtime.workflow_watcher import WorkflowFileWatcher
-
-        workflow_watcher = WorkflowFileWatcher(
-            workflow_store,
-            live_hub,
-            poll_interval=2.0,
-            work_roots=[str(resolved_work_root)],
-        )
-        await workflow_watcher.start()
-        app_state["workflow_watcher"] = workflow_watcher
+        # Optional plugin backends are loaded and started by
+        # create_core_agent_operations via the generic plugin lifecycle. Keep
+        # only the handles in app state so shutdown uses the same boundary.
+        app_state["plugin_runtimes"] = getattr(agent_operations, "plugin_runtimes", [])
 
     async def shutdown_core_agent() -> None:
-        workflow_watcher = app_state.get("workflow_watcher")
-        if workflow_watcher is not None:
-            await workflow_watcher.stop()
+        await shutdown_plugin_backends(app_state.get("plugin_runtimes") or [])
         observer_supervisor = app_state.get("observer_supervisor")
         if observer_supervisor is not None:
             await observer_supervisor.stop()
@@ -605,6 +563,10 @@ def create_core_agent_http_app(
             operations=operations,
             project_store=lambda: app_state["core_db"].project_store,
             publish_event=live_hub.publish,
+            export_service=lambda: ConversationExportService(
+                app_state["core_db"].session_factory,
+                handoff_context_store=app_state["core_db"].handoff_context_store,
+            ),
         ),
         prefix="/api/core",
     )
@@ -617,6 +579,103 @@ def create_core_agent_http_app(
     @app.get("/api/core/config/providers")
     async def list_config_providers() -> dict[str, Any]:
         return {"providers": _list_llm_provider_configs()}
+
+    async def _desktop_plugin_entries(*, enabled_only: bool = True) -> list[dict[str, Any]]:
+        actual = app_state.get("operations")
+        if not isinstance(actual, OperationCatalog):
+            raise HTTPException(status_code=503, detail="Core Agent is not ready")
+        result = await actual.execute("plugin.list", {})
+        if result.status != "ok":
+            raise HTTPException(status_code=503, detail=str(result.payload.get("error") or "Plugin registry unavailable"))
+        plugins = result.payload.get("plugins") if isinstance(result.payload, dict) else []
+        if not isinstance(plugins, list):
+            return []
+        return [
+            item
+            for item in plugins
+            if isinstance(item, dict)
+            and isinstance(item.get("desktop"), dict)
+            and (not enabled_only or item.get("enabled") is True)
+        ]
+
+    @app.get("/api/core/desktop-plugins")
+    async def list_desktop_plugins() -> dict[str, Any]:
+        plugins: list[dict[str, Any]] = []
+        for item in await _desktop_plugin_entries():
+            desktop = dict(item["desktop"])
+            entry = Path(str(desktop.get("entry") or ""))
+            if not entry.is_file():
+                continue
+            name = str(item.get("name") or "")
+            plugins.append({
+                "name": name,
+                "title": str(desktop.get("title") or name),
+                "entry_url": (
+                    f"/api/core/desktop-plugins/{quote(name, safe='')}/assets/"
+                    f"{quote(entry.name, safe='')}"
+                ),
+                "window": desktop.get("window") if isinstance(desktop.get("window"), dict) else {},
+                "fileDrop": desktop.get("fileDrop") is True,
+            })
+        return {"plugins": plugins}
+
+    @app.post("/api/core/desktop-plugins/{plugin_id}/session")
+    async def ensure_desktop_plugin_session(plugin_id: str) -> dict[str, Any]:
+        plugin_id = str(plugin_id).strip()
+        candidates = await _desktop_plugin_entries(enabled_only=False)
+        plugin = next(
+            (item for item in candidates if str(item.get("name") or "") == plugin_id),
+            None,
+        )
+        if plugin is None or plugin.get("enabled") is not True:
+            raise HTTPException(status_code=404, detail="Enabled desktop plugin not found")
+
+        async with desktop_plugin_session_lock:
+            mapped_session_id = desktop_plugin_session_store.get(plugin_id)
+            if mapped_session_id:
+                existing = await session_store.get(mapped_session_id)
+                if existing is not None:
+                    return {
+                        "plugin_id": plugin_id,
+                        "session_id": existing.id,
+                        "created": False,
+                        "session": existing.to_dict(),
+                    }
+                desktop_plugin_session_store.delete(plugin_id)
+
+            desktop = plugin.get("desktop") if isinstance(plugin.get("desktop"), dict) else {}
+            record = build_session_record(
+                member_id=runtime_spec.member_id,
+                title=str(desktop.get("title") or plugin_id),
+                metadata={"desktop_plugin_id": plugin_id, "source": "desktop_plugin"},
+            )
+            await session_store.create(record)
+            desktop_plugin_session_store.set(plugin_id, record.id)
+            return {
+                "plugin_id": plugin_id,
+                "session_id": record.id,
+                "created": True,
+                "session": record.to_dict(),
+            }
+
+    @app.get("/api/core/desktop-plugins/{plugin_name}/assets/{asset_path:path}")
+    async def desktop_plugin_asset(plugin_name: str, asset_path: str) -> FileResponse:
+        plugin = next(
+            (item for item in await _desktop_plugin_entries() if str(item.get("name") or "") == plugin_name),
+            None,
+        )
+        if plugin is None:
+            raise HTTPException(status_code=404, detail="Desktop plugin not found")
+        desktop = plugin.get("desktop")
+        entry = Path(str(desktop.get("entry") or "")).resolve() if isinstance(desktop, dict) else Path()
+        desktop_root = entry.parent
+        target = (desktop_root / asset_path).resolve()
+        if not target.is_relative_to(desktop_root) or not target.is_file():
+            raise HTTPException(status_code=404, detail="Desktop plugin asset not found")
+        # Desktop plugins can be updated independently while Core keeps the
+        # same loopback route. Do not let WebView2 pin stale HTML/JS in its
+        # memory cache across host reloads.
+        return FileResponse(target, headers={"Cache-Control": "no-store"})
 
     def attachment_store() -> CoreAttachmentStore:
         store = app_state.get("attachment_store")
@@ -1022,7 +1081,6 @@ def _register_loadtools_operations(catalog: OperationCatalog) -> None:
         load_loadtools,
         serialize_loadtools,
     )
-    from lamtools_core.tool.workflow_build_tools import workflow_build_tool_specs
 
     def _config_path() -> Path:
         return core_config_file("loadtools.jsonc")
@@ -1039,8 +1097,16 @@ def _register_loadtools_operations(catalog: OperationCatalog) -> None:
         specs = [
             *default_core_tool_specs(),
             *durable_tool_specs(goal=True, arrange=True),
-            *workflow_build_tool_specs(),
         ]
+        # Plugin backends contribute their own model-facing tools. Read the
+        # normalized runtime handles exposed by the generic operation catalog
+        # instead of importing any plugin implementation from Core.
+        for handle in getattr(catalog, "plugin_runtimes", []) or []:
+            runtime_specs = getattr(handle.value, "tool_specs", [])
+            if callable(runtime_specs):
+                runtime_specs = runtime_specs()
+            if isinstance(runtime_specs, (list, tuple)):
+                specs.extend(runtime_specs)
         seen: set[str] = set()
         result: list[dict[str, str]] = []
         for spec in specs:

@@ -7,7 +7,10 @@ from typing import Any
 
 import pytest
 
-from lamtools_core.runtime.workflow_watcher import WorkflowFileWatcher
+from lamtools_core.plugins.bundled.workflow.backend.watcher import WorkflowFileWatcher
+from lamtools_core.plugins.bundled.workflow.backend import WorkflowPluginRuntime
+from lamtools_core.plugins.bundled.workflow.backend.runtime import WorkflowManager, WorkflowRunner
+from lamtools_core.plugins.context import PluginContext
 
 
 class FakeHub:
@@ -113,3 +116,32 @@ async def test_stop_terminates_poll_loop():
     after_stop = store.accesses
     await asyncio.sleep(0.15)
     assert store.accesses == after_stop
+
+
+@pytest.mark.asyncio
+async def test_workflow_plugin_stop_stops_watcher_and_disables_old_provider():
+    store = FakeStore({"": "s-1"})
+    hub = FakeHub()
+    context = PluginContext(work_root=".", event_bus=hub)
+    runtime = WorkflowPluginRuntime(
+        context=context,
+        store=store,  # type: ignore[arg-type]
+        manager=WorkflowManager(store),
+        runner=WorkflowRunner(),
+    )
+
+    await runtime.start()
+    assert runtime.watcher is not None
+    await asyncio.sleep(0.15)
+    before_stop = store.accesses
+
+    await runtime.stop()
+    assert runtime.watcher is None
+    assert runtime.workflow_tool_provider(".").specs == []
+    await asyncio.sleep(0.15)
+    assert store.accesses == before_stop
+
+    # The same runtime object can be re-enabled by PluginRuntimeManager.
+    await runtime.start()
+    assert runtime.watcher is not None
+    await runtime.stop()

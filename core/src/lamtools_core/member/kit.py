@@ -27,7 +27,7 @@ class VerificationPolicy:
     ``required`` establishes the minimum runtime invariant: a task cannot
     complete without a successful, non-empty tool observation. Members may
     narrow eligible tools or categories and tune attempts through metadata;
-    semantic claim checks remain member-owned workflows.
+    semantic claim checks remain member-owned processes.
     """
 
     name: str = "default"

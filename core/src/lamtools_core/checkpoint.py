@@ -26,13 +26,20 @@ from typing import Any, Literal, Protocol, cast
 import uuid
 from weakref import WeakValueDictionary
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from lamtools_core.app.core_db import (
     CoreAppEvent,
     CoreCheckpoint,
+    CoreCheckpointAttachmentRef,
     CoreCheckpointBlob,
+    CoreCheckpointBlobRef,
+    CoreCheckpointV2,
+    CoreCheckpointV2Materialized,
+    CoreCheckpointV2SessionHistory,
+    CoreCheckpointV2SessionMessages,
+    CoreHistoryEntry,
     CoreDbBase,
     CoreRestoreOperation,
     CoreRuntimeSession,
@@ -566,7 +573,7 @@ class CoreCheckpointCoordinator:
             fork_session_id = str(new_session_id or uuid.uuid4().hex).strip()
             if not fork_session_id or _root_session_id(fork_session_id) != fork_session_id:
                 raise ValueError("new_session_id must identify a main session")
-            conversation = copy.deepcopy(dict(target.conversation_json or {}))
+            conversation = await self._conversation_payload_for_fork(target)
             now = datetime.now()
             fork_checkpoint_id = uuid.uuid4().hex
             source_session_id = target.session_id
@@ -593,15 +600,133 @@ class CoreCheckpointCoordinator:
                     label="分叉到新会话",
                     work_root=target.work_root,
                     manifest_hash=target.manifest_hash,
-                    conversation_json=forked.conversation,
+                    conversation_json={},
                     status="ready",
                     created_at=now,
                 )
                 db.add(row)
                 await db.flush()
+                fork_snapshot = await db.get(CoreThreadSnapshot, fork_session_id)
+                fork_state = dict(fork_snapshot.snapshot_json or {}) if fork_snapshot is not None else {}
+                db.add(CoreCheckpointV2SessionMessages(
+                    checkpoint_id=fork_checkpoint_id,
+                    messages_json=list(fork_state.get("messages") or []),
+                    created_at=now,
+                ))
+                runtime = await db.get(CoreRuntimeSession, fork_session_id)
+                db.add(CoreCheckpointV2SessionHistory(
+                    checkpoint_id=fork_checkpoint_id,
+                    history_json=list(runtime.history_json or []) if runtime is not None else [],
+                    created_at=now,
+                ))
+                event_seq = int((await db.execute(
+                    select(func.coalesce(func.max(CoreAppEvent.seq), 0)).where(
+                        CoreAppEvent.thread_id == fork_session_id,
+                    )
+                )).scalar_one())
+                history_seq = int((await db.execute(
+                    select(func.coalesce(func.max(CoreHistoryEntry.seq), 0)).where(
+                        CoreHistoryEntry.thread_id == fork_session_id,
+                    )
+                )).scalar_one())
+                db.add(CoreCheckpointV2(
+                    id=fork_checkpoint_id,
+                    root_session_id=fork_session_id,
+                    session_id=fork_session_id,
+                    parent_checkpoint_id=target.id,
+                    turn_id=f"fork:{target.id}",
+                    actor_kind="fork",
+                    reason="session_fork",
+                    status="ready",
+                    event_seq=event_seq,
+                    history_seq=history_seq,
+                    runtime_state_json=dict(runtime.runtime_state_json or {}) if runtime is not None else {},
+                    workspace_manifest_id=target.manifest_hash,
+                    metadata_json={"v2_only": True},
+                    created_at=now,
+                ))
                 return replace(_checkpoint_ref(row), session_payload=dict(forked.session_payload))
 
             return await self.write_coordinator.run(write)
+
+    async def _conversation_payload_for_fork(self, target: CoreCheckpoint) -> dict[str, Any]:
+        """Build the temporary fork input without persisting a legacy blob."""
+        if target.conversation_json:
+            return copy.deepcopy(dict(target.conversation_json))
+        async with self.session_factory() as db:
+            checkpoint = await db.get(CoreCheckpointV2, target.id)
+            if checkpoint is None:
+                raise LookupError("V2 checkpoint not found")
+            materialized = await db.get(CoreCheckpointV2Materialized, target.id)
+            if materialized is not None:
+                runtime_payload = copy.deepcopy(dict(materialized.runtime_json or {})) if materialized.runtime_present else None
+                projection_payload = copy.deepcopy(dict(materialized.projection_json or {})) if materialized.projection_present else None
+                if materialized.events_json is not None:
+                    events_payload = copy.deepcopy(list(materialized.events_json or []))
+                else:
+                    events_payload = await self._event_payloads_until(db, target.session_id, checkpoint.event_seq)
+                session_messages = await db.get(CoreCheckpointV2SessionMessages, target.id)
+                if session_messages is not None:
+                    if projection_payload is None:
+                        projection_payload = {
+                            "snapshot_seq": 0,
+                            "snapshot_json": CoreAppSnapshotProjector().empty(target.session_id),
+                        }
+                    projection_state = dict(projection_payload.get("snapshot_json") or {})
+                    projection_state["messages"] = copy.deepcopy(list(session_messages.messages_json or []))
+                    projection_payload["snapshot_json"] = projection_state
+                history_payload = list(materialized.history_json or [])
+                if isinstance(runtime_payload, dict):
+                    runtime_payload["history_json"] = copy.deepcopy(history_payload)
+                return {
+                    "session_id": target.session_id,
+                    "runtime": runtime_payload,
+                    "projection": projection_payload,
+                    "events": events_payload,
+                }
+
+            runtime = await db.get(CoreRuntimeSession, target.session_id)
+            runtime_payload = _runtime_payload(runtime)
+            boundary_history = await db.get(CoreCheckpointV2SessionHistory, target.id)
+            if boundary_history is not None:
+                history_payload = [dict(item) for item in list(boundary_history.history_json or []) if isinstance(item, dict)]
+            else:
+                history_rows = list((await db.execute(
+                    select(CoreHistoryEntry).where(
+                        CoreHistoryEntry.thread_id == target.session_id,
+                        CoreHistoryEntry.seq <= checkpoint.history_seq,
+                    ).order_by(CoreHistoryEntry.seq.asc())
+                )).scalars())
+                history_payload = [dict(row.message_json or {}) for row in history_rows]
+            if isinstance(runtime_payload, dict):
+                runtime_payload["history_json"] = history_payload
+            snapshot = await SqlAlchemyThreadSnapshotStore(
+                CoreThreadSnapshot,
+                item_model=CoreThreadSnapshotItem,
+            ).load(db, target.session_id)
+            session_messages = await db.get(CoreCheckpointV2SessionMessages, target.id)
+            projection_payload = _projection_payload(snapshot)
+            if session_messages is not None:
+                projection_state = dict(projection_payload.get("snapshot_json") or {})
+                projection_state["messages"] = copy.deepcopy(list(session_messages.messages_json or []))
+                projection_payload["snapshot_json"] = projection_state
+            return {
+                "session_id": target.session_id,
+                "runtime": runtime_payload,
+                "projection": projection_payload,
+                "events": await self._event_payloads_until(db, target.session_id, checkpoint.event_seq),
+            }
+
+    @staticmethod
+    async def _event_payloads_until(db: Any, session_id: str, event_seq: int) -> list[dict[str, Any]]:
+        rows = list((await db.execute(
+            select(CoreAppEvent).where(
+                CoreAppEvent.thread_id == session_id,
+                CoreAppEvent.seq <= int(event_seq or 0),
+            ).order_by(CoreAppEvent.seq.asc())
+        )).scalars())
+        store = SqlAlchemyAppEventStore(CoreAppEvent)
+        return [store._to_envelope(row).to_dict() for row in rows]
 
     async def _capture(
         self,
@@ -623,7 +748,6 @@ class CoreCheckpointCoordinator:
         entries: dict[str, Any] = {}
         blobs: list[tuple[str, int, str]] = []
         root_session_id = _root_session_id(session_id)
-        conversation = await self.conversation_backend.capture(session_id, exclude_turn_id=turn_id)
         checkpoint_id = uuid.uuid4().hex
         created_at = datetime.now()
 
@@ -654,11 +778,64 @@ class CoreCheckpointCoordinator:
                 label=label,
                 work_root=str(self.work_root),
                 manifest_hash=manifest_hash,
-                conversation_json=conversation,
+                conversation_json={},
                 status="ready",
                 created_at=created_at,
             )
             db.add(row)
+            # V2 checkpoints are metadata-only.  Exclude the turn currently
+            # being opened, matching the old capture semantics without ever
+            # materializing the conversation/event/snapshot payload.
+            event_seq = int((await db.execute(
+                select(func.coalesce(func.max(CoreAppEvent.seq), 0)).where(
+                    CoreAppEvent.thread_id == session_id,
+                    or_(CoreAppEvent.turn_id.is_(None), CoreAppEvent.turn_id != turn_id),
+                )
+            )).scalar_one())
+            runtime = await db.get(CoreRuntimeSession, session_id)
+            history_rows = list((await db.execute(
+                select(CoreHistoryEntry).where(
+                    CoreHistoryEntry.thread_id == session_id,
+                ).order_by(CoreHistoryEntry.seq.asc())
+            )).scalars())
+            history_seq = max((int(item.seq or 0) for item in history_rows), default=0)
+            if history_rows:
+                history_payload = [dict(item.message_json or {}) for item in history_rows]
+            else:
+                history_payload = [
+                    copy.deepcopy(message)
+                    for message in list(runtime.history_json or [])
+                    if isinstance(message, dict)
+                ] if runtime is not None and isinstance(runtime.history_json, list) else []
+            db.add(CoreCheckpointV2SessionHistory(
+                checkpoint_id=checkpoint_id,
+                history_json=history_payload,
+                created_at=created_at,
+            ))
+            if session_id == root_session_id:
+                snapshot_row = await db.get(CoreThreadSnapshot, session_id)
+                snapshot_state = dict(snapshot_row.snapshot_json or {}) if snapshot_row is not None else {}
+                db.add(CoreCheckpointV2SessionMessages(
+                    checkpoint_id=checkpoint_id,
+                    messages_json=list(snapshot_state.get("messages") or []),
+                    created_at=created_at,
+                ))
+            db.add(CoreCheckpointV2(
+                id=checkpoint_id,
+                root_session_id=root_session_id,
+                session_id=session_id,
+                parent_checkpoint_id=parent.id if parent is not None else "",
+                turn_id=turn_id,
+                actor_kind=actor_kind,
+                reason=reason,
+                status="ready",
+                event_seq=event_seq,
+                history_seq=history_seq,
+                runtime_state_json=dict(runtime.runtime_state_json or {}) if runtime is not None else {},
+                workspace_manifest_id=manifest_hash,
+                metadata_json={"v2_only": True},
+                created_at=created_at,
+            ))
             await db.flush()
             await self._prune_mainline(db, root_session_id=root_session_id, latest_id=checkpoint_id)
             return _checkpoint_ref(row)
@@ -737,6 +914,19 @@ class CoreCheckpointCoordinator:
 
         await db.execute(
             delete(CoreCheckpoint).where(CoreCheckpoint.id.in_(deleted_sorted))
+        )
+        await db.execute(
+            delete(CoreCheckpointV2).where(CoreCheckpointV2.id.in_(deleted_sorted))
+        )
+        await db.execute(
+            delete(CoreCheckpointV2SessionMessages).where(
+                CoreCheckpointV2SessionMessages.checkpoint_id.in_(deleted_sorted)
+            )
+        )
+        await db.execute(
+            delete(CoreCheckpointV2SessionHistory).where(
+                CoreCheckpointV2SessionHistory.checkpoint_id.in_(deleted_sorted)
+            )
         )
         # Drop restore operations that reference pruned checkpoints (their
         # undo/redo targets no longer exist).
@@ -861,6 +1051,24 @@ class CoreCheckpointCoordinator:
         await self.write_coordinator.run(write)
 
     async def _restore_conversation(self, target: CoreCheckpoint, operation_id: str) -> None:
+        async with self.session_factory() as db:
+            v2 = await db.get(CoreCheckpointV2, target.id)
+        # During compatibility, prefer the legacy payload while it exists:
+        # it still carries session-store messages that have not yet been
+        # promoted to the event/history fact streams.  V2 becomes authoritative
+        # automatically after the migration removes that payload.
+        if v2 is not None and not target.conversation_json:
+            async def write_v2(db: Any) -> None:
+                restore_v2 = getattr(self.conversation_backend, "restore_v2", None)
+                if restore_v2 is None:
+                    raise RuntimeError("Checkpoint V2 restore backend is not available")
+                await restore_v2(db, target.session_id, v2)
+                operation = await db.get(CoreRestoreOperation, operation_id)
+                if operation is None:
+                    raise LookupError("Restore operation disappeared")
+                operation.updated_at = datetime.now()
+            await self.write_coordinator.run(write_v2)
+            return
         conversation = dict(target.conversation_json or {})
         conversation_session_id = str(conversation.get("session_id") or target.session_id)
         if conversation_session_id != target.session_id:
@@ -887,6 +1095,12 @@ class CoreCheckpointCoordinator:
                 raise RuntimeError("Checkpoint storage requires a bound async session factory")
             tables = [
                 CoreCheckpoint.__table__,
+                CoreCheckpointV2.__table__,
+                CoreCheckpointV2Materialized.__table__,
+                CoreCheckpointV2SessionHistory.__table__,
+                CoreCheckpointV2SessionMessages.__table__,
+                CoreCheckpointAttachmentRef.__table__,
+                CoreCheckpointBlobRef.__table__,
                 CoreWorkspaceManifest.__table__,
                 CoreCheckpointBlob.__table__,
                 CoreRestoreOperation.__table__,
@@ -998,6 +1212,152 @@ class CoreCheckpointConversationBackend:
             for event_payload in events_payload:
                 if isinstance(event_payload, dict):
                     db.add(_app_event_row(event_payload, thread_id=session_id))
+
+    async def restore_v2(self, db: Any, session_id: str, checkpoint: CoreCheckpointV2) -> None:
+        """Restore a V2 checkpoint from facts or migrated base material."""
+        if checkpoint.session_id != session_id:
+            raise ValueError("Checkpoint belongs to a different session")
+
+        # Legacy checkpoints were captured from mutable event/history tables.
+        # A later fork, rollback, or compact can therefore make the current
+        # rows at a given sequence belong to another branch.  The migration
+        # stores the exact legacy branch only when needed (and stores the
+        # captured projection as a base snapshot), so clearing the old blob
+        # does not silently restore another conversation.
+        materialized = await db.get(CoreCheckpointV2Materialized, checkpoint.id)
+        if materialized is not None:
+            await self._restore_materialized(
+                db,
+                session_id,
+                materialized,
+                event_seq=int(checkpoint.event_seq or 0),
+            )
+            return
+
+        boundary_history = await db.get(CoreCheckpointV2SessionHistory, checkpoint.id)
+        if boundary_history is not None:
+            history = [dict(item) for item in list(boundary_history.history_json or []) if isinstance(item, dict)]
+            await db.execute(delete(CoreHistoryEntry).where(CoreHistoryEntry.thread_id == session_id))
+            for seq, message in enumerate(history, 1):
+                db.add(CoreHistoryEntry(thread_id=session_id, seq=seq, message_json=message))
+        else:
+            history_rows = list((await db.execute(
+                select(CoreHistoryEntry).where(
+                    CoreHistoryEntry.thread_id == session_id,
+                    CoreHistoryEntry.seq <= checkpoint.history_seq,
+                ).order_by(CoreHistoryEntry.seq.asc())
+            )).scalars())
+            history = [dict(row.message_json or {}) for row in history_rows]
+            await db.execute(delete(CoreHistoryEntry).where(
+                CoreHistoryEntry.thread_id == session_id,
+                CoreHistoryEntry.seq > checkpoint.history_seq,
+            ))
+        runtime = await db.get(CoreRuntimeSession, session_id)
+        if runtime is not None:
+            runtime.runtime_state_json = dict(checkpoint.runtime_state_json or {})
+            runtime.history_json = history
+            runtime.last_event_seq = checkpoint.event_seq
+        await db.execute(delete(CoreAppEvent).where(
+            CoreAppEvent.thread_id == session_id,
+            CoreAppEvent.seq > checkpoint.event_seq,
+        ))
+        if session_id == _root_session_id(session_id):
+            events = list((await db.execute(
+                select(CoreAppEvent).where(
+                    CoreAppEvent.thread_id == session_id,
+                    CoreAppEvent.seq <= checkpoint.event_seq,
+                ).order_by(CoreAppEvent.seq.asc())
+            )).scalars())
+            event_store = SqlAlchemyAppEventStore(CoreAppEvent)
+            envelopes = [event_store._to_envelope(row) for row in events]
+            await SqlAlchemyThreadSnapshotStore(
+                CoreThreadSnapshot, item_model=CoreThreadSnapshotItem
+            ).rebuild(db, session_id, envelopes)
+            session_messages = await db.get(CoreCheckpointV2SessionMessages, checkpoint.id)
+            if session_messages is not None:
+                projection = await db.get(CoreThreadSnapshot, session_id)
+                if projection is None:
+                    projection = CoreThreadSnapshot(thread_id=session_id)
+                    db.add(projection)
+                state = dict(projection.snapshot_json or {})
+                state["messages"] = copy.deepcopy(list(session_messages.messages_json or []))
+                projection.snapshot_json = state
+                projection.updated_at = datetime.now()
+
+    async def _restore_materialized(
+        self,
+        db: Any,
+        session_id: str,
+        materialized: CoreCheckpointV2Materialized,
+        *,
+        event_seq: int,
+    ) -> None:
+        history = [dict(item) for item in list(materialized.history_json or []) if isinstance(item, dict)]
+
+        # The history table is the runtime state's durable source after the
+        # lazy migration.  Replace it, rather than only trimming by a global
+        # watermark, because an old checkpoint can point at a different
+        # branch or at an explicitly empty history.
+        await db.execute(delete(CoreHistoryEntry).where(CoreHistoryEntry.thread_id == session_id))
+        for seq, message in enumerate(history, 1):
+            if isinstance(message.get("metadata"), dict):
+                metadata = dict(message["metadata"])
+                metadata["history_seq"] = seq
+                message["metadata"] = metadata
+            db.add(CoreHistoryEntry(thread_id=session_id, seq=seq, message_json=message))
+
+        runtime = await db.get(CoreRuntimeSession, session_id)
+        if materialized.runtime_present:
+            payload = dict(materialized.runtime_json or {})
+            if runtime is None:
+                runtime = CoreRuntimeSession(thread_id=session_id)
+                db.add(runtime)
+            runtime.revision = max(
+                int(runtime.revision or 0) + 1,
+                int(payload.get("revision") or 0) + 1,
+            )
+            runtime.runtime_state_json = dict(payload.get("runtime_state_json") or {})
+            runtime.history_json = history
+            runtime.pending_approval_json = dict(payload.get("pending_approval_json") or {})
+            runtime.last_event_seq = int(payload.get("last_event_seq") or 0)
+            runtime.updated_at = datetime.now()
+        elif runtime is not None:
+            await db.delete(runtime)
+
+        is_root_session = session_id == _root_session_id(session_id)
+        if is_root_session and materialized.events_present:
+            if materialized.events_json is None:
+                # The current fact log was proven to be the same branch during
+                # migration.  Keep its prefix and discard only later events.
+                await db.execute(delete(CoreAppEvent).where(
+                    CoreAppEvent.thread_id == session_id,
+                    CoreAppEvent.seq > event_seq,
+                ))
+            else:
+                await db.execute(delete(CoreAppEvent).where(CoreAppEvent.thread_id == session_id))
+                for event_payload in list(materialized.events_json or []):
+                    if isinstance(event_payload, dict):
+                        db.add(_app_event_row(event_payload, thread_id=session_id))
+
+        if not is_root_session:
+            return
+        projection_store = SqlAlchemyThreadSnapshotStore(
+            CoreThreadSnapshot,
+            item_model=CoreThreadSnapshotItem,
+        )
+        if materialized.projection_present and isinstance(materialized.projection_json, dict):
+            await projection_store.write_full_projection(
+                db,
+                session_id,
+                dict(materialized.projection_json),
+            )
+        else:
+            projection = await db.get(CoreThreadSnapshot, session_id)
+            if projection is not None:
+                await db.delete(projection)
+            await db.execute(
+                delete(CoreThreadSnapshotItem).where(CoreThreadSnapshotItem.thread_id == session_id)
+            )
 
     async def require_inactive(self, session_id: str) -> None:
         await _require_inactive_session(self.session_factory, session_id)

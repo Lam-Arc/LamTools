@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Protocol, runtime_checkable
+from uuid import uuid4
 
 
 @dataclass
@@ -60,6 +61,24 @@ class MessageRecord:
         return d
 
 
+def build_session_record(
+    *,
+    member_id: str,
+    title: str,
+    status: str = "idle",
+    metadata: dict[str, Any] | None = None,
+    session_id: str | None = None,
+) -> SessionRecord:
+    """Build a new session using the canonical Core session defaults."""
+    return SessionRecord(
+        id=str(session_id or uuid4().hex),
+        member_id=str(member_id),
+        title=str(title).strip() or "New Session",
+        status=str(status).strip() or "idle",
+        metadata=dict(metadata or {}),
+    )
+
+
 @runtime_checkable
 class SessionStore(Protocol):
     """Protocol for session persistence — create, read, update sessions and messages."""
@@ -84,6 +103,9 @@ class InMemorySessionStore:
         """Store a new session and return it."""
         if session.id in self._sessions:
             raise ValueError(f"Session '{session.id}' already exists")
+        from lamtools_core.app.runtime_permissions import with_session_runtime_preferences
+
+        session.metadata = with_session_runtime_preferences(session.metadata)
         self._sessions[session.id] = session
         return session
 
@@ -100,6 +122,15 @@ class InMemorySessionStore:
 
     def update(self, session: SessionRecord) -> SessionRecord:
         """Update a stored session and refresh its updated_at timestamp."""
+        from lamtools_core.app.runtime_permissions import with_session_runtime_preferences
+
+        existing = self._sessions.get(session.id)
+        if existing is not None:
+            from lamtools_core.app.runtime_permissions import merge_session_runtime_preferences
+
+            session.metadata = merge_session_runtime_preferences(existing.metadata, session.metadata)
+        else:
+            session.metadata = with_session_runtime_preferences(session.metadata)
         session.updated_at = datetime.now()
         self._sessions[session.id] = session
         return session
@@ -128,6 +159,7 @@ class InMemorySessionStore:
 __all__ = [
     "SessionRecord",
     "MessageRecord",
+    "build_session_record",
     "SessionStore",
     "InMemorySessionStore",
 ]

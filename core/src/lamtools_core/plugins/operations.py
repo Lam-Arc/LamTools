@@ -192,6 +192,61 @@ def _hook_summary_from_files(files: list[Path]) -> list[dict[str, Any]]:
     return summary
 
 
+def _ui_payload(plugin: Any) -> dict[str, Any] | None:
+    contribution = getattr(plugin, "ui", None)
+    if contribution is None:
+        return None
+
+    def serialize(item: Any) -> dict[str, Any]:
+        result = {
+            "id": str(item.id),
+            "title": str(item.title),
+            "entry": str(item.entry),
+            "icon": str(item.icon or ""),
+        }
+        if hasattr(item, "tools"):
+            result["tools"] = [str(tool) for tool in (item.tools or [])]
+        return result
+
+    return {
+        "views": [serialize(item) for item in contribution.views],
+        "modes": [serialize(item) for item in contribution.modes],
+    }
+
+
+def _cli_payload(plugin: Any) -> dict[str, Any] | None:
+    """Serialize manifest CLI contributions for plugin discovery clients."""
+    contribution = getattr(plugin, "cli", None)
+    if contribution is None:
+        return None
+
+    def serialize_argument(argument: Any) -> dict[str, Any]:
+        return {
+            "flags": [str(item) for item in (argument.flags or ())],
+            "dest": str(argument.dest or ""),
+            "action": str(argument.action or "store"),
+            "type": str(argument.type or "str"),
+            "default": argument.default,
+            "required": bool(argument.required),
+            "nargs": argument.nargs,
+            "choices": [str(item) for item in (argument.choices or ())],
+            "metavar": str(argument.metavar or ""),
+            "help": str(argument.help or ""),
+        }
+
+    def serialize_command(command: Any) -> dict[str, Any]:
+        return {
+            "name": str(command.name),
+            "help": str(command.help or ""),
+            "handler": str(command.handler or ""),
+            "aliases": [str(item) for item in (command.aliases or ())],
+            "arguments": [serialize_argument(item) for item in (command.arguments or [])],
+            "commands": [serialize_command(item) for item in (command.commands or [])],
+        }
+
+    return {"commands": [serialize_command(item) for item in (contribution.commands or [])]}
+
+
 def _skill_source(location: Path, work_root: str | Path | None) -> str:
     """Guess the source category of a skill by its location."""
     loc = location.resolve()
@@ -231,8 +286,23 @@ def build_plugin_operation_catalog(
     work_root: str | Path | None = None,
     data_dir: str | Path | None = None,
     install_root: str | Path | None = None,
+    context: Any | None = None,
+    plugin_runtimes: list[Any] | None = None,
 ) -> OperationCatalog:
     catalog = OperationCatalog()
+    runtime_manager = None
+    if context is not None:
+        from .lifecycle import PluginRuntimeManager
+
+        runtime_manager = PluginRuntimeManager(
+            plugin_runtimes if plugin_runtimes is not None else [],
+            context,
+            plugin_resolver=lambda name: next(
+                (item for item in plugin_registry.discover() if item.name == name),
+                None,
+            ),
+        )
+        context.set_service("plugin.runtime_manager", runtime_manager)
 
     async def plugin_list(request: OperationRequest) -> OperationResult:
         from .tools import load_plugin_tools
@@ -268,6 +338,8 @@ def build_plugin_operation_catalog(
             plugins.append(
                 {
                     "name": item.name,
+                    "id": item.id or item.name,
+                    "builtin": item.builtin,
                     "version": item.version,
                     "description": item.description,
                     "manifest_version": item.manifest_version,
@@ -292,6 +364,22 @@ def build_plugin_operation_catalog(
                         else "none"
                     ),
                     "config_schema": str(item.config_schema) if item.config_schema else "",
+                    "desktop": (
+                        {
+                            "entry": str(item.desktop_entry),
+                            "title": item.desktop_title or item.name,
+                            "window": {
+                                **dict(item.desktop_window),
+                                "cardWidth": item.desktop_card_width,
+                                "cardHeight": item.desktop_card_height,
+                            },
+                            "fileDrop": item.desktop_file_drop,
+                        }
+                        if item.desktop_entry is not None
+                        else None
+                    ),
+                    "ui": _ui_payload(item),
+                    "cli": _cli_payload(item),
                 }
             )
         return OperationResult(
@@ -302,18 +390,70 @@ def build_plugin_operation_catalog(
             },
         )
 
+    async def plugin_ui_list(request: OperationRequest) -> OperationResult:
+        """List enabled plugin-contributed UI entries.
+
+        UI contribution is deliberately a generic plugin operation. The main
+        application only receives descriptors; bundled component resolution
+        remains in the frontend plugin registry.
+        """
+        del request
+        modes: list[dict[str, Any]] = []
+        views: list[dict[str, Any]] = []
+        for item in plugin_registry.discover():
+            if not item.enabled or item.ui is None:
+                continue
+            for mode in item.ui.modes:
+                modes.append(
+                    {
+                        "pluginId": item.name,
+                        "id": mode.id,
+                        "title": mode.title,
+                        "entry": str(mode.entry),
+                        "icon": mode.icon,
+                        "tools": list(mode.tools),
+                        "enabled": True,
+                    }
+                )
+            for view in item.ui.views:
+                views.append(
+                    {
+                        "pluginId": item.name,
+                        "id": view.id,
+                        "title": view.title,
+                        "entry": str(view.entry),
+                        "icon": view.icon,
+                        "enabled": True,
+                    }
+                )
+        modes.sort(key=lambda item: (str(item["pluginId"]), str(item["id"])))
+        views.sort(key=lambda item: (str(item["pluginId"]), str(item["id"])))
+        return OperationResult(name="plugin.ui.list", payload={"modes": modes, "views": views})
+
     async def plugin_enable(request: OperationRequest) -> OperationResult:
         name = str(request.payload.get("name") or "").strip()
         if not name:
             return OperationResult(name=request.name, status="error", payload={"error": "name is required"})
+        plugin = next((item for item in plugin_registry.discover() if item.name == name), None)
+        if plugin is None:
+            return OperationResult(name=request.name, status="error", payload={"error": f"plugin '{name}' not found"})
         plugin_state_store.set_enabled(name, True)
+        started = True
+        if runtime_manager is not None:
+            started = await runtime_manager.start(name)
         return OperationResult(name=request.name, payload={"name": name, "enabled": True})
 
     async def plugin_disable(request: OperationRequest) -> OperationResult:
         name = str(request.payload.get("name") or "").strip()
         if not name:
             return OperationResult(name=request.name, status="error", payload={"error": "name is required"})
+        plugin = next((item for item in plugin_registry.discover() if item.name == name), None)
+        if plugin is None:
+            return OperationResult(name=request.name, status="error", payload={"error": f"plugin '{name}' not found"})
         plugin_state_store.set_enabled(name, False)
+        stopped = False
+        if runtime_manager is not None:
+            stopped = await runtime_manager.stop(name)
         return OperationResult(name=request.name, payload={"name": name, "enabled": False})
 
     async def hook_list(request: OperationRequest) -> OperationResult:
@@ -1028,6 +1168,7 @@ def build_plugin_operation_catalog(
         return OperationResult(name=request.name, payload={"name": name, "config": merged, "validated": True})
 
     catalog.register("plugin.list", plugin_list)
+    catalog.register("plugin.ui.list", plugin_ui_list)
     catalog.register("plugin.install", plugin_install)
     catalog.register("plugin.uninstall", plugin_uninstall)
     catalog.register("plugin.deps-status", plugin_deps_status)
@@ -1071,7 +1212,11 @@ def build_plugin_operation_catalog(
         if root not in _sys.path:
             _sys.path.append(root)
     for item in plugin_registry.discover():
-        if not item.enabled or not item.operation_files:
+        # Register disabled plugin operations behind an availability guard as
+        # well. This keeps the catalog stable across enable transitions: a
+        # plugin disabled at startup can be enabled later without requiring a
+        # process restart or a second catalog construction.
+        if not item.operation_files:
             continue
         try:
             from .operations_loader import load_plugin_operations
@@ -1092,6 +1237,11 @@ def build_plugin_operation_catalog(
                 plugin_name=item.name,
                 work_root=_work_root,
                 data_dir=_data_dir,
+                context=context,
+                availability=lambda name=item.name: any(
+                    plugin.name == name and plugin.enabled
+                    for plugin in plugin_registry.discover()
+                ),
             )
         )
     catalog.plugin_operation_errors = operation_errors

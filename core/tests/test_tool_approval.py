@@ -53,13 +53,17 @@ def test_approval_gate_requires_user_for_write(tmp_path: Path):
 
 
 def test_approval_gate_applies_command_policy(tmp_path: Path):
-    gate = ApprovalGate(work_root=tmp_path, tool_permissions={"run_command": ASK_USER})
+    gate = ApprovalGate(
+        work_root=tmp_path,
+        tool_permissions={"run_command": ASK_USER},
+        approval_policy="auto_approve",
+    )
 
     regular = gate.check("run_command", {"command": "echo ok"})
     dangerous = gate.check("run_command", {"command": "git reset --hard"})
 
     assert regular.allowed is True
-    assert regular.reason == "Auto-approved regular command"
+    assert regular.reason == "Auto-approved by permission preset"
     assert dangerous.allowed is False
     assert dangerous.requires_approval is True
 
@@ -120,7 +124,8 @@ def test_approval_gate_tier_list_does_not_short_circuit_dangerous_commands(tmp_p
     assert decision.requires_approval is True
 
     allowed = gate.check("run_command", {"command": "echo ok"})
-    assert allowed.allowed is True
+    assert allowed.allowed is False
+    assert allowed.requires_approval is True
 
 
 def test_hard_block_patterns_are_case_insensitive(tmp_path: Path):

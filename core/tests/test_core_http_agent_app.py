@@ -409,6 +409,93 @@ def test_core_agent_http_app_owns_attachment_storage(tmp_path: Path, isolated_co
     assert (tmp_path / "core-data" / "attachments" / "thread-attachment" / "notes.md").is_file()
 
 
+def test_core_agent_http_accepts_multiple_attachments_in_one_turn(
+    tmp_path: Path,
+    monkeypatch,
+    isolated_config_root: Path,
+) -> None:
+    _write_jsonc_config(isolated_config_root)
+
+    async def stream(self, request):
+        del self, request
+        yield LLMStreamEvent(kind="content_delta", content="已收到附件")
+        yield LLMStreamEvent(kind="done")
+
+    monkeypatch.setattr(CoreHttpLLMClient, "stream", stream)
+    app = create_core_agent_http_app(
+        model_id="model-record",
+        core_db=tmp_path / "core.db",
+        data_dir=tmp_path / "core-data",
+        work_root=tmp_path / "workspace",
+    )
+
+    with TestClient(app) as client:
+        uploaded = [
+            client.post(
+                "/api/core/sessions/pet-session/attachments",
+                files={"file": ("report.txt", b"report body", "text/plain")},
+            ),
+            client.post(
+                "/api/core/sessions/pet-session/attachments",
+                files={"file": ("data.csv", b"name,value\nA,1\n", "text/csv")},
+            ),
+        ]
+        assert all(response.status_code == 200 for response in uploaded)
+        attachments = [response.json() for response in uploaded]
+        input_items = [
+            {"type": "text", "text": "请比较这两个文件"},
+            {
+                "type": "attachment",
+                "attachment_id": attachments[0]["id"],
+                "filename": attachments[0]["filename"],
+                "mime_type": attachments[0]["mime_type"],
+                "preview_type": attachments[0]["preview_type"],
+                "size": attachments[0]["size"],
+            },
+            {
+                "type": "attachment",
+                "attachment_id": attachments[1]["id"],
+                "filename": attachments[1]["filename"],
+                "mime_type": attachments[1]["mime_type"],
+                "preview_type": attachments[1]["preview_type"],
+                "size": attachments[1]["size"],
+            },
+        ]
+
+        with client.websocket_connect("/api/core/app-server") as websocket:
+            _initialize_websocket(websocket)
+            websocket.send_json(
+                {
+                    "id": 3,
+                    "method": "turn/start",
+                    "params": {
+                        "thread_id": "pet-session",
+                        "client_message_id": "pet-attachments",
+                        "input": input_items,
+                    },
+                }
+            )
+            started = _receive_rpc_response(websocket, 3)["result"]
+            user_item_id = started["runtime_start"]["user_message_id"]
+            assert started["snapshot"]["items"][user_item_id]["content"] == input_items
+
+            final_snapshot = started["snapshot"]
+            for request_id in range(4, 40):
+                websocket.send_json(
+                    {
+                        "id": request_id,
+                        "method": "thread/read",
+                        "params": {"thread_id": "pet-session"},
+                    }
+                )
+                final_snapshot = _receive_rpc_response(websocket, request_id)["result"]["snapshot"]
+                if final_snapshot.get("status") in {"completed", "idle", "failed", "cancelled"}:
+                    break
+                time.sleep(0.02)
+
+    assert final_snapshot["items"][user_item_id]["content"] == input_items
+
+
 def test_core_http_sessions_survive_app_restart(tmp_path: Path, isolated_config_root: Path) -> None:
     core_db = tmp_path / "core.db"
     _write_jsonc_config(isolated_config_root)
@@ -453,7 +540,14 @@ def test_core_http_sessions_survive_app_restart(tmp_path: Path, isolated_config_
             "member_id": "core",
             "title": "Renamed thread",
             "status": "idle",
-            "metadata": {"source": "restart-test"},
+            "metadata": {
+                "source": "restart-test",
+                "runtime_preferences": {
+                    "base_tier": "full_edit",
+                    "base_allow_access_outside_workdir": False,
+                    "permission_preset": "ask",
+                },
+            },
             "created_at": created.json()["created_at"],
             "updated_at": updated.json()["updated_at"],
         }
@@ -530,6 +624,11 @@ def test_project_http_round_trip_survives_restart_and_uses_agents_md(tmp_path: P
         project_id = result["project"]["id"]
         assert result["session"]["metadata"] == {
             "work_root": str(root.resolve()),
+            "runtime_preferences": {
+                "base_tier": "full_edit",
+                "base_allow_access_outside_workdir": False,
+                "permission_preset": "ask",
+            },
         }
 
         content = "# Project instructions\n\nUse UTF-8.\n"
@@ -549,6 +648,11 @@ def test_project_http_round_trip_survives_restart_and_uses_agents_md(tmp_path: P
         assert created_session.status_code == 201
         assert created_session.json()["metadata"] == {
             "work_root": str(root.resolve()),
+            "runtime_preferences": {
+                "base_tier": "full_edit",
+                "base_allow_access_outside_workdir": False,
+                "permission_preset": "ask",
+            },
         }
         assert client.post(
             "/api/core/sessions",
@@ -633,6 +737,11 @@ def test_project_http_delete_rejects_active_session_and_app_server_uses_project_
         assert protected.json()["metadata"] == {
             "work_root": str((tmp_path / "workspace").resolve()),
             "note": "kept",
+            "runtime_preferences": {
+                "base_tier": "full_edit",
+                "base_allow_access_outside_workdir": False,
+                "permission_preset": "ask",
+            },
         }
         assert client.patch(f"/api/core/sessions/{session_id}", json={"status": "running"}).status_code == 200
         assert client.delete(f"/api/core/projects/{project_id}").status_code == 409
@@ -976,3 +1085,156 @@ async def test_core_config_routing_llm_client_uses_selected_model_output_limit_b
 
     assert [event.kind for event in events] == ["done"]
     assert captured == [8192]
+
+
+def test_core_http_serves_enabled_desktop_plugin_assets(
+    tmp_path: Path,
+    isolated_config_root: Path,
+) -> None:
+    _write_jsonc_config(isolated_config_root)
+    data_dir = tmp_path / "core-data"
+    app = create_core_agent_http_app(
+        model_id="model-record",
+        core_db=tmp_path / "core.db",
+        data_dir=data_dir,
+        work_root=tmp_path / "workspace",
+    )
+
+    with TestClient(app) as client:
+        listed = client.get("/api/core/desktop-plugins")
+        assert listed.status_code == 200
+        pet = next(item for item in listed.json()["plugins"] if item["name"] == "emotion-ball-pet")
+        assert pet["window"]["collapsedWidth"] == 256
+        assert pet["window"]["collapsedHeight"] == 288
+        assert pet["window"]["expandedWidth"] == 506
+        assert pet["window"]["expandedHeight"] == 680
+        assert pet["window"]["cardWidth"] == 506
+        assert pet["window"]["cardHeight"] == 360
+        assert pet["fileDrop"] is True
+
+        html = client.get(pet["entry_url"])
+        script = client.get(
+            "/api/core/desktop-plugins/emotion-ball-pet/assets/pet.js"
+        )
+        escaped = client.get(
+            "/api/core/desktop-plugins/emotion-ball-pet/assets/%2E%2E/plugin.json"
+        )
+        assert html.status_code == 200
+        assert "LamTools 桌宠" in html.text
+        assert "x-frame-options" not in html.headers
+        assert html.headers["cross-origin-resource-policy"] == "cross-origin"
+        assert "http://127.0.0.1:*" in html.headers["content-security-policy"]
+        assert html.headers["cache-control"] == "no-store"
+        assert script.status_code == 200
+        assert "当前会话" not in html.text
+        assert "向 Core 提问" not in html.text
+        assert "turn/start" in script.text
+        assert "/api/core/desktop-plugins/emotion-ball-pet/session" in script.text
+        assert "fetch('/api/core/sessions/'" in script.text
+        assert "/attachments" in script.text
+        assert "files-dropped" in script.text
+        assert "approval/respond" in script.text
+        assert "toolName === 'question'" in script.text
+        assert "set_desktop_plugin_view_mode" in script.text
+        assert 'id="queuePreviewSecond"' in html.text
+        assert 'id="queuePreviewThird"' in html.text
+        assert escaped.status_code == 404
+
+        (data_dir / "plugins.jsonc").write_text(
+            '{"plugins":{"emotion-ball-pet":{"enabled":false}}}',
+            encoding="utf-8",
+        )
+        disabled = client.get("/api/core/desktop-plugins")
+        disabled_asset = client.get(pet["entry_url"])
+
+    assert all(item["name"] != "emotion-ball-pet" for item in disabled.json()["plugins"])
+    assert disabled_asset.status_code == 404
+
+
+def _write_desktop_plugin(root: Path, name: str) -> None:
+    plugin_root = root / name
+    (plugin_root / "desktop").mkdir(parents=True, exist_ok=True)
+    (plugin_root / "plugin.json").write_text(
+        '{\n'
+        f'  "name": "{name}",\n'
+        '  "version": "0.1.0",\n'
+        '  "desktop": {\n'
+        '    "entry": "./desktop/index.html",\n'
+        f'    "title": "{name}",\n'
+        '    "window": {}\n'
+        '  }\n'
+        '}\n',
+        encoding="utf-8",
+    )
+    (plugin_root / "desktop" / "index.html").write_text("<!doctype html>", encoding="utf-8")
+
+
+def _desktop_session_test_app(tmp_path: Path, isolated_config_root: Path, plugin_roots: tuple[Path, ...] = ()):
+    _write_jsonc_config(isolated_config_root)
+    return create_core_agent_http_app(
+        model_id="model-record",
+        core_db=tmp_path / "core.db",
+        data_dir=tmp_path / "core-data",
+        work_root=tmp_path / "workspace",
+        plugin_roots=plugin_roots,
+    )
+
+
+def test_desktop_plugin_session_is_created_once(tmp_path: Path, isolated_config_root: Path) -> None:
+    app = _desktop_session_test_app(tmp_path, isolated_config_root)
+    with TestClient(app) as client:
+        first = client.post("/api/core/desktop-plugins/emotion-ball-pet/session")
+        second = client.post("/api/core/desktop-plugins/emotion-ball-pet/session")
+
+    restarted = _desktop_session_test_app(tmp_path, isolated_config_root)
+    with TestClient(restarted) as client:
+        after_restart = client.post("/api/core/desktop-plugins/emotion-ball-pet/session")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert after_restart.status_code == 200
+    assert first.json()["created"] is True
+    assert second.json()["created"] is False
+    assert after_restart.json()["created"] is False
+    assert first.json()["session_id"] == second.json()["session_id"]
+    assert first.json()["session_id"] == after_restart.json()["session_id"]
+
+
+def test_desktop_plugin_session_isolated_between_plugins(tmp_path: Path, isolated_config_root: Path) -> None:
+    plugins = tmp_path / "plugins"
+    _write_desktop_plugin(plugins, "plugin-a")
+    _write_desktop_plugin(plugins, "plugin-b")
+    app = _desktop_session_test_app(tmp_path, isolated_config_root, (plugins,))
+
+    with TestClient(app) as client:
+        session_a = client.post("/api/core/desktop-plugins/plugin-a/session")
+        session_b = client.post("/api/core/desktop-plugins/plugin-b/session")
+
+    assert session_a.status_code == 200
+    assert session_b.status_code == 200
+    assert session_a.json()["session_id"] != session_b.json()["session_id"]
+
+
+def test_deleted_desktop_plugin_session_is_recreated(tmp_path: Path, isolated_config_root: Path) -> None:
+    app = _desktop_session_test_app(tmp_path, isolated_config_root)
+    with TestClient(app) as client:
+        first = client.post("/api/core/desktop-plugins/emotion-ball-pet/session").json()
+        assert client.delete(f"/api/core/sessions/{first['session_id']}").status_code == 204
+        second = client.post("/api/core/desktop-plugins/emotion-ball-pet/session").json()
+
+    assert first["created"] is True
+    assert second["created"] is True
+    assert first["session_id"] != second["session_id"]
+
+
+def test_disabled_plugin_cannot_ensure_session(tmp_path: Path, isolated_config_root: Path) -> None:
+    app = _desktop_session_test_app(tmp_path, isolated_config_root)
+    data_dir = tmp_path / "core-data"
+    with TestClient(app) as client:
+        (data_dir / "plugins.jsonc").write_text(
+            '{"plugins":{"emotion-ball-pet":{"enabled":false}}}',
+            encoding="utf-8",
+        )
+        response = client.post("/api/core/desktop-plugins/emotion-ball-pet/session")
+
+    assert response.status_code == 404

@@ -580,6 +580,8 @@ class TestKernelTypes:
         assert policy.context_window_tokens is None
         assert policy.compact_trigger_ratio == 0.8
         assert policy.compact_limit_ratio == 0.6
+        assert policy.compact_summary_output_tokens is None
+        assert policy.compact_safety_margin_tokens is None
         assert policy.max_identical_tool_results == 10
         assert policy.consecutive_failure_rounds_threshold == 3
         assert policy.metadata == {}
@@ -1706,6 +1708,49 @@ class TestKernelEvents:
         assert started[0].payload["tool_name"] == "search"
 
     @pytest.mark.asyncio
+    async def test_checklist_snapshot_is_emitted_after_writeback(self):
+        call = ToolCall(
+            id="checklist-1",
+            name="write_checklist",
+            arguments={"design_summary": "Plan", "steps": [{"id": "s1", "description": "Do it"}]},
+        )
+        result = ToolResult(
+            call_id=call.id,
+            name=call.name,
+            status="ok",
+            content="Checklist recorded",
+            metadata={"task_plan": {"steps": [{"id": "s1", "description": "Do it", "status": "in_progress"}]}},
+        )
+
+        class PlanKit(MockRuntimeKit):
+            async def writeback(self, state, turn, tool_results, verification, decision):
+                state.metadata["task_plan"] = {
+                    "goal": "Plan",
+                    "status": "active",
+                    "current_step_id": "s1",
+                    "steps": [{"id": "s1", "description": "Do it", "status": "completed"}],
+                }
+                state.metadata["active_plan"] = {
+                    "plan_steps": state.metadata["task_plan"]["steps"],
+                    "plan_summary": "Plan",
+                }
+
+        sink = CollectingEventSink()
+        kernel = _make_kernel(
+            PlanKit(steps=[MockKitStep(tool_calls=[call], tool_results=[result], decision="done")]),
+            event_sink=sink,
+        )
+
+        await kernel.run(_make_turn_input())
+
+        parts = [event for event in sink.events if event.name == "runtime.part"]
+        snapshot = next(event for event in parts if event.payload.get("metadata", {}).get("checklist_snapshot") is True)
+        assert snapshot.payload["part_id"] == "part-checklist-1"
+        assert snapshot.payload["metadata"]["checklist_snapshot"] is True
+        assert snapshot.payload["metadata"]["task_plan"]["steps"][0]["status"] == "completed"
+        assert snapshot.payload["metadata"]["active_plan"]["plan_summary"] == "Plan"
+        assert snapshot.payload["replace"] is True
+
     async def test_verification_event_emitted(self):
         """Kernel emits verification result event."""
         kit = MockRuntimeKit(steps=[
@@ -2228,11 +2273,47 @@ class TestKernelModelCall:
             MockKitStep(decision="done"),
         ])
         llm = MockLLMClient()
-        kernel = _make_kernel(kit, llm_client=llm)
+        sink = CollectingEventSink()
+        kernel = _make_kernel(kit, llm_client=llm, event_sink=sink)
 
         result = await kernel.run(_make_turn_input())
 
         assert llm.call_count == 2
+        usage_events = [event for event in sink.events if event.name == "runtime.usage"]
+        assert len(usage_events) == 2
+        assert [event.payload["usage"]["llm_calls"] for event in usage_events] == [1, 1]
+
+    @pytest.mark.asyncio
+    async def test_streamed_response_emits_one_canonical_usage_event(self):
+        class OneResponseStreamLLM:
+            async def stream(self, request: LLMRequest):
+                _ = request
+                yield LLMStreamEvent(kind="content_delta", content="hello")
+                yield LLMStreamEvent(kind="done", metadata={"finish_reason": "stop"})
+
+            async def complete(self, request: LLMRequest) -> LLMResponse:
+                raise AssertionError("streaming fixture must not fall back to complete()")
+
+        sink = CollectingEventSink()
+        kernel = _make_kernel(
+            MockRuntimeKit(steps=[MockKitStep(decision="done")]),
+            llm_client=OneResponseStreamLLM(),
+            event_sink=sink,
+        )
+
+        await kernel.run(_make_turn_input())
+
+        usage_events = [event for event in sink.events if event.name == "runtime.usage"]
+        terminal_events = [
+            event for event in sink.events
+            if event.name == "runtime.reply_delta" and "done" in (event.tags or [])
+        ]
+        assert len(usage_events) == 1
+        assert usage_events[0].payload["usage"] == {"llm_calls": 1}
+        assert len(terminal_events) == 1
+        assert terminal_events[0].payload["usage_reported_separately"] is True
+        projected = core_events_to_run_items(sink.events, thread_id="session-1")
+        assert len([item for item in projected if item.kind == "usage"]) == 1
 
     @pytest.mark.asyncio
     async def test_model_failure_retries(self):
@@ -2996,6 +3077,45 @@ class TestKernelContextCompaction:
         assert "[Compacted Context]" in part_events[-1].payload["content"]
 
     @pytest.mark.asyncio
+    async def test_cjk_context_uses_exact_estimate_for_compaction_trigger(self):
+        class CjkRequestKit(MockRuntimeKit):
+            async def build_model_request(self, state, context):
+                return LLMRequest(
+                    messages=[
+                        ChatMessage(role="system", content="stable prefix"),
+                        ChatMessage(role="user", content="中" * 1500),
+                        ChatMessage(role="user", content="latest task"),
+                    ],
+                    model="mock-model",
+                )
+
+        sink = CollectingEventSink()
+        llm = CapturingLLMClient()
+        kernel = _make_kernel(
+            CjkRequestKit(steps=[MockKitStep(decision="done")]),
+            llm_client=llm,
+            event_sink=sink,
+            policy=LoopPolicy(
+                context_window_tokens=2_000,
+                compact_trigger_ratio=0.8,
+                compact_limit_ratio=0.6,
+            ),
+        )
+
+        result = await kernel.run(_make_turn_input())
+
+        assert result.decision == "done"
+        assert llm.last_request is not None
+        assert llm.last_request.metadata["context_compacted"] is True
+        assert any(
+            event.payload["runtime_metrics"]["estimated_prompt_tokens"] >= 1_600
+            for event in sink.events
+            if event.name == "runtime.metrics"
+            and "runtime_metrics" in event.payload
+        )
+        assert any(_is_compaction_request(request) for request in llm.requests)
+
+    @pytest.mark.asyncio
     async def test_compaction_limit_ratio_is_a_hard_upper_bound(self):
         class OversizedSummaryKit(MockRuntimeKit):
             async def build_model_request(self, state, context):
@@ -3338,7 +3458,10 @@ class TestKernelContextCompaction:
             state_store=store,  # type: ignore[arg-type]
             event_sink=sink,
             policy=LoopPolicy(
-                context_window_tokens=2_000,
+                # Keep the second request below the new exact trigger so this
+                # test isolates resume-boundary loading rather than triggering
+                # a second, legitimate compaction.
+                context_window_tokens=3_000,
                 compact_trigger_ratio=0.8,
                 compact_limit_ratio=0.6,
             ),

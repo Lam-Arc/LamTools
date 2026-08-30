@@ -81,3 +81,108 @@ def test_plugin_state_store_controls_enabled_flag(tmp_path: Path):
 
     assert discovered.enabled is False
     assert state.is_enabled("other") is True
+
+
+def test_registry_discovers_desktop_entry(tmp_path: Path):
+    plugin = tmp_path / "plugins" / "pet"
+    write_json(plugin / "plugin.json", {
+        "name": "pet",
+        "desktop": {
+            "entry": "./desktop/index.html",
+            "title": "Pet window",
+            "window": {"collapsedWidth": 176},
+        },
+    })
+    (plugin / "desktop" / "index.html").parent.mkdir(parents=True, exist_ok=True)
+    (plugin / "desktop" / "index.html").write_text("<!doctype html>", encoding="utf-8")
+
+    item = PluginRegistry(plugin_roots=[tmp_path / "plugins"]).discover()[0]
+
+    assert item.desktop_entry == (plugin / "desktop" / "index.html").resolve()
+    assert item.desktop_title == "Pet window"
+    assert item.desktop_window == {"collapsedWidth": 176}
+    assert item.desktop_card_width == 376
+    assert item.desktop_card_height == 360
+    assert item.desktop_file_drop is False
+
+
+def test_desktop_plugin_parses_card_dimensions(tmp_path: Path):
+    plugin = tmp_path / "plugins" / "pet"
+    write_json(plugin / "plugin.json", {
+        "name": "pet",
+        "desktop": {
+            "entry": "./desktop/index.html",
+            "window": {"cardWidth": 412, "cardHeight": 364},
+        },
+    })
+    (plugin / "desktop" / "index.html").parent.mkdir(parents=True, exist_ok=True)
+    (plugin / "desktop" / "index.html").write_text("<!doctype html>", encoding="utf-8")
+
+    item = PluginRegistry(plugin_roots=[tmp_path / "plugins"]).discover()[0]
+
+    assert item.desktop_card_width == 412
+    assert item.desktop_card_height == 364
+
+
+def test_desktop_plugin_parses_file_drop_capability(tmp_path: Path):
+    plugin = tmp_path / "plugins" / "pet"
+    write_json(plugin / "plugin.json", {
+        "name": "pet",
+        "desktop": {
+            "entry": "./desktop/index.html",
+            "fileDrop": True,
+        },
+    })
+    (plugin / "desktop" / "index.html").parent.mkdir(parents=True, exist_ok=True)
+    (plugin / "desktop" / "index.html").write_text("<!doctype html>", encoding="utf-8")
+
+    item = PluginRegistry(plugin_roots=[tmp_path / "plugins"]).discover()[0]
+
+    assert item.desktop_file_drop is True
+
+
+def test_desktop_plugin_rejects_invalid_file_drop_capability(tmp_path: Path):
+    plugin = tmp_path / "plugins" / "pet"
+    write_json(plugin / "plugin.json", {
+        "name": "pet",
+        "desktop": {
+            "entry": "./desktop/index.html",
+            "fileDrop": "yes",
+        },
+    })
+    (plugin / "desktop" / "index.html").parent.mkdir(parents=True, exist_ok=True)
+    (plugin / "desktop" / "index.html").write_text("<!doctype html>", encoding="utf-8")
+
+    assert PluginRegistry(plugin_roots=[tmp_path / "plugins"]).discover() == []
+
+
+def test_desktop_plugin_rejects_invalid_card_dimensions(tmp_path: Path):
+    plugin = tmp_path / "plugins" / "pet"
+    write_json(plugin / "plugin.json", {
+        "name": "pet",
+        "desktop": {
+            "entry": "./desktop/index.html",
+            "window": {"cardWidth": 0},
+        },
+    })
+    (plugin / "desktop" / "index.html").parent.mkdir(parents=True, exist_ok=True)
+    (plugin / "desktop" / "index.html").write_text("<!doctype html>", encoding="utf-8")
+
+    assert PluginRegistry(plugin_roots=[tmp_path / "plugins"]).discover() == []
+
+
+@pytest.mark.parametrize("entry", ["./desktop/index.js", "./../outside.html", "./desktop/missing.html"])
+def test_registry_rejects_invalid_desktop_entry(tmp_path: Path, entry: str):
+    plugin = tmp_path / "plugins" / "bad-pet"
+    write_json(plugin / "plugin.json", {
+        "name": "bad-pet",
+        "desktop": {"entry": entry},
+    })
+    (plugin / "desktop").mkdir(parents=True, exist_ok=True)
+    (plugin / "desktop" / "index.js").write_text("", encoding="utf-8")
+    (tmp_path / "plugins" / "outside.html").write_text("", encoding="utf-8")
+
+    registry = PluginRegistry(plugin_roots=[tmp_path / "plugins"])
+
+    assert registry.discover() == []
+    assert registry.discover_errors[0]["name"] == "bad-pet"

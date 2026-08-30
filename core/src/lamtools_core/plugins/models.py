@@ -9,6 +9,86 @@ HookSource = Literal["user", "project", "plugin", "managed"]
 HookHandlerType = Literal["command", "http", "mcp", "prompt"]
 HookDecisionKind = Literal["allow", "block"]
 
+
+@dataclass(frozen=True)
+class PluginUIView:
+    """A plugin-contributed UI view declared in ``plugin.json``."""
+
+    id: str
+    title: str
+    entry: Path
+    icon: str = ""
+
+
+@dataclass(frozen=True)
+class PluginUIMode:
+    """A plugin-contributed top-level application mode."""
+
+    id: str
+    title: str
+    entry: Path
+    icon: str = ""
+    tools: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class PluginUIContribution:
+    """Manifest-declared UI contributions.
+
+    ``entry`` is resolved inside the plugin root by :class:`PluginRegistry`.
+    The first UI runtime only consumes bundled entries; keeping the same
+    manifest shape for installed plugins lets the protocol grow without a
+    second plugin-specific channel.
+    """
+
+    views: list[PluginUIView] = field(default_factory=list)
+    modes: list[PluginUIMode] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class PluginCLIArgument:
+    """One argparse-compatible argument declared by a plugin command.
+
+    ``flags`` contains either one positional name (``["name"]``) or one or
+    more option strings (for example ``["--name", "-n"]``).  Keeping the
+    declaration data-only means Core can mount commands without importing a
+    plugin-specific parser or handler until that command is actually
+    registered.
+    """
+
+    flags: tuple[str, ...]
+    dest: str = ""
+    action: str = "store"
+    type: str = "str"
+    default: Any = None
+    required: bool = False
+    nargs: str | int | None = None
+    choices: tuple[str, ...] = field(default_factory=tuple)
+    metavar: str = ""
+    help: str = ""
+    const: Any = None
+    raw: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class PluginCLICommand:
+    """A plugin CLI command or command group declared in ``plugin.json``."""
+
+    name: str
+    help: str = ""
+    handler: str = ""
+    aliases: tuple[str, ...] = field(default_factory=tuple)
+    arguments: list[PluginCLIArgument] = field(default_factory=list)
+    commands: list["PluginCLICommand"] = field(default_factory=list)
+    raw: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class PluginCLIContribution:
+    """Manifest-declared CLI command groups contributed by a plugin."""
+
+    commands: list[PluginCLICommand] = field(default_factory=list)
+
 # ── canonical hook event names ──────────────────────────────
 HOOK_EVENT_PRE_TOOL_USE = "PreToolUse"
 HOOK_EVENT_POST_TOOL_USE = "PostToolUse"
@@ -34,6 +114,7 @@ class PluginManifest:
     name: str
     version: str
     description: str = ""
+    builtin: bool = False
     manifest_version: str = "1"
     root: Path = Path()
     enabled: bool = True
@@ -45,7 +126,24 @@ class PluginManifest:
     operation_files: list[Path] = field(default_factory=list)
     dependencies: list[str] = field(default_factory=list)
     config_schema: Path | None = None
+    # Optional self-contained desktop UI. The entry stays inside the plugin
+    # root and is served by the Core loopback HTTP app; Tauri only hosts the
+    # resulting window and never imports plugin code into the main UI bundle.
+    desktop_entry: Path | None = None
+    desktop_title: str = ""
+    desktop_window: dict[str, Any] = field(default_factory=dict)
+    desktop_card_width: int = 376
+    desktop_card_height: int = 360
+    desktop_file_drop: bool = False
+    ui: PluginUIContribution | None = None
+    cli: PluginCLIContribution | None = None
+    backend_entry: Path | None = None
     raw: dict[str, Any] = field(default_factory=dict)
+    # Stable manifest identity. Older manifests used ``name`` as their
+    # identity, so discovery falls back to that value when ``id`` is omitted.
+    # Keep this field at the end to preserve positional construction of the
+    # pre-id manifest model for third-party integrations.
+    id: str = ""
 
 
 @dataclass(frozen=True)

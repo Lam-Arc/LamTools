@@ -11,8 +11,8 @@
         :aria-busy="loading"
       >
         <header class="core-project-dialog-header">
-          <h2 id="core-project-dialog-title">新建项目</h2>
-          <p>选择一个工作目录，系统会为项目准备基础配置。</p>
+          <h2 id="core-project-dialog-title">{{ isOpenMode ? '打开项目' : '新建项目' }}</h2>
+          <p>{{ isOpenMode ? '选择一个已使用或准备使用的工作目录。' : '选择一个工作目录，系统会为项目准备基础配置。' }}</p>
         </header>
 
         <form class="core-project-create" @keydown.esc.prevent="cancel" @submit.prevent="submit">
@@ -63,7 +63,7 @@
           <footer class="core-project-actions">
             <button type="button" class="core-project-cancel" data-project-cancel :disabled="loading" @click="cancel">取消</button>
             <button type="submit" class="core-project-submit" data-project-submit :disabled="loading || !workRoot.trim()">
-              {{ loading ? '创建中' : '创建项目' }}
+              {{ loading ? (isOpenMode ? '打开中' : '创建中') : (isOpenMode ? '打开项目' : '创建项目') }}
             </button>
           </footer>
 </form>
@@ -80,7 +80,7 @@
 </template>
 
 <script setup lang="ts">
-import { nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 import FolderBrowserDialog from './FolderBrowserDialog.vue'
 
 const props = withDefaults(defineProps<{
@@ -88,11 +88,13 @@ const props = withDefaults(defineProps<{
   error?: string
   apiBase?: string
   teleportTarget?: string
+  mode?: 'create' | 'open'
 }>(), {
   loading: false,
   error: '',
   apiBase: '/api/core',
   teleportTarget: 'body',
+  mode: 'create',
 })
 
 const emit = defineEmits<{
@@ -104,6 +106,7 @@ const name = ref('')
 const workRoot = ref('')
 const workRootInput = ref<HTMLInputElement | null>(null)
 const showBrowser = ref(false)
+const isOpenMode = computed(() => props.mode === 'open')
 
 onMounted(() => nextTick(() => workRootInput.value?.focus()))
 

@@ -135,6 +135,11 @@ class CoreAppSnapshotProjector:
                 "work_root": payload.get("work_root") or payload.get("workRoot") or "",
             }
         )
+        runtime_snapshot = payload.get("runtime_snapshot")
+        if isinstance(runtime_snapshot, dict):
+            # The accepted event is the durable authority for this turn.  Do
+            # not derive these fields again from current Composer/settings.
+            turn["runtime_snapshot"] = deepcopy(runtime_snapshot)
         turn.setdefault("items", [])
         turns[turn_id] = turn
         state["status"] = "running"

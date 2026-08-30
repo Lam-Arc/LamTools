@@ -12,6 +12,44 @@ import {
 import type { CoreAppSnapshot } from '../src/appServer'
 
 describe('core appServer workbench projection', () => {
+  it('carries payload checklist metadata into MessagePart metadata', () => {
+    const snapshot = hydrateSnapshot({
+      thread_id: 'thread-plan',
+      snapshot_seq: 2,
+      core: {
+        thread_id: 'thread-plan',
+        snapshot_seq: 2,
+        status: 'running',
+        item_order: ['plan-1'],
+        turns: { 'turn-plan': { turn_id: 'turn-plan', status: 'running', items: ['plan-1'] } },
+        items: {
+          'plan-1': {
+            item_id: 'plan-1',
+            turn_id: 'turn-plan',
+            kind: 'tool_result',
+            status: 'completed',
+            metadata: { runtime_phase: 'runtime.part' },
+            payload: {
+              type: 'dynamicToolCall',
+              tool_name: 'update_checklist',
+              tool_result: 'updated',
+              metadata: {
+                task_plan: { current_step_id: 's2', steps: [{ id: 's2', description: '验证', status: 'in_progress' }] },
+              },
+            },
+          },
+        },
+      },
+    } satisfies CoreAppSnapshot)
+
+    const part = selectCoreWorkbenchMessages(snapshot, { source: 'core_app_server' })[0]?.parts?.[0]
+
+    expect(part?.metadata).toMatchObject({
+      runtime_phase: 'runtime.part',
+      task_plan: { current_step_id: 's2' },
+    })
+  })
+
   it('preserves canonical compaction state and progress metadata through the workbench projection', () => {
     const snapshot = hydrateSnapshot({
       thread_id: 'thread-1',

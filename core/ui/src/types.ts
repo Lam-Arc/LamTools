@@ -47,6 +47,8 @@ export interface CoreRuntimeStep {
   status: CoreRuntimeStepStatus;
   kind?: string;
   detail?: string;
+  /** Planned files or other outputs associated with this step. */
+  deliverables?: string[];
   timestamp?: string;
   /** Optional typed part for rich rendering */
   part?: MessagePart;
@@ -188,6 +190,10 @@ export interface CoreMessage {
   /** Optional typed parts for rich rendering. When present, the renderer
    *  should prefer parts over the flat `content` field. */
   parts?: MessagePart[];
+  /** Stable process/answer projection consumed by MessageView. */
+  processParts?: MessagePart[];
+  answerText?: string;
+  answerPart?: MessagePart | null;
   /** Product-specific persisted payload used by the host app to rebuild parts. */
   rawParts?: unknown;
   metadata?: Record<string, unknown>;
@@ -313,6 +319,7 @@ export type WorkspaceSlotName =
   | 'composer-tools'
   | 'composer-action'
   | 'right-panel'
+  | 'runtime-overlay'
   | 'modals';
 
 export const WORKSPACE_SLOT_NAMES: readonly WorkspaceSlotName[] = [
@@ -329,6 +336,7 @@ export const WORKSPACE_SLOT_NAMES: readonly WorkspaceSlotName[] = [
   'composer-tools',
   'composer-action',
   'right-panel',
+  'runtime-overlay',
   'modals',
 ] as const;
 

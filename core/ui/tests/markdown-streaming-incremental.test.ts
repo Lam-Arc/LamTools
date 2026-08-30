@@ -83,5 +83,19 @@ describe('MarkdownRenderer incremental streaming', () => {
     expect(wrapper.find('.markdown-body').exists()).toBe(true)
     wrapper.unmount()
   })
+
+  it('keeps the markdown shell and content node stable when streaming ends', async () => {
+    const wrapper = await mountStreaming('流式内容')
+    const shell = wrapper.find('.markdown-renderer').element
+    const content = wrapper.find('.markdown-renderer__content').element
+
+    await wrapper.setProps({ streaming: false })
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('.markdown-renderer').element).toBe(shell)
+    expect(wrapper.find('.markdown-renderer__content').element).toBe(content)
+    expect(wrapper.find('.markdown-renderer--streaming').exists()).toBe(false)
+    wrapper.unmount()
+  })
 })
 

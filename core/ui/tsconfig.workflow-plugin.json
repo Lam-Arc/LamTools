@@ -1,0 +1,24 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "..",
+    "noEmit": true,
+    "declaration": true,
+    "emitDeclarationOnly": false,
+    "baseUrl": ".",
+    "paths": {
+      "vue": ["./node_modules/vue"],
+      "lucide-vue-next": ["./node_modules/lucide-vue-next"],
+      "@vue-flow/core": ["./node_modules/@vue-flow/core"],
+      "@vue-flow/background": ["./node_modules/@vue-flow/background"]
+    }
+  },
+  "include": [
+    "../src/lamtools_core/plugins/bundled/workflow/ui/**/*.ts",
+    "../src/lamtools_core/plugins/bundled/workflow/ui/**/*.vue",
+    "src/**/*.ts",
+    "src/**/*.vue",
+    "vite-env.d.ts"
+  ],
+  "exclude": ["node_modules", "dist"]
+}

@@ -1,0 +1,516 @@
+"""Model-facing workflow-graph editing tools (fine-grained node operations).
+
+Backed by the existing workflow.get / workflow.update operations: each
+handler reads the current graph, mutates it in memory, and writes it back.
+The workflow name is derived from the run's session id (``wf_<name>``).
+"""
+
+from __future__ import annotations
+
+from collections.abc import Awaitable, Callable
+from copy import deepcopy
+import json
+from pathlib import Path
+from typing import Any
+
+from lamtools_core.tool import ToolCall, ToolResult, ToolSpec
+from lamtools_core.tool.permission import ASK_USER, AUTO_ALLOW
+
+
+OperationExecutor = Callable[[str, dict[str, Any], dict[str, Any]], Awaitable[Any]]
+
+
+def workflow_build_tool_specs() -> list[ToolSpec]:
+    """Tool specs for fine-grained workflow-graph editing.
+
+    Node kinds mirror the runtime model (``WorkflowNodeKind``): ai / command /
+    script / content / subgraph. Keep this in sync with the frontend workflow-mode
+    instructions so the model sees one consistent vocabulary.
+    """
+    node_kind = {"type": "string", "enum": ["ai", "command", "script", "content", "subgraph"]}
+    port_schema = {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "type": {"type": "string"},
+            "direction": {"type": "string", "enum": ["in", "out"]},
+            "description": {"type": "string"},
+            # Content values are serialized through the model tool boundary.
+            # Keep the boundary scalar and let strict_tool_schema make this
+            # optional field nullable; an untyped leaf is rejected by strict
+            # function-schema validators before the request is sent.
+            "value": {
+                "type": "string",
+                "description": "Constant value for a content node's output port.",
+            },
+        },
+        "required": ["name", "direction"],
+    }
+    config_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            # AI / agent node settings
+            "mode": {"type": "string", "enum": ["single", "loop", "agent"]},
+            "instruction": {"type": "string"},
+            "system_prompt": {"type": "string"},
+            "goal": {"type": "string"},
+            "output_format_text": {"type": "string"},
+            "model_id": {"type": "string"},
+            "agent": {"type": "string"},
+            "reasoning_effort": {"type": "string"},
+            "temperature": {"type": "number"},
+            "top_p": {"type": "number"},
+            "max_tokens": {"type": "integer"},
+            "loop_max_iterations": {"type": "integer"},
+            "tools": {"type": "array", "items": {"type": "string"}},
+            "allowed_tools": {"type": "array", "items": {"type": "string"}},
+            # Subgraph node settings
+            "workflow_name": {"type": "string"},
+            "iterate": {"type": "string", "enum": ["none", "loop", "map"]},
+            "max_iterations": {"type": "integer"},
+            "condition": {"type": "string"},
+            # Command / script node settings
+            "command": {"type": "string"},
+            "cwd": {"type": "string"},
+            "env": {"type": "object", "properties": {}},
+            "timeout": {"type": "number"},
+            "script": {"type": "string"},
+            # Shared execution/error settings
+            "retries": {"type": "integer"},
+            "on_error": {
+                "type": "object",
+                "properties": {
+                    "strategy": {"type": "string", "enum": ["abort", "fallback", "skip"]},
+                    "fallback_port": {"type": "string"},
+                    "error_value": {"type": "string"},
+                },
+            },
+            # Legacy action-node migration field.
+            "action_type": {"type": "string"},
+        },
+        "required": [],
+    }
+    return [
+        ToolSpec(
+            name="workflow_graph",
+            description=(
+                "Read the current workflow graph (nodes + edges) as JSON. Always call "
+                "this before editing to see existing node ids, ports, and connections. "
+                "Returns an empty graph {name,nodes:[],edges:[]} when the workflow does "
+                "not exist yet — you can then add the first node."
+            ),
+            input_schema=_schema({}, required=[]),
+            permission=AUTO_ALLOW,
+            metadata={"category": "workflow"},
+        ),
+        ToolSpec(
+            name="workflow_add_node",
+            description=(
+                "Add a node to the current workflow. If the workflow does not exist yet "
+                "it is created empty first (lazy bootstrap). kind is one of:\n"
+                "- ai: AI processing. config.mode = single | loop | agent. Named output "
+                "ports force structured JSON output (port name = field). Instruction "
+                "supports {{port_name}} interpolation.\n"
+                "- command: invoke a CLI tool via shell (curl/git/ffmpeg/...). config.command "
+                "is the shell command, run in the same shell run_command uses (Git Bash on "
+                "Windows). stdin receives {\"inputs\":{port:val}} JSON and INPUT_<PORT> env "
+                "vars are set. stdout that is a JSON object is split by key to same-named "
+                "output ports, else the whole stdout goes to the default out port. Command "
+                "(shell) is Turing-complete — use it for http (curl) and file/data ops too.\n"
+                "- script: write Python. config.script is plain Python where INPUT PORT NAMES "
+                "are directly usable variables (node IN a, IN b → use a, b in code) and assigning "
+                "to an OUTPUT PORT NAME produces that output (OUT y → y = ...). Do NOT print, do "
+                "NOT parse stdin — the runtime binds inputs as locals and reads outputs as locals. "
+                "A new script node is auto-scaffolded with its port names + comments as a starter.\n"
+                "- content: only output ports, each carrying a constant value (port.value). "
+                "Injects constants, runs nothing.\n"
+                "- subgraph: references an external workflow by config.workflow_name; "
+                "config.iterate = none | loop | map (call once / loop until condition / "
+                "fan-out over an array).\n"
+                "Edge modifiers: condition (per-edge Python expr; false → skip that path), "
+                "transform (per-edge $.field extraction), on_error (node-level "
+                "abort/fallback/skip). Each node has in/out ports; one in-port fed by "
+                "multiple edges aggregates into an array. position is canvas {x,y}."
+            ),
+            input_schema=_schema({
+                "kind": node_kind,
+                "title": {"type": "string"},
+                "config": config_schema,
+                "ports": {"type": "array", "items": port_schema},
+                "position": {"type": "object", "properties": {"x": {"type": "number"}, "y": {"type": "number"}}},
+                "node_id": {"type": "string", "description": "Optional explicit node id (auto-generated if omitted)"},
+            }, required=["kind"]),
+            permission=ASK_USER,
+            metadata={"category": "workflow"},
+        ),
+        ToolSpec(
+            name="workflow_connect",
+            description=(
+                "Connect a source node's output port to a target node's input port. "
+                "source/source_port/target/target_port must reference real node ids and ports."
+            ),
+            input_schema=_schema({
+                "source": {"type": "string"},
+                "source_port": {"type": "string"},
+                "target": {"type": "string"},
+                "target_port": {"type": "string"},
+            }, required=["source", "source_port", "target", "target_port"]),
+            permission=ASK_USER,
+            metadata={"category": "workflow"},
+        ),
+        ToolSpec(
+            name="workflow_delete_node",
+            description=(
+                "Delete a node from the current workflow by node id. Connected edges "
+                "are removed too."
+            ),
+            input_schema=_schema({
+                "node_id": {"type": "string"},
+            }, required=["node_id"]),
+            permission=ASK_USER,
+            metadata={"category": "workflow"},
+        ),
+        ToolSpec(
+            name="workflow_update_node",
+            description=(
+                "Update fields of an existing node (title/config/ports/position) by node id. "
+                "Only provided fields are replaced."
+            ),
+            input_schema=_schema({
+                "node_id": {"type": "string"},
+                "title": {"type": "string"},
+                "config": config_schema,
+                "ports": {"type": "array", "items": port_schema},
+                "position": {"type": "object", "properties": {"x": {"type": "number"}, "y": {"type": "number"}}},
+            }, required=["node_id"]),
+            permission=ASK_USER,
+            metadata={"category": "workflow"},
+        ),
+    ]
+
+
+def workflow_build_tool_handlers(
+    execute_operation: OperationExecutor,
+    work_root: str | Path | None = None,
+) -> dict[str, Callable[[ToolCall], Awaitable[ToolResult]]]:
+    """Handlers that edit the current workflow graph via workflow.get/update."""
+
+    def _call_work_root(call: ToolCall) -> str:
+        metadata = call.metadata if isinstance(call.metadata, dict) else {}
+        raw = metadata.get("work_root") or metadata.get("workRoot")
+        if not raw:
+            session_metadata = metadata.get("_runtime_session_metadata")
+            if isinstance(session_metadata, dict):
+                raw = session_metadata.get("work_root") or session_metadata.get("workRoot")
+        if raw:
+            return str(raw)
+        return str(work_root or "")
+
+    async def _get_graph(name: str, call: ToolCall) -> dict[str, Any] | None:
+        payload: dict[str, Any] = {"name": name}
+        active_root = _call_work_root(call)
+        if active_root:
+            payload["work_root"] = active_root
+        result = await execute_operation("workflow.get", payload, {})
+        status = str(getattr(result, "status", "error") or "error")
+        if status == "ok":
+            wf = (getattr(result, "payload", {}) or {}).get("workflow")
+            return wf if isinstance(wf, dict) else None
+        # "Workflow not found" is expected when bootstrapping from an empty
+        # session; surface it as None so callers can lazy-create / return an
+        # empty graph. Any other error is a real failure — raise so the caller
+        # reports it rather than silently treating it as missing.
+        err = str((getattr(result, "payload", {}) or {}).get("error") or "")
+        if "not found" in err.lower():
+            return None
+        raise RuntimeError(err or "workflow.get failed")
+
+    async def _ensure_graph(name: str, call: ToolCall) -> dict[str, Any]:
+        """Return the named graph, lazy-creating an empty one if it is missing.
+
+        Used by every write tool (add_node/connect/delete/update) so the agent
+        can build a workflow from zero with its natural graph→add→connect flow —
+        no separate "create" step or tool required.
+        """
+        wf = await _get_graph(name, call)
+        if wf is not None:
+            return wf
+        # Bootstrap: create an empty workflow, then re-read it (workflow.create
+        # returns the created definition, but re-reading keeps one code path).
+        create_payload: dict[str, Any] = {"name": name}
+        active_root = _call_work_root(call)
+        if active_root:
+            create_payload["work_root"] = active_root
+        result = await execute_operation("workflow.create", create_payload, {})
+        status = str(getattr(result, "status", "error") or "error")
+        if status != "ok":
+            err = str((getattr(result, "payload", {}) or {}).get("error") or "create failed")
+            raise RuntimeError(f"could not bootstrap workflow {name!r}: {err}")
+        wf = (getattr(result, "payload", {}) or {}).get("workflow")
+        return wf if isinstance(wf, dict) else {"name": name, "nodes": [], "edges": []}
+
+    async def _save_graph(name: str, wf: dict[str, Any], call: ToolCall) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "name": name,
+            "description": wf.get("description") or "",
+            "nodes": wf.get("nodes") or [],
+            "edges": wf.get("edges") or [],
+            "input_params": wf.get("input_params") or [],
+            "output_port": wf.get("output_port") or "",
+            "exposed": bool(wf.get("exposed")),
+            "tool_name": wf.get("tool_name") or "",
+        }
+        active_root = _call_work_root(call)
+        if active_root:
+            payload["work_root"] = active_root
+        result = await execute_operation("workflow.update", payload, {})
+        status = str(getattr(result, "status", "error") or "error")
+        if status != "ok":
+            err = str((getattr(result, "payload", {}) or {}).get("error") or "save failed")
+            raise RuntimeError(err)
+        saved = (getattr(result, "payload", {}) or {}).get("workflow")
+        return saved if isinstance(saved, dict) else wf
+
+    async def _resolve_name(call: ToolCall) -> str:
+        session_metadata = call.metadata.get("_runtime_session_metadata")
+        if isinstance(session_metadata, dict):
+            resource_id = str(session_metadata.get("resource_id") or "").strip()
+            if (
+                session_metadata.get("owner_plugin") == "workflow"
+                and session_metadata.get("resource_type") == "workflow"
+                and resource_id
+            ):
+                payload: dict[str, Any] = {"workflow_id": resource_id}
+                scoped_root = str(session_metadata.get("work_root") or _call_work_root(call) or "").strip()
+                if scoped_root:
+                    payload["work_root"] = scoped_root
+                result = await execute_operation("workflow.get", payload, {})
+                if str(getattr(result, "status", "error") or "error") == "ok":
+                    workflow = (getattr(result, "payload", {}) or {}).get("workflow")
+                    if isinstance(workflow, dict):
+                        return str(workflow.get("name") or "").strip()
+        session = str(call.metadata.get("_runtime_session_id") or "").strip()
+        # Legacy sessions used wf_<name>; keep resolving those while old
+        # clients migrate to metadata-bound workflow:<id> sessions.
+        if session.startswith("wf_"):
+            return session[3:]
+        return ""
+
+    async def workflow_graph(call: ToolCall) -> ToolResult:
+        name = await _resolve_name(call)
+        if not name:
+            return _failed(call, "no active workflow (session id missing)")
+        try:
+            wf = await _get_graph(name, call)
+        except RuntimeError as exc:
+            return _failed(call, str(exc))
+        if wf is None:
+            # Empty graph so the agent can immediately add the first node —
+            # the very first edit (add_node) bootstraps the workflow.
+            wf = {"name": name, "nodes": [], "edges": []}
+        return _ok(call, wf)
+
+    async def workflow_add_node(call: ToolCall) -> ToolResult:
+        args = _args(call)
+        name = await _resolve_name(call)
+        if not name:
+            return _failed(call, "no active workflow (session metadata missing)")
+        try:
+            wf = await _ensure_graph(name, call)
+        except RuntimeError as exc:
+            return _failed(call, str(exc))
+        nodes = list(wf.get("nodes") or [])
+        kind = str(args.get("kind") or "command")
+        import secrets
+
+        node_id = str(args.get("node_id") or "").strip() or f"{kind}-{secrets.token_hex(2)}"
+        if any(str(n.get("id")) == node_id for n in nodes if isinstance(n, dict)):
+            return _failed(call, f"node id already exists: {node_id}")
+        ports = args.get("ports") if isinstance(args.get("ports"), list) else _default_ports(kind)
+        config = args.get("config") if isinstance(args.get("config"), dict) else {}
+        # Auto-scaffold a starter script from the port names + comments, so the
+        # model opens a ready-to-fill file with the right variable names.
+        if kind == "script" and not str(config.get("script") or "").strip():
+            config = dict(config)
+            config["script"] = _scaffold_script(str(args.get("title") or kind.capitalize()), ports)
+        node: dict[str, Any] = {
+            "id": node_id,
+            "kind": kind,
+            "title": str(args.get("title") or kind.capitalize()),
+            "config": config,
+            "ports": ports,
+            "position": args.get("position") if isinstance(args.get("position"), dict) else {"x": 120, "y": 120},
+        }
+        nodes.append(node)
+        wf["nodes"] = nodes
+        saved = await _save_graph(name, wf, call)
+        return _ok(call, {"added": node, "workflow": saved})
+
+    async def workflow_connect(call: ToolCall) -> ToolResult:
+        args = _args(call)
+        name = await _resolve_name(call)
+        if not name:
+            return _failed(call, "no active workflow (session metadata missing)")
+        try:
+            wf = await _ensure_graph(name, call)
+        except RuntimeError as exc:
+            return _failed(call, str(exc))
+        source = str(args.get("source") or "")
+        source_port = str(args.get("source_port") or "")
+        target = str(args.get("target") or "")
+        target_port = str(args.get("target_port") or "")
+        nodes = wf.get("nodes") or []
+        node_ids = {str(n.get("id")) for n in nodes if isinstance(n, dict)}
+        if source not in node_ids or target not in node_ids:
+            return _failed(call, "source or target node id not found")
+        import secrets
+
+        edges = list(wf.get("edges") or [])
+        edge_id = f"e-{source}-{source_port}-{target}-{target_port}-{secrets.token_hex(1)}"
+        edges.append({
+            "id": edge_id,
+            "source": source,
+            "source_port": source_port,
+            "target": target,
+            "target_port": target_port,
+        })
+        wf["edges"] = edges
+        saved = await _save_graph(name, wf, call)
+        return _ok(call, {"connected": edge_id, "workflow": saved})
+
+    async def workflow_delete_node(call: ToolCall) -> ToolResult:
+        args = _args(call)
+        name = await _resolve_name(call)
+        if not name:
+            return _failed(call, "no active workflow (session metadata missing)")
+        try:
+            wf = await _ensure_graph(name, call)
+        except RuntimeError as exc:
+            return _failed(call, str(exc))
+        node_id = str(args.get("node_id") or "")
+        wf["nodes"] = [n for n in (wf.get("nodes") or []) if isinstance(n, dict) and str(n.get("id")) != node_id]
+        wf["edges"] = [e for e in (wf.get("edges") or []) if isinstance(e, dict) and str(e.get("source")) != node_id and str(e.get("target")) != node_id]
+        saved = await _save_graph(name, wf, call)
+        return _ok(call, {"deleted": node_id, "workflow": saved})
+
+    async def workflow_update_node(call: ToolCall) -> ToolResult:
+        args = _args(call)
+        name = await _resolve_name(call)
+        if not name:
+            return _failed(call, "no active workflow (session metadata missing)")
+        try:
+            wf = await _ensure_graph(name, call)
+        except RuntimeError as exc:
+            return _failed(call, str(exc))
+        node_id = str(args.get("node_id") or "")
+        nodes = wf.get("nodes") or []
+        found = False
+        for n in nodes:
+            if isinstance(n, dict) and str(n.get("id")) == node_id:
+                if "title" in args:
+                    n["title"] = str(args.get("title") or "")
+                if isinstance(args.get("config"), dict):
+                    n["config"] = args.get("config")
+                if isinstance(args.get("ports"), list):
+                    n["ports"] = args.get("ports")
+                if isinstance(args.get("position"), dict):
+                    n["position"] = args.get("position")
+                found = True
+                break
+        if not found:
+            return _failed(call, f"node not found: {node_id}")
+        wf["nodes"] = nodes
+        saved = await _save_graph(name, wf, call)
+        return _ok(call, {"updated": node_id, "workflow": saved})
+
+    return {
+        "workflow_graph": workflow_graph,
+        "workflow_add_node": workflow_add_node,
+        "workflow_connect": workflow_connect,
+        "workflow_delete_node": workflow_delete_node,
+        "workflow_update_node": workflow_update_node,
+    }
+
+
+# ---- helpers -------------------------------------------------------------
+
+def _default_ports(kind: str) -> list[dict[str, Any]]:
+    """Sensible default ports per node kind for newly created nodes."""
+    if kind == "content":
+        return [{"name": "out", "type": "string", "direction": "out", "value": ""}]
+    if kind == "subgraph":
+        return [
+            {"name": "in", "type": "any", "direction": "in"},
+            {"name": "result", "type": "any", "direction": "out"},
+        ]
+    return [
+        {"name": "in", "type": "string", "direction": "in"},
+        {"name": "out", "type": "string", "direction": "out"},
+    ]
+
+
+def _scaffold_script(title: str, ports: list[Any]) -> str:
+    """Starter Python for a freshly created script node.
+
+    Lists input port names (available as variables) and output port names
+    (assign to produce output) on two comment lines, plus a `name = None`
+    placeholder per output. The runtime binds inputs as locals — inputs are
+    only commented (never re-declared, which would clobber the bound value).
+    """
+    in_ports = [p for p in ports if isinstance(p, dict) and p.get("direction") == "in"]
+    out_ports = [p for p in ports if isinstance(p, dict) and p.get("direction") == "out"]
+    in_names = [_id(p.get("name")) for p in in_ports]
+    out_names = [_id(p.get("name")) for p in out_ports]
+    lines = [
+        f"# 输入：{', '.join(in_names) if in_names else '（无）'}",
+        f"# 输出：{', '.join(out_names) if out_names else '（无）'}",
+        "",
+    ]
+    for name in out_names:
+        lines.append(f"{name} = None")
+    return "\n".join(lines) + "\n"
+
+
+def _id(name: Any) -> str:
+    """A safe Python identifier fallback for a port name."""
+    s = str(name or "value").strip()
+    if s.isidentifier():
+        return s
+    cleaned = "".join(c if c.isalnum() or c == "_" else "_" for c in s) or "value"
+    return cleaned if cleaned.isidentifier() else "value"
+
+
+def _args(call: ToolCall) -> dict[str, Any]:
+    return call.arguments if isinstance(call.arguments, dict) else {}
+
+
+def _schema(properties: dict[str, Any], *, required: list[str]) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": properties,
+        "required": required,
+    }
+
+
+def _ok(call: ToolCall, payload: dict[str, Any]) -> ToolResult:
+    return ToolResult(
+        call_id=call.id,
+        name=call.name,
+        status="ok",
+        content=json.dumps(payload, ensure_ascii=False, default=str),
+        metadata={"operation_payload": payload},
+    )
+
+
+def _failed(call: ToolCall, error: str) -> ToolResult:
+    return ToolResult(
+        call_id=call.id,
+        name=call.name,
+        status="failed",
+        error=error,
+    )
+
+
+__all__ = ["workflow_build_tool_specs", "workflow_build_tool_handlers", "OperationExecutor"]

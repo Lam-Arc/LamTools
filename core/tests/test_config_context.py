@@ -36,7 +36,10 @@ async def test_loadtools_get_returns_builtin_modes_and_catalog(isolated_config_r
     assert result.status == "ok"
     assert result.payload["source"] == "builtin"
     modes = result.payload["modes"]
-    assert set(modes) == {"consider", "execute", "workflow"}
+    # Workflow is contributed by the bundled plugin, not by Core's default
+    # loadtools catalogue.  This operation-only fixture deliberately builds
+    # the Core context without plugin contributions.
+    assert set(modes) == {"consider", "execute"}
     assert modes["execute"]["tools"] == []  # full access
     assert "read_file" in modes["consider"]["tools"]
     catalog_names = {item["name"] for item in result.payload["catalog"]}

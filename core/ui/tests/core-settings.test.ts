@@ -1,7 +1,7 @@
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import CoreSettings from '../src/components/CoreSettings.vue'
 import { DEFAULT_THEME } from '../src/helpers/theme'
@@ -22,13 +22,14 @@ const providers = [{
   has_api_key: true,
 }]
 
-function mountSettings() {
+function mountSettings(requestRpc?: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>) {
   return mount(CoreSettings, {
     props: {
       models,
       providers,
       density: 'standard',
       theme: structuredClone(DEFAULT_THEME),
+      requestRpc,
     },
     // CoreSettings teleports its whole content to body; stub Teleport so
     // wrapper queries hit the rendered tree (see core-project-components.test.ts)
@@ -137,11 +138,41 @@ describe('CoreSettings', () => {
 
     expect(wrapper.text()).toContain('权限策略')
     expect(wrapper.text()).toContain('放行模式')
-    expect(wrapper.findAll('input, select, textarea').length).toBe(1)
+    expect(wrapper.findAll('input, select, textarea').length).toBe(0)
     await wrapper.get('[aria-label="选择完全编辑"]').trigger('click')
     expect(wrapper.emitted('update-permission-mode')).toEqual([['full_edit']])
-    await wrapper.get('[data-allow-outside-workdir]').setValue(true)
+    await wrapper.get('[data-allow-outside-workdir]').trigger('click')
     expect(wrapper.emitted('update-allow-outside-workdir')).toEqual([[true]])
+  })
+
+  it('toggles and persists button-based settings controls', async () => {
+    localStorage.clear()
+    const rpc = vi.fn(async (method: string) => {
+      if (method === 'settings.get') return { value: { enabled: false, min_turns: 3 } }
+      return {}
+    })
+    const wrapper = mountSettings(rpc)
+    await flushPromises()
+
+    await wrapper.get('[data-settings-section="about"]').trigger('click')
+    const updateToggle = wrapper.get('[data-update-auto-check]')
+    expect(updateToggle.attributes('aria-pressed')).toBe('true')
+    await updateToggle.trigger('click')
+    expect(updateToggle.attributes('aria-pressed')).toBe('false')
+    expect(localStorage.getItem('lamtools.update.autoCheck')).toBe('false')
+
+    await wrapper.get('[data-settings-section="agents"]').trigger('click')
+    const dreamingToggle = wrapper.get('[aria-label="自动记忆整理"]')
+    await dreamingToggle.trigger('click')
+    await flushPromises()
+    expect(dreamingToggle.attributes('aria-pressed')).toBe('true')
+    expect(rpc).toHaveBeenCalledWith('settings.update', {
+      namespace: 'core.dreaming',
+      value: { enabled: true, min_turns: 3 },
+    })
+
+    wrapper.unmount()
+    localStorage.clear()
   })
 })
 
@@ -155,7 +186,7 @@ describe('Core settings permission contract', () => {
     expect(source).toContain("'update-allow-outside-workdir': [value: boolean]")
     expect(source).toContain('data-allow-outside-workdir')
     expect(source).toContain('允许访问工作目录以外')
-    expect(source).toContain("emit('update-allow-outside-workdir', input.checked)")
+    expect(source).toContain("emit('update-allow-outside-workdir', !props.allowAccessOutsideWorkdir)")
   })
 
   it('binds the toggle state in the Core demo App', () => {

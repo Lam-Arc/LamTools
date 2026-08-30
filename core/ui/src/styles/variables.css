@@ -56,6 +56,47 @@
   --ease-inout: cubic-bezier(.2, .8, .2, 1);          /* 抽屉/面板往返 */
   --ease-emphasized: cubic-bezier(.16, 1, .3, 1);     /* 强调入场 */
 
-  --sidebar-width: 300px;
+  /* —— Core 左侧栏标尺（桌面端紧凑密度）—— */
+  --sidebar-width: 280px;
+  --sidebar-padding-x: 14px;
+  --sidebar-padding-y: 0;
+  --sidebar-font: 14px;
+  --sidebar-font-title: 16px;
+  --sidebar-font-section: 12px;
+  --sidebar-line-height-item: 20px;
+  --sidebar-row-height: 34px;
+  --sidebar-footer-row-height: 38px;
+  --sidebar-row-radius: 8px;
+  --sidebar-row-gap: 0;
+  --sidebar-item-gap: 6px;
+  --sidebar-toolbar-gap: 8px;
+  --sidebar-footer-gap: 10px;
+  --sidebar-list-gap: 6px;
+  --sidebar-section-gap: 18px;
+  --sidebar-indent: 18px;
+  --sidebar-icon-size: 18px;
+  --sidebar-chevron-size: 16px;
+  --sidebar-text-primary: color-mix(in srgb, var(--theme-backdrop-text, var(--text)) 90%, transparent);
+  --sidebar-text-secondary: color-mix(in srgb, var(--theme-backdrop-text, var(--text)) 72%, transparent);
+  --sidebar-text-muted: color-mix(in srgb, var(--theme-backdrop-text, var(--text)) 46%, transparent);
+  --sidebar-text-disabled: color-mix(in srgb, var(--theme-backdrop-text, var(--text)) 28%, transparent);
+  --sidebar-hover: color-mix(in srgb, var(--theme-backdrop-text, var(--text)) 5%, transparent);
+  --sidebar-selected: color-mix(in srgb, var(--theme-backdrop-text, var(--text)) 8%, transparent);
+  --sidebar-hover-fill: rgba(255, 255, 255, 0.055);
+  --sidebar-selected-fill: rgb(255 255 255 / var(--alpha-active));
+  --sidebar-hover-fade-left: 18px;
+  --sidebar-hover-fade-right: 26px;
+  --sidebar-hover-fade-vertical: 2px;
+  --sidebar-divider: color-mix(in srgb, var(--theme-backdrop-text, var(--text)) 6%, transparent);
+  --sidebar-scrollbar-thumb: color-mix(in srgb, var(--theme-backdrop-text, var(--text)) 16%, transparent);
+  --sidebar-scrollbar-thumb-hover: color-mix(in srgb, var(--theme-backdrop-text, var(--text)) 30%, transparent);
+  --sidebar-scrollbar-width: 6px;
+  --sidebar-text-size: var(--sidebar-font);
+  --sidebar-meta-text-size: 12px;
+
+  /* Legacy names kept as aliases for the shell frame. */
+  --sidebar-header-height: 66px;
+  --sidebar-inline-padding: var(--sidebar-padding-x);
+  --sidebar-item-height: var(--sidebar-row-height);
   --right-panel-width: 320px;
 }

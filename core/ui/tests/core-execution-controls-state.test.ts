@@ -178,9 +178,11 @@ describe('useCoreExecutionControlsState', () => {
       model_id: 'model-1',
       thinking_enabled: true,
       thinking_budget: 8_192,
+      reasoning_effort: undefined,
       shallow_thinking_enabled: true,
       context_window_tokens: 128_000,
       active_mode: 'execute',
+      permission_preset: 'ask',
     })
 
     state.selectModel('model-1')

@@ -754,7 +754,7 @@ async def test_core_live_turn_start_accepts_input_before_runtime_completion(tmp_
 
 
 @pytest.mark.asyncio
-async def test_turn_start_uses_shared_auto_allow_setting_when_policy_is_omitted(tmp_path):
+async def test_turn_start_uses_shared_runtime_controls_without_inventing_auto_preset(tmp_path):
     engine, context = await _context(tmp_path)
     release = _register_blocking_turn_start(context)
 
@@ -782,7 +782,7 @@ async def test_turn_start_uses_shared_auto_allow_setting_when_policy_is_omitted(
             context=context,
         )
 
-        assert outcome.response["result"]["runtime_start"]["approval_policy"] == "auto_approve"
+        assert outcome.response["result"]["runtime_start"]["approval_policy"] == "require"
     finally:
         task = context.runtime_task_registry.task("thread-auto-allow")
         release.set()

@@ -3,15 +3,14 @@
     <div class="titlebar-left">
       <span class="brand">Core</span>
 
-      <!-- mode toggle: shows the *current* mode, click to switch -->
+      <!-- mode toggle: shows the current application mode -->
       <button
         class="mode-toggle"
-        :class="{ 'is-workflow': workflowMode }"
-        :title="workflowMode ? '切换到 Agent 模式' : '切换到工作流模式'"
-        @click="$emit('toggleWorkflowMode')"
+        :title="modeTitle"
+        :disabled="!canToggleMode"
+        @click="$emit('cycleMode')"
       >
-      <span class="mode-word mode-agent" :class="{ 'is-on': !workflowMode }">Agent</span>
-      <span class="mode-word mode-workflow" :class="{ 'is-on': workflowMode }">Workflow</span>
+        <span class="mode-word mode-current">{{ modeLabel }}</span>
       </button>
     </div>
 
@@ -62,13 +61,15 @@ import { ref, onMounted, onUnmounted } from 'vue'
 defineProps<{
   leftPinned?: boolean
   rightPinned?: boolean
-  workflowMode?: boolean
+  modeLabel?: string
+  modeTitle?: string
+  canToggleMode?: boolean
 }>()
 
 defineEmits<{
   toggleLeftPinned: []
   toggleRightPinned: []
-  toggleWorkflowMode: []
+  cycleMode: []
 }>()
 
 const isTauri = ref(false)
@@ -122,11 +123,7 @@ onUnmounted(() => {
   gap: 0;   /* spacing lives in .mode-toggle's left padding → ~one space */
 }
 
-/* ── Mode toggle (agent ⇄ workflow) ── */
-/* inline-grid so both words share one cell (overlap → cross-fade) and the
-   button auto-sizes to the longer word. justify-items: start left-aligns both
-   → the first letter stays put, the longer word just extends right. Same font
-   family/size/color as .brand so it reads as a uniform "Core Agent" label. */
+/* ── Generic application mode toggle ── */
 .mode-toggle {
   display: inline-grid;
   align-items: center;
@@ -143,6 +140,10 @@ onUnmounted(() => {
   color: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 62%, transparent);
 }
 
+.mode-toggle:disabled {
+  cursor: default;
+}
+
 .mode-toggle:focus-visible {
   outline: 2px solid var(--blue, #79bcff);
   outline-offset: 1px;
@@ -153,31 +154,8 @@ onUnmounted(() => {
   white-space: nowrap;
   line-height: 22px;        /* match .brand → shared baseline */
   font-weight: 700;         /* 加粗 */
-  opacity: 0;
-  transform: scale(0.94);
-  transform-origin: left center;  /* scales from the first letter */
-  transition:
-    opacity 0.28s ease,
-    transform 0.28s ease,
-    color 0.12s ease;
+  color: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 78%, transparent);
 }
-
-.mode-word.is-on {
-  opacity: 1;
-  transform: scale(1);
-}
-
-/* per-mode tint on the text itself (no background). Desaturated so the tint
-   reads as a subtle wash rather than a bright color. 底色取标题栏文字色降饱和。 */
-.mode-agent { color: color-mix(in srgb, var(--blue) 62%, color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 62%, transparent)); }    /* 淡蓝,降饱和 */
-.mode-workflow { color: color-mix(in srgb, var(--orange) 62%, color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 62%, transparent)); } /* 淡橙,降饱和 */
-
-/* hover brightens the visible word toward its lighter shade */
-.mode-toggle:hover .mode-agent.is-on { color: color-mix(in srgb, var(--blue) 70%, color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 85%, transparent)); }
-.mode-toggle:hover .mode-workflow.is-on { color: color-mix(in srgb, var(--orange) 70%, color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 85%, transparent)); }
-
-
-
 
 .titlebar-right {
   display: flex;

@@ -30,7 +30,7 @@ from .live_protocol import (
     snapshot_notification,
 )
 from .operation_catalog import OperationCatalog
-from .security import is_allowed_origin
+from .security import is_allowed_origin, is_same_server_origin
 
 
 logger = logging.getLogger(__name__)
@@ -97,7 +97,15 @@ def create_core_live_router(context_factory: CoreLiveContextFactory) -> APIRoute
         # otherwise open a raw WS to 127.0.0.1 and drive the agent, since WS
         # is not subject to CORS).  Non-browser clients omit Origin and pass.
         origin = websocket.headers.get("origin")
-        if origin is not None and not is_allowed_origin(origin):
+        if (
+            origin is not None
+            and not is_allowed_origin(origin)
+            and not is_same_server_origin(
+                origin,
+                scheme=str(websocket.scope.get("scheme") or ""),
+                server=websocket.scope.get("server"),
+            )
+        ):
             await websocket.close(code=1008, reason="origin not allowed")
             return
         context = context_factory()
@@ -269,7 +277,7 @@ class CoreLiveConnection:
             # client never observes state out of order.
             await self._flush_run_item_buffer()
             await self._send(event_notification(event))
-            if event_method in (CORE_RUN_ITEM_METHOD, "session/created", "session/updated", "workflow/changed"):
+            if event_method in (CORE_RUN_ITEM_METHOD, "session/created", "session/updated"):
                 continue
             if event_method not in SNAPSHOT_TRIGGER_EVENTS:
                 continue

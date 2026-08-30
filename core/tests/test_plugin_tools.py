@@ -278,7 +278,8 @@ def test_plugin_tool_permission_ask_user_requires_approval(tmp_path):
     assert call.requires_approval is True
 
 
-def test_plugin_tool_hard_block_skipped(tmp_path):
+@pytest.mark.asyncio
+async def test_plugin_tool_hard_block_skipped(tmp_path):
     from lamtools_core.plugins.models import PluginToolSpec
 
     toolbox = _make_toolbox(
@@ -292,6 +293,45 @@ def test_plugin_tool_hard_block_skipped(tmp_path):
     decision = toolbox.approval_gate.check("evil_tool", {})
     assert decision.blocked is True
     assert decision.permission_tier == HARD_BLOCK
+    direct = await toolbox.execute(ToolCall(id="c2", name="evil_tool", arguments={}))
+    assert direct.status == "blocked"
+
+
+@pytest.mark.asyncio
+async def test_approved_plugin_call_rechecks_the_permission_boundary(tmp_path):
+    from lamtools_core.plugins.models import PluginToolSpec
+
+    toolbox = _make_toolbox(
+        tmp_path,
+        [PluginToolSpec(name="echo_tool", permission="ask_user", handler="plugin_test_handlers:echo_tool")],
+        approval_policy="require",
+    )
+    call = toolbox.prepare_approved_call(
+        ToolCall(id="approved-1", name="echo_tool", arguments={"value": "ok"})
+    )
+
+    assert call.requires_approval is False
+    result = await toolbox.execute(call)
+    assert result.status == "ok"
+
+
+@pytest.mark.asyncio
+async def test_approved_plugin_call_cannot_cross_a_new_manifest_hard_block(tmp_path):
+    from lamtools_core.plugins.models import PluginToolSpec
+
+    toolbox = _make_toolbox(
+        tmp_path,
+        [PluginToolSpec(name="echo_tool", permission="ask_user", handler="plugin_test_handlers:echo_tool")],
+        approval_policy="require",
+    )
+    toolbox.manifest_hard_block_tools.add("echo_tool")
+    call = toolbox.prepare_approved_call(
+        ToolCall(id="approved-2", name="echo_tool", arguments={"value": "blocked"})
+    )
+
+    assert call.metadata["approval"]["blocked"] is True
+    result = await toolbox.execute(call)
+    assert result.status == "blocked"
 
 
 # ── 惰性暴露（visibility=on_load） ────────────────────────────────
@@ -414,7 +454,7 @@ async def test_load_skill_disabled_rejected(tmp_path):
 
 # ── 用户权限覆盖（E3） ────────────────────────────────────────────
 
-def test_permission_overrides_win(tmp_path):
+def test_manifest_permission_wins_over_user_override(tmp_path):
     from lamtools_core.plugins.models import PluginToolSpec
 
     toolbox = _make_toolbox(
@@ -423,7 +463,8 @@ def test_permission_overrides_win(tmp_path):
         permission_overrides={"echo_tool": "ask_user"},
     )
     call = toolbox.prepare_call(ToolCall(id="c1", name="echo_tool", arguments={}))
-    assert call.requires_approval is True
+    assert call.requires_approval is False
+    assert call.metadata["approval"]["tier"] == "auto_allow"
 
 
 
@@ -431,7 +472,7 @@ def test_permission_overrides_win(tmp_path):
 # ── 验收 #2：access_tools 档位对插件工具生效 ─────────────────────
 
 def test_plugin_tool_respects_access_tier(tmp_path):
-    """read_only 档位：不在 access 列表的插件工具需审批；在列表的免审。"""
+    """tier access is checked before the manifest approval permission."""
     from lamtools_core.plugins.models import PluginToolSpec
 
     tier_tools = {"read_only": {"echo_tool"}, "limited_edit": set(), "full_edit": set()}
@@ -449,9 +490,41 @@ def test_plugin_tool_respects_access_tier(tmp_path):
             plugin_root=tmp_path,
         ),
     )
-    # 在 read_only access 列表 → 免审
+    # 在 read_only access 列表，但 manifest ask_user 仍需审批。
     call = toolbox.prepare_call(ToolCall(id="c1", name="echo_tool", arguments={}))
-    assert call.requires_approval is False
-    # 不在列表 → 需审批
+    assert call.requires_approval is True
+    # 不在列表 → capability boundary blocks before approval.
     call2 = toolbox.prepare_call(ToolCall(id="c2", name="other_tool", arguments={}))
-    assert call2.requires_approval is True
+    assert call2.requires_approval is False
+    assert call2.metadata["approval"]["blocked"] is True
+
+
+@pytest.mark.asyncio
+async def test_direct_plugin_execute_cannot_bypass_access_tier(tmp_path):
+    """The low-level execute entry point must honor a frozen capability tier."""
+    from lamtools_core.plugins.models import PluginToolSpec
+
+    toolbox = build_core_toolbox(
+        work_root=tmp_path,
+        approval_policy="auto_approve",
+        active_tier="read_only",
+        tier_tools={"read_only": set(), "limited_edit": set(), "full_edit": set()},
+        plugin_tool_specs=complete_plugin_tool_specs(
+            [
+                PluginToolSpec(
+                    name="echo_tool",
+                    permission="auto_allow",
+                    handler="plugin_test_handlers:echo_tool",
+                )
+            ],
+            plugin_name="demo",
+            plugin_root=tmp_path,
+        ),
+    )
+
+    result = await toolbox.execute(
+        ToolCall(id="direct-tier", name="echo_tool", arguments={"value": "blocked"})
+    )
+
+    assert result.status == "blocked"
+    assert "outside the read_only capability tier" in (result.error or "")

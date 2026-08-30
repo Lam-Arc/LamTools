@@ -23,7 +23,7 @@
 7. **快照不可变拷贝 O(items×events)**（`appServer/store.ts:377`）：每帧 N 个事件逐个 spread 拷贝全部 items + `seen_event_ids`（2000 条 slice）+ `deltas` 数组只增不减。
 8. **后端每 chunk 都做投影转换**（`core/src/lamtools_core/app/default_agent.py:362` live_callback → `core_events_to_run_items`），模型快时 20-100+ events/s。
 
-次要：`item/started`/`turn/accepted` 不走 rAF 批处理直接替换 state；`typingMessageIds` 只 add 永不 delete（App.vue:2081）。
+次要：`item/started`/`turn/accepted` 不走 rAF 批处理直接替换 state。
 
 ## 快速见效包（已完成 2026-08-07）
 
@@ -72,7 +72,7 @@
 
 - `ChatThread.vue`（原 5237 行）瘦身为薄壳：v-for + 插槽转发；消息渲染整体迁入新组件 `MessageView.vue`（单消息组件，自递归处理 sub-line）
 - 模板零变换搬移（prop 名保持 `msg`）；`<style>` 全局 CSS 留在 ChatThread（测试契约 + 零视觉回归）；内部 UI 状态（展开/折叠/decision draft/copy 反馈）全部下放到 MessageView 实例（状态变更只重渲对应消息）
-- **关键机制**：`v-memo="[msg, assistantLabel, processExpandedIds, typingMessageIds, messageActions]"` + 命名事件处理器（内联箭头会让所有消息随父渲染重渲——slots/事件每次父渲染重建引用）。v-memo 依赖 = 消息渲染的全部外部输入；当前消费方（demo/CoreSubAgentDialog）不提供命名插槽，无 stale 风险
+- **关键机制**：`v-memo` 使用消息引用、每消息过程展开状态及其他渲染输入 + 命名事件处理器（内联箭头会让所有消息随父渲染重渲——slots/事件每次父渲染重建引用）。v-memo 依赖 = 消息渲染的全部外部输入；当前消费方（demo/CoreSubAgentDialog）不提供命名插槽，无 stale 风险
 - 新增 `tests/chat-thread-messageview-isolation.test.ts`（3 个隔离契约测试：只重渲变化消息 / 同数组零重渲 / message-product 路由，全绿）
 - 附带收益：`vue-tsc -b` 与 `npm run build` 恢复全绿（此前被「样式精进」WIP 的 ChatThread:1016 类型错误挡住）
 - 回归验证：chat-thread-process 55 测试与基线逐项一致（18 红为 WIP 既有）；chat-thread-rollback 4/4、demo/scroll/projection 相关 32/32 全绿
@@ -105,7 +105,7 @@
 
 - **现象**：用户反馈"新消息出现 / 流式输出瞬间卡顿"
 - **根因**：ChatThread 的 `v-memo` 缓存键含 `processExpandedIds`（Set **引用**）。新消息到达时该 Set 内容变化 → 新建 Set → 引用变 → **所有历史消息的 v-memo 缓存同时失效 → 整线重渲一次**
-- **修复**：v-memo 键改为**每消息布尔** `processExpandedIds.has(msg.id)` / `typingMessageIds.has(msg.id)`——新消息只挂载自身，历史消息 hits cache 不重渲；只有展开状态真正变化的那条消息才重渲
+- **修复**：v-memo 键改为**每消息布尔** `processExpandedIds.has(msg.id)`——新消息只挂载自身，历史消息 hits cache 不重渲；只有展开状态真正变化的那条消息才重渲
 - 新增测试"新消息到达时不重渲历史消息"（`chat-thread-messageview-isolation.test.ts` 4/4）
 
 ### 阶段 4 补丁二 — part 级 v-memo 隔离（2026-08-07，直击 runtime-core 自我时间）

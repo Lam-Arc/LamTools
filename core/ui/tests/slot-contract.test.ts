@@ -210,6 +210,7 @@ describe('WorkspaceShell rendering', () => {
         'main-content': '<main class="test-main">Thread</main>',
         'composer-textarea': '<textarea class="test-composer"></textarea>',
         'right-panel': '<aside class="test-review">Review</aside>',
+        'runtime-overlay': '<aside class="test-runtime-overlay">Checklist</aside>',
       },
     });
 
@@ -217,13 +218,14 @@ describe('WorkspaceShell rendering', () => {
     expect(wrapper.find('.test-main').text()).toBe('Thread');
     expect(wrapper.find('.test-composer').exists()).toBe(true);
     expect(wrapper.find('.test-review').text()).toBe('Review');
+    expect(wrapper.find('.test-runtime-overlay').text()).toBe('Checklist');
   });
 
   it('emits shell actions', async () => {
     const wrapper = mountShell();
 
     await wrapper.find('.drawer-head .icon-btn').trigger('click');
-    await wrapper.find('.settings-entry').trigger('click');
+    await wrapper.find('.settings-entry[aria-label="打开设置"]').trigger('click');
     await wrapper.find('.floating-composer').trigger('submit');
 
     expect(wrapper.emitted('new-session')).toHaveLength(1);
@@ -263,13 +265,15 @@ describe('CoreExecutionControls', () => {
       },
     });
 
-    const triggers = wrapper.findAll('.ui-select-trigger');
-    await triggers[0].trigger('click');
-    await wrapper.findAll('.ui-select-option')[1].trigger('click');
-    await triggers[1].trigger('click');
-    await wrapper.findAll('.ui-select-option')[1].trigger('click');
-    await triggers[1].trigger('click');
-    await wrapper.findAll('.ui-select-option').at(-1)!.trigger('click');
+    await wrapper.get('[data-core-model-thinking-menu] .core-model-thinking-menu__trigger').trigger('click');
+    await wrapper.get('[data-model-thinking-section="model"]').trigger('mouseenter');
+    await wrapper.findAll('[data-model-thinking-model-option]')[1].trigger('click');
+    await wrapper.get('[data-core-model-thinking-menu] .core-model-thinking-menu__trigger').trigger('click');
+    await wrapper.get('[data-model-thinking-section="thinking"]').trigger('mouseenter');
+    await wrapper.findAll('[data-model-thinking-level-option]')[1].trigger('click');
+    await wrapper.get('[data-core-model-thinking-menu] .core-model-thinking-menu__trigger').trigger('click');
+    await wrapper.get('[data-model-thinking-section="thinking"]').trigger('mouseenter');
+    await wrapper.get('[data-model-thinking-shallow-option]').trigger('click');
 
     expect(wrapper.emitted('update:modelValue')?.[0]).toEqual(['model-1']);
     expect(wrapper.emitted('update:thinkingMode')?.[0]).toEqual(['max']);
@@ -296,7 +300,7 @@ describe('SessionSidebar numbering', () => {
       },
     });
 
-    expect(wrapper.findAll('.conversation strong').map((item) => item.text())).toEqual([
+    expect(wrapper.findAll('[data-session-row] strong').map((item) => item.text())).toEqual([
       'Session 4',
       'Session 3',
       'Session 2',
@@ -319,9 +323,18 @@ describe('SessionSidebar numbering', () => {
         allowRename: false,
         allowSessionDelete: true,
       },
+      attachTo: document.body,
     });
 
-    await wrapper.find('[data-session-delete="s1"]').trigger('click');
+    await wrapper.get('[data-session-row="s1"]').trigger('contextmenu', {
+      clientX: 120,
+      clientY: 80,
+    });
+    await nextTick();
+    const deleteButton = document.body.querySelector<HTMLElement>('[data-session-menu-delete="s1"]');
+    expect(deleteButton).not.toBeNull();
+    deleteButton!.click();
+    await nextTick();
 
     expect(wrapper.emitted('delete-session')).toEqual([['s1']]);
     expect(wrapper.emitted('select-session')).toBeUndefined();

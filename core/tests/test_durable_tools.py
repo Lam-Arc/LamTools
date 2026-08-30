@@ -8,6 +8,7 @@ import pytest
 
 from lamtools_core.app.operation_catalog import OperationResult
 from lamtools_core.tool import ToolCall, ToolResult
+from lamtools_core.tool.default_toolbox import core_model_tools
 from lamtools_core.tool.durable_tools import (
     arrange_requires_approval,
     durable_tool_handlers,
@@ -42,6 +43,20 @@ class TestDurableToolSpecs:
     def test_arrange_spec_carries_current_utc_hint(self):
         [spec] = durable_tool_specs(goal=False, arrange=True)
         assert "Current UTC time is" in spec.description
+
+    def test_durable_model_schemas_are_strict_compatible(self):
+        definitions = {
+            item["function"]["name"]: item["function"]
+            for item in core_model_tools(durable_tool_specs(goal=True, arrange=True))
+        }
+
+        for name in ("goal", "arrange"):
+            parameters = definitions[name]["parameters"]
+            assert parameters["additionalProperties"] is False
+            assert set(parameters["required"]) == set(parameters["properties"])
+
+        completion_criteria = definitions["goal"]["parameters"]["properties"]["completion_criteria"]
+        assert completion_criteria["type"] == ["array", "null"]
 
 
 class TestGoalTool:

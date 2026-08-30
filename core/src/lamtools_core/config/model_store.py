@@ -12,7 +12,7 @@ model without forking the whole set). Provider connection info (base_url,
 api_key, api_type) stays in the shared config DB; each model references its
 provider by ``provider`` name (or ``provider_id``).
 
-This mirrors the :class:`~lamtools_core.project.workflow_store.WorkflowStore`
+This mirrors the file-backed resource-store pattern used by bundled plugins.
 discovery pattern: lazy scan + mtime signature cache. Parsing uses
 :func:`lamtools_core.llm.profiles.load_jsonc` (comment- and trailing-comma
 tolerant) — never plain ``json.loads``.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -72,6 +73,10 @@ class KernelSubAgentRunner:
         thinking_enabled: bool | None = None,
         thinking_budget: int | None = None,
         approval_policy: ApprovalPolicy = "require",
+        permission_preset: str = "ask",
+        active_tier: str | None = None,
+        tier_tools: dict[str, Any] | None = None,
+        runtime_snapshot: dict[str, Any] | None = None,
         loaded_skill_roots: set[Path] | None = None,
         mcp_caller: MCPToolCaller | None = None,
         mcp_tool_specs: list[ToolSpec] | None = None,
@@ -87,6 +92,7 @@ class KernelSubAgentRunner:
         attachment_service: AttachmentServiceLike = None,
         imagegen_config: dict | None = None,
         allow_access_outside_workdir: bool = False,
+        model_context_sink: Any | None = None,
     ) -> None:
         self.work_root = Path(work_root)
         self.llm_client = llm_client
@@ -97,6 +103,10 @@ class KernelSubAgentRunner:
         self.thinking_enabled = thinking_enabled
         self.thinking_budget = thinking_budget
         self.approval_policy = approval_policy
+        self.permission_preset = str(permission_preset or "ask")
+        self.active_tier = active_tier
+        self.tier_tools = deepcopy(tier_tools) if isinstance(tier_tools, dict) else tier_tools
+        self.runtime_snapshot = deepcopy(runtime_snapshot) if isinstance(runtime_snapshot, dict) else None
         self.loaded_skill_roots = set(loaded_skill_roots or set())
         self.mcp_caller = mcp_caller
         self.mcp_tool_specs = list(mcp_tool_specs or [])
@@ -112,6 +122,7 @@ class KernelSubAgentRunner:
         self.attachment_service = attachment_service
         self.imagegen_config = imagegen_config
         self.allow_access_outside_workdir = allow_access_outside_workdir
+        self.model_context_sink = model_context_sink
         # Per-session serialization: parallel sub_agent calls with the same
         # agent name share one child session id, so concurrent runs would
         # interleave history writes (audit 02 S2).  Keyed by session id, which
@@ -130,6 +141,8 @@ class KernelSubAgentRunner:
         return build_core_toolbox(
             work_root=self.work_root,
             approval_policy=self.approval_policy,
+            active_tier=self.active_tier,
+            tier_tools=self.tier_tools,
             loaded_skill_roots=self.loaded_skill_roots,
             mcp_caller=self.mcp_caller,
             mcp_tool_specs=self.mcp_tool_specs,
@@ -251,8 +264,8 @@ class KernelSubAgentRunner:
             if allowed:
                 # An explicit tool allow-list: disable everything else.  The
                 # full name set is the toolbox's own spec set (audit 18 S2 —
-                # cfg.tools/allowed_tools from the workflow UI was written but
-                # never read by the runner).
+                # cfg.tools/allowed_tools from plugin UIs must be honored by
+                # the runner rather than only persisted in the session.
                 probe = self._build_toolbox(disabled_tools, active_mode=effective_mode)
                 full_names = {spec.name for spec in probe.tool_specs()}
                 disabled_tools |= full_names - allowed
@@ -284,6 +297,14 @@ class KernelSubAgentRunner:
                     "thinking_enabled": self.thinking_enabled,
                     "thinking_budget": self.thinking_budget,
                     "actor_kind": "sub_agent",
+                    **(
+                        {
+                            "runtime_snapshot": deepcopy(self.runtime_snapshot),
+                            "runtime_snapshot_fresh": True,
+                        }
+                        if self.runtime_snapshot is not None
+                        else {}
+                    ),
                 },
             )
         )
@@ -325,6 +346,7 @@ class KernelSubAgentRunner:
                 }
             ),
             retry_policy=self._retry_policy(),
+            model_context_sink=self.model_context_sink,
         )
 
     def _retry_policy_overrides(self) -> dict[str, Any]:
@@ -500,7 +522,9 @@ class KernelSubAgentRunner:
         ))
         approval_toolbox = build_core_toolbox(
             work_root=self.work_root,
-            approval_policy="auto_approve",
+            approval_policy=self.approval_policy,
+            active_tier=self.active_tier,
+            tier_tools=self.tier_tools,
             loaded_skill_roots=self.loaded_skill_roots,
             mcp_caller=self.mcp_caller,
             mcp_tool_specs=self.mcp_tool_specs,
@@ -508,8 +532,10 @@ class KernelSubAgentRunner:
             imagegen_config=self.imagegen_config,
             activated_mcp_servers=self.activated_mcp_servers,
             load_tools=self.load_tools,
+            active_mode=self.active_mode,
             allow_access_outside_workdir=self.allow_access_outside_workdir,
         )
+        call = approval_toolbox.prepare_approved_call(call)
         tool_result = await approval_toolbox.execute(call)
         await child_sink.emit(CoreEvent(
             name="runtime.tool.finished",
@@ -594,6 +620,8 @@ class KernelSubAgentRunner:
         toolbox = build_core_toolbox(
             work_root=self.work_root,
             approval_policy=self.approval_policy,
+            active_tier=self.active_tier,
+            tier_tools=self.tier_tools,
             loaded_skill_roots=self.loaded_skill_roots,
             mcp_caller=self.mcp_caller,
             mcp_tool_specs=self.mcp_tool_specs,
@@ -632,6 +660,11 @@ class KernelSubAgentRunner:
                     "active_mode": effective_mode,
                     "thinking_enabled": self.thinking_enabled,
                     "thinking_budget": self.thinking_budget,
+                    **(
+                        {"runtime_snapshot": deepcopy(self.runtime_snapshot)}
+                        if self.runtime_snapshot is not None
+                        else {}
+                    ),
                 },
             )
         )

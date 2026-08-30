@@ -712,6 +712,61 @@ def test_runtime_projection_keeps_stream_terminal_usage_without_text():
     assert events[0].usage["output_tokens"] == 3
 
 
+def test_runtime_projection_maps_call_without_token_usage():
+    events = runtime_fact_to_run_item_events(
+        thread_id="thread-1",
+        event_id="event-call",
+        group="usage",
+        source="core",
+        phase="runtime.usage",
+        status="completed",
+        sequence=5,
+        metadata={
+            "payload": {
+                "turn_id": "turn-1",
+                "usage": {"llm_calls": 1},
+            },
+        },
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+
+    assert events is not None
+    assert len(events) == 1
+    assert events[0].kind == "usage"
+    assert events[0].usage == {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "cached_tokens": 0,
+        "cache_creation_tokens": 0,
+        "cache_hit_rate": 0,
+        "llm_calls": 1,
+    }
+
+
+def test_runtime_projection_does_not_double_count_terminal_stream_usage():
+    events = runtime_fact_to_run_item_events(
+        thread_id="thread-1",
+        event_id="event-terminal",
+        group="message",
+        source="core",
+        phase="runtime.reply_delta",
+        status="completed",
+        sequence=6,
+        metadata={
+            "payload": {
+                "turn_id": "turn-1",
+                "content": "",
+                "usage": {"prompt_tokens": 12, "completion_tokens": 3},
+                "usage_reported_separately": True,
+            },
+        },
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+
+    assert events == []
+
+
 def test_runtime_projection_preserves_compaction_display_metadata():
     fact = RuntimeProjectionInput(
         id="compact-event-1",

@@ -86,7 +86,6 @@ export function useCoreWorkbenchProjectionController(options: UseCoreWorkbenchPr
       const active = isCoreActiveTurnStatus(rawStatus)
       const finished = Boolean(snapshotMatchesActiveThread && previousTurnWasActive && isTerminalStatus(rawStatus))
       if (finished) {
-        processExpandedIds.value = new Set()
         options.onTurnFinished?.(change)
       }
       previousStatus = status

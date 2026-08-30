@@ -20,7 +20,9 @@
     "baseUrl": ".",
     "ignoreDeprecations": "6.0",
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@vue-flow/core": ["./node_modules/@vue-flow/core"],
+      "@vue-flow/background": ["./node_modules/@vue-flow/background"]
     }
   },
   "include": ["src/**/*.ts", "src/**/*.vue", "vite-env.d.ts"],

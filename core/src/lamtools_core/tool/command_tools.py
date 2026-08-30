@@ -87,11 +87,13 @@ class CommandToolHandlers:
         loaded_skill_roots: set[Path],
         core_event_callback: Callable[[CoreEvent], Awaitable[None]] | None = None,
         background_process_registry: BackgroundProcessRegistry | None = None,
+        allow_access_outside_workdir: bool = False,
     ) -> None:
         self._work_root = work_root
         self._command_timeout = command_timeout
         self._loaded_skill_roots = loaded_skill_roots
         self._core_event_callback = core_event_callback
+        self._allow_access_outside_workdir = allow_access_outside_workdir
         self._background_process_registry = (
             background_process_registry or default_background_process_registry()
         )
@@ -196,6 +198,7 @@ class CommandToolHandlers:
                 validation_argv,
                 self._work_root,
                 tuple(sorted(self._loaded_skill_roots, key=lambda item: item.as_posix())),
+                allow_outside=self._allow_access_outside_workdir,
             )
         except ValueError as exc:
             return ToolResult(

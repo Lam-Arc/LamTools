@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' ws:; img-src 'self' data:; style-src 'self'; script-src 'self'">
+    <title>LamTools 桌宠</title>
+    <link rel="stylesheet" href="pet.css">
+  </head>
+  <body class="is-collapsed" data-view-mode="pet" data-file-drag="false">
+    <main class="pet-shell" aria-label="LamTools 桌宠">
+      <section class="pet-stage" aria-label="桌宠状态">
+        <button id="petToggle" class="pet-toggle" type="button" aria-label="打开桌宠面板" aria-expanded="false" aria-controls="petCard petPanel">
+          <span id="ball" class="ball" aria-hidden="true"></span>
+          <span id="statusBadge" class="status-badge" data-pet-hit-surface data-pet-drag-surface data-tone="idle" role="status" aria-live="polite" aria-atomic="true">正在连接</span>
+          <span id="attentionDot" class="attention-dot" data-pet-hit-surface data-pet-drag-surface hidden aria-hidden="true"></span>
+        </button>
+      </section>
+
+      <section id="queuePreviewThird" class="pet-panel queue-preview queue-preview-third" aria-hidden="true" hidden></section>
+      <section id="queuePreviewSecond" class="pet-panel queue-preview queue-preview-second" aria-hidden="true" hidden></section>
+      <section id="petCard" class="pet-card" data-pet-hit-surface aria-label="桌宠卡片" hidden>
+        <header class="pet-card-header">
+          <p id="petCardTitle" class="pet-card-title"></p>
+          <button id="petCardClose" class="pet-card-close" type="button" aria-label="关闭卡片">×</button>
+        </header>
+        <div id="petCardBody" class="pet-card-body"></div>
+        <div id="petCardFiles" class="pet-card-files" hidden></div>
+        <div id="petCardInputWrap" class="pet-card-input-wrap" hidden>
+          <label class="visually-hidden" for="petCardInput">卡片输入</label>
+          <textarea id="petCardInput" rows="2" maxlength="4000" placeholder="输入内容…"></textarea>
+        </div>
+        <div id="petCardActions" class="pet-card-actions"></div>
+      </section>
+      <section id="petPanel" class="pet-panel" data-pet-hit-surface aria-label="桌宠面板" hidden>
+        <section id="panelDetail" class="panel-detail" hidden aria-labelledby="panelDetailTitle" aria-live="polite">
+          <header class="panel-detail-heading">
+            <p id="panelDetailTitle">最新结果</p>
+            <span id="panelDetailKind" class="panel-detail-kind"></span>
+          </header>
+          <div id="panelDetailBody" class="panel-detail-body"></div>
+        </section>
+        <section id="interactionCard" class="interaction-region" hidden aria-labelledby="interactionTitle">
+          <header class="interaction-heading">
+            <p id="interactionTitle">需要批准</p>
+            <span id="interactionKind" class="interaction-kind">Approval</span>
+          </header>
+          <p id="interactionMessage" class="interaction-message"></p>
+          <p id="interactionError" class="interaction-error" role="alert" hidden></p>
+          <div id="interactionDetail" class="interaction-detail" hidden>
+            <p id="interactionDetailLabel" class="interaction-detail-label">运行命令</p>
+            <pre class="interaction-detail-value"><code id="interactionDetailValue"></code></pre>
+          </div>
+          <div id="approvalOptions" class="approval-options" hidden></div>
+          <div id="approvalActions" class="approval-actions">
+            <button id="denyButton" class="button secondary" type="button">拒绝</button>
+            <button id="approveButton" class="button primary" type="button">批准</button>
+          </div>
+          <form id="guidanceForm" class="guidance-form" hidden>
+            <label class="visually-hidden" for="guidanceInput">其他回答</label>
+            <textarea id="guidanceInput" rows="1" maxlength="2000" placeholder="其他回答…"></textarea>
+            <button id="guidanceSubmitButton" class="button primary" type="submit">提交</button>
+          </form>
+        </section>
+        <form id="petComposer" class="pet-composer" data-pet-hit-surface>
+          <label class="visually-hidden" for="petComposerInput">发送消息</label>
+          <textarea id="petComposerInput" rows="2" maxlength="8000" placeholder="给桌宠发送消息…"></textarea>
+          <button id="petComposerSend" class="button primary" type="submit">发送</button>
+        </form>
+      </section>
+    </main>
+
+    <script src="vendor/rings.js"></script>
+    <script src="vendor/emotions.js"></script>
+    <script src="vendor/ball.js"></script>
+    <script src="vendor/engine.js"></script>
+    <script src="petLogic.js"></script>
+    <script src="pet.js"></script>
+  </body>
+</html>

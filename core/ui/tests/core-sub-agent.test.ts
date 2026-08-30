@@ -254,8 +254,9 @@ describe('CoreSubAgentDialog and composer reuse', () => {
     expect(wrapper.find('.composer-bar--embedded').exists()).toBe(true)
 
     await wrapper.get('.composer-bar--embedded textarea').setValue('继续检查')
-    await wrapper.get('.composer-model-select .ui-select-trigger').trigger('click')
-    await wrapper.findAll('.composer-model-select .ui-select-option')[1].trigger('click')
+    await wrapper.get('[data-core-model-thinking-menu] .core-model-thinking-menu__trigger').trigger('click')
+    await wrapper.get('[data-model-thinking-section="model"]').trigger('mouseenter')
+    await wrapper.findAll('[data-model-thinking-model-option]')[1].trigger('click')
     await wrapper.get('.composer-bar--embedded').trigger('submit')
     await wrapper.get('.core-sub-agent-dialog__close').trigger('click')
 

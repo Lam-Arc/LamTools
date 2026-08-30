@@ -110,7 +110,6 @@ import {
   Sparkles,
   UsersRound,
   Wand2,
-  Workflow,
   type LucideIcon,
 } from 'lucide-vue-next'
 
@@ -145,7 +144,6 @@ const ICON_MAP: Record<string, LucideIcon> = {
   sparkles: Sparkles,
   users: UsersRound,
   wand: Wand2,
-  workflow: Workflow,
 }
 
 function iconComponent(icon: string | undefined) {

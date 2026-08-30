@@ -5,8 +5,8 @@ import type { CoreMessage, MessagePart, ToolArtifact } from '../src/types'
 
 /**
  * 「本轮产出」面板（message-artifacts）契约：
- * 1. 本轮（turn）运行期间隐藏——活跃轮内所有消息（含子代理 sub-line 段，经
- *    suppressArtifactsPanel 传播），轮次结束才出现；
+ * 1. 产出一旦到达就显示——live/history 使用同一位置；子代理 sub-line 段仍经
+ *    suppressArtifactsPanel 显式抑制，避免嵌套面板重复；
  * 2. 面板内部去重：同一张图跨多个 part 只留一张（artifact_id → uri →
  *    image_data_url 归一化键），同一 uri 优先保留带 artifact_id 的条目。
  */
@@ -28,20 +28,22 @@ function msg(id: string, parts: MessagePart[]): CoreMessage {
   return { id, role: 'assistant', content: '', timestamp: '', parts }
 }
 
-describe('「本轮产出」面板：轮次结束才出现', () => {
-  it('本轮运行中隐藏，轮次结束才出现', async () => {
+describe('「本轮产出」面板：实时与历史同位置显示', () => {
+  it('本轮运行中即可显示，轮次结束后保持显示', async () => {
     const m = msg('assistant:t1', [part('p1', [artifact('workspace://.lam/artifacts/a.png')])])
     const wrapper = mount(MessageView, { props: { msg: m, turnActive: true, activeTurnId: 't1' } })
-    expect(wrapper.find('.message-artifacts').exists()).toBe(false)
+    const livePanel = wrapper.find('.message-artifacts')
+    expect(livePanel.exists()).toBe(true)
 
     await wrapper.setProps({ turnActive: false })
     expect(wrapper.find('.message-artifacts').exists()).toBe(true)
+    expect(wrapper.find('.message-artifacts').element).toBe(livePanel.element)
   })
 
-  it('同轮分段消息（assistant:<turn>#<n>）同样隐藏', () => {
+  it('同轮分段消息（assistant:<turn>#<n>）同样显示', () => {
     const m = msg('assistant:t1#2', [part('p1', [artifact('workspace://.lam/artifacts/a.png')])])
     const wrapper = mount(MessageView, { props: { msg: m, turnActive: true, activeTurnId: 't1' } })
-    expect(wrapper.find('.message-artifacts').exists()).toBe(false)
+    expect(wrapper.find('.message-artifacts').exists()).toBe(true)
   })
 
   it('历史消息（非活跃轮）直接显示', () => {
@@ -50,12 +52,12 @@ describe('「本轮产出」面板：轮次结束才出现', () => {
     expect(wrapper.find('.message-artifacts').exists()).toBe(true)
   })
 
-  it('live 标记的消息同样隐藏（turn 状态边界兜底）', () => {
+  it('live 标记的消息同样显示（turn 状态边界不改变位置）', () => {
     const m = msg('assistant:t9', [part('p1', [artifact('workspace://.lam/artifacts/a.png')])])
     const wrapper = mount(MessageView, {
       props: { msg: { ...m, metadata: { live: true } }, turnActive: false },
     })
-    expect(wrapper.find('.message-artifacts').exists()).toBe(false)
+    expect(wrapper.find('.message-artifacts').exists()).toBe(true)
   })
 
   it('sub-line 子消息经 suppressArtifactsPanel 传播隐藏', async () => {
@@ -109,7 +111,7 @@ describe('决策答复 GSAP Transition（jsdom 降级）', () => {
         metadata: { waitingResponse: { action: 'approve', response: 'ok' } },
       },
     ])
-    const wrapper = mount(MessageView, { props: { msg: m } })
+    const wrapper = mount(MessageView, { props: { msg: m, processExpandedIds: new Set([m.id]) } })
     expect(wrapper.find('.decision-card-decision').exists()).toBe(true)
     expect(wrapper.find('.decision-card-decision').text()).toContain('批准')
   })

@@ -1,5 +1,30 @@
 export type CoreThinkingMode = 'none' | 'low' | 'medium' | 'high' | 'max' | 'ultra' | 'ULTRA'
 
+export type CorePermissionPreset = 'ask' | 'auto' | 'full_access'
+
+export const CORE_PERMISSION_PRESET_LABELS: Record<CorePermissionPreset, string> = {
+  ask: '询问',
+  auto: '自动',
+  full_access: '完全访问',
+}
+
+export const CORE_PERMISSION_PRESET_DESCRIPTIONS: Record<CorePermissionPreset, string> = {
+  ask: '工具执行前请求批准',
+  auto: '在当前能力范围内自动批准',
+  full_access: '完全编辑、自动批准，并允许访问工作目录外',
+}
+
+export function normalizeCorePermissionPreset(
+  value: unknown,
+  fallback: CorePermissionPreset = 'ask',
+): CorePermissionPreset {
+  return value === 'ask' || value === 'auto' || value === 'full_access' ? value : fallback
+}
+
+export function corePermissionPresetLabel(value: unknown): string {
+  return CORE_PERMISSION_PRESET_LABELS[normalizeCorePermissionPreset(value)]
+}
+
 export interface CoreExecutionModelSource {
   id?: string
   provider_id?: string
@@ -21,6 +46,7 @@ export interface CoreSelectOption {
   label: string
   selectedLabel?: string
   group?: string
+  disabled?: boolean
 }
 
 export interface CoreThinkingModeOption {

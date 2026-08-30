@@ -164,8 +164,10 @@
           <button
             type="button"
             class="toggle-btn"
+            data-allow-outside-workdir
             :class="{ 'is-on': allowAccessOutsideWorkdir }"
             :aria-label="'允许访问工作目录以外'"
+            :aria-pressed="allowAccessOutsideWorkdir ? 'true' : 'false'"
             @click="toggleAllowOutsideWorkdir"
           >
             <ToggleRight v-if="allowAccessOutsideWorkdir" :size="16" :stroke-width="1.8" aria-hidden="true" />
@@ -303,7 +305,9 @@
             class="toggle-btn"
             :class="{ 'is-on': dreamingEnabled }"
             :aria-label="'自动记忆整理'"
-            @click="saveDreamingSettings"
+            :aria-pressed="dreamingEnabled ? 'true' : 'false'"
+            :disabled="dreamingSaving"
+            @click="toggleDreamingSettings"
           >
             <ToggleRight v-if="dreamingEnabled" :size="16" :stroke-width="1.8" aria-hidden="true" />
             <ToggleLeft v-else :size="16" :stroke-width="1.8" aria-hidden="true" />
@@ -330,50 +334,6 @@
           </div>
           <p v-if="dreamingError" class="skill-error" role="alert">{{ dreamingError }}</p>
           <p class="hook-meta">内容写入 <code>&lt;workRoot&gt;/MEMORY.md</code>，下个会话自动加载；<code>/dream</code> 命令始终可手动触发；短期记忆存 SQLite（<code>core_memories</code> 表）。CLI：<code>core memory dream show/config</code>。</p>
-        </article>
-      </section>
-
-      <section v-if="activeSection === 'workflow'" class="settings-panel">
-        <header class="settings-title">
-          <h1>工作流</h1>
-          <p class="settings-subhead">管理与创建 Workflow，并控制是否暴露为 Agent 工具。</p>
-        </header>
-        <article class="setting-card">
-          <div class="subhead">
-            <h3>已创建的工作流</h3>
-            <div class="subhead-actions">
-              <button class="small-btn" type="button" @click="refreshWorkflowList">
-                <RefreshCw :size="13" :stroke-width="1.8" aria-hidden="true" /> 刷新
-              </button>
-            </div>
-          </div>
-          <div v-if="workflowListLoading" class="model-empty">加载中…</div>
-          <div v-else-if="workflowList.length" class="provider-list">
-            <div v-for="wf in workflowList" :key="wf.name" class="provider-group">
-              <div class="provider-head">
-                <strong>{{ wf.name }}</strong>
-                <span v-if="wf.exposed" class="tool-status ok">已暴露</span>
-                <span v-else class="tool-status">未暴露</span>
-                <div class="row-actions">
-                  <button
-                    type="button"
-                    class="text-btn"
-                    :class="{ 'is-on': wf.exposed }"
-                    @click="$emit('toggle-workflow-exposed', wf.name, !wf.exposed)"
-                  >{{ wf.exposed ? '取消暴露' : '暴露为工具' }}</button>
-                </div>
-              </div>
-              <div class="model-list">
-                <div class="model-row">
-                  <div class="model-identity">
-                    <span>{{ wf.nodes.length }} 个节点 · {{ wf.edges.length }} 条连线</span>
-                    <span v-if="wf.description" class="hook-meta">{{ wf.description }}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-          <p v-else class="model-empty">暂无工作流。在侧栏点击「工作流」进入画布模式创建。</p>
         </article>
       </section>
 
@@ -419,8 +379,10 @@
           <button
             type="button"
             class="toggle-btn"
+            data-update-auto-check
             :class="{ 'is-on': updateAutoCheck }"
             :aria-label="'启动时自动检查更新'"
+            :aria-pressed="updateAutoCheck ? 'true' : 'false'"
             @click="toggleUpdateAutoCheck"
           >
             <ToggleRight v-if="updateAutoCheck" :size="16" :stroke-width="1.8" aria-hidden="true" />
@@ -552,6 +514,7 @@
                       class="toggle-btn"
                       :class="{ 'is-on': modelEditor.thinking_supported }"
                       aria-label="支持推理"
+                      :aria-pressed="modelEditor.thinking_supported ? 'true' : 'false'"
                       @click="modelEditor.thinking_supported = !modelEditor.thinking_supported"
                     >
                       <ToggleRight v-if="modelEditor.thinking_supported" :size="16" :stroke-width="1.8" aria-hidden="true" />
@@ -587,7 +550,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { RefreshCw, Star, X } from 'lucide-vue-next'
+import { Star, ToggleLeft, ToggleRight, X } from 'lucide-vue-next'
 import { PROVIDER_PRESETS } from '../data/provider-presets'
 import { THEME_PRESETS } from '../data/theme-presets'
 import {
@@ -598,6 +561,7 @@ import {
   type ThemePreset,
   type ThemeStop,
 } from '../helpers/theme'
+import { openUpdatePage } from '../helpers/update'
 import SettingsShell, { type SettingsSection } from './SettingsShell.vue'
 import ThemeEditor from './ThemeEditor.vue'
 import CoreSubAgentEditor from './CoreSubAgentEditor.vue'
@@ -675,8 +639,6 @@ const props = defineProps<{
   permissionMode?: 'read_only' | 'limited_edit' | 'full_edit'
   allowAccessOutsideWorkdir?: boolean
   requestRpc?: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>
-  workflows?: WorkflowListItem[]
-  workflowListLoading?: boolean
   updateState?: CoreUpdateState
 }>()
 
@@ -704,23 +666,7 @@ const emit = defineEmits<{
   'update-model': [payload: CoreSettingsModelPayload]
   'delete-model': [modelRecordId: string]
   'set-default-model': [modelId: string]
-  'refresh-workflows': []
-  'toggle-workflow-exposed': [name: string, exposed: boolean]
 }>()
-
-export interface WorkflowListItem {
-  name: string
-  description: string
-  nodes: { id: string }[]
-  edges: { id: string }[]
-  exposed: boolean
-  tool_name: string
-}
-
-const workflowList = computed(() => props.workflows ?? [])
-function refreshWorkflowList() {
-  emit('refresh-workflows')
-}
 
 const sections: SettingsSection[] = [
   { id: 'models', label: '模型与供应商', icon: 'database' },
@@ -728,21 +674,18 @@ const sections: SettingsSection[] = [
   { id: 'loadtools', label: '工具模式', icon: 'list-checks' },
   { id: 'permissions', label: '权限', icon: 'lock' },
   { id: 'agents', label: '上下文与记忆', icon: 'file-code' },
-  { id: 'workflow', label: '工作流', icon: 'workflow' },
   { id: 'subagent', label: 'Sub agent', icon: 'bot' },
   { id: 'about', label: '关于与更新', icon: 'info' },
 ]
 
 // ── Update check state (共享实例由 App.vue 传入以便启动时自动检查；缺省自建) ──
 const updateAutoCheck = ref(readUpdateAutoCheck())
-function toggleUpdateAutoCheck(event: Event) {
-  const input = event.target as HTMLInputElement
-  updateAutoCheck.value = input.checked
-  setUpdateAutoCheck(input.checked)
+function toggleUpdateAutoCheck() {
+  updateAutoCheck.value = !updateAutoCheck.value
+  setUpdateAutoCheck(updateAutoCheck.value)
 }
 async function openUpdateReleasePage() {
   if (updateReleaseUrl.value) {
-    const { openUpdatePage } = await import('../helpers/update')
     await openUpdatePage(updateReleaseUrl.value)
   }
 }
@@ -940,11 +883,19 @@ async function saveDreamingSettings() {
       value: { enabled: dreamingEnabled.value, min_turns: minTurns },
     })
     settingsDirty.value = false
+    return true
   } catch (e) {
     dreamingError.value = e instanceof Error ? e.message : String(e)
+    return false
   } finally {
     dreamingSaving.value = false
   }
+}
+
+async function toggleDreamingSettings() {
+  const previous = dreamingEnabled.value
+  dreamingEnabled.value = !previous
+  if (!await saveDreamingSettings()) dreamingEnabled.value = previous
 }
 
 function closeEditors() {
@@ -973,9 +924,8 @@ const {
 } = update
 
 const permissionMode = computed(() => props.permissionMode || 'full_edit')
-function toggleAllowOutsideWorkdir(event: Event) {
-  const input = event.target as HTMLInputElement
-  emit('update-allow-outside-workdir', input.checked)
+function toggleAllowOutsideWorkdir() {
+  emit('update-allow-outside-workdir', !props.allowAccessOutsideWorkdir)
 }
 const permissionTiers = [
   {

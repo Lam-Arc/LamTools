@@ -1,0 +1,20 @@
+{
+  "name": "emotion-ball-pet",
+  "version": "0.2.8",
+  "description": "Emotion Ball desktop companion for Core questions and approvals",
+  "manifest_version": "1",
+  "desktop": {
+    "entry": "./desktop/index.html",
+    "title": "LamTools 桌宠",
+    "fileDrop": true,
+    "window": {
+      "collapsedWidth": 256,
+      "collapsedHeight": 288,
+      "expandedWidth": 506,
+      "expandedHeight": 680,
+      "cardWidth": 506,
+      "cardHeight": 360,
+      "margin": 24
+    }
+  }
+}

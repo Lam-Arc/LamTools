@@ -507,7 +507,12 @@ function coreItemToAppItem(item: CoreRuntimeItem): CoreAppItem {
     // Carry the source item's metadata through (audit 15 S1: it was dropped
     // here, so message-level flags like ``metadata.live`` never reached the
     // projection).
-    metadata: isRecord(item.metadata) ? item.metadata : payload.metadata,
+    // Preserve both runtime envelope metadata and tool-result metadata. The
+    // latter carries task_plan/active_plan for checklist projection.
+    metadata: {
+      ...(isRecord(payload.metadata) ? payload.metadata : {}),
+      ...(isRecord(item.metadata) ? item.metadata : {}),
+    },
   }
 }
 

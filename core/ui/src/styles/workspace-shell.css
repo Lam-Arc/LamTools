@@ -1,0 +1,530 @@
+/**
+ * Workspace shell — drawer frame, responsive surfaces, and shell controls.
+ *
+ * This file is imported by layout.css so the package keeps one public CSS entry.
+ */
+
+/* =========================================================================
+   Shell — backdrop layer (full viewport)
+   ========================================================================= */
+.workspace-shell {
+  --left-card-width: var(--sidebar-width);
+  --left-overlap: 0px;
+  --left-peek: 18px;
+  --main-left: var(--left-peek);
+  --left-reveal: calc(var(--left-card-width) - var(--left-overlap));
+  --left-visible-width: min(var(--left-card-width), var(--main-left));
+  --right-drawer-width: 292px;
+  --right-overlap: 0px;
+  --right-peek: 18px;
+  --main-right: var(--right-peek);
+  --right-reveal: calc(var(--right-drawer-width) - var(--right-overlap));
+  --main-x-padding: max(22px, 5vw);
+  --content-width: 780px;
+  --z-background-info: 10;
+  --z-stage: 15;
+  --stage-reveal: 0px;
+  --z-main-surface: 20;
+  --z-edge-trigger: 35;
+  --z-composer: 40;
+  --z-popover: 60;
+  --z-modal: 80;
+  --z-toast: 90;
+  --z-fullscreen: 100;
+  --theme-backdrop-background: linear-gradient(180deg, #202020 0%, #202020 100%);
+  --theme-backdrop-text: #f2efeb;
+  --theme-main-background: linear-gradient(180deg, #111111 0%, #111111 100%);
+  --theme-main-text: #f2efeb;
+  --theme-main-soft-background: rgba(255, 255, 255, 0.045);
+  --theme-main-subtle-background: rgba(255, 255, 255, 0.028);
+  --theme-main-sunken-background: rgba(0, 0, 0, 0.32);
+  --theme-main-border: rgba(255, 255, 255, 0.10);
+  --theme-composer-background: linear-gradient(180deg, rgba(44, 44, 43, 1) 0%, rgba(44, 44, 43, 1) 100%);
+  --theme-composer-text: #f2efeb;
+  --theme-composer-soft-background: rgba(255, 255, 255, 0.045);
+  --theme-control-background: linear-gradient(180deg, rgba(52, 51, 49, 1) 0%, rgba(52, 51, 49, 1) 100%);
+  --theme-control-text: #f2efeb;
+  --theme-control-soft-background: rgba(255, 255, 255, 0.055);
+  position: fixed;
+  inset: var(--titlebar-offset, 0) 0 0 0;
+  overflow: hidden;
+  background: var(--theme-backdrop-background);
+  color: var(--theme-backdrop-text);
+}
+
+.workspace-shell.left-open  { --main-left: var(--left-reveal); }
+.workspace-shell.right-open { --main-right: var(--right-reveal); }
+.workspace-shell.stage-open { --stage-reveal: var(--stage-height, 300px); }
+.workspace-shell.stage-open { --main-left: var(--left-reveal); }
+.workspace-shell.stage-open { --main-right: var(--right-reveal); }
+
+/* Mobile nav bar + drawer backdrop are desktop-hidden here; their ≤640px
+   rules live in the responsive section at the bottom (audit 19: the whole
+   mobile block was accidentally dropped, leaving an unstyled floating bar
+   on desktop and a zero-width drawer on mobile). */
+.mobile-shell-nav,
+.mobile-drawer-backdrop {
+  display: none;
+}
+
+.workspace-shell.density-compact {
+  --left-card-width: var(--sidebar-width);
+  --right-drawer-width: 272px;
+}
+.workspace-shell.density-loose {
+  --left-card-width: var(--sidebar-width);
+  --right-drawer-width: 324px;
+}
+
+/* =========================================================================
+   Edge hit areas — hover triggers for drawers
+   ========================================================================= */
+.edge {
+  position: fixed;
+  top: var(--titlebar-offset, 0);
+  bottom: 0;
+  z-index: var(--z-edge-trigger, 35);
+  width: 12px;
+}
+.edge:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: -2px;
+  background: color-mix(in srgb, var(--blue) 14%, transparent);
+}
+.edge-left  { left: 0; }
+.edge-right {
+  right: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--theme-backdrop-text);
+}
+.edge-right-label { display: none; }
+
+/* =========================================================================
+   Drawers — left sidebar / right panel
+   ========================================================================= */
+.workspace-drawer {
+  --text: var(--theme-backdrop-text);
+  position: fixed;
+  z-index: var(--z-background-info, 10);
+  width: var(--left-card-width);
+  max-width: calc(100vw - 28px);
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  transition:
+    transform var(--dur-slow) var(--ease-inout),
+    opacity var(--dur-base) ease;
+}
+
+.drawer-left {
+  top: var(--titlebar-offset, 0); bottom: 0; left: 0;
+  width: var(--left-visible-width);
+  border-radius: 0;
+  transform: none;
+  opacity: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.drawer-left.open {
+  transform: none;
+}
+/* Closed left drawer must be inert to clicks (mirrors .drawer-right) — the
+   old `pointer-events: auto` made it swallow the left ~244px of clicks
+   whenever a consumer rendered the drawer without the template `inert`
+   (audit 19). */
+.drawer-left:not(.open) {
+  opacity: 0;
+  pointer-events: none;
+  /* 桌面端关闭态：轻微侧滑 + 淡出（与移动端整幅滑出区分） */
+  transform: translateX(-10px);
+}
+
+.drawer-right {
+  top: var(--titlebar-offset, 0); bottom: 0; right: 0;
+  width: var(--right-drawer-width);
+  max-height: none;
+  border-radius: 0;
+  opacity: 1;
+  pointer-events: auto;
+  transform: none;
+}
+.drawer-right:not(.open) { opacity: 0; pointer-events: none; transform: translateX(10px); }
+.drawer-right.open { transform: none; }
+
+/* Force drawers visible when stage is open */
+.workspace-shell.stage-open .drawer-right { opacity: 1; pointer-events: auto; transform: none; }
+
+.drawer-head {
+  flex: 0 0 auto;
+  min-height: var(--sidebar-header-height);
+  padding: 14px var(--sidebar-inline-padding) 10px;
+  border-bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.sidebar-header {
+  gap: 8px;
+}
+.sidebar-root :focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--blue) 75%, transparent);
+  outline-offset: 1px;
+}
+.drawer-right .drawer-head { padding: 13px 14px; }
+.drawer-head strong { flex: 1; font-size: var(--sidebar-font-title); line-height: 24px; letter-spacing: -.02em; }
+
+/* The left sidebar has four explicit layout regions. Only its body may
+   scroll; header, primary actions, and footer stay in place. */
+.drawer-left .drawer-head,
+.drawer-left .sidebar-primary,
+.drawer-left .drawer-footer {
+  flex: 0 0 auto;
+}
+.drawer-left .drawer-head {
+  min-height: 38px;
+  padding-top: 14px;
+  padding-bottom: 0;
+  padding-left: var(--sidebar-inline-padding);
+  padding-right: var(--sidebar-inline-padding);
+  margin-bottom: 10px;
+}
+.drawer-left .drawer-body {
+  padding-right: var(--sidebar-inline-padding);
+}
+.drawer-left .drawer-footer {
+  margin-right: 0;
+}
+.drawer-left .sidebar-primary {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sidebar-row-gap);
+  padding: 0 var(--sidebar-inline-padding) var(--space-2);
+}
+
+.core-project-primary-actions {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sidebar-row-gap);
+}
+
+.sidebar-create-project {
+  width: 100%;
+  height: var(--sidebar-row-height);
+  min-height: var(--sidebar-row-height);
+  display: flex;
+  align-items: center;
+  gap: var(--sidebar-item-gap);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--sidebar-row-radius);
+  background: transparent;
+  color: var(--sidebar-text-secondary);
+  font: inherit;
+  font-size: var(--sidebar-font);
+  font-weight: 400;
+  text-align: left;
+  cursor: pointer;
+}
+.sidebar-create-project:hover {
+  background: var(--sidebar-hover);
+  color: var(--sidebar-text-primary);
+}
+.sidebar-create-project:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--blue) 75%, transparent);
+  outline-offset: 1px;
+}
+.sidebar-create-project > span:first-child {
+  flex: 0 0 var(--sidebar-icon-size);
+  width: var(--sidebar-icon-size);
+  font-size: var(--sidebar-icon-size);
+  line-height: 1;
+  text-align: center;
+}
+
+.pin-plain {
+  width: 28px; height: 28px;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  display: grid;
+  place-items: center;
+  font-size: 15px;
+}
+.pin-plain.active { color: var(--green); }
+
+.sidebar-scroll-shell {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+.drawer-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  overflow: auto;
+  padding: 8px calc(var(--sidebar-inline-padding) + var(--left-overlap)) 16px var(--sidebar-inline-padding);
+}
+.drawer-left > .sidebar-scroll-shell {
+  min-height: 0;
+}
+.drawer-left > .sidebar-scroll-shell > .drawer-body {
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.sidebar-body {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.sidebar-body::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+.sidebar-scrollbar {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-1);
+  bottom: var(--space-2);
+  width: var(--sidebar-scrollbar-width);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  opacity: 0;
+  pointer-events: none;
+  touch-action: none;
+  transition: opacity var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+.sidebar-scrollbar.is-visible {
+  opacity: .78;
+  pointer-events: auto;
+}
+.sidebar-scrollbar:hover,
+.sidebar-scrollbar.is-dragging,
+.sidebar-scrollbar:focus-visible {
+  opacity: 1;
+  background: var(--sidebar-hover);
+}
+.sidebar-scrollbar:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--blue) 75%, transparent);
+  outline-offset: 1px;
+}
+.sidebar-scrollbar-thumb {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: auto;
+  left: 0;
+  display: block;
+  min-height: var(--space-6);
+  border-radius: 999px;
+  background: var(--sidebar-scrollbar-thumb);
+  cursor: grab;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+.sidebar-scrollbar:hover .sidebar-scrollbar-thumb,
+.sidebar-scrollbar.is-dragging .sidebar-scrollbar-thumb,
+.sidebar-scrollbar:focus-visible .sidebar-scrollbar-thumb {
+  background: var(--sidebar-scrollbar-thumb-hover);
+}
+.sidebar-scrollbar.is-dragging .sidebar-scrollbar-thumb {
+  cursor: grabbing;
+}
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-scrollbar,
+  .sidebar-scrollbar-thumb {
+    transition: none;
+  }
+}
+.drawer-right > .drawer-body {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.drawer-right > .drawer-body::-webkit-scrollbar { width: 0; height: 0; display: none; }
+.right-body { max-height: none; padding: 12px 12px 14px; }
+
+.drawer-footer {
+  flex: 0 0 auto;
+  padding: 10px var(--sidebar-inline-padding) var(--sidebar-inline-padding);
+  margin-right: var(--left-overlap);
+  border-top: 1px solid var(--sidebar-divider);
+  background: transparent;
+  color: var(--sidebar-text-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sidebar-row-gap);
+}
+.drawer-footer .settings-entry {
+  width: 100%;
+  height: var(--sidebar-footer-row-height);
+  min-height: var(--sidebar-row-height);
+  color: var(--sidebar-text-secondary);
+  background: transparent;
+  border: 0;
+  border-radius: var(--sidebar-row-radius);
+  padding: 0 var(--space-3);
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: var(--sidebar-footer-gap);
+  text-align: left;
+  font: inherit;
+  font-size: var(--sidebar-font);
+  font-weight: 400;
+  cursor: pointer;
+  position: relative;
+}
+.drawer-footer .settings-entry::before {
+  content: ""; position: absolute; top: 0; bottom: 0; left: calc(var(--space-2) * -1); right: calc(var(--space-2) * -1); z-index: -1;
+  border-radius: var(--sidebar-row-radius); background: transparent; pointer-events: none;
+  -webkit-mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
+  mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
+}
+.drawer-footer .settings-entry:hover {
+  color: var(--sidebar-text-primary);
+}
+.drawer-footer .settings-entry:hover::before {
+  background: var(--sidebar-hover);
+}
+.drawer-footer .settings-entry svg,
+.drawer-footer .sidebar-action svg {
+  width: var(--sidebar-icon-size);
+  height: var(--sidebar-icon-size);
+  stroke-width: 1.8;
+  opacity: .75;
+}
+
+.sidebar-action {
+  display: flex;
+  align-items: center;
+  gap: var(--sidebar-footer-gap);
+  width: 100%;
+  height: var(--sidebar-footer-row-height);
+  min-height: var(--sidebar-row-height);
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: var(--sidebar-row-radius);
+  background: transparent;
+  color: var(--sidebar-text-secondary);
+  font: inherit;
+  font-size: var(--sidebar-font);
+  font-weight: 400;
+  text-align: left;
+  cursor: pointer;
+  position: relative;
+}
+.sidebar-action::before {
+  content: ""; position: absolute; top: 0; bottom: 0; left: calc(var(--space-2) * -1); right: calc(var(--space-2) * -1); z-index: -1;
+  border-radius: var(--sidebar-row-radius); background: transparent; pointer-events: none;
+  -webkit-mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
+  mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
+}
+.sidebar-action:hover {
+  color: var(--sidebar-text-primary);
+}
+.sidebar-action:hover::before {
+  background: var(--sidebar-hover);
+}
+.sidebar-action:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
+
+/* =========================================================================
+   Responsive drawer surfaces
+   ========================================================================= */
+@media (max-width: 820px) {
+  .workspace-shell { --left-card-width: var(--sidebar-width); }
+}
+
+@media (max-width: 640px) {
+  .workspace-shell {
+    --sidebar-width: min(86vw, 320px);
+    --left-card-width: var(--sidebar-width);
+  }
+  .workspace-shell { --right-drawer-width: 100vw; }
+  .workspace-shell { --main-x-padding: 14px; }
+  .edge { display: none; }
+  .workspace-drawer {
+    z-index: var(--z-popover, 60);
+    max-width: var(--sidebar-width);
+    background: var(--theme-backdrop-background);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, .22);
+    opacity: 0;
+    pointer-events: none;
+  }
+  .drawer-left:not(.open) { transform: translateX(-102%); }
+  .drawer-right:not(.open) { transform: translateX(102%); }
+  .drawer-left.open,
+  .drawer-right.open {
+    transform: translateX(0);
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .mobile-shell-nav {
+    position: fixed;
+    inset: 8px 10px auto;
+    z-index: calc(var(--z-edge-trigger, 35) + 1);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    pointer-events: none;
+  }
+  .mobile-shell-button {
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    border: 1px solid color-mix(in srgb, var(--theme-main-text) 14%, transparent);
+    border-radius: var(--radius-sm);
+    background: var(--theme-main-background);
+    color: var(--theme-main-text);
+    display: grid;
+    place-items: center;
+    pointer-events: auto;
+  }
+  .mobile-shell-button svg {
+    width: 20px;
+    height: 20px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.7;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .mobile-shell-button:focus-visible {
+    outline: 2px solid var(--blue);
+    outline-offset: 2px;
+  }
+  .mobile-drawer-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: calc(var(--z-popover, 60) - 1);
+    display: block;
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    border: 0;
+    background: rgba(0, 0, 0, .48);
+  }
+  .pin-plain { display: none; }
+  .icon-btn,
+  .drawer-footer .settings-entry,
+  .drawer-footer .sidebar-action,
+  .sidebar-create-project {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .sidebar-root .sidebar-pin-button {
+    width: 44px;
+    height: 44px;
+  }
+}

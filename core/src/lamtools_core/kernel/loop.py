@@ -21,18 +21,17 @@ import logging
 import re
 import uuid
 import time as time_module
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from typing import Any, TYPE_CHECKING
 
 _logger = logging.getLogger(__name__)
 
 from lamtools_core.context_compaction import (
+    ContextCompactionController,
     ContextCompactionError,
-    ContextCompactionRequest,
-    ContextCompactionResult,
-    compact_context,
-    compaction_segment_input_limit,
 )
+from lamtools_core.context_compaction_budget import TokenBudget
 from lamtools_core.event import CoreEvent, EventCategory, EventSink
 from lamtools_core.llm import ChatMessage, LLMClient, LLMRequest, LLMResponse, LLMStreamEvent, LLMToolCall
 from lamtools_core.llm.helpers import merge_tool_call_deltas, resolve_tool_calls
@@ -257,6 +256,10 @@ class CoreLoopKernel:
     backup_tool_names: tuple[str, ...] = ("write_file", "edit_file")
     completion_gate: CompletionGate | None = None
     memory_store: Any | None = None  # MemoryStoreProtocol; Any to avoid import cycle
+    # Called after the final request context is assembled and cleaned, just
+    # before the request crosses into the LLM client.  The callback is
+    # observational: failures must never prevent the actual model call.
+    model_context_sink: Callable[[RuntimeState, LLMRequest], Awaitable[None] | None] | None = field(default=None, repr=False)
     _cancel_event: asyncio.Event = field(default_factory=asyncio.Event, init=False, repr=False)
     # External cancel signal source (e.g. RuntimeTaskRegistry.get_cancel_event).
     # When set by the app layer's turn.cancel path, the kernel can detect it
@@ -548,6 +551,17 @@ class CoreLoopKernel:
                 # marker) before the request reaches the model — the shared
                 # objects in `history` keep their tags for later compactions.
                 request.messages = _strip_internal_message_metadata(request.messages)
+                if self.model_context_sink is not None:
+                    try:
+                        captured = self.model_context_sink(state, request)
+                        if captured is not None:
+                            await captured
+                    except Exception:  # noqa: BLE001 — capture must not break a run
+                        _logger.exception(
+                            "[kernel:_run] model context capture failed sid=%s step=%d",
+                            state.session_id,
+                            index,
+                        )
 
                 # 5.4 Call model — try streaming first
                 _step_start = time_module.time()
@@ -569,15 +583,19 @@ class CoreLoopKernel:
                 # approval-wait / progress-gate / no-progress / normal exits and
                 # later error paths all share one consistent 口径 (audit 05 S4).
                 state.turn_count += 1
-                if response.usage is not None and not streamed_response:
-                    await self.event_sink.emit(CoreEvent(
-                        name="runtime.usage",
-                        category="usage",
-                        payload={"usage": response.usage.to_dict(), "response_index": index},
-                        session_id=state.session_id,
-                        run_id=state.run_id,
-                        tags=["usage"],
-                    ))
+                # Emit one canonical per-response usage fact for both streaming
+                # and non-streaming calls.  Providers are allowed to omit token
+                # usage, but a successful response is still one model call.
+                usage_payload = response.usage.to_dict() if response.usage is not None else {}
+                usage_payload["llm_calls"] = 1
+                await self.event_sink.emit(CoreEvent(
+                    name="runtime.usage",
+                    category="usage",
+                    payload={"usage": usage_payload, "response_index": index},
+                    session_id=state.session_id,
+                    run_id=state.run_id,
+                    tags=["usage"],
+                ))
                 if response.thinking and not streamed_response:
                     await self._emit_stream_part(
                         state,
@@ -1187,6 +1205,12 @@ class CoreLoopKernel:
 
                 # 5.12 Writeback
                 await self.kit.writeback(state, turn, tool_results, verification, decision)
+                await self._emit_checklist_snapshots(
+                    state,
+                    turn,
+                    tool_results,
+                    response_index=index,
+                )
 
                 # Update state
                 state.loop_state = decision
@@ -1830,6 +1854,11 @@ class CoreLoopKernel:
                             "content": "",
                             "finish_reason": finish_reason,
                             "usage": usage_dict,
+                            # The canonical per-response usage event is emitted
+                            # by _run after this stream returns. Keep this
+                            # payload for protocol consumers, but do not let the
+                            # projection count it a second time.
+                            "usage_reported_separately": True,
                             "response_index": response_index,
                         },
                         session_id=state.session_id,
@@ -2780,22 +2809,23 @@ class CoreLoopKernel:
             summary["reply_preview"] = step.turn.reply[:200]
         return summary
 
-    def _estimate_request_tokens(self, request: LLMRequest) -> int:
+    def _estimate_request_tokens(self, request: LLMRequest, *, fast: bool = True) -> int:
         """Estimate full request tokens, including tool definitions.
 
-        Uses the fast estimation path because the result is only used for
-        context-window trigger checks — ±20 % is acceptable here.
+        The fast path is used for cheap metrics by default.  Trigger checks
+        switch to the exact path near the threshold so Unicode-heavy prompts
+        cannot be delayed by a fast-estimator undercount.
         """
         total = estimate_message_tokens(
-            [m.to_dict() for m in request.messages], fast=True
+            [m.to_dict() for m in request.messages], fast=fast
         )
         if request.tools:
             total += estimate_text_tokens(
-                json.dumps(request.tools, ensure_ascii=False), fast=True
+                json.dumps(request.tools, ensure_ascii=False), fast=fast
             )
         if request.response_format:
             total += estimate_text_tokens(
-                json.dumps(request.response_format, ensure_ascii=False), fast=True
+                json.dumps(request.response_format, ensure_ascii=False), fast=fast
             )
         return total
 
@@ -2846,13 +2876,49 @@ class CoreLoopKernel:
         if window is None or window <= 0:
             return
 
-        trigger_ratio = min(max(self.policy.compact_trigger_ratio, 0.01), 1.0)
-        limit_ratio = min(max(self.policy.compact_limit_ratio, 0.01), trigger_ratio)
-        trigger_tokens = int(self.policy.compact_trigger_tokens or int(window * trigger_ratio))
-        limit_tokens = int(self.policy.compact_limit_tokens or int(window * limit_ratio))
-        trigger_tokens = min(max(1, trigger_tokens), window)
-        limit_tokens = min(max(1, limit_tokens), trigger_tokens)
-        before_tokens = self._estimate_request_tokens(request)
+        budget = self._resolve_compaction_budget(window)
+        trigger_tokens = budget.trigger_tokens
+        limit_tokens = budget.target_tokens
+
+        def estimate_request_messages(messages: list[ChatMessage], *, fast: bool) -> int:
+            original_messages = request.messages
+            request.messages = messages
+            try:
+                return self._estimate_request_tokens(request, fast=fast)
+            finally:
+                request.messages = original_messages
+
+        compaction_controller = ContextCompactionController(
+            llm_client=self.llm_client,
+            estimate_request_tokens=lambda messages, fast: estimate_request_messages(
+                messages, fast=fast
+            ),
+            on_delta=lambda delta: self._emit_stream_part(
+                state,
+                part_id=f"{state.run_id}:context-compaction",
+                part_type="compaction",
+                status="running",
+                label="正在压缩上下文",
+                delta=delta,
+                transient=True,
+            ),
+            on_event=lambda payload: self._emit_compaction_part_event(state, payload),
+            model_retries=self.policy.model_retries,
+            model_timeout_seconds=self.policy.model_timeout_seconds,
+            retry_policy=self.retry_policy,
+            summary_output_tokens=self.policy.compact_summary_output_tokens,
+            safety_margin_tokens=self.policy.compact_safety_margin_tokens,
+            on_model_retry=lambda retry: self._emit_model_retry_from_event(
+                retry,
+                state=state,
+                response_index=None,
+            ),
+        )
+        measurement = compaction_controller.measure(
+            request.messages,
+            trigger_tokens=trigger_tokens,
+        )
+        before_tokens = measurement.tokens
         request.metadata["estimated_prompt_tokens"] = before_tokens
         request.metadata["context_window_tokens"] = window
         request.metadata["context_compaction_trigger_tokens"] = trigger_tokens
@@ -2880,113 +2946,24 @@ class CoreLoopKernel:
 
         before_messages = len(request.messages)
         request_messages_before_compaction = list(request.messages)
-
-        def estimate_compaction_tokens(messages: list[ChatMessage]) -> int:
-            original_messages = request.messages
-            request.messages = messages
-            try:
-                return self._estimate_request_tokens(request)
-            finally:
-                request.messages = original_messages
-
-        async def attempt_compaction(
-            *,
-            model: str,
-            model_window: int,
-            strategy: str,
-            fallback_on_terminal: bool,
-        ) -> ContextCompactionResult:
-            async def on_compaction_delta(delta: str) -> None:
-                await self._emit_stream_part(
-                    state,
-                    part_id=f"{state.run_id}:context-compaction",
-                    part_type="compaction",
-                    status="running",
-                    label="正在压缩上下文",
-                    delta=delta,
-                    transient=True,
-                )
-
-            async def on_compaction_event(payload: dict[str, Any]) -> None:
-                event_payload = dict(payload)
-                if event_payload.get("status") == "running" and event_payload.get("delta"):
-                    return
-                if fallback_on_terminal and event_payload.get("status") in {"failed", "not_needed"}:
-                    event_payload.update(
-                        {
-                            "status": "running",
-                            "phase": "fallback",
-                            "label": "原模型压缩未完成 · 正在改用当前模型",
-                        }
-                    )
-                await self.event_sink.emit(
-                    CoreEvent(
-                        name="runtime.part",
-                        category="message",
-                        payload={
-                            "part_id": f"{state.run_id}:context-compaction",
-                            "part_type": "compaction",
-                            "execution_model": model,
-                            "strategy": strategy,
-                            **event_payload,
-                        },
-                        session_id=state.session_id,
-                        run_id=state.run_id,
-                        tags=["stream", "compaction"],
-                    )
-                )
-
-            return await compact_context(
-                ContextCompactionRequest(
-                    trigger="model_switch" if model_switched else "auto",
-                    messages=list(request.messages),
-                    llm_client=self.llm_client,
-                    model=model,
-                    timeout=request.timeout,
-                    limit_tokens=limit_tokens,
-                    input_limit_tokens=compaction_segment_input_limit(model_window),
-                    estimate_tokens=estimate_compaction_tokens,
-                    on_delta=on_compaction_delta,
-                    on_event=on_compaction_event,
-                    model_retries=self.policy.model_retries,
-                    model_timeout_seconds=self.policy.model_timeout_seconds,
-                    retry_policy=self.retry_policy,
-                    on_model_retry=lambda retry: self._emit_model_retry_from_event(
-                        retry,
-                        state=state,
-                        response_index=None,
-                    ),
-                )
-            )
-
         allow_previous = request.metadata.get("allow_previous_model_compaction") is not False
-        used_previous_model = (
-            model_switched
-            and allow_previous
-            and previous_window > 0
-            and before_tokens <= previous_window
+        execution = await compaction_controller.compact(
+            list(request.messages),
+            budget=budget,
+            timeout=request.timeout,
+            current_model=current_model,
+            previous_model=previous_model,
+            previous_window=previous_window,
+            model_switched=model_switched,
+            allow_previous_model=allow_previous,
+            trigger="model_switch" if model_switched else "auto",
+            measurement=measurement,
         )
-        if used_previous_model:
-            result = await attempt_compaction(
-                model=previous_model,
-                model_window=previous_window,
-                strategy="previous_model_once",
-                fallback_on_terminal=True,
-            )
-        else:
-            result = None
-        if result is None or result.status != "compacted":
-            result = await attempt_compaction(
-                model=current_model,
-                model_window=window,
-                strategy="segmented_current_model" if model_switched else "current_model",
-                fallback_on_terminal=False,
-            )
-            execution_model = current_model
-            compaction_strategy = "segmented_current_model" if model_switched else "current_model"
-        else:
-            execution_model = previous_model
-            compaction_strategy = "previous_model_once"
+        result = execution.result
+        execution_model = execution.execution_model
+        compaction_strategy = execution.strategy
+        if result is None:
+            return
         if result.status == "failed":
             raise ContextCompactionError(
                 str(result.display_payload.get("message") or "Context compaction failed")
@@ -3045,12 +3022,27 @@ class CoreLoopKernel:
                     for message in request_messages_before_compaction
                     if id(message) not in history_message_ids
                 }
-                history[:] = [
+                compacted_ids = {id(message) for message in result.compacted_messages}
+                retained_ids = {id(message) for message in result.retained_messages}
+                source_ids = {id(item) for item in request_messages_before_compaction}
+                # A fitter may drop a previously retained tail turn to satisfy
+                # the exact target. Keep that turn before the resume marker in
+                # persisted history; the marker makes it invisible to the
+                # next context load while preserving the original row span.
+                dropped_before_resume = [
+                    message
+                    for message in history
+                    if id(message) in source_ids
+                    and id(message) not in compacted_ids
+                    and id(message) not in retained_ids
+                ]
+                compacted_history = [
                     message
                     for message in result.replacement_messages
                     if id(message) not in request_only_ids
                     and message.metadata.get("key") != "context_compaction_summary"
                 ]
+                history[:] = [*dropped_before_resume, *compacted_history]
         request.metadata["estimated_prompt_tokens"] = result.after_tokens
 
         request.metadata["context_compacted"] = True
@@ -3091,6 +3083,41 @@ class CoreLoopKernel:
             trigger="auto",
             compacted_message_ids=_message_reference_ids(result.compacted_messages),
             retained_message_ids=_message_reference_ids(result.retained_messages),
+        )
+
+    def _resolve_compaction_budget(self, window: int) -> TokenBudget:
+        """Resolve user-facing ratio policy into concrete compaction limits."""
+        trigger_ratio = min(max(self.policy.compact_trigger_ratio, 0.01), 1.0)
+        limit_ratio = min(max(self.policy.compact_limit_ratio, 0.01), trigger_ratio)
+        trigger_tokens = int(
+            self.policy.compact_trigger_tokens or int(window * trigger_ratio)
+        )
+        limit_tokens = int(
+            self.policy.compact_limit_tokens or int(window * limit_ratio)
+        )
+        return TokenBudget(
+            context_window=window,
+            trigger_tokens=min(max(1, trigger_tokens), window),
+            target_tokens=min(max(1, limit_tokens), min(max(1, trigger_tokens), window)),
+        )
+
+    async def _emit_compaction_part_event(
+        self, state: RuntimeState, payload: dict[str, Any]
+    ) -> None:
+        """Adapt controller progress payloads to kernel runtime-part events."""
+        await self.event_sink.emit(
+            CoreEvent(
+                name="runtime.part",
+                category="message",
+                payload={
+                    "part_id": f"{state.run_id}:context-compaction",
+                    "part_type": "compaction",
+                    **payload,
+                },
+                session_id=state.session_id,
+                run_id=state.run_id,
+                tags=["stream", "compaction"],
+            )
         )
 
     async def _emit_state_event(self, state: RuntimeState, name: str, message: str) -> None:
@@ -3236,6 +3263,66 @@ class CoreLoopKernel:
             run_id=state.run_id,
             tags=["tool", "approval", "part"],
         ))
+
+    async def _emit_checklist_snapshots(
+        self,
+        state: RuntimeState,
+        turn: KernelTurn,
+        tool_results: list[ToolResult],
+        *,
+        response_index: int | None = None,
+    ) -> None:
+        """Publish the post-writeback checklist projection for the UI.
+
+        Checklist tool results are emitted before writeback so the model can see
+        them immediately. The second, replace-style part carries the canonical
+        state after update actions and automatic deliverable advancement.
+        """
+        task_plan = state.metadata.get("task_plan")
+        if not isinstance(task_plan, dict) or not task_plan.get("steps"):
+            return
+        active_plan = state.metadata.get("active_plan")
+        active_plan = active_plan if isinstance(active_plan, dict) else {}
+        checklist_results = {
+            result.call_id: result
+            for result in tool_results
+            if result.status == "ok" and result.name in {"write_checklist", "update_checklist"}
+        }
+        if not checklist_results:
+            return
+
+        calls_by_id = {call.id: call for call in turn.tool_calls}
+        for call_id, result in checklist_results.items():
+            call = calls_by_id.get(call_id)
+            if call is None:
+                continue
+            metadata = dict(result.metadata) if isinstance(result.metadata, dict) else {}
+            metadata.update({
+                "task_plan": copy.deepcopy(task_plan),
+                "active_plan": copy.deepcopy(active_plan),
+                "checklist_snapshot": True,
+            })
+            await self.event_sink.emit(CoreEvent(
+                name="runtime.part",
+                category="tool",
+                payload={
+                    "part_type": "tool_result",
+                    "status": "completed",
+                    "tool_name": call.name,
+                    "label": "Checklist updated",
+                    "detail": (result.content or "")[:200],
+                    "tool_result": result.content or "",
+                    "replace": True,
+                    "tool_args": call.arguments if isinstance(call.arguments, dict) else {},
+                    "metadata": metadata,
+                    "part_id": f"part-{call.id}",
+                    "message_id": state.run_id or "",
+                    **({"response_index": response_index} if response_index is not None else {}),
+                },
+                session_id=state.session_id,
+                run_id=state.run_id,
+                tags=["tool", "part"],
+            ))
 
     async def _emit_tool_finished(
         self,

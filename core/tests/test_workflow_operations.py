@@ -1,0 +1,531 @@
+"""Safety-net coverage for the Workflow operation surface."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from lamtools_core.app.base_agent import build_core_plugin_operation_catalog
+from lamtools_core.plugins.bundled.workflow.backend.runtime import (
+    WorkflowDef,
+    WorkflowInputParam,
+    WorkflowNode,
+    WorkflowPort,
+    WorkflowRunner,
+)
+from lamtools_core.plugins.bundled.workflow.backend.tools import workflow_tool_specs
+from lamtools_core.plugins.bundled.workflow.backend.store import WorkflowStore
+from lamtools_core.plugins.context import PluginContext
+from lamtools_core.plugins.registry import bundled_plugins_dir
+from lamtools_core.tool import ToolCall
+from lamtools_core.tool.default_toolbox import build_core_toolbox
+from lamtools_core.runtime import RuntimeTaskRegistry
+
+
+def _definition(name: str = "demo") -> WorkflowDef:
+    return WorkflowDef(
+        name=name,
+        nodes=[
+            WorkflowNode(
+                id="content",
+                kind="content",
+                ports=[WorkflowPort(name="out", type="string", direction="out", value="ok")],
+            )
+        ],
+    )
+
+
+def _input_workflow() -> WorkflowDef:
+    return WorkflowDef(
+        name="inputs",
+        nodes=[
+            WorkflowNode(
+                id="input",
+                kind="script",
+                ports=[
+                    WorkflowPort(name="value", type="integer", direction="in"),
+                    WorkflowPort(name="required", type="integer", direction="in"),
+                    WorkflowPort(name="optional", type="string", direction="in"),
+                    WorkflowPort(name="out", type="integer", direction="out"),
+                ],
+                config={"script": "out = value + required"},
+            )
+        ],
+        input_params=[
+            WorkflowInputParam(
+                name="input.value",
+                type="integer",
+                description="Optional value",
+                required=False,
+                default=7,
+            ),
+            WorkflowInputParam(
+                name="input.required",
+                type="integer",
+                description="Required value",
+                required=True,
+            ),
+            WorkflowInputParam(
+                name="input.optional",
+                type="string",
+                required=False,
+            ),
+        ],
+    )
+
+
+def _catalog(tmp_path: Path, store: WorkflowStore):
+    data_dir = tmp_path / "data"
+    context = PluginContext(
+        work_root=tmp_path,
+        data_dir=data_dir,
+        services={"workflow_store": store},
+    )
+    return build_core_plugin_operation_catalog(
+        data_dir=data_dir,
+        work_root=tmp_path,
+        plugin_roots=[bundled_plugins_dir()],
+        context=context,
+    )
+
+
+class _MemorySessionStore:
+    def __init__(self) -> None:
+        self.records = {}
+
+    async def create(self, record):
+        if record.id in self.records:
+            raise ValueError(record.id)
+        self.records[record.id] = record
+        return record
+
+    async def get(self, session_id):
+        return self.records.get(session_id)
+
+    async def patch(self, session_id, *, title=None, metadata=None):
+        record = self.records.get(session_id)
+        if record is None:
+            return None
+        if title is not None:
+            record.title = title
+        if metadata is not None:
+            record.metadata = dict(metadata)
+        return record
+
+
+def test_workflow_tool_schema_preserves_input_required_and_default_contract() -> None:
+    spec = workflow_tool_specs([_input_workflow()])[0]
+    schema = spec.input_schema
+
+    assert schema["required"] == ["input.required"]
+    assert schema["properties"]["input.value"]["default"] == 7
+    assert schema["properties"]["input.value"]["type"] == "integer"
+    assert "input.optional" not in schema["required"]
+    assert "default" not in schema["properties"]["input.optional"]
+
+
+@pytest.mark.asyncio
+async def test_workflow_runner_applies_defaults_and_validates_missing_required_input(
+    tmp_path: Path,
+) -> None:
+    workflow = _input_workflow()
+    missing = await WorkflowRunner().run(workflow, work_root=str(tmp_path), run_id="missing")
+    assert missing.status == "failed"
+    assert "input.required" in missing.error
+
+    completed = await WorkflowRunner().run(
+        workflow,
+        inputs={"input.required": 5},
+        work_root=str(tmp_path),
+        run_id="with-default",
+    )
+    assert completed.status == "completed"
+    assert completed.output == 12
+
+
+@pytest.mark.asyncio
+async def test_workflow_operations_cover_create_list_get_update_expose_run_delete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LAMTOOLS_HOME", str(tmp_path / "home"))
+    store = WorkflowStore()
+    catalog = _catalog(tmp_path, store)
+
+    created = await catalog.execute("workflow.create", _definition().to_dict())
+    assert created.status == "ok"
+    assert created.payload["workflow"]["name"] == "demo"
+
+    listed = await catalog.execute("workflow.list")
+    assert [item["name"] for item in listed.payload["workflows"]] == ["demo"]
+
+    fetched = await catalog.execute("workflow.get", {"name": "demo"})
+    assert fetched.payload["workflow"]["name"] == "demo"
+
+    updated = await catalog.execute("workflow.update", {"name": "demo", "description": "updated"})
+    assert updated.payload["workflow"]["description"] == "updated"
+
+    exposed = await catalog.execute("workflow.expose", {"name": "demo"})
+    assert exposed.payload["workflow"]["exposed"] is True
+
+    run = await catalog.execute("workflow.run", {"name": "demo", "run_id": "operation-run"})
+    assert run.status == "ok"
+    assert run.payload["run"]["status"] == "completed"
+    assert run.payload["run"]["output"] == "ok"
+
+    hidden = await catalog.execute("workflow.unexpose", {"name": "demo"})
+    assert hidden.payload["workflow"]["exposed"] is False
+
+    deleted = await catalog.execute("workflow.delete", {"name": "demo"})
+    assert deleted.payload["deleted"] is True
+    assert (await catalog.execute("workflow.list")).payload["workflows"] == []
+
+
+@pytest.mark.asyncio
+async def test_workflow_operation_grouped_list_keeps_project_scope(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LAMTOOLS_HOME", str(tmp_path / "home"))
+    project = tmp_path / "project"
+    store = WorkflowStore()
+    await store.save(_definition("global"))
+    await store.save(WorkflowDef(**{**_definition("project").__dict__, "work_root": str(project)}))
+
+    catalog = _catalog(tmp_path, store)
+
+    result = await catalog.execute("workflow.list_grouped", {"work_roots": [str(project)]})
+    assert [item["name"] for item in result.payload["groups"]["global"]] == ["global"]
+    assert [item["name"] for item in result.payload["groups"][str(project)]] == ["project"]
+
+
+@pytest.mark.asyncio
+async def test_workflow_grouped_list_creates_sessions_for_discovered_resources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LAMTOOLS_HOME", str(tmp_path / "home"))
+    project = tmp_path / "project"
+    session_store = _MemorySessionStore()
+    store = WorkflowStore()
+    global_workflow = _definition("global")
+    project_workflow = WorkflowDef(
+        **{**_definition("project").__dict__, "work_root": str(project)}
+    )
+    await store.save(global_workflow)
+    await store.save(project_workflow)
+    context = PluginContext(
+        work_root=project,
+        data_dir=tmp_path / "data",
+        services={"workflow_store": store, "session_store": session_store},
+    )
+    catalog = build_core_plugin_operation_catalog(
+        data_dir=tmp_path / "data",
+        work_root=project,
+        plugin_roots=[bundled_plugins_dir()],
+        context=context,
+    )
+
+    result = await catalog.execute(
+        "workflow.list_grouped", {"work_roots": [str(project)]}
+    )
+
+    assert result.status == "ok"
+    assert {f"workflow:{global_workflow.id}", f"workflow:{project_workflow.id}"} == set(
+        session_store.records
+    )
+    for record in session_store.records.values():
+        assert record.metadata["owner_plugin"] == "workflow"
+        assert record.metadata["resource_type"] == "workflow"
+
+
+@pytest.mark.asyncio
+async def test_workflow_run_releases_session_claim_after_completion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A completed run must not block a later run on the same workflow Session."""
+    monkeypatch.setenv("LAMTOOLS_HOME", str(tmp_path / "home"))
+    registry = RuntimeTaskRegistry()
+    store = WorkflowStore()
+    context = PluginContext(
+        work_root=tmp_path,
+        data_dir=tmp_path / "data",
+        runtime_task_registry=registry,
+        services={"workflow_store": store},
+    )
+    catalog = build_core_plugin_operation_catalog(
+        data_dir=tmp_path / "data",
+        work_root=tmp_path,
+        plugin_roots=[bundled_plugins_dir()],
+        context=context,
+    )
+    created = await catalog.execute("workflow.create", _definition("repeatable").to_dict())
+    assert created.status == "ok"
+    thread_id = created.payload["session_id"]
+
+    first = await catalog.execute(
+        "workflow.run",
+        {"name": "repeatable", "thread_id": thread_id, "run_id": "first"},
+    )
+    second = await catalog.execute(
+        "workflow.run",
+        {"name": "repeatable", "thread_id": thread_id, "run_id": "second"},
+    )
+
+    assert first.payload["run"]["status"] == "completed"
+    assert second.payload["run"]["status"] == "completed"
+    assert registry.active_run_id(thread_id) is None
+    await registry.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_workflow_project_switch_uses_current_root_for_operations_and_dynamic_tools(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LAMTOOLS_HOME", str(tmp_path / "home"))
+    project_a = tmp_path / "project-a"
+    project_b = tmp_path / "project-b"
+    store = WorkflowStore()
+    await store.save(
+        WorkflowDef(
+            **{
+                **_definition("shared").__dict__,
+                "description": "project A",
+                "work_root": str(project_a),
+                "exposed": True,
+            }
+        )
+    )
+    await store.save(
+        WorkflowDef(
+            **{
+                **_definition("shared").__dict__,
+                "description": "project B",
+                "work_root": str(project_b),
+                "exposed": True,
+            }
+        )
+    )
+    context = PluginContext(
+        work_root=project_a,
+        data_dir=tmp_path / "data",
+        services={"workflow_store": store},
+    )
+    catalog = build_core_plugin_operation_catalog(
+        data_dir=tmp_path / "data",
+        work_root=project_a,
+        plugin_roots=[bundled_plugins_dir()],
+        context=context,
+    )
+
+    listed_a = await catalog.execute("workflow.list", {"work_root": str(project_a)})
+    listed_b = await catalog.execute("workflow.list", {"work_root": str(project_b)})
+    assert [(item["name"], item["description"]) for item in listed_a.payload["workflows"]] == [
+        ("shared", "project A")
+    ]
+    assert [(item["name"], item["description"]) for item in listed_b.payload["workflows"]] == [
+        ("shared", "project B")
+    ]
+
+    runtime = context.service("plugin.runtime_manager").get("workflow").value
+    tools_a = runtime.workflow_tool_provider(str(project_a)).specs
+    tools_b = runtime.workflow_tool_provider(str(project_b)).specs
+    assert [(spec.metadata["workflow_name"], spec.description) for spec in tools_a] == [
+        ("shared", "project A")
+    ]
+    assert [(spec.metadata["workflow_name"], spec.description) for spec in tools_b] == [
+        ("shared", "project B")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_workflow_disabled_at_start_can_reenable_and_restart_watcher(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LAMTOOLS_HOME", str(tmp_path / "home"))
+    from lamtools_core.plugins.registry import PluginStateStore
+
+    data_dir = tmp_path / "data"
+    state = PluginStateStore(data_dir / "plugins.jsonc")
+    state.set_enabled("workflow", False)
+    store = WorkflowStore()
+    await store.save(_definition("survives-disable"))
+
+    class _EventBus:
+        async def broadcast(self, event: dict[str, Any]) -> None:
+            del event
+
+    context = PluginContext(
+        work_root=tmp_path,
+        data_dir=data_dir,
+        event_bus=_EventBus(),
+        services={"workflow_store": store},
+    )
+    catalog = build_core_plugin_operation_catalog(
+        data_dir=data_dir,
+        work_root=tmp_path,
+        plugin_roots=[bundled_plugins_dir()],
+        context=context,
+    )
+    manager = context.service("plugin.runtime_manager")
+
+    assert manager.get("workflow") is None
+    assert not catalog.has("workflow.run")
+    assert (await catalog.execute("plugin.ui.list")).payload["modes"] == []
+
+    enabled = await catalog.execute("plugin.enable", {"name": "workflow"})
+    assert enabled.payload["enabled"] is True
+    handle = manager.get("workflow")
+    assert handle is not None
+    assert handle.value.watcher is not None
+    assert catalog.has("workflow.run")
+    listed = await catalog.execute("workflow.list")
+    assert [item["name"] for item in listed.payload["workflows"]] == ["survives-disable"]
+
+    disabled = await catalog.execute("plugin.disable", {"name": "workflow"})
+    assert disabled.payload["enabled"] is False
+    assert handle.value.watcher is None
+    assert not catalog.has("workflow.run")
+    # Disable/re-enable only affects capabilities; it never deletes workflow data.
+    assert (await store.get("survives-disable")) is not None
+
+    reenabled = await catalog.execute("plugin.enable", {"name": "workflow"})
+    assert reenabled.payload["enabled"] is True
+    restored = await catalog.execute("workflow.list")
+    assert [item["name"] for item in restored.payload["workflows"]] == ["survives-disable"]
+    assert manager.get("workflow") is not None
+    assert manager.get("workflow").value.watcher is not None
+
+
+@pytest.mark.asyncio
+async def test_workflow_disable_removes_old_toolbox_capabilities_and_reenable_restores_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A live toolbox must observe plugin disable/enable without a restart."""
+    monkeypatch.setenv("LAMTOOLS_HOME", str(tmp_path / "home"))
+    store = WorkflowStore()
+    context = PluginContext(
+        work_root=tmp_path,
+        data_dir=tmp_path / "data",
+        services={"workflow_store": store},
+    )
+    catalog = build_core_plugin_operation_catalog(
+        data_dir=tmp_path / "data",
+        work_root=tmp_path,
+        plugin_roots=[bundled_plugins_dir()],
+        context=context,
+    )
+    manager = context.service("plugin.runtime_manager")
+    handle = manager.get("workflow")
+    assert handle is not None
+    runtime = handle.value
+
+    created = await catalog.execute(
+        "workflow.create",
+        {**_definition("exposed").to_dict(), "exposed": True},
+    )
+    assert created.status == "ok"
+    old_provider = runtime.workflow_tool_provider
+    old_specs = list(runtime.tool_specs)
+    for spec in old_specs:
+        spec.metadata["plugin"] = "workflow"
+    old_handlers = runtime.tool_handlers
+    toolbox = build_core_toolbox(
+        work_root=tmp_path,
+        plugin_tool_specs=old_specs,
+        plugin_tool_handlers=old_handlers,
+        plugin_tool_providers=[old_provider],
+        plugin_availability=manager.is_enabled,
+    )
+    assert "workflow_graph" in {spec.name for spec in toolbox.tool_specs()}
+    assert "workflow_exposed" in {spec.name for spec in toolbox.tool_specs()}
+
+    ui_before = await catalog.execute("plugin.ui.list")
+    assert any(item["pluginId"] == "workflow" for item in ui_before.payload["modes"])
+
+    disabled = await catalog.execute("plugin.disable", {"name": "workflow"})
+    assert disabled.payload["enabled"] is False
+    assert not catalog.has("workflow.run")
+    with pytest.raises(KeyError):
+        await catalog.execute("workflow.run", {"name": "exposed"})
+    assert runtime.workflow_tool_provider(str(tmp_path)).specs == []
+    assert "workflow_graph" not in {spec.name for spec in toolbox.tool_specs()}
+    blocked = await toolbox.execute(ToolCall(id="disabled", name="workflow_graph", arguments={}))
+    assert blocked.status == "blocked"
+    ui_after_disable = await catalog.execute("plugin.ui.list")
+    assert not any(item["pluginId"] == "workflow" for item in ui_after_disable.payload["modes"])
+
+    enabled = await catalog.execute("plugin.enable", {"name": "workflow"})
+    assert enabled.payload["enabled"] is True
+    assert catalog.has("workflow.run")
+    assert manager.get("workflow").value is runtime
+    assert "workflow_graph" in {spec.name for spec in toolbox.tool_specs()}
+    assert "workflow_exposed" in {spec.name for spec in old_provider(str(tmp_path)).specs}
+    ui_after_enable = await catalog.execute("plugin.ui.list")
+    assert any(item["pluginId"] == "workflow" for item in ui_after_enable.payload["modes"])
+
+
+@pytest.mark.asyncio
+async def test_workflow_project_a_and_b_are_isolated_even_with_same_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LAMTOOLS_HOME", str(tmp_path / "home"))
+    project_a = tmp_path / "project-a"
+    project_b = tmp_path / "project-b"
+    store = WorkflowStore()
+    await store.save(WorkflowDef(**{**_definition("shared").__dict__, "description": "A", "work_root": str(project_a)}))
+    await store.save(WorkflowDef(**{**_definition("shared").__dict__, "description": "B", "work_root": str(project_b)}))
+
+    assert (await store.get("shared", work_root=str(project_a))).description == "A"
+    assert (await store.get("shared", work_root=str(project_b))).description == "B"
+    grouped = await store.list_grouped(work_roots=[str(project_a), str(project_b)])
+    assert [item.description for item in grouped[str(project_a)]] == ["A"]
+    assert [item.description for item in grouped[str(project_b)]] == ["B"]
+
+    assert await store.delete("shared", work_root=str(project_a)) is True
+    assert await store.get("shared", work_root=str(project_a)) is None
+    assert (await store.get("shared", work_root=str(project_b))).description == "B"
+
+
+@pytest.mark.asyncio
+async def test_workflow_rename_preserves_stable_id_and_session_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LAMTOOLS_HOME", str(tmp_path / "home"))
+    project = tmp_path / "project"
+    session_store = _MemorySessionStore()
+    store = WorkflowStore()
+    context = PluginContext(
+        work_root=project,
+        data_dir=tmp_path / "data",
+        services={"workflow_store": store, "session_store": session_store},
+    )
+    catalog = build_core_plugin_operation_catalog(
+        data_dir=tmp_path / "data",
+        work_root=project,
+        plugin_roots=[bundled_plugins_dir()],
+        context=context,
+    )
+
+    created = await catalog.execute(
+        "workflow.create",
+        {**_definition("before").to_dict(), "work_root": str(project)},
+    )
+    workflow_before = created.payload["workflow"]
+    session_id = created.payload["session_id"]
+    assert session_id == f"workflow:{workflow_before['id']}"
+    original_metadata = dict(session_store.records[session_id].metadata)
+
+    renamed = await catalog.execute(
+        "workflow.rename",
+        {"name": "before", "new_name": "after", "work_root": str(project)},
+    )
+    workflow_after = renamed.payload["workflow"]
+
+    assert workflow_after["id"] == workflow_before["id"]
+    assert renamed.payload["session_id"] == session_id
+    record = session_store.records[session_id]
+    assert record.title == "after"
+    assert record.metadata["owner_plugin"] == "workflow"
+    assert record.metadata["resource_type"] == "workflow"
+    assert record.metadata["resource_id"] == workflow_before["id"]
+    assert record.metadata["resource_id"] == original_metadata["resource_id"]
+    assert (await store.get("after", work_root=str(project))).id == workflow_before["id"]
+    assert await store.get("before", work_root=str(project)) is None

@@ -1,0 +1,37 @@
+[
+  {
+    "endpoint": "/v1/responses",
+    "request": {
+      "model": "gpt-5.6-terra",
+      "input": "Reply with OK.",
+      "max_output_tokens": 5
+    },
+    "status_code": 200,
+    "response_headers": {
+      "server": "nginx/1.26.3",
+      "content-type": "application/json; charset=utf-8"
+    },
+    "error_code": "",
+    "response_body": "{\"id\":\"resp_02d29dd9a3d64b55016a931314fdb087d0a2a58419944d636d\",\"object\":\"response\",\"model\":\"gpt-5.6-terra\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"id\":\"item_ff45bf27bd4378a1a18af55e\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"OK\"}],\"status\":\"completed\"}],\"usage\":{\"input_tokens\":4390,\"output_tokens\":5,\"total_tokens\":4395,\"input_tokens_details\":{\"cached_tokens\":3840}}}"
+  },
+  {
+    "endpoint": "/v1/chat/completions",
+    "request": {
+      "model": "gpt-5.6-terra",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Reply with OK."
+        }
+      ],
+      "max_tokens": 5
+    },
+    "status_code": 200,
+    "response_headers": {
+      "server": "nginx/1.26.3",
+      "content-type": "application/json; charset=utf-8"
+    },
+    "error_code": "",
+    "response_body": "{\"id\":\"resp_02f8e882c5684239016a9313376c1087d186cd0ac284aa8eb1\",\"object\":\"chat.completion\",\"created\":1788023608,\"model\":\"gpt-5.6-terra\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"OK\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":4390,\"completion_tokens\":5,\"total_tokens\":4395,\"prompt_tokens_details\":{\"cached_tokens\":3840}},\"service_tier\":\"default\"}"
+  }
+]

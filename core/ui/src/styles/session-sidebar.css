@@ -1,0 +1,685 @@
+/**
+ * Session sidebar — project and conversation rows, menus, and status states.
+ *
+ * This file is imported by layout.css so the package keeps one public CSS entry.
+ */
+
+/* =========================================================================
+   Sidebar content — project blocks, sessions
+   ========================================================================= */
+.sidebar-drag-image {
+  position: fixed;
+  top: 0;
+  left: 0;
+  display: block;
+  width: var(--space-1);
+  height: var(--space-1);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.sidebar-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--sidebar-toolbar-gap);
+  min-width: 0;
+  min-height: var(--sidebar-row-height);
+  margin-bottom: var(--space-2);
+}
+.sidebar-search-wrap {
+  display: flex;
+  align-items: center;
+  flex: 0 1 var(--sidebar-row-height);
+  width: var(--sidebar-row-height);
+  min-width: var(--sidebar-row-height);
+  max-width: 100%;
+  height: var(--sidebar-row-height);
+  box-sizing: border-box;
+  overflow: hidden;
+  border: 1px solid transparent;
+  border-radius: var(--sidebar-row-radius);
+  background: transparent;
+  transition:
+    width var(--dur-base) var(--ease-out),
+    flex-basis var(--dur-base) var(--ease-out),
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+.sidebar-search-wrap:hover,
+.sidebar-search-wrap:focus-within,
+.sidebar-search-wrap.is-expanded {
+  flex-basis: min(100%, var(--sidebar-width));
+  width: min(100%, var(--sidebar-width));
+  border-color: color-mix(in srgb, var(--theme-control-text) 12%, transparent);
+  background: color-mix(in srgb, var(--theme-control-background) 70%, transparent);
+}
+.sidebar-search-toggle {
+  flex: 0 0 var(--sidebar-row-height);
+  width: var(--sidebar-row-height);
+  height: var(--sidebar-row-height);
+  border: 0;
+  border-radius: var(--sidebar-row-radius);
+  background: transparent;
+  color: color-mix(in srgb, var(--theme-control-text) 66%, transparent);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+.sidebar-search-toggle:hover,
+.sidebar-search-toggle:focus-visible {
+  background: color-mix(in srgb, var(--theme-control-text) var(--alpha-hover), transparent);
+  color: var(--theme-control-text);
+}
+.sidebar-search-toggle:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--blue) 75%, transparent);
+  outline-offset: -1px;
+}
+.sidebar-search-toggle svg {
+  width: var(--sidebar-icon-size);
+  height: var(--sidebar-icon-size);
+  stroke-width: 1.8;
+}
+.sidebar-search {
+  flex: 1 1 auto;
+  width: 0;
+  min-width: 0;
+  min-height: var(--sidebar-row-height);
+  box-sizing: border-box;
+  padding: 0 var(--space-2) 0 0;
+  border: 0;
+  border-radius: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--theme-control-text);
+  font: inherit;
+  font-size: var(--sidebar-text-size);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+.sidebar-search-wrap:hover .sidebar-search,
+.sidebar-search-wrap:focus-within .sidebar-search,
+.sidebar-search-wrap.is-expanded .sidebar-search {
+  opacity: 1;
+  pointer-events: auto;
+}
+.sidebar-search::placeholder {
+  color: color-mix(in srgb, var(--theme-control-text) 52%, transparent);
+}
+.sidebar-section + .sidebar-section {
+  margin-top: var(--sidebar-section-gap);
+}
+.sidebar-section-title {
+  margin: 0 0 6px;
+  padding-left: var(--space-2);
+  color: var(--sidebar-text-muted);
+  font-size: var(--sidebar-font-section);
+  font-weight: 500;
+  line-height: 16px;
+  letter-spacing: .04em;
+}
+.sidebar-section:first-of-type .sidebar-section-title { margin-top: 18px; }
+.project-block {
+  position: relative;
+  border-radius: var(--sidebar-row-radius);
+  padding: var(--sidebar-padding-y) var(--space-2);
+  margin-bottom: var(--sidebar-list-gap);
+  background: transparent;
+  border: 0;
+}
+.project-row {
+  position: relative;
+  display: flex;
+  gap: var(--sidebar-item-gap);
+  align-items: center;
+  height: var(--sidebar-row-height);
+  min-height: var(--sidebar-row-height);
+}
+.project-row[draggable="true"],
+.conversation[draggable="true"] {
+  cursor: grab;
+}
+.project-row.is-dragging,
+.conversation.is-dragging {
+  opacity: 1;
+  cursor: grabbing;
+}
+.sidebar-sort-move {
+  transition: transform var(--dur-base) var(--ease-out);
+}
+.project-row,
+.session-row {
+  background: transparent;
+}
+.project-toggle {
+  flex: 0 0 var(--sidebar-chevron-size);
+}
+.project-name,
+.project-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: grid;
+  gap: var(--sidebar-item-gap);
+}
+.project-name strong {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.project-name strong {
+  font-size: var(--sidebar-font);
+  font-weight: 600;
+  line-height: var(--sidebar-line-height-item);
+  color: var(--sidebar-text-primary);
+  white-space: nowrap;
+}
+.project-name.clickable { cursor: pointer; }
+.project-name.clickable:hover strong { color: var(--sidebar-text-primary); }
+
+.project-btns {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: var(--sidebar-item-gap);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur-fast) var(--ease-out);
+  flex: 0 0 28px;
+}
+.project-menu-button {
+  flex: 0 0 28px;
+}
+.project-block:hover .project-btns,
+.project-block:focus-within .project-btns,
+.project-btns:has(.project-menu-button[aria-expanded="true"]) {
+  opacity: 1;
+  pointer-events: auto;
+}
+.project-action {
+  width: var(--sidebar-icon-size); height: var(--sidebar-icon-size);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--sidebar-text-muted);
+  display: grid;
+  place-items: center;
+  font-size: var(--sidebar-font); font-weight: 400; line-height: 1;
+  transition: background .14s ease, color .14s ease;
+}
+.project-action:hover {
+  background: var(--sidebar-hover);
+  color: var(--sidebar-text-primary);
+}
+.project-action:focus-visible {
+  opacity: 1;
+  outline: 2px solid color-mix(in srgb, var(--blue) 75%, transparent);
+  outline-offset: 1px;
+}
+.project-action.menu-trigger {
+  width: 28px;
+  font-size: var(--sidebar-font);
+  letter-spacing: 1px;
+}
+.project-action svg {
+  width: var(--sidebar-icon-size);
+  height: var(--sidebar-icon-size);
+  stroke-width: 1.8;
+}
+.project-fold svg {
+  width: var(--sidebar-chevron-size); height: var(--sidebar-chevron-size);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform .16s ease;
+  transform: rotate(90deg);
+}
+.project-block[data-collapsed] .project-fold svg {
+  transform: rotate(0deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-search-wrap,
+  .sidebar-search,
+  .project-fold svg,
+  .project-btns,
+  .sidebar-sort-move {
+    transition: none;
+  }
+}
+.project-menu {
+  position: absolute;
+  z-index: var(--z-popover);
+  top: 36px;
+  right: 4px;
+  width: 154px;
+  padding: 5px;
+  border: 1px solid color-mix(in srgb, var(--theme-backdrop-text) 12%, transparent);
+  border-radius: var(--radius);
+  background: var(--theme-backdrop-background);
+  box-shadow: var(--shadow-md);
+  /* 弹出入场：scale+淡入（popover-in 与 UiSelect 菜单同源） */
+  animation: popover-in var(--dur-base) var(--ease-out);
+  transform-origin: top right;
+}
+.project-menu button {
+  width: 100%;
+  min-height: var(--sidebar-item-height);
+  padding: 0 var(--space-2);
+  border-radius: 0;
+  background: transparent;
+  color: var(--sidebar-text-secondary);
+  font: inherit;
+  font-size: var(--sidebar-font);
+  font-weight: 400;
+  text-align: left;
+  position: relative;
+}
+.project-menu button::before {
+  content: ""; position: absolute; inset: 0;
+  border-radius: 0; background: transparent; pointer-events: none;
+  -webkit-mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
+  mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
+}
+.project-menu button:hover::before,
+.project-menu button:focus-visible::before {
+  background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-hover), transparent);
+}
+.project-menu button:disabled {
+  color: var(--sidebar-text-disabled);
+  opacity: 1;
+}
+.project-menu button.danger {
+  color: var(--red);
+}
+.project-menu-separator {
+  display: block;
+  height: 1px;
+  margin: 4px 5px;
+  background: var(--sidebar-divider);
+}
+.conversation-list {
+  margin-top: var(--sidebar-list-gap);
+  padding-left: 0;
+  display: grid;
+  gap: var(--sidebar-row-gap);
+}
+.conversation {
+  width: calc(100% - var(--sidebar-indent)); min-width: 0;
+  margin-left: var(--sidebar-indent);
+  border: 0;
+  border-radius: var(--sidebar-row-radius);
+  background: transparent;
+  padding: 0 10px 0 var(--space-2);
+  height: var(--sidebar-row-height);
+  min-height: var(--sidebar-row-height);
+  display: flex;
+  gap: var(--sidebar-item-gap);
+  align-items: center;
+  text-align: left;
+  color: var(--sidebar-text-secondary);
+  cursor: pointer;
+  position: relative;
+}
+/* 行式高亮：沿用最初设计的左右渐隐遮罩，背景只表达 hover/active 状态。 */
+.conversation::before {
+  content: ""; position: absolute; top: 0; bottom: 0; left: calc(var(--space-2) * -1); right: calc(var(--space-2) * -1); z-index: -1;
+  border-radius: var(--sidebar-row-radius); background: transparent; pointer-events: none;
+  -webkit-mask-image: linear-gradient(
+    180deg,
+    transparent 0,
+    #000 var(--sidebar-hover-fade-vertical),
+    #000 calc(100% - var(--sidebar-hover-fade-vertical)),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    180deg,
+    transparent 0,
+    #000 var(--sidebar-hover-fade-vertical),
+    #000 calc(100% - var(--sidebar-hover-fade-vertical)),
+    transparent 100%
+  );
+}
+.conversation-select {
+  flex: 1 1 auto;
+  width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sidebar-item-gap);
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.conversation:hover::before {
+  background: linear-gradient(
+    90deg,
+    transparent 0,
+    var(--sidebar-hover-fill) var(--sidebar-hover-fade-left),
+    var(--sidebar-hover-fill) calc(100% - var(--sidebar-hover-fade-right)),
+    transparent 100%
+  );
+}
+.conversation:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--blue) 75%, transparent);
+  outline-offset: 2px;
+}
+.conversation.active::before {
+  background: linear-gradient(
+    90deg,
+    transparent 0,
+    var(--sidebar-selected-fill) var(--sidebar-hover-fade-left),
+    var(--sidebar-selected-fill) calc(100% - var(--sidebar-hover-fade-right)),
+    transparent 100%
+  );
+}
+.conversation.active { color: var(--sidebar-text-primary); }
+.conversation-main {
+  flex: 1 1 auto;
+  width: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+.session-main {
+  min-width: 0;
+}
+.session-editing {
+  cursor: text;
+}
+.conversation strong {
+  display: block; min-width: 0;
+  font-size: var(--sidebar-font); font-weight: 400; line-height: var(--sidebar-line-height-item);
+  color: var(--sidebar-text-secondary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.conversation.active strong { color: var(--sidebar-text-primary); }
+.session-title {
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-name-input {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--theme-backdrop-text);
+  caret-color: var(--theme-backdrop-text);
+  font: inherit;
+  font-size: var(--sidebar-font);
+  font-weight: 400;
+  line-height: var(--sidebar-line-height-item);
+}
+.session-name-input:focus {
+  border: 0;
+  outline: 0;
+  background: transparent;
+}
+.session-name-input:disabled {
+  opacity: .62;
+}
+.conversation span span {
+  display: block; margin-top: 0;
+  color: var(--sidebar-text-muted); font-size: var(--sidebar-meta-text-size);
+}
+.conversation-actions {
+  position: relative;
+  min-width: 22px;
+  min-height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+.session-status {
+  flex: 0 0 auto;
+}
+.conversation-status {
+  position: absolute;
+  right: 7px;
+  transition: opacity .12s ease;
+}
+
+/* Session context menus are teleported out of the clipped sidebar body. */
+.session-context-menu,
+.session-export-menu {
+  position: fixed;
+  z-index: var(--z-popover);
+  box-sizing: border-box;
+  padding: var(--space-1);
+  border: 1px solid color-mix(in srgb, var(--theme-backdrop-text) 12%, transparent);
+  border-radius: var(--radius);
+  background: var(--theme-backdrop-background);
+  color: var(--theme-backdrop-text);
+  box-shadow: var(--shadow-md);
+  animation: popover-in var(--dur-base) var(--ease-out);
+  max-width: calc(100vw - var(--space-4));
+  max-height: calc(100dvh - var(--space-4));
+  overflow-y: auto;
+}
+.session-context-menu {
+  width: 192px;
+}
+.session-export-menu {
+  width: 176px;
+}
+.session-context-menu[data-placement="up"],
+.session-export-menu[data-placement="left"] {
+  transform-origin: bottom right;
+}
+.session-context-menu button,
+.session-export-menu button {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: var(--sidebar-item-height);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: var(--sidebar-text-size);
+  text-align: left;
+  cursor: pointer;
+}
+.session-context-menu button::before,
+.session-export-menu button::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 0;
+  background: transparent;
+  pointer-events: none;
+  -webkit-mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
+  mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
+}
+.session-context-menu button:hover::before,
+.session-context-menu button:focus-visible::before,
+.session-export-menu button:hover::before,
+.session-export-menu button:focus-visible::before {
+  background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-hover), transparent);
+}
+.session-context-menu button:focus-visible,
+.session-export-menu button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--blue) 75%, transparent);
+  outline-offset: -1px;
+}
+.session-context-menu button.danger {
+  color: var(--red);
+}
+.session-menu-chevron {
+  flex: 0 0 auto;
+  color: color-mix(in srgb, var(--theme-backdrop-text) 58%, transparent);
+}
+.session-menu-separator {
+  display: block;
+  height: 1px;
+  margin: var(--space-1) var(--space-2);
+  background: color-mix(in srgb, var(--theme-backdrop-text) 10%, transparent);
+}
+.session-export-group-label {
+  min-height: var(--sidebar-item-height);
+  display: flex;
+  align-items: center;
+  padding: 0 var(--space-2);
+  color: var(--sidebar-text-muted);
+  font-size: var(--sidebar-meta-text-size);
+  font-weight: 500;
+  letter-spacing: .02em;
+}
+.session-export-menu button[data-session-export-format="markdown"],
+.session-export-menu button[data-session-export-format="txt"],
+.session-export-menu button[data-session-export-format="jsonl"] {
+  padding-left: var(--space-3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-context-menu,
+  .session-export-menu {
+    animation: none;
+  }
+}
+
+/* Session status indicators — 点色以 backdrop area 文字为底，靠动画/混合区分状态 */
+.conversation .status {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--theme-backdrop-text) 54%, transparent);
+  box-shadow: none;
+  justify-self: end;
+}
+/* 运行中：spinner 转圈——复用发送后等待回复的绿色圆环（stream-spinner）配方 */
+.conversation .status.running {
+  width: 9px; height: 9px;
+  border: 2px solid color-mix(in srgb, var(--theme-backdrop-text) 14%, transparent);
+  border-top-color: var(--green);
+  background: transparent;
+  border-radius: 50%;
+  box-shadow: none;
+  animation: stream-spin .9s linear infinite;
+}
+.conversation .status.completed {
+  background: var(--theme-backdrop-text);
+  box-shadow: none;
+}
+.conversation .status.failed {
+  background: color-mix(in srgb, var(--theme-backdrop-text) 30%, var(--red) 70%);
+  box-shadow: none;
+}
+.conversation .status.waiting {
+  background: color-mix(in srgb, var(--theme-backdrop-text) 30%, var(--orange) 70%);
+  box-shadow: none;
+  /* waiting = 呼吸（区别于 running 的转圈）；status-breathe 唯一消费者 */
+  animation: status-breathe 1.6s ease-in-out infinite;
+}
+.conversation .status.idle {
+  background: color-mix(in srgb, var(--theme-backdrop-text) 54%, transparent);
+}
+@keyframes status-breathe {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: .62;
+    transform: scale(.86);
+  }
+}
+/* 运行态 spinner 与等待回复的 stream-spinner 同源——后者本就无视 reduced-motion 始终转动，
+   此处保持一致，避免系统开"减少动画"时侧栏运行点静止而聊天区等待圆环仍转的割裂。 */
+
+/* Sidebar empty state */
+.sidebar-empty {
+  padding: 18px 12px;
+  text-align: center;
+  color: var(--sidebar-text-muted);
+  font-size: var(--sidebar-text-size);
+}
+.sidebar-empty-projects p {
+  margin: 0 0 var(--space-2);
+}
+.sidebar-empty-projects .sidebar-create-project {
+  justify-content: center;
+}
+.sidebar-search-empty p {
+  margin: 0 0 var(--space-2);
+}
+.sidebar-search-clear {
+  min-height: var(--sidebar-row-height);
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: var(--sidebar-row-radius);
+  background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-hover), transparent);
+  color: var(--sidebar-text-secondary);
+  font: inherit;
+  font-size: var(--sidebar-text-size);
+  cursor: pointer;
+}
+.sidebar-search-clear:hover,
+.sidebar-search-clear:focus-visible {
+  background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-active), transparent);
+  color: var(--sidebar-text-primary);
+}
+
+@media (max-width: 640px) {
+  .sidebar-search-toggle {
+    flex-basis: 44px;
+    width: 44px;
+    min-width: 44px;
+    min-height: 44px;
+    height: 44px;
+  }
+  .sidebar-search-wrap {
+    flex-basis: 44px;
+    width: 44px;
+    height: 44px;
+  }
+  .sidebar-search-wrap:hover,
+  .sidebar-search-wrap:focus-within,
+  .sidebar-search-wrap.is-expanded {
+    flex-basis: min(100%, var(--sidebar-width));
+    width: min(100%, var(--sidebar-width));
+  }
+  .sidebar-search,
+  .sidebar-search-clear,
+  .sidebar-project-empty-action {
+    min-height: 44px;
+  }
+  .project-action {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .project-btns {
+    flex-basis: 44px;
+  }
+  .project-menu-button {
+    width: 44px;
+    flex-basis: 44px;
+  }
+  .project-menu {
+    width: min(154px, calc(100vw - var(--space-6)));
+    max-width: calc(100vw - var(--space-6));
+    max-height: calc(100dvh - var(--space-6));
+    overflow-y: auto;
+  }
+  .project-menu button {
+    min-height: 44px;
+  }
+  .conversation,
+  .conversation-select {
+    min-height: 44px;
+  }
+}

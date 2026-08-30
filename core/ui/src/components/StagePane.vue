@@ -124,14 +124,16 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, defineAsyncComponent, ref } from 'vue'
 import { Globe, Image, Music, Video, X, type LucideIcon } from 'lucide-vue-next'
 import type { StageResource } from '../types'
-import StageCodeEditor from './StageCodeEditor.vue'
 import StageImagePreview from './StageImagePreview.vue'
 import StageMediaPreview from './StageMediaPreview.vue'
 import StageBrowser from './StageBrowser.vue'
 import MarkdownRenderer from './MarkdownRenderer.vue'
+
+const StageCodeEditor = defineAsyncComponent(() => import('./StageCodeEditor.vue'))
+type StageCodeEditorInstance = InstanceType<(typeof import('./StageCodeEditor.vue'))['default']>
 
 const props = defineProps<{
   tabs: StageResource[]
@@ -146,7 +148,7 @@ const emit = defineEmits<{
   'toggle-preview': [id: string, mode: 'code' | 'preview']
 }>()
 
-const codeEditorRef = ref<InstanceType<typeof StageCodeEditor> | null>(null)
+const codeEditorRef = ref<StageCodeEditorInstance | null>(null)
 const codeDirty = ref(false)
 const saving = ref(false)
 

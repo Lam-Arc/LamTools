@@ -183,7 +183,7 @@ class SkillRegistry:
         description = meta.get("description", "").strip()
         if not description:
             first_line = next((line.strip() for line in content.splitlines() if line.strip()), "")
-            description = first_line[:200] if first_line else "Specialized workflow."
+            description = first_line[:200] if first_line else "Specialized capability."
         return Skill(
             name=name.strip(),
             description=description,

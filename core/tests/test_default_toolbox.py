@@ -123,6 +123,104 @@ class FakeSkillRegistry:
         return SkillRef()
 
 
+def test_strict_tool_schema_closes_nullable_object_properties(tmp_path):
+    toolbox = build_core_toolbox(work_root=tmp_path)
+    mcp = next(spec for spec in toolbox.tool_specs() if spec.name == "mcp_tool")
+    arguments = mcp.input_schema["properties"]["arguments"]
+
+    assert arguments["type"] == ["object", "null"]
+    assert arguments["additionalProperties"] is False
+
+
+def _assert_strict_schema(node, path="schema"):
+    assert isinstance(node, dict), f"{path} must be an object"
+    assert any(key in node for key in ("type", "anyOf", "$ref")), (
+        f"{path} has no type/anyOf/$ref: {node}"
+    )
+
+    schema_type = node.get("type")
+    is_object = schema_type == "object" or (
+        isinstance(schema_type, list) and "object" in schema_type
+    ) or "properties" in node
+    if is_object:
+        properties = node.get("properties")
+        assert isinstance(properties, dict), f"{path}.properties must be an object"
+        assert node.get("additionalProperties") is False, f"{path} is open"
+        assert set(node.get("required") or []) == set(properties), (
+            f"{path}.required does not cover every property"
+        )
+        for key, child in properties.items():
+            _assert_strict_schema(child, f"{path}.properties.{key}")
+
+    is_array = schema_type == "array" or (
+        isinstance(schema_type, list) and "array" in schema_type
+    )
+    if is_array:
+        assert isinstance(node.get("items"), dict), f"{path}.items is missing"
+        _assert_strict_schema(node["items"], f"{path}.items")
+
+    for index, branch in enumerate(node.get("anyOf") or []):
+        _assert_strict_schema(branch, f"{path}.anyOf[{index}]")
+    for name, definition in (node.get("$defs") or {}).items():
+        _assert_strict_schema(definition, f"{path}.$defs.{name}")
+
+
+def test_all_model_tool_schemas_are_strict_compatible(tmp_path):
+    from lamtools_core.plugins.bundled.workflow.backend.runtime import (
+        WorkflowDef,
+        WorkflowInputParam,
+        WorkflowNode,
+        WorkflowPort,
+    )
+    from lamtools_core.tool import ToolSpec
+    from lamtools_core.tool.default_toolbox import (
+        bundled_core_tool_specs,
+        core_model_tools,
+        default_core_tool_specs,
+    )
+    from lamtools_core.tool.durable_tools import durable_tool_specs
+    from lamtools_core.plugins.bundled.workflow.backend.build_tools import workflow_build_tool_specs
+    from lamtools_core.plugins.bundled.workflow.backend.tools import workflow_tool_specs
+    from lamtools_core.plugins.manager_tools import plugin_manager_tool_specs
+
+    workflow = WorkflowDef(
+        name="dynamic",
+        nodes=[
+            WorkflowNode(
+                id="input",
+                kind="command",
+                ports=[WorkflowPort(name="payload", type="any")],
+            )
+        ],
+        input_params=[WorkflowInputParam(name="items", type="array")],
+    )
+    specs = [
+        *default_core_tool_specs(),
+        *bundled_core_tool_specs(),
+        *durable_tool_specs(goal=True, arrange=True),
+        *workflow_build_tool_specs(),
+        *plugin_manager_tool_specs(),
+        *workflow_tool_specs([workflow]),
+        ToolSpec(name="empty_schema", input_schema={}),
+        ToolSpec(
+            name="untyped_property",
+            input_schema={
+                "type": "object",
+                "properties": {"value": {}},
+            },
+        ),
+        ToolSpec(name="malformed_root", input_schema={"description": "no parameters"}),
+    ]
+
+    definitions = core_model_tools(specs)
+    assert len(definitions) == len(specs)
+    for definition in definitions:
+        _assert_strict_schema(
+            definition["function"]["parameters"],
+            definition["function"]["name"],
+        )
+
+
 def test_core_toolbox_exposes_generic_tool_specs(tmp_path):
     toolbox = build_core_toolbox(work_root=tmp_path)
 
@@ -154,6 +252,69 @@ def test_core_toolbox_exposes_generic_tool_specs(tmp_path):
         item["type"] for item in specs["write_file"].metadata["failure_modes"]
     }
     assert specs["write_file"].metadata["recovery"]
+
+
+def test_write_checklist_description_covers_optional_planning_contract(tmp_path):
+    toolbox = build_core_toolbox(work_root=tmp_path)
+
+    description = next(spec for spec in toolbox.tool_specs() if spec.name == "write_checklist").description
+
+    assert "optionally" in description.lower()
+    assert "simple tasks may skip" in description.lower()
+    assert "3-7" in description
+    assert "non-overlapping" in description.lower()
+    assert "verifiable" in description.lower()
+    assert "sub-agents" in description.lower()
+    assert "evidence" in description.lower()
+
+
+@pytest.mark.asyncio
+async def test_write_checklist_normalizes_none_files(tmp_path):
+    toolbox = build_core_toolbox(work_root=tmp_path)
+
+    result = await toolbox.execute(
+        ToolCall(
+            id="checklist-none-files",
+            name="write_checklist",
+            arguments={
+                "design_summary": "Inspect the project",
+                "files": None,
+                "steps": [{"id": "s1", "description": "Inspect sources"}],
+            },
+        )
+    )
+
+    assert result.status == "ok"
+    assert result.metadata["plan_files"] == []
+    assert result.metadata["task_plan"]["files"] == []
+
+
+@pytest.mark.asyncio
+async def test_write_checklist_preserves_deliverables_in_outputs(tmp_path):
+    toolbox = build_core_toolbox(work_root=tmp_path)
+
+    result = await toolbox.execute(
+        ToolCall(
+            id="checklist-deliverables",
+            name="write_checklist",
+            arguments={
+                "design_summary": "Add checklist coverage",
+                "files": ["core/tests/test_default_toolbox.py"],
+                "steps": [
+                    {
+                        "id": "s1",
+                        "description": "Add focused tests",
+                        "deliverables": ["passing pytest assertions"],
+                    }
+                ],
+            },
+        )
+    )
+
+    assert result.status == "ok"
+    assert result.metadata["plan_steps"][0]["deliverables"] == ["passing pytest assertions"]
+    assert result.metadata["task_plan"]["steps"][0]["deliverables"] == ["passing pytest assertions"]
+    assert "passing pytest assertions" in result.content
 
 
 @pytest.mark.asyncio
@@ -662,7 +823,8 @@ def test_core_toolbox_workflow_mode_allows_dynamic_workflow_tools(tmp_path):
         work_root=tmp_path,
         load_tools=default_load_tools(),
         active_mode="workflow",
-        workflow_tool_provider=lambda: FakeWorkflowBundle,
+        plugin_tool_providers=[lambda: FakeWorkflowBundle],
+        plugin_mode_tool_sets={"workflow": {"wf_run_dynamic"}},
     )
 
     dynamic = toolbox.prepare_call(ToolCall(id="wf-dyn", name="wf_run_dynamic", arguments={}))
@@ -684,7 +846,8 @@ def test_core_toolbox_consider_mode_blocks_dynamic_workflow_tools(tmp_path):
         work_root=tmp_path,
         load_tools=default_load_tools(),
         active_mode="consider",
-        workflow_tool_provider=lambda: FakeWorkflowBundle,
+        plugin_tool_providers=[lambda: FakeWorkflowBundle],
+        plugin_mode_tool_sets={"workflow": {"wf_run_dynamic"}},
     )
 
     call = toolbox.prepare_call(ToolCall(id="wf-dyn-consider", name="wf_run_dynamic", arguments={}))

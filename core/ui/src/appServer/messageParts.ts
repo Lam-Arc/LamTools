@@ -1,6 +1,113 @@
 import type { MessagePart } from '../types'
 import type { CoreAppItem } from './protocol.ts'
 
+export interface AssistantMessagePartsProjection {
+  processParts: MessagePart[]
+  answerPart: MessagePart | null
+  answerText: string
+}
+
+/**
+ * Normalize only the representation differences that are safe to ignore when
+ * deciding whether a model-text item is the flat assistant answer.
+ */
+export function normalizeAnswerText(value: string): string {
+  return String(value || '').replace(/\r\n/g, '\n').trim()
+}
+
+/**
+ * Split the raw part timeline into one process timeline and one final answer.
+ * The UI must not repeat this semantic decision for live/history rendering.
+ *
+ * Explicit final markers win when a producer provides one. Older snapshots do
+ * not have that marker, so the compatibility rule accepts only the last
+ * non-empty model_text whose normalized body equals the flat message content;
+ * trailing status/attachment bookkeeping does not disqualify it.
+ */
+export function projectAssistantMessageParts(
+  parts: MessagePart[] = [],
+  content = '',
+  options: { live?: boolean } = {},
+): AssistantMessagePartsProjection {
+  const source = Array.isArray(parts) ? parts : []
+  const answerText = String(content || '')
+  let answerIndex = -1
+
+  for (let index = source.length - 1; index >= 0; index -= 1) {
+    const part = source[index]
+    if (part.partType !== 'model_text' || !normalizeAnswerText(part.content || '')) continue
+    if (isExplicitFinalAnswerPart(part)) {
+      answerIndex = index
+      break
+    }
+  }
+
+  if (answerIndex < 0) {
+    const normalizedContent = normalizeAnswerText(answerText)
+    if (normalizedContent) {
+      for (let index = source.length - 1; index >= 0; index -= 1) {
+        const part = source[index]
+        if (part.partType !== 'model_text') continue
+        if (normalizeAnswerText(part.content || '') !== normalizedContent) continue
+        if (!hasMeaningfulTrailingProcess(source, index)) {
+          answerIndex = index
+          break
+        }
+      }
+    }
+  }
+
+  // During a live stream the flat message content can lag behind the terminal
+  // model_text delta. Treat a terminal model_text as the answer until a later
+  // process part arrives; the next projection will move it back into the
+  // process timeline when that happens.
+  if (answerIndex < 0 && options.live) {
+    for (let index = source.length - 1; index >= 0; index -= 1) {
+      const part = source[index]
+      if (part.partType !== 'model_text' || !normalizeAnswerText(part.content || '')) continue
+      if (hasMeaningfulTrailingProcess(source, index)) break
+      answerIndex = index
+      break
+    }
+  }
+
+  const answerPart = answerIndex >= 0 ? source[answerIndex] : null
+  const hasMeaningfulModelText = source.some((part) => (
+    part.partType === 'model_text'
+    && Boolean(normalizeAnswerText(part.content || ''))
+  ))
+  return {
+    processParts: answerIndex >= 0 ? source.filter((_, index) => index !== answerIndex) : [...source],
+    answerPart,
+    // During live projection, a model-text part that remains in the process
+    // timeline means the flat content field is usually its stale snapshot.
+    // Do not render it again in the final-answer slot; a later projection will
+    // promote the terminal model-text once the process stream reaches its end.
+    answerText: answerPart
+      ? (answerText || String(answerPart.content || ''))
+      : options.live && hasMeaningfulModelText
+        ? ''
+        : answerText,
+  }
+}
+
+function isExplicitFinalAnswerPart(part: MessagePart): boolean {
+  const metadata = part.metadata || {}
+  return metadata.final === true
+    || metadata.is_final === true
+    || metadata.final_answer === true
+    || metadata.answer === true
+    || metadata.role === 'assistant_answer'
+    || metadata.kind === 'final_answer'
+}
+
+function hasMeaningfulTrailingProcess(parts: MessagePart[], index: number): boolean {
+  return parts.slice(index + 1).some((part) => {
+    if (part.partType === 'status' || part.partType === 'attachment') return false
+    return part.partType !== 'text' || Boolean(normalizeAnswerText(part.content || ''))
+  })
+}
+
 export interface CoreAppItemPartOptions {
   status?: MessagePart['status']
   type?: MessagePart['partType']

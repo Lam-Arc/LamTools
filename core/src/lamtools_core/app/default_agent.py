@@ -7,6 +7,7 @@ import inspect
 import logging
 import time as time_module
 from collections.abc import Awaitable, Callable, Mapping
+from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -63,6 +64,11 @@ from .live_approval import normalize_approval_request
 from .operation_catalog import OperationCatalog, OperationRequest, OperationResult
 from .persistence_host import AppPersistenceHost
 from .snapshot_store import SqlAlchemyThreadSnapshotStore
+from .runtime_permissions import (
+    permissions_from_snapshot,
+    resolve_permission_preset,
+    runtime_snapshot as build_runtime_snapshot,
+)
 
 
 @dataclass(frozen=True)
@@ -108,6 +114,20 @@ class CoreAgentRuntimeOptions:
     capability: str = ""
 
 
+_RUNTIME_OPTION_KEYS: tuple[str, ...] = (
+    "model_id",
+    "thinking_enabled",
+    "thinking_budget",
+    "reasoning_effort",
+    "shallow_thinking_enabled",
+    "context_window_tokens",
+    "max_tokens",
+    "temperature",
+    "compact_trigger_tokens",
+    "compact_limit_tokens",
+)
+
+
 def create_goal_gate(
     goal_manager: GoalManager | None,
     goal_id: str,
@@ -144,6 +164,7 @@ def create_kernel(
     compact_limit_tokens: int | None = None,
     parallel_tool_names: tuple[str, ...] = ("sub_agent",),
     cancel_event_source: "asyncio.Event | None" = None,
+    model_context_sink: Callable[[Any, Any], Awaitable[None] | None] | None = None,
     **extra_policy_kwargs: Any,
 ) -> CoreLoopKernel:
     """Create a CoreLoopKernel with sensible production defaults.
@@ -198,6 +219,7 @@ def create_kernel(
         completion_gate=completion_gate,
         memory_store=memory_store,
         cancel_event_source=cancel_event_source,
+        model_context_sink=model_context_sink,
     )
 
 
@@ -221,11 +243,12 @@ def create_core_agent_operations(
     runtime_task_registry: RuntimeTaskRegistry | None = None,
     goal_manager: GoalManager | None = None,
     arrange_manager: ArrangeManager | None = None,
-    workflow_store: Any = None,
+    start_plugin_lifecycle: bool = False,
     enable_turn_checkpoints: bool = False,
     attachment_service: Any | None = None,
     model_display_resolver: Callable[[str], str] | None = None,
     memory_store: MemoryStoreProtocol | None = None,
+    model_context_sink: Callable[[Any, Any], Awaitable[None] | None] | None = None,
 ) -> OperationCatalog:
     spec = spec or CoreAgentSpec()
 
@@ -236,6 +259,7 @@ def create_core_agent_operations(
     runtime_state_store = runtime_state_store or InMemoryRuntimeStateStore()
     memory_store = memory_store or InMemoryMemoryStore()
     runtime_task_registry = runtime_task_registry or default_runtime_task_registry()
+    session_store = session_store or InMemorySessionStore()
     kit = member_kit or StaticMemberKit(
         id=spec.member_id,
         display_name=spec.name,
@@ -257,7 +281,7 @@ def create_core_agent_operations(
         ),
         kit=kit,
         model_provider=model_provider,
-        session_store=session_store or InMemorySessionStore(),
+        session_store=session_store,
         snapshot_store=snapshot_store or InMemorySnapshotStore(),
     )
     catalog = OperationCatalog()
@@ -280,6 +304,8 @@ def create_core_agent_operations(
             data_dir=paths.data_dir,
             work_root=paths.work_root,
             plugin_roots=plugin_roots,
+            context=plugin_context,
+            plugin_runtimes=getattr(plugin_operations, "plugin_runtimes", []),
         )
         from lamtools_core.config.root import core_skills_root
 
@@ -384,9 +410,23 @@ def create_core_agent_operations(
         if _is_llm_client(model_provider):
             from lamtools_core.tool.default_toolbox import build_core_toolbox
 
+            runtime_snapshot = _runtime_snapshot_from_payload(request.payload)
+            runtime_request = request
+            if runtime_snapshot is not None:
+                runtime_request = replace(
+                    request,
+                    payload={
+                        **request.payload,
+                        **{
+                            key: runtime_snapshot[key]
+                            for key in _RUNTIME_OPTION_KEYS
+                            if key in runtime_snapshot
+                        },
+                    },
+                )
             runtime_options = _runtime_options_from_request(
                 turn_spec,
-                request,
+                runtime_request,
                 work_root=runtime_work_root,
             )
             runtime_model_provider = _model_provider_for_runtime(
@@ -408,25 +448,38 @@ def create_core_agent_operations(
                 live_callback if app_event_hub is not None else None,
                 should_collect=_should_collect_core_event,
             )
-            approval_policy = str(request.payload.get("approval_policy") or "require")
+            approval_policy = str(
+                (runtime_snapshot or {}).get("approval_policy")
+                or request.payload.get("approval_policy")
+                or "require"
+            )
             if approval_policy not in {"require", "auto_approve"}:
                 approval_policy = "require"
-            active_tier = request.payload.get("active_tier")
+            active_tier = (runtime_snapshot or {}).get("active_tier", request.payload.get("active_tier"))
             if active_tier not in ("read_only", "limited_edit", "full_edit"):
                 active_tier = None
-            tier_tools = request.payload.get("tier_tools") if isinstance(request.payload.get("tier_tools"), dict) else None
-            active_mode = request.payload.get("active_mode")
+            raw_tier_tools = (runtime_snapshot or {}).get("tier_tools", request.payload.get("tier_tools"))
+            tier_tools = raw_tier_tools if isinstance(raw_tier_tools, dict) else None
+            active_mode = (runtime_snapshot or {}).get("active_mode", request.payload.get("active_mode"))
             if not isinstance(active_mode, str) or not active_mode.strip():
                 active_mode = None
-            # Optional per-turn instructions override (e.g. workflow-mode context).
+            # Optional per-turn instructions override (for a plugin mode or
+            # another host-provided context).
             turn_instructions = str(request.payload.get("instructions") or "").strip() or None
-            allow_access_outside_workdir = bool(request.payload.get("allow_access_outside_workdir"))
+            allow_access_outside_workdir = bool(
+                (runtime_snapshot or {}).get(
+                    "allow_access_outside_workdir",
+                    request.payload.get("allow_access_outside_workdir"),
+                )
+            )
             raw_imagegen = request.payload.get("imagegen_config")
             imagegen_config = raw_imagegen if isinstance(raw_imagegen, dict) else None
             plugin_assembly = assemble_core_agent_plugins(
                 data_dir=paths.data_dir,
                 work_root=runtime_work_root,
                 plugin_roots=plugin_roots,
+                context=plugin_context,
+                plugin_runtimes=getattr(plugin_operations, "plugin_runtimes", []),
             )
             _logger.info("[default:turn_start] plugin assembly done thread_id=%s", thread_id)
             # Load existing session state to get activated MCP servers.
@@ -446,6 +499,16 @@ def create_core_agent_operations(
                 except Exception:
                     pass
             turn_checkpoint_coordinator = checkpoint_coordinator(runtime_work_root)
+            session_metadata: dict[str, Any] = {}
+            try:
+                stored_session = session_store.get(thread_id)
+                if inspect.isawaitable(stored_session):
+                    stored_session = await stored_session
+                raw_session_metadata = getattr(stored_session, "metadata", None)
+                if isinstance(raw_session_metadata, dict):
+                    session_metadata = dict(raw_session_metadata)
+            except Exception:  # noqa: BLE001 — metadata is optional context
+                session_metadata = {}
             toolbox, mcp_registry = await _build_core_runtime_toolbox(
                 work_root=runtime_work_root,
                 plugin_assembly=plugin_assembly,
@@ -465,11 +528,11 @@ def create_core_agent_operations(
                 operation_catalog=catalog,
                 enable_goal_tool=goal_manager is not None,
                 enable_arrange_tool=arrange_manager is not None,
-                workflow_store=workflow_store,
-                enable_workflow_tool=workflow_store is not None,
                 active_tier=active_tier,
                 tier_tools=tier_tools,
                 active_mode=active_mode,
+                permission_preset=(runtime_snapshot or {}).get("permission_preset", "ask"),
+                runtime_snapshot=runtime_snapshot,
                 activated_mcp_servers=activated_mcp_servers,
                 attachment_service=attachment_service,
                 imagegen_config=imagegen_config,
@@ -516,6 +579,7 @@ def create_core_agent_operations(
                     ),
                     memory_store=memory_store,
                     cancel_event_source=runtime_task_registry.get_cancel_event(thread_id),
+                    model_context_sink=model_context_sink,
                 )
                 _logger.info("[default:turn_start] kernel created, starting run thread_id=%s model=%s",
                               thread_id, runtime_options.model_id)
@@ -547,12 +611,28 @@ def create_core_agent_operations(
                             **request.metadata,
                             **dict(request.payload.get("metadata") or {}),
                             "session_id": thread_id,
+                            "session_metadata": session_metadata,
                             "goal_id": goal_id,
                             "data_dir": str(paths.data_dir),
                             "work_root": str(runtime_work_root),
                             "model_id": runtime_options.model_id,
                             "capability": runtime_options.capability,
                             "deferred_attachments": deferred_attachments,
+                            **(
+                                {
+                                    "runtime_snapshot": deepcopy(runtime_snapshot),
+                                    "runtime_snapshot_fresh": True,
+                                    "permission_preset": runtime_snapshot.get("permission_preset"),
+                                    "active_tier": runtime_snapshot.get("active_tier"),
+                                    "tier_tools": runtime_snapshot.get("tier_tools"),
+                                    "approval_policy": runtime_snapshot.get("approval_policy"),
+                                    "allow_access_outside_workdir": runtime_snapshot.get(
+                                        "allow_access_outside_workdir"
+                                    ),
+                                }
+                                if runtime_snapshot is not None
+                                else {}
+                            ),
                             "max_tokens": runtime_options.max_tokens,
                             "temperature": runtime_options.temperature,
                             **(
@@ -651,14 +731,28 @@ def create_core_agent_operations(
         # Re-resolve approval policy from payload (injected by live_operations
         # via _resolve_turn_approval_policy) so the continuation kernel inherits
         # the same tier as the original turn_start — not a hardcoded "require".
-        approval_policy = str(request.payload.get("approval_policy") or "require")
+        runtime_snapshot = _runtime_snapshot_from_payload(request.payload)
+        approval_policy = str(
+            (runtime_snapshot or {}).get("approval_policy")
+            or request.payload.get("approval_policy")
+            or "require"
+        )
         if approval_policy not in {"require", "auto_approve"}:
             approval_policy = "require"
-        active_tier = request.payload.get("active_tier")
+        active_tier = (runtime_snapshot or {}).get("active_tier", request.payload.get("active_tier"))
         if active_tier not in ("read_only", "limited_edit", "full_edit"):
             active_tier = None
-        tier_tools = request.payload.get("tier_tools") if isinstance(request.payload.get("tier_tools"), dict) else None
-        allow_access_outside_workdir = bool(request.payload.get("allow_access_outside_workdir"))
+        raw_tier_tools = (runtime_snapshot or {}).get("tier_tools", request.payload.get("tier_tools"))
+        tier_tools = raw_tier_tools if isinstance(raw_tier_tools, dict) else None
+        active_mode = (runtime_snapshot or {}).get("active_mode", request.payload.get("active_mode"))
+        if not isinstance(active_mode, str) or not active_mode.strip():
+            active_mode = None
+        allow_access_outside_workdir = bool(
+            (runtime_snapshot or {}).get(
+                "allow_access_outside_workdir",
+                request.payload.get("allow_access_outside_workdir"),
+            )
+        )
         if _is_llm_client(model_provider):
             from lamtools_core.event import CoreEvent
             from lamtools_core.tool import ToolCall
@@ -700,6 +794,24 @@ def create_core_agent_operations(
                 )
             if state is None:
                 return OperationResult(name=request.name, status="error", payload={"error": "thread state not found"})
+            # The paused RuntimeState is authoritative.  In particular, a
+            # Composer change made while the approval card is visible must not
+            # alter this continuation's permissions.
+            persisted_snapshot = _runtime_snapshot_from_payload(state.metadata)
+            if persisted_snapshot is not None:
+                runtime_snapshot = persisted_snapshot
+                approval_policy = str(runtime_snapshot.get("approval_policy") or "require")
+                active_tier = runtime_snapshot.get("active_tier")
+                if active_tier not in ("read_only", "limited_edit", "full_edit"):
+                    active_tier = None
+                raw_tier_tools = runtime_snapshot.get("tier_tools")
+                tier_tools = raw_tier_tools if isinstance(raw_tier_tools, dict) else None
+                active_mode = runtime_snapshot.get("active_mode")
+                if not isinstance(active_mode, str) or not active_mode.strip():
+                    active_mode = None
+                allow_access_outside_workdir = bool(
+                    runtime_snapshot.get("allow_access_outside_workdir", False)
+                )
             pending = state.metadata.get("pending_approval") if isinstance(state.metadata, dict) else None
             pending_call = pending.get("tool_call") if isinstance(pending, dict) else None
             if not isinstance(pending_call, dict):
@@ -903,6 +1015,8 @@ def create_core_agent_operations(
                         data_dir=paths.data_dir,
                         work_root=runtime_work_root,
                         plugin_roots=plugin_roots,
+                        context=plugin_context,
+                        plugin_runtimes=getattr(plugin_operations, "plugin_runtimes", []),
                     )
                     toolbox, mcp_registry = await _build_core_runtime_toolbox(
                         work_root=runtime_work_root,
@@ -924,8 +1038,12 @@ def create_core_agent_operations(
                         enable_arrange_tool=arrange_manager is not None,
                         active_tier=active_tier,
                         tier_tools=tier_tools,
+                        active_mode=active_mode,
+                        permission_preset=(runtime_snapshot or {}).get("permission_preset", "ask"),
+                        runtime_snapshot=runtime_snapshot,
                         activated_mcp_servers=delegated_activated_mcp,
                         allow_access_outside_workdir=allow_access_outside_workdir,
+                        model_context_sink=model_context_sink,
                     )
                     sub_agent_runner = toolbox.sub_agent_runner
                     if sub_agent_runner is None or not hasattr(sub_agent_runner, "resume_approved"):
@@ -1049,6 +1167,7 @@ def create_core_agent_operations(
                             runtime_model_provider,
                             runtime_options.model_id,
                         ),
+                        model_context_sink=model_context_sink,
                     )
                     kernel_result = await kernel.run(
                         RuntimeTurnInput(
@@ -1155,11 +1274,16 @@ def create_core_agent_operations(
                         data_dir=paths.data_dir,
                         work_root=runtime_work_root,
                         plugin_roots=plugin_roots,
+                        context=plugin_context,
+                        plugin_runtimes=getattr(plugin_operations, "plugin_runtimes", []),
                     )
                     toolbox, mcp_registry = await _build_core_runtime_toolbox(
                         work_root=runtime_work_root,
                         plugin_assembly=plugin_assembly,
-                        approval_policy="auto_approve",
+                        # This continuation is still part of the original
+                        # turn; preserve its frozen policy while executing the
+                        # approved call instead of silently upgrading it.
+                        approval_policy=approval_policy,
                         llm_client=runtime_model_provider,
                         model_id=runtime_options.model_id,
                         instructions=turn_instructions or spec.instructions,
@@ -1173,7 +1297,14 @@ def create_core_agent_operations(
                         operation_catalog=catalog,
                         enable_goal_tool=goal_manager is not None,
                         enable_arrange_tool=arrange_manager is not None,
+                        active_tier=active_tier,
+                        tier_tools=tier_tools,
+                        active_mode=active_mode,
+                        permission_preset=(runtime_snapshot or {}).get("permission_preset", "ask"),
                         activated_mcp_servers=approval_activated_mcp,
+                        allow_access_outside_workdir=allow_access_outside_workdir,
+                        runtime_snapshot=runtime_snapshot,
+                        model_context_sink=model_context_sink,
                     )
                     call = ToolCall(
                         id=str(pending_call.get("id") or ""),
@@ -1184,6 +1315,7 @@ def create_core_agent_operations(
                             "approval": {"approved": True, "auto_approved": True},
                         },
                     )
+                    call = toolbox.prepare_approved_call(call)
                     tool_result = await toolbox.execute(call)
                 except BaseException as exc:
                     if isinstance(exc, asyncio.CancelledError):
@@ -1274,6 +1406,8 @@ def create_core_agent_operations(
                     data_dir=paths.data_dir,
                     work_root=runtime_work_root,
                     plugin_roots=plugin_roots,
+                    context=plugin_context,
+                    plugin_runtimes=getattr(plugin_operations, "plugin_runtimes", []),
                 )
                 toolbox, mcp_registry = await _build_core_runtime_toolbox(
                     work_root=runtime_work_root,
@@ -1295,7 +1429,12 @@ def create_core_agent_operations(
                     enable_arrange_tool=arrange_manager is not None,
                     active_tier=active_tier,
                     tier_tools=tier_tools,
+                    active_mode=active_mode,
+                    permission_preset=(runtime_snapshot or {}).get("permission_preset", "ask"),
                     activated_mcp_servers=continuation_activated_mcp,
+                    allow_access_outside_workdir=allow_access_outside_workdir,
+                    runtime_snapshot=runtime_snapshot,
+                    model_context_sink=model_context_sink,
                 )
                 kernel = create_kernel(
                     kit=CoreBaseAgentKit(
@@ -1327,6 +1466,7 @@ def create_core_agent_operations(
                         runtime_model_provider,
                         runtime_options.model_id,
                     ),
+                    model_context_sink=model_context_sink,
                 )
                 kernel_result = await kernel.run(
                     RuntimeTurnInput(
@@ -1546,19 +1686,86 @@ def create_core_agent_operations(
             data_dir=paths.data_dir,
             default_work_root=paths.work_root,
         )
+    from lamtools_core.plugins.context import PluginContext
+    from lamtools_core.tool.approval import ApprovalGate
+    from lamtools_core.tool.permission import ASK_USER
+
+    plugin_permission_service = ApprovalGate(
+        work_root=Path(paths.work_root),
+        tool_permissions={"run_command": ASK_USER},
+    )
+
+    async def emit_plugin_event(event: Any) -> None:
+        event_thread_id = str(getattr(event, "thread_id", "") or paths.work_root)
+        await _persist_core_event_live(
+            event,
+            thread_id=event_thread_id,
+            db_session_factory=db_session_factory,
+            app_event_store=app_event_store,
+            thread_snapshot_store=thread_snapshot_store,
+            app_event_hub=app_event_hub,
+        )
+
+    def plugin_sub_agent_runner_factory() -> Any:
+        """Provide a host-owned sub-agent runner to plugin backends on demand."""
+        from lamtools_core.tool.sub_agent_runner import KernelSubAgentRunner
+
+        return KernelSubAgentRunner(
+            work_root=paths.work_root,
+            llm_client=model_provider,
+            model_id=spec.default_model,
+            approval_policy="require",
+            session_prefix="plugin-sub-agent",
+            state_store=runtime_state_store,
+        )
+
+    plugin_context = PluginContext(
+        work_root=Path(paths.work_root),
+        data_dir=Path(paths.data_dir),
+        operation_catalog=catalog,
+        permission_service=plugin_permission_service,
+        event_bus=app_event_hub,
+        runtime_task_registry=runtime_task_registry,
+        llm_client=model_provider,
+        event_sink=emit_plugin_event,
+        services={
+            "session_store": session_store,
+            "sub_agent_runner": None,
+            "sub_agent_runner_factory": plugin_sub_agent_runner_factory,
+        },
+    )
     plugin_operations = build_core_plugin_operation_catalog(
         data_dir=paths.data_dir,
         work_root=paths.work_root,
         plugin_roots=plugin_roots,
+        context=plugin_context,
+        start_lifecycle=start_plugin_lifecycle,
     )
-    for operation_name in plugin_operations.list():
+    # Mount the complete plugin operation surface once. The plugin catalog
+    # keeps disabled operations registered behind availability guards,
+    # allowing a live enable transition to expose them without rebuilding the
+    # outer Core catalog. The outer wrapper applies the same guard, while
+    # list and has still hide unavailable operations from clients.
+    for operation_name in plugin_operations.registered():
+        operation_owner = plugin_operations.owner_of(operation_name)
         async def execute_plugin_operation(
             request: OperationRequest,
             name: str = operation_name,
         ) -> OperationResult:
             return await plugin_operations.execute(name, request.payload, metadata=request.metadata)
 
-        catalog.register(operation_name, execute_plugin_operation)
+        catalog.register(
+            operation_name,
+            execute_plugin_operation,
+            owner=operation_owner,
+            availability=(
+                (lambda name=operation_name: plugin_operations.has(name))
+                if operation_owner
+                else None
+            ),
+        )
+    catalog.plugin_context = plugin_context
+    catalog.plugin_runtimes = getattr(plugin_operations, "plugin_runtimes", [])
     return catalog
 
 
@@ -1581,6 +1788,87 @@ def _work_root_from_request(paths: CoreAgentPaths, request: OperationRequest) ->
 def _work_root_from_state(paths: CoreAgentPaths, state: Any) -> Path:
     metadata = state.metadata if isinstance(getattr(state, "metadata", None), dict) else {}
     return Path(metadata.get("work_root") or paths.work_root).expanduser().resolve()
+
+
+def _runtime_snapshot_from_payload(payload: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Normalize the accepted turn snapshot without consulting live UI state.
+
+    The live operation normally supplies a canonical ``runtime_snapshot``.
+    Direct/legacy callers may still send the old expanded fields; those are
+    retained as a compatibility path and are never allowed to override a
+    valid snapshot.
+    """
+    raw = payload.get("runtime_snapshot")
+    if isinstance(raw, dict):
+        permissions = permissions_from_snapshot(raw)
+        if permissions is None:
+            return None
+        snapshot = build_runtime_snapshot(
+            permissions=permissions,
+            active_mode=(
+                str(raw.get("active_mode") or "").strip()
+                if raw.get("active_mode") is not None
+                else None
+            ),
+        )
+        for key in _RUNTIME_OPTION_KEYS:
+            if key in raw and raw[key] is not None:
+                snapshot[key] = deepcopy(raw[key])
+        return snapshot
+
+    # Old internal callers already provide the resolved fields.  Preserve
+    # their semantics while making the values available to state/continuation
+    # code under one name.
+    has_legacy = any(
+        key in payload
+        for key in (
+            "approval_policy",
+            "active_tier",
+            "tier_tools",
+            "allow_access_outside_workdir",
+            "permission_preset",
+        )
+    )
+    if not has_legacy:
+        return None
+    raw_preset = payload.get("permission_preset")
+    if raw_preset is not None:
+        try:
+            permissions = resolve_permission_preset(
+                preset=raw_preset,
+                base_tier=payload.get("active_tier") or "full_edit",
+                base_allow_access_outside_workdir=payload.get(
+                    "allow_access_outside_workdir", False
+                ),
+                tier_tools=payload.get("tier_tools"),
+            )
+        except ValueError:
+            return None
+        snapshot = build_runtime_snapshot(
+            permissions=permissions,
+            active_mode=(
+                str(payload.get("active_mode") or "").strip()
+                if payload.get("active_mode") is not None
+                else None
+            ),
+        )
+    else:
+        snapshot = {
+            "permission_preset": "auto"
+            if payload.get("approval_policy") == "auto_approve"
+            else "ask",
+            "active_tier": payload.get("active_tier"),
+            "tier_tools": deepcopy(payload.get("tier_tools")),
+            "approval_policy": payload.get("approval_policy") or "require",
+            "allow_access_outside_workdir": bool(
+                payload.get("allow_access_outside_workdir")
+            ),
+            "active_mode": payload.get("active_mode"),
+        }
+    for key in _RUNTIME_OPTION_KEYS:
+        if key in payload and payload[key] is not None:
+            snapshot[key] = deepcopy(payload[key])
+    return snapshot
 
 
 def _runtime_options_from_request(spec: CoreAgentSpec, request: OperationRequest, work_root: str | None = None) -> CoreAgentRuntimeOptions:
@@ -1662,26 +1950,43 @@ def _runtime_options_from_request(spec: CoreAgentSpec, request: OperationRequest
 
 def _runtime_options_from_state(spec: CoreAgentSpec, state: Any, work_root: str | None = None) -> CoreAgentRuntimeOptions:
     metadata = state.metadata if isinstance(getattr(state, "metadata", None), dict) else {}
-    model_id = str(metadata.get("model_id") or spec.default_model or "")
+    runtime_snapshot = metadata.get("runtime_snapshot")
+    snapshot = runtime_snapshot if isinstance(runtime_snapshot, dict) else {}
+    model_id = str(snapshot.get("model_id") or metadata.get("model_id") or spec.default_model or "")
     temperature = _optional_float(metadata.get("temperature"))
     return CoreAgentRuntimeOptions(
         model_id=model_id,
-        thinking_enabled=_optional_bool(metadata.get("thinking_enabled"), spec.metadata.get("thinking_enabled")),
-        thinking_budget=_optional_int(metadata.get("thinking_budget"), spec.metadata.get("thinking_budget")),
+        thinking_enabled=_optional_bool(
+            snapshot.get("thinking_enabled"), metadata.get("thinking_enabled"), spec.metadata.get("thinking_enabled")
+        ),
+        thinking_budget=_optional_int(
+            snapshot.get("thinking_budget"), metadata.get("thinking_budget"), spec.metadata.get("thinking_budget")
+        ),
+        reasoning_effort=str(snapshot.get("reasoning_effort") or metadata.get("reasoning_effort") or ""),
         shallow_thinking_enabled=bool(
             _optional_bool(
+                snapshot.get("shallow_thinking_enabled"),
                 metadata.get("shallow_thinking_enabled"),
                 spec.metadata.get("shallow_thinking_enabled"),
             )
         ),
         context_window_tokens=_optional_int(
+            snapshot.get("context_window_tokens"),
             metadata.get("context_window_tokens"),
             metadata.get("context_window"),
         ),
-        max_tokens=_optional_int(metadata.get("max_tokens")),
-        temperature=0.2 if temperature is None else temperature,
-        compact_trigger_tokens=_optional_int(metadata.get("compact_trigger_tokens")),
-        compact_limit_tokens=_optional_int(metadata.get("compact_limit_tokens")),
+        max_tokens=_optional_int(snapshot.get("max_tokens"), metadata.get("max_tokens")),
+        temperature=(
+            _optional_float(snapshot.get("temperature"))
+            if _optional_float(snapshot.get("temperature")) is not None
+            else 0.2 if temperature is None else temperature
+        ),
+        compact_trigger_tokens=_optional_int(
+            snapshot.get("compact_trigger_tokens"), metadata.get("compact_trigger_tokens")
+        ),
+        compact_limit_tokens=_optional_int(
+            snapshot.get("compact_limit_tokens"), metadata.get("compact_limit_tokens")
+        ),
         capability=resolve_model_capability(model_id, work_root=work_root),
     )
 
@@ -1846,18 +2151,18 @@ async def _build_core_runtime_toolbox(
     active_tier: str | None = None,
     tier_tools: dict | None = None,
     active_mode: str | None = None,
+    permission_preset: str = "ask",
+    runtime_snapshot: dict[str, Any] | None = None,
     activated_mcp_servers: set[str] | None = None,
-    workflow_store: Any = None,
-    enable_workflow_tool: bool = False,
     attachment_service: Any = None,
     imagegen_config: dict | None = None,
     allow_access_outside_workdir: bool = False,
+    model_context_sink: Callable[[Any, Any], Awaitable[None] | None] | None = None,
 ):
     from lamtools_core.mcp import MCPToolRegistry
     from lamtools_core.tool.sub_agent_runner import KernelSubAgentRunner
     from lamtools_core.tool.default_toolbox import build_core_toolbox
     from lamtools_core.tool.loadtools import LoadTools, default_load_tools, load_loadtools
-    from lamtools_core.tool.workflow_tools import workflow_tool_provider
     from lamtools_core.artifact import ArtifactRegistry
 
     registry = MCPToolRegistry(work_root, config_files=plugin_assembly.get("mcp_files") or [])
@@ -1904,6 +2209,9 @@ async def _build_core_runtime_toolbox(
             thinking_enabled=thinking_enabled,
             thinking_budget=thinking_budget,
             approval_policy=normalized_policy,
+            permission_preset=permission_preset,
+            active_tier=active_tier,
+            tier_tools=tier_tools,
             loaded_skill_roots=skill_roots,
             mcp_caller=registry if mcp_tool_specs else None,
             mcp_tool_specs=mcp_tool_specs,
@@ -1916,19 +2224,32 @@ async def _build_core_runtime_toolbox(
             load_tools=load_tools,
             attachment_service=attachment_service,
             allow_access_outside_workdir=allow_access_outside_workdir,
+            runtime_snapshot=runtime_snapshot,
+            model_context_sink=model_context_sink,
         )
     async def execute_operation(name: str, payload: dict[str, Any], metadata: dict[str, Any]) -> Any:
         if operation_catalog is None:
             raise RuntimeError("Operation catalog is not configured")
         return await operation_catalog.execute(name, payload, metadata=metadata)
 
-    workflow_provider = None
-    if enable_workflow_tool and workflow_store is not None and operation_catalog is not None:
-        workflow_provider = workflow_tool_provider(
-            workflow_store,
-            execute_operation,
-            work_root=work_root,
-        )
+    # Plugin backends provide their dynamic tool providers and handlers through
+    # the generic assembly result.
+    plugin_context = plugin_assembly.get("plugin_context")
+    if plugin_context is not None:
+        plugin_context.operation_catalog = operation_catalog
+        plugin_context.services["sub_agent_runner"] = sub_agent_runner
+        for runtime_handle in plugin_assembly.get("plugin_runtimes") or []:
+            runner = getattr(runtime_handle.value, "runner", None)
+            if runner is not None:
+                runner.sub_agent_runner = sub_agent_runner
+    plugin_tool_providers = list(plugin_assembly.get("plugin_tool_providers") or [])
+    plugin_tool_handlers = dict(plugin_assembly.get("plugin_tool_handlers") or {})
+    plugin_availability = None
+    if plugin_context is not None:
+        runtime_manager = plugin_context.service("plugin.runtime_manager")
+        candidate = getattr(runtime_manager, "is_enabled", None)
+        if callable(candidate):
+            plugin_availability = candidate
     # generate_image 是否上传工具集：除 loadtools 模式白名单外，还受
     # 设置 → 生图 的启用开关控制；未启用时从模型可见工具中剔除，
     # 即使模型仍尝试调用也会被 execute() 以 "Tool disabled" 拦截。
@@ -1949,6 +2270,8 @@ async def _build_core_runtime_toolbox(
     from lamtools_core.plugins.tools import complete_plugin_tool_specs
 
     plugin_tool_specs: list[ToolSpec] = []
+    runtime_plugin_specs = list(plugin_assembly.get("plugin_runtime_specs") or [])
+    runtime_plugin_names = {str(getattr(spec, "name", "")) for spec in runtime_plugin_specs}
     plugin_groups = plugin_assembly.get("plugin_tool_groups") or []
     if plugin_groups:
         # 半声明式补全源 = 基础集 15 + 内置插件常量 4（S3：内置插件的
@@ -1958,15 +2281,16 @@ async def _build_core_runtime_toolbox(
             for spec in [*default_core_tool_specs(), *bundled_core_tool_specs()]
         }
         for group in plugin_groups:
-            plugin_tool_specs.extend(
-                complete_plugin_tool_specs(
+            declared_specs = complete_plugin_tool_specs(
                     group.get("tools") or [],
                     plugin_name=str(group.get("name") or ""),
                     plugin_root=group.get("root"),
                     base_specs_by_name=base_specs,
                     dependencies=group.get("dependencies") or None,
                 )
-            )
+            plugin_tool_specs.extend(spec for spec in declared_specs if spec.name not in runtime_plugin_names)
+    plugin_tool_specs.extend(runtime_plugin_specs)
+
     # 插件 skill 禁用状态（缺口 #1）：load_skill 查 SkillStateStore
     skill_state_store = None
     data_dir = plugin_assembly.get("data_dir")
@@ -1975,8 +2299,9 @@ async def _build_core_runtime_toolbox(
 
         skill_state_store = SkillStateStore(Path(data_dir) / "skill_state.json")
     # 用户权限覆盖（E3 共识）：{data_dir}/tool_permissions.jsonc，
-    # 形如 {"permissions": {"rag_search": "ask_user"}}；覆盖优先于
-    # manifest 声明（disabled_tools 仍优先，见 CoreToolbox）。
+    # 形如 {"permissions": {"rag_search": "ask_user"}}；仅作用于没有
+    # manifest 声明的工具。manifest hard_block/permission 优先，disabled_tools
+    # 仍保持独立的最高执行边界（见 CoreToolbox）。
     permission_overrides: dict[str, str] | None = None
     if data_dir:
         overrides_path = Path(data_dir) / "tool_permissions.jsonc"
@@ -2008,7 +2333,6 @@ async def _build_core_runtime_toolbox(
         operation_executor=execute_operation if operation_catalog is not None else None,
         enable_goal_tool=enable_goal_tool,
         enable_arrange_tool=enable_arrange_tool,
-        workflow_build=enable_workflow_tool,
         imagegen_config=runtime_imagegen_config,
         disabled_tools=disabled_tools,
         active_tier=active_tier,
@@ -2016,9 +2340,12 @@ async def _build_core_runtime_toolbox(
         load_tools=load_tools,
         active_mode=active_mode,
         activated_mcp_servers=activated_mcp_servers,
-        workflow_tool_provider=workflow_provider,
+        plugin_tool_providers=plugin_tool_providers,
+        plugin_mode_tool_sets=plugin_assembly.get("plugin_mode_tool_sets") or {},
+        plugin_availability=plugin_availability,
         allow_access_outside_workdir=allow_access_outside_workdir,
         plugin_tool_specs=plugin_tool_specs,
+        plugin_tool_handlers=plugin_tool_handlers,
         skill_state_store=skill_state_store,
         permission_overrides=permission_overrides,
         enable_plugin_manager=enable_plugin_manager,

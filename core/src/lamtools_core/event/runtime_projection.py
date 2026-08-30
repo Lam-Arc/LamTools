@@ -253,7 +253,11 @@ def runtime_fact_to_run_item_events(
 
     if phase == "runtime.reply_delta":
         text = _text_from_event(fact, payload)
-        metrics = _usage_metrics(payload)
+        metrics = (
+            {}
+            if payload.get("usage_reported_separately") is True
+            else _usage_metrics(payload)
+        )
         events: list[RunItemEvent] = []
         if text:
             content_base = {**base, "event_id": _content_event_id(fact, "reply-delta", text)}
@@ -267,6 +271,7 @@ def runtime_fact_to_run_item_events(
         if metrics:
             events.append(RunItemEvent(
                 kind="usage",
+                item_id=_usage_item_id(fact, payload),
                 status="running",
                 payload={"type": "turn", "runtime_metrics": metrics},
                 usage=metrics,
@@ -381,6 +386,7 @@ def runtime_fact_to_run_item_events(
         return [
             RunItemEvent(
                 kind="usage",
+                item_id=_usage_item_id(fact, payload),
                 status="running",
                 payload={"type": "turn", "runtime_metrics": metrics},
                 usage=metrics,
@@ -768,6 +774,13 @@ def _agent_item_id(fact: RuntimeProjectionInput, payload: dict[str, Any]) -> str
     return f"{_turn_id(fact, payload)}:model_text"
 
 
+def _usage_item_id(fact: RuntimeProjectionInput, payload: dict[str, Any]) -> str:
+    call_id = event_model_call_id(fact.metadata, fallback_run_id=event_run_id(fact.metadata, fallback_run_id=""))
+    if call_id:
+        return f"{call_id}:usage"
+    return f"{fact.thread_id}:usage:{fact.id}"
+
+
 def _content_event_id(fact: RuntimeProjectionInput, suffix: str, content: str) -> str:
     return _content_delta_event_id(fact.id, suffix, content)
 
@@ -862,9 +875,15 @@ def _request_options(payload: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _usage_metrics(payload: dict[str, Any]) -> dict[str, int | float]:
-    usage = payload.get("usage")
-    if not isinstance(usage, dict):
+    raw_usage = payload.get("usage")
+    usage = raw_usage if isinstance(raw_usage, dict) else {}
+    raw_call_count = usage.get("llm_calls", payload.get("llm_calls"))
+    if raw_call_count is None and not isinstance(raw_usage, dict):
         return {}
+    try:
+        llm_calls = int(raw_call_count) if raw_call_count is not None else 1
+    except (TypeError, ValueError):
+        llm_calls = 1
     input_tokens = int(usage.get("input_tokens") or usage.get("prompt_tokens") or 0)
     output_tokens = int(usage.get("output_tokens") or usage.get("completion_tokens") or 0)
     total_tokens = int(usage.get("total_tokens") or input_tokens + output_tokens or 0)
@@ -877,7 +896,7 @@ def _usage_metrics(payload: dict[str, Any]) -> dict[str, int | float]:
         "cached_tokens": cached_tokens,
         "cache_creation_tokens": cache_creation_tokens,
         "cache_hit_rate": round(cached_tokens / input_tokens, 4) if input_tokens > 0 else 0,
-        "llm_calls": 1,
+        "llm_calls": llm_calls,
     }
 
 

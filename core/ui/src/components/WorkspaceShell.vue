@@ -69,47 +69,49 @@
     ></div>
 
     <!-- ===== Left Drawer ===== -->
-    <aside
+    <LeftSidebarShell
       :id="leftDrawerId"
-      data-workspace-left-drawer
-      class="workspace-drawer drawer-left"
-      :class="{ open: leftOpen || stageOpen, pinned: leftPinned }"
-      :inert="(!leftOpen && !stageOpen) || undefined"
-      :aria-hidden="!leftOpen && !stageOpen"
+      :open="leftOpen || stageOpen"
+      :pinned="leftPinned"
+      :title="sidebarTitle"
+      :show-sidebar-header="showSidebarHeader"
+      :show-default-header-action="showSidebarHeaderAction"
+      @close="closeDrawers"
+      @toggle-pinned="onSidebarTogglePinned"
       @mouseleave="onLeftDrawerLeave"
+      @new-session="$emit('new-session')"
+      @settings="$emit('settings')"
+      @plugins="$emit('plugins')"
+      @search="$emit('search')"
     >
-      <header class="drawer-head">
-        <span class="sidebar-label">项目</span>
-        <slot name="sidebar-header-action">
-          <button class="icon-btn" title="新建" aria-label="新建会话" @click="$emit('new-session')">+</button>
-        </slot>
-      </header>
-
-      <div class="drawer-body">
-        <slot name="sidebar-body">
-          <div class="sidebar-empty">No content</div>
-        </slot>
-      </div>
-
-      <footer class="drawer-footer">
-        <button class="settings-entry" aria-label="打开搜索" @click="$emit('search')">
-          <span aria-hidden="true"><Search :size="14" :stroke-width="1.8" /></span>
-          <span>搜索</span>
-        </button>
-        <button class="settings-entry" aria-label="打开插件" @click="$emit('plugins')">
-          <span aria-hidden="true"><Puzzle :size="14" :stroke-width="1.8" /></span>
-          <span>插件</span>
-        </button>
-        <button class="settings-entry" aria-label="打开设置" @click="$emit('settings')">
-          <span aria-hidden="true"><Command :size="14" :stroke-width="1.8" /></span>
-          <span>设置</span>
-        </button>
+      <template v-if="$slots['sidebar-header-action']" #sidebar-header-action>
+        <slot name="sidebar-header-action" />
+      </template>
+      <template v-else-if="$slots['header-actions']" #header-actions>
+        <slot name="header-actions" />
+      </template>
+      <template v-if="$slots.primary" #primary>
+        <slot name="primary" />
+      </template>
+      <template v-else-if="$slots['sidebar-primary']" #sidebar-primary>
+        <slot name="sidebar-primary" />
+      </template>
+      <template v-if="$slots['sidebar-body']" #sidebar-body>
+        <slot name="sidebar-body" />
+      </template>
+      <template v-if="$slots['sidebar-footer']" #sidebar-footer>
         <slot name="sidebar-footer" />
-      </footer>
-    </aside>
+      </template>
+      <template v-else-if="$slots.footer" #footer>
+        <slot name="footer" />
+      </template>
+    </LeftSidebarShell>
 
     <!-- ===== Main Area ===== -->
     <main class="workspace-main" :inert="rightDrawerModal || undefined">
+      <div class="workspace-runtime-overlay">
+        <slot name="runtime-overlay" />
+      </div>
       <slot name="main-header" />
       <slot name="main-content">
         <section class="thread">
@@ -177,7 +179,7 @@
             class="send"
             :class="{ 'send--stop': composerActionMode === 'stop' }"
             type="submit"
-            :disabled="composerActionMode === 'send' && composerDisabled"
+            :disabled="composerActionMode === 'send' && composerSendDisabled"
             :title="composerActionMode === 'stop' ? composerStopTitle : composerSendTitle"
             :aria-label="composerActionMode === 'stop' ? composerStopTitle : composerSendTitle"
           >{{ composerActionMode === 'stop' ? composerStopLabel : composerSendLabel }}</button>
@@ -220,17 +222,19 @@
  * Product provides slots for actual content.
  */
 import { ref, useId, watch } from 'vue'
-import { Command, Puzzle, Search } from 'lucide-vue-next'
 import { useShellLayout } from '../composables/useShellLayout'
 import type { ThemeData } from '../composables/useShellLayout'
 import { dismissToast, showToast } from '../composables/useCoreToast'
 import ComposerBar from './ComposerBar.vue'
 import CoreToastHost from './CoreToastHost.vue'
+import LeftSidebarShell from './LeftSidebarShell.vue'
 
 const props = withDefaults(
   defineProps<{
     productName: string
     sidebarTitle?: string
+    showSidebarHeader?: boolean
+    showSidebarHeaderAction?: boolean
     storageKey?: string
     density?: 'compact' | 'standard' | 'loose'
     contentWidth?: number
@@ -238,6 +242,7 @@ const props = withDefaults(
     rightPanelTitle?: string
     composerPlaceholder?: string
     composerDisabled?: boolean
+    composerSendDisabled?: boolean
     composerActionMode?: 'send' | 'stop'
     composerSendLabel?: string
     composerStopLabel?: string
@@ -254,11 +259,14 @@ const props = withDefaults(
   {
     storageKey: 'lamtools.ui',
     sidebarTitle: '',
+    showSidebarHeader: true,
+    showSidebarHeaderAction: true,
     density: 'standard',
     contentWidth: 780,
     rightPanelTitle: '运行状态',
     composerPlaceholder: '输入内容...',
     composerDisabled: false,
+    composerSendDisabled: false,
     composerActionMode: 'send',
     composerSendLabel: 'send',
     composerStopLabel: 'stop',
@@ -274,6 +282,7 @@ const props = withDefaults(
 
 const emit = defineEmits<{
   'new-session': []
+  'update:left-pinned': [value: boolean]
   settings: []
   plugins: []
   search: []
@@ -353,6 +362,11 @@ const {
   showRightPanel: props.showRightPanel,
 })
 
+function onSidebarTogglePinned() {
+  toggleLeftPinned()
+  emit('update:left-pinned', leftPinned.value)
+}
+
 let lastMobileDrawer: 'left' | 'right' | null = null
 watch([leftOpen, rightOpen], ([left, right], [previousLeft, previousRight]) => {
   if (!isNarrowViewport.value) return
@@ -391,28 +405,5 @@ defineExpose({ leftPinned, rightPinned, toggleLeftPinned, toggleRightPinned })
 /* 移动端导航条标题：桌面端不渲染（无独立 CSS 曾导致桌面显示多余 productName 行） */
 .mobile-shell-title {
   display: none;
-}
-.sidebar-label {
-  flex: 1;
-  font-size: 13px;
-  font-weight: 650;
-  color: var(--text, #f2efeb);
-  opacity: 0.8;
-  letter-spacing: -0.02em;
-}
-.icon-btn {
-  width: 28px;
-  height: 28px;
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 8%, transparent);
-  color: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 56%, transparent);
-  display: grid;
-  place-items: center;
-  font-size: 18px;
-  font-weight: 700;
-}
-.icon-btn:hover {
-  background: color-mix(in srgb, var(--theme-backdrop-text, #f2efeb) 14%, transparent);
-  color: var(--theme-backdrop-text, #f2efeb);
 }
 </style>

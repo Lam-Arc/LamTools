@@ -59,6 +59,40 @@ async def test_plugin_operations_list_enable_disable_and_trust(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_plugin_list_includes_desktop_descriptor(tmp_path: Path):
+    plugin_root = tmp_path / "plugins" / "pet"
+    write_json(plugin_root / "plugin.json", {
+        "name": "pet",
+        "version": "0.1.0",
+        "desktop": {
+            "entry": "./desktop/index.html",
+            "title": "Pet window",
+            "window": {"expandedWidth": 400},
+        },
+    })
+    (plugin_root / "desktop" / "index.html").parent.mkdir(parents=True, exist_ok=True)
+    (plugin_root / "desktop" / "index.html").write_text("<!doctype html>", encoding="utf-8")
+    state = PluginStateStore(tmp_path / "plugin-state.json")
+    trust = HookTrustStore(tmp_path / "hook-trust.json")
+    registry = PluginRegistry(plugin_roots=[tmp_path / "plugins"], state_store=state)
+    catalog = build_plugin_operation_catalog(
+        plugin_registry=registry,
+        plugin_state_store=state,
+        hook_registry_factory=lambda: HookRegistry(),
+        hook_trust_store=trust,
+    )
+
+    result = await catalog.execute("plugin.list")
+
+    assert result.payload["plugins"][0]["desktop"] == {
+            "entry": str((plugin_root / "desktop" / "index.html").resolve()),
+            "title": "Pet window",
+            "window": {"expandedWidth": 400, "cardWidth": 376, "cardHeight": 360},
+            "fileDrop": False,
+        }
+
+
+@pytest.mark.asyncio
 async def test_websearch_config_save_preserves_urls_in_strings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """A URL inside a quoted value must survive JSONC validation — the old
     comment-stripping regex corrupted it into ``https:`` (audit 11)."""

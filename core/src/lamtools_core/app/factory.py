@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from ..member import MemberManifest, MemberRegistry
-from .security import allowed_origins, is_allowed_origin
+from .security import allowed_origins, is_allowed_origin, is_same_server_origin
 
 
 @asynccontextmanager
@@ -113,16 +113,39 @@ def create_app(
         # Origin is only present on browser-style (cross-site) requests;
         # non-browser clients omit it and stay trusted.
         origin = request.headers.get("origin")
-        if origin is not None and not is_allowed_origin(origin):
+        if (
+            origin is not None
+            and not is_allowed_origin(origin)
+            and not is_same_server_origin(
+                origin,
+                scheme=str(request.scope.get("scheme") or ""),
+                server=request.scope.get("server"),
+            )
+        ):
             return JSONResponse(status_code=403, content={"detail": "origin not allowed"})
         response = await call_next(request)
         # Security headers (audit 03 S3): the SPA is served inline and file
         # responses use guessable content-types — nosniff + frame/referrer
         # policies shrink the sniffing / clickjacking surface.
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
-        response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
         response.headers.setdefault("Referrer-Policy", "no-referrer")
-        response.headers.setdefault("Cross-Origin-Resource-Policy", "same-origin")
+        is_desktop_plugin_asset = (
+            request.url.path.startswith("/api/core/desktop-plugins/")
+            and "/assets/" in request.url.path
+        )
+        if is_desktop_plugin_asset:
+            # Desktop plugin documents are intentionally framed by the local
+            # Tauri host, which uses a different loopback port in development
+            # and the Tauri custom origin in packaged builds. Keep every other
+            # response protected by SAMEORIGIN.
+            response.headers.setdefault(
+                "Content-Security-Policy",
+                "frame-ancestors http://127.0.0.1:* http://localhost:* tauri://localhost http://tauri.localhost",
+            )
+            response.headers.setdefault("Cross-Origin-Resource-Policy", "cross-origin")
+        else:
+            response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+            response.headers.setdefault("Cross-Origin-Resource-Policy", "same-origin")
         return response
 
     # --- Core routes ---

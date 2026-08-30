@@ -6,10 +6,12 @@ from pathlib import Path
 from typing import Any
 
 from lamtools_core.context_compaction import (
-    ContextCompactionRequest,
+    CompactionOptions,
+    ContextCompactor,
     compact_context,
     compaction_segment_input_limit,
 )
+from lamtools_core.context_compaction_budget import SummaryTokenBudget, TokenBudget
 from lamtools_core.llm import ChatMessage, LLMClient, LLMToolCall
 from lamtools_core.mem import MemoryStoreProtocol
 from lamtools_core.mem.dreaming import dream_session
@@ -76,55 +78,75 @@ async def compact_runtime_history(
     existing_summary = str(compaction_meta.get("summary") or "")
     raw_history = await runtime_state_store.get_history(thread_id)
     messages = [message for item in raw_history if (message := _chat_message_from_dict(item)) is not None]
-    result = await compact_context(
-        ContextCompactionRequest(
-            trigger="manual",
-            messages=messages,
-            llm_client=llm_client,
-            model=active_model,
-            limit_tokens=MANUAL_COMPACTION_LIMIT_TOKENS,
-            input_limit_tokens=compaction_segment_input_limit(context_window_tokens),
-            existing_summary=existing_summary,
-            on_event=on_event,
+    summary_budget = None
+    if context_window_tokens > 0:
+        summary_budget = SummaryTokenBudget.for_context_window(
+            context_window=context_window_tokens,
+            output_tokens=max(256, min(4096, MANUAL_COMPACTION_LIMIT_TOKENS // 3)),
+            protocol_tokens=min(1024, max(0, context_window_tokens // 10)),
         )
+    budget_window = max(context_window_tokens, MANUAL_COMPACTION_LIMIT_TOKENS)
+    budget = TokenBudget(
+        context_window=budget_window,
+        trigger_tokens=budget_window,
+        target_tokens=min(MANUAL_COMPACTION_LIMIT_TOKENS, budget_window),
     )
+    compactor = ContextCompactor(
+        llm_client=llm_client,
+        model=active_model,
+        input_limit_tokens=compaction_segment_input_limit(context_window_tokens),
+        summary_budget=summary_budget,
+        existing_summary=existing_summary,
+        on_event=on_event,
+        pipeline=compact_context,
+    )
+    result = await compactor.compact(
+        messages,
+        budget=budget,
+        options=CompactionOptions(
+            force=True,
+            target_tokens=MANUAL_COMPACTION_LIMIT_TOKENS,
+        ),
+        trigger="manual",
+    )
+    assert result is not None
     if result.status != "compacted":
         return {
             **result.display_payload,
             "session_id": thread_id,
             "summary": result.summary,
         }
-    # Resume boundary = the row seq of the first retained message MINUS one
-    # (never the history tail, otherwise the retained span is dropped on the
-    # next run).  The marker travels with that message through a full history
-    # rewrite so later replaces can re-anchor the boundary after renumbering.
+    # Resume boundary is the zero-based position of the first retained message
+    # in the replacement history.  The marker travels with that message
+    # through a full history rewrite so later replaces can re-anchor it.
     compaction_boundary = 0
     retained_messages = result.retained_messages
     if retained_messages:
         first_retained = retained_messages[0]
-        first_seq = (
-            first_retained.metadata.get("history_seq")
-            if isinstance(first_retained.metadata, dict)
-            else None
-        )
-        if isinstance(first_seq, int) and first_seq > 0:
-            compaction_boundary = first_seq - 1
-        else:
-            compaction_boundary = next(
-                (
-                    index
-                    for index, message in enumerate(messages)
-                    if id(message) == id(first_retained)
-                ),
-                0,
-            )
         if isinstance(first_retained.metadata, dict):
             first_retained.metadata["lam_compaction_resume"] = True
+        replacement_messages = [
+            message for message in result.replacement_messages
+            if not (
+                isinstance(message.metadata, dict)
+                and message.metadata.get("key") == "context_compaction_summary"
+            )
+        ]
+        compaction_boundary = next(
+            (
+                index
+                for index, message in enumerate(replacement_messages)
+                if id(message) == id(first_retained)
+            ),
+            0,
+        )
+    else:
+        replacement_messages = list(result.replacement_messages)
     # Persist the resume marker (and keep row numbering stable) so later full
     # replaces can re-anchor the boundary after rows are renumbered.
     if isinstance(runtime_state_store, RuntimeCheckpointStore):
         await runtime_state_store.replace_history(
-            thread_id, [message.to_dict() for message in messages]
+            thread_id, [message.to_dict() for message in replacement_messages]
         )
     if not isinstance(state.metadata, dict):
         state.metadata = {}

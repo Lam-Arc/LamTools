@@ -6,12 +6,25 @@ import pytest
 
 from lamtools_core.context_compaction import (
     COMPACTION_PREFIX,
+    MAX_FIT_ATTEMPTS,
+    CompactionBudgetExceeded,
+    CompactionFitInput,
+    CompactionFitter,
+    CompactionOptions,
+    CompactionSummary,
+    ContextCompactionController,
+    ContextCompactor,
     ContextCompactionRequest,
     compact_context,
     compress_structured_compaction_summary,
+    parse_compaction_summary,
+    select_context_compaction_layout,
+    summarize_context_messages,
+    truncate_text_to_tokens,
 )
-from lamtools_core.llm import ChatMessage, LLMResponse, LLMStreamEvent
-from lamtools_core.tokens import estimate_message_tokens
+from lamtools_core.context_compaction_budget import SummaryTokenBudget, TokenBudget
+from lamtools_core.llm import ChatMessage, LLMResponse, LLMStreamEvent, LLMToolCall
+from lamtools_core.tokens import estimate_message_tokens, estimate_text_tokens
 
 
 class _CompactionClient:
@@ -46,6 +59,14 @@ class _CompactionClient:
 
     async def stream(self, request):
         raise NotImplementedError
+
+
+class _AttributeErrorStreamingCompactionClient(_CompactionClient):
+    async def complete(self, request):
+        raise AssertionError("an AttributeError from streaming must not fall back")
+
+    async def stream(self, request):
+        raise AttributeError("stream implementation bug")
 
 
 class _SegmentingCompactionClient:
@@ -136,6 +157,241 @@ class _LosesPriorUserInstructionsClient:
 
 def _estimate(messages: list[ChatMessage]) -> int:
     return estimate_message_tokens([message.to_dict() for message in messages])
+
+
+def _canonical_summary_text() -> str:
+    return CompactionSummary(
+        goals="- Finish the export task.",
+        active_user_instructions="- Keep the public interface unchanged.",
+        external_action_authorization="- Do not deploy without confirmation.",
+        confirmed_facts_and_decisions="- The route is implemented.",
+        current_execution_state="- Tests are running.",
+        verification_evidence="- The unit suite is green.",
+        open_issues_risks_and_hypotheses="- Recheck the integration test.",
+        rejected_or_superseded_directions="- None.",
+        next_actions="- Run the integration test.",
+    ).render()
+
+
+def test_summary_parser_accepts_expected_sections():
+    parsed = parse_compaction_summary(_canonical_summary_text())
+
+    assert parsed is not None
+    assert parsed.goals == "- Finish the export task."
+    assert parsed.next_actions == "- Run the integration test."
+
+
+def test_summary_parser_rejects_wrong_title():
+    text = _canonical_summary_text().replace(
+        "2. Active User Instructions",
+        "2. Wrong Title",
+    )
+
+    assert parse_compaction_summary(text) is None
+
+
+def test_summary_parser_rejects_missing_section():
+    text = _canonical_summary_text().replace(
+        "6. Verification Evidence\n- The unit suite is green.\n\n",
+        "",
+    )
+
+    assert parse_compaction_summary(text) is None
+
+
+def test_summary_parser_rejects_reordered_sections():
+    sections = _canonical_summary_text().split("\n\n")
+    sections[1], sections[2] = sections[2], sections[1]
+
+    assert parse_compaction_summary("\n\n".join(sections)) is None
+
+
+def test_summary_render_round_trip():
+    summary = CompactionSummary(
+        goals="- Goal.",
+        active_user_instructions="- Constraint.",
+        external_action_authorization="- Permission.",
+        confirmed_facts_and_decisions="- Fact.",
+        current_execution_state="- State.",
+        verification_evidence="- Evidence.",
+        open_issues_risks_and_hypotheses="- Risk.",
+        rejected_or_superseded_directions="- Rejected.",
+        next_actions="- Next.",
+    )
+
+    assert parse_compaction_summary(summary.render()) == summary
+
+
+def test_compaction_options_reject_non_positive_target():
+    with pytest.raises(ValueError, match="target_tokens"):
+        CompactionOptions(target_tokens=0)
+
+
+@pytest.mark.asyncio
+async def test_context_compactor_auto_and_manual_share_the_same_pipeline():
+    messages = [
+        ChatMessage(role="user", content="old request " + ("x" * 6_000)),
+        ChatMessage(role="assistant", content="old result " + ("y" * 6_000)),
+        ChatMessage(role="user", content="latest request"),
+    ]
+    budget = TokenBudget(context_window=12_000, trigger_tokens=1_200, target_tokens=1_200)
+
+    auto_client = _CompactionClient()
+    auto_result = await ContextCompactor(
+        llm_client=auto_client,
+        model="mock-model",
+        estimate_tokens=_estimate,
+    ).compact(
+        messages,
+        budget=budget,
+        options=CompactionOptions(force=False),
+    )
+    manual_client = _CompactionClient()
+    manual_result = await ContextCompactor(
+        llm_client=manual_client,
+        model="mock-model",
+        estimate_tokens=_estimate,
+    ).compact(
+        messages,
+        budget=budget,
+        options=CompactionOptions(force=True, target_tokens=1_200),
+    )
+
+    assert auto_result is not None
+    assert manual_result is not None
+    assert auto_result.status == manual_result.status == "compacted"
+    assert auto_result.compacted_count == manual_result.compacted_count
+    assert auto_result.retained_count == manual_result.retained_count
+    assert auto_result.after_tokens == manual_result.after_tokens
+    assert auto_result.trigger == "auto"
+    assert manual_result.trigger == "manual"
+    assert auto_client.last_request is not None
+    assert manual_client.last_request is not None
+    assert auto_client.last_request.messages[-1].content == manual_client.last_request.messages[-1].content
+
+
+@pytest.mark.asyncio
+async def test_context_compactor_auto_waits_for_trigger_but_force_bypasses_it():
+    messages = [
+        ChatMessage(role="user", content="old request"),
+        ChatMessage(role="assistant", content="old result"),
+        ChatMessage(role="user", content="latest request"),
+    ]
+    budget = TokenBudget(context_window=8_000, trigger_tokens=8_000, target_tokens=1_200)
+    client = _CompactionClient()
+    compactor = ContextCompactor(
+        llm_client=client,
+        model="mock-model",
+        estimate_tokens=_estimate,
+    )
+
+    assert await compactor.compact(
+        messages,
+        budget=budget,
+        options=CompactionOptions(force=False),
+    ) is None
+    forced = await compactor.compact(
+        messages,
+        budget=budget,
+        options=CompactionOptions(force=True),
+    )
+
+    assert forced is not None
+    assert forced.trigger == "manual"
+
+
+@pytest.mark.asyncio
+async def test_context_controller_owns_trigger_and_reports_execution_metadata():
+    def estimate_request(messages: list[ChatMessage], fast: bool) -> int:
+        return estimate_message_tokens(
+            [message.to_dict() for message in messages],
+            fast=fast,
+        )
+
+    controller = ContextCompactionController(
+        llm_client=_CompactionClient(),
+        estimate_request_tokens=estimate_request,
+    )
+    budget = TokenBudget(context_window=12_000, trigger_tokens=1_200, target_tokens=1_200)
+
+    execution = await controller.compact(
+        [
+            ChatMessage(role="user", content="old request " + ("x" * 6_000)),
+            ChatMessage(role="assistant", content="old result " + ("y" * 6_000)),
+            ChatMessage(role="user", content="latest request"),
+        ],
+        budget=budget,
+        timeout=None,
+        current_model="mock-model",
+    )
+
+    assert execution.result is not None
+    assert execution.result.status == "compacted"
+    assert execution.execution_model == "mock-model"
+    assert execution.strategy == "current_model"
+    assert execution.measurement.exact is True
+
+
+@pytest.mark.asyncio
+async def test_context_controller_skips_small_request_without_calling_pipeline():
+    client = _CompactionClient()
+    controller = ContextCompactionController(
+        llm_client=client,
+        estimate_request_tokens=lambda messages, fast: estimate_message_tokens(
+            [message.to_dict() for message in messages],
+            fast=fast,
+        ),
+    )
+
+    execution = await controller.compact(
+        [ChatMessage(role="user", content="small request")],
+        budget=TokenBudget(context_window=8_000, trigger_tokens=8_000, target_tokens=1_200),
+        timeout=None,
+        current_model="mock-model",
+    )
+
+    assert execution.result is None
+    assert execution.measurement.exact is False
+    assert client.last_request is None
+
+
+@pytest.mark.asyncio
+async def test_stream_not_implemented_falls_back_to_complete():
+    result = await compact_context(
+        ContextCompactionRequest(
+            trigger="manual",
+            messages=[
+                ChatMessage(role="user", content="old request " + ("x" * 2_000)),
+                ChatMessage(role="assistant", content="old result " + ("y" * 2_000)),
+                ChatMessage(role="user", content="latest request"),
+            ],
+            llm_client=_CompactionClient(),
+            model="mock-model",
+            limit_tokens=1_200,
+            estimate_tokens=_estimate,
+        )
+    )
+
+    assert result.status == "compacted"
+
+
+@pytest.mark.asyncio
+async def test_attribute_error_from_stream_is_not_swallowed():
+    with pytest.raises(AttributeError, match="stream implementation bug"):
+        await compact_context(
+            ContextCompactionRequest(
+                trigger="manual",
+                messages=[
+                    ChatMessage(role="user", content="old request " + ("x" * 2_000)),
+                    ChatMessage(role="assistant", content="old result " + ("y" * 2_000)),
+                    ChatMessage(role="user", content="latest request"),
+                ],
+                llm_client=_AttributeErrorStreamingCompactionClient(),
+                model="mock-model",
+                limit_tokens=1_200,
+                estimate_tokens=_estimate,
+            )
+        )
 
 
 @pytest.mark.asyncio
@@ -458,6 +714,40 @@ async def test_compact_context_segments_oversized_history_within_model_input_lim
 
 
 @pytest.mark.asyncio
+async def test_summary_budget_limits_segment_and_merge_requests():
+    llm = _SegmentingCompactionClient()
+    budget = SummaryTokenBudget(
+        context_window=2_000,
+        output_tokens=200,
+        protocol_tokens=100,
+        safety_margin_tokens=0,
+    )
+    messages = [
+        ChatMessage(role="user", content=f"segment {index} " + ("x" * 300))
+        for index in range(20)
+    ]
+
+    summary, segment_count = await summarize_context_messages(
+        messages,
+        llm_client=llm,
+        model="mock-model",
+        limit_tokens=1_200,
+        input_limit_tokens=99_999,
+        summary_budget=budget,
+    )
+
+    assert summary.startswith(COMPACTION_PREFIX)
+    assert segment_count > 1
+    assert len(llm.requests) > segment_count
+    assert all(
+        estimate_message_tokens([message.to_dict() for message in request.messages])
+        <= budget.max_input_tokens
+        for request in llm.requests
+    )
+    assert all(request.max_tokens == budget.output_tokens for request in llm.requests)
+
+
+@pytest.mark.asyncio
 async def test_compact_context_forwards_native_character_stream_events_without_losing_content():
     llm = _CharacterStreamingCompactionClient()
     progress = []
@@ -700,3 +990,295 @@ async def test_auto_compaction_transcript_includes_prior_summary_and_excludes_re
     assert "recent user 2" not in transcript
     assert "recent assistant 3" not in transcript
     assert "latest request" not in transcript
+
+
+def test_preserves_leading_system_prefix():
+    prefix = [
+        ChatMessage(role="system", content="stable policy"),
+        ChatMessage(role="system", content="workspace policy"),
+    ]
+    messages = [
+        *prefix,
+        ChatMessage(role="user", content="old context " + ("x " * 1600)),
+        ChatMessage(role="assistant", content="old result " + ("y " * 1600)),
+        ChatMessage(role="user", content="latest request"),
+    ]
+
+    layout = select_context_compaction_layout(
+        messages,
+        limit_tokens=1200,
+        estimate_tokens=_estimate,
+    )
+
+    assert layout is not None
+    assert layout.prefix_messages == prefix
+
+
+def test_preserves_latest_user_turn():
+    messages = [
+        ChatMessage(role="user", content="old context " + ("x " * 1600)),
+        ChatMessage(role="assistant", content="old result " + ("y " * 1600)),
+        ChatMessage(role="user", content="latest explicit request"),
+    ]
+
+    layout = select_context_compaction_layout(
+        messages,
+        limit_tokens=1200,
+        estimate_tokens=_estimate,
+    )
+
+    assert layout is not None
+    assert layout.retained_messages[-1].content == "latest explicit request"
+
+
+def test_preserves_recent_complete_turns():
+    messages = [
+        ChatMessage(role="user", content="old context " + ("x " * 1600)),
+        ChatMessage(role="assistant", content="old result " + ("y " * 1600)),
+        ChatMessage(role="user", content="recent request"),
+        ChatMessage(role="assistant", content="recent answer"),
+        ChatMessage(role="user", content="latest request"),
+    ]
+
+    layout = select_context_compaction_layout(
+        messages,
+        limit_tokens=1200,
+        estimate_tokens=_estimate,
+    )
+
+    assert layout is not None
+    assert [message.content for message in layout.retained_messages] == [
+        "recent request",
+        "recent answer",
+        "latest request",
+    ]
+
+
+def test_tool_call_and_result_stay_together():
+    tool_call = LLMToolCall(
+        id="call-1",
+        name="read_file",
+        arguments={"path": "notes.txt"},
+    )
+    messages = [
+        ChatMessage(role="user", content="old context " + ("x " * 1600)),
+        ChatMessage(role="assistant", content="old result " + ("y " * 1600)),
+        ChatMessage(role="user", content="read the notes"),
+        ChatMessage(role="assistant", tool_calls=[tool_call]),
+        ChatMessage(
+            role="tool",
+            tool_call_id="call-1",
+            content="notes content",
+        ),
+    ]
+
+    layout = select_context_compaction_layout(
+        messages,
+        limit_tokens=1200,
+        estimate_tokens=_estimate,
+    )
+
+    assert layout is not None
+    assert layout.retained_messages[-2].tool_calls == [tool_call]
+    assert layout.retained_messages[-1].tool_call_id == "call-1"
+
+
+@pytest.mark.asyncio
+async def test_compaction_summary_does_not_enter_raw_history():
+    messages = [
+        ChatMessage(role="user", content="old requirement " + ("x " * 1600)),
+        ChatMessage(role="assistant", content="old result " + ("y " * 1600)),
+        ChatMessage(role="user", content="latest request"),
+    ]
+    original = [message.to_dict() for message in messages]
+
+    result = await compact_context(
+        ContextCompactionRequest(
+            trigger="auto",
+            messages=messages,
+            llm_client=_CompactionClient(),
+            model="mock-model",
+            limit_tokens=1200,
+            estimate_tokens=_estimate,
+        )
+    )
+
+    assert result.status == "compacted"
+    assert [message.to_dict() for message in messages] == original
+    assert all(
+        message.metadata.get("key") != "context_compaction_summary"
+        for message in messages
+    )
+
+
+@pytest.mark.asyncio
+async def test_resume_boundary_restores_recent_tail():
+    messages = [
+        ChatMessage(role="user", content="old request " + ("x " * 1600)),
+        ChatMessage(role="assistant", content="old answer " + ("y " * 1600)),
+        ChatMessage(role="user", content="recent request"),
+        ChatMessage(role="assistant", content="recent answer"),
+        ChatMessage(role="user", content="latest request"),
+    ]
+
+    result = await compact_context(
+        ContextCompactionRequest(
+            trigger="manual",
+            messages=messages,
+            llm_client=_CompactionClient(),
+            model="mock-model",
+            limit_tokens=1200,
+            estimate_tokens=_estimate,
+        )
+    )
+
+    assert result.status == "compacted"
+    assert [message.content for message in result.retained_messages] == [
+        "recent request",
+        "recent answer",
+        "latest request",
+    ]
+    assert [message.content for message in result.replacement_messages[-3:]] == [
+        "recent request",
+        "recent answer",
+        "latest request",
+    ]
+
+
+def test_fitter_finishes_within_max_attempts():
+    calls = 0
+
+    def never_shrinks(messages: list[ChatMessage]) -> int:
+        nonlocal calls
+        calls += 1
+        return 10_000 if messages else 0
+
+    fitter = CompactionFitter(never_shrinks)
+    with pytest.raises(CompactionBudgetExceeded):
+        fitter.fit(
+            CompactionFitInput(
+                system_prefix=[],
+                summary_message=ChatMessage(role="system", content="summary"),
+                recent_messages=[],
+                target_tokens=100,
+            )
+        )
+
+    assert calls >= MAX_FIT_ATTEMPTS
+
+
+def test_fitter_never_returns_over_target():
+    result = CompactionFitter(_estimate).fit(
+        CompactionFitInput(
+            system_prefix=[ChatMessage(role="system", content="stable prefix")],
+            summary_message=ChatMessage(role="system", content="summary " + ("中" * 1_000)),
+            recent_messages=[ChatMessage(role="user", content="latest request")],
+            target_tokens=1_200,
+        )
+    )
+
+    assert result.estimated_tokens <= 1_200
+    assert _estimate(result.messages) == result.estimated_tokens
+    assert result.attempts <= MAX_FIT_ATTEMPTS
+
+
+def test_fitter_drops_oldest_recent_turn_first():
+    result = CompactionFitter(_estimate).fit(
+        CompactionFitInput(
+            system_prefix=[],
+            summary_message=ChatMessage(role="system", content="summary"),
+            recent_messages=[
+                ChatMessage(role="user", content="old request"),
+                ChatMessage(role="assistant", content="old answer"),
+                ChatMessage(role="user", content="recent request"),
+                ChatMessage(role="assistant", content="recent answer"),
+                ChatMessage(role="user", content="latest request"),
+            ],
+            target_tokens=1_000,
+        )
+    )
+
+    assert [message.content for message in result.messages[-3:]] == [
+        "recent request",
+        "recent answer",
+        "latest request",
+    ]
+
+
+def test_fitter_preserves_latest_user_turn():
+    result = CompactionFitter(_estimate).fit(
+        CompactionFitInput(
+            system_prefix=[],
+            summary_message=ChatMessage(role="system", content="summary" + ("x" * 200)),
+            recent_messages=[ChatMessage(role="user", content="latest user instruction")],
+            target_tokens=600,
+        )
+    )
+
+    assert result.messages[-1].role == "user"
+    assert result.messages[-1].content == "latest user instruction"
+
+
+def test_fitter_raises_when_required_messages_exceed_budget():
+    with pytest.raises(CompactionBudgetExceeded, match="required latest turn"):
+        CompactionFitter(_estimate).fit(
+            CompactionFitInput(
+                system_prefix=[ChatMessage(role="system", content="stable prefix")],
+                summary_message=ChatMessage(role="system", content="summary"),
+                recent_messages=[ChatMessage(role="user", content="中" * 2_000)],
+                target_tokens=1_000,
+            )
+        )
+
+
+@pytest.mark.parametrize("summary", ["中" * 1_000, "🙂" * 500], ids=["cjk", "emoji"])
+def test_fitter_handles_unicode_summary(summary: str):
+    result = CompactionFitter(_estimate).fit(
+        CompactionFitInput(
+            system_prefix=[],
+            summary_message=ChatMessage(role="system", content=summary),
+            recent_messages=[ChatMessage(role="user", content="latest request")],
+            target_tokens=1_400,
+        )
+    )
+
+    assert result.estimated_tokens <= 1_400
+    assert estimate_message_tokens([message.to_dict() for message in result.messages]) <= 1_400
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "a" * 10_000,
+        "中" * 10_000,
+        "🙂" * 3_000,
+        "abc中文🙂" * 1_000,
+    ],
+    ids=["ascii", "cjk", "emoji", "mixed"],
+)
+def test_truncate_never_exceeds_token_limit(text: str):
+    result = truncate_text_to_tokens(text, 100)
+
+    assert estimate_text_tokens(result) <= 100
+    assert len(result) < len(text)
+
+
+def test_truncate_returns_original_text_when_already_within_budget():
+    assert truncate_text_to_tokens("abc", 100) == "abc"
+
+
+def test_truncate_returns_empty_text_for_zero_budget():
+    assert truncate_text_to_tokens("abc", 0) == ""
+
+
+def test_truncate_budget_includes_marker_when_marker_fits():
+    result = truncate_text_to_tokens("a" * 10_000, 20)
+
+    assert estimate_text_tokens(result) <= 20
+    assert "compaction summary truncated to fit budget" in result
+
+
+def test_truncate_omits_marker_when_marker_cannot_fit():
+    result = truncate_text_to_tokens("a" * 10_000, 1)
+
+    assert estimate_text_tokens(result) <= 1

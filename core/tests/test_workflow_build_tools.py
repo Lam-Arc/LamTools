@@ -8,7 +8,7 @@ import pytest
 
 from lamtools_core.app.operation_catalog import OperationResult
 from lamtools_core.tool import ToolCall, ToolResult
-from lamtools_core.tool.workflow_build_tools import workflow_build_tool_handlers, workflow_build_tool_specs
+from lamtools_core.plugins.bundled.workflow.backend.build_tools import workflow_build_tool_handlers, workflow_build_tool_specs
 
 
 def _call(arguments: dict, *, session_id: str = "wf_news") -> ToolCall:
@@ -61,6 +61,17 @@ class TestWorkflowBuildSpecs:
             "workflow_delete_node",
             "workflow_update_node",
         ]
+
+    def test_port_value_has_a_model_schema_type(self):
+        specs = {spec.name: spec for spec in workflow_build_tool_specs()}
+        for name in ("workflow_add_node", "workflow_update_node"):
+            value = specs[name].input_schema["properties"]["ports"]["items"]["properties"]["value"]
+            assert value["type"] == "string"
+
+    def test_node_config_declares_runtime_fields(self):
+        specs = {spec.name: spec for spec in workflow_build_tool_specs()}
+        config = specs["workflow_add_node"].input_schema["properties"]["config"]
+        assert {"command", "script", "instruction", "workflow_name"} <= set(config["properties"])
 
 
 class TestWorkflowGraph:
@@ -180,7 +191,7 @@ class TestWorkflowUpdateNode:
 
 def test_substitute_env_vars_no_prefix_collision():
     """$INPUT_A must not be rewritten inside $INPUT_ABC (audit 07 S4)."""
-    from lamtools_core.runtime.workflow import _substitute_env_vars
+    from lamtools_core.plugins.bundled.workflow.backend.runtime import _substitute_env_vars
 
     result = _substitute_env_vars(
         "echo $INPUT_A $INPUT_ABC ${INPUT_A}x",
@@ -190,7 +201,7 @@ def test_substitute_env_vars_no_prefix_collision():
 
 
 def test_substitute_env_vars_unknown_tokens_left_untouched():
-    from lamtools_core.runtime.workflow import _substitute_env_vars
+    from lamtools_core.plugins.bundled.workflow.backend.runtime import _substitute_env_vars
 
     assert _substitute_env_vars("echo $UNKNOWN $KNOWN", {"KNOWN": "ok"}) == "echo $UNKNOWN ok"
     assert _substitute_env_vars("echo ${UNKNOWN}", {"KNOWN": "ok"}) == "echo ${UNKNOWN}"
@@ -198,7 +209,7 @@ def test_substitute_env_vars_unknown_tokens_left_untouched():
 
 def test_eval_condition_rejects_dunder_attribute_escape():
     """x.__class__ chains are blocked while benign method calls survive (audit 07 S4)."""
-    from lamtools_core.runtime.workflow import _eval_condition
+    from lamtools_core.plugins.bundled.workflow.backend.runtime import _eval_condition
 
     assert _eval_condition("len(text) > 3 and source == 'A'", {"text": "hello", "source": "A"}) is True
     assert _eval_condition("text.strip() == 'hi'", {"text": "  hi  "}) is True

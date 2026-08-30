@@ -278,13 +278,18 @@ export function createCoreAppServerRuntimeController<
     applyResponse(response)
   }
 
-  async function queueInput(threadId: string, input: string | InputItem[]) {
+  async function queueInput(
+    threadId: string,
+    input: string | InputItem[],
+    turnOptions: Record<string, unknown> = {},
+  ) {
     await ensureClient()
     const inputItems = typeof input === 'string' ? [{ type: 'text' as const, text: input }] : input
     const response = await runtime.client!.request('queue/create', {
       thread_id: threadId,
       client_message_id: crypto.randomUUID(),
       input: inputItems,
+      ...turnOptions,
     })
     applyResponse(response)
   }
