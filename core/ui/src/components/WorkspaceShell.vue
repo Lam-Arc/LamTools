@@ -179,7 +179,7 @@
             class="send"
             :class="{ 'send--stop': composerActionMode === 'stop' }"
             type="submit"
-            :disabled="composerActionMode === 'send' && composerDisabled"
+            :disabled="composerActionMode === 'send' && composerSendDisabled"
             :title="composerActionMode === 'stop' ? composerStopTitle : composerSendTitle"
             :aria-label="composerActionMode === 'stop' ? composerStopTitle : composerSendTitle"
           >{{ composerActionMode === 'stop' ? composerStopLabel : composerSendLabel }}</button>
@@ -242,6 +242,7 @@ const props = withDefaults(
     rightPanelTitle?: string
     composerPlaceholder?: string
     composerDisabled?: boolean
+    composerSendDisabled?: boolean
     composerActionMode?: 'send' | 'stop'
     composerSendLabel?: string
     composerStopLabel?: string
@@ -265,6 +266,7 @@ const props = withDefaults(
     rightPanelTitle: '运行状态',
     composerPlaceholder: '输入内容...',
     composerDisabled: false,
+    composerSendDisabled: false,
     composerActionMode: 'send',
     composerSendLabel: 'send',
     composerStopLabel: 'stop',

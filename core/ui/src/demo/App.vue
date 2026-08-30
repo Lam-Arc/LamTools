@@ -92,7 +92,8 @@
     :content-width="contentWidth"
     :show-sidebar-header="false"
     :show-sidebar-header-action="false"
-    :composer-disabled="composerDisabled"
+    :composer-disabled="composerInputDisabled"
+    :composer-send-disabled="composerSendDisabled"
     :composer-placeholder="composerPlaceholder"
     :composer-action-mode="composerActionMode"
     :composer-active="latestStatus === 'running'"
@@ -339,7 +340,7 @@
         <textarea
           ref="composerTextareaEl"
           v-model="composerText"
-          :disabled="composerDisabled"
+          :disabled="composerInputDisabled"
           :placeholder="composerPlaceholder"
           rows="1"
           @input="handleComposerInput"
@@ -686,16 +687,20 @@ const composerPlaceholder = computed(() => (
     : '给 Core Agent 发送任务...'
 ))
 
-const composerDisabled = computed(() => {
+const composerInputDisabled = computed(() => {
   if (activePluginMode.value) {
     return readPluginSurface(activePluginSurface.value?.composerDisabled, true)
   }
   return composerActionMode.value === 'send' && (
     sendingDisabled.value
     || !activeSessionId.value
-    || (!composerText.value.trim() && pendingAttachments.value.length === 0)
   )
 })
+
+const composerSendDisabled = computed(() => (
+  composerInputDisabled.value
+  || (!composerText.value.trim() && pendingAttachments.value.length === 0)
+))
 
 // --- Stage pane state ---
 const stageOpen = ref(false)
