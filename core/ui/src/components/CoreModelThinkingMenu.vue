@@ -460,6 +460,7 @@ function persistCollapsedProviderGroups(groups: Record<string, boolean>): void {
   top: 0;
   z-index: 1;
   justify-content: space-between;
+  background: var(--theme-composer-background);
   color: color-mix(in srgb, var(--text) 78%, transparent);
   font-size: 12px;
   font-weight: 900;
