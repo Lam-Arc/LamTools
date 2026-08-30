@@ -693,14 +693,15 @@ const composerInputDisabled = computed(() => {
   }
   return composerActionMode.value === 'send' && (
     sendingDisabled.value
-    || !activeSessionId.value
   )
 })
 
-const composerSendDisabled = computed(() => (
-  composerInputDisabled.value
-  || (!composerText.value.trim() && pendingAttachments.value.length === 0)
-))
+const composerSendDisabled = computed(() => {
+  if (activePluginMode.value) return composerInputDisabled.value
+  return composerInputDisabled.value
+    || !activeSessionId.value
+    || (!composerText.value.trim() && pendingAttachments.value.length === 0)
+})
 
 // --- Stage pane state ---
 const stageOpen = ref(false)
