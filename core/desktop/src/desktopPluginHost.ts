@@ -267,7 +267,13 @@ async function start(): Promise<void> {
 
   const payload = await response.json() as { plugins?: DesktopPluginDescriptor[] }
   const plugin = payload.plugins?.find((candidate) => candidate.name === DESKTOP_PET_PLUGIN_NAME)
-  if (!plugin?.entry_url) throw new Error('桌宠插件未启用或入口不可用')
+  if (!plugin?.entry_url) {
+    pluginOrigin = ''
+    fileDropEnabled = false
+    frame.removeAttribute('src')
+    await invoke('hide_current_window')
+    return
+  }
 
   const entryUrl = new URL(plugin.entry_url, apiBase)
   if (entryUrl.origin !== new URL(apiBase).origin) throw new Error('桌面插件入口不属于 Core')

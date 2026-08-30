@@ -126,6 +126,11 @@ test('desktop host selects the pet by identity instead of registry order', () =>
   assert.doesNotMatch(hostSource, /plugins\?\.\[0\]/)
 })
 
+test('desktop host stays hidden when the pet plugin is disabled', () => {
+  assert.match(hostSource, /if \(!plugin\?\.entry_url\) \{[\s\S]*await invoke\('hide_current_window'\)[\s\S]*return/)
+  assert.doesNotMatch(hostSource, /throw new Error\('桌宠插件未启用或入口不可用'\)/)
+})
+
 test('desktop plugin host prevents persistent browser zoom drift', () => {
   assert.match(hostSource, /event\.preventDefault\(\)/)
   assert.match(hostSource, /\['\+', '-', '=', '0'\]\.includes\(event\.key\)/)
