@@ -507,8 +507,12 @@ function persistCollapsedProviderGroups(groups: Record<string, boolean>): void {
 }
 
 .core-model-thinking-menu__option.active::before {
+  opacity: 0;
+}
+
+.core-model-thinking-menu__option.active:hover::before {
   opacity: 1;
-  background: color-mix(in srgb, var(--text) var(--alpha-active), transparent);
+  background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent);
 }
 
 .core-model-thinking-menu__option > * {
@@ -523,11 +527,6 @@ function persistCollapsedProviderGroups(groups: Record<string, boolean>): void {
   min-height: 40px;
   display: grid;
   align-items: center;
-}
-
-.core-model-thinking-menu__parameter[aria-expanded='true']::before {
-  opacity: 1;
-  background: color-mix(in srgb, var(--text) var(--alpha-active), transparent);
 }
 
 .core-model-thinking-menu__parameter-label {
