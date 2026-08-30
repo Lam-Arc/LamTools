@@ -455,7 +455,9 @@ function persistCollapsedProviderGroups(groups: Record<string, boolean>): void {
   margin-top: var(--space-1);
 }
 
-.core-model-thinking-menu__option.core-model-thinking-menu__provider {
+.core-model-thinking-menu__option.core-model-thinking-menu__provider,
+.core-model-thinking-menu__option.core-model-thinking-menu__provider:hover,
+.core-model-thinking-menu__option.core-model-thinking-menu__provider[aria-expanded='true'] {
   position: sticky;
   top: 0;
   z-index: 1;
