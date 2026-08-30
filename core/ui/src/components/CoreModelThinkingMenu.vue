@@ -15,7 +15,7 @@
     </button>
 
     <div v-if="open" class="core-model-thinking-menu__panel" role="menu">
-      <section class="core-model-thinking-menu__card core-model-thinking-menu__card--parameters" aria-label="模型与思考参数">
+      <section ref="parameterCard" class="core-model-thinking-menu__card core-model-thinking-menu__card--parameters" aria-label="模型与思考参数">
         <button
           class="core-model-thinking-menu__option core-model-thinking-menu__parameter"
           type="button"
@@ -50,7 +50,9 @@
 
       <section
         v-if="activeSection === 'model'"
+        ref="submenuCard"
         class="core-model-thinking-menu__card core-model-thinking-menu__card--submenu"
+        :class="'core-model-thinking-menu__card--submenu-' + submenuSide"
         role="menu"
         aria-label="模型选项"
         data-model-thinking-submenu="model"
@@ -76,7 +78,9 @@
 
       <section
         v-else-if="activeSection === 'thinking'"
+        ref="submenuCard"
         class="core-model-thinking-menu__card core-model-thinking-menu__card--submenu"
+        :class="'core-model-thinking-menu__card--submenu-' + submenuSide"
         role="menu"
         aria-label="思考等级选项"
         data-model-thinking-submenu="thinking"
@@ -114,7 +118,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { ChevronDown, ChevronRight } from 'lucide-vue-next'
 import { coreModelDisplayLabel, normalizeCoreThinkingMode, type CoreSelectOption, type CoreThinkingMode, type CoreThinkingModeOption } from '../composer/execution'
 
@@ -147,7 +151,10 @@ const emit = defineEmits<{
 
 const open = ref(false)
 const activeSection = ref<'model' | 'thinking' | null>(null)
+const submenuSide = ref<'left' | 'right'>('right')
 const root = ref<HTMLElement | null>(null)
+const parameterCard = ref<HTMLElement | null>(null)
+const submenuCard = ref<HTMLElement | null>(null)
 
 const modelLabel = computed(() => {
   const option = props.modelOptions.find((item) => item.value === props.modelValue)
@@ -169,6 +176,22 @@ function toggle(): void {
 
 function activateSection(section: 'model' | 'thinking'): void {
   activeSection.value = section
+  void nextTick(updateSubmenuSide)
+}
+
+function updateSubmenuSide(): void {
+  if (!parameterCard.value || !submenuCard.value) return
+  const mainRect = parameterCard.value.getBoundingClientRect()
+  const submenuWidth = submenuCard.value.getBoundingClientRect().width
+  const spaceValue = getComputedStyle(parameterCard.value).getPropertyValue('--space-2')
+  const gap = Number.parseFloat(spaceValue) || 8
+  const required = submenuWidth + gap
+  const roomLeft = mainRect.left
+  const roomRight = window.innerWidth - mainRect.right
+
+  if (roomRight >= required) submenuSide.value = 'right'
+  else if (roomLeft >= required) submenuSide.value = 'left'
+  else submenuSide.value = roomRight >= roomLeft ? 'right' : 'left'
 }
 
 function close(): void {
@@ -205,11 +228,13 @@ function onKeydown(event: KeyboardEvent): void {
 onMounted(() => {
   document.addEventListener('pointerdown', onPointerDown)
   document.addEventListener('keydown', onKeydown)
+  window.addEventListener('resize', updateSubmenuSide)
 })
 
 onUnmounted(() => {
   document.removeEventListener('pointerdown', onPointerDown)
   document.removeEventListener('keydown', onKeydown)
+  window.removeEventListener('resize', updateSubmenuSide)
 })
 </script>
 
@@ -271,14 +296,15 @@ onUnmounted(() => {
 
 .core-model-thinking-menu__panel {
   position: absolute;
-  right: calc(100% + var(--space-2));
+  left: 50%;
   bottom: calc(100% + 8px);
   z-index: var(--z-popover, 60);
   width: max-content;
   max-width: calc(100vw - 24px);
   color: var(--text);
   animation: core-model-thinking-menu-in var(--dur-base) var(--ease-out);
-  transform-origin: bottom right;
+  transform: translateX(-50%);
+  transform-origin: bottom center;
 }
 
 .core-model-thinking-menu__card {
@@ -294,9 +320,17 @@ onUnmounted(() => {
 
 .core-model-thinking-menu__card--submenu {
   position: absolute;
-  left: calc(100% + var(--space-2));
   bottom: 0;
-  animation: core-model-thinking-submenu-in var(--dur-base) var(--ease-out);
+}
+
+.core-model-thinking-menu__card--submenu-right {
+  left: calc(100% + var(--space-2));
+  animation: core-model-thinking-submenu-right-in var(--dur-base) var(--ease-out);
+}
+
+.core-model-thinking-menu__card--submenu-left {
+  right: calc(100% + var(--space-2));
+  animation: core-model-thinking-submenu-left-in var(--dur-base) var(--ease-out);
 }
 
 .core-model-thinking-menu__card--submenu .core-model-thinking-menu__option > span:first-child {
@@ -432,12 +466,17 @@ onUnmounted(() => {
 }
 
 @keyframes core-model-thinking-menu-in {
-  from { opacity: 0; transform: translateY(var(--space-1)) scale(.98); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
-@keyframes core-model-thinking-submenu-in {
+@keyframes core-model-thinking-submenu-right-in {
   from { opacity: 0; transform: translateX(calc(var(--space-1) * -1)); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes core-model-thinking-submenu-left-in {
+  from { opacity: 0; transform: translateX(var(--space-1)); }
   to { opacity: 1; transform: translateX(0); }
 }
 
