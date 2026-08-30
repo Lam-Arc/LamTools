@@ -1,5 +1,6 @@
 <template>
   <div class="core-execution-controls composer-model-row">
+    <slot name="leading" />
     <CoreRuntimeMenu
       v-if="showRuntimeMenu"
       :active-mode="activeMode"
@@ -10,7 +11,6 @@
       @update:active-mode="$emit('update:activeMode', $event)"
       @update:permission-preset="$emit('update:permissionPreset', $event)"
     />
-    <slot name="leading" />
     <CoreModelThinkingMenu
       :model-value="modelValue"
       :model-options="modelOptions"
@@ -83,15 +83,21 @@ const emit = defineEmits<{
 <style scoped>
 .core-execution-controls.composer-model-row {
   min-width: 0;
+  width: 100%;
+  flex: 1 1 auto;
   display: flex;
   align-items: center;
-  gap: 0;
+  gap: var(--space-1);
 }
 
 .core-execution-controls :deep(.core-runtime-menu),
 .core-execution-controls :deep(.core-model-thinking-menu) {
   min-width: 0;
   flex: 0 1 auto;
+}
+
+.core-execution-controls :deep(.core-model-thinking-menu) {
+  margin-left: auto;
 }
 
 :global(.floating-composer:has(.core-execution-controls [data-core-runtime-menu]),

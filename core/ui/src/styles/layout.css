@@ -255,10 +255,11 @@
 }
 .tool-row {
   min-width: 0;
+  flex: 1 1 auto;
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 .attach, .send {
   width: 34px; height: 34px;
