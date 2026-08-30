@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 
 import CoreAgentsEditor from '../src/components/CoreAgentsEditor.vue'
 import CoreProjectCreate from '../src/components/CoreProjectCreate.vue'
+import CoreProjectPicker from '../src/components/CoreProjectPicker.vue'
 import SessionSidebar from '../src/components/SessionSidebar.vue'
 
 describe('CoreProjectCreate', () => {
@@ -28,14 +29,11 @@ describe('CoreProjectCreate', () => {
     expect(wrapper.emitted('submit')).toEqual([[{ name: '', work_root: 'E:\\path-only' }]])
   })
 
-  it('reuses the directory workflow with clear copy when opening a project', () => {
-    const wrapper = mount(CoreProjectCreate, {
-      props: { mode: 'open' },
-      global: { stubs: { Teleport: true } },
-    })
+  it('reserves this dialog for creating projects', () => {
+    const wrapper = mount(CoreProjectCreate, { global: { stubs: { Teleport: true } } })
 
-    expect(wrapper.get('#core-project-dialog-title').text()).toBe('打开项目')
-    expect(wrapper.get('[data-project-submit]').text()).toBe('打开项目')
+    expect(wrapper.get('#core-project-dialog-title').text()).toBe('新建项目')
+    expect(wrapper.get('[data-project-submit]').text()).toBe('创建项目')
   })
 
   it('keeps invalid and loading submissions disabled while exposing errors', async () => {
@@ -89,6 +87,20 @@ describe('CoreProjectCreate', () => {
     await wrapper.get('[data-project-cancel]').trigger('click')
 
     expect(wrapper.emitted('cancel')).toEqual([[]])
+  })
+})
+
+describe('CoreProjectPicker', () => {
+  it('only offers registered projects for selection', async () => {
+    const wrapper = mount(CoreProjectPicker, {
+      props: { projects: [{ id: 'docs', name: 'Docs', workRoot: 'E:\\docs' }] },
+      global: { stubs: { Teleport: true } },
+    })
+
+    expect(wrapper.get('#core-project-picker-title').text()).toBe('选择项目')
+    expect(wrapper.get('[data-project-picker-item="docs"]').text()).toContain('E:\\docs')
+    await wrapper.get('[data-project-picker-item="docs"]').trigger('click')
+    expect(wrapper.emitted('select')).toEqual([['docs']])
   })
 })
 
@@ -159,7 +171,8 @@ describe('Core project narrow layout contract', () => {
     const demoSource = readFileSync(resolve(process.cwd(), 'src/demo/App.vue'), 'utf8')
 
     expect(demoSource).toMatch(/<template #primary>[\s\S]*data-sidebar-primary-action[\s\S]*@click="invokeSidebarPrimaryAction"/)
-    expect(demoSource).toMatch(/<template #empty>[\s\S]*data-sidebar-empty-projects[\s\S]*还没有项目[\s\S]*data-sidebar-empty-create-project[\s\S]*@click="openProjectCreate\(\)"/)
+    expect(demoSource).toMatch(/<template #empty>[\s\S]*data-sidebar-empty-projects[\s\S]*sidebar-empty-backdrop[\s\S]*>暂无<\/div>/)
+    expect(demoSource).not.toContain('data-sidebar-empty-create-project')
     expect(demoSource).toContain(':show-sidebar-header="false"')
     expect(demoSource).toContain(':show-sidebar-header-action="false"')
     expect(demoSource).not.toContain('core-project-header-action')

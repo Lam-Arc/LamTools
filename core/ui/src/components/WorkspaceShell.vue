@@ -1,5 +1,9 @@
 <template>
-  <div class="workspace-shell" :class="shellClass" :style="shellStyle">
+  <div
+    class="workspace-shell"
+    :class="[shellClass, { 'workspace-shell--empty-session': emptySession }]"
+    :style="shellStyle"
+  >
     <!-- Notifications: single global host fed by the useCoreToast service.
          errorText/noticeText props are bridged into the service for legacy
          hosts (audit: previously two fixed slots, no dismissal, no
@@ -140,6 +144,7 @@
     <!-- ===== Floating Composer ===== -->
     <ComposerBar
       v-if="!hideComposer"
+      :class="{ 'composer-root--empty-session': emptySession }"
       :inert="rightDrawerModal || undefined"
       variant="floating"
       :placeholder="composerPlaceholder"
@@ -253,6 +258,8 @@ const props = withDefaults(
     showRightPanel?: boolean
     stageOpen?: boolean
     hideComposer?: boolean
+    /** Host-controlled layout state for a Core session with no messages yet. */
+    emptySession?: boolean
     /** 透传给 ComposerBar：运行时驱动输入框背景粒子动效 */
     composerActive?: boolean
   }>(),
@@ -276,6 +283,7 @@ const props = withDefaults(
     noticeText: '',
     showRightPanel: true,
     stageOpen: false,
+    emptySession: false,
     composerActive: false,
   },
 )

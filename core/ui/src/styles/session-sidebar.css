@@ -611,8 +611,17 @@
 .sidebar-empty-projects p {
   margin: 0 0 var(--space-2);
 }
-.sidebar-empty-projects .sidebar-create-project {
-  justify-content: center;
+.sidebar-empty-backdrop {
+  width: 100%;
+  color: color-mix(in srgb, var(--theme-backdrop-text) 7%, transparent);
+  font-size: 280px;
+  font-weight: 800;
+  letter-spacing: calc(-0.035em + 2px);
+  line-height: .96;
+  text-align: right;
+  transform: translateX(calc(var(--space-4) + 72px));
+  user-select: none;
+  writing-mode: vertical-rl;
 }
 .sidebar-search-empty p {
   margin: 0 0 var(--space-2);

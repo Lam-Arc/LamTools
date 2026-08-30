@@ -121,7 +121,6 @@
               <span v-if="isLiveMessage(msg) && liveDetailText(msg)" class="process-summary-detail">{{ liveDetailText(msg) }}</span>
               <span class="process-summary-icon" :class="processBarStatus(msg)" />
               <span class="process-summary-text">{{ isLiveMessage(msg) ? liveStatusText(msg) : processSummary(msg).text }}</span>
-              <span class="process-summary-hint">{{ isProcessExpanded(msg) ? '收起过程' : '查看过程' }}</span>
             </button>
           </div>
 

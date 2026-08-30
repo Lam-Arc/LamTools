@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import CoreStartPage from '../src/components/CoreStartPage.vue'
 
 describe('CoreStartPage', () => {
-  it('guides a workspace without projects to create or open one', async () => {
+  it('guides a workspace without projects to create one and disables registered-project selection', async () => {
     const wrapper = mount(CoreStartPage)
 
     expect(wrapper.attributes('data-state')).toBe('no-project')
@@ -13,10 +13,10 @@ describe('CoreStartPage', () => {
     expect(wrapper.find('.core-start-page-recent').exists()).toBe(false)
 
     await wrapper.get('[data-start-new-project]').trigger('click')
-    await wrapper.get('[data-start-open-project]').trigger('click')
+    expect(wrapper.get('[data-start-select-project]').attributes('disabled')).toBeDefined()
 
     expect(wrapper.emitted('new-project')).toEqual([[]])
-    expect(wrapper.emitted('open-project')).toEqual([[]])
+    expect(wrapper.emitted('select-project')).toBeUndefined()
   })
 
   it('gives an existing project without a session a focused new-session entry', async () => {
@@ -24,7 +24,10 @@ describe('CoreStartPage', () => {
 
     expect(wrapper.attributes('data-state')).toBe('project-no-session')
     expect(wrapper.find('[data-start-new-project]').exists()).toBe(false)
-    expect(wrapper.get('[data-start-open-project]').text()).toBe('打开其他项目')
+    expect(wrapper.get('[data-start-select-project]').text()).toBe('选择项目')
+
+    await wrapper.get('[data-start-select-project]').trigger('click')
+    expect(wrapper.emitted('select-project')).toEqual([[]])
 
     await wrapper.get('[data-start-new-session]').trigger('click')
     expect(wrapper.emitted('new-session')).toEqual([[]])

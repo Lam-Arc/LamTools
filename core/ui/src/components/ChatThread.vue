@@ -10,10 +10,10 @@
       v-for="msg in messages"
       :key="msg.id"
       :data-message-id="msg.id"
-      v-memo="[msg, assistantLabel, processExpandedIds.has(msg.id), messageActions, turnActive, activeTurnId, checkpointTurnIds]"
+      v-memo="[msg, assistantLabelForMessage(msg), processExpandedIds.has(msg.id), messageActions, turnActive, activeTurnId, checkpointTurnIds]"
       :motion-enter="!initialMessageIds.has(msg.id)"
       :msg="msg"
-        :assistant-label="assistantLabel"
+        :assistant-label="assistantLabelForMessage(msg)"
         :process-expanded-ids="processExpandedIds"
         :message-actions="messageActions"
       :api-base="apiBase"
@@ -65,6 +65,8 @@ const props = withDefaults(
   defineProps<{
     messages: CoreMessage[]
     assistantLabel?: string
+    /** Labels keyed by the model id frozen into each turn's runtime snapshot. */
+    assistantModelLabels?: Readonly<Record<string, string>>
     /** Set of message ids whose process section is expanded */
     processExpandedIds?: Set<string>
     /** Show hover actions (copy / fork / roll back) under assistant replies */
@@ -84,6 +86,7 @@ const props = withDefaults(
   }>(),
   {
     assistantLabel: 'Assistant',
+    assistantModelLabels: () => ({}),
     processExpandedIds: () => new Set(),
     messageActions: false,
     apiBase: '/api/core',
@@ -94,6 +97,14 @@ const props = withDefaults(
     checkpointTurnIds: () => new Set(),
   },
 )
+
+function assistantLabelForMessage(message: CoreMessage): string {
+  const runtimeModelId = typeof message.metadata?.runtime_model_id === 'string'
+    ? message.metadata.runtime_model_id.trim()
+    : ''
+  if (!runtimeModelId) return props.assistantLabel
+  return props.assistantModelLabels[runtimeModelId] || runtimeModelId.toUpperCase()
+}
 
 const emit = defineEmits<{
   'toggle-process': [messageId: string]

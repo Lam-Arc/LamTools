@@ -33,9 +33,11 @@
         <button
           class="core-start-page-action secondary"
           type="button"
-          data-start-open-project
-          @click="emit('open-project')"
-        >{{ hasProject ? '打开其他项目' : '打开项目' }}</button>
+          data-start-select-project
+          :disabled="!hasProject"
+          :title="hasProject ? '选择已登记项目' : '暂无已登记项目'"
+          @click="emit('select-project')"
+        >选择项目</button>
       </div>
 
       <section v-if="recentProjects.length" class="core-start-page-recent" aria-labelledby="core-start-page-recent-title">
@@ -81,7 +83,7 @@ withDefaults(defineProps<{
 
 const emit = defineEmits<{
   'new-project': []
-  'open-project': []
+  'select-project': []
   'new-session': []
   'open-recent-project': [projectId: string]
 }>()
@@ -115,14 +117,14 @@ function formatOpenedAt(value: string): string {
 .core-start-page-backdrop {
   position: absolute;
   z-index: -1;
-  top: 50%;
+  top: 38%;
   left: 50%;
   width: max-content;
   max-width: 100%;
   color: color-mix(in srgb, var(--text) 7%, transparent);
   font-size: clamp(56px, 11vw, 144px);
   font-weight: 800;
-  letter-spacing: -0.035em;
+  letter-spacing: calc(-0.035em + 2px);
   line-height: .96;
   pointer-events: none;
   transform: translate(-50%, -50%);
@@ -133,6 +135,7 @@ function formatOpenedAt(value: string): string {
 .core-start-page-content {
   width: min(100%, 540px);
   padding: var(--space-5);
+  transform: translateY(calc(var(--space-6) + var(--space-6)));
 }
 
 .core-start-page-kicker {
@@ -185,6 +188,11 @@ function formatOpenedAt(value: string): string {
 
 .core-start-page-action.primary:hover { filter: brightness(.94); }
 .core-start-page-action.primary:active { filter: brightness(.9); }
+
+.core-start-page-action:disabled {
+  cursor: default;
+  opacity: .45;
+}
 
 .core-start-page-action.secondary {
   background: color-mix(in srgb, var(--text) var(--alpha-hover), transparent);
@@ -278,8 +286,14 @@ function formatOpenedAt(value: string): string {
 
 @media (max-width: 640px) {
   .core-start-page { padding: var(--space-4); }
-  .core-start-page-content { padding: var(--space-4); }
-  .core-start-page-backdrop { font-size: clamp(44px, 13vw, 76px); }
+  .core-start-page-content {
+    padding: var(--space-4);
+    transform: none;
+  }
+  .core-start-page-backdrop {
+    top: 50%;
+    font-size: clamp(44px, 13vw, 76px);
+  }
   .core-start-page-recent-time { display: none; }
 }
 

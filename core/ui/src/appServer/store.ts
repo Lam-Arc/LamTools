@@ -658,6 +658,9 @@ function applyAppEvent(snapshot: CoreAppSnapshot, event: CoreAppEvent): CoreAppS
       status: typeof payload.status === 'string' ? payload.status : 'running',
       input: input ?? turn.input,
       work_root: payload.work_root || payload.workRoot || turn.work_root || '',
+      ...(isRecord(payload.runtime_snapshot)
+        ? { runtime_snapshot: payload.runtime_snapshot }
+        : {}),
     }
     return { ...snapshot, turns, status: 'running' }
   }

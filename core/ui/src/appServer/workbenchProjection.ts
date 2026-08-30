@@ -247,6 +247,7 @@ function messageFingerprint(
     meta.live === true,
     meta.initialWaiting === true,
     meta.processMetrics,
+    meta.runtime_model_id,
     message.attachments,
     ...parts.map(part => part),
   ]

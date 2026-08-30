@@ -108,8 +108,10 @@ export function selectChatMessages(
     if (!last || last.role !== 'assistant' || assistantSegmentTurnId(last.id) !== turnId) {
       const segment = (assistantSegments.get(turnId) ?? 0) + 1
       assistantSegments.set(turnId, segment)
-      const coreTurn = typeof item.turn_id === 'string' ? state.core?.turns?.[item.turn_id] : null
+      const appTurn = typeof item.turn_id === 'string' ? state.turns?.[item.turn_id] : undefined
+      const coreTurn = typeof item.turn_id === 'string' ? state.core?.turns?.[item.turn_id] : undefined
       const runtimeMetrics = coreTurn && typeof coreTurn.usage === 'object' && coreTurn.usage ? coreTurn.usage : null
+      const runtimeModelId = runtimeModelIdForTurn(appTurn, coreTurn)
       messages.push({
         // Real turn ids contain colons (`<session>:turn:<run>`), so segments
         // are separated with `#` — never a colon.
@@ -123,6 +125,7 @@ export function selectChatMessages(
         metadata: {
           ...(runtimeMetrics ? { processMetrics: runtimeMetrics } : {}),
           ...(isRecord(item.metadata) ? item.metadata : {}),
+          ...(runtimeModelId ? { runtime_model_id: runtimeModelId } : {}),
         },
       })
     }
@@ -258,6 +261,13 @@ function maybeAppendInitialAssistantWaiting(state: CoreAppSnapshot, messages: Co
   if (selectLatestTurnStatus(state) !== 'running') return
   const last = messages[messages.length - 1]
   if (!last || last.role !== 'user') return
+  const turnId = typeof state.items?.[last.id]?.turn_id === 'string'
+    ? state.items[last.id]?.turn_id || ''
+    : Object.entries(state.turns ?? {}).find(([, turn]) => turn.items?.includes(last.id))?.[0] || ''
+  const runtimeModelId = runtimeModelIdForTurn(
+    turnId ? state.turns?.[turnId] : undefined,
+    turnId ? state.core?.turns?.[turnId] : undefined,
+  )
   messages.push({
     id: `assistant:waiting:${last.id}`,
     role: 'assistant',
@@ -266,8 +276,19 @@ function maybeAppendInitialAssistantWaiting(state: CoreAppSnapshot, messages: Co
     metadata: {
       live: true,
       initialWaiting: true,
+      ...(runtimeModelId ? { runtime_model_id: runtimeModelId } : {}),
     },
   })
+}
+
+function runtimeModelIdForTurn(
+  appTurn: { runtime_snapshot?: unknown } | undefined,
+  coreTurn: { runtime_snapshot?: unknown } | undefined,
+): string {
+  const appSnapshot = isRecord(appTurn?.runtime_snapshot) ? appTurn.runtime_snapshot : null
+  const coreSnapshot = isRecord(coreTurn?.runtime_snapshot) ? coreTurn.runtime_snapshot : null
+  const modelId = appSnapshot?.model_id ?? coreSnapshot?.model_id
+  return typeof modelId === 'string' ? modelId.trim() : ''
 }
 
 /**

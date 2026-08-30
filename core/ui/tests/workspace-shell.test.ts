@@ -146,4 +146,14 @@ describe('WorkspaceShell responsive drawers', () => {
     expect(pin.attributes('aria-pressed')).toBe('true')
     expect(wrapper.emitted('update:left-pinned')).toEqual([[true]])
   })
+
+  it('marks the shared shell and composer for an empty Core session', () => {
+    const wrapper = mount(WorkspaceShell, {
+      props: { productName: 'Core', emptySession: true },
+    })
+
+    expect(wrapper.get('.workspace-shell').classes()).toContain('workspace-shell--empty-session')
+    expect(wrapper.get('.composer-root').classes()).toContain('composer-root--empty-session')
+    expect(wrapper.find('.floating-composer').exists()).toBe(true)
+  })
 })

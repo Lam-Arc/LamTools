@@ -98,6 +98,7 @@
     :composer-action-mode="composerActionMode"
     :composer-active="latestStatus === 'running'"
     :hide-composer="shouldHideComposer"
+    :empty-session="isEmptySession"
     v-model:stage-open="stageOpen"
     @new-session="handleShellNewSession"
     @update:left-pinned="syncLeftPinned"
@@ -125,9 +126,14 @@
           :loading="projectCreateLoading"
           :error="projectCreateError"
           :api-base="apiBase"
-          :mode="projectDialogMode"
           @submit="createProject"
           @cancel="closeProjectCreate"
+        />
+        <CoreProjectPicker
+          v-if="showProjectPicker && !activePluginMode"
+          :projects="projects"
+          @select="selectRegisteredProject"
+          @cancel="showProjectPicker = false"
         />
       </div>
     </template>
@@ -158,18 +164,7 @@
       >
         <template #empty>
           <div class="sidebar-empty-projects" data-sidebar-empty-projects>
-            <p>还没有项目</p>
-            <button
-              v-if="!activePluginMode"
-              class="sidebar-create-project"
-              type="button"
-              data-sidebar-empty-create-project
-              title="新建项目"
-              aria-label="新建项目"
-              @click="openProjectCreate()"
-            >
-              <span aria-hidden="true">＋</span><span>新建项目</span>
-            </button>
+            <div v-if="!activePluginMode" class="sidebar-empty-backdrop" aria-hidden="true">暂无</div>
           </div>
         </template>
       </SessionSidebar>
@@ -213,7 +208,7 @@
         :has-project="projects.length > 0"
         :recent-projects="recentCoreProjects"
         @new-project="openProjectCreate()"
-        @open-project="openProjectCreate('open')"
+        @select-project="showProjectPicker = true"
         @new-session="createStartPageSession"
         @open-recent-project="openRecentProject"
       />
@@ -221,6 +216,7 @@
         v-else
         ref="threadScrollEl"
         class="thread"
+        :class="{ 'thread--empty-session': isEmptySession }"
         @scroll.passive="threadScroll.handleScroll"
         @wheel.passive="threadScroll.handleWheel"
       >
@@ -232,8 +228,19 @@
         >
           加载更早消息（共 {{ totalMessages }} 条）
         </button>
+        <div
+          v-if="isEmptySession"
+          class="empty-session-hero"
+          data-empty-session-hero
+        >
+          <!-- 空会话品牌背景当前不好看，先去掉；后续重新设计后再恢复。 -->
+          <h1 class="empty-session-title">准备开始一个新任务？</h1>
+          <p class="empty-session-description">描述你想完成的事情</p>
+        </div>
         <ChatThread
+          v-else
           :messages="messages"
+          :assistant-model-labels="assistantModelLabels"
           :process-expanded-ids="processExpandedIds"
           :message-actions="true"
           :api-base="apiBase"
@@ -255,7 +262,7 @@
         </div>
         <Transition name="thread-jump-latest">
           <button
-            v-if="!threadScroll.atBottom.value"
+            v-if="!isEmptySession && !threadScroll.atBottom.value"
             type="button"
             class="thread-jump-latest"
             aria-label="回到最新消息"
@@ -510,6 +517,7 @@ import CoreGoalStrip from '../components/CoreGoalStrip.vue'
 import FileTreePanel from '../components/FileTreePanel.vue'
 import type { StageResource, StageKind } from '../types'
 import CoreProjectCreate from '../components/CoreProjectCreate.vue'
+import CoreProjectPicker from '../components/CoreProjectPicker.vue'
 import CoreStartPage, { type CoreRecentProject } from '../components/CoreStartPage.vue'
 import CoreSessionTitleEditor from '../components/CoreSessionTitleEditor.vue'
 import ArtifactPanel from '../components/ArtifactPanel.vue'
@@ -604,7 +612,7 @@ function setLoadError(text: string) {
 const showProjectCreate = ref(false)
 const projectCreateLoading = ref(false)
 const projectCreateError = ref('')
-const projectDialogMode = ref<'create' | 'open'>('create')
+const showProjectPicker = ref(false)
 const selectedProjectId = ref<string | null>(null)
 const projectNameDraft = ref('')
 const projectActionLoading = ref(false)
@@ -917,6 +925,17 @@ const modeOptions = computed(() =>
     { value: 'execute', label: '执行' },
   ]
 )
+const assistantModelLabels = computed<Record<string, string>>(() => {
+  const labels: Record<string, string> = {}
+  for (const model of availableModels.value) {
+    const label = String(model.display_name || model.model_id || model.id || '').trim().toUpperCase()
+    if (!label) continue
+    for (const modelId of [model.id, model.model_id]) {
+      if (modelId) labels[modelId] = label
+    }
+  }
+  return labels
+})
 const runtimeModeLabel = computed(() => (
   activePluginMode.value?.title
     || modeOptions.value.find((option) => option.value === activeMode.value)?.label
@@ -1123,6 +1142,11 @@ const projectionController = useCoreWorkbenchProjectionController({
   onTurnFinished: () => void refreshGoal(activeSessionId.value, true),
 })
 const { messages, processExpandedIds, toggleProcess, hasMoreHistory, totalMessages, loadMoreHistory } = projectionController
+const isEmptySession = computed(() => (
+  Boolean(activeSessionId.value)
+  && !activePluginMode.value
+  && messages.value.length === 0
+))
 
 const pendingPlaceholder = ref<{ id: string; content: string } | null>(null)
 const stepGroups = computed(() => buildCurrentTurnChecklistGroups(messages.value))
@@ -1284,8 +1308,7 @@ async function refreshSessions() {
   ))
 }
 
-function openProjectCreate(mode: 'create' | 'open' = 'create') {
-  projectDialogMode.value = mode
+function openProjectCreate() {
   projectCreateError.value = ''
   showProjectCreate.value = true
 }
@@ -1352,6 +1375,11 @@ async function openRecentProject(projectId: string): Promise<void> {
   } else {
     await createProjectSession(project.id)
   }
+}
+
+async function selectRegisteredProject(projectId: string): Promise<void> {
+  showProjectPicker.value = false
+  await openRecentProject(projectId)
 }
 
 async function loadAgentsForProject(projectId: string) {

@@ -88,8 +88,8 @@
   --sidebar-hover-fade-right: 26px;
   --sidebar-hover-fade-vertical: 2px;
   --sidebar-divider: color-mix(in srgb, var(--theme-backdrop-text, var(--text)) 6%, transparent);
-  --sidebar-scrollbar-thumb: color-mix(in srgb, var(--theme-backdrop-text, var(--text)) 16%, transparent);
-  --sidebar-scrollbar-thumb-hover: color-mix(in srgb, var(--theme-backdrop-text, var(--text)) 30%, transparent);
+  --sidebar-scrollbar-thumb: color-mix(in srgb, var(--theme-backdrop-text, var(--text)) 4%, transparent);
+  --sidebar-scrollbar-thumb-hover: color-mix(in srgb, var(--theme-backdrop-text, var(--text)) 8%, transparent);
   --sidebar-scrollbar-width: 6px;
   --sidebar-text-size: var(--sidebar-font);
   --sidebar-meta-text-size: 12px;
