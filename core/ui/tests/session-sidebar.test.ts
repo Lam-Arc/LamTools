@@ -331,14 +331,40 @@ describe('SessionSidebar sections', () => {
     expect(wrapper.find('.session-name-input').exists()).toBe(false)
   })
 
+  it('truncates long session names by available width and keeps the full title in the action menu', async () => {
+    const title = '调查输入框权限切换改动画面'
+    const wrapper = mount(SessionSidebar, {
+      props: {
+        projectGroups: [{ id: 'project', name: 'Project', sessions: [{ id: 'long', title }] }],
+      },
+      attachTo: document.body,
+    })
+
+    expect(wrapper.get('[data-session-row="long"] .session-title').text()).toBe(title)
+
+    const css = readFileSync(resolve(import.meta.dirname, '../src/styles/session-sidebar.css'), 'utf8')
+    const selectRule = css.match(/\.conversation-select \{([\s\S]*?)\n\}/)?.[1] || ''
+    expect(selectRule).toContain('flex: 1 1 auto;')
+    expect(selectRule).toContain('width: 0;')
+    expect(selectRule).toContain('min-width: 0;')
+    expect(selectRule).not.toContain('width: 100%;')
+    expect(css).toMatch(/\.conversation-main \{[\s\S]*?flex: 1 1 auto;[\s\S]*?width: 0;[\s\S]*?overflow: hidden;/)
+    expect(css).toMatch(/\.session-title \{[\s\S]*?width: 100%;[\s\S]*?overflow: hidden;[\s\S]*?text-overflow: ellipsis;/)
+
+    await wrapper.get('[data-session-row="long"]').trigger('contextmenu', { clientX: 120, clientY: 80 })
+    expect(document.querySelector('[data-session-menu="long"]')?.getAttribute('aria-label')).toBe('调查输入框权限切换改动画面 会话操作')
+  })
+
   it('keeps project rows transparent while sessions retain row states', () => {
     const css = readFileSync(resolve(import.meta.dirname, '../src/styles/session-sidebar.css'), 'utf8')
 
     expect(css).toMatch(/\.project-row,[\s\S]*?\.session-row \{[\s\S]*?background: transparent;/)
     expect(css).not.toMatch(/\.project-row:hover\s*\{[\s\S]*?background:/)
     expect(css).not.toMatch(/\.project-block\.active\s*\{[\s\S]*?background:/)
-    expect(css).toMatch(/\.conversation\.active::before \{[\s\S]*?var\(--alpha-active\)/)
-    expect(css).toMatch(/\.conversation strong \{[\s\S]*?font-weight: 700;/)
+    expect(css).toMatch(/\.conversation\.active::before \{[\s\S]*?linear-gradient\([\s\S]*?var\(--sidebar-selected-fill\)/)
+    expect(css).toMatch(/\.conversation strong \{[\s\S]*?font-weight: 400;/)
+    expect(css).toMatch(/\.project-name strong \{[\s\S]*?font-size: var\(--sidebar-text-size\);/)
+    expect(css).toMatch(/\.conversation strong \{[\s\S]*?font-size: var\(--sidebar-text-size\);/)
     expect(css).not.toMatch(/\.session-row\.is-active \.session-title\s*\{[\s\S]*?font-weight:/)
     expect(css).toMatch(/\.sidebar-sort-move\s*\{[\s\S]*?transition: transform var\(--dur-base\) var\(--ease-out\);/)
     expect(css).toMatch(/\.project-row\.is-dragging,[\s\S]*?\.conversation\.is-dragging\s*\{[\s\S]*?opacity: 1;/)

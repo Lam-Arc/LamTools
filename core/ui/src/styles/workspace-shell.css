@@ -13,6 +13,7 @@
   --left-peek: 18px;
   --main-left: var(--left-peek);
   --left-reveal: calc(var(--left-card-width) - var(--left-overlap));
+  --left-visible-width: min(var(--left-card-width), var(--main-left));
   --right-drawer-width: 292px;
   --right-overlap: 0px;
   --right-peek: 18px;
@@ -122,6 +123,7 @@
 
 .drawer-left {
   top: var(--titlebar-offset, 0); bottom: 0; left: 0;
+  width: var(--left-visible-width);
   border-radius: 0;
   transform: none;
   opacity: 1;
@@ -161,7 +163,7 @@
 .drawer-head {
   flex: 0 0 auto;
   min-height: var(--sidebar-header-height);
-  padding: 18px calc(16px + var(--left-overlap)) 12px 16px;
+  padding: 14px var(--sidebar-inline-padding) 10px;
   border-bottom: 0;
   display: flex;
   align-items: center;
@@ -175,7 +177,7 @@
   outline-offset: 1px;
 }
 .drawer-right .drawer-head { padding: 13px 14px; }
-.drawer-head strong { flex: 1; font-size: 20px; line-height: 1.2; letter-spacing: -.02em; }
+.drawer-head strong { flex: 1; font-size: var(--sidebar-font-title); line-height: 24px; letter-spacing: -.02em; }
 
 /* The left sidebar has four explicit layout regions. Only its body may
    scroll; header, primary actions, and footer stay in place. */
@@ -184,10 +186,24 @@
 .drawer-left .drawer-footer {
   flex: 0 0 auto;
 }
+.drawer-left .drawer-head {
+  min-height: 38px;
+  padding-top: 14px;
+  padding-bottom: 0;
+  padding-left: var(--sidebar-inline-padding);
+  padding-right: var(--sidebar-inline-padding);
+  margin-bottom: 10px;
+}
+.drawer-left .drawer-body {
+  padding-right: var(--sidebar-inline-padding);
+}
+.drawer-left .drawer-footer {
+  margin-right: 0;
+}
 .drawer-left .sidebar-primary {
   display: flex;
   flex-direction: column;
-  gap: var(--sidebar-item-gap);
+  gap: var(--sidebar-row-gap);
   padding: 0 var(--sidebar-inline-padding) var(--space-2);
 }
 
@@ -200,28 +216,36 @@
 
 .sidebar-create-project {
   width: 100%;
+  height: var(--sidebar-row-height);
   min-height: var(--sidebar-row-height);
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  padding: 0 var(--space-3);
+  gap: var(--sidebar-item-gap);
+  padding: 0 var(--space-2);
   border: 0;
   border-radius: var(--sidebar-row-radius);
   background: transparent;
-  color: var(--theme-backdrop-text);
-  opacity: .78;
+  color: var(--sidebar-text-secondary);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--sidebar-font);
+  font-weight: 400;
   text-align: left;
   cursor: pointer;
 }
 .sidebar-create-project:hover {
-  background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-hover), transparent);
-  opacity: .96;
+  background: var(--sidebar-hover);
+  color: var(--sidebar-text-primary);
 }
 .sidebar-create-project:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--blue) 75%, transparent);
   outline-offset: 1px;
+}
+.sidebar-create-project > span:first-child {
+  flex: 0 0 var(--sidebar-icon-size);
+  width: var(--sidebar-icon-size);
+  font-size: var(--sidebar-icon-size);
+  line-height: 1;
+  text-align: center;
 }
 
 .pin-plain {
@@ -271,7 +295,7 @@
   top: var(--space-2);
   right: var(--space-1);
   bottom: var(--space-2);
-  width: var(--space-2);
+  width: var(--sidebar-scrollbar-width);
   padding: 0;
   border: 0;
   background: transparent;
@@ -288,7 +312,7 @@
 .sidebar-scrollbar.is-dragging,
 .sidebar-scrollbar:focus-visible {
   opacity: 1;
-  background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-hover), transparent);
+  background: var(--sidebar-hover);
 }
 .sidebar-scrollbar:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--blue) 75%, transparent);
@@ -297,20 +321,20 @@
 .sidebar-scrollbar-thumb {
   position: absolute;
   top: 0;
-  right: 1px;
+  right: 0;
   bottom: auto;
-  left: 1px;
+  left: 0;
   display: block;
   min-height: var(--space-6);
   border-radius: 999px;
-  background: color-mix(in srgb, var(--theme-backdrop-text) 18%, transparent);
+  background: var(--sidebar-scrollbar-thumb);
   cursor: grab;
   transition: background var(--dur-fast) var(--ease-out);
 }
 .sidebar-scrollbar:hover .sidebar-scrollbar-thumb,
 .sidebar-scrollbar.is-dragging .sidebar-scrollbar-thumb,
 .sidebar-scrollbar:focus-visible .sidebar-scrollbar-thumb {
-  background: color-mix(in srgb, var(--theme-backdrop-text) 34%, transparent);
+  background: var(--sidebar-scrollbar-thumb-hover);
 }
 .sidebar-scrollbar.is-dragging .sidebar-scrollbar-thumb {
   cursor: grabbing;
@@ -332,18 +356,18 @@
   flex: 0 0 auto;
   padding: 10px var(--sidebar-inline-padding) var(--sidebar-inline-padding);
   margin-right: var(--left-overlap);
-  border-top: 1px solid color-mix(in srgb, var(--theme-backdrop-text) 12%, transparent);
+  border-top: 1px solid var(--sidebar-divider);
   background: transparent;
-  color: var(--theme-backdrop-text);
+  color: var(--sidebar-text-secondary);
   display: flex;
   flex-direction: column;
   gap: var(--sidebar-row-gap);
 }
 .drawer-footer .settings-entry {
   width: 100%;
+  height: var(--sidebar-footer-row-height);
   min-height: var(--sidebar-row-height);
-  color: var(--theme-backdrop-text);
-  opacity: .78;
+  color: var(--sidebar-text-secondary);
   background: transparent;
   border: 0;
   border-radius: var(--sidebar-row-radius);
@@ -351,10 +375,11 @@
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  gap: var(--space-2);
+  gap: var(--sidebar-footer-gap);
   text-align: left;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--sidebar-font);
+  font-weight: 400;
   cursor: pointer;
   position: relative;
 }
@@ -365,26 +390,34 @@
   mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
 }
 .drawer-footer .settings-entry:hover {
-  opacity: .96;
+  color: var(--sidebar-text-primary);
 }
 .drawer-footer .settings-entry:hover::before {
-  background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-hover), transparent);
+  background: var(--sidebar-hover);
+}
+.drawer-footer .settings-entry svg,
+.drawer-footer .sidebar-action svg {
+  width: var(--sidebar-icon-size);
+  height: var(--sidebar-icon-size);
+  stroke-width: 1.8;
+  opacity: .75;
 }
 
 .sidebar-action {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--sidebar-footer-gap);
   width: 100%;
+  height: var(--sidebar-footer-row-height);
   min-height: var(--sidebar-row-height);
   padding: 0 var(--space-3);
   border: 0;
   border-radius: var(--sidebar-row-radius);
   background: transparent;
-  color: var(--theme-backdrop-text);
-  opacity: .78;
+  color: var(--sidebar-text-secondary);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--sidebar-font);
+  font-weight: 400;
   text-align: left;
   cursor: pointer;
   position: relative;
@@ -396,10 +429,10 @@
   mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
 }
 .sidebar-action:hover {
-  opacity: .96;
+  color: var(--sidebar-text-primary);
 }
 .sidebar-action:hover::before {
-  background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-hover), transparent);
+  background: var(--sidebar-hover);
 }
 .sidebar-action:focus-visible {
   outline: 2px solid var(--blue);

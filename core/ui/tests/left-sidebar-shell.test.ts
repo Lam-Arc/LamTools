@@ -100,6 +100,8 @@ describe('LeftSidebarShell', () => {
   })
 
   it('keeps only the left body scrollable', () => {
+    expect(workspaceShellCss).toMatch(/--left-visible-width: min\(var\(--left-card-width\), var\(--main-left\)\);/)
+    expect(workspaceShellCss).toMatch(/\.drawer-left \{[\s\S]*?width: var\(--left-visible-width\);/)
     expect(workspaceShellCss).toMatch(/\.drawer-left \{[\s\S]*?overflow: hidden;/)
     expect(workspaceShellCss).toMatch(/\.drawer-left \.drawer-head,[\s\S]*?\.drawer-left \.drawer-footer \{[\s\S]*?flex: 0 0 auto;/)
     expect(workspaceShellCss).toMatch(/\.drawer-left > \.sidebar-scroll-shell > \.drawer-body \{[\s\S]*?height: 100%;[\s\S]*?overflow-y: auto;[\s\S]*?overflow-x: hidden;/)

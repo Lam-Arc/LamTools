@@ -1214,11 +1214,14 @@ function statusLabel(status: string): string {
 .conversation-more {
   width: calc(100% - var(--sidebar-indent));
   margin-left: var(--sidebar-indent);
-  padding: 6px 8px;
-  border-radius: var(--radius-sm);
+  height: var(--sidebar-row-height);
+  padding: 0 var(--space-2);
+  border-radius: var(--sidebar-row-radius);
   background: transparent;
-  color: color-mix(in srgb, var(--theme-backdrop-text) 64%, transparent);
-  font-size: 12px;
+  color: var(--sidebar-text-muted);
+  font-size: var(--sidebar-font);
+  font-weight: 400;
+  line-height: var(--sidebar-line-height-item);
   text-align: center;
 }
 .conversation-more:hover {
@@ -1229,13 +1232,14 @@ function statusLabel(status: string): string {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: var(--space-1);
+  gap: 0;
   margin-left: var(--sidebar-indent);
   padding: var(--space-1) var(--space-2);
-  color: color-mix(in srgb, var(--theme-backdrop-text) 58%, transparent);
-  font-size: 12px;
+  color: var(--sidebar-text-muted);
+  font-size: var(--sidebar-font-section);
 }
 .sidebar-project-empty-action {
+  height: var(--sidebar-row-height);
   min-height: var(--sidebar-row-height);
   padding: 0 var(--space-2);
   border: 0;
@@ -1243,7 +1247,8 @@ function statusLabel(status: string): string {
   background: transparent;
   color: var(--theme-backdrop-text);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--sidebar-font);
+  font-weight: 400;
   cursor: pointer;
 }
 .sidebar-project-empty-action:hover,

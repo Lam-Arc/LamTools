@@ -349,16 +349,17 @@ defineExpose({ close, togglePinned })
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 13px;
-  font-weight: 650;
-  color: var(--theme-backdrop-text);
-  opacity: 0.8;
+  font-size: var(--sidebar-font-title);
+  font-weight: 600;
+  line-height: 24px;
+  color: var(--sidebar-text-primary);
   letter-spacing: -0.02em;
 }
 
 .sidebar-title {
-  font-size: 14px;
+  font-size: var(--sidebar-font-title);
   font-weight: 600;
+  line-height: 24px;
 }
 
 .sidebar-header-actions {
@@ -373,7 +374,7 @@ defineExpose({ close, togglePinned })
   height: 28px;
   border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--theme-backdrop-text);
+  color: var(--sidebar-text-muted);
   opacity: 0.55;
   display: grid;
   place-items: center;
@@ -390,6 +391,12 @@ defineExpose({ close, togglePinned })
   background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-hover), transparent);
 }
 
+.sidebar-pin-button svg,
+.icon-btn svg {
+  width: var(--sidebar-icon-size);
+  height: var(--sidebar-icon-size);
+}
+
 .sidebar-pin-button:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--blue) 75%, transparent);
   outline-offset: 1px;
@@ -397,15 +404,15 @@ defineExpose({ close, togglePinned })
 
 .icon-btn {
   flex: 0 0 auto;
-  width: 28px;
-  height: 28px;
-  border-radius: var(--radius-sm);
+  width: var(--sidebar-row-height);
+  height: var(--sidebar-row-height);
+  border-radius: var(--sidebar-row-radius);
   background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-hover), transparent);
   color: color-mix(in srgb, var(--theme-backdrop-text) 56%, transparent);
   display: grid;
   place-items: center;
-  font-size: 18px;
-  font-weight: 700;
+  font-size: var(--sidebar-icon-size);
+  font-weight: 400;
 }
 
 .icon-btn:hover {
