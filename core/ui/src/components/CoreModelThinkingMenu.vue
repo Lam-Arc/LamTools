@@ -432,16 +432,16 @@ function persistCollapsedProviderGroups(groups: Record<string, boolean>): void {
   top: 0;
   z-index: 1;
   justify-content: space-between;
-  background: var(--theme-composer-background);
-  color: color-mix(in srgb, var(--text) 58%, transparent);
-  font-size: 11px;
+  color: color-mix(in srgb, var(--text) 78%, transparent);
+  font-size: 12px;
   font-weight: 800;
   letter-spacing: .03em;
 }
 
+.core-model-thinking-menu__provider::before,
+.core-model-thinking-menu__provider:hover::before,
 .core-model-thinking-menu__provider[aria-expanded='true']::before {
-  opacity: 1;
-  background: color-mix(in srgb, var(--text) var(--alpha-active), transparent);
+  opacity: 0;
 }
 
 .core-model-thinking-menu__provider-options {
