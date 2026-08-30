@@ -455,7 +455,7 @@ function persistCollapsedProviderGroups(groups: Record<string, boolean>): void {
   margin-top: var(--space-1);
 }
 
-.core-model-thinking-menu__provider {
+.core-model-thinking-menu__option.core-model-thinking-menu__provider {
   position: sticky;
   top: 0;
   z-index: 1;
