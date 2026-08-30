@@ -82,23 +82,25 @@
                 aria-hidden="true"
               />
             </button>
-            <div v-if="!isProviderCollapsed(group.label)" class="core-model-thinking-menu__provider-options">
-              <button
-                v-for="option in group.options"
-                :key="option.value"
-                class="core-model-thinking-menu__option"
-                :class="{ active: option.value === modelValue, disabled: option.disabled }"
-                type="button"
-                role="menuitemradio"
-                :aria-checked="option.value === modelValue"
-                :disabled="option.disabled"
-                :data-model-thinking-model-option="option.value"
-                @click="selectModel(option)"
-              >
-                <span>{{ option.label }}</span>
-                <span v-if="option.value === modelValue" class="core-model-thinking-menu__check" aria-hidden="true">✓</span>
-              </button>
-            </div>
+            <Transition :css="false" @enter="providerOptionsEnter" @leave="providerOptionsLeave">
+              <div v-if="!isProviderCollapsed(group.label)" class="core-model-thinking-menu__provider-options">
+                <button
+                  v-for="option in group.options"
+                  :key="option.value"
+                  class="core-model-thinking-menu__option"
+                  :class="{ active: option.value === modelValue, disabled: option.disabled }"
+                  type="button"
+                  role="menuitemradio"
+                  :aria-checked="option.value === modelValue"
+                  :disabled="option.disabled"
+                  :data-model-thinking-model-option="option.value"
+                  @click="selectModel(option)"
+                >
+                  <span>{{ option.label }}</span>
+                  <span v-if="option.value === modelValue" class="core-model-thinking-menu__check" aria-hidden="true">✓</span>
+                </button>
+              </div>
+            </Transition>
           </section>
         </div>
         <div v-if="modelOptions.length === 0" class="core-model-thinking-menu__empty">暂无可用模型</div>
@@ -184,7 +186,7 @@ const submenuSide = ref<'left' | 'right'>('right')
 const root = ref<HTMLElement | null>(null)
 const parameterCard = ref<HTMLElement | null>(null)
 const submenuCard = ref<HTMLElement | null>(null)
-const { animatePrimaryCard, animateSubmenuCard, cancel } = useComposerMenuMotion(root)
+const { animatePrimaryCard, animateProviderOptions, animateSubmenuCard, cancel } = useComposerMenuMotion(root)
 const COLLAPSED_PROVIDER_GROUPS_STORAGE_KEY = 'lamtools.core.modelMenu.collapsedProviders'
 const collapsedProviderGroups = ref<Record<string, boolean>>(readCollapsedProviderGroups())
 
@@ -246,6 +248,14 @@ function toggleProviderGroup(label: string): void {
   collapsedProviderGroups.value = next
   persistCollapsedProviderGroups(next)
   void nextTick(updateSubmenuSide)
+}
+
+function providerOptionsEnter(element: Element, done: () => void): void {
+  animateProviderOptions(element, true, done)
+}
+
+function providerOptionsLeave(element: Element, done: () => void): void {
+  animateProviderOptions(element, false, done)
 }
 
 function updateSubmenuSide(): void {

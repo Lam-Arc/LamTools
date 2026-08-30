@@ -8,6 +8,7 @@ export function useComposerMenuMotion(root: Ref<HTMLElement | null>) {
   let media: gsap.MatchMedia | null = null
   let primaryTimeline: gsap.core.Timeline | null = null
   let submenuTimeline: gsap.core.Timeline | null = null
+  let providerTween: gsap.core.Tween | null = null
   let motionEnabled = false
 
   onMounted(() => {
@@ -75,12 +76,63 @@ export function useComposerMenuMotion(root: Ref<HTMLElement | null>) {
     })
   }
 
+  function animateProviderOptions(element: Element, expanding: boolean, done: () => void): void {
+    const target = element as HTMLElement
+    if (!context || !motionEnabled) {
+      done()
+      return
+    }
+
+    providerTween?.kill()
+    const height = expanding ? target.scrollHeight : target.offsetHeight
+    let completed = false
+    const finish = () => {
+      if (completed) return
+      completed = true
+      providerTween = null
+      gsap.set(target, { clearProps: 'height,opacity,visibility,transform,overflow' })
+      done()
+    }
+
+    context.add(() => {
+      providerTween = gsap.fromTo(
+        target,
+        expanding
+          ? { height: 0, autoAlpha: 0, y: -4, overflow: 'hidden' }
+          : { height, autoAlpha: 1, y: 0, overflow: 'hidden' },
+        expanding
+          ? {
+              height,
+              autoAlpha: 1,
+              y: 0,
+              duration: 0.24,
+              ease: 'back.out(1.1)',
+              overwrite: 'auto',
+              onComplete: finish,
+              onInterrupt: finish,
+            }
+          : {
+              height: 0,
+              autoAlpha: 0,
+              y: -4,
+              duration: 0.16,
+              ease: 'power2.in',
+              overwrite: 'auto',
+              onComplete: finish,
+              onInterrupt: finish,
+            },
+      )
+    })
+  }
+
   function cancel(): void {
     primaryTimeline?.kill()
     submenuTimeline?.kill()
+    providerTween?.kill()
     primaryTimeline = null
     submenuTimeline = null
+    providerTween = null
   }
 
-  return { animatePrimaryCard, animateSubmenuCard, cancel }
+  return { animatePrimaryCard, animateProviderOptions, animateSubmenuCard, cancel }
 }
