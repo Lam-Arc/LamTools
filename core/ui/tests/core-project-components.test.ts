@@ -28,6 +28,16 @@ describe('CoreProjectCreate', () => {
     expect(wrapper.emitted('submit')).toEqual([[{ name: '', work_root: 'E:\\path-only' }]])
   })
 
+  it('reuses the directory workflow with clear copy when opening a project', () => {
+    const wrapper = mount(CoreProjectCreate, {
+      props: { mode: 'open' },
+      global: { stubs: { Teleport: true } },
+    })
+
+    expect(wrapper.get('#core-project-dialog-title').text()).toBe('打开项目')
+    expect(wrapper.get('[data-project-submit]').text()).toBe('打开项目')
+  })
+
   it('keeps invalid and loading submissions disabled while exposing errors', async () => {
     const wrapper = mount(CoreProjectCreate, {
       props: { loading: true, error: '目录不可用' },
@@ -149,7 +159,7 @@ describe('Core project narrow layout contract', () => {
     const demoSource = readFileSync(resolve(process.cwd(), 'src/demo/App.vue'), 'utf8')
 
     expect(demoSource).toMatch(/<template #primary>[\s\S]*data-sidebar-primary-action[\s\S]*@click="invokeSidebarPrimaryAction"/)
-    expect(demoSource).toMatch(/<template #empty>[\s\S]*data-sidebar-empty-projects[\s\S]*还没有项目[\s\S]*data-sidebar-empty-create-project[\s\S]*@click="openProjectCreate"/)
+    expect(demoSource).toMatch(/<template #empty>[\s\S]*data-sidebar-empty-projects[\s\S]*还没有项目[\s\S]*data-sidebar-empty-create-project[\s\S]*@click="openProjectCreate\(\)"/)
     expect(demoSource).toContain(':show-sidebar-header="false"')
     expect(demoSource).toContain(':show-sidebar-header-action="false"')
     expect(demoSource).not.toContain('core-project-header-action')

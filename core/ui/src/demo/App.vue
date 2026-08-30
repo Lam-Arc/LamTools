@@ -97,6 +97,7 @@
     :composer-placeholder="composerPlaceholder"
     :composer-action-mode="composerActionMode"
     :composer-active="latestStatus === 'running'"
+    :hide-composer="shouldHideComposer"
     v-model:stage-open="stageOpen"
     @new-session="handleShellNewSession"
     @update:left-pinned="syncLeftPinned"
@@ -124,6 +125,7 @@
           :loading="projectCreateLoading"
           :error="projectCreateError"
           :api-base="apiBase"
+          :mode="projectDialogMode"
           @submit="createProject"
           @cancel="closeProjectCreate"
         />
@@ -164,7 +166,7 @@
               data-sidebar-empty-create-project
               title="新建项目"
               aria-label="新建项目"
-              @click="openProjectCreate"
+              @click="openProjectCreate()"
             >
               <span aria-hidden="true">＋</span><span>新建项目</span>
             </button>
@@ -205,6 +207,15 @@
         v-if="activePluginMode"
         :plugin-id="activePluginMode.pluginId"
         :mode-id="activePluginMode.id"
+      />
+      <CoreStartPage
+        v-else-if="showCoreStartPage"
+        :has-project="projects.length > 0"
+        :recent-projects="recentCoreProjects"
+        @new-project="openProjectCreate()"
+        @open-project="openProjectCreate('open')"
+        @new-session="createStartPageSession"
+        @open-recent-project="openRecentProject"
       />
       <section
         v-else
@@ -448,6 +459,7 @@ import type {
   CoreAttachment,
   CoreSessionListItem,
 } from '../types'
+import { isInternalSession, isPluginOwnedSession } from '../sessions/visibility'
 import {
   buildCoreProjectGroups,
   type CoreProject,
@@ -498,6 +510,7 @@ import CoreGoalStrip from '../components/CoreGoalStrip.vue'
 import FileTreePanel from '../components/FileTreePanel.vue'
 import type { StageResource, StageKind } from '../types'
 import CoreProjectCreate from '../components/CoreProjectCreate.vue'
+import CoreStartPage, { type CoreRecentProject } from '../components/CoreStartPage.vue'
 import CoreSessionTitleEditor from '../components/CoreSessionTitleEditor.vue'
 import ArtifactPanel from '../components/ArtifactPanel.vue'
 import OnboardingWizard from '../components/OnboardingWizard.vue'
@@ -591,11 +604,56 @@ function setLoadError(text: string) {
 const showProjectCreate = ref(false)
 const projectCreateLoading = ref(false)
 const projectCreateError = ref('')
+const projectDialogMode = ref<'create' | 'open'>('create')
 const selectedProjectId = ref<string | null>(null)
 const projectNameDraft = ref('')
 const projectActionLoading = ref(false)
 const projectActionError = ref('')
 const showProjectSettings = ref(false)
+
+const RECENT_PROJECTS_STORAGE_KEY = 'lamtools-core.recent-projects'
+const recentProjectOpenings = ref<CoreRecentProject[]>(readRecentProjectOpenings())
+
+function readRecentProjectOpenings(): CoreRecentProject[] {
+  try {
+    const raw = window.localStorage.getItem(RECENT_PROJECTS_STORAGE_KEY)
+    const parsed = raw ? JSON.parse(raw) : []
+    if (!Array.isArray(parsed)) return []
+    return parsed.flatMap((entry): CoreRecentProject[] => (
+      entry
+      && typeof entry.id === 'string'
+      && typeof entry.openedAt === 'string'
+        ? [{
+            id: entry.id,
+            name: typeof entry.name === 'string' ? entry.name : '未命名项目',
+            workRoot: typeof entry.workRoot === 'string' ? entry.workRoot : '',
+            openedAt: entry.openedAt,
+          }]
+        : []
+    )).slice(0, 6)
+  } catch {
+    return []
+  }
+}
+
+function rememberRecentProject(project: CoreProject): void {
+  const nextEntry: CoreRecentProject = {
+    id: project.id,
+    name: project.name,
+    workRoot: project.workRoot,
+    openedAt: new Date().toISOString(),
+  }
+  recentProjectOpenings.value = [
+    nextEntry,
+    ...recentProjectOpenings.value.filter((entry) => entry.id !== project.id),
+  ].slice(0, 6)
+  try {
+    window.localStorage.setItem(RECENT_PROJECTS_STORAGE_KEY, JSON.stringify(recentProjectOpenings.value))
+  } catch {
+    // Recent projects are a convenience only; a restricted storage context
+    // must never stop the workspace from opening a project.
+  }
+}
 const agentsProjectId = ref<string | null>(null)
 const agentsContent = ref('')
 const agentsLoading = ref(false)
@@ -670,11 +728,6 @@ const nextAppModeTitle = computed(() => {
 
 function modeKey(mode: PluginMode): string {
   return mode.pluginId + ':' + mode.id
-}
-
-function isPluginOwnedSession(session: CoreSessionListItem | undefined): boolean {
-  return typeof session?.metadata?.owner_plugin === 'string'
-    && Boolean(session.metadata.owner_plugin)
 }
 
 function isActivePluginSession(): boolean {
@@ -876,8 +929,17 @@ const activeTurnId = computed(() => snapshot.value ? selectLatestActiveTurnId(sn
 const activeTurnRunning = computed(() => isCoreActiveTurnStatus(latestStatus.value))
 const rollbackActiveTurn = computed(() => ['running', 'waiting'].includes(latestStatus.value))
 
-const coreSessions = computed(() => sessions.value.filter((session) => !isPluginOwnedSession(session)))
+const coreSessions = computed(() => sessions.value.filter((session) => !isInternalSession(session)))
 const coreProjectGroups = computed(() => buildCoreProjectGroups(projects.value, coreSessions.value))
+const showCoreStartPage = computed(() => !activePluginMode.value && !activeSessionId.value)
+const shouldHideComposer = computed(() => showCoreStartPage.value)
+const recentCoreProjects = computed<CoreRecentProject[]>(() => {
+  const projectsById = new Map(projects.value.map((project) => [project.id, project]))
+  return recentProjectOpenings.value.flatMap((entry): CoreRecentProject[] => {
+    const project = projectsById.get(entry.id)
+    return project ? [{ ...entry, name: project.name, workRoot: project.workRoot }] : []
+  })
+})
 const sidebarGroups = computed(() => {
   const sidebar = activePluginSurface.value?.sidebar
   return sidebar ? readPluginSurface(sidebar.groups, []) : coreProjectGroups.value
@@ -1200,7 +1262,11 @@ async function loadInitialData() {
     loadError.value = null
     await Promise.all([loadModelOptions(), loadPermissionMode(), refreshProjects(), refreshSessions()])
     await refreshPluginModes()
-    if (coreSessions.value[0]) await selectSession(coreSessions.value[0].id)
+    if (coreSessions.value[0]) {
+      await selectSession(coreSessions.value[0].id)
+    } else if (projects.value[0]) {
+      selectedProjectId.value = projects.value[0].id
+    }
   } catch (error) {
     setLoadError(error instanceof Error ? error.message : String(error))
   }
@@ -1218,7 +1284,8 @@ async function refreshSessions() {
   ))
 }
 
-function openProjectCreate() {
+function openProjectCreate(mode: 'create' | 'open' = 'create') {
+  projectDialogMode.value = mode
   projectCreateError.value = ''
   showProjectCreate.value = true
 }
@@ -1235,6 +1302,7 @@ async function createProject(payload: CoreProjectCreatePayload) {
   try {
     const created = await projectWorkspace.createProject(payload)
     selectedProjectId.value = created.project.id
+    rememberRecentProject(created.project)
     showProjectCreate.value = false
   } catch (error) {
     projectCreateError.value = messageFromError(error)
@@ -1260,6 +1328,30 @@ function openProjectActions(projectId: string) {
   showProjectSettings.value = true
   // Load AGENTS.md content for the in-place editor inside project settings.
   void loadAgentsForProject(project.id)
+}
+
+async function createStartPageSession(): Promise<void> {
+  const project = projects.value.find((item) => item.id === selectedProjectId.value)
+    || projects.value[0]
+  if (!project) return
+  selectedProjectId.value = project.id
+  rememberRecentProject(project)
+  await createProjectSession(project.id)
+}
+
+async function openRecentProject(projectId: string): Promise<void> {
+  const project = projects.value.find((item) => item.id === projectId)
+  if (!project) return
+  selectedProjectId.value = project.id
+  rememberRecentProject(project)
+  const session = coreSessions.value
+    .filter((item) => item.metadata?.work_root === project.workRoot)
+    .sort((left, right) => String(right.updatedAt || right.createdAt).localeCompare(String(left.updatedAt || left.createdAt)))[0]
+  if (session) {
+    await selectSession(session.id)
+  } else {
+    await createProjectSession(project.id)
+  }
 }
 
 async function loadAgentsForProject(projectId: string) {
@@ -1308,7 +1400,7 @@ async function deleteProject(projectId: string) {
       runtimeController.disconnect()
       liveComposerController.resetForThreadChange()
       activeSessionId.value = null
-      if (sessions.value[0]) await selectSession(sessions.value[0].id)
+      if (coreSessions.value[0]) await selectSession(coreSessions.value[0].id)
     }
   } catch (error) {
     projectActionError.value = messageFromError(error)
@@ -1440,11 +1532,22 @@ async function deleteSession(sessionId: string) {
     activeSessionId.value = null
   }
   await refreshSessions()
-  if (deletedActiveSession && sessions.value[0]) await selectSession(sessions.value[0].id)
+  if (deletedActiveSession && coreSessions.value[0]) await selectSession(coreSessions.value[0].id)
 }
 
 async function selectSession(id: string) {
+  const session = sessions.value.find((item) => item.id === id)
   activeSessionId.value = id
+  if (!isInternalSession(session)) {
+    const workRoot = session?.metadata?.work_root
+    const project = typeof workRoot === 'string'
+      ? projects.value.find((item) => item.workRoot === workRoot)
+      : undefined
+    if (project) {
+      selectedProjectId.value = project.id
+      rememberRecentProject(project)
+    }
+  }
   restoreSessionModel(id)
   restoreSessionPermissionPreset(id)
   runtimeController.disconnect()
