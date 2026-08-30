@@ -65,22 +65,39 @@
             role="group"
             :aria-label="group.label"
           >
-            <div class="core-model-thinking-menu__provider">{{ group.label }}</div>
             <button
-              v-for="option in group.options"
-              :key="option.value"
-              class="core-model-thinking-menu__option"
-              :class="{ active: option.value === modelValue, disabled: option.disabled }"
+              class="core-model-thinking-menu__option core-model-thinking-menu__provider"
               type="button"
-              role="menuitemradio"
-              :aria-checked="option.value === modelValue"
-              :disabled="option.disabled"
-              :data-model-thinking-model-option="option.value"
-              @click="selectModel(option)"
+              :aria-expanded="!isProviderCollapsed(group.label)"
+              :data-model-thinking-provider="group.label"
+              @click="toggleProviderGroup(group.label)"
             >
-              <span>{{ option.label }}</span>
-              <span v-if="option.value === modelValue" class="core-model-thinking-menu__check" aria-hidden="true">✓</span>
+              <span>{{ group.label }}</span>
+              <ChevronDown
+                class="core-model-thinking-menu__provider-chevron"
+                :class="{ 'core-model-thinking-menu__provider-chevron--collapsed': isProviderCollapsed(group.label) }"
+                :size="14"
+                :stroke-width="2"
+                aria-hidden="true"
+              />
             </button>
+            <div v-if="!isProviderCollapsed(group.label)" class="core-model-thinking-menu__provider-options">
+              <button
+                v-for="option in group.options"
+                :key="option.value"
+                class="core-model-thinking-menu__option"
+                :class="{ active: option.value === modelValue, disabled: option.disabled }"
+                type="button"
+                role="menuitemradio"
+                :aria-checked="option.value === modelValue"
+                :disabled="option.disabled"
+                :data-model-thinking-model-option="option.value"
+                @click="selectModel(option)"
+              >
+                <span>{{ option.label }}</span>
+                <span v-if="option.value === modelValue" class="core-model-thinking-menu__check" aria-hidden="true">✓</span>
+              </button>
+            </div>
           </section>
         </div>
         <div v-if="modelOptions.length === 0" class="core-model-thinking-menu__empty">暂无可用模型</div>
@@ -165,6 +182,8 @@ const submenuSide = ref<'left' | 'right'>('right')
 const root = ref<HTMLElement | null>(null)
 const parameterCard = ref<HTMLElement | null>(null)
 const submenuCard = ref<HTMLElement | null>(null)
+const COLLAPSED_PROVIDER_GROUPS_STORAGE_KEY = 'lamtools.core.modelMenu.collapsedProviders'
+const collapsedProviderGroups = ref<Record<string, boolean>>(readCollapsedProviderGroups())
 
 const modelLabel = computed(() => {
   const option = props.modelOptions.find((item) => item.value === props.modelValue)
@@ -197,6 +216,19 @@ function toggle(): void {
 
 function activateSection(section: 'model' | 'thinking'): void {
   activeSection.value = section
+  void nextTick(updateSubmenuSide)
+}
+
+function isProviderCollapsed(label: string): boolean {
+  return collapsedProviderGroups.value[label] === true
+}
+
+function toggleProviderGroup(label: string): void {
+  const next = { ...collapsedProviderGroups.value }
+  if (next[label]) delete next[label]
+  else next[label] = true
+  collapsedProviderGroups.value = next
+  persistCollapsedProviderGroups(next)
   void nextTick(updateSubmenuSide)
 }
 
@@ -257,6 +289,26 @@ onUnmounted(() => {
   document.removeEventListener('keydown', onKeydown)
   window.removeEventListener('resize', updateSubmenuSide)
 })
+
+function readCollapsedProviderGroups(): Record<string, boolean> {
+  if (typeof localStorage === 'undefined') return {}
+  try {
+    const stored = JSON.parse(localStorage.getItem(COLLAPSED_PROVIDER_GROUPS_STORAGE_KEY) || '[]')
+    if (!Array.isArray(stored)) return {}
+    return Object.fromEntries(stored.filter((label): label is string => typeof label === 'string').map((label) => [label, true]))
+  } catch {
+    return {}
+  }
+}
+
+function persistCollapsedProviderGroups(groups: Record<string, boolean>): void {
+  if (typeof localStorage === 'undefined') return
+  try {
+    localStorage.setItem(COLLAPSED_PROVIDER_GROUPS_STORAGE_KEY, JSON.stringify(Object.keys(groups)))
+  } catch {
+    // The current menu remains usable when browser storage is unavailable.
+  }
+}
 </script>
 
 <style scoped>
@@ -376,18 +428,33 @@ onUnmounted(() => {
 }
 
 .core-model-thinking-menu__provider {
-  min-height: 34px;
-  padding: var(--space-1) var(--space-2);
   position: sticky;
   top: 0;
   z-index: 1;
-  display: flex;
-  align-items: center;
+  justify-content: space-between;
   background: var(--theme-composer-background);
   color: color-mix(in srgb, var(--text) 58%, transparent);
   font-size: 11px;
   font-weight: 800;
   letter-spacing: .03em;
+}
+
+.core-model-thinking-menu__provider[aria-expanded='true']::before {
+  opacity: 1;
+  background: color-mix(in srgb, var(--text) var(--alpha-active), transparent);
+}
+
+.core-model-thinking-menu__provider-options {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.core-model-thinking-menu__provider-chevron {
+  flex: 0 0 auto;
+}
+
+.core-model-thinking-menu__provider-chevron--collapsed {
+  transform: rotate(-90deg);
 }
 
 .core-model-thinking-menu__heading {
