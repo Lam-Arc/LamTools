@@ -8,7 +8,7 @@
   "tools": ["./tools.jsonc"],
   "operations": ["./operations.jsonc"],
   "session": {
-    "legacyPrefixes": ["wf_"]
+    "legacyPrefixes": ["wf_", "workflow_thread_"]
   },
   "cli": {
     "commands": [

@@ -50,6 +50,15 @@ async def test_disabled_plugin_sessions_are_not_materialized_or_listed(
     )
     await sessions.create(
         SessionRecord(
+            id="workflow_thread_legacy",
+            member_id="core",
+            title="Legacy Workflow Run",
+            status="idle",
+            metadata={"work_root": project.work_root},
+        )
+    )
+    await sessions.create(
+        SessionRecord(
             id="workflow:demo",
             member_id="core",
             title="Workflow",
@@ -75,6 +84,7 @@ async def test_disabled_plugin_sessions_are_not_materialized_or_listed(
 
     assert await sessions.get("workflow:demo") is None
     assert await sessions.get("wf_legacy") is None
+    assert await sessions.get("workflow_thread_legacy") is None
     assert "workflow:demo" not in {session.id for session in await sessions.list()}
     assert await sessions.list_messages("workflow:demo") == []
     assert await sessions.patch("workflow:demo", title="must not write") is None
@@ -87,6 +97,7 @@ async def test_disabled_plugin_sessions_are_not_materialized_or_listed(
 
     assert (await sessions.get("workflow:demo")).title == "Workflow"
     assert (await sessions.get("wf_legacy")).title == "Legacy Workflow"
+    assert (await sessions.get("workflow_thread_legacy")).title == "Legacy Workflow Run"
     assert [message.id for message in await sessions.list_messages("workflow:demo")] == [
         "workflow-message"
     ]
