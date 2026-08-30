@@ -30,12 +30,17 @@ describe('CoreExecutionControls', () => {
 
     const modelThinkingTrigger = wrapper.get('[data-core-model-thinking-menu] .core-model-thinking-menu__trigger')
     await modelThinkingTrigger.trigger('click')
+    expect(wrapper.findAll('[data-model-thinking-section]')).toHaveLength(2)
+    expect(wrapper.find('[data-model-thinking-submenu]').exists()).toBe(false)
+    await wrapper.get('[data-model-thinking-section="model"]').trigger('mouseenter')
+    expect(wrapper.find('[data-model-thinking-submenu="model"]').exists()).toBe(true)
     const options = wrapper.findAll('[data-model-thinking-model-option]')
     await options[1].trigger('click')
 
     expect(wrapper.emitted('update:modelValue')).toEqual([['model-2']])
 
     await wrapper.get('[data-core-model-thinking-menu] .core-model-thinking-menu__trigger').trigger('click')
+    await wrapper.get('[data-model-thinking-section="thinking"]').trigger('mouseenter')
     const shallowOption = wrapper.get('[data-model-thinking-shallow-option]')
     expect(shallowOption).toBeTruthy()
     expect(shallowOption.classes()).toContain('core-model-thinking-menu__shallow')
@@ -46,6 +51,7 @@ describe('CoreExecutionControls', () => {
 
     await wrapper.setProps({ shallowThinkingEnabled: true })
     await wrapper.get('[data-core-model-thinking-menu] .core-model-thinking-menu__trigger').trigger('click')
+    await wrapper.get('[data-model-thinking-section="thinking"]').trigger('mouseenter')
     const enabledShallowOption = wrapper.get('[data-model-thinking-shallow-option]')
     expect(enabledShallowOption.classes()).toContain('active')
   })

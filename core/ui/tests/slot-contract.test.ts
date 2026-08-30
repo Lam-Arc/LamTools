@@ -266,10 +266,13 @@ describe('CoreExecutionControls', () => {
     });
 
     await wrapper.get('[data-core-model-thinking-menu] .core-model-thinking-menu__trigger').trigger('click');
+    await wrapper.get('[data-model-thinking-section="model"]').trigger('mouseenter');
     await wrapper.findAll('[data-model-thinking-model-option]')[1].trigger('click');
     await wrapper.get('[data-core-model-thinking-menu] .core-model-thinking-menu__trigger').trigger('click');
+    await wrapper.get('[data-model-thinking-section="thinking"]').trigger('mouseenter');
     await wrapper.findAll('[data-model-thinking-level-option]')[1].trigger('click');
     await wrapper.get('[data-core-model-thinking-menu] .core-model-thinking-menu__trigger').trigger('click');
+    await wrapper.get('[data-model-thinking-section="thinking"]').trigger('mouseenter');
     await wrapper.get('[data-model-thinking-shallow-option]').trigger('click');
 
     expect(wrapper.emitted('update:modelValue')?.[0]).toEqual(['model-1']);

@@ -15,8 +15,47 @@
     </button>
 
     <div v-if="open" class="core-model-thinking-menu__panel" role="menu">
-      <section class="core-model-thinking-menu__card" aria-labelledby="model-thinking-model-heading">
-        <div id="model-thinking-model-heading" class="core-model-thinking-menu__heading">模型</div>
+      <section class="core-model-thinking-menu__card core-model-thinking-menu__card--parameters" aria-label="模型与思考参数">
+        <button
+          class="core-model-thinking-menu__option core-model-thinking-menu__parameter"
+          type="button"
+          role="menuitem"
+          aria-haspopup="menu"
+          :aria-expanded="activeSection === 'model'"
+          data-model-thinking-section="model"
+          @mouseenter="activateSection('model')"
+          @focus="activateSection('model')"
+          @click="activateSection('model')"
+        >
+          <span class="core-model-thinking-menu__parameter-label">模型</span>
+          <span class="core-model-thinking-menu__parameter-value">{{ modelLabel }}</span>
+          <ChevronRight class="core-model-thinking-menu__parameter-chevron" :size="15" :stroke-width="2" aria-hidden="true" />
+        </button>
+        <button
+          class="core-model-thinking-menu__option core-model-thinking-menu__parameter"
+          type="button"
+          role="menuitem"
+          aria-haspopup="menu"
+          :aria-expanded="activeSection === 'thinking'"
+          data-model-thinking-section="thinking"
+          @mouseenter="activateSection('thinking')"
+          @focus="activateSection('thinking')"
+          @click="activateSection('thinking')"
+        >
+          <span class="core-model-thinking-menu__parameter-label">思考等级</span>
+          <span class="core-model-thinking-menu__parameter-value">{{ thinkingLabel }}</span>
+          <ChevronRight class="core-model-thinking-menu__parameter-chevron" :size="15" :stroke-width="2" aria-hidden="true" />
+        </button>
+      </section>
+
+      <section
+        v-if="activeSection === 'model'"
+        class="core-model-thinking-menu__card core-model-thinking-menu__card--submenu"
+        role="menu"
+        aria-label="模型选项"
+        data-model-thinking-submenu="model"
+      >
+        <div class="core-model-thinking-menu__heading">模型</div>
         <button
           v-for="option in modelOptions"
           :key="option.value"
@@ -35,8 +74,14 @@
         <div v-if="modelOptions.length === 0" class="core-model-thinking-menu__empty">暂无可用模型</div>
       </section>
 
-      <section class="core-model-thinking-menu__card" aria-labelledby="model-thinking-strength-heading">
-        <div id="model-thinking-strength-heading" class="core-model-thinking-menu__heading">推理强度</div>
+      <section
+        v-else-if="activeSection === 'thinking'"
+        class="core-model-thinking-menu__card core-model-thinking-menu__card--submenu"
+        role="menu"
+        aria-label="思考等级选项"
+        data-model-thinking-submenu="thinking"
+      >
+        <div class="core-model-thinking-menu__heading">思考等级</div>
         <button
           v-for="option in thinkingModeOptions"
           :key="option.value"
@@ -70,7 +115,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { ChevronDown } from 'lucide-vue-next'
+import { ChevronDown, ChevronRight } from 'lucide-vue-next'
 import { coreModelDisplayLabel, normalizeCoreThinkingMode, type CoreSelectOption, type CoreThinkingMode, type CoreThinkingModeOption } from '../composer/execution'
 
 const props = withDefaults(defineProps<{
@@ -101,6 +146,7 @@ const emit = defineEmits<{
 }>()
 
 const open = ref(false)
+const activeSection = ref<'model' | 'thinking' | null>(null)
 const root = ref<HTMLElement | null>(null)
 
 const modelLabel = computed(() => {
@@ -116,33 +162,44 @@ const thinkingLabel = computed(() => {
 const ariaLabel = computed(() => `模型与思考强度：${modelLabel.value} ${thinkingLabel.value}`)
 
 function toggle(): void {
-  if (!props.disabled) open.value = !open.value
+  if (props.disabled) return
+  open.value = !open.value
+  activeSection.value = null
+}
+
+function activateSection(section: 'model' | 'thinking'): void {
+  activeSection.value = section
+}
+
+function close(): void {
+  open.value = false
+  activeSection.value = null
 }
 
 function selectModel(option: CoreSelectOption): void {
   if (option.disabled) return
   emit('update:modelValue', option.value)
-  open.value = false
+  close()
 }
 
 function selectThinking(value: string): void {
   emit('update:thinkingMode', value)
-  open.value = false
+  close()
 }
 
 function toggleShallow(): void {
   emit('update:shallowThinkingEnabled', !props.shallowThinkingEnabled)
-  open.value = false
+  close()
 }
 
 function onPointerDown(event: PointerEvent): void {
   const target = event.target as Node | null
   if (!target || !root.value || root.value.contains(target)) return
-  open.value = false
+  close()
 }
 
 function onKeydown(event: KeyboardEvent): void {
-  if (event.key === 'Escape' && open.value) open.value = false
+  if (event.key === 'Escape' && open.value) close()
 }
 
 onMounted(() => {
@@ -214,28 +271,38 @@ onUnmounted(() => {
 
 .core-model-thinking-menu__panel {
   position: absolute;
-  right: 0;
+  right: calc(100% + var(--space-2));
   bottom: calc(100% + 8px);
   z-index: var(--z-popover, 60);
-  width: min(310px, calc(100vw - 24px));
-  padding: var(--space-2);
-  display: grid;
-  gap: var(--space-2);
-  border: 1px solid color-mix(in srgb, var(--text) var(--alpha-active), transparent);
-  border-radius: var(--radius);
-  background: var(--theme-composer-background);
+  width: max-content;
+  max-width: calc(100vw - 24px);
   color: var(--text);
-  box-shadow: var(--shadow-md);
   animation: core-model-thinking-menu-in var(--dur-base) var(--ease-out);
   transform-origin: bottom right;
 }
 
 .core-model-thinking-menu__card {
   min-width: 0;
-  padding: var(--space-1);
-  border: 1px solid color-mix(in srgb, var(--text) var(--alpha-hover), transparent);
-  border-radius: var(--radius-sm);
-  background: var(--theme-composer-soft-background);
+  width: max-content;
+  max-width: 240px;
+  padding: var(--space-2);
+  border: 1px solid color-mix(in srgb, var(--text) var(--alpha-active), transparent);
+  border-radius: var(--radius);
+  background: var(--theme-composer-background);
+  box-shadow: var(--shadow-md);
+}
+
+.core-model-thinking-menu__card--submenu {
+  position: absolute;
+  left: calc(100% + var(--space-2));
+  bottom: 0;
+  animation: core-model-thinking-submenu-in var(--dur-base) var(--ease-out);
+}
+
+.core-model-thinking-menu__card--submenu .core-model-thinking-menu__option > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .core-model-thinking-menu__heading {
@@ -297,6 +364,40 @@ onUnmounted(() => {
   z-index: 1;
 }
 
+.core-model-thinking-menu__parameter {
+  grid-template-columns: auto minmax(0, max-content) auto;
+  width: max-content;
+  max-width: 224px;
+  min-height: 40px;
+  display: grid;
+  align-items: center;
+}
+
+.core-model-thinking-menu__parameter[aria-expanded='true']::before {
+  opacity: 1;
+  background: color-mix(in srgb, var(--text) var(--alpha-active), transparent);
+}
+
+.core-model-thinking-menu__parameter-label {
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.core-model-thinking-menu__parameter-value {
+  overflow: hidden;
+  color: color-mix(in srgb, var(--text) 58%, transparent);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.core-model-thinking-menu__parameter-chevron {
+  flex: 0 0 auto;
+  color: color-mix(in srgb, var(--text) 58%, transparent);
+}
+
 .core-model-thinking-menu__option.active {
   color: var(--green);
 }
@@ -335,12 +436,17 @@ onUnmounted(() => {
   to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
+@keyframes core-model-thinking-submenu-in {
+  from { opacity: 0; transform: translateX(calc(var(--space-1) * -1)); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
 @media (max-width: 560px) {
   .core-model-thinking-menu__trigger { max-width: 42vw; }
-  .core-model-thinking-menu__panel { right: -4px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .core-model-thinking-menu__panel { animation: none; }
+  .core-model-thinking-menu__panel,
+  .core-model-thinking-menu__card--submenu { animation: none; }
 }
 </style>
