@@ -57,22 +57,32 @@
         aria-label="模型选项"
         data-model-thinking-submenu="model"
       >
-        <div class="core-model-thinking-menu__heading">模型</div>
-        <button
-          v-for="option in modelOptions"
-          :key="option.value"
-          class="core-model-thinking-menu__option"
-          :class="{ active: option.value === modelValue, disabled: option.disabled }"
-          type="button"
-          role="menuitemradio"
-          :aria-checked="option.value === modelValue"
-          :disabled="option.disabled"
-          :data-model-thinking-model-option="option.value"
-          @click="selectModel(option)"
-        >
-          <span>{{ option.label }}</span>
-          <span v-if="option.value === modelValue" class="core-model-thinking-menu__check" aria-hidden="true">✓</span>
-        </button>
+        <div class="core-model-thinking-menu__model-list" aria-label="按供应商分组的模型">
+          <section
+            v-for="group in modelOptionGroups"
+            :key="group.label"
+            class="core-model-thinking-menu__model-group"
+            role="group"
+            :aria-label="group.label"
+          >
+            <div class="core-model-thinking-menu__provider">{{ group.label }}</div>
+            <button
+              v-for="option in group.options"
+              :key="option.value"
+              class="core-model-thinking-menu__option"
+              :class="{ active: option.value === modelValue, disabled: option.disabled }"
+              type="button"
+              role="menuitemradio"
+              :aria-checked="option.value === modelValue"
+              :disabled="option.disabled"
+              :data-model-thinking-model-option="option.value"
+              @click="selectModel(option)"
+            >
+              <span>{{ option.label }}</span>
+              <span v-if="option.value === modelValue" class="core-model-thinking-menu__check" aria-hidden="true">✓</span>
+            </button>
+          </section>
+        </div>
         <div v-if="modelOptions.length === 0" class="core-model-thinking-menu__empty">暂无可用模型</div>
       </section>
 
@@ -159,6 +169,17 @@ const submenuCard = ref<HTMLElement | null>(null)
 const modelLabel = computed(() => {
   const option = props.modelOptions.find((item) => item.value === props.modelValue)
   return option?.selectedLabel || option?.label || props.modelAriaLabel
+})
+
+const modelOptionGroups = computed(() => {
+  const groups = new Map<string, CoreSelectOption[]>()
+  for (const option of props.modelOptions) {
+    const label = option.group?.trim() || '默认模型'
+    const options = groups.get(label) || []
+    options.push(option)
+    groups.set(label, options)
+  }
+  return [...groups].map(([label, options]) => ({ label, options }))
 })
 
 const thinkingLabel = computed(() => {
@@ -337,6 +358,36 @@ onUnmounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.core-model-thinking-menu__model-list {
+  max-height: calc(34px * 5);
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+.core-model-thinking-menu__model-group {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.core-model-thinking-menu__model-group + .core-model-thinking-menu__model-group {
+  margin-top: var(--space-1);
+}
+
+.core-model-thinking-menu__provider {
+  min-height: 34px;
+  padding: var(--space-1) var(--space-2);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  background: var(--theme-composer-background);
+  color: color-mix(in srgb, var(--text) 58%, transparent);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .03em;
 }
 
 .core-model-thinking-menu__heading {
