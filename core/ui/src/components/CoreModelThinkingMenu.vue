@@ -462,7 +462,7 @@ function persistCollapsedProviderGroups(groups: Record<string, boolean>): void {
   justify-content: space-between;
   color: color-mix(in srgb, var(--text) 78%, transparent);
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 900;
   letter-spacing: .03em;
 }
 
