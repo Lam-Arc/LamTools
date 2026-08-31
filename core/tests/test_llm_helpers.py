@@ -672,7 +672,8 @@ class TestNormalizeStreamChunk:
         }
         event = normalize_stream_chunk(chunk)
         assert event is not None
-        assert event.kind == "done"
+        assert event.kind == "finish"
+        assert event.finish_reason == "stop"
         assert event.metadata["finish_reason"] == "stop"
 
     def test_error_event(self):
@@ -729,11 +730,11 @@ class TestNormalizeStreamChunk:
         assert event.kind == "content_delta"
         assert event.content == "x"
 
-    def test_final_chunk_with_usage_and_finish_reason_is_done(self):
+    def test_final_chunk_with_usage_and_finish_reason_is_finish(self):
         """DeepSeek / Moonshot / opencode zen gateways fold usage into the
         FINAL chunk together with finish_reason. That chunk must produce a
-        done event carrying the usage — a standalone usage event here would
-        swallow the done event and the kernel would drop the token metrics."""
+        finish event carrying the usage; the transport may still send a
+        usage-only chunk and [DONE] afterwards."""
         chunk = {
             "choices": [
                 {"index": 0, "delta": {"content": ""}, "finish_reason": "stop"}
@@ -748,10 +749,31 @@ class TestNormalizeStreamChunk:
         }
         event = normalize_stream_chunk(chunk)
         assert event is not None
-        assert event.kind == "done"
+        assert event.kind == "finish"
+        assert event.finish_reason == "stop"
         assert event.usage is not None
         assert event.usage.cached_tokens == 800
         assert event.usage.prompt_tokens == 1000
+
+    def test_terminal_content_chunk_preserves_inline_usage(self):
+        chunk = {
+            "choices": [
+                {"index": 0, "delta": {"content": "OK"}, "finish_reason": "stop"}
+            ],
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 20,
+                "total_tokens": 120,
+            },
+        }
+
+        event = normalize_stream_chunk(chunk)
+
+        assert event is not None
+        assert event.kind == "content_delta"
+        assert event.finish_reason == "stop"
+        assert event.usage is not None
+        assert event.usage.total_tokens == 120
 
 
 # ---------------------------------------------------------------------------

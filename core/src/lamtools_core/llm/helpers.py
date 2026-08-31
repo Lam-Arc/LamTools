@@ -496,6 +496,8 @@ def normalize_stream_chunk(chunk: dict[str, Any]) -> LLMStreamEvent | None:
             kind="tool_call_delta",
             content="",  # tool call deltas carry structured data in raw
             raw=chunk,
+            finish_reason=finish_reason,
+            usage=_parse_usage(usage_raw) if usage_raw else None,
             metadata={"tool_calls_delta": tool_calls_delta, **({"finish_reason": finish_reason} if finish_reason is not None else {})},
         )
 
@@ -507,6 +509,8 @@ def normalize_stream_chunk(chunk: dict[str, Any]) -> LLMStreamEvent | None:
             kind="thinking_delta",
             content=thinking_str,
             raw=chunk,
+            finish_reason=finish_reason,
+            usage=_parse_usage(usage_raw) if usage_raw else None,
             metadata={"finish_reason": finish_reason} if finish_reason is not None else {},
         )
 
@@ -528,18 +532,24 @@ def normalize_stream_chunk(chunk: dict[str, Any]) -> LLMStreamEvent | None:
             kind="content_delta",
             content=content_str,
             raw=chunk,
+            finish_reason=finish_reason,
+            usage=_parse_usage(usage_raw) if usage_raw else None,
             metadata={"finish_reason": finish_reason} if finish_reason is not None else {},
         )
 
-    # Done: finish_reason is set — also carry tool_calls and usage if present
+    # A provider finish reason only means generation has stopped.  OpenAI
+    # compatible streams commonly send the usage-only chunk after this one,
+    # followed by [DONE].  Keep finish separate from transport completion so
+    # the kernel can continue consuming the stream.
     if finish_reason is not None:
         tool_calls_raw = choice.get("tool_calls") if isinstance(choice, dict) else None
         usage_raw = chunk.get("usage") if isinstance(chunk, dict) else None
         return LLMStreamEvent(
-            kind="done",
+            kind="finish",
             raw=chunk,
             tool_calls=_resolve_raw_tool_calls(tool_calls_raw) if tool_calls_raw else None,
             usage=_parse_usage(usage_raw) if usage_raw else None,
+            finish_reason=str(finish_reason),
             metadata={"finish_reason": finish_reason},
         )
 

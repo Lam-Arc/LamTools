@@ -20,6 +20,7 @@
     </div>
     <template v-if="summary">
       <div class="core-resource-main">
+        <div class="core-resource-section-label">上下文</div>
         <div class="core-resource-values">
           <strong>{{ summary.contextLabel }}</strong>
           <strong>{{ summary.percentLabel }}</strong>
@@ -32,6 +33,10 @@
           <span>可用至 {{ summary.thresholdPct }}%</span>
           <span>灰色区压缩</span>
         </div>
+      </div>
+      <div class="core-resource-section-label core-resource-usage-label">
+        <span>Provider Usage</span>
+        <span>{{ summary.usageStatusLabel }}</span>
       </div>
       <div class="core-resource-stats">
         <div v-for="item in summary.callItems" :key="item.label">
@@ -145,6 +150,8 @@ onBeforeUnmount(() => {
 .core-resource-widget { --core-resource-ease: cubic-bezier(0.22, 1, 0.36, 1); }
 .core-resource-state { color: var(--green); font-size: 12px; font-weight: 800; }
 .core-resource-main { display: grid; gap: 6px; }
+.core-resource-section-label { color: color-mix(in srgb, var(--theme-backdrop-text) 62%, transparent); font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.core-resource-usage-label { display: flex; justify-content: space-between; gap: 8px; margin-top: 10px; }
 .core-resource-values, .core-resource-legend { display: flex; justify-content: space-between; gap: 8px; }
 .core-resource-values strong { color: var(--theme-backdrop-text); font-family: var(--font-mono); font-size: 14px; }
 .core-resource-bar { position: relative; height: 6px; overflow: hidden; background: color-mix(in srgb, var(--theme-backdrop-text) 10%, transparent); }

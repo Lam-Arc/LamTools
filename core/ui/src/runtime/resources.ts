@@ -12,6 +12,7 @@ export interface CoreResourceSummary {
   currentRatio: number
   thresholdRatio: number
   hasContext: boolean
+  usageStatusLabel: string
   callItems: Array<{ label: string; value: string }>
 }
 
@@ -19,52 +20,38 @@ export function buildCoreResourceSummary(
   messages: Array<Pick<CoreMessage, 'metadata' | 'id'> & Partial<Pick<CoreMessage, 'parts'>>>,
   modelContextWindow?: number | null,
 ): CoreResourceSummary | null {
-  // A turn attaches its usage record to EVERY assistant segment (mid-turn
-  // user messages split a turn into several segments sharing the same
-  // processMetrics object). Summing per message would count one turn's
-  // tokens / calls multiple times — dedupe by turn id first.
-  const records: Array<Record<string, unknown>> = []
-  const countedTurns = new Set<string>()
-  for (const message of messages) {
-    const metrics = message.metadata?.processMetrics
-    if (!metrics || typeof metrics !== 'object') continue
-    const turnId = typeof message.id === 'string' ? assistantSegmentTurnId(message.id) : ''
-    if (turnId) {
-      if (countedTurns.has(turnId)) continue
-      countedTurns.add(turnId)
-    }
-    records.push(metrics as Record<string, unknown>)
-  }
+  // Context and provider usage are separate records. Both are attached to
+  // every assistant segment, so dedupe by turn id before aggregating. The
+  // processMetrics fallback keeps old snapshots readable.
+  const contextRecords = collectMetricRecords(messages, 'contextMetrics')
+  const providerRecords = collectMetricRecords(messages, 'usageMetrics')
   let current = -1
   let max = firstNumber(modelContextWindow)
   let threshold = -1
   let contextCompacted = false
+  for (const record of contextRecords) {
+    current = latestNumber(current,
+      record.estimated_prompt_tokens,
+      record.estimatedPromptTokens,
+      record.context_tokens,
+      record.contextTokens,
+    )
+    max = latestNumber(max, record.context_window_tokens, record.contextWindowTokens)
+    threshold = latestNumber(threshold,
+      record.context_compaction_trigger_tokens,
+      record.contextCompactionTriggerTokens,
+      record.trigger_tokens,
+      record.triggerTokens,
+    )
+    contextCompacted = record.context_compacted === true || record.contextCompacted === true
+  }
   for (const message of messages) {
-    const metrics = message.metadata?.processMetrics
-    if (metrics && typeof metrics === 'object') {
-      const record = metrics as Record<string, unknown>
-      current = latestNumber(current,
-        record.estimated_prompt_tokens,
-        record.estimatedPromptTokens,
-        record.context_tokens,
-        record.contextTokens,
-      )
-      max = latestNumber(max, record.context_window_tokens, record.contextWindowTokens)
-      threshold = latestNumber(threshold,
-        record.context_compaction_trigger_tokens,
-        record.contextCompactionTriggerTokens,
-        record.trigger_tokens,
-        record.triggerTokens,
-      )
-      contextCompacted = record.context_compacted === true || record.contextCompacted === true
-    }
     const compactedTokens = latestCompletedCompactionTokens(message.parts)
     if (compactedTokens >= 0) {
       current = compactedTokens
       contextCompacted = true
     }
   }
-  if (records.length === 0 && current < 0) return null
 
   const hasContext = current >= 0 && max > 0
   const currentRatio = hasContext ? clampRatio(current / max) : 0
@@ -82,7 +69,10 @@ export function buildCoreResourceSummary(
   let hasInput = false
   let hasOutput = false
   let hasCache = false
-  for (const metrics of records) {
+  let hasProviderRecord = false
+  let usageReported = false
+  for (const metrics of providerRecords) {
+    hasProviderRecord = true
     const callCount = firstNumber(metrics.llm_calls, metrics.llmCalls, metrics.model_calls, metrics.modelCalls)
     const input = firstNumber(metrics.input_tokens, metrics.inputTokens, metrics.prompt_tokens, metrics.promptTokens)
     const output = firstNumber(metrics.output_tokens, metrics.outputTokens, metrics.completion_tokens, metrics.completionTokens)
@@ -91,18 +81,24 @@ export function buildCoreResourceSummary(
     if (input >= 0) { inputTokens += input; hasInput = true }
     if (output >= 0) { outputTokens += output; hasOutput = true }
     if (cached >= 0) { cachedTokens += cached; hasCache = true }
+    usageReported = usageReported
+      || metrics.usage_available === true
+      || input >= 0
+      || output >= 0
+      || firstNumber(metrics.total_tokens, metrics.totalTokens) >= 0
   }
   // Aggregate rate over the whole window: Σ cached / Σ input. The
   // per-record backend rate only describes one turn — showing the last turn's
   // rate for a multi-turn thread would be misleading. Falls back to a
   // backend-computed rate when the cache token counts are unavailable.
-  const directRate = firstNumber(...records.map(r => firstNumber(r.cache_hit_rate, r.cacheHitRate)))
+  const directRate = firstNumber(...providerRecords.map(r => firstNumber(r.cache_hit_rate, r.cacheHitRate)))
   const cacheHitRate = hasCache && inputTokens > 0
     ? cachedTokens / inputTokens
     : directRate >= 0
       ? directRate
       : -1
-  if (!hasContext && !hasCalls && !hasInput && !hasOutput) return null
+  const hasProviderUsage = hasProviderRecord && (hasCalls || hasInput || hasOutput || hasCache || usageReported)
+  if (!hasContext && !hasProviderUsage) return null
 
   return {
     currentPct,
@@ -113,6 +109,7 @@ export function buildCoreResourceSummary(
     currentRatio,
     thresholdRatio,
     hasContext,
+    usageStatusLabel: hasProviderRecord && usageReported ? '已获取' : '未获取',
     callItems: [
       { label: '调用', value: hasCalls ? String(calls) : '--' },
       { label: '输入', value: hasInput ? formatCompactNumber(inputTokens) : '--' },
@@ -120,6 +117,43 @@ export function buildCoreResourceSummary(
       { label: '缓存', value: cacheHitRate >= 0 ? formatPercent(cacheHitRate) : '--' },
     ],
   }
+}
+
+function collectMetricRecords(
+  messages: Array<Pick<CoreMessage, 'metadata' | 'id'>>,
+  kind: 'contextMetrics' | 'usageMetrics',
+): Array<Record<string, unknown>> {
+  const records: Array<Record<string, unknown>> = []
+  const countedTurns = new Set<string>()
+  for (const message of messages) {
+    const metadata = message.metadata
+    const direct = metadata?.[kind]
+    const legacy = metadata?.processMetrics
+    const directRecord = direct && typeof direct === 'object' && !Array.isArray(direct)
+      ? direct as Record<string, unknown>
+      : null
+    const legacyRecord = legacy && typeof legacy === 'object' && !Array.isArray(legacy)
+      ? legacy as Record<string, unknown>
+      : null
+    // New snapshots deliberately keep the historical processMetrics alias
+    // for context metrics. Do not interpret that alias as provider usage when
+    // a dedicated contextMetrics field is present.
+    const hasDedicatedContext = Boolean(
+      metadata?.contextMetrics
+      && typeof metadata.contextMetrics === 'object'
+      && !Array.isArray(metadata.contextMetrics),
+    )
+    const metrics = directRecord
+      ?? (kind === 'contextMetrics' || !hasDedicatedContext ? legacyRecord : null)
+    if (!metrics) continue
+    const turnId = typeof message.id === 'string' ? assistantSegmentTurnId(message.id) : ''
+    if (turnId) {
+      if (countedTurns.has(turnId)) continue
+      countedTurns.add(turnId)
+    }
+    records.push(metrics)
+  }
+  return records
 }
 
 function latestCompletedCompactionTokens(parts?: MessagePart[]): number {

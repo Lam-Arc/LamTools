@@ -588,6 +588,9 @@ class CoreLoopKernel:
                 # usage, but a successful response is still one model call.
                 usage_payload = response.usage.to_dict() if response.usage is not None else {}
                 usage_payload["llm_calls"] = 1
+                usage_payload["usage_available"] = response.usage is not None
+                usage_payload["usage_status"] = "reported" if response.usage is not None else "missing"
+                usage_payload["usage_source"] = "provider"
                 await self.event_sink.emit(CoreEvent(
                     name="runtime.usage",
                     category="usage",
@@ -1672,6 +1675,7 @@ class CoreLoopKernel:
         # separate done chunk (audit 10 S3). Track it so the stream-ended
         # fallback below still reports the real finish reason + usage.
         stream_finish_reason: str | None = None
+        terminal_tool_calls: list[LLMToolCall] = []
         try:
             stream_iterator = stream.__aiter__()
             while True:
@@ -1686,8 +1690,15 @@ class CoreLoopKernel:
                 # nothing (the 2b34c636 "stop 无效" symptom).
                 if self._is_external_cancelled():
                     raise asyncio.CancelledError()
-                if event.metadata and event.metadata.get("finish_reason"):
-                    stream_finish_reason = str(event.metadata["finish_reason"])
+                event_finish_reason = event.finish_reason or (
+                    event.metadata.get("finish_reason") if event.metadata else None
+                )
+                if event_finish_reason:
+                    stream_finish_reason = str(event_finish_reason)
+                if event.usage is not None:
+                    # A few gateways attach usage to the final content/tool
+                    # delta instead of sending a separate usage-only chunk.
+                    pending_usage = event.usage
                 if event.kind == "content_delta" and event.content:
                     accumulated += event.content
                     await self.event_sink.emit(CoreEvent(
@@ -1817,62 +1828,20 @@ class CoreLoopKernel:
                                     emitted_tool_input_arguments[tool_index] = arguments_text
                 elif event.kind == "usage":
                     pending_usage = event.usage or pending_usage
+                elif event.kind == "finish":
+                    # ``finish`` ends generation, not the provider
+                    # transport. A usage-only chunk may still follow before
+                    # the explicit ``done`` event or natural EOF.
+                    if event.usage is not None:
+                        pending_usage = event.usage
+                    if event.tool_calls:
+                        terminal_tool_calls = event.tool_calls
                 elif event.kind == "done":
-                    # Prefer tool_calls from the done event (some providers
-                    # include complete tool_calls in the final chunk);
-                    # otherwise merge accumulated deltas.
-                    tool_calls = event.tool_calls or []
-                    if not tool_calls and pending_tool_calls:
-                        tool_calls = resolve_tool_calls(pending_tool_calls)
-                    if not accumulated and not thinking and not tool_calls:
-                        await self._emit_stream_fallback(state, "流式响应未返回内容")
-                        return None
-                    await self._emit_final_stream_tool_input_delta_parts(
-                        state,
-                        response_index=response_index,
-                        tool_calls=tool_calls,
-                        emitted_arguments=emitted_tool_input_arguments,
-                        raw=event.raw,
-                    )
-                    await self._emit_final_stream_text_parts(
-                        state,
-                        response_index=response_index,
-                        accumulated=accumulated,
-                        thinking=thinking,
-                        emitted_text=emitted_text,
-                        emitted_thinking=emitted_thinking,
-                        raw=event.raw,
-                    )
-                    # Emit a terminal delta so members can format the done chunk
-                    finish_reason = event.metadata.get("finish_reason", "stop") if event.metadata else "stop"
-                    usage = event.usage or pending_usage
-                    usage_dict = usage.to_dict() if usage else None
-                    await self.event_sink.emit(CoreEvent(
-                        name="runtime.reply_delta",
-                        category="message",
-                        payload={
-                            "content": "",
-                            "finish_reason": finish_reason,
-                            "usage": usage_dict,
-                            # The canonical per-response usage event is emitted
-                            # by _run after this stream returns. Keep this
-                            # payload for protocol consumers, but do not let the
-                            # projection count it a second time.
-                            "usage_reported_separately": True,
-                            "response_index": response_index,
-                        },
-                        session_id=state.session_id,
-                        run_id=state.run_id,
-                        tags=["reply", "done"],
-                    ))
-                    return LLMResponse(
-                        content=accumulated,
-                        thinking=thinking,
-                        tool_calls=tool_calls,
-                        usage=usage,
-                        finish_reason=finish_reason,
-                        metadata=event.metadata or {},
-                    )
+                    # [DONE] is the transport terminator. Keep final tool
+                    # calls, then finalize once after the stream loop.
+                    if event.tool_calls:
+                        terminal_tool_calls = event.tool_calls
+                    break
                 elif event.kind == "error":
                     await self._emit_stream_fallback(state, event.error or "stream error")
                     return None  # fall back to non-streaming
@@ -1886,7 +1855,9 @@ class CoreLoopKernel:
             return None  # fall back to non-streaming
 
         # Stream ended without a done event — build response from accumulated data
-        merged_tool_calls = resolve_tool_calls(pending_tool_calls) if pending_tool_calls else []
+        merged_tool_calls = terminal_tool_calls or (
+            resolve_tool_calls(pending_tool_calls) if pending_tool_calls else []
+        )
         if not accumulated and not thinking and not merged_tool_calls:
             await self._emit_stream_fallback(state, "流式响应未返回内容")
             return None
@@ -1904,6 +1875,24 @@ class CoreLoopKernel:
             emitted_text=emitted_text,
             emitted_thinking=emitted_thinking,
         )
+        # Emit a terminal delta so consumers can finalize the visible part.
+        # The canonical usage event is emitted by _run after this response;
+        # this copy is marked separately to prevent projection double counts.
+        usage_dict = pending_usage.to_dict() if pending_usage else None
+        await self.event_sink.emit(CoreEvent(
+            name="runtime.reply_delta",
+            category="message",
+            payload={
+                "content": "",
+                "finish_reason": stream_finish_reason or "stop",
+                "usage": usage_dict,
+                "usage_reported_separately": True,
+                "response_index": response_index,
+            },
+            session_id=state.session_id,
+            run_id=state.run_id,
+            tags=["reply", "done"],
+        ))
         # Some providers end the stream with a usage-only chunk (no done
         # event) — carry the captured usage so the turn still gets its token /
         # cache-hit metrics instead of silently dropping them. Same for a

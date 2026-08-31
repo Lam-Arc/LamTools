@@ -121,13 +121,20 @@ def test_snapshot_persists_terminal_status_usage_on_the_turn():
         turn_id="turn-1",
         item_id="turn-1:terminal",
         status="completed",
-        payload={"status": "completed"},
+        payload={
+            "status": "completed",
+            "runtime_metrics": {
+                "estimated_prompt_tokens": 120,
+                "context_window_tokens": 128_000,
+            },
+        },
         usage={"estimated_prompt_tokens": 120, "context_window_tokens": 128_000},
     )
 
     snapshot = apply_run_item_event(None, event)
 
-    assert snapshot["turns"]["turn-1"]["usage"] == event.usage
+    assert snapshot["turns"]["turn-1"]["context_metrics"] == event.usage
+    assert "usage" not in snapshot["turns"]["turn-1"]
 
 
 def test_terminal_status_metrics_preserve_exact_usage_without_double_counting_calls():
@@ -146,7 +153,14 @@ def test_terminal_status_metrics_preserve_exact_usage_without_double_counting_ca
         turn_id="turn-1",
         seq=2,
         status="completed",
-        payload={"status": "completed"},
+        payload={
+            "status": "completed",
+            "runtime_metrics": {
+                "estimated_prompt_tokens": 30,
+                "context_window_tokens": 128_000,
+                "steps_total": 1,
+            },
+        },
         usage={"estimated_prompt_tokens": 30, "context_window_tokens": 128_000, "steps_total": 1},
     )
 
@@ -155,9 +169,11 @@ def test_terminal_status_metrics_preserve_exact_usage_without_double_counting_ca
     assert snapshot["turns"]["turn-1"]["usage"] == {
         "input_tokens": 20,
         "output_tokens": 5,
+        "llm_calls": 1,
+    }
+    assert snapshot["turns"]["turn-1"]["context_metrics"] == {
         "estimated_prompt_tokens": 30,
         "context_window_tokens": 128_000,
-        "llm_calls": 1,
         "steps_total": 1,
     }
 
@@ -590,7 +606,7 @@ def test_snapshot_indexes_artifacts_and_merges_usage():
     }
 
 
-def test_replace_flagged_usage_item_is_skipped_from_turn_usage():
+def test_replace_flagged_usage_item_is_stored_as_context_metrics():
     # `runtime.metrics` items (`replace: true`) carry session-cumulative
     # context state — they are not per-call usage deltas, so they must not
     # wipe the accumulated per-call aggregation or overwrite `llm_calls`.
@@ -621,6 +637,26 @@ def test_replace_flagged_usage_item_is_skipped_from_turn_usage():
         "total_tokens": 13,
         "llm_calls": 1,
     }
+    assert snapshot["turns"]["turn-1"]["context_metrics"] == {
+        "steps_total": 1,
+        "estimated_prompt_tokens": 30,
+    }
+
+
+def test_provider_usage_envelope_does_not_become_context_metrics():
+    event = RunItemEvent(
+        kind="usage",
+        thread_id="thread-1",
+        event_id="event-provider-usage",
+        turn_id="turn-1",
+        payload={"type": "turn", "runtime_metrics": {"input_tokens": 12}},
+        usage={"input_tokens": 12, "output_tokens": 3, "total_tokens": 15},
+    )
+
+    snapshot = apply_run_item_event(None, event)
+
+    assert snapshot["turns"]["turn-1"]["usage"] == event.usage
+    assert "context_metrics" not in snapshot["turns"]["turn-1"]
 
 
 def test_reduce_orders_events_by_sequence():

@@ -150,6 +150,7 @@ StreamEventKind = Literal[
     "refusal_delta",
     "tool_call_delta",
     "tool_calls",
+    "finish",
     "usage",
     "done",
     "error",
@@ -162,6 +163,7 @@ class LLMStreamEvent:
     content: str = ""
     refusal: str = ""
     tool_calls: list[LLMToolCall] = field(default_factory=list)
+    finish_reason: str | None = None
     usage: LLMUsage | None = None
     error: str = ""
     raw: Any = None
@@ -175,6 +177,8 @@ class LLMStreamEvent:
             d["refusal"] = self.refusal
         if self.tool_calls:
             d["tool_calls"] = [tc.to_dict() for tc in self.tool_calls]
+        if self.finish_reason is not None:
+            d["finish_reason"] = self.finish_reason
         if self.usage is not None:
             d["usage"] = self.usage.to_dict()
         if self.error:

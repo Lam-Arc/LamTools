@@ -422,24 +422,44 @@ def normalize_stream_chunk_with_profile(
             kind="tool_call_delta",
             content="",
             raw=chunk,
-            metadata={"tool_calls_delta": tool_calls_delta},
+            finish_reason=str(finish_reason) if finish_reason else None,
+            usage=_usage_from_raw(usage) if usage else None,
+            metadata={
+                "tool_calls_delta": tool_calls_delta,
+                **({"finish_reason": finish_reason} if finish_reason else {}),
+            },
         )
 
     reasoning = get_path(chunk, response_path(profile, "stream_response", "reasoning_delta", "choices.0.delta.reasoning_content"))
     if reasoning:
-        return LLMStreamEvent(kind="thinking_delta", content=str(reasoning), raw=chunk)
+        return LLMStreamEvent(
+            kind="thinking_delta",
+            content=str(reasoning),
+            raw=chunk,
+            finish_reason=str(finish_reason) if finish_reason else None,
+            usage=_usage_from_raw(usage) if usage else None,
+            metadata={"finish_reason": finish_reason} if finish_reason else {},
+        )
 
     content = get_path(chunk, response_path(profile, "stream_response", "content_delta", "choices.0.delta.content"))
     if content:
-        return LLMStreamEvent(kind="content_delta", content=str(content), raw=chunk)
+        return LLMStreamEvent(
+            kind="content_delta",
+            content=str(content),
+            raw=chunk,
+            finish_reason=str(finish_reason) if finish_reason else None,
+            usage=_usage_from_raw(usage) if usage else None,
+            metadata={"finish_reason": finish_reason} if finish_reason else {},
+        )
 
-    # Done: finish_reason is set and no delta payload remains in this
-    # chunk.  The loop falls back to accumulated deltas via resolve_tool_calls.
+    # A provider finish reason is not the end of the transport.  Usage may be
+    # delivered in a later usage-only chunk before [DONE].
     if finish_reason:
         return LLMStreamEvent(
-            kind="done",
+            kind="finish",
             raw=chunk,
             usage=_usage_from_raw(usage) if usage else None,
+            finish_reason=str(finish_reason),
             metadata={"finish_reason": finish_reason},
         )
 

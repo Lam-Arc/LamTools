@@ -36,19 +36,19 @@ describe('ChatThread assistant message actions', () => {
 
   it('shows copy/fork/rollback actions only for assistant turns with content', async () => {
     const wrapper = mount(ChatThread, {
-      props: { messages, messageActions: true, checkpointTurnIds: new Set(['turn-1']) },
+      props: { messages, messageActions: true },
     })
 
     // Only assistant:turn-1 is actionable; the waiting placeholder is excluded.
     expect(wrapper.findAll('[data-assistant-actions]')).toHaveLength(1)
     expect(wrapper.get('[data-message-copy]').attributes('aria-label')).toBe('复制回复')
     expect(wrapper.get('[data-message-fork]').attributes('aria-label')).toBe('从此处另开会话')
-    expect(wrapper.get('[data-message-rollback]').attributes('aria-label')).toBe('回到这条指令执行前')
+    expect(wrapper.get('[data-message-rollback]').attributes('aria-label')).toBe('回退到这条回复')
   })
 
   it('emits the turn payload for fork and rollback', async () => {
     const wrapper = mount(ChatThread, {
-      props: { messages, messageActions: true, checkpointTurnIds: new Set(['turn-1']) },
+      props: { messages, messageActions: true },
     })
 
     await wrapper.get('[data-message-rollback]').trigger('click')
@@ -66,5 +66,13 @@ describe('ChatThread assistant message actions', () => {
     await wrapper.get('[data-message-copy]').trigger('click')
     await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith('第一条回复'))
     expect(wrapper.get('[data-message-copy]').attributes('aria-label')).toBe('已复制')
+  })
+
+  it('keeps fork and rollback enabled without a checkpoint', async () => {
+    const wrapper = mount(ChatThread, { props: { messages, messageActions: true } })
+
+    expect(wrapper.get('[data-message-fork]').attributes('disabled')).toBeUndefined()
+    expect(wrapper.get('[data-message-rollback]').attributes('disabled')).toBeUndefined()
+    expect(wrapper.get('[data-message-fork]').attributes('title')).toBe('从此处另开会话')
   })
 })

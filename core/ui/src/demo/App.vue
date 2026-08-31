@@ -503,6 +503,7 @@ import {
   useCoreUiPreferences,
   useCoreUpdateState,
   useCoreWorkbenchProjectionController,
+  useCheckpoints,
   showToast,
 } from '../composables'
 
@@ -1151,20 +1152,6 @@ const isEmptySession = computed(() => (
 const pendingPlaceholder = ref<{ id: string; content: string } | null>(null)
 const stepGroups = computed(() => buildCurrentTurnChecklistGroups(messages.value))
 
-const turnPrompts = computed(() => {
-  const map: Record<string, string> = {}
-  const state = snapshot.value
-  if (!state?.turns) return map
-  for (const [turnId, turn] of Object.entries(state.turns)) {
-    const input = (turn as Record<string, unknown>).input
-    if (Array.isArray(input)) {
-      const textItem = input.find((item: Record<string, unknown>) => item.type === 'text')
-      if (textItem && typeof textItem.text === 'string') map[turnId] = textItem.text
-    }
-  }
-  return map
-})
-
 const approvalController = useCoreApprovalController({
   messages,
   hasActiveThread: computed(() => Boolean(activeSessionId.value)),
@@ -1183,11 +1170,10 @@ const approvalController = useCoreApprovalController({
 })
 approvalControllerRef.value = approvalController
 
-// ── Assistant message actions: fork / roll back at a turn's checkpoint ──
-const checkpointsByTurnId = ref<Record<string, string>>({})
-
-/** Turn ids that currently have a checkpoint — rollback/fork/edit buttons hide when absent */
-const checkpointTurnIds = computed(() => new Set(Object.keys(checkpointsByTurnId.value)))
+// Checkpoint state is retained only for the legacy user-message edit path.
+// Assistant Fork/Rollback always use a durable turn boundary instead.
+const checkpointController = useCheckpoints(requestConfigOperation)
+const checkpointTurnIds = checkpointController.checkpointTurnIds
 
 provideCorePluginModeContext({
   apiBase,
@@ -1586,7 +1572,11 @@ async function selectSession(id: string) {
   await connectLive(id)
   await liveComposerController.loadCommandCatalog(id)
   await refreshGoal(id, true)
-  loadCheckpointGraph(id) // fire-and-forget: refresh turn→checkpoint map for rollback/fork
+  checkpointController.reset()
+  checkpointController.beginLoading()
+  // Legacy user-message editing still uses a pre-turn checkpoint.  Failure
+  // here is deliberately isolated from assistant Fork/Rollback.
+  void checkpointController.load(id)
   await threadScroll.scrollToBottom(true)
 }
 
@@ -1643,49 +1633,12 @@ async function refreshAfterRollback() {
   if (!sessionId) return
   await refreshSessions()
   await selectSession(sessionId)
-}
-
-function onCheckpointGraphLoaded(nodes: Array<{
-  id: string
-  turn_id?: string
-  actor_kind?: string
-  reason?: string
-}>) {
-  const map: Record<string, string> = {}
-  for (const node of nodes) {
-    const turnId = String(node.turn_id || '').trim()
-    // Only the "before user prompt" node of a main-session turn maps 1:1 to a
-    // user message; sub-agent / manual / rollback-derived nodes are excluded.
-    if (turnId && node.actor_kind === 'main' && node.reason === 'before_user_prompt') {
-      map[turnId] = node.id
-    }
-  }
-  checkpointsByTurnId.value = map
-}
-
-async function loadCheckpointGraph(sessionId: string) {
-  try {
-    const result = await requestConfigOperation('session.checkpoints.graph', { session_id: sessionId })
-    onCheckpointGraphLoaded(Array.isArray(result?.nodes) ? result.nodes : [])
-  } catch {
-    // Graph load must never block the UI; rollback/fork handlers refresh
-    // on-demand before giving up, so a failure here is non-fatal.
-  }
+  await checkpointController.load(sessionId)
 }
 
 async function handleForkMessage(payload: { turnId: string; content: string }) {
   const sessionId = activeSessionId.value
   if (!sessionId) {
-    composerErrorText.value = '该消息没有可用的分叉节点'
-    return
-  }
-  let checkpointId = checkpointsByTurnId.value[payload.turnId]
-  if (!checkpointId) {
-    // Map may be stale or not loaded yet — refresh once before giving up.
-    await loadCheckpointGraph(sessionId)
-    checkpointId = checkpointsByTurnId.value[payload.turnId]
-  }
-  if (!checkpointId) {
     composerErrorText.value = '该消息没有可用的分叉节点'
     return
   }
@@ -1696,11 +1649,12 @@ async function handleForkMessage(payload: { turnId: string; content: string }) {
   try {
     const result = await requestConfigOperation('session.fork', {
       session_id: sessionId,
-      checkpoint_id: checkpointId,
+      turn_id: payload.turnId,
     })
     const forkedSessionId = String(result?.session_id || '')
     await refreshSessions()
     if (forkedSessionId) await selectSession(forkedSessionId)
+    showToast('notice', '已从此处创建分叉会话；仅复制对话历史，未复制工作区或运行时状态。')
   } catch (error) {
     composerErrorText.value = error instanceof Error ? error.message : String(error)
   }
@@ -1712,27 +1666,22 @@ async function handleRollbackMessage(payload: { turnId: string; content: string 
     composerErrorText.value = '该消息没有对应的回退节点'
     return
   }
-  let checkpointId = checkpointsByTurnId.value[payload.turnId]
-  if (!checkpointId) {
-    // Map may be stale or not loaded yet — refresh once before giving up.
-    await loadCheckpointGraph(sessionId)
-    checkpointId = checkpointsByTurnId.value[payload.turnId]
-  }
-  if (!checkpointId) {
-    composerErrorText.value = '该消息没有对应的回退节点'
-    return
-  }
   if (rollbackActiveTurn.value) {
     composerErrorText.value = '任务运行中，请先停止任务再回退'
     return
   }
+  if (!window.confirm('将保留这条回复及之前的内容，并删除其后的对话。若没有同一边界的完整 checkpoint，仅回退对话，不恢复文件、运行时或外部操作。是否继续？')) return
   try {
-    await requestConfigOperation('session.checkpoints.restore', {
+    const result = await requestConfigOperation('session.rollback', {
       session_id: sessionId,
-      checkpoint_id: checkpointId,
-      scope: 'all',
+      turn_id: payload.turnId,
     })
     await refreshAfterRollback()
+    if (result.mode === 'checkpoint') {
+      showToast('notice', '已完整回退到此处：对话、运行时和工作区已恢复。')
+    } else {
+      showToast('notice', '已回退对话；文件、运行时和外部操作未恢复。')
+    }
   } catch (error) {
     composerErrorText.value = error instanceof Error ? error.message : String(error)
   }
@@ -1744,11 +1693,11 @@ async function handleEditMessage(payload: { turnId: string; content: string; att
     composerErrorText.value = '该消息没有可编辑的节点'
     return
   }
-  let checkpointId = checkpointsByTurnId.value[payload.turnId]
+  let checkpointId = checkpointController.getCheckpointForTurn(payload.turnId)
   if (!checkpointId) {
     // Map may be stale or not loaded yet — refresh once before giving up.
-    await loadCheckpointGraph(sessionId)
-    checkpointId = checkpointsByTurnId.value[payload.turnId]
+    await checkpointController.load(sessionId)
+    checkpointId = checkpointController.getCheckpointForTurn(payload.turnId)
   }
   if (!checkpointId) {
     composerErrorText.value = '该消息没有可编辑的节点'
@@ -1760,11 +1709,7 @@ async function handleEditMessage(payload: { turnId: string; content: string; att
   }
   try {
     // 回退到该用户消息发出前的检查点（同回退），再以编辑后的内容重新发送
-    await requestConfigOperation('session.checkpoints.restore', {
-      session_id: sessionId,
-      checkpoint_id: checkpointId,
-      scope: 'all',
-    })
+    await checkpointController.restore(sessionId, checkpointId, 'all')
     await refreshAfterRollback()
     // 携带原消息附件（已在后端上传，直接标记 uploaded 随发送提交，无需重新上传）
     clearAttachments()

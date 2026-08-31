@@ -96,6 +96,10 @@ export interface CoreAppTurn {
   last_seq?: number
   items: string[]
   input?: CoreAppInputItem[] | unknown
+  /** Provider-reported usage; absent token fields mean the provider did not report them. */
+  usage?: Record<string, unknown>
+  /** Estimated context pressure and compaction state, never billing usage. */
+  context_metrics?: Record<string, unknown>
   runtime_snapshot?: CoreAppRuntimeSnapshot
   [key: string]: unknown
 }
@@ -156,6 +160,8 @@ export interface CoreRuntimeTurn {
   status: string
   items?: string[]
   usage?: Record<string, unknown>
+  /** Estimated context pressure and compaction state, never billing usage. */
+  context_metrics?: Record<string, unknown>
   runtime_snapshot?: CoreAppRuntimeSnapshot
   [key: string]: unknown
 }

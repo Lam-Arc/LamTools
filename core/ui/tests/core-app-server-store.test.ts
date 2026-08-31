@@ -102,7 +102,7 @@ describe('core appServer runtime store', () => {
     })
   })
 
-  it('skips replace-flagged metrics items when aggregating turn usage', async () => {
+  it('stores replace-flagged metrics as context without aggregating turn usage', async () => {
     // `runtime.metrics` items (`replace: true`) carry session-cumulative
     // context state (steps_total), not per-call usage deltas — merging them
     // would inflate llm_calls to a quadratic sum and wipe token accumulations.
@@ -145,6 +145,52 @@ describe('core appServer runtime store', () => {
       llm_calls: 2,
     })
     expect(runtime.state?.core?.turns?.['turn-1']?.usage).not.toHaveProperty('steps_total')
+    expect(runtime.state?.core?.turns?.['turn-1']?.context_metrics).toEqual({
+      steps_total: 1,
+      context_window_tokens: 128_000,
+    })
+  })
+
+  it('keeps terminal runtime metrics out of provider usage', async () => {
+    const runtime = createCoreAppServerRuntimeState()
+    const frames: Array<() => void> = []
+    let onEvent: ((event: CoreAppEvent) => void) | undefined
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: (callbacks) => {
+        onEvent = callbacks.onEvent
+        return fakeClient(async (method) => method === 'thread/resume'
+          ? { snapshot: snapshot(1, 'running') }
+          : {})
+      },
+      scheduleFrame: (callback) => frames.push(callback),
+    })
+    await controller.connect('http://127.0.0.1:6173', 'thread-1')
+
+    onEvent?.(runUsageEvent('usage-1', {
+      input_tokens: 100,
+      output_tokens: 10,
+      total_tokens: 110,
+      llm_calls: 1,
+      usage_available: true,
+    }))
+    onEvent?.(runStatusEvent('done-1', 'completed', {
+      estimated_prompt_tokens: 6_925,
+      context_window_tokens: 50_000,
+      steps_total: 1,
+    }))
+    frames[0]()
+
+    expect(runtime.state?.core?.turns?.['turn-1']?.usage).toMatchObject({
+      input_tokens: 100,
+      output_tokens: 10,
+      total_tokens: 110,
+      llm_calls: 1,
+    })
+    expect(runtime.state?.core?.turns?.['turn-1']?.usage).not.toHaveProperty('estimated_prompt_tokens')
+    expect(runtime.state?.core?.turns?.['turn-1']?.context_metrics).toMatchObject({
+      estimated_prompt_tokens: 6_925,
+      context_window_tokens: 50_000,
+    })
   })
 
   it('uses response snapshots as the authoritative frontend state', () => {
@@ -651,7 +697,11 @@ function runItemDelta(eventId: string, delta: string): CoreAppEvent {
   }
 }
 
-function runStatusEvent(eventId: string, status: string): CoreAppEvent {
+function runStatusEvent(
+  eventId: string,
+  status: string,
+  runtimeMetrics?: Record<string, unknown>,
+): CoreAppEvent {
   return {
     event_id: eventId,
     thread_id: 'thread-1',
@@ -665,7 +715,7 @@ function runStatusEvent(eventId: string, status: string): CoreAppEvent {
       turn_id: 'turn-1',
       kind: 'status',
       status,
-      payload: { type: 'turn', status },
+      payload: { type: 'turn', status, ...(runtimeMetrics ? { runtime_metrics: runtimeMetrics } : {}) },
     },
   }
 }

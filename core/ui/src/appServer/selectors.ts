@@ -110,7 +110,14 @@ export function selectChatMessages(
       assistantSegments.set(turnId, segment)
       const appTurn = typeof item.turn_id === 'string' ? state.turns?.[item.turn_id] : undefined
       const coreTurn = typeof item.turn_id === 'string' ? state.core?.turns?.[item.turn_id] : undefined
-      const runtimeMetrics = coreTurn && typeof coreTurn.usage === 'object' && coreTurn.usage ? coreTurn.usage : null
+      // New snapshots keep context pressure and provider billing data in
+      // separate fields. Older snapshots only have `usage`; expose it in
+      // both compatibility slots so historical turns remain readable while
+      // new data cannot accidentally mix the two categories.
+      const providerUsage = coreTurn && isRecord(coreTurn.usage) ? coreTurn.usage : null
+      const contextMetrics = coreTurn && isRecord(coreTurn.context_metrics)
+        ? coreTurn.context_metrics
+        : providerUsage
       const runtimeModelId = runtimeModelIdForTurn(appTurn, coreTurn)
       messages.push({
         // Real turn ids contain colons (`<session>:turn:<run>`), so segments
@@ -123,8 +130,14 @@ export function selectChatMessages(
         // ``metadata.live`` flag was dropped here, so the projection could
         // never see it for main-line messages).
         metadata: {
-          ...(runtimeMetrics ? { processMetrics: runtimeMetrics } : {}),
           ...(isRecord(item.metadata) ? item.metadata : {}),
+          ...(contextMetrics ? {
+            // `processMetrics` is the historical name consumed by members;
+            // it now intentionally means context metrics only.
+            processMetrics: contextMetrics,
+            contextMetrics,
+          } : {}),
+          ...(providerUsage ? { usageMetrics: providerUsage } : {}),
           ...(runtimeModelId ? { runtime_model_id: runtimeModelId } : {}),
         },
       })

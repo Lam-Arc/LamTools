@@ -1174,6 +1174,104 @@ class CoreCheckpointConversationBackend:
             "events": [event.to_dict() for event in kept_events],
         }
 
+    async def conversation_payload_through_turn(
+        self,
+        db: Any,
+        *,
+        session_id: str,
+        turn_id: str,
+    ) -> tuple[dict[str, Any], int]:
+        """Build the durable conversation prefix ending with ``turn_id``.
+
+        A checkpoint is an optional, richer recovery mechanism.  Fork and the
+        conversation-only rollback path instead use the event log as their
+        boundary, which keeps the selected user/assistant turn itself.
+        """
+        if session_id != _root_session_id(session_id):
+            raise ValueError("Turn-based fork and rollback support main sessions only")
+        normalized_turn_id = str(turn_id or "").strip()
+        if not normalized_turn_id:
+            raise ValueError("turn_id is required")
+        event_store = SqlAlchemyAppEventStore(CoreAppEvent)
+        events = await event_store.list_thread(db, thread_id=session_id)
+        boundary = max(
+            (index for index, event in enumerate(events) if str(event.turn_id or "") == normalized_turn_id),
+            default=-1,
+        )
+        if boundary < 0:
+            raise LookupError(f"Turn not found: {normalized_turn_id}")
+        kept_events = events[: boundary + 1]
+        boundary_seq = int(kept_events[-1].seq or 0)
+        projection = CoreAppSnapshotProjector().reduce(session_id, kept_events)
+        runtime = await db.get(CoreRuntimeSession, session_id)
+        history = _conversation_history_from_events(kept_events)
+        return {
+            "session_id": session_id,
+            "runtime": _conversation_runtime_payload(
+                runtime,
+                session_id=session_id,
+                history=history,
+                boundary_seq=boundary_seq,
+                turn_id=normalized_turn_id,
+            ),
+            "projection": {
+                "snapshot_seq": boundary_seq,
+                "snapshot_json": projection,
+            },
+            "events": [event.to_dict() for event in kept_events],
+        }, boundary_seq
+
+    async def rollback_conversation_through_turn(
+        self,
+        db: Any,
+        *,
+        session_id: str,
+        turn_id: str,
+    ) -> int:
+        """Discard only events after ``turn_id`` and rebuild its projection.
+
+        This intentionally does not touch workspace files, tool side effects,
+        or external systems.  The caller must have checked that the runtime is
+        inactive before entering this transaction.
+        """
+        payload, boundary_seq = await self.conversation_payload_through_turn(
+            db,
+            session_id=session_id,
+            turn_id=turn_id,
+        )
+        await db.execute(delete(CoreAppEvent).where(
+            CoreAppEvent.thread_id == session_id,
+            CoreAppEvent.seq > boundary_seq,
+        ))
+        await db.execute(delete(CoreHistoryEntry).where(CoreHistoryEntry.thread_id == session_id))
+        runtime_payload = dict(payload["runtime"])
+        runtime = await db.get(CoreRuntimeSession, session_id)
+        if runtime is None:
+            runtime = CoreRuntimeSession(thread_id=session_id)
+            db.add(runtime)
+        runtime.revision = max(int(runtime.revision or 0) + 1, int(runtime_payload["revision"] or 0))
+        runtime.runtime_state_json = dict(runtime_payload["runtime_state_json"])
+        # Keep the reconstructed history in the legacy field for this path.
+        # The empty fact table makes get_history use it until the next normal
+        # kernel run appends durable history entries.
+        runtime.history_json = list(runtime_payload["history_json"])
+        runtime.pending_approval_json = {}
+        runtime.last_event_seq = boundary_seq
+        runtime.updated_at = datetime.now()
+        kept_events = [
+            event for event in payload["events"]
+            if isinstance(event, dict)
+        ]
+        envelopes = [
+            SqlAlchemyAppEventStore(CoreAppEvent)._to_envelope(_app_event_row(event, thread_id=session_id))
+            for event in kept_events
+        ]
+        await SqlAlchemyThreadSnapshotStore(
+            CoreThreadSnapshot,
+            item_model=CoreThreadSnapshotItem,
+        ).rebuild(db, session_id, envelopes)
+        return boundary_seq
+
     async def restore(self, db: Any, session_id: str, payload: dict[str, Any]) -> None:
         runtime_payload = payload.get("runtime")
         projection_payload = payload.get("projection")
@@ -1532,14 +1630,104 @@ def register_checkpoint_operations(
             return _operation_error(request, str(exc))
         return OperationResult(name=request.name, payload=_restore_payload(result))
 
+    async def rollback_to_turn(request: OperationRequest, *, session_id: str, turn_id: str) -> OperationResult:
+        work_root = await session_work_root(session_id)
+        turn_backend = CoreCheckpointConversationBackend(session_factory)
+        try:
+            await turn_backend.require_inactive(session_id)
+            checkpoint_id = await _checkpoint_id_at_turn_boundary(
+                session_factory,
+                session_id=session_id,
+                turn_id=turn_id,
+                conversation_backend=turn_backend,
+            )
+            if checkpoint_id:
+                result = await coordinator(work_root).load(
+                    checkpoint_id,
+                    scope="all",
+                    requesting_session_id=session_id,
+                )
+                return OperationResult(name=request.name, payload={
+                    "mode": "checkpoint",
+                    "turn_id": turn_id,
+                    "checkpoint_id": checkpoint_id,
+                    "operation_id": result.operation_id,
+                    "restored": {
+                        "conversation": True,
+                        "runtime": True,
+                        "workspace": True,
+                        "external_effects": False,
+                    },
+                    "restored_paths": list(result.restored_paths),
+                })
+            boundary_seq = await coordinator(work_root).write_coordinator.run(
+                lambda db: turn_backend.rollback_conversation_through_turn(
+                    db,
+                    session_id=session_id,
+                    turn_id=turn_id,
+                )
+            )
+        except (LookupError, ValueError, OSError) as exc:
+            return _operation_error(request, str(exc))
+        return OperationResult(name=request.name, payload={
+            "mode": "conversation_only",
+            "turn_id": turn_id,
+            "event_seq": boundary_seq,
+            "restored": {
+                "conversation": True,
+                "runtime": False,
+                "workspace": False,
+                "external_effects": False,
+            },
+        })
+
     async def fork_session(request: OperationRequest) -> OperationResult:
         session_id = str(request.payload.get("session_id") or request.payload.get("thread_id") or "").strip()
         checkpoint_id = str(request.payload.get("checkpoint_id") or "").strip()
+        turn_id = str(request.payload.get("turn_id") or "").strip()
         new_session_id = str(request.payload.get("new_session_id") or "").strip() or None
         title = str(request.payload.get("title") or "").strip()
         if not session_id:
             return _operation_error(request, "session_id is required")
         try:
+            if turn_id:
+                work_root = await session_work_root(session_id)
+                turn_backend = CoreCheckpointConversationBackend(session_factory)
+                await turn_backend.require_inactive(session_id)
+                fork_session_id = str(new_session_id or uuid.uuid4().hex).strip()
+                if not fork_session_id or _root_session_id(fork_session_id) != fork_session_id:
+                    return _operation_error(request, "new_session_id must identify a main session")
+
+                async def write_turn_fork(db: Any) -> tuple[ForkConversationResult, int]:
+                    payload, boundary_seq = await turn_backend.conversation_payload_through_turn(
+                        db,
+                        session_id=session_id,
+                        turn_id=turn_id,
+                    )
+                    forked = await turn_backend.fork(
+                        db,
+                        source_session_id=session_id,
+                        new_session_id=fork_session_id,
+                        payload=payload,
+                        title=title,
+                        options={"turn_id": turn_id, "mode": "conversation_only"},
+                    )
+                    return forked, boundary_seq
+
+                forked, boundary_seq = await coordinator(work_root).write_coordinator.run(write_turn_fork)
+                return OperationResult(name=request.name, payload={
+                    "session_id": fork_session_id,
+                    "session": forked.session_payload,
+                    "mode": "conversation_only",
+                    "turn_id": turn_id,
+                    "event_seq": boundary_seq,
+                    "restored": {
+                        "conversation": True,
+                        "runtime": False,
+                        "workspace": False,
+                        "external_effects": False,
+                    },
+                })
             if checkpoint_id:
                 schema_coordinator = coordinator(default_work_root)
                 await schema_coordinator._ensure_schema()
@@ -1569,11 +1757,20 @@ def register_checkpoint_operations(
             **({"session": row.session_payload} if row.session_payload else {}),
         })
 
+    async def rollback_session(request: OperationRequest) -> OperationResult:
+        session_id = str(request.payload.get("session_id") or request.payload.get("thread_id") or "").strip()
+        turn_id = str(request.payload.get("turn_id") or "").strip()
+        if turn_id:
+            if not session_id:
+                return _operation_error(request, "session_id is required")
+            return await rollback_to_turn(request, session_id=session_id, turn_id=turn_id)
+        return await restore_checkpoint(request)
+
     catalog.register("session.checkpoints.create", checkpoint_create)
     catalog.register("session.checkpoints.graph", checkpoints_graph)
     catalog.register("session.checkpoints.list", checkpoints_list)
     catalog.register("session.checkpoints.restore", restore_checkpoint)
-    catalog.register("session.rollback", restore_checkpoint)
+    catalog.register("session.rollback", rollback_session)
     catalog.register("session.fork", fork_session)
 
 
@@ -1823,6 +2020,120 @@ def _runtime_payload(row: CoreRuntimeSession | None) -> dict[str, Any] | None:
         "pending_approval_json": dict(row.pending_approval_json or {}),
         "last_event_seq": int(row.last_event_seq or 0),
     }
+
+
+def _conversation_history_from_events(events: list[Any]) -> list[dict[str, Any]]:
+    """Reconstruct the model-visible transcript from durable message events.
+
+    Tool/runtime state is deliberately excluded: this is the safe fallback
+    used when there is no checkpoint capable of restoring those side effects.
+    Later updates to an item replace its earlier event while retaining its
+    original position in the transcript.
+    """
+    messages: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for event in events:
+        if str(getattr(event, "method", "")) != "core/runItem":
+            continue
+        run_item = getattr(event, "payload", None)
+        if not isinstance(run_item, dict) or str(run_item.get("kind") or "") != "message":
+            continue
+        payload = run_item.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        role = str(payload.get("role") or "").strip()
+        content = payload.get("content")
+        if role not in {"user", "assistant", "system"} or not isinstance(content, str):
+            continue
+        item_id = str(getattr(event, "item_id", "") or run_item.get("item_id") or getattr(event, "event_id", ""))
+        if not item_id:
+            continue
+        if item_id not in messages:
+            order.append(item_id)
+        message: dict[str, Any] = {"role": role, "content": content}
+        if isinstance(payload.get("name"), str) and payload["name"]:
+            message["name"] = payload["name"]
+        messages[item_id] = message
+    return [messages[item_id] for item_id in order]
+
+
+def _conversation_runtime_payload(
+    runtime: CoreRuntimeSession | None,
+    *,
+    session_id: str,
+    history: list[dict[str, Any]],
+    boundary_seq: int,
+    turn_id: str,
+) -> dict[str, Any]:
+    """Return an idle runtime shell without claiming runtime restoration."""
+    source_state = dict((runtime.runtime_state_json if runtime is not None else {}) or {})
+    source_metadata = dict(source_state.get("metadata") or {})
+    # These values describe an in-flight or already-completed execution, not
+    # reusable conversation state.  Keeping them would falsely revive a tool
+    # call, approval, or last-turn bookkeeping after a fallback rollback.
+    for key in (
+        "turn_id",
+        "original_user_message",
+        "pending_approval",
+        "pending_waiting_request",
+        "kernel_steps",
+        "tool_progress",
+        "failure_diagnosis",
+    ):
+        source_metadata.pop(key, None)
+    source_metadata["conversation_boundary"] = {
+        "turn_id": turn_id,
+        "mode": "conversation_only",
+    }
+    return {
+        "revision": max(int(getattr(runtime, "revision", 0) or 0) + 1, 1),
+        "runtime_state_json": {
+            "session_id": session_id,
+            "run_id": "",
+            "status": "idle",
+            "position": str(source_state.get("position") or "idle"),
+            "loop_state": "idle",
+            "turn_count": int(source_state.get("turn_count") or 0),
+            "metadata": source_metadata,
+        },
+        "history_json": copy.deepcopy(history),
+        "pending_approval_json": {},
+        "last_event_seq": boundary_seq,
+    }
+
+
+async def _checkpoint_id_at_turn_boundary(
+    session_factory: async_sessionmaker,
+    *,
+    session_id: str,
+    turn_id: str,
+    conversation_backend: CoreCheckpointConversationBackend,
+) -> str:
+    """Return a checkpoint only when it represents this exact event prefix.
+
+    Automatic checkpoints are taken *before* a user turn, so matching on
+    ``turn_id`` alone is incorrect and would drop the turn the user clicked.
+    The event sequence makes the full-recovery path safe to select.
+    """
+    async with session_factory() as db:
+        _, boundary_seq = await conversation_backend.conversation_payload_through_turn(
+            db,
+            session_id=session_id,
+            turn_id=turn_id,
+        )
+        row = (await db.execute(
+            select(CoreCheckpoint.id)
+            .join(CoreCheckpointV2, CoreCheckpointV2.id == CoreCheckpoint.id)
+            .where(
+                CoreCheckpoint.session_id == session_id,
+                CoreCheckpoint.status == "ready",
+                CoreCheckpointV2.status == "ready",
+                CoreCheckpointV2.event_seq == boundary_seq,
+            )
+            .order_by(CoreCheckpoint.created_at.desc())
+            .limit(1)
+        )).scalar_one_or_none()
+    return str(row or "")
 
 
 def _projection_payload(state: dict[str, Any] | None) -> dict[str, Any] | None:

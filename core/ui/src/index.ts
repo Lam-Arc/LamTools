@@ -100,12 +100,6 @@ export { default as CoreProjectCreate } from './components/CoreProjectCreate.vue
 export { default as CoreSessionTitleEditor } from './components/CoreSessionTitleEditor.vue';
 export { default as CoreImageGenEditor } from './components/CoreImageGenEditor.vue';
 export { default as ArtifactPanel } from './components/ArtifactPanel.vue';
-export { default as CoreSessionRollback } from './components/CoreSessionRollback.vue';
-export type {
-  CoreSessionCheckpoint,
-  CoreSessionRollbackResult,
-  CoreSessionOperationRequest,
-} from './components/CoreSessionRollback.vue';
 export { default as CoreAgentsEditor } from './components/CoreAgentsEditor.vue';
 export { default as CoreArrangeManager } from './components/CoreArrangeManager.vue';
 export { default as CoreGoalStrip } from './components/CoreGoalStrip.vue';

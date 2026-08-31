@@ -535,7 +535,18 @@ function applyCoreRunItemEvent(snapshot: CoreAppSnapshot, event: CoreAppEvent): 
     const turns = { ...(currentCore.turns ?? {}) }
     if (turnId) {
       const turn = turns[turnId] ?? { turn_id: turnId, status: status || 'running', items: [] }
-      turns[turnId] = { ...turn, status: status || turn.status }
+      const runtimeMetrics = isRecord(runPayload.runtime_metrics)
+        ? runPayload.runtime_metrics
+        : isRecord(value.usage) && isContextMetrics(value.usage)
+          ? value.usage
+          : undefined
+      turns[turnId] = {
+        ...turn,
+        status: status || turn.status,
+        ...(runtimeMetrics ? {
+          context_metrics: { ...(turn.context_metrics ?? {}), ...runtimeMetrics },
+        } : {}),
+      }
     }
     return {
       ...snapshot,
@@ -546,13 +557,12 @@ function applyCoreRunItemEvent(snapshot: CoreAppSnapshot, event: CoreAppEvent): 
     const turns = { ...(currentCore.turns ?? {}) }
     if (turnId) {
       const turn = turns[turnId] ?? { turn_id: turnId, status: 'running', items: [] }
-      // `runtime.metrics` items (`payload.replace === true`) carry
-      // session-cumulative context state, not per-call usage deltas — merging
-      // them sums cumulative counters (llm_calls/steps_total) into the turn's
-      // usage and inflates the displayed call count. Skip them entirely (the
-      // backend canonical reducer treats them the same way).
-      if (runPayload.replace !== true) {
-        const usage = isRecord(value.usage) ? value.usage : {}
+      const usage = isRecord(value.usage) ? value.usage : {}
+      if (runPayload.replace === true) {
+        // `runtime.metrics` is a replace-style context snapshot, not a
+        // per-call provider usage delta. Keep it visible, but out of usage.
+        turns[turnId] = { ...turn, context_metrics: { ...usage } }
+      } else {
         turns[turnId] = { ...turn, usage: mergeUsageMetrics(turn.usage, usage) }
       }
     }
@@ -845,6 +855,32 @@ const SUM_USAGE_FIELDS = [
   'llm_calls',
 ] as const
 
+const CONTEXT_METRIC_FIELDS = new Set([
+  'estimated_prompt_tokens',
+  'estimatedPromptTokens',
+  'context_tokens',
+  'contextTokens',
+  'context_window_tokens',
+  'contextWindowTokens',
+  'context_compaction_trigger_tokens',
+  'contextCompactionTriggerTokens',
+  'trigger_tokens',
+  'triggerTokens',
+  'context_compacted',
+  'contextCompacted',
+  'context_compaction_status',
+  'context_tokens_before_compaction',
+  'context_tokens_after_compaction',
+  'context_messages_before_compaction',
+  'context_messages_after_compaction',
+  'steps_total',
+  'model_id',
+])
+
+function isContextMetrics(value: Record<string, unknown>): boolean {
+  return [...CONTEXT_METRIC_FIELDS].some((key) => key in value)
+}
+
 function numericField(value: unknown): number | undefined {
   if (typeof value === 'number' && Number.isFinite(value)) return value
   if (typeof value === 'string' && value.trim() !== '') {
@@ -884,6 +920,10 @@ function mergeUsageMetrics(
   if (durationA !== undefined || durationB !== undefined) {
     merged.duration_ms = Math.max(durationA ?? 0, durationB ?? 0)
   }
+  const reported = prev.usage_available === true || next.usage_available === true
+  merged.usage_available = reported
+  merged.usage_status = reported ? 'reported' : 'missing'
+  merged.usage_source = String(next.usage_source || prev.usage_source || 'provider')
   return merged
 }
 

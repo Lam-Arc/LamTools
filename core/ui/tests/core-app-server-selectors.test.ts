@@ -212,6 +212,62 @@ describe('core appServer selectors', () => {
     ])
   })
 
+  it('projects provider usage and context metrics into separate message metadata', () => {
+    const snapshot = hydrateSnapshot({
+      thread_id: 'thread-metrics',
+      snapshot_seq: 3,
+      status: 'completed',
+      core: {
+        thread_id: 'thread-metrics',
+        snapshot_seq: 3,
+        status: 'completed',
+        item_order: ['answer-1'],
+        turns: {
+          'turn-1': {
+            turn_id: 'turn-1',
+            status: 'completed',
+            items: ['answer-1'],
+            usage: {
+              input_tokens: 100,
+              output_tokens: 10,
+              total_tokens: 110,
+              llm_calls: 1,
+              usage_available: true,
+            },
+            context_metrics: {
+              estimated_prompt_tokens: 6_925,
+              context_window_tokens: 50_000,
+            },
+          },
+        },
+        items: {
+          'answer-1': {
+            item_id: 'answer-1',
+            turn_id: 'turn-1',
+            kind: 'message',
+            status: 'completed',
+            payload: { type: 'agentMessage', content: '完成' },
+          },
+        },
+      },
+    } satisfies CoreAppSnapshot)
+
+    expect(selectChatMessages(snapshot)[0]?.metadata).toMatchObject({
+      processMetrics: {
+        estimated_prompt_tokens: 6_925,
+        context_window_tokens: 50_000,
+      },
+      contextMetrics: {
+        estimated_prompt_tokens: 6_925,
+      },
+      usageMetrics: {
+        input_tokens: 100,
+        output_tokens: 10,
+        usage_available: true,
+      },
+    })
+  })
+
   it('does not promote a JSON-RPC envelope into visible assistant text', () => {
     const snapshot = hydrateSnapshot({
       thread_id: 'thread-1',

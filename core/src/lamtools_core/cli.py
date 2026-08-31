@@ -1116,12 +1116,20 @@ def build_parser(
     _add_live_connection_arguments(session_checkpoints)
     session_checkpoints.add_argument("--raw", action="store_true")
     session_checkpoints.set_defaults(func=cmd_session_checkpoints)
-    session_rollback = session_sub.add_parser("rollback", help="Restore conversation and files to a checkpoint")
+    session_rollback = session_sub.add_parser("rollback", help="Rollback to a turn, or restore a checkpoint")
     session_rollback.add_argument("thread_id")
-    session_rollback.add_argument("checkpoint_id")
+    session_rollback.add_argument("checkpoint_id", nargs="?", default="", help="Legacy checkpoint id")
+    session_rollback.add_argument("--turn-id", default="", help="Keep this turn and discard later conversation")
     _add_live_connection_arguments(session_rollback)
     session_rollback.add_argument("--raw", action="store_true")
     session_rollback.set_defaults(func=cmd_session_rollback)
+    session_fork = session_sub.add_parser("fork", help="Fork at a turn, or from a checkpoint")
+    session_fork.add_argument("thread_id")
+    session_fork.add_argument("checkpoint_id", nargs="?", default="", help="Legacy checkpoint id")
+    session_fork.add_argument("--turn-id", default="", help="Keep this turn in the new session")
+    _add_live_connection_arguments(session_fork)
+    session_fork.add_argument("--raw", action="store_true")
+    session_fork.set_defaults(func=cmd_session_fork)
 
     project = sub.add_parser("project", help="Manage Core project workspaces")
     project_sub = project.add_subparsers(dest="project_command", required=True)
@@ -1967,14 +1975,40 @@ async def cmd_session_checkpoints(args: argparse.Namespace) -> int:
 
 
 async def cmd_session_rollback(args: argparse.Namespace) -> int:
+    payload = {"session_id": args.thread_id}
+    if args.turn_id:
+        payload["turn_id"] = args.turn_id
+    elif args.checkpoint_id:
+        payload["checkpoint_id"] = args.checkpoint_id
+    else:
+        raise ValueError("rollback requires a checkpoint_id or --turn-id")
     result = await _invoke_live(
         args,
         lambda client: client.request(
             "session.rollback",
-            {"session_id": args.thread_id, "checkpoint_id": args.checkpoint_id},
+            payload,
         ),
     )
     _print_live_result(args, result, f"rollback {result.get('status', '-')} ({result.get('operation_id', '-')})")
+    return 0
+
+
+async def cmd_session_fork(args: argparse.Namespace) -> int:
+    payload = {"session_id": args.thread_id}
+    if args.turn_id:
+        payload["turn_id"] = args.turn_id
+    elif args.checkpoint_id:
+        payload["checkpoint_id"] = args.checkpoint_id
+    else:
+        raise ValueError("fork requires a checkpoint_id or --turn-id")
+    result = await _invoke_live(
+        args,
+        lambda client: client.request(
+            "session.fork",
+            payload,
+        ),
+    )
+    _print_live_result(args, result, f"fork {result.get('status', '-')} ({result.get('session_id', '-')})")
     return 0
 
 

@@ -874,7 +874,7 @@ def _request_options(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return [dict(item) for item in APPROVAL_OPTIONS]
 
 
-def _usage_metrics(payload: dict[str, Any]) -> dict[str, int | float]:
+def _usage_metrics(payload: dict[str, Any]) -> dict[str, Any]:
     raw_usage = payload.get("usage")
     usage = raw_usage if isinstance(raw_usage, dict) else {}
     raw_call_count = usage.get("llm_calls", payload.get("llm_calls"))
@@ -884,20 +884,100 @@ def _usage_metrics(payload: dict[str, Any]) -> dict[str, int | float]:
         llm_calls = int(raw_call_count) if raw_call_count is not None else 1
     except (TypeError, ValueError):
         llm_calls = 1
-    input_tokens = int(usage.get("input_tokens") or usage.get("prompt_tokens") or 0)
-    output_tokens = int(usage.get("output_tokens") or usage.get("completion_tokens") or 0)
-    total_tokens = int(usage.get("total_tokens") or input_tokens + output_tokens or 0)
-    cached_tokens = _cached_tokens_from_usage(usage)
+    metrics: dict[str, Any] = {"llm_calls": llm_calls}
+
+    # Missing provider usage is different from a provider explicitly
+    # reporting zero.  Do not materialize absent counters as zero: doing so
+    # made the UI claim that a successful request consumed zero tokens.
+    usage_available = usage.get("usage_available")
+    if not isinstance(usage_available, bool):
+        usage_available = any(
+            _has_usage_key(usage, key)
+            for key in (
+                "input_tokens", "prompt_tokens", "output_tokens",
+                "completion_tokens", "total_tokens",
+            )
+        )
+    metrics["usage_available"] = usage_available
+    metrics["usage_status"] = str(
+        usage.get("usage_status") or ("reported" if usage_available else "missing")
+    )
+    metrics["usage_source"] = str(usage.get("usage_source") or "provider")
+
+    input_tokens = _optional_usage_int(usage, "input_tokens", "prompt_tokens")
+    output_tokens = _optional_usage_int(usage, "output_tokens", "completion_tokens")
+    total_tokens = _optional_usage_int(usage, "total_tokens")
+    if total_tokens is None and (input_tokens is not None or output_tokens is not None):
+        total_tokens = (input_tokens or 0) + (output_tokens or 0)
+    if input_tokens is not None:
+        metrics["input_tokens"] = input_tokens
+    if output_tokens is not None:
+        metrics["output_tokens"] = output_tokens
+    if total_tokens is not None:
+        metrics["total_tokens"] = total_tokens
+
+    if _has_cache_usage(usage):
+        cached_tokens = _cached_tokens_from_usage(usage)
+        metrics["cached_tokens"] = cached_tokens
+        if input_tokens is not None and input_tokens > 0:
+            metrics["cache_hit_rate"] = round(cached_tokens / input_tokens, 4)
     cache_creation_tokens = _cache_creation_tokens_from_usage(usage)
-    return {
-        "input_tokens": input_tokens,
-        "output_tokens": output_tokens,
-        "total_tokens": total_tokens,
-        "cached_tokens": cached_tokens,
-        "cache_creation_tokens": cache_creation_tokens,
-        "cache_hit_rate": round(cached_tokens / input_tokens, 4) if input_tokens > 0 else 0,
-        "llm_calls": llm_calls,
-    }
+    if _has_usage_key(
+        usage,
+        "cache_creation_input_tokens",
+        "cache_write_input_tokens",
+        "cache_creation_tokens",
+    ) or _has_nested_cache_key(usage, "write"):
+        metrics["cache_creation_tokens"] = cache_creation_tokens
+    explicit_rate = usage.get("cache_hit_rate")
+    if "cache_hit_rate" not in metrics and explicit_rate is not None:
+        try:
+            metrics["cache_hit_rate"] = float(explicit_rate)
+        except (TypeError, ValueError):
+            pass
+    return metrics
+
+
+def _optional_usage_int(usage: dict[str, Any], *keys: str) -> int | None:
+    for key in keys:
+        if key not in usage or usage.get(key) is None:
+            continue
+        try:
+            return int(usage[key])
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _has_usage_key(usage: dict[str, Any], *keys: str) -> bool:
+    return any(key in usage and usage.get(key) is not None for key in keys)
+
+
+def _has_nested_cache_key(usage: dict[str, Any], key: str) -> bool:
+    for container in (usage.get("tokens"), usage):
+        if isinstance(container, dict):
+            cache = container.get("cache")
+            if isinstance(cache, dict) and key in cache and cache.get(key) is not None:
+                return True
+    return False
+
+
+def _has_cache_usage(usage: dict[str, Any]) -> bool:
+    if _has_usage_key(
+        usage,
+        "cached_tokens",
+        "prompt_cache_hit_tokens",
+        "cache_read_input_tokens",
+        "cache_read_tokens",
+    ):
+        return True
+    for details_key in ("prompt_tokens_details", "input_tokens_details"):
+        details = usage.get(details_key)
+        if isinstance(details, dict) and _has_usage_key(
+            details, "cached_tokens", "prompt_cache_hit_tokens", "cache_read_input_tokens", "cache_read_tokens"
+        ):
+            return True
+    return _has_nested_cache_key(usage, "read")
 
 
 def _created_at_ms(fact: RuntimeProjectionInput) -> int:

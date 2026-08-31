@@ -1277,6 +1277,133 @@ class TestKernelEvents:
         assert done_deltas[0].payload.get("usage", {}).get("cached_tokens") == 800
 
     @pytest.mark.asyncio
+    async def test_finish_does_not_stop_stream_before_usage_chunk(self):
+        """A provider finish chunk is not the transport terminator."""
+
+        class FinishThenUsageStreamLLM:
+            async def stream(self, request: LLMRequest):
+                _ = request
+                yield LLMStreamEvent(kind="content_delta", content="OK")
+                yield LLMStreamEvent(kind="finish", finish_reason="stop")
+                yield LLMStreamEvent(
+                    kind="usage",
+                    usage=normalize_usage({
+                        "prompt_tokens": 100,
+                        "completion_tokens": 20,
+                        "total_tokens": 120,
+                    }),
+                )
+                yield LLMStreamEvent(kind="done")
+
+            async def complete(self, request: LLMRequest) -> LLMResponse:
+                raise AssertionError("streaming fixture must not fall back to complete()")
+
+        kernel = _make_kernel(MockRuntimeKit(), llm_client=FinishThenUsageStreamLLM())
+        response = await kernel._stream_model(
+            LLMRequest(messages=[ChatMessage(role="user", content="hi")]),
+            RuntimeState(session_id="stream-session", run_id="stream-run"),
+            response_index=0,
+        )
+
+        assert response is not None
+        assert response.content == "OK"
+        assert response.finish_reason == "stop"
+        assert response.usage is not None
+        assert response.usage.prompt_tokens == 100
+        assert response.usage.completion_tokens == 20
+
+    @pytest.mark.asyncio
+    async def test_stream_without_provider_usage_keeps_usage_missing(self):
+        class NoUsageStreamLLM:
+            async def stream(self, request: LLMRequest):
+                _ = request
+                yield LLMStreamEvent(kind="content_delta", content="OK")
+                yield LLMStreamEvent(kind="finish", finish_reason="stop")
+                yield LLMStreamEvent(kind="done")
+
+            async def complete(self, request: LLMRequest) -> LLMResponse:
+                raise AssertionError("streaming fixture must not fall back to complete()")
+
+        kernel = _make_kernel(MockRuntimeKit(), llm_client=NoUsageStreamLLM())
+        response = await kernel._stream_model(
+            LLMRequest(messages=[ChatMessage(role="user", content="hi")]),
+            RuntimeState(session_id="stream-session", run_id="stream-run"),
+            response_index=0,
+        )
+
+        assert response is not None
+        assert response.usage is None
+
+    @pytest.mark.asyncio
+    async def test_finish_usage_stream_without_done_reaches_eof(self):
+        class FinishUsageEofStreamLLM:
+            async def stream(self, request: LLMRequest):
+                _ = request
+                yield LLMStreamEvent(kind="content_delta", content="OK")
+                yield LLMStreamEvent(kind="finish", finish_reason="stop")
+                yield LLMStreamEvent(
+                    kind="usage",
+                    usage=normalize_usage({
+                        "prompt_tokens": 100,
+                        "completion_tokens": 20,
+                    }),
+                )
+
+            async def complete(self, request: LLMRequest) -> LLMResponse:
+                raise AssertionError("streaming fixture must not fall back to complete()")
+
+        kernel = _make_kernel(MockRuntimeKit(), llm_client=FinishUsageEofStreamLLM())
+        response = await kernel._stream_model(
+            LLMRequest(messages=[ChatMessage(role="user", content="hi")]),
+            RuntimeState(session_id="stream-session", run_id="stream-run"),
+            response_index=0,
+        )
+
+        assert response is not None
+        assert response.usage is not None
+        assert response.usage.total_tokens == 120
+
+    @pytest.mark.asyncio
+    async def test_tool_call_finish_usage_and_done_are_all_preserved(self):
+        class ToolFinishUsageStreamLLM:
+            async def stream(self, request: LLMRequest):
+                _ = request
+                yield LLMStreamEvent(
+                    kind="tool_call_delta",
+                    metadata={"tool_calls_delta": [{
+                        "index": 0,
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {"name": "read_file", "arguments": '{"path":"a.txt"}'},
+                    }]},
+                )
+                yield LLMStreamEvent(kind="finish", finish_reason="tool_calls")
+                yield LLMStreamEvent(
+                    kind="usage",
+                    usage=normalize_usage({
+                        "prompt_tokens": 100,
+                        "completion_tokens": 20,
+                    }),
+                )
+                yield LLMStreamEvent(kind="done")
+
+            async def complete(self, request: LLMRequest) -> LLMResponse:
+                raise AssertionError("streaming fixture must not fall back to complete()")
+
+        kernel = _make_kernel(MockRuntimeKit(), llm_client=ToolFinishUsageStreamLLM())
+        response = await kernel._stream_model(
+            LLMRequest(messages=[ChatMessage(role="user", content="read")]),
+            RuntimeState(session_id="stream-session", run_id="stream-run"),
+            response_index=0,
+        )
+
+        assert response is not None
+        assert response.finish_reason == "tool_calls"
+        assert response.tool_calls[0].name == "read_file"
+        assert response.usage is not None
+        assert response.usage.total_tokens == 120
+
+    @pytest.mark.asyncio
     async def test_usage_survives_when_stream_ends_without_done(self):
         """Some providers end the stream with a usage-only chunk and never
         send a done event (e.g. the plain adapter path where a DeepSeek-style
@@ -2309,7 +2436,12 @@ class TestKernelModelCall:
             if event.name == "runtime.reply_delta" and "done" in (event.tags or [])
         ]
         assert len(usage_events) == 1
-        assert usage_events[0].payload["usage"] == {"llm_calls": 1}
+        assert usage_events[0].payload["usage"] == {
+            "llm_calls": 1,
+            "usage_available": False,
+            "usage_status": "missing",
+            "usage_source": "provider",
+        }
         assert len(terminal_events) == 1
         assert terminal_events[0].payload["usage_reported_separately"] is True
         projected = core_events_to_run_items(sink.events, thread_id="session-1")

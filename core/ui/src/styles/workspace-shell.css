@@ -46,7 +46,9 @@
   --theme-control-text: #f2efeb;
   --theme-control-soft-background: rgba(255, 255, 255, 0.055);
   position: fixed;
-  inset: var(--titlebar-offset, 0) 0 0 0;
+  /* The shell backdrop must continue behind the transparent custom titlebar;
+     child surfaces keep their own titlebar offset below. */
+  inset: 0;
   overflow: hidden;
   background: var(--theme-backdrop-background);
   color: var(--theme-backdrop-text);

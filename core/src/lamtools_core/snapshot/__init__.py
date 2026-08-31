@@ -58,8 +58,9 @@ def apply_run_item_event_in_place(state: dict[str, Any], event: RunItemEvent) ->
         existing_turn = (state.get("turns") or {}).get(event.turn_id) if event.turn_id else None
         existing_status = str(existing_turn.get("status") or "") if isinstance(existing_turn, dict) else ""
         turn = _upsert_turn(state, event)
+        _apply_turn_metrics(turn, event, replace=False)
         if existing_status in TERMINAL_STATUSES and status != existing_status:
-            if turn is not None and event.usage:
+            if turn is not None and event.usage and not _is_context_metrics_event(event):
                 turn["usage"] = {**dict(turn.get("usage") or {}), **event.usage}
             _recompute_thread_status(state)
             return state
@@ -67,7 +68,7 @@ def apply_run_item_event_in_place(state: dict[str, Any], event: RunItemEvent) ->
             state["status"] = status
         if turn is not None and status:
             turn["status"] = status
-        if turn is not None and event.usage:
+        if turn is not None and event.usage and not _is_context_metrics_event(event):
             turn["usage"] = {**dict(turn.get("usage") or {}), **event.usage}
         if status in {"failed", "cancelled", "error"} and (
             event.payload.get("message") or event.payload.get("raw_end_reason")
@@ -93,13 +94,14 @@ def apply_run_item_event_in_place(state: dict[str, Any], event: RunItemEvent) ->
 
     if event.kind == "usage":
         # `runtime.metrics` items carry session-cumulative context state and
-        # flag `replace: true` — they are NOT per-call usage deltas. Skipping
-        # them keeps turn usage as the pure per-call aggregation: replacing
-        # would wipe accumulated token sums and overwrite `llm_calls` with a
-        # cumulative step counter.
-        if event.payload.get("replace") is True:
-            return state
+        # flag `replace: true` — they are NOT per-call usage deltas. Keep them
+        # in their own field so the UI can show context pressure without
+        # poisoning provider-reported token usage.
         turn = _upsert_turn(state, event)
+        if event.payload.get("replace") is True:
+            if turn is not None and event.usage:
+                turn["context_metrics"] = dict(event.usage)
+            return state
         if event.usage:
             turn["usage"] = _merge_dict_values(turn.get("usage"), event.usage)
         return state
@@ -415,6 +417,61 @@ def _merge_dict_values(current: Any, incoming: dict[str, Any]) -> dict[str, Any]
         else:
             result[key] = value
     return result
+
+
+_CONTEXT_METRIC_KEYS = {
+    "estimated_prompt_tokens",
+    "estimatedPromptTokens",
+    "context_tokens",
+    "contextTokens",
+    "context_window_tokens",
+    "contextWindowTokens",
+    "context_compaction_trigger_tokens",
+    "contextCompactionTriggerTokens",
+    "trigger_tokens",
+    "triggerTokens",
+    "context_compacted",
+    "contextCompacted",
+    "context_compaction_status",
+    "context_tokens_before_compaction",
+    "context_tokens_after_compaction",
+    "context_messages_before_compaction",
+    "context_messages_after_compaction",
+    "steps_total",
+    "model_id",
+}
+
+
+def _is_context_metrics_event(event: RunItemEvent) -> bool:
+    # Provider usage events historically used the payload key
+    # ``runtime_metrics`` as a transport envelope too.  That key alone does
+    # not make the values context metrics; only terminal status events and
+    # explicit replace-style runtime.metrics events do.
+    if event.payload.get("replace") is True:
+        return True
+    if event.kind == "status" and event.payload.get("runtime_metrics") is not None:
+        return True
+    return bool(
+        event.usage
+        and any(key in event.usage for key in _CONTEXT_METRIC_KEYS)
+    )
+
+
+def _apply_turn_metrics(
+    turn: dict[str, Any] | None,
+    event: RunItemEvent,
+    *,
+    replace: bool,
+) -> None:
+    if turn is None or not event.usage or not _is_context_metrics_event(event):
+        return
+    if replace:
+        turn["context_metrics"] = dict(event.usage)
+    else:
+        turn["context_metrics"] = {
+            **dict(turn.get("context_metrics") or {}),
+            **event.usage,
+        }
 
 
 __all__ = [

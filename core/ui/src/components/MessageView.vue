@@ -656,7 +656,7 @@
           <!-- Message footer slot (for global stats line etc.) -->
           <slot name="message-footer" :message="msg" />
 
-          <!-- Hover actions: copy / fork / roll back to the turn's checkpoint -->
+          <!-- Hover actions: copy / fork / roll back at this turn boundary -->
           <div
             v-if="messageActions && assistantActionable(msg)"
             class="assistant-actions"
@@ -675,7 +675,6 @@
               <Check v-else :size="15" :stroke-width="1.8" aria-hidden="true" />
             </button>
             <button
-              v-if="hasTurnCheckpoint(msg)"
               type="button"
               class="assistant-action"
               title="从此处另开会话"
@@ -686,11 +685,10 @@
               <GitFork :size="15" :stroke-width="1.8" aria-hidden="true" />
             </button>
             <button
-              v-if="hasTurnCheckpoint(msg)"
               type="button"
               class="assistant-action"
-              title="回退到上一节点（对话与文件）"
-              aria-label="回到这条指令执行前"
+              title="保留此处并删除之后内容"
+              aria-label="回退到这条回复"
               data-message-rollback
               @click="emit('rollback-message', assistantActionPayload(msg))"
             >
@@ -1647,11 +1645,6 @@ function assistantActionable(msg: CoreMessage): boolean {
 
 function assistantActionPayload(msg: CoreMessage): AssistantActionPayload {
   return { turnId: assistantTurnId(msg), content: answerContent(msg) }
-}
-
-function hasTurnCheckpoint(msg: CoreMessage): boolean {
-  const turnId = assistantTurnId(msg)
-  return Boolean(turnId && props.checkpointTurnIds.has(turnId))
 }
 
 async function copyAssistantMessage(msg: CoreMessage) {

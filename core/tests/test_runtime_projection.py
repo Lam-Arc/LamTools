@@ -543,9 +543,11 @@ def test_runtime_projection_maps_usage_metrics():
         "output_tokens": 5,
         "total_tokens": 15,
         "cached_tokens": 4,
-        "cache_creation_tokens": 0,
         "cache_hit_rate": 0.4,
         "llm_calls": 1,
+        "usage_available": True,
+        "usage_status": "reported",
+        "usage_source": "provider",
     }
 
 
@@ -734,13 +736,44 @@ def test_runtime_projection_maps_call_without_token_usage():
     assert len(events) == 1
     assert events[0].kind == "usage"
     assert events[0].usage == {
+        "llm_calls": 1,
+        "usage_available": False,
+        "usage_status": "missing",
+        "usage_source": "provider",
+    }
+
+
+def test_runtime_projection_preserves_explicit_zero_usage_as_reported():
+    events = runtime_fact_to_run_item_events(
+        thread_id="thread-1",
+        event_id="event-zero-usage",
+        group="usage",
+        source="core",
+        phase="runtime.usage",
+        status="completed",
+        sequence=6,
+        metadata={
+            "payload": {
+                "turn_id": "turn-1",
+                "usage": {
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0,
+                },
+            },
+        },
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+
+    assert events is not None
+    assert events[0].usage == {
         "input_tokens": 0,
         "output_tokens": 0,
         "total_tokens": 0,
-        "cached_tokens": 0,
-        "cache_creation_tokens": 0,
-        "cache_hit_rate": 0,
         "llm_calls": 1,
+        "usage_available": True,
+        "usage_status": "reported",
+        "usage_source": "provider",
     }
 
 

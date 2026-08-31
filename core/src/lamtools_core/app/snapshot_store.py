@@ -395,6 +395,10 @@ class CoreAppSnapshotProjector:
             turn["last_seq"] = int(core_turn.get("last_seq") or turn.get("last_seq") or 0)
             if core_turn.get("run_id"):
                 turn["run_id"] = str(core_turn["run_id"])
+            if isinstance(core_turn.get("usage"), dict):
+                turn["usage"] = deepcopy(core_turn["usage"])
+            if isinstance(core_turn.get("context_metrics"), dict):
+                turn["context_metrics"] = deepcopy(core_turn["context_metrics"])
             turns[turn_id] = turn
 
     def sync_status_from_core(self, state: dict[str, Any]) -> None:

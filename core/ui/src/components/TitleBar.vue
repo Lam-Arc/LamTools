@@ -104,7 +104,7 @@ onUnmounted(() => {
   justify-content: space-between;
   height: 36px;
   padding: 0 8px;
-  background: var(--theme-titlebar-bg, #202020);
+  background: transparent;
   user-select: none;
 }
 

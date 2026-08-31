@@ -10,7 +10,7 @@ from lamtools_core.app import open_core_app_db
 from lamtools_core.app.core_db import CoreThreadSnapshot
 from lamtools_core.app.core_session_store import CoreDbSessionStore
 from lamtools_core.app.event_store import AppEventInput
-from lamtools_core.checkpoint import CoreCheckpointCoordinator
+from lamtools_core.checkpoint import CoreCheckpointCoordinator, register_checkpoint_operations
 from lamtools_core.event import RunItemEvent
 from lamtools_core.plugins.engine import HookEngine
 from lamtools_core.plugins.models import HookDefinition, HookEvent, HookHandler
@@ -32,6 +32,142 @@ async def _runtime(
         state = RuntimeState(session_id=session_id, status=status)
     state.status = status
     await db.runtime_state_store.save_checkpoint(state, history)
+
+
+async def _append_message_turn(db: Any, session_id: str, turn_id: str, text: str) -> None:
+    async with db.session_factory() as session:
+        await db.event_store.append(session, AppEventInput(
+            thread_id=session_id,
+            method="turn/accepted",
+            payload={"turn_id": turn_id, "input": text},
+            turn_id=turn_id,
+        ))
+        for role, suffix in (("user", "user"), ("assistant", "assistant")):
+            await db.event_store.append_run_item_event(session, RunItemEvent(
+                kind="message",
+                thread_id=session_id,
+                event_id=f"{turn_id}-{suffix}",
+                turn_id=turn_id,
+                item_id=f"{session_id}:turn:{turn_id}:{suffix}",
+                status="completed",
+                payload={"role": role, "content": text if role == "user" else f"reply {text}"},
+            ))
+        await db.event_store.append(session, AppEventInput(
+            thread_id=session_id,
+            method="turn/completed",
+            payload={"turn_id": turn_id},
+            turn_id=turn_id,
+        ))
+        await db.event_store.append_run_item_event(session, RunItemEvent(
+            kind="status",
+            thread_id=session_id,
+            event_id=f"{turn_id}-completed",
+            turn_id=turn_id,
+            item_id=f"{session_id}:turn:{turn_id}:status",
+            status="completed",
+            payload={"status": "completed"},
+        ))
+        events = await db.event_store.list_thread(session, thread_id=session_id)
+        await db.snapshot_store.apply_many(session, events)
+        await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_turn_fork_and_conversation_rollback_keep_selected_turn_without_checkpoint(tmp_path: Path) -> None:
+    work_root = tmp_path / "workspace"
+    work_root.mkdir()
+    db = await open_core_app_db(tmp_path / "core.db")
+    sessions = CoreDbSessionStore(lambda: db)
+    from lamtools_core.app.operation_catalog import OperationCatalog
+
+    catalog = OperationCatalog()
+    register_checkpoint_operations(
+        catalog,
+        session_factory=db.session_factory,
+        data_dir=tmp_path / "core-data",
+        default_work_root=work_root,
+    )
+    try:
+        await sessions.create(SessionRecord(
+            id="turn-source", member_id="core", title="Source", status="idle",
+            metadata={"work_root": str(work_root)},
+        ))
+        await _runtime(db, "turn-source", history=[])
+        await _append_message_turn(db, "turn-source", "turn-1", "one")
+        await _append_message_turn(db, "turn-source", "turn-2", "two")
+
+        forked = await catalog.execute("session.fork", {
+            "session_id": "turn-source", "turn_id": "turn-1", "new_session_id": "turn-fork",
+        })
+        assert forked.status == "ok", forked.payload
+        assert forked.payload["mode"] == "conversation_only"
+        assert forked.payload["restored"]["workspace"] is False
+
+        async with db.session_factory() as session:
+            source_events = await db.event_store.list_thread(session, thread_id="turn-source")
+            fork_events = await db.event_store.list_thread(session, thread_id="turn-fork")
+        assert any(event.turn_id == "turn-2" for event in source_events)
+        assert {event.turn_id for event in fork_events if event.turn_id} == {"turn-1"}
+
+        rolled_back = await catalog.execute("session.rollback", {
+            "session_id": "turn-source", "turn_id": "turn-1",
+        })
+        assert rolled_back.status == "ok", rolled_back.payload
+        assert rolled_back.payload["mode"] == "conversation_only"
+        assert rolled_back.payload["restored"]["runtime"] is False
+        async with db.session_factory() as session:
+            events = await db.event_store.list_thread(session, thread_id="turn-source")
+            snapshot = await db.snapshot_store.load(session, "turn-source")
+        assert {event.turn_id for event in events if event.turn_id} == {"turn-1"}
+        assert "turn-2" not in str(snapshot)
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_turn_rollback_uses_only_an_exact_boundary_checkpoint(tmp_path: Path) -> None:
+    work_root = tmp_path / "workspace"
+    work_root.mkdir()
+    db = await open_core_app_db(tmp_path / "core.db")
+    sessions = CoreDbSessionStore(lambda: db)
+    coordinator = CoreCheckpointCoordinator(
+        work_root=work_root,
+        session_factory=db.session_factory,
+        write_coordinator=db.persistence.write_coordinator,
+        storage_root=tmp_path / "checkpoint-data",
+    )
+    from lamtools_core.app.operation_catalog import OperationCatalog
+
+    catalog = OperationCatalog()
+    register_checkpoint_operations(
+        catalog,
+        session_factory=db.session_factory,
+        data_dir=tmp_path / "core-data",
+        default_work_root=work_root,
+    )
+    try:
+        await sessions.create(SessionRecord(
+            id="checkpoint-source", member_id="core", title="Source", status="idle",
+            metadata={"work_root": str(work_root)},
+        ))
+        await _runtime(db, "checkpoint-source", history=[])
+        await _append_message_turn(db, "checkpoint-source", "turn-1", "one")
+        # A checkpoint taken before the *next* turn is an exact complete
+        # boundary for turn-1.  A checkpoint labelled turn-1 itself is the
+        # automatic pre-turn checkpoint and must not be selected here.
+        checkpoint = await coordinator.save(
+            session_id="checkpoint-source", turn_id="turn-2", actor_kind="main", reason="manual",
+        )
+        await _append_message_turn(db, "checkpoint-source", "turn-2", "two")
+
+        restored = await catalog.execute("session.rollback", {
+            "session_id": "checkpoint-source", "turn_id": "turn-1",
+        })
+        assert restored.status == "ok", restored.payload
+        assert restored.payload["mode"] == "checkpoint"
+        assert restored.payload["checkpoint_id"] == checkpoint.id
+    finally:
+        await db.close()
 
 
 @pytest.mark.asyncio

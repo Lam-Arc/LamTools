@@ -96,7 +96,8 @@ def test_stream_chunk_uses_profile_paths():
     assert content.kind == "content_delta"
     assert content.content == "answer"
     assert done is not None
-    assert done.kind == "done"
+    assert done.kind == "finish"
+    assert done.finish_reason == "stop"
     assert done.usage is not None
     assert done.usage.total_tokens == 7
 
@@ -136,8 +137,8 @@ def test_stream_chunk_tool_call_delta_not_dropped_when_finish_reason_present():
     assert event.metadata["tool_calls_delta"] == chunk["choices"][0]["delta"]["tool_calls"]
 
 
-def test_stream_chunk_pure_finish_reason_yields_done():
-    """A chunk with finish_reason and no delta payload still yields done."""
+def test_stream_chunk_pure_finish_reason_yields_finish():
+    """A finish reason ends generation but not the provider transport."""
     profile = {}
 
     chunk = {
@@ -148,8 +149,66 @@ def test_stream_chunk_pure_finish_reason_yields_done():
     event = normalize_stream_chunk_with_profile(chunk, profile)
 
     assert event is not None
-    assert event.kind == "done"
+    assert event.kind == "finish"
+    assert event.finish_reason == "stop"
     assert event.metadata["finish_reason"] == "stop"
+
+
+def test_stream_chunk_preserves_usage_on_finish_event():
+    event = normalize_stream_chunk_with_profile(
+        {
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120},
+        },
+        {},
+    )
+
+    assert event is not None
+    assert event.kind == "finish"
+    assert event.usage is not None
+    assert event.usage.prompt_tokens == 100
+    assert event.usage.completion_tokens == 20
+
+
+def test_stream_chunk_keeps_finish_reason_on_terminal_content_and_tool_deltas():
+    content = normalize_stream_chunk_with_profile(
+        {
+            "choices": [{"delta": {"content": "OK"}, "finish_reason": "stop"}],
+        },
+        {},
+    )
+    tool = normalize_stream_chunk_with_profile(
+        {
+            "choices": [{
+                "delta": {"tool_calls": [{"index": 0, "function": {"arguments": "}"}}]},
+                "finish_reason": "tool_calls",
+            }],
+        },
+        {},
+    )
+
+    assert content is not None
+    assert content.kind == "content_delta"
+    assert content.finish_reason == "stop"
+    assert tool is not None
+    assert tool.kind == "tool_call_delta"
+    assert tool.finish_reason == "tool_calls"
+
+
+def test_stream_chunk_keeps_inline_usage_on_terminal_content_delta():
+    event = normalize_stream_chunk_with_profile(
+        {
+            "choices": [{"delta": {"content": "OK"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120},
+        },
+        {},
+    )
+
+    assert event is not None
+    assert event.kind == "content_delta"
+    assert event.finish_reason == "stop"
+    assert event.usage is not None
+    assert event.usage.total_tokens == 120
 
 
 def test_non_stream_response_uses_profile_paths():

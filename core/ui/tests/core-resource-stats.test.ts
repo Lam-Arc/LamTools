@@ -130,4 +130,45 @@ describe('CoreResourceStats', () => {
     const wrapper = mount(CoreResourceStats, { props: { messages: cachedMessages } })
     expect(wrapper.text()).toContain('50%') // (700 + 300) / 2000
   })
+
+  it('keeps context estimates separate from missing provider usage', () => {
+    const separated = [{
+      id: 'assistant:thread-1:turn:separated',
+      metadata: {
+        contextMetrics: {
+          estimated_prompt_tokens: 6_925,
+          context_window_tokens: 50_000,
+        },
+        usageMetrics: {
+          llm_calls: 1,
+          usage_available: false,
+          usage_status: 'missing',
+          usage_source: 'provider',
+        },
+      },
+    }]
+
+    const wrapper = mount(CoreResourceStats, { props: { messages: separated } })
+
+    expect(wrapper.text()).toContain('6.9k / 50k')
+    expect(wrapper.text()).toContain('Provider Usage')
+    expect(wrapper.text()).toContain('未获取')
+    expect(wrapper.findAll('.core-resource-stats > div')[1].text()).toContain('--')
+    expect(wrapper.findAll('.core-resource-stats > div')[2].text()).toContain('--')
+  })
+
+  it('does not treat the new processMetrics context alias as provider usage', () => {
+    const contextOnly = {
+      estimated_prompt_tokens: 6_925,
+      context_window_tokens: 50_000,
+    }
+    const summary = buildCoreResourceSummary([{
+      id: 'assistant:thread-1:turn:context-only',
+      metadata: { contextMetrics: contextOnly, processMetrics: contextOnly },
+    }])
+
+    expect(summary).not.toBeNull()
+    expect(summary!.usageStatusLabel).toBe('未获取')
+    expect(summary!.callItems.map(item => item.value)).toEqual(['--', '--', '--', '--'])
+  })
 })

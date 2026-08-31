@@ -213,6 +213,21 @@ def test_core_cli_parser_exposes_session_query_commands(tmp_path: Path) -> None:
             str(tmp_path / "core.db"),
         ]
     )
+    checkpoints_args = parser.parse_args([
+        "session", "checkpoints", "thread-cli", "--base-url", "http://core.test", "--raw",
+    ])
+    rollback_args = parser.parse_args([
+        "session", "rollback", "thread-cli", "checkpoint-1", "--base-url", "http://core.test", "--raw",
+    ])
+    fork_args = parser.parse_args([
+        "session", "fork", "thread-cli", "checkpoint-1", "--base-url", "http://core.test", "--raw",
+    ])
+    turn_rollback_args = parser.parse_args([
+        "session", "rollback", "thread-cli", "--turn-id", "turn-1", "--base-url", "http://core.test", "--raw",
+    ])
+    turn_fork_args = parser.parse_args([
+        "session", "fork", "thread-cli", "--turn-id", "turn-1", "--base-url", "http://core.test", "--raw",
+    ])
 
     assert list_args.command == "session"
     assert list_args.session_command == "list"
@@ -233,6 +248,16 @@ def test_core_cli_parser_exposes_session_query_commands(tmp_path: Path) -> None:
     assert export_args.format == "zip"
     assert export_args.output == str(tmp_path / "thread.zip")
     assert export_args.core_db == str(tmp_path / "core.db")
+    assert checkpoints_args.session_command == "checkpoints"
+    assert checkpoints_args.thread_id == "thread-cli"
+    assert rollback_args.session_command == "rollback"
+    assert rollback_args.checkpoint_id == "checkpoint-1"
+    assert fork_args.session_command == "fork"
+    assert fork_args.checkpoint_id == "checkpoint-1"
+    assert turn_rollback_args.turn_id == "turn-1"
+    assert turn_rollback_args.checkpoint_id == ""
+    assert turn_fork_args.turn_id == "turn-1"
+    assert turn_fork_args.checkpoint_id == ""
 
 
 def test_core_cli_session_export_writes_transcript_and_full_zip(tmp_path: Path, capsys) -> None:
