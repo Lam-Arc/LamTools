@@ -97,7 +97,11 @@ async def handle_command_execute_operation(
             )
         )
     actions = context.host.member_hooks.command_action_handlers()
-    catalog = {str(item.get("name") or ""): item for item in await _live_command_catalog(context=context, params=params)}
+    catalog = {
+        normalize_command_name(item.get("name")): item
+        for item in await _live_command_catalog(context=context, params=params)
+        if isinstance(item, dict) and normalize_command_name(item.get("name"))
+    }
     definition = catalog.get(command)
     # Allow commands registered as actions even if the catalog (which may
     # go through operations) doesn't list them — e.g. "compact" registered
@@ -106,12 +110,21 @@ async def handle_command_execute_operation(
         return CoreLiveOperationOutcome(
             response=rpc_error(request_id, code=INVALID_REQUEST, message=f"Command not available: {command}")
         )
-    if definition is not None and definition.get("action") != "run_action":
+    if definition is not None and _command_kind(definition) != "action":
         return CoreLiveOperationOutcome(
             response=rpc_error(
                 request_id,
                 code=INVALID_REQUEST,
                 message=f"Command is not executable as an action: {command}",
+            )
+        )
+    arguments = _command_arguments(params)
+    if definition is not None and arguments and not bool(definition.get("accepts_args")):
+        return CoreLiveOperationOutcome(
+            response=rpc_error(
+                request_id,
+                code=INVALID_REQUEST,
+                message=f"Command does not accept arguments: {command}",
             )
         )
     work_root = str(params.get("work_root") or params.get("workRoot") or "")
@@ -122,7 +135,7 @@ async def handle_command_execute_operation(
                 thread_id=thread_id,
                 work_root=work_root,
                 actions=actions,
-                params=params,
+                params={**params, "arguments": arguments},
             )
         else:
             result = await _execute_live_command_action(
@@ -132,6 +145,7 @@ async def handle_command_execute_operation(
                 work_root=work_root,
                 actions=actions,
                 params=params,
+                arguments=arguments,
             )
             async with context.session_factory() as db:
                 snapshot = await context.persistence.load(db, thread_id)
@@ -661,6 +675,7 @@ async def handle_turn_start_operation(
         "runtime_snapshot": turn_runtime_snapshot,
         "imagegen_config": imagegen_config,
         "model_id": str(params.get("model_id") or params.get("modelId") or ""),
+        "reasoning_level": str(params.get("reasoning_level") or params.get("reasoningLevel") or ""),
         "thinking_enabled": params.get("thinking_enabled") if isinstance(params.get("thinking_enabled"), bool) else None,
         "thinking_budget": params.get("thinking_budget") if isinstance(params.get("thinking_budget"), int) else None,
         "reasoning_effort": str(params.get("reasoning_effort") or params.get("reasoningEffort") or ""),
@@ -779,6 +794,11 @@ async def _resolve_turn_approval_policy(*, context: "CoreLiveContext", params: d
                             if isinstance(value.get("allow_access_outside_workdir"), bool)
                             else global_controls["base_allow_access_outside_workdir"]
                         ),
+                        "permission_preset": (
+                            value.get("permission_preset")
+                            if value.get("permission_preset") in {"ask", "auto", "full_access"}
+                            else global_controls["permission_preset"]
+                        ),
                     },
                 }
         except Exception:
@@ -859,6 +879,7 @@ def _runtime_snapshot_with_turn_options(
     result["active_mode"] = active_mode
     scalar_keys = (
         "model_id",
+        "reasoning_level",
         "thinking_enabled",
         "thinking_budget",
         "reasoning_effort",
@@ -900,6 +921,7 @@ def _queue_runtime_snapshot(item: dict[str, Any]) -> dict[str, Any]:
             )
             for key in (
                 "model_id",
+                "reasoning_level",
                 "thinking_enabled",
                 "thinking_budget",
                 "reasoning_effort",
@@ -2188,6 +2210,7 @@ async def _dispatch_next_queue_item(
             }
             for key in (
                 "model_id",
+                "reasoning_level",
                 "thinking_enabled",
                 "thinking_budget",
                 "reasoning_effort",
@@ -2555,6 +2578,11 @@ async def _live_command_catalog(
         member_roots=[Path(item) for item in hooks.command_member_roots()],
         work_root=work_root if isinstance(work_root, (str, Path)) else None,
         skill_registry=hooks.command_skill_registry(),
+        skill_state_store=(
+            hooks.command_skill_state_store()
+            if callable(getattr(hooks, "command_skill_state_store", None))
+            else None
+        ),
     )
     return [command.to_dict() for command in commands]
 
@@ -2567,6 +2595,7 @@ async def _execute_live_command_action(
     work_root: str,
     actions: dict[str, Any],
     params: dict[str, Any],
+    arguments: str = "",
     on_event: Callable[[dict[str, Any]], Any] | None = None,
 ) -> dict[str, Any]:
     if command in actions:
@@ -2574,6 +2603,7 @@ async def _execute_live_command_action(
             command=command,
             thread_id=thread_id,
             work_root=work_root,
+            arguments=arguments,
             handlers=actions,
             on_event=on_event,
         )
@@ -2581,7 +2611,13 @@ async def _execute_live_command_action(
         raise ValueError(f"Command is not executable as an action: {command}")
     result = await context.operations.execute(
         "command.execute",
-        {**params, "thread_id": thread_id, "command": command, "_on_event": on_event},
+        {
+            **params,
+            "thread_id": thread_id,
+            "command": command,
+            "arguments": arguments,
+            "_on_event": on_event,
+        },
         metadata={"source": "core_live"},
     )
     if result.status != "ok":
@@ -2700,6 +2736,7 @@ async def _execute_claimed_compact_live_command(
             work_root=work_root,
             actions=actions,
             params=params,
+            arguments=_command_arguments(params),
             on_event=on_event,
         )
     except asyncio.CancelledError:
@@ -2877,6 +2914,22 @@ def _is_active_turn(snapshot: dict[str, Any], turn_id: str) -> bool:
 
 def _thread_id_from_params(params: dict[str, Any]) -> str:
     return str(params.get("thread_id") or params.get("threadId") or params.get("session_id") or "").strip()
+
+
+def _command_arguments(params: dict[str, Any]) -> str:
+    value = params.get("arguments")
+    if value is None:
+        value = params.get("args")
+    return str(value or "").strip()
+
+
+def _command_kind(definition: dict[str, Any]) -> str:
+    raw_kind = str(definition.get("kind") or "").strip().lower()
+    if raw_kind in {"action", "skill"}:
+        return raw_kind
+    # Compatibility for command catalogs produced before the explicit kind
+    # field was introduced.
+    return "skill" if definition.get("action") in {"insert_token", "expand_on_send"} else "action"
 
 
 def _int_param(value: Any, *, default: int) -> int:

@@ -116,10 +116,10 @@ const props = withDefaults(defineProps<{
   sendLabel: 'send',
   stopLabel: 'stop',
   selectedModelId: '',
-  thinkingMode: 'none',
+  thinkingMode: 'off',
   shallowThinkingEnabled: false,
   modelOptions: () => [],
-  thinkingModeOptions: () => [{ value: 'none', label: '无思考' }],
+  thinkingModeOptions: () => [{ value: 'off', label: '关闭' }],
   errorText: '',
 })
 

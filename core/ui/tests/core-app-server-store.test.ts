@@ -210,7 +210,9 @@ describe('core appServer runtime store', () => {
     const calls: Array<{ method: string; params: Record<string, unknown> }> = []
     runtime.client = fakeClient(async (method, params) => {
       calls.push({ method, params })
-      if (method === 'command.catalog') return { commands: [{ name: 'compact', action: 'run_action' }] }
+      if (method === 'command.catalog') return {
+        commands: [{ name: 'compact', action: 'run_action', kind: 'action', accepts_args: false }],
+      }
       if (method === 'command.execute') return { result: { status: 'compacted' }, snapshot: snapshot(2, 'idle') }
       if (method === 'queue/guide') return { applied: true, reason: '', snapshot: snapshot(3, 'running') }
       return { snapshot: snapshot(1, 'running') }
@@ -224,7 +226,7 @@ describe('core appServer runtime store', () => {
       { type: 'skill', name: 'reviewer', source_text: '/reviewer' },
     ])
     const commands = await controller.listCommands('E:\\LamTools')
-    const result = await controller.executeCommand('thread-1', 'compact', 'E:\\LamTools')
+    const result = await controller.executeCommand('thread-1', 'compact', 'E:\\LamTools', '创建发布计划')
     const guided = await controller.guideQueueInput('thread-1', 'turn-1', 'queue-1', 'updated guidance')
 
     expect(calls[0].method).toBe('turn/start')
@@ -232,8 +234,17 @@ describe('core appServer runtime store', () => {
       { type: 'text', text: '请 ' },
       { type: 'skill', name: 'reviewer', source_text: '/reviewer' },
     ])
-    expect(commands).toEqual([{ name: 'compact', action: 'run_action' }])
+    expect(commands).toEqual([{ name: 'compact', action: 'run_action', kind: 'action', accepts_args: false }])
     expect(result).toEqual({ status: 'compacted' })
+    expect(calls[2]).toEqual({
+      method: 'command.execute',
+      params: {
+        thread_id: 'thread-1',
+        command: 'compact',
+        arguments: '创建发布计划',
+        work_root: 'E:\\LamTools',
+      },
+    })
     expect(guided).toEqual({ applied: true, reason: '' })
     expect(calls[3]).toMatchObject({
       method: 'queue/guide',

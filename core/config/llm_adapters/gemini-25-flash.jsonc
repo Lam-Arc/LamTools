@@ -1,0 +1,24 @@
+{
+  "id": "gemini-25-flash",
+  "label": "Gemini 2.5 Flash Thinking",
+  "protocol": "gemini-generative-language",
+  "match_model": ["gemini-2.5-flash"],
+  "endpoint": "/v1beta/models/{model}:generateContent",
+  "stream_endpoint": "/v1beta/models/{model}:streamGenerateContent?alt=sse",
+  "request": {
+    "reasoning": {
+      "cleanup": [
+        "generationConfig.thinkingConfig",
+        "reasoning_effort",
+        "reasoning",
+        "thinking"
+      ],
+      "presets": {
+        "off": { "set": { "generationConfig.thinkingConfig.thinkingBudget": 0 } },
+        "light": { "set": { "generationConfig.thinkingConfig.thinkingBudget": 2048 } },
+        "high": { "set": { "generationConfig.thinkingConfig.thinkingBudget": 8192 } },
+        "max": { "set": { "generationConfig.thinkingConfig.thinkingBudget": 24576 } }
+      }
+    }
+  }
+}

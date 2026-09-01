@@ -18,6 +18,7 @@
         "minWidth": 800,
         "minHeight": 600,
         "decorations": false,
+        "backgroundColor": "#202020",
         "dragDropEnabled": false,
         "additionalBrowserArgs": "--disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling --disable-backgrounding-tabs"
       },
@@ -35,7 +36,6 @@
         "transparent": true,
         "backgroundColor": "#00000000",
         "shadow": false,
-        "alwaysOnTop": true,
         "skipTaskbar": true,
         "resizable": false,
         "maximizable": false,

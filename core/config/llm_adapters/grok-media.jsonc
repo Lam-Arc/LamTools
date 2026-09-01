@@ -1,0 +1,23 @@
+{
+  "id": "grok-media",
+  "label": "Grok Image/Video (no reasoning)",
+  "protocol": "openai-chat-completions",
+  "match_model": ["grok-imagine"],
+  "request": {
+    "reasoning": {
+      "cleanup": [
+        "reasoning_effort",
+        "reasoning",
+        "thinking",
+        "enable_thinking",
+        "thinking_budget"
+      ],
+      "presets": {
+        "off": {},
+        "light": {},
+        "high": {},
+        "max": {}
+      }
+    }
+  }
+}

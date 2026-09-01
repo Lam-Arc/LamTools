@@ -122,6 +122,15 @@ def test_projector_syncs_outer_turn_status_and_sequence_from_core_run_item(run_s
     assert state["status"] == thread_status
 
 
+def test_projector_persists_turn_acceptance_time():
+    projector = CoreAppSnapshotProjector(member_defaults={"queue": []})
+    accepted = _envelope(1, {"turn_id": "turn-1", "status": "running"}, method="turn/accepted")
+
+    state = projector.apply(None, accepted)
+
+    assert state["turns"]["turn-1"]["created_at"] == accepted.created_at.isoformat()
+
+
 def test_projector_owns_queue_projection_and_terminal_removal():
     projector = CoreAppSnapshotProjector(member_defaults={"queue": []})
 

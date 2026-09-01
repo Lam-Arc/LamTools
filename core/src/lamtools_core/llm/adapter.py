@@ -6,6 +6,7 @@ provider-neutral helpers. No network dependencies — pure transformation.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any, Protocol, runtime_checkable
 
 from lamtools_core.llm import (
@@ -78,7 +79,15 @@ class OpenAICompatibleAdapter:
 
     def parse_stream_chunk(self, chunk: dict[str, Any]) -> LLMStreamEvent | None:
         """Convert OpenAI-compatible stream chunk to LLMStreamEvent."""
-        return normalize_stream_chunk(chunk)
+        event = normalize_stream_chunk(chunk)
+        # The legacy adapter API treats a provider finish chunk as the
+        # terminal event.  The profile-based Core HTTP client distinguishes
+        # provider ``finish`` from transport ``done`` so it can still consume
+        # a following usage chunk; keep that newer distinction out of this
+        # older standalone adapter contract.
+        if event is not None and event.kind == "finish":
+            return replace(event, kind="done")
+        return event
 
     def normalize_base_url(self, base_url: str) -> str:
         """Normalize a provider base URL.

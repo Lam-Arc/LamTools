@@ -38,7 +38,7 @@
         <span>Provider Usage</span>
         <span>{{ summary.usageStatusLabel }}</span>
       </div>
-      <div class="core-resource-stats">
+      <div class="core-resource-stats" :style="{ gridTemplateColumns: `repeat(${summary.callItems.length}, minmax(0, 1fr))` }">
         <div v-for="item in summary.callItems" :key="item.label">
           <span>{{ item.label }}</span>
           <strong>{{ item.value }}</strong>
@@ -159,7 +159,7 @@ onBeforeUnmount(() => {
 .core-resource-used { background: var(--green); transform: scaleX(var(--core-resource-used)); transform-origin: left; transition: transform 180ms var(--core-resource-ease); }
 .core-resource-blocked { left: var(--core-resource-threshold); background: color-mix(in srgb, var(--theme-backdrop-text) 14%, transparent); }
 .core-resource-legend, .core-resource-empty, .core-resource-stats span { color: color-mix(in srgb, var(--theme-backdrop-text) 56%, transparent); font-size: 12px; }
-.core-resource-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 8px; padding-top: 10px; border-top: 1px solid color-mix(in srgb, var(--theme-backdrop-text) 11%, transparent); }
+.core-resource-stats { display: grid; gap: 8px; margin-top: 8px; padding-top: 10px; border-top: 1px solid color-mix(in srgb, var(--theme-backdrop-text) 11%, transparent); }
 .core-resource-stats > div { display: grid; gap: 3px; min-width: 0; }
 .core-resource-stats strong { overflow: hidden; color: var(--theme-backdrop-text); font-family: var(--font-mono); font-size: 13px; text-overflow: ellipsis; }
 .core-resource-empty { padding: 8px 0; }

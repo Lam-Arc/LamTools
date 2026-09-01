@@ -517,6 +517,7 @@ def _error(request: OperationRequest, message: str) -> OperationResult:
 
 
 _PERMISSION_MODES = ("read_only", "limited_edit", "full_edit")
+_DEFAULT_PERMISSION_PRESETS = ("ask", "auto", "full_access")
 _RUNTIME_CONTROL_BOOLS = (
     "allow_access_outside_workdir",
 )
@@ -534,6 +535,10 @@ def _merge_runtime_controls(request: OperationRequest, current: Any, incoming: d
     for key, raw in incoming.items():
         if key == "permission_mode":
             if raw not in _PERMISSION_MODES:
+                return None
+            merged[key] = raw
+        elif key == "permission_preset":
+            if raw not in _DEFAULT_PERMISSION_PRESETS:
                 return None
             merged[key] = raw
         elif key in _RUNTIME_CONTROL_BOOLS:

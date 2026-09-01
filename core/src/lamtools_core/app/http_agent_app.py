@@ -25,6 +25,7 @@ from lamtools_core.cli import (
 )
 from lamtools_core.http import create_core_router
 from lamtools_core.llm import LLMRequest
+from lamtools_core.llm.profiles import reasoning_off_supported
 from lamtools_core.config import build_config_operation_catalog
 from lamtools_core.config.provider_store import ProviderConfig, ProviderStore, mask_api_key
 from lamtools_core.config.root import ensure_projects_root
@@ -73,6 +74,7 @@ class CoreConfigRoutingLLMClient:
         adapter_dirs: tuple[Path | str, ...] = (),
         thinking_enabled: bool = True,
         thinking_budget: int = 10000,
+        reasoning_level: str = "",
         max_tokens: int | None = None,
         temperature: float = 0.2,
     ) -> None:
@@ -80,6 +82,7 @@ class CoreConfigRoutingLLMClient:
         self.adapter_dirs = tuple(Path(item) for item in adapter_dirs)
         self.thinking_enabled = thinking_enabled
         self.thinking_budget = thinking_budget
+        self.reasoning_level = reasoning_level
         self.max_tokens = max_tokens
         self.temperature = temperature
 
@@ -89,12 +92,14 @@ class CoreConfigRoutingLLMClient:
         model_id: str = "",
         thinking_enabled: bool | None = None,
         thinking_budget: int | None = None,
+        reasoning_level: str | None = None,
     ) -> "CoreConfigRoutingLLMClient":
         return CoreConfigRoutingLLMClient(
             default_model_ref=model_id or self.default_model_ref,
             adapter_dirs=self.adapter_dirs,
             thinking_enabled=self.thinking_enabled if thinking_enabled is None else thinking_enabled,
             thinking_budget=self.thinking_budget if thinking_budget is None else thinking_budget,
+            reasoning_level=self.reasoning_level if reasoning_level is None else reasoning_level,
             max_tokens=self.max_tokens,
             temperature=self.temperature,
         )
@@ -125,18 +130,21 @@ class CoreConfigRoutingLLMClient:
             if isinstance(metadata.get("thinking_enabled"), bool)
             else self.thinking_enabled
         )
+        thinking_enabled = bool(thinking_enabled) and bool(config.thinking_supported)
         thinking_budget = (
             metadata.get("thinking_budget")
             if isinstance(metadata.get("thinking_budget"), int) and not isinstance(metadata.get("thinking_budget"), bool)
             else self.thinking_budget or config.thinking_budget
         )
-        reasoning_effort = str(metadata.get("reasoning_effort") or "")
+        reasoning_level = str(metadata.get("reasoning_level") or self.reasoning_level or "")
+        reasoning_effort = str(metadata.get("reasoning_effort") or config.reasoning_effort or "")
         return config, CoreHttpLLMClient(
             config=config,
             adapter_profile=profile,
             thinking_enabled=thinking_enabled,
             thinking_budget=thinking_budget,
             reasoning_effort=reasoning_effort,
+            reasoning_level=reasoning_level,
             max_tokens=self.max_tokens or config.max_output_tokens,
             temperature=self.temperature if self.temperature is not None else config.temperature,
         )
@@ -145,7 +153,17 @@ class CoreConfigRoutingLLMClient:
 class _MemberDefaultsHooks(DefaultCoreLiveMemberHooks):
     """Member hooks that inject member_defaults into thread materialization."""
 
-    def __init__(self, member_defaults: dict[str, Any]) -> None:
+    def __init__(
+        self,
+        member_defaults: dict[str, Any],
+        *,
+        skill_registry_factory: Any = None,
+        skill_state_store_factory: Any = None,
+    ) -> None:
+        super().__init__(
+            skill_registry_factory=skill_registry_factory,
+            skill_state_store_factory=skill_state_store_factory,
+        )
         self._member_defaults = member_defaults
 
     async def materialize_thread(self, *, db, thread_id, params):
@@ -185,6 +203,7 @@ def create_core_agent_http_app(
     plugin_roots: tuple[Path | str, ...] = (),
     thinking_enabled: bool = True,
     thinking_budget: int = 10000,
+    reasoning_level: str = "",
     max_tokens: int | None = None,
     temperature: float = 0.2,
     frontend_dir: Path | str | None = None,
@@ -212,6 +231,7 @@ def create_core_agent_http_app(
         default_model_ref=model_id or config.model_record_id or config.model_id,
         thinking_enabled=thinking_enabled,
         thinking_budget=thinking_budget or config.thinking_budget,
+        reasoning_level=reasoning_level,
         max_tokens=max_tokens,
         temperature=temperature if temperature is not None else config.temperature,
     )
@@ -228,6 +248,7 @@ def create_core_agent_http_app(
             "model_record_id": config.model_record_id,
             "thinking_enabled": thinking_enabled,
             "thinking_budget": thinking_budget or config.thinking_budget,
+            "reasoning_level": reasoning_level,
             "context_window": config.context_window,
             "capability": config.capability,
         },
@@ -535,7 +556,11 @@ def create_core_agent_http_app(
                 llm_client=llm_client,
                 default_model_id=config.model_id,
                 session_store=session_store,
-                member_hooks=_MemberDefaultsHooks(core_db_handle.member_defaults),
+                member_hooks=_MemberDefaultsHooks(
+                    core_db_handle.member_defaults,
+                    skill_registry_factory=getattr(actual_operations, "command_skill_registry_factory", None),
+                    skill_state_store_factory=getattr(actual_operations, "command_skill_state_store_factory", None),
+                ),
             ),
         )
 
@@ -1022,6 +1047,7 @@ def _register_core_config_operations(
         task_type = str(request.payload.get("task_type") or request.payload.get("taskType") or "core")
         model_ref = str(request.payload.get("model_id") or request.payload.get("modelId") or "")
         config = load_llm_config(model_ref=model_ref)
+        adapter_profile = _resolve_adapter_profile(config, ())
         return OperationResult(
             name="config.resolved.get",
             payload={
@@ -1035,6 +1061,7 @@ def _register_core_config_operations(
                         "context_window": config.context_window,
                         "max_output_tokens": config.max_output_tokens,
                         "thinking_supported": config.thinking_supported,
+                        "reasoning_off_supported": reasoning_off_supported(adapter_profile),
                         "thinking_budget": config.thinking_budget,
                         "temperature": config.temperature,
                     },

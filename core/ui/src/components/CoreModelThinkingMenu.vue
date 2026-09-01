@@ -208,7 +208,9 @@ const modelOptionGroups = computed(() => {
 
 const thinkingLabel = computed(() => {
   const option = props.thinkingModeOptions.find((item) => item.value === props.thinkingMode)
-  return option?.label || (props.thinkingMode === 'none' ? props.thinkingAriaLabel : normalizeCoreThinkingMode(props.thinkingMode, 'none'))
+  return option?.label || (normalizeCoreThinkingMode(props.thinkingMode, 'off') === 'off'
+    ? props.thinkingAriaLabel
+    : normalizeCoreThinkingMode(props.thinkingMode, 'off'))
 })
 
 const ariaLabel = computed(() => `模型与思考强度：${modelLabel.value} ${thinkingLabel.value}`)

@@ -98,7 +98,7 @@ onUnmounted(() => {
 .titlebar {
   position: fixed;
   inset: 0 0 auto 0;
-  z-index: var(--z-toast);
+  z-index: var(--z-toast, 90);
   display: flex;
   align-items: center;
   justify-content: space-between;

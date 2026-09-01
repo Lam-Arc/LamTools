@@ -81,6 +81,7 @@ class CoreAppServerClient:
         work_root: str = "",
         mode: str = "",
         model_id: str | None = None,
+        reasoning_level: str | None = None,
         thinking_enabled: bool | None = None,
         thinking_budget: int | None = None,
         reasoning_effort: str | None = None,
@@ -109,6 +110,8 @@ class CoreAppServerClient:
             params["goal_id"] = goal_id
         if model_id:
             params["model_id"] = model_id
+        if reasoning_level is not None:
+            params["reasoning_level"] = reasoning_level
         if thinking_enabled is not None:
             params["thinking_enabled"] = thinking_enabled
         if thinking_budget is not None:
@@ -257,6 +260,7 @@ class CoreAppServerClient:
         thread_id: str,
         command: str,
         work_root: str = "",
+        arguments: str = "",
         client_command_id: str = "",
     ) -> dict[str, Any]:
         response = await self._request_result(
@@ -264,6 +268,7 @@ class CoreAppServerClient:
             {
                 "thread_id": thread_id,
                 "command": command,
+                "arguments": arguments,
                 "work_root": work_root,
                 "include_snapshot": False,
                 **({"client_command_id": client_command_id} if client_command_id else {}),

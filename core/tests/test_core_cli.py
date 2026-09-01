@@ -510,7 +510,7 @@ async def test_core_cli_live_commands_call_core_app_server_operations(monkeypatc
 
     assert ("turn.start", {
         "thread_id": "thread-1", "input_items": [{"type": "text", "text": "start"}], "work_root": str(tmp_path),
-        "model_id": "model-1", "thinking_enabled": False, "thinking_budget": 512,
+        "model_id": "model-1", "reasoning_level": "off", "thinking_budget": 512,
         "shallow_thinking_enabled": True, "approval_policy": "auto_approve", "client_message_id": "message-1",
         "goal_id": None,
     }) in calls
@@ -739,7 +739,7 @@ async def test_core_cli_run_starts_and_watches_one_live_connection(monkeypatch, 
         "input_items": [{"type": "text", "text": "write doc"}],
         "work_root": str(tmp_path),
         "model_id": "fake-model",
-        "thinking_enabled": True,
+        "reasoning_level": "high",
         "thinking_budget": 10000,
         "shallow_thinking_enabled": False,
         "max_tokens": 4096,

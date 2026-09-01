@@ -27,7 +27,7 @@
         />
         <button
           type="button"
-          :disabled="stops.length <= 2"
+          :disabled="stops.length <= 1"
           @click="$emit('remove-stop', index)"
         >删</button>
       </div>
@@ -47,7 +47,6 @@
           min="0"
           max="360"
           step="5"
-          @change="$emit('update:angle', angleModel)"
         />
         <input
           v-model.number="angleModel"
@@ -55,7 +54,6 @@
           min="0"
           max="360"
           step="5"
-          @change="$emit('update:angle', angleModel)"
         />
       </div>
     </label>
@@ -68,7 +66,6 @@
           min="0.1"
           max="1"
           step="0.05"
-          @change="$emit('update:opacity', opacityModel)"
         />
         <input
           v-model.number="opacityModel"
@@ -76,7 +73,6 @@
           min="0.1"
           max="1"
           step="0.05"
-          @change="$emit('update:opacity', opacityModel)"
         />
       </div>
     </label>

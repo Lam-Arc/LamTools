@@ -8,16 +8,7 @@
       @dragleave="dragOver = false"
       @drop.prevent="$emit('drop', $event); dragOver = false"
     >
-      <div class="composer-ambient" :class="{ 'composer-ambient--on': active }" aria-hidden="true">
-        <span v-for="i in 7" :key="i" class="composer-particle" :style="{ '--i': i - 1 }" />
-      </div>
-      <!-- 运行态顶部流光线条（demo-composer-line-gsap 原型落地）：active 时流动，inactive 淡出 -->
-      <span
-        ref="glowEl"
-        class="composer-glow"
-        :class="{ 'composer-glow--on': active }"
-        aria-hidden="true"
-      />
+      <slot name="popover" />
       <slot name="preamble" />
       <div class="composer-main-card">
         <slot name="status" />
@@ -38,14 +29,14 @@
             <slot name="tools" />
           </div>
           <slot name="action">
-            <button
-              class="send"
-              :class="{ 'send--stop': actionMode === 'stop' }"
-              type="submit"
+            <CoreSendStopButton
+              :action-mode="actionMode"
               :disabled="actionMode === 'send' && (disabled || !(modelValue || '').trim())"
-              :title="actionMode === 'stop' ? stopTitle : sendTitle"
-              :aria-label="actionMode === 'stop' ? stopTitle : sendTitle"
-            >{{ actionMode === 'stop' ? stopLabel : sendLabel }}</button>
+              :send-label="sendLabel"
+              :stop-label="stopLabel"
+              :send-title="sendTitle"
+              :stop-title="stopTitle"
+            />
           </slot>
         </div>
       </div>
@@ -62,10 +53,8 @@
  * Renders a floating or embedded textarea with toolbar and send button.
  * Drag-and-drop support via slots and events.
  */
-import { onBeforeUnmount, ref, watch } from 'vue'
-import { startFlowLine, stopFlowLine } from '../motion/flowLine'
-
-const REDUCED_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)')
+import { ref } from 'vue'
+import CoreSendStopButton from './CoreSendStopButton.vue'
 
 const props = withDefaults(defineProps<{
   modelValue?: string
@@ -78,8 +67,6 @@ const props = withDefaults(defineProps<{
   stopLabel?: string
   sendTitle?: string
   stopTitle?: string
-  /** 运行时：背景粒子浮动层亮起（仅运行时出现的动效） */
-  active?: boolean
 }>(), {
   modelValue: '',
   placeholder: '输入内容...',
@@ -90,7 +77,6 @@ const props = withDefaults(defineProps<{
   stopLabel: 'stop',
   sendTitle: '发送',
   stopTitle: '停止运行',
-  active: false,
 })
 
 const emit = defineEmits<{
@@ -100,24 +86,6 @@ const emit = defineEmits<{
 }>()
 
 const dragOver = ref(false)
-const glowEl = ref<HTMLElement | null>(null)
-
-// ── 运行态流光线条：active 时启动 20fps 流动（WebView2 需内联样式写入），
-//    inactive / reduced-motion / 卸载时停止并清理（模块级共享 rAF，见 motion/flowLine.ts）
-watch(
-  () => props.active,
-  (on) => {
-    if (!glowEl.value) return
-    if (on && !REDUCED_MOTION.matches) startFlowLine(glowEl.value)
-    else stopFlowLine(glowEl.value)
-  },
-  { immediate: true, flush: 'post' },
-)
-
-onBeforeUnmount(() => {
-  if (glowEl.value) stopFlowLine(glowEl.value)
-})
-
 // IME guard: the composition-confirm Enter must not submit the message
 // (audit 19 S3 — the default textarea previously emitted submit on any
 // plain Enter, which misfired for CJK users).
@@ -132,78 +100,6 @@ function onEnterKey(event: KeyboardEvent) {
 .composer-root--embedded {
   min-width: 0;
   width: 100%;
-}
-
-/* ── 背景粒子层：运行时亮起，粒子沿 y 轴浮动（stagger 100ms）── */
-.composer-ambient {
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity .3s ease;
-  /* 上下边缘渐隐，粒子浮出边界时柔化消失，避免硬裁剪 */
-  -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 22%, #000 78%, transparent 100%);
-  mask-image: linear-gradient(180deg, transparent 0, #000 22%, #000 78%, transparent 100%);
-}
-.composer-ambient--on {
-  opacity: 1;
-}
-.composer-ambient:not(.composer-ambient--on) .composer-particle {
-  animation-play-state: paused;
-}
-.composer-particle {
-  position: absolute;
-  border-radius: 50%;
-  background: color-mix(in srgb, var(--green) 10%, transparent);
-  animation: composer-particle-float 3s ease-in-out infinite;
-  animation-delay: calc(var(--i) * 100ms);
-}
-/* 7 个粒子：位置错落、大小不一 */
-.composer-particle:nth-child(1) { left: 12%; top: 24%; width: 8px; height: 8px; }
-.composer-particle:nth-child(2) { left: 27%; top: 72%; width: 5px; height: 5px; }
-.composer-particle:nth-child(3) { left: 39%; top: 32%; width: 10px; height: 10px; }
-.composer-particle:nth-child(4) { left: 53%; top: 64%; width: 7px; height: 7px; }
-.composer-particle:nth-child(5) { left: 66%; top: 28%; width: 5px; height: 5px; }
-.composer-particle:nth-child(6) { left: 78%; top: 68%; width: 8px; height: 8px; }
-.composer-particle:nth-child(7) { left: 90%; top: 44%; width: 7px; height: 7px; }
-@keyframes composer-particle-float {
-  0%, 100% { transform: translateY(-50px); }
-  50% { transform: translateY(50px); }
-}
-
-/* ── 运行态顶部流光线条：active 时亮起，渐变随 background-position 流动
-   （flowLine.ts 每帧写内联样式；inactive 淡出）── */
-.composer-glow {
-  position: absolute;
-  top: -1px;
-  left: 10%;
-  right: 10%;
-  height: 2px;
-  border-radius: 0 0 999px 999px;
-  background-image: linear-gradient(
-    90deg,
-    transparent 0%,
-    color-mix(in srgb, var(--green) 62%, transparent) 35%,
-    color-mix(in srgb, var(--blue) 55%, transparent) 65%,
-    transparent 100%
-  );
-  background-size: 200% 100%;
-  opacity: 0;
-  transition: opacity .3s ease;
-  pointer-events: none;
-}
-.composer-glow--on {
-  opacity: .85;
-}
-@media (prefers-reduced-motion: reduce) {
-  .composer-particle {
-    animation: none;
-  }
-  .composer-glow {
-    opacity: 0;
-    transition: none;
-  }
 }
 
 .composer-root .floating-composer.composer-bar--embedded {

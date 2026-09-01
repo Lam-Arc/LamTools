@@ -96,6 +96,14 @@ def test_full_access_preset_expands_to_full_edit_auto_approve_and_outside_access
     assert resolved.allow_access_outside_workdir is True
 
 
+def test_global_runtime_controls_preserve_full_access_default() -> None:
+    from lamtools_core.app.runtime_permissions import read_global_runtime_controls
+
+    controls = read_global_runtime_controls({"permission_preset": "full_access"})
+
+    assert controls["permission_preset"] == "full_access"
+
+
 def test_auto_preset_keeps_the_session_capability_tier() -> None:
     from lamtools_core.app.runtime_permissions import resolve_permission_preset
 

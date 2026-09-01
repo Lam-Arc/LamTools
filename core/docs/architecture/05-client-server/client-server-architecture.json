@@ -1,0 +1,521 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "LamTools Core 桌面端 / 界面 / 应用服务器架构",
+    "locale": "zh-CN",
+    "output": "client-server-architecture.html",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1320,
+      700
+    ],
+    "repository": {
+      "url": "https://github.com/Lam-Arc/LamTools.git",
+      "revision": "5c1371e717dfa86e125665f7669526d758ad5bce"
+    },
+    "views": [
+      {
+        "id": "request-path",
+        "label": "请求进入运行时",
+        "focus": [
+          "user-ui",
+          "ui-client",
+          "fastapi",
+          "http-router",
+          "live-router",
+          "core-runtime"
+        ],
+        "note": "界面通过应用服务器协议把用户操作送入核心运行时。"
+      },
+      {
+        "id": "stream-path",
+        "label": "流式回到界面",
+        "focus": [
+          "core-runtime",
+          "event-hub",
+          "live-router",
+          "ui-store",
+          "ui-client",
+          "user-ui"
+        ],
+        "note": "运行时事件经事件中心、WebSocket 和界面投影回到界面。"
+      },
+      {
+        "id": "desktop-bootstrap",
+        "label": "桌面启动与地址注入",
+        "focus": [
+          "tauri-shell",
+          "api-base",
+          "ui-client",
+          "fastapi"
+        ],
+        "note": "Tauri 只负责启动与地址注入，HTTP 服务承担核心适配。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "user-ui",
+      "type": "frontend",
+      "label": "Vue 界面",
+      "sublabel": "工作台 / 用户交互",
+      "tag": "表示层",
+      "pos": [
+        40,
+        300
+      ],
+      "size": [
+        170,
+        72
+      ],
+      "sources": [
+        {
+          "path": "core/ui/src/demo/App.vue",
+          "label": "UI shell"
+        },
+        {
+          "path": "core/ui/src/components/ChatThread.vue",
+          "label": "chat view"
+        }
+      ]
+    },
+    {
+      "id": "ui-client",
+      "type": "frontend",
+      "label": "应用服务器客户端",
+      "sublabel": "HTTP + WebSocket 协议",
+      "tag": "传输客户端",
+      "pos": [
+        250,
+        300
+      ],
+      "size": [
+        180,
+        72
+      ],
+      "sources": [
+        {
+          "path": "core/ui/src/appServer/client.ts",
+          "label": "WebSocket client"
+        },
+        {
+          "path": "core/ui/src/appServer/protocol.ts",
+          "label": "protocol"
+        }
+      ]
+    },
+    {
+      "id": "tauri-shell",
+      "type": "backend",
+      "label": "Tauri 桌面宿主",
+      "sublabel": "桌面窗口 + 调用",
+      "tag": "桌面宿主",
+      "pos": [
+        250,
+        120
+      ],
+      "size": [
+        180,
+        66
+      ],
+      "sources": [
+        {
+          "path": "core/desktop/src/main.ts",
+          "label": "Tauri bootstrap"
+        },
+        {
+          "path": "core/desktop/src/desktopPluginHost.ts",
+          "label": "desktop host"
+        }
+      ]
+    },
+    {
+      "id": "api-base",
+      "type": "backend",
+      "label": "API 地址注入",
+      "sublabel": "get_api_base → /api/core",
+      "pos": [
+        470,
+        120
+      ],
+      "size": [
+        180,
+        66
+      ],
+      "sources": [
+        {
+          "path": "core/desktop/src/main.ts",
+          "label": "base injection"
+        }
+      ]
+    },
+    {
+      "id": "fastapi",
+      "type": "backend",
+      "label": "Core FastAPI 服务",
+      "sublabel": "应用装配 + 启动",
+      "tag": "后端边界",
+      "pos": [
+        470,
+        300
+      ],
+      "size": [
+        180,
+        72
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/app/http_agent_app.py",
+          "label": "FastAPI app"
+        },
+        {
+          "path": "core/src/lamtools_core/app/factory.py",
+          "label": "app factory"
+        }
+      ]
+    },
+    {
+      "id": "http-router",
+      "type": "backend",
+      "label": "HTTP API 路由器",
+      "sublabel": "REST / 命令适配器",
+      "pos": [
+        680,
+        300
+      ],
+      "size": [
+        180,
+        72
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/http/routes.py",
+          "label": "HTTP routes"
+        },
+        {
+          "path": "core/src/lamtools_core/app/http_agent_app.py",
+          "label": "route mount"
+        }
+      ]
+    },
+    {
+      "id": "live-router",
+      "type": "messagebus",
+      "label": "实时 WebSocket 路由器",
+      "sublabel": "/api/core/app-server",
+      "tag": "流式传输",
+      "pos": [
+        890,
+        300
+      ],
+      "size": [
+        180,
+        72
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/app/live_router.py",
+          "label": "WebSocket router"
+        },
+        {
+          "path": "core/ui/src/appServer/client.ts",
+          "label": "client socket"
+        }
+      ]
+    },
+    {
+      "id": "core-runtime",
+      "type": "backend",
+      "label": "核心运行时",
+      "sublabel": "实时操作 + 内核",
+      "tag": "核心领域",
+      "pos": [
+        1100,
+        300
+      ],
+      "size": [
+        180,
+        72
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/app/live_operations.py",
+          "label": "live operations"
+        },
+        {
+          "path": "core/src/lamtools_core/kernel/loop.py",
+          "label": "运行时内核"
+        }
+      ]
+    },
+    {
+      "id": "ui-store",
+      "type": "frontend",
+      "label": "界面投影存储",
+      "sublabel": "事件 → 界面状态",
+      "tag": "界面状态",
+      "pos": [
+        250,
+        500
+      ],
+      "size": [
+        180,
+        66
+      ],
+      "sources": [
+        {
+          "path": "core/ui/src/appServer/store.ts",
+          "label": "client store"
+        },
+        {
+          "path": "core/ui/src/appServer/workbenchProjection.ts",
+          "label": "projection"
+        }
+      ]
+    },
+    {
+      "id": "event-hub",
+      "type": "messagebus",
+      "label": "核心应用事件中心",
+      "sublabel": "发布 / 广播信封",
+      "pos": [
+        890,
+        500
+      ],
+      "size": [
+        180,
+        66
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/app/live_hub.py",
+          "label": "事件中心"
+        },
+        {
+          "path": "core/src/lamtools_core/app/live_protocol.py",
+          "label": "live protocol"
+        }
+      ]
+    },
+    {
+      "id": "core-db",
+      "type": "database",
+      "label": "核心应用数据库 / SQLite",
+      "sublabel": "持久化核心状态",
+      "tag": "持久化状态",
+      "pos": [
+        1100,
+        500
+      ],
+      "size": [
+        180,
+        66
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/app/core_db.py",
+          "label": "SQLite persistence"
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "表示边界",
+      "wraps": [
+        "user-ui",
+        "ui-client",
+        "ui-store"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "传输边界",
+      "wraps": [
+        "fastapi",
+        "http-router",
+        "live-router",
+        "event-hub"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "核心边界",
+      "wraps": [
+        "core-runtime",
+        "core-db"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "ui-to-client",
+      "from": "user-ui",
+      "to": "ui-client",
+      "label": "用户操作",
+      "variant": "emphasis",
+      "labelDy": -48
+    },
+    {
+      "id": "client-to-fastapi",
+      "from": "ui-client",
+      "to": "fastapi",
+      "label": "HTTP /api/core",
+      "labelAt": [
+        430,
+        390
+      ]
+    },
+    {
+      "id": "fastapi-to-router",
+      "from": "fastapi",
+      "to": "http-router",
+      "label": "挂载路由",
+      "labelAt": [
+        645,
+        260
+      ]
+    },
+    {
+      "id": "router-to-live",
+      "from": "http-router",
+      "to": "live-router",
+      "label": "WebSocket 升级",
+      "variant": "emphasis",
+      "labelAt": [
+        855,
+        390
+      ]
+    },
+    {
+      "id": "live-to-runtime",
+      "from": "live-router",
+      "to": "core-runtime",
+      "label": "启动 / 控制轮次",
+      "variant": "emphasis",
+      "labelAt": [
+        1065,
+        260
+      ]
+    },
+    {
+      "id": "tauri-to-base",
+      "from": "tauri-shell",
+      "to": "api-base",
+      "label": "启动 + 调用",
+      "labelDy": -48
+    },
+    {
+      "id": "base-to-client",
+      "from": "api-base",
+      "to": "ui-client",
+      "label": "获取 API 地址",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "via": [
+        [
+          560,
+          220
+        ],
+        [
+          340,
+          220
+        ]
+      ]
+    },
+    {
+      "id": "runtime-to-events",
+      "from": "core-runtime",
+      "to": "event-hub",
+      "label": "发布运行时事件",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "via": [
+        [
+          1190,
+          430
+        ],
+        [
+          980,
+          430
+        ]
+      ]
+    },
+    {
+      "id": "events-to-live",
+      "from": "event-hub",
+      "to": "live-router",
+      "label": "广播流",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "labelAt": [
+        1040,
+        470
+      ]
+    },
+    {
+      "id": "events-to-store",
+      "from": "event-hub",
+      "to": "ui-store",
+      "label": "WebSocket 信封",
+      "variant": "dashed",
+      "labelAt": [
+        640,
+        590
+      ]
+    },
+    {
+      "id": "store-to-client",
+      "from": "ui-store",
+      "to": "ui-client",
+      "label": "投影状态",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "labelAt": [
+        430,
+        440
+      ]
+    },
+    {
+      "id": "runtime-to-db",
+      "from": "core-runtime",
+      "to": "core-db",
+      "label": "持久化状态",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        1290,
+        430
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "表示边界",
+      "items": [
+        "Vue 界面只拥有交互与投影状态，不拥有核心执行状态。",
+        "应用服务器客户端负责协议适配与 WebSocket 重连。"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "传输边界",
+      "items": [
+        "FastAPI 与实时 WebSocket 路由器是可替换的入口适配器。",
+        "运行时通过事件中心反向广播，避免界面直接进入核心内核。"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "解耦信号",
+      "items": [
+        "Tauri 目前承担启动、API 地址注入和桌面宿主能力。",
+        "稳定的 API / 实时协议是桌面端与 Web 界面解耦的关键。"
+      ]
+    }
+  ]
+}

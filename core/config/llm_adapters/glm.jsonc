@@ -1,0 +1,26 @@
+{
+  "id": "glm",
+  "label": "GLM Thinking",
+  "protocol": "openai-chat-completions",
+  "match_model": ["glm", "zhipu", "chatglm"],
+  "reasoning": {
+    "off_supported": false
+  },
+  "request": {
+    "reasoning": {
+      "cleanup": ["thinking", "reasoning_effort", "enable_thinking"],
+      "presets": {
+        "off": {},
+        "light": {
+          "set": { "thinking.type": "enabled", "reasoning_effort": "low" }
+        },
+        "high": {
+          "set": { "thinking.type": "enabled", "reasoning_effort": "high" }
+        },
+        "max": {
+          "set": { "thinking.type": "enabled", "reasoning_effort": "max" }
+        }
+      }
+    }
+  }
+}

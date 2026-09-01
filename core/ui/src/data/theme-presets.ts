@@ -1,124 +1,113 @@
-/**
- * Shared theme presets.
- *
- * Built-in presets are intentionally pure-color only. Users can still create
- * gradients from the advanced editor, but presets must stay predictable.
- */
+/** Shared, low-saturation theme presets. */
+import type { ThemeData, ThemePreset } from '../helpers/theme'
 
-import type { ThemePreset, ThemeData } from '../helpers/theme'
+const theme = (overrides: Partial<ThemeData>): Partial<ThemeData> => overrides
+const solid = (color: string) => [{ color, position: 0 }]
+const neutralDark = theme({
+  backdropStops: solid('#242424'), backdropAngle: 180, backdropText: '#f2efeb',
+  mainStops: solid('#151515'), mainAngle: 180, mainText: '#f2efeb', mainOpacity: 1,
+  composerStops: solid('#303030'), composerAngle: 180, composerText: '#f2efeb', composerOpacity: 1,
+  controlStops: solid('#3d3d3d'), controlAngle: 180, controlText: '#f3eee8', controlOpacity: 1,
+})
 
-const _ = (overrides: Partial<ThemeData>): Partial<ThemeData> => overrides
-const solidStops = (color: string) => [
-  { color, position: 0 },
-  { color, position: 100 },
-]
+const neutralLight = theme({
+  backdropStops: solid('#dfdfdf'), backdropAngle: 180, backdropText: '#1f1f1f',
+  mainStops: solid('#f8f8ef'), mainAngle: 180, mainText: '#1f1f1f', mainOpacity: 1,
+  composerStops: solid('#efefef'), composerAngle: 180, composerText: '#1f1f1f', composerOpacity: 1,
+  controlStops: solid('#d8d8d8'), controlAngle: 180, controlText: '#1f1f1f', controlOpacity: 1,
+})
+const berryTealBackdrop = {
+  backdropStops: [
+    { color: '#281a1f', position: 0 },
+    { color: '#272734', position: 50 },
+    { color: '#1e2429', position: 100 },
+  ],
+  backdropAngle: 180,
+}
+const berryTealLightBackdrop = {
+  ...berryTealBackdrop,
+  backdropStops: [
+    { color: '#e3d9dc', position: 0 },
+    { color: '#d8d8e4', position: 50 },
+    { color: '#d3e1e3', position: 100 },
+  ],
+}
+const morningMistLightBackdrop = {
+  backdropStops: [
+    { color: '#c1d8e2', position: 0 },
+    { color: '#fff2db', position: 100 },
+  ],
+  backdropAngle: 185,
+}
+const morningMistDarkBackdrop = {
+  backdropStops: [
+    { color: '#111a19', position: 0 },
+    { color: '#0d1216', position: 100 },
+  ],
+  backdropAngle: 185,
+  backdropText: '#f2efeb',
+}
+const morningMistDarkTheme = {
+  ...neutralDark,
+  ...morningMistDarkBackdrop,
+  mainStops: [{ color: '#151616', position: 0 }],
+  mainAngle: 180,
+  mainText: '#f2efeb',
+  mainOpacity: 1,
+  composerStops: [
+    { color: '#242525', position: 0 },
+    { color: '#282929', position: 100 },
+  ],
+  composerAngle: 180,
+  composerText: '#f2efeb',
+  composerOpacity: 1,
+  controlStops: [{ color: '#1a2824', position: 0 }],
+  controlAngle: 180,
+  controlText: '#f3eee8',
+  controlOpacity: 1,
+}
+const morningMistLightTheme = {
+  ...neutralLight,
+  ...morningMistLightBackdrop,
+  mainStops: [{ color: '#eeeeea', position: 0 }],
+  mainAngle: 180,
+  mainText: '#242625',
+  mainOpacity: 1,
+  composerStops: [
+    { color: '#e6e8e4', position: 0 },
+    { color: '#e2e4e0', position: 100 },
+  ],
+  composerAngle: 180,
+  composerText: '#1f1f1f',
+  composerOpacity: 1,
+  controlStops: [{ color: '#d3d6d2', position: 0 }],
+  controlAngle: 180,
+  controlText: '#1f1f1f',
+  controlOpacity: 1,
+}
 
 export const THEME_PRESETS: ThemePreset[] = [
   {
-    id: 'solid-ink',
-    group: 'solid',
-    name: '墨黑',
-    note: '主界面近黑，外侧深灰。',
-    method: '全部区域使用纯色，靠明度差建立层级。',
-    rationale: '长时间工作时减少视觉干扰，主内容优先。',
-    theme: _({
-      backdropStops: solidStops('#202020'),
-      backdropAngle: 180,
-      backdropText: '#f2efeb',
-      mainStops: solidStops('#111111'),
-      mainAngle: 180,
-      mainText: '#f2efeb',
-      mainOpacity: 1,
-      composerStops: solidStops('#2c2c2b'),
-      composerAngle: 180,
-      composerText: '#f2efeb',
-      composerOpacity: 1,
-      controlStops: solidStops('#3a3835'),
-      controlAngle: 180,
-      controlText: '#f3eee8',
-      controlOpacity: 1,
-    }),
+    id: 'default', group: 'theme', name: '默认', note: '克制的中性灰阶。',
+    method: '工作区域保持纯色，颜色只用于控件层级。', rationale: '适合长时间处理任务与配置。',
+    theme: neutralDark, lightTheme: neutralLight, darkTheme: neutralDark,
   },
   {
-    id: 'solid-carbon',
-    group: 'solid',
-    name: '炭灰',
-    note: '整体深灰，层级更柔和。',
-    method: '全部区域使用纯色，主区比外壳更暗。',
-    rationale: '适合写作、整理、复盘类任务。',
-    theme: _({
-      backdropStops: solidStops('#242424'),
-      backdropAngle: 180,
-      backdropText: '#f0ebe5',
-      mainStops: solidStops('#151515'),
-      mainAngle: 180,
-      mainText: '#f2efeb',
-      mainOpacity: 1,
-      composerStops: solidStops('#303030'),
-      composerAngle: 180,
-      composerText: '#f2efeb',
-      composerOpacity: 1,
-      controlStops: solidStops('#3d3d3d'),
-      controlAngle: 180,
-      controlText: '#f2efeb',
-      controlOpacity: 1,
-    }),
+    id: 'berry-teal', group: 'theme', name: '浮梦', note: '莓紫、灰蓝与青绿的横向渐变。',
+    method: '只改变背景板，聊天区、输入栏和控件保持中性。', rationale: '先提供背景方向，其他区域可继续单独调整。',
+    theme: { ...neutralDark, ...berryTealBackdrop },
+    lightTheme: { ...neutralLight, ...berryTealLightBackdrop },
+    darkTheme: { ...neutralDark, ...berryTealBackdrop },
   },
   {
-    id: 'solid-paper',
-    group: 'solid',
-    name: '纸白',
-    note: '浅色纯色，适合白天。',
-    method: '全部区域使用纯色，避免渐变造成脏灰。',
-    rationale: '白天环境需要更高整体亮度，同时保留清晰层级。',
-    theme: _({
-      backdropStops: solidStops('#dfdfdf'),
-      backdropAngle: 180,
-      backdropText: '#1f1f1f',
-      mainStops: solidStops('#f8f8ef'),
-      mainAngle: 180,
-      mainText: '#1f1f1f',
-      mainOpacity: 1,
-      composerStops: solidStops('#efefef'),
-      composerAngle: 180,
-      composerText: '#1f1f1f',
-      composerOpacity: 1,
-      controlStops: solidStops('#d8d8d8'),
-      controlAngle: 180,
-      controlText: '#1f1f1f',
-      controlOpacity: 1,
-    }),
-  },
-  {
-    id: 'solid-review',
-    group: 'solid',
-    name: '审阅灰',
-    note: '中性灰阶，适合 diff 和报告。',
-    method: '全部区域使用纯色，突出红绿状态色。',
-    rationale: '审阅场景需要低刺激、高可读。',
-    theme: _({
-      backdropStops: solidStops('#d5d2cc'),
-      backdropAngle: 180,
-      backdropText: '#2a2926',
-      mainStops: solidStops('#ebe8e2'),
-      mainAngle: 180,
-      mainText: '#20201e',
-      mainOpacity: 1,
-      composerStops: solidStops('#d9d5ce'),
-      composerAngle: 180,
-      composerText: '#20201e',
-      composerOpacity: 1,
-      controlStops: solidStops('#343331'),
-      controlAngle: 180,
-      controlText: '#f1eee8',
-      controlOpacity: 1,
-    }),
+    id: 'morning-mist', group: 'theme', name: '晨宵', note: '雾蓝到奶油白的浅色渐变。',
+    method: '浅色使用雾蓝到奶油白，暗色使用墨绿到蓝黑背景，其他界面层保持中性。', rationale: '同一主题在两种模式下保持不同的明暗气质。',
+    theme: neutralDark,
+    lightTheme: morningMistLightTheme,
+    darkTheme: morningMistDarkTheme,
   },
 ]
 
-export const THEME_PRESET_GROUPS: Array<{
-  id: ThemePreset['group']
-  label: string
-}> = [
-  { id: 'solid', label: '纯色' },
+export const THEME_PRESET_GROUPS: Array<{ id: ThemePreset['group']; label: string }> = [
+  { id: 'theme', label: '主题预设' },
 ]

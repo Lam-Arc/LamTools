@@ -16,7 +16,7 @@ from typing import Any
 _logger = logging.getLogger(__name__)
 
 from lamtools_core.event import CollectingEventSink, EventSink
-from lamtools_core.llm import ChatMessage
+from lamtools_core.llm import ChatMessage, reasoning_level_from_legacy
 from lamtools_core.config.model_store import resolve_model_capability
 from lamtools_core.composer_commands import (
     build_composer_command_catalog,
@@ -43,7 +43,7 @@ from lamtools_core.runtime import (
 )
 from lamtools_core.runtime.goal import GoalCompletionGate, GoalManager, ModelGoalEvaluator
 from lamtools_core.runtime.arrange import ArrangeManager
-from lamtools_core.skills import SkillRegistry
+from lamtools_core.skills import SkillRegistry, SkillStateStore
 from lamtools_core.session import InMemorySessionStore, SessionStore
 from lamtools_core.snapshot import InMemorySnapshotStore, SnapshotStore
 from lamtools_core.tool import ToolSpec
@@ -102,6 +102,7 @@ ModelProviderCallable = Callable[[Any], ModelTurnOutput | Awaitable[ModelTurnOut
 @dataclass(frozen=True)
 class CoreAgentRuntimeOptions:
     model_id: str
+    reasoning_level: str = ""
     thinking_enabled: bool | None = None
     thinking_budget: int | None = None
     reasoning_effort: str = ""
@@ -116,6 +117,7 @@ class CoreAgentRuntimeOptions:
 
 _RUNTIME_OPTION_KEYS: tuple[str, ...] = (
     "model_id",
+    "reasoning_level",
     "thinking_enabled",
     "thinking_budget",
     "reasoning_effort",
@@ -289,6 +291,7 @@ def create_core_agent_operations(
         Path(item) for item in (command_core_roots or default_core_resource_roots())
     ]
     resolved_command_member_roots = [Path(item) for item in (command_member_roots or [])]
+    command_skill_state_store = SkillStateStore(Path(paths.data_dir) / "skill_state.json")
 
     def checkpoint_coordinator(work_root: Path | str) -> CoreCheckpointCoordinator | None:
         if db_session_factory is None or not enable_turn_checkpoints:
@@ -317,6 +320,19 @@ def create_core_agent_operations(
                 *plugin_assembly.get("skill_roots", []),
             ]
         )
+
+    def command_plugin_manifests() -> list[Any]:
+        registry = getattr(plugin_operations, "plugin_registry", None)
+        if registry is None:
+            return []
+        return list(registry.discover())
+
+    # The live input hooks and command.catalog must resolve skills from the
+    # same roots.  Keep the factory on the operation catalog as a small seam
+    # for the HTTP/Tauri live host; the operation catalog remains the owner of
+    # command registration and execution.
+    catalog.command_skill_registry_factory = command_skill_registry
+    catalog.command_skill_state_store_factory = lambda: command_skill_state_store
 
     async def _build_attachment_user_content(
         *, message: str, attachment_ids: list[str], attachment_service: Any, capability: str
@@ -517,6 +533,7 @@ def create_core_agent_operations(
                 model_id=runtime_options.model_id,
                 instructions=turn_instructions or spec.instructions,
                 context_window_tokens=runtime_options.context_window_tokens,
+                reasoning_level=runtime_options.reasoning_level,
                 thinking_enabled=runtime_options.thinking_enabled,
                 thinking_budget=runtime_options.thinking_budget,
                 temperature=runtime_options.temperature,
@@ -549,6 +566,7 @@ def create_core_agent_operations(
                             model_id=runtime_options.model_id,
                             model_display_name=_model_display(runtime_options.model_id),
                             instructions=turn_instructions or spec.instructions,
+                            reasoning_level=runtime_options.reasoning_level,
                             thinking_enabled=runtime_options.thinking_enabled,
                             thinking_budget=runtime_options.thinking_budget,
                             reasoning_effort=runtime_options.reasoning_effort,
@@ -635,6 +653,7 @@ def create_core_agent_operations(
                             ),
                             "max_tokens": runtime_options.max_tokens,
                             "temperature": runtime_options.temperature,
+                            "reasoning_level": runtime_options.reasoning_level,
                             **(
                                 {"compact_trigger_tokens": runtime_options.compact_trigger_tokens}
                                 if runtime_options.compact_trigger_tokens is not None
@@ -1026,6 +1045,7 @@ def create_core_agent_operations(
                         model_id=runtime_options.model_id,
                         instructions=turn_instructions or spec.instructions,
                         context_window_tokens=runtime_options.context_window_tokens,
+                        reasoning_level=runtime_options.reasoning_level,
                         thinking_enabled=runtime_options.thinking_enabled,
                         thinking_budget=runtime_options.thinking_budget,
                         temperature=runtime_options.temperature,
@@ -1143,6 +1163,7 @@ def create_core_agent_operations(
                                 model_id=runtime_options.model_id,
                                 model_display_name=_model_display(runtime_options.model_id),
                                 instructions=turn_instructions or spec.instructions,
+                                reasoning_level=runtime_options.reasoning_level,
                                 thinking_enabled=runtime_options.thinking_enabled,
                                 thinking_budget=runtime_options.thinking_budget,
                                 reasoning_effort=runtime_options.reasoning_effort,
@@ -1186,6 +1207,7 @@ def create_core_agent_operations(
                                 "data_dir": str(paths.data_dir),
                                 "work_root": str(runtime_work_root),
                                 "model_id": runtime_options.model_id,
+                                "reasoning_level": runtime_options.reasoning_level,
                                 **(
                                     {"thinking_enabled": runtime_options.thinking_enabled}
                                     if runtime_options.thinking_enabled is not None
@@ -1288,6 +1310,7 @@ def create_core_agent_operations(
                         model_id=runtime_options.model_id,
                         instructions=turn_instructions or spec.instructions,
                         context_window_tokens=runtime_options.context_window_tokens,
+                        reasoning_level=runtime_options.reasoning_level,
                         thinking_enabled=runtime_options.thinking_enabled,
                         thinking_budget=runtime_options.thinking_budget,
                         temperature=runtime_options.temperature,
@@ -1417,6 +1440,7 @@ def create_core_agent_operations(
                     model_id=runtime_options.model_id,
                     instructions=turn_instructions or spec.instructions,
                     context_window_tokens=runtime_options.context_window_tokens,
+                    reasoning_level=runtime_options.reasoning_level,
                     thinking_enabled=runtime_options.thinking_enabled,
                     thinking_budget=runtime_options.thinking_budget,
                     temperature=runtime_options.temperature,
@@ -1444,6 +1468,7 @@ def create_core_agent_operations(
                             model_id=runtime_options.model_id,
                             model_display_name=_model_display(runtime_options.model_id),
                             instructions=turn_instructions or spec.instructions,
+                            reasoning_level=runtime_options.reasoning_level,
                             thinking_enabled=runtime_options.thinking_enabled,
                             thinking_budget=runtime_options.thinking_budget,
                             temperature=runtime_options.temperature,
@@ -1483,6 +1508,7 @@ def create_core_agent_operations(
                             "data_dir": str(paths.data_dir),
                             "work_root": str(runtime_work_root),
                             "model_id": runtime_options.model_id,
+                            "reasoning_level": runtime_options.reasoning_level,
                             **(
                                 {"thinking_enabled": runtime_options.thinking_enabled}
                                 if runtime_options.thinking_enabled is not None
@@ -1558,6 +1584,8 @@ def create_core_agent_operations(
             member_roots=resolved_command_member_roots,
             work_root=work_root,
             skill_registry=command_skill_registry(),
+            skill_state_store=command_skill_state_store,
+            plugin_manifests=command_plugin_manifests(),
         )
         return OperationResult(
             name="command.catalog",
@@ -1586,6 +1614,8 @@ def create_core_agent_operations(
                 member_roots=resolved_command_member_roots,
                 work_root=request.payload.get("work_root") or request.payload.get("workRoot") or paths.work_root,
                 skill_registry=command_skill_registry(),
+                skill_state_store=command_skill_state_store,
+                plugin_manifests=command_plugin_manifests(),
             )
         }
         definition = available.get(command)
@@ -1595,13 +1625,52 @@ def create_core_agent_operations(
                 status="error",
                 payload={"error": f"Command not available: {command}"},
             )
-        if definition.action != "run_action":
+        if definition.kind != "action":
             return OperationResult(
                 name=request.name,
                 status="error",
                 payload={"error": f"Command is not executable as an action: {command}"},
             )
+        arguments = str(
+            request.payload.get("arguments")
+            if request.payload.get("arguments") is not None
+            else request.payload.get("args") or ""
+        ).strip()
+        if arguments and not definition.accepts_args:
+            return OperationResult(
+                name=request.name,
+                status="error",
+                payload={"error": f"Command does not accept arguments: {command}"},
+            )
         handlers = dict(command_action_handlers or {})
+        if definition.source == "plugin":
+            async def plugin_action(arguments: str = "", **_: Any) -> dict[str, Any]:
+                metadata = dict(definition.metadata)
+                operation_name = str(metadata.get("operation") or "").strip()
+                operation_payload = dict(metadata.get("payload") or {})
+                if arguments:
+                    operation_payload["arguments"] = arguments
+                operation_result: dict[str, Any] | None = None
+                if operation_name:
+                    if not catalog.has(operation_name):
+                        raise RuntimeError(f"Plugin command operation is unavailable: {operation_name}")
+                    executed = await catalog.execute(
+                        operation_name,
+                        operation_payload,
+                        metadata={"source": "plugin_composer_command", "plugin": metadata.get("plugin_name")},
+                    )
+                    if executed.status != "ok":
+                        raise RuntimeError(str(executed.payload.get("error") or executed.status))
+                    operation_result = dict(executed.payload)
+                effects = metadata.get("effects")
+                return {
+                    "plugin_id": metadata.get("plugin_id"),
+                    "plugin_name": metadata.get("plugin_name"),
+                    **({"operation": operation_result} if operation_result is not None else {}),
+                    **({"effects": effects} if isinstance(effects, list) else {}),
+                }
+
+            handlers.setdefault(command, plugin_action)
         async def goal_action(thread_id: str, arguments: str = "", **_: Any) -> dict[str, Any]:
             if goal_manager is None:
                 raise RuntimeError("Goal storage is not configured")
@@ -1661,13 +1730,28 @@ def create_core_agent_operations(
                 on_event=on_event,
             ),
         )
+
+        async def fork_action(thread_id: str, arguments: str = "", **_: Any) -> dict[str, Any]:
+            del arguments
+            if not catalog.has("session.fork"):
+                raise RuntimeError("session.fork operation is unavailable")
+            forked = await catalog.execute(
+                "session.fork",
+                {"thread_id": thread_id},
+                metadata={"source": "composer_command"},
+            )
+            if forked.status != "ok":
+                raise RuntimeError(str(forked.payload.get("error") or "session.fork failed"))
+            return dict(forked.payload)
+
+        handlers.setdefault("fork", fork_action)
         try:
             on_event = request.payload.get("_on_event")
             result = await execute_command_action(
                 command=command,
                 thread_id=thread_id,
                 work_root=str(request.payload.get("work_root") or request.payload.get("workRoot") or paths.work_root),
-                arguments=str(request.payload.get("arguments") or request.payload.get("args") or ""),
+                arguments=arguments,
                 handlers=handlers,
                 on_event=on_event if callable(on_event) else None,
             )
@@ -1766,6 +1850,8 @@ def create_core_agent_operations(
         )
     catalog.plugin_context = plugin_context
     catalog.plugin_runtimes = getattr(plugin_operations, "plugin_runtimes", [])
+    catalog.plugin_registry = getattr(plugin_operations, "plugin_registry", None)
+    catalog.plugin_state_store = getattr(plugin_operations, "plugin_state_store", None)
     return catalog
 
 
@@ -1881,6 +1967,14 @@ def _runtime_options_from_request(spec: CoreAgentSpec, request: OperationRequest
         or spec.default_model
         or ""
     )
+    reasoning_level = str(
+        payload.get("reasoning_level")
+        or payload.get("reasoningLevel")
+        or metadata.get("reasoning_level")
+        or metadata.get("reasoningLevel")
+        or spec.metadata.get("reasoning_level")
+        or ""
+    ).strip()
     thinking_enabled = _optional_bool(
         payload.get("thinking_enabled"),
         payload.get("thinkingEnabled"),
@@ -1900,6 +1994,12 @@ def _runtime_options_from_request(spec: CoreAgentSpec, request: OperationRequest
         or spec.metadata.get("reasoning_effort")
         or ""
     )
+    reasoning_level = reasoning_level_from_legacy(
+        reasoning_level=reasoning_level,
+        thinking_enabled=thinking_enabled,
+        reasoning_effort=reasoning_effort,
+        fallback="off",
+    ) if reasoning_level or thinking_enabled is not None or reasoning_effort else ""
     shallow_thinking_enabled = bool(
         _optional_bool(
             payload.get("shallow_thinking_enabled"),
@@ -1935,6 +2035,7 @@ def _runtime_options_from_request(spec: CoreAgentSpec, request: OperationRequest
     )
     return CoreAgentRuntimeOptions(
         model_id=model_id,
+        reasoning_level=reasoning_level,
         thinking_enabled=thinking_enabled,
         thinking_budget=thinking_budget,
         reasoning_effort=reasoning_effort,
@@ -1954,15 +2055,26 @@ def _runtime_options_from_state(spec: CoreAgentSpec, state: Any, work_root: str 
     snapshot = runtime_snapshot if isinstance(runtime_snapshot, dict) else {}
     model_id = str(snapshot.get("model_id") or metadata.get("model_id") or spec.default_model or "")
     temperature = _optional_float(metadata.get("temperature"))
+    reasoning_level = str(snapshot.get("reasoning_level") or metadata.get("reasoning_level") or "").strip()
+    thinking_enabled = _optional_bool(
+        snapshot.get("thinking_enabled"), metadata.get("thinking_enabled"), spec.metadata.get("thinking_enabled")
+    )
+    thinking_budget = _optional_int(
+        snapshot.get("thinking_budget"), metadata.get("thinking_budget"), spec.metadata.get("thinking_budget")
+    )
+    reasoning_effort = str(snapshot.get("reasoning_effort") or metadata.get("reasoning_effort") or "")
+    reasoning_level = reasoning_level_from_legacy(
+        reasoning_level=reasoning_level,
+        thinking_enabled=thinking_enabled,
+        reasoning_effort=reasoning_effort,
+        fallback="off",
+    ) if reasoning_level or thinking_enabled is not None or reasoning_effort else ""
     return CoreAgentRuntimeOptions(
         model_id=model_id,
-        thinking_enabled=_optional_bool(
-            snapshot.get("thinking_enabled"), metadata.get("thinking_enabled"), spec.metadata.get("thinking_enabled")
-        ),
-        thinking_budget=_optional_int(
-            snapshot.get("thinking_budget"), metadata.get("thinking_budget"), spec.metadata.get("thinking_budget")
-        ),
-        reasoning_effort=str(snapshot.get("reasoning_effort") or metadata.get("reasoning_effort") or ""),
+        reasoning_level=reasoning_level,
+        thinking_enabled=thinking_enabled,
+        thinking_budget=thinking_budget,
+        reasoning_effort=reasoning_effort,
         shallow_thinking_enabled=bool(
             _optional_bool(
                 snapshot.get("shallow_thinking_enabled"),
@@ -2016,11 +2128,20 @@ def _model_provider_for_runtime(model_provider: Any, *, runtime_options: CoreAge
     provider = model_provider
     with_runtime_options = getattr(provider, "with_runtime_options", None)
     if callable(with_runtime_options):
-        maybe_provider = with_runtime_options(
-            model_id=runtime_options.model_id,
-            thinking_enabled=runtime_options.thinking_enabled,
-            thinking_budget=runtime_options.thinking_budget,
-        )
+        try:
+            maybe_provider = with_runtime_options(
+                model_id=runtime_options.model_id,
+                reasoning_level=runtime_options.reasoning_level,
+                thinking_enabled=runtime_options.thinking_enabled,
+                thinking_budget=runtime_options.thinking_budget,
+            )
+        except TypeError:
+            # Third-party/test providers may still implement the old hook.
+            maybe_provider = with_runtime_options(
+                model_id=runtime_options.model_id,
+                thinking_enabled=runtime_options.thinking_enabled,
+                thinking_budget=runtime_options.thinking_budget,
+            )
         if maybe_provider is not None:
             provider = maybe_provider
     if runtime_options.shallow_thinking_enabled:
@@ -2138,6 +2259,7 @@ async def _build_core_runtime_toolbox(
     context_window_tokens: int | None = None,
     temperature: float = 0.2,
     max_tokens: int | None = None,
+    reasoning_level: str = "",
     thinking_enabled: bool | None = None,
     thinking_budget: int | None = None,
     sub_agent_state_store: RuntimeStateStore | None = None,
@@ -2206,6 +2328,7 @@ async def _build_core_runtime_toolbox(
             instructions=instructions,
             temperature=temperature,
             max_tokens=max_tokens,
+            reasoning_level=reasoning_level,
             thinking_enabled=thinking_enabled,
             thinking_budget=thinking_budget,
             approval_policy=normalized_policy,

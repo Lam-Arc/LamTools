@@ -14,6 +14,7 @@ export interface ThemeStop {
 }
 
 export type ThemeArea = 'backdrop' | 'main' | 'composer' | 'control'
+export type ThemeMode = 'system' | 'light' | 'dark'
 
 export interface ThemeData {
   backdropStops: ThemeStop[]
@@ -35,12 +36,18 @@ export interface ThemeData {
 
 export interface ThemePreset {
   id: string
-  group: 'gradient' | 'solid' | 'mixed'
+  group: 'gradient' | 'solid' | 'mixed' | 'theme'
   name: string
   note: string
   method?: string
   rationale?: string
   theme: Partial<ThemeData>
+  lightTheme?: Partial<ThemeData>
+  darkTheme?: Partial<ThemeData>
+}
+
+export function themeForMode(preset: ThemePreset, mode: Exclude<ThemeMode, 'system'>): Partial<ThemeData> {
+  return mode === 'dark' ? preset.darkTheme || preset.theme : preset.lightTheme || preset.theme
 }
 
 // ---------------------------------------------------------------------------
@@ -51,13 +58,11 @@ export const DEFAULT_THEME: ThemeData = {
   backdropAngle: 180,
   backdropStops: [
     { color: '#202020', position: 0 },
-    { color: '#202020', position: 100 },
   ],
   backdropText: '#f2efeb',
   mainAngle: 180,
   mainStops: [
     { color: '#111111', position: 0 },
-    { color: '#111111', position: 100 },
   ],
   mainText: '#f2efeb',
   mainOpacity: 1,
@@ -100,7 +105,7 @@ export function rgbaFromHex(hex: string, opacity: number): string {
   return `rgba(${red}, ${green}, ${blue}, ${clampNumber(opacity, 0.1, 1, 1)})`
 }
 
-/** Normalize an array of gradient stops — ensures at least 2 stops, sorted, capped at 8. */
+/** Normalize gradient stops, collapsing a solid color to its single source node. */
 export function normalizeGradientStops(
   value: unknown,
   fallbackStart: string,
@@ -118,21 +123,20 @@ export function normalizeGradientStops(
     })
     .filter((s): s is ThemeStop => Boolean(s))
 
-  const baseStops =
-    stops.length >= 2
-      ? stops
-      : [
-          { color: fallbackStart, position: 0 },
-          { color: fallbackEnd, position: 100 },
-        ]
-
-  return baseStops
+  const baseStops = stops.length
+    ? stops
+    : [{ color: fallbackStart, position: 0 }, { color: fallbackEnd, position: 100 }]
+  const normalized = baseStops
     .slice(0, 8)
     .sort((a, b) => a.position - b.position)
     .map((stop, idx, src) => ({
       color: stop.color,
-      position: idx === 0 ? 0 : idx === src.length - 1 ? 100 : stop.position,
+      position: src.length === 1 || idx === 0 ? 0 : idx === src.length - 1 ? 100 : stop.position,
     }))
+
+  return normalized.every((stop) => stop.color.toLowerCase() === normalized[0].color.toLowerCase())
+    ? [{ color: normalized[0].color, position: 0 }]
+    : normalized
 }
 
 /** Generate a CSS linear-gradient from stops. */
@@ -215,7 +219,7 @@ export function normalizeTheme(raw: Partial<ThemeData>): ThemeData {
 }
 
 function isSolidStops(stops: ThemeStop[], color: string): boolean {
-  return stops.length === 2
+  return stops.length >= 1
     && stops.every((stop) => stop.color.toLowerCase() === color.toLowerCase())
 }
 
@@ -303,6 +307,12 @@ export function themeToCSSVars(theme: ThemeData): ThemeCSSVars {
 
 export function addGradientStop(stops: ThemeStop[]): ThemeStop[] {
   if (stops.length >= 8) return stops
+  if (stops.length === 1) {
+    return [
+      { color: stops[0].color, position: 0 },
+      { color: stops[0].color, position: 100 },
+    ]
+  }
   const middle =
     stops.length > 1
       ? Math.round(
@@ -314,15 +324,14 @@ export function addGradientStop(stops: ThemeStop[]): ThemeStop[] {
     color: stops[stops.length - 1]?.color || '#222222',
     position: middle,
   })
-  return normalizeGradientStops(
-    newStops,
-    newStops[0].color,
-    newStops[newStops.length - 1].color,
-  )
+  // Keep the just-added duplicate long enough for the user to choose its new
+  // color. The next color/position commit runs sortGradientStops and folds it
+  // back into one node if it remains a solid color.
+  return newStops
 }
 
 export function removeGradientStop(stops: ThemeStop[], index: number): ThemeStop[] {
-  if (stops.length <= 2) return stops
+  if (stops.length <= 1) return stops
   const newStops = [...stops]
   newStops.splice(index, 1)
   return normalizeGradientStops(

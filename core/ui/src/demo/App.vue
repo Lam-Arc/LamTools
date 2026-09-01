@@ -24,13 +24,16 @@
     :density="density"
     :theme="theme"
     :content-width="contentWidth"
-    :permission-mode="permissionMode"
+    :theme-mode="themeMode"
+    :effective-theme-mode="effectiveThemeMode"
+    :permission-preset="defaultPermissionPreset"
     :allow-access-outside-workdir="allowAccessOutsideWorkdir"
     :request-rpc="requestConfigOperation"
     :update-state="updateState"
     @close="showSettings = false"
     @update:density="uiPreferences.setDensity"
     @update:content-width="uiPreferences.setContentWidth"
+    @update:theme-mode="uiPreferences.setThemeMode"
     @reset-theme="uiPreferences.resetTheme"
     @apply-preset="uiPreferences.applyThemePreset"
     @update-stops="uiPreferences.updateThemeStops"
@@ -40,7 +43,7 @@
     @add-stop="uiPreferences.addStop"
     @remove-stop="uiPreferences.removeStop"
     @sort-stops="uiPreferences.sortStops"
-    @update-permission-mode="updatePermissionMode"
+    @update-permission-preset="updatePermissionPreset"
     @update-allow-outside-workdir="updateAllowAccessOutsideWorkdir"
     @create-provider="createProvider"
     @update-provider="updateProvider"
@@ -55,6 +58,7 @@
     v-if="showPlugins"
     :request-rpc="requestConfigOperation"
     :theme="theme"
+    @capabilities-changed="handleCapabilitiesChanged"
     @close="closePlugins"
   />
   <CoreArrangeManager
@@ -96,7 +100,6 @@
     :composer-send-disabled="composerSendDisabled"
     :composer-placeholder="composerPlaceholder"
     :composer-action-mode="composerActionMode"
-    :composer-active="latestStatus === 'running'"
     :hide-composer="shouldHideComposer"
     :empty-session="isEmptySession"
     v-model:stage-open="stageOpen"
@@ -228,6 +231,7 @@
         >
           加载更早消息（共 {{ totalMessages }} 条）
         </button>
+        <HistoryLoadingIndicator :active="historyLoading" />
         <div
           v-if="isEmptySession"
           class="empty-session-hero"
@@ -240,6 +244,7 @@
         <ChatThread
           v-else
           :messages="messages"
+          :show-empty-state="!historyLoading"
           :assistant-model-labels="assistantModelLabels"
           :process-expanded-ids="processExpandedIds"
           :message-actions="true"
@@ -269,7 +274,15 @@
             title="回到最新消息"
             @click="threadScroll.scrollToBottom(true)"
           >
-            <ArrowDown :size="16" :stroke-width="1.8" aria-hidden="true" />
+            <span
+              v-if="activeTurnRunning"
+              ref="latestActivityIndicator"
+              class="thread-jump-latest-spinner"
+              aria-hidden="true"
+            >
+              <LoaderCircle :size="16" :stroke-width="1.8" />
+            </span>
+            <ArrowDown v-else :size="16" :stroke-width="1.8" aria-hidden="true" />
           </button>
         </Transition>
       </section>
@@ -332,32 +345,30 @@
       />
     </template>
 
+    <template #composer-popover>
+      <CommandPalette
+        v-if="commandPaletteVisible"
+        :commands="commandPalette.filteredCommands.value"
+        :active-index="commandPalette.activeIndex.value"
+        @select="liveComposerController.selectCommand"
+      />
+    </template>
+
     <template #composer-textarea>
       <input ref="attachmentFileInput" class="sr-only" type="file" multiple @change="handleAttachmentInputChange" />
       <AttachmentTray
         :attachments="pendingAttachments"
+        :api-base="apiBase"
         @remove="removeAttachment"
         @retry="retryPendingAttachment"
         @preview="previewPendingAttachment"
         @open="openPendingAttachment"
       />
-      <div class="composer-input-wrap" :class="{ 'has-command-tokens': hasComposerCommandTokens }">
-        <CommandPalette
-          v-if="commandPaletteVisible"
-          :commands="commandPalette.filteredCommands.value"
-          :active-index="commandPalette.activeIndex.value"
-          @select="liveComposerController.selectCommand"
-        />
-        <div v-if="hasComposerCommandTokens" class="composer-syntax-overlay" aria-hidden="true">
-          <span
-            v-for="(segment, index) in composerHighlightSegments"
-            :key="index"
-            :class="{ 'composer-skill-token': segment.command }"
-          >{{ segment.text }}</span>
-        </div>
+      <div class="composer-input-wrap">
         <textarea
           ref="composerTextareaEl"
           v-model="composerText"
+          :class="{ 'composer-input--recognized': hasComposerRecognizedCommand }"
           :disabled="composerInputDisabled"
           :placeholder="composerPlaceholder"
           rows="1"
@@ -461,7 +472,8 @@ import {
   shallowRef,
   watch,
 } from 'vue'
-import { ArrowDown, CalendarClock, ChevronDown, ChevronUp, Upload } from 'lucide-vue-next'
+import { gsap } from 'gsap'
+import { ArrowDown, CalendarClock, ChevronDown, ChevronUp, LoaderCircle, Upload } from 'lucide-vue-next'
 import type {
   CoreAttachment,
   CoreSessionListItem,
@@ -515,6 +527,7 @@ import CoreResourceStats from '../components/CoreResourceStats.vue'
 import CoreQueuedInputTray from '../components/CoreQueuedInputTray.vue'
 import CoreArrangeManager from '../components/CoreArrangeManager.vue'
 import CoreGoalStrip from '../components/CoreGoalStrip.vue'
+import HistoryLoadingIndicator from '../components/HistoryLoadingIndicator.vue'
 import FileTreePanel from '../components/FileTreePanel.vue'
 import type { StageResource, StageKind } from '../types'
 import CoreProjectCreate from '../components/CoreProjectCreate.vue'
@@ -573,6 +586,7 @@ type RawModel = {
   max_output_tokens?: number
   thinking_supported?: boolean
   thinking_budget?: number
+  reasoning_off_supported?: boolean
   temperature?: number
 }
 
@@ -590,6 +604,7 @@ const projectClient = createCoreProjectClient(apiBase)
 const projects = ref<CoreProject[]>([])
 const sessions = ref<CoreSessionListItem[]>([])
 const activeSessionId = ref<string | null>(null)
+const historyLoadingSessionId = ref<string | null>(null)
 const runtime = reactive(createCoreAppServerRuntimeState<CoreAppSnapshot, CoreAppServerClient>())
 const snapshot = computed(() => runtime.state)
 const composerText = ref('')
@@ -866,19 +881,23 @@ async function openFileInStage(entry: { path: string; name: string; ext: string 
 // under 'lamtools.core.ui'; writing the same key from here with a different
 // schema silently dropped those fields on every preference save (audit 19 S3).
 const uiPreferences = useCoreUiPreferences('lamtools.core.ui.preferences')
-const { density, contentWidth, theme } = uiPreferences
+const { density, contentWidth, theme, themeMode, effectiveThemeMode } = uiPreferences
 const availableModels = ref<RawModel[]>([])
 const availableProviders = ref<RawProvider[]>([])
 const defaultModelId = ref('')
 const permissionMode = ref<'read_only' | 'limited_edit' | 'full_edit'>('full_edit')
+const defaultPermissionPreset = ref<CorePermissionPreset>('ask')
 const allowAccessOutsideWorkdir = ref(false)
 const { pendingAttachments, attachmentInputItems, addUploaded, markFailed, removeAttachment, clearAttachments } = usePendingAttachments()
 const threadScrollEl = ref<HTMLElement | null>(null)
+const latestActivityIndicator = ref<HTMLElement | null>(null)
 const threadScroll = useCoreAutoFollowScroll(threadScrollEl)
 const COMPOSER_MAX_ROWS = 5
 let threadResizeObserver: ResizeObserver | null = null
 let threadResizeObserverTarget: HTMLElement | null = null
 let configClient: CoreAppServerClient | null = null
+let latestActivityMotion: gsap.MatchMedia | null = null
+let latestActivityTween: gsap.core.Tween | null = null
 
 async function loadEarlierMessages(): Promise<void> {
   const el = threadScrollEl.value
@@ -906,7 +925,7 @@ const executionControls = useCoreExecutionControlsState({
   providers: availableProviders,
   defaultModel,
   storage: window.localStorage,
-  initial: { thinkingMode: 'medium' },
+  initial: { thinkingMode: 'high', permissionPreset: defaultPermissionPreset.value },
   onPermissionPresetSelected: persistSessionPermissionPreset,
 })
 const {
@@ -948,6 +967,43 @@ const latestStatus = computed(() => snapshot.value ? selectLatestTurnStatus(snap
 const activeTurnId = computed(() => snapshot.value ? selectLatestActiveTurnId(snapshot.value) : '')
 const activeTurnRunning = computed(() => isCoreActiveTurnStatus(latestStatus.value))
 const rollbackActiveTurn = computed(() => ['running', 'waiting'].includes(latestStatus.value))
+
+function stopLatestActivityMotion(): void {
+  latestActivityTween?.kill()
+  latestActivityTween = null
+  latestActivityMotion?.revert()
+  latestActivityMotion = null
+  if (latestActivityIndicator.value) {
+    gsap.set(latestActivityIndicator.value, { clearProps: 'transform' })
+  }
+}
+
+function syncLatestActivityMotion(): void {
+  stopLatestActivityMotion()
+  if (!activeTurnRunning.value) return
+
+  void nextTick(() => {
+    const target = latestActivityIndicator.value
+    if (!target || !activeTurnRunning.value) return
+
+    latestActivityMotion = gsap.matchMedia()
+    latestActivityMotion.add('(prefers-reduced-motion: no-preference)', () => {
+      latestActivityTween = gsap.to(target, {
+        rotation: 360,
+        transformOrigin: '50% 50%',
+        duration: 0.9,
+        ease: 'none',
+        repeat: -1,
+      })
+      return () => {
+        latestActivityTween?.kill()
+        latestActivityTween = null
+      }
+    })
+  })
+}
+
+watch([activeTurnRunning, latestActivityIndicator], syncLatestActivityMotion, { flush: 'post' })
 
 const coreSessions = computed(() => sessions.value.filter((session) => !isInternalSession(session)))
 const coreProjectGroups = computed(() => buildCoreProjectGroups(projects.value, coreSessions.value))
@@ -1072,8 +1128,9 @@ const liveComposerController = useCoreLiveComposerController({
   queueInput: (threadId, input, options) => runtimeController.queueInput(threadId, input, options),
   listCommands: (workRoot) => runtimeController.listCommands(workRoot),
   getWorkRoot: currentWorkRoot,
-  executeCommand: async (threadId, command, workRoot) => {
-    await runtimeController.executeCommand(threadId, command, workRoot)
+  executeCommand: async (threadId, command, workRoot, argumentsText) => {
+    const result = await runtimeController.executeCommand(threadId, command, workRoot, argumentsText)
+    await applyCommandEffects(result)
     return true
   },
   canExecuteCommand: () => latestStatus.value !== 'running' && latestStatus.value !== 'waiting',
@@ -1124,8 +1181,9 @@ const {
 const composerHighlightSegments = computed(() => (
   buildCoreComposerHighlightSegments(composerText.value, commandCatalog.value)
 ))
-const hasComposerCommandTokens = computed(() => (
+const hasComposerRecognizedCommand = computed(() => (
   composerHighlightSegments.value.some((segment) => segment.command)
+  && composerHighlightSegments.value.every((segment) => segment.command || !segment.text.trim())
 ))
 
 const approvalControllerRef = shallowRef<ReturnType<typeof useCoreApprovalController>>()
@@ -1143,9 +1201,14 @@ const projectionController = useCoreWorkbenchProjectionController({
   onTurnFinished: () => void refreshGoal(activeSessionId.value, true),
 })
 const { messages, processExpandedIds, toggleProcess, hasMoreHistory, totalMessages, loadMoreHistory } = projectionController
+const historyLoading = computed(() => (
+  Boolean(activeSessionId.value)
+  && historyLoadingSessionId.value === activeSessionId.value
+))
 const isEmptySession = computed(() => (
   Boolean(activeSessionId.value)
   && !activePluginMode.value
+  && !historyLoading.value
   && messages.value.length === 0
 ))
 
@@ -1552,6 +1615,7 @@ async function deleteSession(sessionId: string) {
 async function selectSession(id: string) {
   const session = sessions.value.find((item) => item.id === id)
   activeSessionId.value = id
+  historyLoadingSessionId.value = id
   if (!isInternalSession(session)) {
     const workRoot = session?.metadata?.work_root
     const project = typeof workRoot === 'string'
@@ -1569,7 +1633,11 @@ async function selectSession(id: string) {
   composerErrorText.value = ''
   setRuntimeStatus('', 0)
   threadScroll.reset() // invalidate in-flight scrolls from the previous session
-  await connectLive(id)
+  try {
+    await connectLive(id)
+  } finally {
+    if (historyLoadingSessionId.value === id) historyLoadingSessionId.value = null
+  }
   await liveComposerController.loadCommandCatalog(id)
   await refreshGoal(id, true)
   checkpointController.reset()
@@ -1670,7 +1738,7 @@ async function handleRollbackMessage(payload: { turnId: string; content: string 
     composerErrorText.value = '任务运行中，请先停止任务再回退'
     return
   }
-  if (!window.confirm('将保留这条回复及之前的内容，并删除其后的对话。若没有同一边界的完整 checkpoint，仅回退对话，不恢复文件、运行时或外部操作。是否继续？')) return
+  if (!window.confirm('将删除这条回复所在的整轮对话（用户消息和回复）及其后的内容。若没有该轮开始前的完整 checkpoint，仅回退对话，不恢复文件、运行时或外部操作。是否继续？')) return
   try {
     const result = await requestConfigOperation('session.rollback', {
       session_id: sessionId,
@@ -1678,9 +1746,9 @@ async function handleRollbackMessage(payload: { turnId: string; content: string 
     })
     await refreshAfterRollback()
     if (result.mode === 'checkpoint') {
-      showToast('notice', '已完整回退到此处：对话、运行时和工作区已恢复。')
+      showToast('notice', '已删除此轮及之后内容：对话、运行时和工作区已恢复。')
     } else {
-      showToast('notice', '已回退对话；文件、运行时和外部操作未恢复。')
+      showToast('notice', '已删除此轮及之后对话；文件、运行时和外部操作未恢复。')
     }
   } catch (error) {
     composerErrorText.value = error instanceof Error ? error.message : String(error)
@@ -2020,9 +2088,17 @@ async function loadPermissionMode() {
     } else {
       await updatePermissionMode(permissionMode.value)
     }
+    if (value.permission_preset === 'ask' || value.permission_preset === 'auto' || value.permission_preset === 'full_access') {
+      defaultPermissionPreset.value = value.permission_preset
+    } else {
+      // Accept the legacy policy spelling when present.
+      defaultPermissionPreset.value = value.approval_policy === 'auto_approve' ? 'auto' : 'ask'
+    }
     allowAccessOutsideWorkdir.value = Boolean(value.allow_access_outside_workdir)
   } catch {
     permissionMode.value = 'full_edit'
+    defaultPermissionPreset.value = 'ask'
+    allowAccessOutsideWorkdir.value = false
   }
 }
 
@@ -2128,6 +2204,21 @@ function currentWorkRoot(): string {
   return typeof workRoot === 'string' ? workRoot : ''
 }
 
+async function updatePermissionPreset(preset: CorePermissionPreset) {
+  const previous = defaultPermissionPreset.value
+  defaultPermissionPreset.value = preset
+  try {
+    await requestConfigOperation('settings.update', {
+      namespace: 'core.runtimeControls',
+      value: { permission_preset: preset },
+    })
+  } catch (e) {
+    defaultPermissionPreset.value = previous
+    const message = e instanceof Error ? e.message : String(e)
+    window.alert(`默认审批策略保存失败，已回滚：${message}`)
+  }
+}
+
 function restoreSessionPermissionPreset(id: string): void {
   const session = sessions.value.find((item) => item.id === id)
   const preferences = session?.metadata?.runtime_preferences
@@ -2137,7 +2228,7 @@ function restoreSessionPermissionPreset(id: string): void {
   // A legacy session is canonicalized by the backend on listing. If an old
   // client still returns no preference block, use the safe UI default; never
   // copy the currently selected session's preset across the boundary.
-  executionControls.restorePermissionPreset(preset ?? 'ask')
+  executionControls.restorePermissionPreset(preset ?? defaultPermissionPreset.value)
 }
 
 let permissionPersistence = Promise.resolve()
@@ -2204,6 +2295,54 @@ async function refreshPluginModes(): Promise<void> {
         activeSessionId.value = null
         if (coreSessions.value[0]) await selectSession(coreSessions.value[0].id)
       }
+    }
+  }
+}
+
+async function handleCapabilitiesChanged(refreshDesktop: boolean): Promise<void> {
+  const refreshDesktopPlugins = (window as {
+    __LAMTOOLS_REFRESH_DESKTOP_PLUGINS__?: () => Promise<void>
+  }).__LAMTOOLS_REFRESH_DESKTOP_PLUGINS__
+  if (refreshDesktop && refreshDesktopPlugins) await refreshDesktopPlugins()
+  await refreshPluginModes()
+  if (activeSessionId.value) await liveComposerController.loadCommandCatalog(activeSessionId.value)
+}
+
+async function applyCommandEffects(result: Record<string, unknown>): Promise<void> {
+  const effects = Array.isArray(result.effects) ? result.effects : []
+  for (const rawEffect of effects) {
+    if (!rawEffect || typeof rawEffect !== 'object') continue
+    const effect = rawEffect as Record<string, unknown>
+    if (effect.type !== 'desktop_plugin' || effect.action !== 'show') {
+      throw new Error('命令返回了当前版本不支持的界面操作')
+    }
+    const pluginId = String(effect.plugin_id || '').trim()
+    const showDesktopPlugin = (window as {
+      __LAMTOOLS_SHOW_DESKTOP_PLUGIN__?: (pluginId: string) => Promise<void>
+    }).__LAMTOOLS_SHOW_DESKTOP_PLUGIN__
+    if (!pluginId || !showDesktopPlugin) {
+      throw new Error('桌宠命令仅能在 LamTools 桌面端执行')
+    }
+    try {
+      await showDesktopPlugin(pluginId)
+    } catch (initialError) {
+      const refreshDesktopPlugins = (window as {
+        __LAMTOOLS_REFRESH_DESKTOP_PLUGINS__?: () => Promise<void>
+      }).__LAMTOOLS_REFRESH_DESKTOP_PLUGINS__
+      if (!refreshDesktopPlugins) throw initialError
+      await refreshDesktopPlugins()
+      let latestError: unknown = initialError
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        await new Promise(resolve => window.setTimeout(resolve, 100))
+        try {
+          await showDesktopPlugin(pluginId)
+          latestError = null
+          break
+        } catch (error) {
+          latestError = error
+        }
+      }
+      if (latestError) throw latestError
     }
   }
 }
@@ -2475,6 +2614,7 @@ onUnmounted(() => {
   window.removeEventListener('dragleave', handleWindowDragLeave)
   window.removeEventListener('drop', handleWindowDrop)
   window.removeEventListener('keydown', handleGlobalSearchKeydown)
+  stopLatestActivityMotion()
   threadResizeObserver?.disconnect()
   threadResizeObserver = null
   threadResizeObserverTarget = null
@@ -2731,6 +2871,16 @@ onUnmounted(() => {
 .thread-jump-latest:active {
   background: color-mix(in srgb, var(--text) var(--alpha-active, 12%), var(--theme-control-background));
   transform: translateY(1px);
+}
+.thread-jump-latest-spinner {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+}
+.thread-jump-latest-spinner svg {
+  display: block;
 }
 /* enter from just below; leave by fading. Reduced-motion drops the slide. */
 .thread-jump-latest-enter-active,

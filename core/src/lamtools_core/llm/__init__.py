@@ -6,6 +6,7 @@ Sub-modules:
   policy    - transport-level retry policy types
 """
 
+import copy
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Literal, Protocol, runtime_checkable
 
@@ -39,6 +40,12 @@ class ChatMessage:
     tool_call_id: str = ""
     tool_calls: list[LLMToolCall] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
+    # Provider-native continuation material that must survive a tool round
+    # (for example Anthropic thinking blocks/signatures, Gemini
+    # thoughtSignature, or a Responses reasoning item).  This is deliberately
+    # separate from ``metadata`` because metadata is application bookkeeping
+    # and may be stripped before dispatch.
+    provider_state: Any = None
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {"role": self.role, "content": self.content}
@@ -50,6 +57,8 @@ class ChatMessage:
             d["tool_calls"] = [tc.to_dict() for tc in self.tool_calls]
         if self.metadata:
             d["metadata"] = self.metadata
+        if self.provider_state is not None:
+            d["provider_state"] = copy.deepcopy(self.provider_state)
         return d
 
 
@@ -127,6 +136,8 @@ class LLMResponse:
     finish_reason: str = "stop"
     raw: Any = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    # Opaque provider-native continuation state extracted from this response.
+    provider_state: Any = None
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -141,6 +152,8 @@ class LLMResponse:
             d["usage"] = self.usage.to_dict()
         if self.metadata:
             d["metadata"] = self.metadata
+        if self.provider_state is not None:
+            d["provider_state"] = copy.deepcopy(self.provider_state)
         return d
 
 
@@ -168,6 +181,8 @@ class LLMStreamEvent:
     error: str = ""
     raw: Any = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    # Opaque provider-native continuation state extracted from this response.
+    provider_state: Any = None
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {"kind": self.kind}
@@ -185,6 +200,8 @@ class LLMStreamEvent:
             d["error"] = self.error
         if self.metadata:
             d["metadata"] = self.metadata
+        if self.provider_state is not None:
+            d["provider_state"] = copy.deepcopy(self.provider_state)
         return d
 
 
@@ -241,6 +258,12 @@ from lamtools_core.llm.helpers import (
     resolve_tool_calls,
 )
 from lamtools_core.llm.policy import RetryPolicy
+from lamtools_core.llm.reasoning import (
+    REASONING_LEVELS,
+    ReasoningLevel,
+    normalize_reasoning_level,
+    reasoning_level_from_legacy,
+)
 
 
 __all__ = [
@@ -271,4 +294,8 @@ __all__ = [
     "parse_tool_call_arguments",
     "resolve_tool_calls",
     "RetryPolicy",
+    "REASONING_LEVELS",
+    "ReasoningLevel",
+    "normalize_reasoning_level",
+    "reasoning_level_from_legacy",
 ]

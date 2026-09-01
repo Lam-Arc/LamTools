@@ -44,7 +44,7 @@ export interface UseCoreLiveComposerControllerOptions {
   queueInput(threadId: string, input: CoreInputItem[], options?: Record<string, unknown>): Promise<void>
   listCommands(workRoot?: string): Promise<unknown[]>
   getWorkRoot(): string
-  executeCommand(threadId: string, command: string, workRoot?: string): Promise<boolean>
+  executeCommand(threadId: string, command: string, workRoot?: string, argumentsText?: string): Promise<boolean>
   canExecuteCommand?(): boolean
   commandUnavailableMessage?: string
   turnOptions?(): Record<string, unknown>
@@ -113,6 +113,14 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
   watch(options.text, () => {
     if (dismissedText.value && dismissedText.value !== options.text.value) dismissedText.value = ''
   })
+  watch(
+    () => commandPalette.activeSlash.value !== null,
+    (active, wasActive) => {
+      if (active && !wasActive && options.activeThreadId.value) {
+        void loadCommandCatalog(options.activeThreadId.value)
+      }
+    },
+  )
   watch(options.status, (status) => {
     if (!stopPending || isCoreActiveTurnStatus(status)) return
     stopPending = false
@@ -124,7 +132,6 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
     if (!threadId || threadId !== options.activeThreadId.value) return false
     const generation = ++commandCatalogGeneration
     const workRoot = options.getWorkRoot()
-    commandCatalog.value = []
     commandError.value = ''
     dismissedText.value = ''
     if (!threadId) return true
@@ -164,29 +171,22 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
   function replaceActiveSlash(command: CoreCommandCatalogItem, replacement?: string): void {
     const span = commandPalette.activeSlash.value
     if (!span) return
-    const nextText = replacement ?? (command.action === 'insert_token' ? `/${command.name}` : '')
+    const nextText = replacement ?? `/${command.name}${command.accepts_args ? ' ' : ''}`
     const updatedText = `${options.text.value.slice(0, span.start)}${nextText}${options.text.value.slice(span.end)}`
     const nextCursor = span.start + nextText.length
     options.text.value = updatedText
     options.cursor.value = nextCursor
-    if (command.action === 'insert_token') dismissedText.value = updatedText
+    dismissedText.value = updatedText
     options.focusComposer?.(nextCursor)
   }
 
   async function selectCommand(command: CoreCommandCatalogItem): Promise<boolean> {
     commandPalette.reset()
-    if (command.action === 'insert_token') {
-      replaceActiveSlash(command)
-      return true
-    }
-    replaceActiveSlash(command, `/${command.name}`)
-    const ok = await runCommand(command.name)
-    if (ok) replaceActiveSlash(command, '')
-    else dismissedText.value = options.text.value
-    return ok
+    replaceActiveSlash(command)
+    return true
   }
 
-  async function runCommand(command: string): Promise<boolean> {
+  async function runCommand(command: string, argumentsText = ''): Promise<boolean> {
     const threadId = options.activeThreadId.value || ''
     if (!threadId) {
       reportError(options.messages?.noActiveThread || 'An active thread is required')
@@ -194,7 +194,8 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
     }
     const workRoot = options.getWorkRoot()
     const submittedCommand = options.text.value.trim()
-    const clearRunningCommand = submittedCommand === `/${command}`
+    const expectedCommandText = `/${command}${argumentsText ? ` ${argumentsText}` : ''}`
+    const clearRunningCommand = submittedCommand === expectedCommandText || submittedCommand === `/${command}`
     if (options.canExecuteCommand && !options.canExecuteCommand()) {
       reportError(options.commandUnavailableMessage || 'Command is unavailable while the turn is active')
       return false
@@ -206,7 +207,7 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
       commandPalette.reset()
       if (clearRunningCommand) clearCommandComposer(submittedCommand)
       commandRunning.value = true
-      const ok = await options.executeCommand(threadId, command, workRoot)
+      const ok = await options.executeCommand(threadId, command, workRoot, argumentsText)
       if (!ok && clearRunningCommand && !options.text.value) options.text.value = submittedCommand
       return ok
     } catch (error) {

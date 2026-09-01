@@ -61,6 +61,25 @@ describe('ChatThread process cards', () => {
     expect(wrapper.text()).not.toContain('**正文**');
   });
 
+  it('shows a compact assistant time and its full hover value', () => {
+    const wrapper = mount(ChatThread, {
+      props: {
+        messages: [{
+          id: 'timestamped-answer',
+          role: 'assistant',
+          content: '已完成',
+          timestamp: '2026-06-18T04:05:06',
+          parts: [],
+        }],
+      },
+    });
+
+    const timestamp = wrapper.get('[data-message-timestamp]');
+    expect(timestamp.get('.assistant-timestamp__compact').text()).toBe('04:05');
+    expect(timestamp.get('.assistant-timestamp__expanded').text()).toBe('2026-06-18 04:05:06');
+    expect(timestamp.attributes('title')).toBe('2026-06-18 04:05:06');
+  });
+
   it('renders a tool part as one process step only', () => {
     const messages: CoreMessage[] = [{
       id: 'm-tool',

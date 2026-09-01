@@ -252,6 +252,60 @@ def test_core_live_host_rejects_base_operation_executor_override(tmp_path, opera
 
 
 @pytest.mark.asyncio
+async def test_core_live_command_action_receives_arguments_without_reparsing(tmp_path):
+    engine, context = await _context(tmp_path)
+    member_root = tmp_path / "member"
+    command_dir = member_root / "config" / "command"
+    command_dir.mkdir(parents=True)
+    (command_dir / "echo.json").write_text(
+        json.dumps({
+            "name": "echo",
+            "title": "Echo",
+            "description": "Echo arguments",
+            "icon": "message-square",
+            "kind": "action",
+            "action": "run_action",
+            "accepts_args": True,
+        }),
+        encoding="utf-8",
+    )
+    captured: dict[str, str] = {}
+
+    class Hooks(DefaultCoreLiveMemberHooks):
+        def command_member_roots(self):
+            return [member_root]
+
+        def command_action_handlers(self):
+            async def echo(*, thread_id: str, arguments: str, work_root: str, **_: object):
+                captured.update(thread_id=thread_id, arguments=arguments, work_root=work_root)
+                return {"echo": arguments}
+
+            return {"echo": echo}
+
+    context.host.member_hooks = Hooks()
+    try:
+        outcome = await handle_command_execute_operation(
+            request_id=1,
+            params={
+                "thread_id": "thread-echo",
+                "command": "echo",
+                "arguments": "创建发布计划",
+                "work_root": str(tmp_path / "workspace"),
+            },
+            context=context,
+        )
+
+        assert outcome.response["result"]["result"] == {"echo": "创建发布计划"}
+        assert captured == {
+            "thread_id": "thread-echo",
+            "arguments": "创建发布计划",
+            "work_root": str(tmp_path / "workspace"),
+        }
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_core_compact_command_failure_persists_terminal_projection(tmp_path):
     engine, context = await _context(tmp_path)
 

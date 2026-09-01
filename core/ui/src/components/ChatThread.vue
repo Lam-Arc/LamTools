@@ -1,6 +1,6 @@
 ﻿<template>
   <div class="chat-thread">
-    <div v-if="messages.length === 0" class="sidebar-empty">
+    <div v-if="messages.length === 0 && showEmptyState" class="sidebar-empty">
       <slot name="empty">
         <span>暂无消息，发送一个任务。</span>
       </slot>
@@ -64,6 +64,8 @@ defineSlots<{
 const props = withDefaults(
   defineProps<{
     messages: CoreMessage[]
+    /** Render the generic empty message when there are no messages. */
+    showEmptyState?: boolean
     assistantLabel?: string
     /** Labels keyed by the model id frozen into each turn's runtime snapshot. */
     assistantModelLabels?: Readonly<Record<string, string>>
@@ -85,6 +87,7 @@ const props = withDefaults(
     checkpointTurnIds?: Set<string>
   }>(),
   {
+    showEmptyState: true,
     assistantLabel: 'Assistant',
     assistantModelLabels: () => ({}),
     processExpandedIds: () => new Set(),

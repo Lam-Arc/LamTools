@@ -73,7 +73,7 @@ async def _append_message_turn(db: Any, session_id: str, turn_id: str, text: str
 
 
 @pytest.mark.asyncio
-async def test_turn_fork_and_conversation_rollback_keep_selected_turn_without_checkpoint(tmp_path: Path) -> None:
+async def test_turn_fork_keeps_selected_turn_and_rollback_removes_it_without_checkpoint(tmp_path: Path) -> None:
     work_root = tmp_path / "workspace"
     work_root.mkdir()
     db = await open_core_app_db(tmp_path / "core.db")
@@ -118,7 +118,8 @@ async def test_turn_fork_and_conversation_rollback_keep_selected_turn_without_ch
         async with db.session_factory() as session:
             events = await db.event_store.list_thread(session, thread_id="turn-source")
             snapshot = await db.snapshot_store.load(session, "turn-source")
-        assert {event.turn_id for event in events if event.turn_id} == {"turn-1"}
+        assert not {event.turn_id for event in events if event.turn_id}
+        assert "turn-1" not in str(snapshot)
         assert "turn-2" not in str(snapshot)
     finally:
         await db.close()
@@ -152,20 +153,23 @@ async def test_turn_rollback_uses_only_an_exact_boundary_checkpoint(tmp_path: Pa
         ))
         await _runtime(db, "checkpoint-source", history=[])
         await _append_message_turn(db, "checkpoint-source", "turn-1", "one")
-        # A checkpoint taken before the *next* turn is an exact complete
-        # boundary for turn-1.  A checkpoint labelled turn-1 itself is the
-        # automatic pre-turn checkpoint and must not be selected here.
+        # A checkpoint taken before turn-2 is the exact complete boundary for
+        # removing turn-2.  It preserves turn-1 and restores the workspace to
+        # the state before the selected turn began.
         checkpoint = await coordinator.save(
             session_id="checkpoint-source", turn_id="turn-2", actor_kind="main", reason="manual",
         )
         await _append_message_turn(db, "checkpoint-source", "turn-2", "two")
 
         restored = await catalog.execute("session.rollback", {
-            "session_id": "checkpoint-source", "turn_id": "turn-1",
+            "session_id": "checkpoint-source", "turn_id": "turn-2",
         })
         assert restored.status == "ok", restored.payload
         assert restored.payload["mode"] == "checkpoint"
         assert restored.payload["checkpoint_id"] == checkpoint.id
+        async with db.session_factory() as session:
+            events = await db.event_store.list_thread(session, thread_id="checkpoint-source")
+        assert {event.turn_id for event in events if event.turn_id} == {"turn-1"}
     finally:
         await db.close()
 

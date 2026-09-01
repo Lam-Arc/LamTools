@@ -16,7 +16,7 @@
           type="button"
           @click="openCreateForm"
         >新建技能</button>
-        <button class="text-btn" type="button" @click="fetchSkills">刷新</button>
+        <button class="text-btn" type="button" @click="refreshSkills">刷新</button>
       </div>
     </div>
 
@@ -87,6 +87,17 @@
             </div>
             <div class="row-actions">
               <button
+                v-if="skill.deletable"
+                class="text-btn danger icon-btn"
+                type="button"
+                :disabled="deletingName === skill.name"
+                :aria-label="`删除技能 ${skill.name}`"
+                title="删除"
+                @click="deleteSkill(skill)"
+              >
+                <Trash2 :size="15" :stroke-width="1.8" aria-hidden="true" />
+              </button>
+              <button
                 class="text-btn toggle-btn"
                 :class="{ 'is-on': skill.enabled }"
                 type="button"
@@ -107,16 +118,20 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { ToggleLeft, ToggleRight, X } from 'lucide-vue-next'
+import { ToggleLeft, ToggleRight, Trash2, X } from 'lucide-vue-next'
 import type { CoreSkillItem } from '../types'
 
 const props = defineProps<{
   requestRpc: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>
 }>()
+const emit = defineEmits<{
+  changed: []
+}>()
 
 const skills = ref<CoreSkillItem[]>([])
 const loading = ref(true)
 const error = ref('')
+const deletingName = ref('')
 
 // 新建技能表单（标题 / 描述 / 内容三块）
 const showCreateForm = ref(false)
@@ -161,11 +176,17 @@ async function fetchSkills() {
   }
 }
 
+async function refreshSkills() {
+  await fetchSkills()
+  emit('changed')
+}
+
 async function toggleSkill(name: string, enable: boolean) {
   try {
     await props.requestRpc(enable ? 'skill.enable' : 'skill.disable', { name })
     const idx = skills.value.findIndex((s) => s.name === name)
     if (idx >= 0) skills.value[idx] = { ...skills.value[idx], enabled: enable }
+    emit('changed')
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
   }
@@ -189,10 +210,26 @@ async function submitCreate() {
     await props.requestRpc('skill.create', { ...createForm.value })
     closeCreateForm()
     await fetchSkills()
+    emit('changed')
   } catch (e) {
     createError.value = e instanceof Error ? e.message : String(e)
   } finally {
     createSaving.value = false
+  }
+}
+
+async function deleteSkill(skill: CoreSkillItem) {
+  if (!skill.deletable || !window.confirm(`删除技能“${skill.name}”及其目录？此操作无法撤销。`)) return
+  deletingName.value = skill.name
+  error.value = ''
+  try {
+    await props.requestRpc('skill.delete', { name: skill.name })
+    await fetchSkills()
+    emit('changed')
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    deletingName.value = ''
   }
 }
 

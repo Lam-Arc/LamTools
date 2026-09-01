@@ -132,6 +132,9 @@ def _chat_message_from_dict(value: Any) -> ChatMessage | None:
         tool_call_id=str(value.get("tool_call_id") or ""),
         tool_calls=tool_calls,
         metadata=dict(value.get("metadata") or {}),
+        provider_state=copy.deepcopy(value.get("provider_state"))
+        if "provider_state" in value
+        else None,
     )
 
 
@@ -709,6 +712,7 @@ class CoreLoopKernel:
                             )
                             for call in turn.tool_calls
                         ],
+                        provider_state=copy.deepcopy(response.provider_state),
                     ))
                     await self._save_checkpoint(state)
 
@@ -1676,6 +1680,7 @@ class CoreLoopKernel:
         # fallback below still reports the real finish reason + usage.
         stream_finish_reason: str | None = None
         terminal_tool_calls: list[LLMToolCall] = []
+        provider_state: Any = None
         try:
             stream_iterator = stream.__aiter__()
             while True:
@@ -1699,6 +1704,8 @@ class CoreLoopKernel:
                     # A few gateways attach usage to the final content/tool
                     # delta instead of sending a separate usage-only chunk.
                     pending_usage = event.usage
+                if event.provider_state is not None:
+                    provider_state = copy.deepcopy(event.provider_state)
                 if event.kind == "content_delta" and event.content:
                     accumulated += event.content
                     await self.event_sink.emit(CoreEvent(
@@ -1903,6 +1910,7 @@ class CoreLoopKernel:
             tool_calls=merged_tool_calls,
             usage=pending_usage,
             finish_reason=stream_finish_reason or "stop",
+            provider_state=copy.deepcopy(provider_state),
         )
 
     async def _consume_guidance(

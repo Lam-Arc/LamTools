@@ -35,6 +35,11 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    fs: {
+      // The desktop shell imports Core UI source directly so Tauri can use
+      // the same modules and receive their HMR updates during development.
+      allow: [resolve(__dirname, '..')],
+    },
     proxy: {
       '/api': {
         target: `http://127.0.0.1:${process.env.CORE_BACKEND_PORT || '5172'}`,

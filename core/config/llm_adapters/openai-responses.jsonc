@@ -1,0 +1,22 @@
+{
+  "id": "openai-responses",
+  "label": "OpenAI Responses",
+  "protocol": "openai-responses",
+  "endpoint": "/responses",
+  "request": {
+    "reasoning": {
+      "cleanup": [
+        "reasoning",
+        "reasoning_effort",
+        "thinking",
+        "enable_thinking"
+      ],
+      "presets": {
+        "off": {},
+        "light": { "set": { "reasoning.effort": "low" } },
+        "high": { "set": { "reasoning.effort": "medium" } },
+        "max": { "set": { "reasoning.effort": "high" } }
+      }
+    }
+  }
+}

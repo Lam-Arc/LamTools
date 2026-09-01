@@ -8,15 +8,15 @@ describe('CoreExecutionControls', () => {
     const wrapper = mount(CoreExecutionControls, {
       props: {
         modelValue: 'model-1',
-        thinkingMode: 'medium',
+        thinkingMode: 'high',
         shallowThinkingEnabled: false,
         modelOptions: [
           { value: 'model-1', label: 'Kimi K2.6' },
           { value: 'model-2', label: 'GLM-5.2' },
         ],
         thinkingModeOptions: [
-          { value: 'medium', label: 'Medium thinking' },
-          { value: 'none', label: 'No thinking' },
+          { value: 'high', label: '高强度思考' },
+          { value: 'off', label: '关闭思考' },
         ],
       },
     })
@@ -24,7 +24,7 @@ describe('CoreExecutionControls', () => {
     expect(wrapper.findAll('select')).toHaveLength(0)
     expect(wrapper.findAll('[data-core-runtime-menu], [data-core-model-thinking-menu]')).toHaveLength(2)
     expect(wrapper.text()).toContain('Kimi K2.6')
-    expect(wrapper.text()).toContain('Medium thinking')
+    expect(wrapper.text()).toContain('高强度思考')
     expect(wrapper.find('.core-runtime-menu').exists()).toBe(true)
     expect(wrapper.find('.core-model-thinking-menu').exists()).toBe(true)
 

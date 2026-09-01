@@ -70,6 +70,7 @@ class KernelSubAgentRunner:
         instructions: str = "",
         temperature: float = 0.2,
         max_tokens: int | None = None,
+        reasoning_level: str = "",
         thinking_enabled: bool | None = None,
         thinking_budget: int | None = None,
         approval_policy: ApprovalPolicy = "require",
@@ -100,6 +101,7 @@ class KernelSubAgentRunner:
         self.instructions = instructions
         self.temperature = temperature
         self.max_tokens = max_tokens
+        self.reasoning_level = reasoning_level
         self.thinking_enabled = thinking_enabled
         self.thinking_budget = thinking_budget
         self.approval_policy = approval_policy
@@ -294,6 +296,7 @@ class KernelSubAgentRunner:
                     "session_id": f"{self.session_prefix}:sub:{agent_name}",
                     "model_id": effective_model,
                     "active_mode": effective_mode,
+                    "reasoning_level": self.reasoning_level,
                     "thinking_enabled": self.thinking_enabled,
                     "thinking_budget": self.thinking_budget,
                     "actor_kind": "sub_agent",
@@ -326,6 +329,7 @@ class KernelSubAgentRunner:
                     instructions=self.instructions,
                     temperature=self.temperature,
                     max_tokens=self.max_tokens,
+                    reasoning_level=self.reasoning_level,
                     thinking_enabled=self.thinking_enabled,
                     thinking_budget=self.thinking_budget,
                     approval_policy=self.approval_policy,
@@ -658,6 +662,7 @@ class KernelSubAgentRunner:
                     "session_id": session_id,
                     "model_id": effective_model,
                     "active_mode": effective_mode,
+                    "reasoning_level": self.reasoning_level,
                     "thinking_enabled": self.thinking_enabled,
                     "thinking_budget": self.thinking_budget,
                     **(

@@ -131,6 +131,7 @@ class CoreAppSnapshotProjector:
                 "seq": event.seq,
                 "last_seq": event.seq,
                 "last_method": event.method,
+                "created_at": event.created_at.isoformat(),
                 "input": payload.get("input"),
                 "work_root": payload.get("work_root") or payload.get("workRoot") or "",
             }

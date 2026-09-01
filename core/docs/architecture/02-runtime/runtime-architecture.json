@@ -1,0 +1,448 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "LamTools Core 运行时 / 智能体执行架构",
+    "locale": "zh-CN",
+    "output": "runtime-architecture.html",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1320,
+      700
+    ],
+    "repository": {
+      "url": "https://github.com/Lam-Arc/LamTools.git",
+      "revision": "5c1371e717dfa86e125665f7669526d758ad5bce"
+    },
+    "views": [
+      {
+        "id": "turn-path",
+        "label": "一次轮次主链路",
+        "focus": [
+          "turn-request",
+          "application-service",
+          "session-runtime",
+          "core-loop",
+          "runtime-events",
+          "state-store"
+        ],
+        "note": "从请求进入到事件与持久化收敛。"
+      },
+      {
+        "id": "model-and-tools",
+        "label": "模型与工具调度",
+        "focus": [
+          "core-loop",
+          "agent-kit",
+          "model-provider",
+          "core-toolbox"
+        ],
+        "note": "核心循环内核通过智能体工具包、提供方与工具箱完成执行。"
+      },
+      {
+        "id": "runtime-control",
+        "label": "生命周期控制",
+        "focus": [
+          "application-service",
+          "core-loop",
+          "task-registry",
+          "runtime-events"
+        ],
+        "note": "取消、审批、重试和终态由运行时控制面协调。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "turn-request",
+      "type": "external",
+      "label": "轮次请求",
+      "sublabel": "用户命令",
+      "pos": [
+        40,
+        300
+      ],
+      "size": [
+        140,
+        66
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/cli.py",
+          "label": "命令行入口"
+        }
+      ]
+    },
+    {
+      "id": "application-service",
+      "type": "backend",
+      "label": "应用服务",
+      "sublabel": "创建 / 恢复会话",
+      "pos": [
+        220,
+        300
+      ],
+      "size": [
+        160,
+        66
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/app/default_agent.py",
+          "label": "智能体装配"
+        },
+        {
+          "path": "core/src/lamtools_core/app/http_agent_app.py",
+          "label": "请求编排"
+        }
+      ]
+    },
+    {
+      "id": "session-runtime",
+      "type": "backend",
+      "label": "会话与运行时",
+      "sublabel": "任务注册 / 状态加载",
+      "pos": [
+        420,
+        300
+      ],
+      "size": [
+        160,
+        66
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/runtime/__init__.py",
+          "label": "运行时契约"
+        },
+        {
+          "path": "core/src/lamtools_core/app/live_operations.py",
+          "label": "会话编排"
+        }
+      ]
+    },
+    {
+      "id": "core-loop",
+      "type": "backend",
+      "label": "***核心循环内核***",
+      "sublabel": "轮次生命周期控制器",
+      "tag": "***核心控制面***",
+      "pos": [
+        620,
+        300
+      ],
+      "size": [
+        180,
+        74
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/kernel/loop.py",
+          "label": "内核循环"
+        }
+      ]
+    },
+    {
+      "id": "agent-kit",
+      "type": "backend",
+      "label": "***核心基础智能体工具包***",
+      "sublabel": "上下文 / 解析 / 校验",
+      "pos": [
+        620,
+        120
+      ],
+      "size": [
+        180,
+        66
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/app/base_agent.py",
+          "label": "智能体工具包"
+        }
+      ]
+    },
+    {
+      "id": "model-provider",
+      "type": "external",
+      "label": "模型提供方",
+      "sublabel": "流式生成",
+      "pos": [
+        850,
+        120
+      ],
+      "size": [
+        160,
+        66
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/app/default_agent.py",
+          "label": "模型绑定"
+        }
+      ]
+    },
+    {
+      "id": "runtime-events",
+      "type": "messagebus",
+      "label": "运行时事件",
+      "sublabel": "增量 / 生命周期 / 审批",
+      "pos": [
+        850,
+        300
+      ],
+      "size": [
+        170,
+        66
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/app/live_operations.py",
+          "label": "事件路由"
+        }
+      ]
+    },
+    {
+      "id": "core-toolbox",
+      "type": "backend",
+      "label": "***核心工具箱***",
+      "sublabel": "工具调度 + 结果",
+      "pos": [
+        850,
+        500
+      ],
+      "size": [
+        170,
+        66
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/tool/default_toolbox.py",
+          "label": "工具绑定"
+        }
+      ]
+    },
+    {
+      "id": "task-registry",
+      "type": "backend",
+      "label": "***运行时任务注册表***",
+      "sublabel": "取消 / 批准 / 指导",
+      "pos": [
+        420,
+        120
+      ],
+      "size": [
+        160,
+        66
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/runtime/__init__.py",
+          "label": "任务控制"
+        }
+      ]
+    },
+    {
+      "id": "state-store",
+      "type": "database",
+      "label": "***运行时状态存储***",
+      "sublabel": "检查点 / 快照 / 状态",
+      "pos": [
+        1080,
+        300
+      ],
+      "size": [
+        170,
+        66
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/app/core_db.py",
+          "label": "SQLite 运行时存储"
+        },
+        {
+          "path": "core/src/lamtools_core/app/persistence_host.py",
+          "label": "持久化宿主"
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "应用编排",
+      "wraps": [
+        "application-service",
+        "session-runtime",
+        "task-registry"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "运行时执行边界",
+      "wraps": [
+        "core-loop",
+        "agent-kit",
+        "runtime-events",
+        "core-toolbox"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "持久化适配器",
+      "wraps": [
+        "state-store"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "request-to-service",
+      "from": "turn-request",
+      "to": "application-service",
+      "label": "提交轮次",
+      "variant": "emphasis",
+      "labelDy": -48
+    },
+    {
+      "id": "service-to-session",
+      "from": "application-service",
+      "to": "session-runtime",
+      "label": "创建 / 恢复",
+      "labelDy": -48
+    },
+    {
+      "id": "session-to-kernel",
+      "from": "session-runtime",
+      "to": "core-loop",
+      "label": "启动轮次",
+      "variant": "emphasis",
+      "labelDy": -48
+    },
+    {
+      "id": "task-control",
+      "from": "task-registry",
+      "to": "core-loop",
+      "label": "取消 / 审批",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "via": [
+        [
+          500,
+          220
+        ],
+        [
+          710,
+          220
+        ]
+      ]
+    },
+    {
+      "id": "kernel-to-agent-kit",
+      "from": "core-loop",
+      "to": "agent-kit",
+      "label": "构建上下文 / 解析",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "labelDx": -110
+    },
+    {
+      "id": "agent-kit-to-model",
+      "from": "agent-kit",
+      "to": "model-provider",
+      "label": "请求 + 流式传输",
+      "variant": "emphasis",
+      "labelDy": -48
+    },
+    {
+      "id": "model-to-kernel",
+      "from": "model-provider",
+      "to": "core-loop",
+      "label": "令牌 / 工具调用",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDx": 140
+    },
+    {
+      "id": "kernel-to-tools",
+      "from": "core-loop",
+      "to": "core-toolbox",
+      "label": "工具调用 ↔ 结果",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        820,
+        430
+      ]
+    },
+    {
+      "id": "kernel-to-events",
+      "from": "core-loop",
+      "to": "runtime-events",
+      "label": "发出增量 + 生命周期",
+      "variant": "emphasis",
+      "labelDy": -50
+    },
+    {
+      "id": "events-to-state",
+      "from": "runtime-events",
+      "to": "state-store",
+      "label": "追加 / 检查点",
+      "labelDy": -50
+    },
+    {
+      "id": "state-to-session",
+      "from": "state-store",
+      "to": "session-runtime",
+      "label": "恢复状态",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "via": [
+        [
+          1165,
+          620
+        ],
+        [
+          20,
+          620
+        ],
+        [
+          20,
+          250
+        ],
+        [
+          500,
+          250
+        ]
+      ],
+      "labelDy": 24
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "核心边界",
+      "items": [
+        "***核心循环内核***收敛轮次生命周期、工具、审批、取消与终态。",
+        "智能体工具包提供上下文、解析、校验和写回能力。"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "控制流",
+      "items": [
+        "应用服务负责装配与请求编排。",
+        "运行时通过事件把执行进度传播给外部适配器。"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "架构信号",
+      "items": [
+        "运行时需要依赖抽象的状态与工具端口。",
+        "应用 / HTTP 编排中心是潜在职责过重热点。"
+      ]
+    }
+  ]
+}

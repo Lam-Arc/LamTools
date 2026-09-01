@@ -946,6 +946,7 @@ def test_core_agent_http_app_exposes_shared_model_catalog_without_secrets(tmp_pa
             "thinking_budget": 10000,
             "temperature": 0.2,
             "capability": "text",
+            "reasoning_off_supported": True,
             "notes": "",
             "is_default": False,
             "adapter_profile_id": "",
@@ -982,6 +983,12 @@ def test_core_agent_http_app_exposes_config_catalog_over_live_operations(tmp_pat
             models = websocket.receive_json()
             websocket.send_json({"id": 4, "method": "config.providers.list", "params": {}})
             providers = websocket.receive_json()
+            websocket.send_json({
+                "id": 5,
+                "method": "config.resolved.get",
+                "params": {"model_id": "model-record"},
+            })
+            resolved = websocket.receive_json()
 
     assert models["id"] == 3
     assert models["result"]["models"][0]["id"] == "model-record"
@@ -1000,6 +1007,8 @@ def test_core_agent_http_app_exposes_config_catalog_over_live_operations(tmp_pat
         }
     ]
     assert "secret" not in str(providers)
+    assert resolved["id"] == 5
+    assert resolved["result"]["resolved"]["model"]["reasoning_off_supported"] is True
     operations = app.state.core_agent_app_state["operations"]
     assert {
         "project.list",

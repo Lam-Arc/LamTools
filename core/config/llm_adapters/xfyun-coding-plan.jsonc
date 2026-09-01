@@ -4,18 +4,41 @@
   "protocol": "openai-chat-completions",
   "match_base_url": [
     "maas-coding-api",
-    "xf-yun\\.com",
-    "xfyun\\.cn"
+    "xf-yun.com",
+    "xfyun.cn"
   ],
   "request": {
-    "thinking": {
-      "when_enabled": {
-        "enable_thinking": true
+    "omit_temperature_when_reasoning": true,
+    "reasoning": {
+      "cleanup": [
+        "reasoning_effort",
+        "reasoning",
+        "thinking",
+        "enable_thinking"
+      ],
+      "presets": {
+        "off": {},
+        "light": {
+          "set": {
+            "enable_thinking": true,
+            "reasoning_effort": "low"
+          }
+        },
+        "high": {
+          "set": {
+            "enable_thinking": true,
+            "reasoning_effort": "medium"
+          }
+        },
+        "max": {
+          "set": {
+            "enable_thinking": true,
+            "reasoning_effort": "high"
+          }
+        }
       }
     },
-    "unsupported_fields": [
-      "thinking"
-    ]
+    "unsupported_fields": ["thinking"]
   },
   "stream_response": {
     "content_delta": "choices.0.delta.content",

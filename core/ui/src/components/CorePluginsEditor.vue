@@ -351,6 +351,10 @@ const props = defineProps<{
   requestRpc: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>
 }>()
 
+const emit = defineEmits<{
+  changed: [refreshDesktop: boolean]
+}>()
+
 const plugins = ref<PluginItem[]>([])
 const loading = ref(true)
 const error = ref('')
@@ -393,6 +397,7 @@ async function onDrop(e: DragEvent) {
     await props.requestRpc('plugin.install', { source: 'zip', path: p })
     installNotice.value = `安装成功：${file.name}`
     await fetchPlugins()
+    emit('changed', false)
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err)
   } finally {
@@ -479,6 +484,7 @@ async function toggleEnabled(plugin: PluginItem) {
     await props.requestRpc(next ? 'plugin.enable' : 'plugin.disable', { name: plugin.name })
     const idx = plugins.value.findIndex((p) => p.name === plugin.name)
     if (idx >= 0) plugins.value[idx] = { ...plugins.value[idx], enabled: next }
+    emit('changed', plugin.name === 'emotion-ball-pet')
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
   }
@@ -497,6 +503,7 @@ async function doInstall() {
     installNotice.value = '安装成功'
     installPath.value = ''
     await fetchPlugins()
+    emit('changed', false)
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
   } finally {
@@ -510,6 +517,7 @@ async function doUninstall(plugin: PluginItem) {
     await props.requestRpc('plugin.uninstall', { name: plugin.name })
     if (configPlugin.value?.name === plugin.name) closeConfig()
     await fetchPlugins()
+    emit('changed', plugin.name === 'emotion-ball-pet')
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
   }
@@ -787,7 +795,7 @@ onMounted(fetchPlugins)
 .plugins-root .editor-overlay {
   position: fixed;
   inset: var(--titlebar-offset, 36px) 0 0 0;
-  z-index: 95;
+  z-index: var(--z-modal);
   background: transparent;
   backdrop-filter: none;
   -webkit-backdrop-filter: none;

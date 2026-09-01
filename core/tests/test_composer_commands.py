@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import lamtools_core.composer_commands as composer_commands
+import pytest
 from lamtools_core.composer_commands import (
     build_composer_command_catalog,
     default_core_resource_roots,
@@ -8,7 +9,7 @@ from lamtools_core.composer_commands import (
     load_command_catalog,
     prepare_composer_input,
 )
-from lamtools_core.skills import SkillRegistry
+from lamtools_core.skills import SkillRegistry, SkillStateStore
 
 
 def write_json(path: Path, content: str) -> None:
@@ -146,3 +147,33 @@ def test_core_catalog_includes_skills_and_core_prepares_skill_with_attachments(t
         "attachment_id": "att-1",
         "filename": "note.md",
     }
+
+
+def test_disabled_skill_is_absent_from_catalog_and_rejected_during_prepare(tmp_path: Path):
+    work_root = tmp_path / "workspace"
+    skill_dir = work_root / ".lam" / "skills" / "reviewer"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: reviewer\ndescription: Review changes\n---\nREVIEW WORKFLOW\n",
+        encoding="utf-8",
+    )
+    registry = SkillRegistry()
+    state = SkillStateStore(tmp_path / "skill-state.json")
+    state.set_enabled("reviewer", False)
+
+    catalog = build_composer_command_catalog(
+        core_roots=[],
+        member_roots=[],
+        work_root=work_root,
+        skill_registry=registry,
+        skill_state_store=state,
+    )
+
+    assert all(item.name != "reviewer" for item in catalog)
+    with pytest.raises(ValueError, match="disabled"):
+        prepare_composer_input(
+            work_root=work_root,
+            input_items=[{"type": "skill", "name": "reviewer", "source_text": "/reviewer"}],
+            skill_registry=registry,
+            skill_state_store=state,
+        )

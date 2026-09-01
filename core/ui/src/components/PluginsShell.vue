@@ -10,10 +10,16 @@
         >
           <template #default="{ activeSection }">
             <section v-if="activeSection === 'plugins'" class="settings-panel">
-              <CorePluginsEditor :request-rpc="props.requestRpc" />
+              <CorePluginsEditor
+                :request-rpc="props.requestRpc"
+                @changed="(refreshDesktop) => $emit('capabilities-changed', refreshDesktop)"
+              />
             </section>
             <section v-else-if="activeSection === 'skills'" class="settings-panel">
-              <CoreSkillsEditor :request-rpc="props.requestRpc" />
+              <CoreSkillsEditor
+                :request-rpc="props.requestRpc"
+                @changed="$emit('capabilities-changed', false)"
+              />
             </section>
             <section v-else-if="activeSection === 'hooks'" class="settings-panel">
               <KeepAlive>
@@ -47,6 +53,11 @@ import { gradientFromStops, relativeLuminance, type ThemeData } from '../helpers
 const props = defineProps<{
   requestRpc: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>
   theme?: ThemeData | null
+}>()
+
+defineEmits<{
+  close: []
+  'capabilities-changed': [refreshDesktop: boolean]
 }>()
 
 const sections: SettingsSection[] = [

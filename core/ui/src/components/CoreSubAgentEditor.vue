@@ -1,5 +1,5 @@
 <template>
-  <section class="settings-panel">
+  <section class="settings-panel settings-panel--editor">
     <header class="settings-title">
       <h1>Sub agent</h1>
       <p>配置 sub_agent 调用提示词，指导主 Agent 如何与何时委派子 Agent（model/mode 等）。</p>
@@ -7,6 +7,7 @@
 
     <p v-if="error" class="skill-error">{{ error }}</p>
 
+    <div class="settings-surface settings-surface--stack">
     <!-- Default multimodal model picker -->
     <article class="setting-card">
       <div class="subhead">
@@ -50,6 +51,7 @@
         {{ guideDescription }}
       </p>
     </article>
+    </div>
   </section>
 </template>
 

@@ -80,12 +80,20 @@ describe('CoreResourceStats', () => {
     expect(wrapper.text()).toContain('80%')
   })
 
-  it('shows -- for cache hit rate when no cache data is present', () => {
+  it('hides cache hit rate when no cache data is present', () => {
     const wrapper = mount(CoreResourceStats, { props: { messages } })
     const stats = wrapper.findAll('.core-resource-stats > div')
-    expect(stats.length).toBe(4)
-    expect(stats[3].text()).toContain('缓存')
-    expect(stats[3].text()).toContain('--')
+    expect(stats.length).toBe(3)
+    expect(wrapper.text()).not.toContain('缓存')
+  })
+
+  it('excludes cache-unreported calls from the cache-rate denominator', () => {
+    const mixedCacheReporting = [
+      { id: 'assistant:thread-1:turn:1', metadata: { processMetrics: { llm_calls: 1, input_tokens: 9_383, cached_tokens: 8_704 } } },
+      { id: 'assistant:thread-1:turn:2', metadata: { processMetrics: { llm_calls: 1, input_tokens: 9_404 } } },
+    ]
+    const summary = buildCoreResourceSummary(mixedCacheReporting)
+    expect(summary!.callItems).toContainEqual({ label: '缓存', value: '92.8%' })
   })
 
   it('counts one turn usage once across its assistant segments', () => {
@@ -169,6 +177,6 @@ describe('CoreResourceStats', () => {
 
     expect(summary).not.toBeNull()
     expect(summary!.usageStatusLabel).toBe('未获取')
-    expect(summary!.callItems.map(item => item.value)).toEqual(['--', '--', '--', '--'])
+    expect(summary!.callItems.map(item => item.value)).toEqual(['--', '--', '--'])
   })
 })

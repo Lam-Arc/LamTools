@@ -247,9 +247,22 @@ def _cli_payload(plugin: Any) -> dict[str, Any] | None:
     return {"commands": [serialize_command(item) for item in (contribution.commands or [])]}
 
 
-def _skill_source(location: Path, work_root: str | Path | None) -> str:
+def _skill_source(
+    location: Path,
+    work_root: str | Path | None,
+    plugin_manifests: Iterable[Any] = (),
+) -> str:
     """Guess the source category of a skill by its location."""
     loc = location.resolve()
+    for plugin in plugin_manifests:
+        if not bool(getattr(plugin, "enabled", False)):
+            continue
+        for root in getattr(plugin, "skill_roots", ()) or ():
+            try:
+                loc.relative_to(Path(root).resolve())
+            except ValueError:
+                continue
+            return "plugin"
     if work_root:
         wr = Path(work_root).resolve()
         try:
@@ -353,6 +366,18 @@ def build_plugin_operation_catalog(
                     "operations": _operation_status_from_files(
                         item.operation_files, plugin_root=item.root
                     ),
+                    "commands": [
+                        {
+                            "name": command.name,
+                            "title": command.title,
+                            "description": command.description,
+                            "icon": command.icon,
+                            "kind": command.kind,
+                            "action": command.action,
+                            "accepts_args": command.accepts_args,
+                        }
+                        for command in item.commands
+                    ],
                     # 插件资产明细（配置卡片展示用）：具体技能名 / 钩子事件摘要
                     "skill_names": _skill_names_from_roots(item.skill_roots),
                     "hook_summary": _hook_summary_from_files(item.hook_files),
@@ -640,18 +665,56 @@ def build_plugin_operation_catalog(
 
     # ── skill operations ──────────────────────────────────────────────────
 
+    def _resolve_skill(name: str):
+        if skill_registry_factory is None:
+            return None
+        target = name.strip().lstrip("/").lower()
+        return next(
+            (
+                skill
+                for skill in skill_registry_factory().available(work_root)
+                if skill.name.strip().lstrip("/").lower() == target
+            ),
+            None,
+        )
+
+    def _deletable_skill_dir(skill: Any) -> Path | None:
+        location = Path(skill.location).resolve()
+        source = _skill_source(location, work_root, plugin_registry.discover())
+        if source not in {"project", "user"} or location.name != "SKILL.md":
+            return None
+        skill_dir = location.parent
+        allowed_roots: list[Path] = []
+        if source == "project" and work_root:
+            root = Path(work_root).resolve()
+            allowed_roots.extend([(root / ".lam").resolve(), (root / ".lamtools").resolve()])
+        elif source == "user":
+            from lamtools_core.config.root import lam_home
+
+            allowed_roots.append(lam_home().resolve())
+        for allowed in allowed_roots:
+            try:
+                skill_dir.relative_to(allowed)
+            except ValueError:
+                continue
+            if skill_dir != allowed:
+                return skill_dir
+        return None
+
     async def skill_list(request: OperationRequest) -> OperationResult:
         store = skill_state_store
         skills: list[dict[str, object]] = []
         if skill_registry_factory is not None:
             for skill in skill_registry_factory().available(work_root):
                 enabled = store.is_enabled(skill.name) if store else True
+                source = _skill_source(skill.location, work_root, plugin_registry.discover())
                 skills.append({
                     "name": skill.name,
                     "description": skill.description,
                     "location": str(skill.location),
-                    "source": _skill_source(skill.location, work_root),
+                    "source": source,
                     "enabled": enabled,
+                    "deletable": _deletable_skill_dir(skill) is not None,
                 })
         return OperationResult(name=request.name, payload={
             "skills": skills,
@@ -703,19 +766,54 @@ def build_plugin_operation_catalog(
         name = str(request.payload.get("name") or "").strip()
         if not name:
             return OperationResult(name=request.name, status="error", payload={"error": "name is required"})
+        skill = _resolve_skill(name)
+        if skill is None:
+            return OperationResult(name=request.name, status="error", payload={"error": f"Skill '{name}' was not found"})
         if skill_state_store is None:
             return OperationResult(name=request.name, status="error", payload={"error": "skill state store not available"})
-        skill_state_store.set_enabled(name, True)
-        return OperationResult(name=request.name, payload={"name": name, "enabled": True})
+        skill_state_store.set_enabled(skill.name, True)
+        return OperationResult(name=request.name, payload={"name": skill.name, "enabled": True})
 
     async def skill_disable(request: OperationRequest) -> OperationResult:
         name = str(request.payload.get("name") or "").strip()
         if not name:
             return OperationResult(name=request.name, status="error", payload={"error": "name is required"})
+        skill = _resolve_skill(name)
+        if skill is None:
+            return OperationResult(name=request.name, status="error", payload={"error": f"Skill '{name}' was not found"})
         if skill_state_store is None:
             return OperationResult(name=request.name, status="error", payload={"error": "skill state store not available"})
-        skill_state_store.set_enabled(name, False)
-        return OperationResult(name=request.name, payload={"name": name, "enabled": False})
+        skill_state_store.set_enabled(skill.name, False)
+        return OperationResult(name=request.name, payload={"name": skill.name, "enabled": False})
+
+    async def skill_delete(request: OperationRequest) -> OperationResult:
+        name = str(request.payload.get("name") or "").strip()
+        if not name:
+            return OperationResult(name=request.name, status="error", payload={"error": "name is required"})
+        skill = _resolve_skill(name)
+        if skill is None:
+            return OperationResult(
+                name=request.name,
+                status="error",
+                payload={"error": f"Skill '{name}' was not found"},
+            )
+        skill_dir = _deletable_skill_dir(skill)
+        if skill_dir is None:
+            return OperationResult(
+                name=request.name,
+                status="error",
+                payload={"error": f"Skill '{skill.name}' is read-only and cannot be deleted"},
+            )
+        try:
+            shutil.rmtree(skill_dir)
+        except OSError as exc:
+            return OperationResult(name=request.name, status="error", payload={"error": f"Delete failed: {exc}"})
+        if skill_state_store is not None:
+            skill_state_store.remove(skill.name)
+        return OperationResult(
+            name=request.name,
+            payload={"name": skill.name, "location": str(skill.location), "deleted": True},
+        )
 
     # ── 插件生命周期（S2：安装 / 卸载 / 依赖状态 / 配置）──────────
 
@@ -1189,6 +1287,7 @@ def build_plugin_operation_catalog(
     catalog.register("skill.create", skill_create)
     catalog.register("skill.enable", skill_enable)
     catalog.register("skill.disable", skill_disable)
+    catalog.register("skill.delete", skill_delete)
     # ── G 组（2026-08-15 增量需求）：插件声明 operations（RPC 面）──────
     # 收集各 enabled 插件的 operations.jsonc → 动态导入 handler →
     # partial 绑定 work_root/data_dir → 注册进 catalog。UI 经现成

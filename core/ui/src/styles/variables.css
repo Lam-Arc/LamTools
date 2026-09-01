@@ -51,6 +51,7 @@
   --dur-fast: 120ms;            /* 微交互：图标/颜色翻转 */
   --dur-base: 180ms;            /* 标准过渡：hover/菜单/淡入 */
   --dur-slow: 280ms;            /* 展开折叠/抽屉滑入 */
+  --dur-theme: 600ms;           /* 深浅色与主题预览切换 */
   --dur-morph: 500ms;           /* 布局 morph：主卡/浮动 composer 跟随抽屉 */
   --ease-out: cubic-bezier(.25, 1, .5, 1);            /* 克制出场 */
   --ease-inout: cubic-bezier(.2, .8, .2, 1);          /* 抽屉/面板往返 */

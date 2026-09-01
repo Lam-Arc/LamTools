@@ -46,6 +46,22 @@ class PluginUIContribution:
 
 
 @dataclass(frozen=True)
+class PluginComposerCommand:
+    """A data-only slash command contributed by an enabled plugin."""
+
+    name: str
+    title: str
+    description: str = ""
+    icon: str = "puzzle"
+    kind: str = "action"
+    action: str = "run_action"
+    accepts_args: bool = False
+    operation: str = ""
+    payload: dict[str, Any] = field(default_factory=dict)
+    effect: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class PluginCLIArgument:
     """One argparse-compatible argument declared by a plugin command.
 
@@ -137,6 +153,7 @@ class PluginManifest:
     desktop_file_drop: bool = False
     ui: PluginUIContribution | None = None
     cli: PluginCLIContribution | None = None
+    commands: list[PluginComposerCommand] = field(default_factory=list)
     backend_entry: Path | None = None
     raw: dict[str, Any] = field(default_factory=dict)
     # Stable manifest identity. Older manifests used ``name`` as their

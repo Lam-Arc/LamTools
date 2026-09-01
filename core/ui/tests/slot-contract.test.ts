@@ -252,14 +252,14 @@ describe('CoreExecutionControls', () => {
     const wrapper = mount(CoreExecutionControls, {
       props: {
         modelValue: '',
-        thinkingMode: 'medium',
+        thinkingMode: 'high',
         shallowThinkingEnabled: false,
         modelOptions: [
           { value: '', label: 'Default' },
           { value: 'model-1', label: 'Model 1' },
         ],
         thinkingModeOptions: [
-          { value: 'medium', label: 'Medium' },
+          { value: 'high', label: '高' },
           { value: 'max', label: 'Max' },
         ],
       },

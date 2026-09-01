@@ -1,3 +1,5 @@
+import type { CoreCommandCatalogItem, CoreCommandKind } from '../types.ts'
+
 export type ComposerSyntaxKind = 'resource' | 'slash';
 
 export interface ComposerSyntaxSpan {
@@ -7,6 +9,12 @@ export interface ComposerSyntaxSpan {
   raw: string;
   value: string;
   quoted: boolean;
+}
+
+export interface ParsedComposerCommand {
+  kind: CoreCommandKind;
+  name: string;
+  arguments: string;
 }
 
 const RESOURCE_STOP = new Set('，。；：！？、,!?;)]}）】》”'.split(''));
@@ -63,6 +71,39 @@ export function parseComposerSyntax(text: string): ComposerSyntaxSpan[] {
   }
 
   return spans;
+}
+
+/**
+ * Parse the complete composer value as one leading slash command.
+ *
+ * Inline slash spans remain useful for skill tokens, but only a command at
+ * the beginning of the submitted value is allowed to take over submission.
+ * Unknown commands and ordinary prose deliberately return null so they keep
+ * the normal turn/queue path.
+ */
+export function parseComposerInput(
+  text: string,
+  commands: CoreCommandCatalogItem[] = [],
+): ParsedComposerCommand | null {
+  const value = text.trim();
+  if (!value) return null;
+
+  const span = parseComposerSyntax(value).find((item) => item.kind === 'slash' && item.start === 0);
+  if (!span) return null;
+
+  const command = commands.find((item) => normalizeCommandName(item.name) === normalizeCommandName(span.value));
+  if (!command) return null;
+
+  return {
+    kind: resolveComposerCommandKind(command),
+    name: normalizeCommandName(command.name),
+    arguments: value.slice(span.end).trim(),
+  };
+}
+
+export function resolveComposerCommandKind(command: CoreCommandCatalogItem): CoreCommandKind {
+  if (command.kind === 'action' || command.kind === 'skill') return command.kind;
+  return command.action === 'insert_token' || command.action === 'expand_on_send' ? 'skill' : 'action';
 }
 
 export function findActiveSlashCandidate(text: string, cursor: number): ComposerSyntaxSpan | null {
@@ -133,4 +174,8 @@ function parseSlash(text: string, start: number): ComposerSyntaxSpan | null {
     value: raw.slice(1),
     quoted: false,
   };
+}
+
+function normalizeCommandName(value: string): string {
+  return value.trim().replace(/^\/+/, '').toLowerCase();
 }

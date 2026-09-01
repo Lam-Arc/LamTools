@@ -1,0 +1,20 @@
+{
+  "id": "always-on",
+  "label": "Always-on Reasoning",
+  "protocol": "openai-chat-completions",
+  "match_model": ["magistral", "minimax-m", "mimo"],
+  "reasoning": {
+    "off_supported": false
+  },
+  "request": {
+    "reasoning": {
+      "cleanup": ["reasoning_effort", "reasoning", "thinking", "enable_thinking"],
+      "presets": {
+        "off": {},
+        "light": {},
+        "high": {},
+        "max": {}
+      }
+    }
+  }
+}

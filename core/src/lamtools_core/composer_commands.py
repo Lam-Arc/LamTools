@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from collections.abc import Iterable
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, cast
 
-from lamtools_core.skills import SkillRegistry
+from lamtools_core.skills import SkillRegistry, SkillStateStore
 
 CommandAction = Literal["insert_token", "run_action", "expand_on_send"]
-CommandSource = Literal["core", "member"]
+CommandKind = Literal["action", "skill"]
+CommandSource = Literal["core", "member", "plugin"]
 
 
 def default_core_resource_roots() -> list[Path]:
@@ -39,18 +41,24 @@ class ComposerCommandDefinition:
     icon: str
     action: CommandAction
     source: CommandSource
+    kind: CommandKind = "action"
     accepts_args: bool = False
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        result: dict[str, object] = {
             "name": self.name,
             "title": self.title,
             "description": self.description,
             "icon": self.icon,
             "action": self.action,
             "source": self.source,
+            "kind": self.kind,
             "accepts_args": self.accepts_args,
         }
+        if self.metadata:
+            result["metadata"] = dict(self.metadata)
+        return result
 
 
 @dataclass(frozen=True)
@@ -82,6 +90,8 @@ def build_composer_command_catalog(
     member_roots: list[Path],
     work_root: str | Path | None = None,
     skill_registry: SkillRegistry | None = None,
+    skill_state_store: SkillStateStore | None = None,
+    plugin_manifests: Iterable[Any] = (),
 ) -> list[ComposerCommandDefinition]:
     """Return one Core-owned catalog for built-ins, member declarations, and skills."""
     commands = load_command_catalog(core_roots=core_roots, member_roots=member_roots)
@@ -89,8 +99,50 @@ def build_composer_command_catalog(
     reserved_names = {item.name for item in _load_definitions(core_roots, source="core")}
     reserved_names.update(item.name for item in commands)
     reserved_names.update(load_disabled_core_commands(member_roots))
+    plugin_commands: list[ComposerCommandDefinition] = []
+    for plugin in plugin_manifests:
+        if not bool(getattr(plugin, "enabled", False)):
+            continue
+        plugin_name = str(getattr(plugin, "name", "") or "").strip()
+        plugin_id = str(getattr(plugin, "id", "") or plugin_name).strip()
+        plugin_title = str(getattr(plugin, "desktop_title", "") or plugin_name).strip()
+        for declared in getattr(plugin, "commands", ()) or ():
+            name = normalize_command_name(getattr(declared, "name", ""))
+            if not name or name in reserved_names:
+                continue
+            reserved_names.add(name)
+            effect = dict(getattr(declared, "effect", {}) or {})
+            if effect:
+                # A plugin may only target its own desktop surface.
+                effect["plugin_id"] = plugin_id
+            metadata: dict[str, Any] = {
+                "plugin_id": plugin_id,
+                "plugin_name": plugin_name,
+                "plugin_title": plugin_title,
+            }
+            operation = str(getattr(declared, "operation", "") or "").strip()
+            if operation:
+                metadata["operation"] = operation
+                metadata["payload"] = dict(getattr(declared, "payload", {}) or {})
+            if effect:
+                metadata["effects"] = [effect]
+            plugin_commands.append(
+                ComposerCommandDefinition(
+                    name=name,
+                    title=str(getattr(declared, "title", "") or name),
+                    description=str(getattr(declared, "description", "") or ""),
+                    icon=str(getattr(declared, "icon", "") or "puzzle"),
+                    action="run_action",
+                    source="plugin",
+                    kind="action",
+                    accepts_args=bool(getattr(declared, "accepts_args", False)),
+                    metadata=metadata,
+                )
+            )
     skill_commands: list[ComposerCommandDefinition] = []
     for skill in registry.available(work_root):
+        if skill_state_store is not None and not skill_state_store.is_enabled(skill.name):
+            continue
         name = normalize_command_name(skill.name)
         if not name or name in reserved_names:
             continue
@@ -103,9 +155,11 @@ def build_composer_command_catalog(
                 icon="sparkles",
                 action="insert_token",
                 source="core",
+                kind="skill",
+                accepts_args=True,
             )
         )
-    return [*commands, *skill_commands]
+    return [*commands, *plugin_commands, *skill_commands]
 
 
 def prepare_composer_input(
@@ -113,6 +167,7 @@ def prepare_composer_input(
     work_root: str | Path | None,
     input_items: list[dict[str, Any]],
     skill_registry: SkillRegistry | None = None,
+    skill_state_store: SkillStateStore | None = None,
 ) -> PreparedComposerInput:
     """Prepare visible and runtime input while preserving attachment items."""
     registry = skill_registry or SkillRegistry()
@@ -130,8 +185,14 @@ def prepare_composer_input(
                 raise ValueError("skill name is required")
             skill = _resolve_skill(registry, work_root, requested_name)
             if skill is None:
-                available = ", ".join(item.name for item in registry.available(work_root))
+                available = ", ".join(
+                    item.name
+                    for item in registry.available(work_root)
+                    if skill_state_store is None or skill_state_store.is_enabled(item.name)
+                )
                 raise ValueError(f'Skill "{requested_name}" not found. Available skills: {available or "none"}')
+            if skill_state_store is not None and not skill_state_store.is_enabled(skill.name):
+                raise ValueError(f'Skill "{requested_name}" is disabled')
             source_text = str(item.get("source_text") or f"/{requested_name}")
             content = registry.load_prompt_content(work_root, skill.name)
             visible_items.append({"type": "text", "text": source_text})
@@ -227,6 +288,14 @@ def _read_definition(
     action = str(data.get("action") or "run_action")
     if action not in {"insert_token", "run_action", "expand_on_send"}:
         return None
+    raw_kind = str(data.get("kind") or "").strip().lower()
+    if raw_kind in {"action", "skill"}:
+        kind = cast(CommandKind, raw_kind)
+    else:
+        # Older command files predate the explicit kind field.  Preserve the
+        # historical meaning of token/expand commands as skill entries while
+        # treating ordinary run actions as actions.
+        kind = "skill" if action in {"insert_token", "expand_on_send"} else "action"
     return ComposerCommandDefinition(
         name=name,
         title=str(data.get("title") or name),
@@ -234,6 +303,7 @@ def _read_definition(
         icon=str(data.get("icon") or "/"),
         action=cast(CommandAction, action),
         source=source,
+        kind=kind,
         accepts_args=bool(data.get("accepts_args") or False),
     )
 

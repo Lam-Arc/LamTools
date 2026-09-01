@@ -104,6 +104,16 @@
         >
           <div class="assistant-meta">
             <span class="assistant-label">{{ assistantLabel }}</span>
+            <span
+              v-if="assistantTimestamp"
+              class="assistant-timestamp"
+              :title="assistantTimestamp.expanded"
+              :aria-label="`时间 ${assistantTimestamp.expanded}`"
+              data-message-timestamp
+            >
+              <span class="assistant-timestamp__compact">{{ assistantTimestamp.compact }}</span>
+              <span class="assistant-timestamp__expanded" aria-hidden="true">{{ assistantTimestamp.expanded }}</span>
+            </span>
             <span v-if="isLiveMessage(msg) && !isInitialWaitingMessage(msg)" class="assistant-live-state">
               <span class="stream-spinner" />
               {{ liveStatusText(msg) }}
@@ -687,8 +697,8 @@
             <button
               type="button"
               class="assistant-action"
-              title="保留此处并删除之后内容"
-              aria-label="回退到这条回复"
+              title="删除此轮及之后内容"
+              aria-label="删除此轮及之后内容"
               data-message-rollback
               @click="emit('rollback-message', assistantActionPayload(msg))"
             >
@@ -816,7 +826,7 @@ const props = withDefaults(
     activeTurnId?: string | null
     /** 当前 turn 是否在运行（与 composer stop 按钮同一信号源） */
     turnActive?: boolean
-    /** 有 checkpoint 的 turn ids：回退/分叉/编辑按钮依赖 checkpoint，无节点时不显示 */
+    /** 有 checkpoint 的 turn ids：仅用于用户消息编辑的完整恢复路径。 */
     checkpointTurnIds?: Set<string>
     /** 挂载时播放入场动效（新消息淡入；初始批次/历史加载不播）。
         注意不能做成 directive：本组件多根（div + Teleport），运行时 directive 不生效。 */
@@ -847,6 +857,17 @@ const emit = defineEmits<{
   'rollback-message': [payload: AssistantActionPayload]
   'edit-message': [payload: EditMessagePayload]
 }>()
+
+const assistantTimestamp = computed(() => formatAssistantTimestamp(props.msg.timestamp))
+
+function formatAssistantTimestamp(value: string | undefined): { compact: string; expanded: string } | null {
+  const date = value ? new Date(value) : null
+  if (!date || Number.isNaN(date.getTime())) return null
+  const pad = (part: number) => String(part).padStart(2, '0')
+  const compact = `${pad(date.getHours())}:${pad(date.getMinutes())}`
+  const expanded = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${compact}:${pad(date.getSeconds())}`
+  return { compact, expanded }
+}
 
 // ── 消息入场动效（motionEnter prop，ChatThread 传入）：新消息挂载时淡入。
 //    mount-only + transform/opacity + 局部元素，不写响应式状态、不动兄弟节点

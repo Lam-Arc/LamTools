@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { mount } from '@vue/test-utils';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { flushPromises, mount } from '@vue/test-utils';
 import AttachmentTray from '../src/components/AttachmentTray.vue';
 import ChatThread from '../src/components/ChatThread.vue';
 import type { CoreAttachment, CoreMessage } from '../src/types';
@@ -15,6 +15,8 @@ const uploaded: CoreAttachment = {
 };
 
 describe('AttachmentTray', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
   it('renders uploaded and failed attachments with stable actions', async () => {
     const wrapper = mount(AttachmentTray, {
       props: {
@@ -37,11 +39,14 @@ describe('AttachmentTray', () => {
     expect(wrapper.text()).toContain('note.md');
     expect(wrapper.text()).toContain('bad.png');
     expect(wrapper.text()).toContain('上传失败');
-    expect(wrapper.text()).toContain('本机打开');
+    expect(wrapper.text()).toContain('MD');
+    expect(wrapper.text()).not.toContain('本机打开');
 
+    await wrapper.get('[data-attachment-preview="att-1"]').trigger('click');
     await wrapper.get('[data-attachment-remove="att-1"]').trigger('click');
     await wrapper.get('[data-attachment-retry="att-2"]').trigger('click');
 
+    expect(wrapper.emitted('preview')?.[0]).toEqual(['att-1']);
     expect(wrapper.emitted('remove')?.[0]).toEqual(['att-1']);
     expect(wrapper.emitted('retry')?.[0]).toEqual(['att-2']);
   });
@@ -66,5 +71,34 @@ describe('AttachmentTray', () => {
 
     expect(wrapper.text()).toContain('看附件');
     expect(wrapper.text()).toContain('note.md');
+  });
+
+  it('renders image attachments as thumbnail-only cards', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      blob: async () => new window.Blob(['thumbnail'], { type: 'image/png' }),
+    }));
+    const wrapper = mount(AttachmentTray, {
+      props: {
+        apiBase: 'http://127.0.0.1:5172/api/core',
+        attachments: [{
+          ...uploaded,
+          id: 'image-1',
+          filename: 'preview.png',
+          label: 'preview.png',
+          mime_type: 'image/png',
+          preview_type: 'image',
+        }],
+      },
+    });
+
+    expect(wrapper.find('.attachment-card--image').exists()).toBe(true);
+    expect(wrapper.find('.attachment-copy').exists()).toBe(false);
+    await flushPromises();
+    await vi.waitFor(() => expect(wrapper.find('.attachment-thumbnail').exists()).toBe(true));
+    expect(wrapper.get('.attachment-thumbnail').attributes('src')).toMatch(/^data:image\/png;base64,/);
+    expect(fetch).toHaveBeenCalledWith(
+      'http://127.0.0.1:5172/api/core/attachments/image-1/download',
+    );
   });
 });

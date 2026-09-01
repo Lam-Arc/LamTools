@@ -1,12 +1,12 @@
 <template>
-  <div class="settings-page" :style="settingsThemeStyle">
+  <div ref="settingsPageEl" class="settings-page" :style="settingsThemeStyle">
     <!-- Sidebar -->
     <aside class="settings-sidebar">
       <div class="settings-brand">
         <strong>{{ title }}</strong>
       </div>
 
-      <nav class="settings-nav">
+    <nav ref="settingsNavEl" class="settings-nav">
         <button
           v-for="section in sections"
           :key="section.id"
@@ -38,40 +38,17 @@
     </aside>
 
     <!-- Main content -->
-    <main class="settings-main">
+    <main class="settings-main" :class="{ 'settings-main--models': activeSection === 'models' }">
       <slot name="notice" />
       <!-- No :key remount here — sections are kept alive (v-show in the
            parent slot) so draft state in child editors survives switching
            back and forth (audit 17 S3). -->
-      <div class="settings-content">
+      <div ref="settingsContentEl" class="settings-content">
         <slot :activeSection="activeSection" />
       </div>
     </main>
   </div>
 </template>
-
-<style scoped>
-.settings-content {
-  animation: contentEnter 260ms cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-@keyframes contentEnter {
-  from {
-    opacity: 0;
-    transform: translateY(6px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .settings-content {
-    animation: none;
-  }
-}
-</style>
 
 <script setup lang="ts">
 /**
@@ -80,7 +57,8 @@
  * Left sidebar with navigation + right content area.
  * Product provides sections array and slot content per section.
  */
-import { ref } from 'vue'
+import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { gsap } from 'gsap'
 import {
   Activity,
   AppWindow,
@@ -176,4 +154,76 @@ const emit = defineEmits<{
 }>()
 
 const activeSection = ref(props.sections[0]?.id || '')
+const settingsPageEl = ref<HTMLElement | null>(null)
+const settingsNavEl = ref<HTMLElement | null>(null)
+const settingsContentEl = ref<HTMLElement | null>(null)
+
+let motionContext: gsap.Context | null = null
+let motionMedia: gsap.MatchMedia | null = null
+let contentTween: gsap.core.Tween | null = null
+let navTween: gsap.core.Tween | null = null
+let motionEnabled = false
+
+function animateSectionChange() {
+  if (!motionEnabled || !motionContext || !settingsContentEl.value) return
+  const panel = settingsContentEl.value.querySelector<HTMLElement>('.settings-panel')
+  if (!panel) return
+  contentTween?.kill()
+  motionContext.add(() => {
+    contentTween = gsap.fromTo(
+      panel,
+      { autoAlpha: 0, y: 8, scale: 0.995, transformOrigin: '50% 0%' },
+      {
+        autoAlpha: 1,
+        y: 0,
+        scale: 1,
+        duration: 0.28,
+        ease: 'back.out(1.05)',
+        overwrite: 'auto',
+        clearProps: 'opacity,visibility,transform',
+      },
+    )
+  })
+}
+
+function animateActiveNavItem() {
+  if (!motionEnabled || !motionContext || !settingsNavEl.value) return
+  const activeItem = settingsNavEl.value.querySelector<HTMLElement>('.active')
+  if (!activeItem) return
+  navTween?.kill()
+  motionContext.add(() => {
+    navTween = gsap.fromTo(
+      activeItem,
+      { scale: 0.975, transformOrigin: '50% 50%' },
+      { scale: 1, duration: 0.2, ease: 'back.out(1.25)', overwrite: 'auto', clearProps: 'transform' },
+    )
+  })
+}
+
+watch(activeSection, async () => {
+  await nextTick()
+  animateActiveNavItem()
+  animateSectionChange()
+})
+
+onMounted(() => {
+  if (!settingsPageEl.value) return
+  motionContext = gsap.context(() => {}, settingsPageEl.value)
+  motionMedia = gsap.matchMedia()
+  motionMedia.add('(prefers-reduced-motion: no-preference)', () => {
+    motionEnabled = true
+    return () => { motionEnabled = false }
+  })
+})
+
+onUnmounted(() => {
+  contentTween?.kill()
+  navTween?.kill()
+  motionMedia?.revert()
+  motionContext?.revert()
+  contentTween = null
+  navTween = null
+  motionMedia = null
+  motionContext = null
+})
 </script>

@@ -1,0 +1,416 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "LamTools Core 本地智能体架构",
+    "locale": "zh-CN",
+    "output": "lamtools-core-architecture.html",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1360,
+      570
+    ],
+    "repository": {
+      "url": "https://github.com/Lam-Arc/LamTools.git",
+      "revision": "5c1371e717dfa86e125665f7669526d758ad5bce"
+    },
+    "views": [
+      {
+        "id": "desktop-entry",
+        "label": "桌面入口",
+        "focus": [
+          "user",
+          "tauri",
+          "ui",
+          "server"
+        ],
+        "note": "从 Tauri WebView 进入本地 /api/core 服务。"
+      },
+      {
+        "id": "agent-execution",
+        "label": "智能体执行",
+        "focus": [
+          "server",
+          "runtime",
+          "toolbox",
+          "providers"
+        ],
+        "note": "跟随一次轮次从 HTTP 层进入智能体内核，再到模型与工具。"
+      },
+      {
+        "id": "durable-state",
+        "label": "状态与配置",
+        "focus": [
+          "runtime",
+          "database",
+          "config",
+          "workspace"
+        ],
+        "note": "查看运行时状态、JSONC 配置与工作区文件的边界。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "user",
+      "type": "external",
+      "label": "使用者",
+      "sublabel": "桌面界面 / 命令行",
+      "pos": [
+        40,
+        230
+      ],
+      "size": [
+        140,
+        70
+      ]
+    },
+    {
+      "id": "tauri",
+      "type": "frontend",
+      "label": "Tauri 桌面宿主",
+      "sublabel": "Rust · WebView · IPC",
+      "pos": [
+        220,
+        230
+      ],
+      "size": [
+        180,
+        74
+      ],
+      "sources": [
+        {
+          "path": "core/desktop/src-tauri/src/main.rs"
+        }
+      ]
+    },
+    {
+      "id": "ui",
+      "type": "frontend",
+      "label": "核心界面",
+      "sublabel": "Vue 3 · WorkspaceShell",
+      "pos": [
+        430,
+        90
+      ],
+      "size": [
+        180,
+        74
+      ],
+      "sources": [
+        {
+          "path": "core/desktop/src/main.ts"
+        },
+        {
+          "path": "core/ui/src/components/WorkspaceShell.vue"
+        }
+      ]
+    },
+    {
+      "id": "cli",
+      "type": "frontend",
+      "label": "核心命令行",
+      "sublabel": "lamtools_core.cli",
+      "pos": [
+        430,
+        370
+      ],
+      "size": [
+        180,
+        70
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/cli.py"
+        }
+      ]
+    },
+    {
+      "id": "server",
+      "type": "backend",
+      "label": "FastAPI 核心服务",
+      "sublabel": "/api/core · Uvicorn",
+      "tag": "HTTP + WebSocket",
+      "pos": [
+        640,
+        230
+      ],
+      "size": [
+        195,
+        78
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/app/http_agent_app.py"
+        },
+        {
+          "path": "core/desktop_backend.py"
+        }
+      ]
+    },
+    {
+      "id": "runtime",
+      "type": "backend",
+      "label": "智能体内核与运行时",
+      "sublabel": "轮次 · 目标 · 检查点",
+      "pos": [
+        860,
+        230
+      ],
+      "size": [
+        205,
+        78
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/app/default_agent.py"
+        },
+        {
+          "path": "core/src/lamtools_core/runtime/goal.py"
+        }
+      ]
+    },
+    {
+      "id": "providers",
+      "type": "external",
+      "label": "大语言模型提供方",
+      "sublabel": "模型 · 提供方适配器",
+      "pos": [
+        1090,
+        230
+      ],
+      "size": [
+        195,
+        74
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/app/default_agent.py"
+        },
+        {
+          "path": "core/config/llm_adapters/openai-chat.jsonc"
+        }
+      ]
+    },
+    {
+      "id": "database",
+      "type": "database",
+      "label": "SQLite 核心数据库",
+      "sublabel": "会话 · 事件 · 快照",
+      "tag": "core.db",
+      "pos": [
+        640,
+        370
+      ],
+      "size": [
+        195,
+        82
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/app/core_db.py"
+        },
+        {
+          "path": "core/src/lamtools_core/app/persistence_host.py"
+        }
+      ]
+    },
+    {
+      "id": "config",
+      "type": "database",
+      "label": "JSONC 配置",
+      "sublabel": ".lam/core/config",
+      "tag": "模型 · 工具 · 钩子",
+      "pos": [
+        860,
+        370
+      ],
+      "size": [
+        205,
+        82
+      ],
+      "sources": [
+        {
+          "path": "core/desktop_backend.py"
+        },
+        {
+          "path": "core/src/lamtools_core/config/defaults.py"
+        }
+      ]
+    },
+    {
+      "id": "toolbox",
+      "type": "backend",
+      "label": "工具箱与插件",
+      "sublabel": "核心工具 · MCP · 钩子",
+      "pos": [
+        1090,
+        360
+      ],
+      "size": [
+        195,
+        82
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/tool/default_toolbox.py"
+        },
+        {
+          "path": "core/src/lamtools_core/plugins/engine.py"
+        }
+      ]
+    },
+    {
+      "id": "workspace",
+      "type": "external",
+      "label": "工作区与项目文件",
+      "sublabel": "工作根目录 · 上下文 · 产物",
+      "pos": [
+        1080,
+        470
+      ],
+      "size": [
+        210,
+        82
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/app/project_context.py"
+        },
+        {
+          "path": "core/src/lamtools_core/tool/workspace_files.py"
+        }
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "user-to-tauri",
+      "from": "user",
+      "to": "tauri",
+      "label": "启动桌面端",
+      "variant": "emphasis",
+      "labelDy": -22
+    },
+    {
+      "id": "user-to-cli",
+      "from": "user",
+      "to": "cli",
+      "label": "直接运行 / 管理",
+      "variant": "dashed"
+    },
+    {
+      "id": "tauri-to-ui",
+      "from": "tauri",
+      "to": "ui",
+      "label": "加载 WebView"
+    },
+    {
+      "id": "tauri-to-server",
+      "from": "tauri",
+      "to": "server",
+      "label": "启动 + 获取 API 地址",
+      "variant": "dashed",
+      "labelDy": -46,
+      "labelDx": 100
+    },
+    {
+      "id": "ui-to-server",
+      "from": "ui",
+      "to": "server",
+      "label": "HTTP + WebSocket /api/core",
+      "variant": "emphasis"
+    },
+    {
+      "id": "cli-to-server",
+      "from": "cli",
+      "to": "server",
+      "label": "服务 / 监听 / 管理",
+      "variant": "dashed"
+    },
+    {
+      "id": "server-to-runtime",
+      "from": "server",
+      "to": "runtime",
+      "label": "创建 / 执行轮次",
+      "variant": "emphasis",
+      "labelDy": 70,
+      "labelDx": -55
+    },
+    {
+      "id": "server-to-database",
+      "from": "server",
+      "to": "database",
+      "label": "会话 · 事件",
+      "labelDy": 24
+    },
+    {
+      "id": "runtime-to-database",
+      "from": "runtime",
+      "to": "database",
+      "label": "运行时状态"
+    },
+    {
+      "id": "config-to-runtime",
+      "from": "config",
+      "to": "runtime",
+      "label": "模型 · 提供方 · 设置"
+    },
+    {
+      "id": "runtime-to-providers",
+      "from": "runtime",
+      "to": "providers",
+      "label": "模型调用",
+      "variant": "emphasis",
+      "labelDy": -26
+    },
+    {
+      "id": "runtime-to-toolbox",
+      "from": "runtime",
+      "to": "toolbox",
+      "label": "工具调用"
+    },
+    {
+      "id": "config-to-toolbox",
+      "from": "config",
+      "to": "toolbox",
+      "label": "工具配置",
+      "labelDy": -35,
+      "labelDx": -70
+    },
+    {
+      "id": "toolbox-to-workspace",
+      "from": "toolbox",
+      "to": "workspace",
+      "label": "读取 / 写入文件",
+      "fromSide": "bottom",
+      "toSide": "top"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "入口",
+      "items": [
+        "Tauri Rust 宿主管理 WebView、动态 API 地址与本地后端",
+        "核心命令行提供服务、直接运行、监听等入口"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "执行",
+      "items": [
+        "FastAPI 暴露 /api/core 与应用服务器 WebSocket，智能体内核组织轮次、目标、检查点与工具调用"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "状态边界",
+      "items": [
+        "SQLite 持久化会话、事件与快照",
+        "JSONC 保存模型、提供方、工具与钩子配置",
+        "工作区文件和大语言模型提供方位于本地 Core 外部边界"
+      ]
+    }
+  ]
+}

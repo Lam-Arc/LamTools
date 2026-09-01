@@ -207,7 +207,7 @@ function buildWorkbenchMessage(
     id: message.id,
     role: message.role,
     content: shallow.content,
-    timestamp: '',
+    timestamp: message.timestamp || '',
     parts,
     processParts: answerProjection.processParts,
     answerPart: answerProjection.answerPart,
@@ -248,6 +248,7 @@ function messageFingerprint(
     meta.initialWaiting === true,
     meta.processMetrics,
     meta.runtime_model_id,
+    message.timestamp,
     message.attachments,
     ...parts.map(part => part),
   ]

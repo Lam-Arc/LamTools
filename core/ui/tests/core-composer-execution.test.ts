@@ -37,18 +37,17 @@ describe('core composer execution helpers', () => {
 
   it('limits thinking options from model and provider capabilities', () => {
     expect(coreThinkingModeOptions({ model: { thinking_supported: false } })).toEqual([
-      { value: 'none', label: 'No' },
+      { value: 'off', label: '关闭' },
     ])
     expect(coreThinkingModeOptions({
       model: { thinking_supported: true },
       provider: { name: '讯飞 max', base_url: 'https://maas-coding.example.test' },
-    }).map((option) => option.value)).toEqual(['high', 'medium', 'low', 'none'])
+    }).map((option) => option.value)).toEqual(['max', 'high', 'light', 'off'])
     expect(coreThinkingModeOptions({ model: { thinking_supported: true } }).map((option) => option.value)).toEqual([
       'max',
       'high',
-      'medium',
-      'low',
-      'none',
+      'light',
+      'off',
     ])
   })
 
@@ -58,27 +57,21 @@ describe('core composer execution helpers', () => {
       model: { thinking_supported: true, thinking_budget: 6_000 },
       shallow: true,
     })).toEqual({
-      thinking_enabled: true,
-      thinking_budget: 8_192,
-      shallow_thinking_enabled: true,
+      reasoning_level: 'high',
     })
     expect(coreThinkingPayload({
       mode: 'max',
       model: { thinking_supported: true, thinking_budget: 12_000 },
       provider: { base_url: 'https://xfyun.example.test' },
     })).toEqual({
-      thinking_enabled: true,
-      thinking_budget: 12_000,
-      shallow_thinking_enabled: false,
-      reasoning_effort: 'high',
+      reasoning_level: 'max',
     })
     expect(coreThinkingPayload({
       mode: 'max',
       model: { thinking_supported: false },
       shallow: true,
     })).toEqual({
-      thinking_enabled: false,
-      shallow_thinking_enabled: true,
+      reasoning_level: 'off',
     })
   })
 
@@ -89,12 +82,12 @@ describe('core composer execution helpers', () => {
       setItem: (key: string, value: string) => data.set(key, value),
     }
 
-    expect(normalizeCoreThinkingMode('invalid', 'medium')).toBe('medium')
+    expect(normalizeCoreThinkingMode('invalid', 'high')).toBe('high')
     expect(readStoredCoreThinkingMode(storage, 'thinking', 'max')).toBe('max')
     writeStoredCoreThinkingMode(storage, 'thinking', 'low')
     writeStoredCoreShallowThinking(storage, 'shallow', true)
 
-    expect(readStoredCoreThinkingMode(storage, 'thinking', 'max')).toBe('low')
+    expect(readStoredCoreThinkingMode(storage, 'thinking', 'max')).toBe('light')
     expect(readStoredCoreShallowThinking(storage, 'shallow')).toBe(true)
   })
 })

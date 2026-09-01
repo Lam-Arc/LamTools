@@ -59,10 +59,18 @@ class SkillRegistry:
                 return skill
         return None
 
-    def prompt_index(self, work_root: str | Path | None) -> str:
-        if self._cached_index is not None:
+    def prompt_index(
+        self,
+        work_root: str | Path | None,
+        state_store: SkillStateStore | None = None,
+    ) -> str:
+        if state_store is None and self._cached_index is not None:
             return self._cached_index
-        skills = self.available(work_root)
+        skills = [
+            skill
+            for skill in self.available(work_root)
+            if state_store is None or state_store.is_enabled(skill.name)
+        ]
         if not skills:
             return ""
         lines = [
@@ -82,7 +90,8 @@ class SkillRegistry:
             )
         lines.append("</available_skills>")
         result = "\n".join(lines)
-        self._cached_index = result
+        if state_store is None:
+            self._cached_index = result
         return result
 
     def load_prompt_content(self, work_root: str | Path | None, name: str) -> str:
@@ -251,6 +260,14 @@ class SkillStateStore:
             entry = {}
             skills[name] = entry
         entry["enabled"] = bool(enabled)
+        self._save(data)
+
+    def remove(self, name: str) -> None:
+        data = self._load()
+        skills = data.get("skills", {})
+        if not isinstance(skills, dict) or name not in skills:
+            return
+        skills.pop(name, None)
         self._save(data)
 
 

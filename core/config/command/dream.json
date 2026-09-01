@@ -3,6 +3,7 @@
   "title": "整理记忆",
   "description": "蒸馏当前会话到长期记忆",
   "icon": "sparkles",
+  "kind": "action",
   "action": "run_action",
   "accepts_args": false
 }

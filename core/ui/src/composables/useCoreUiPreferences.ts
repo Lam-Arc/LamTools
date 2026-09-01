@@ -1,4 +1,4 @@
-import { ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import {
   DEFAULT_THEME,
   addGradientStop,
@@ -7,21 +7,68 @@ import {
   sortGradientStops,
   type ThemeArea,
   type ThemeData,
+  type ThemeMode,
   type ThemePreset,
   type ThemeStop,
+  themeForMode,
 } from '../helpers/theme'
 
 export type CoreUiDensity = 'compact' | 'standard' | 'loose'
-export interface CoreUiPreferencesValue { density: CoreUiDensity; contentWidth: number; theme: ThemeData }
+export interface CoreUiPreferencesValue {
+  density: CoreUiDensity
+  contentWidth: number
+  theme: ThemeData
+  themeMode: ThemeMode
+  lightTheme: ThemeData
+  darkTheme: ThemeData
+}
 export interface CoreUiPreferencesAdapter {
   read?(): Promise<Partial<CoreUiPreferencesValue> | null>
   write?(value: CoreUiPreferencesValue): Promise<void>
 }
 
+type ThemeTransitionDocument = Document & {
+  startViewTransition?: (update: () => void | Promise<void>) => unknown
+}
+
+function runThemeTransition(update: () => void) {
+  if (typeof document === 'undefined' || typeof window === 'undefined') {
+    update()
+    return
+  }
+  const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+  const transitionDocument = document as ThemeTransitionDocument
+  if (reducedMotion || typeof transitionDocument.startViewTransition !== 'function') {
+    update()
+    return
+  }
+  transitionDocument.startViewTransition(() => {
+    update()
+  })
+}
+
 export function useCoreUiPreferences(storageKey: string, adapter: CoreUiPreferencesAdapter = {}) {
   const density = ref<CoreUiDensity>('standard')
   const contentWidth = ref(780)
-  const theme = ref<ThemeData>(normalizeTheme({ ...DEFAULT_THEME }))
+  const themeMode = ref<ThemeMode>('system')
+  const systemPrefersDark = ref(false)
+  const lightTheme = ref<ThemeData>(normalizeTheme({ ...DEFAULT_THEME }))
+  const darkTheme = ref<ThemeData>(normalizeTheme({ ...DEFAULT_THEME }))
+  const effectiveThemeMode = computed<'light' | 'dark'>(() => (
+    themeMode.value === 'system' ? (systemPrefersDark.value ? 'dark' : 'light') : themeMode.value
+  ))
+  const theme = computed<ThemeData>(() => (
+    effectiveThemeMode.value === 'dark' ? darkTheme.value : lightTheme.value
+  ))
+  let systemThemeQuery: MediaQueryList | null = null
+
+  function updateSystemTheme(query: MediaQueryList | MediaQueryListEvent) {
+    systemPrefersDark.value = query.matches
+  }
+
+  function handleSystemThemeChange(query: MediaQueryListEvent) {
+    runThemeTransition(() => updateSystemTheme(query))
+  }
 
   // Legacy key: before the shell/preferences keys were split, both wrote
   // 'lamtools.core.ui' with different schemas (audit 19 S3). We still read
@@ -40,7 +87,10 @@ export function useCoreUiPreferences(storageKey: string, adapter: CoreUiPreferen
     if (!value) return
     if (value.density === 'compact' || value.density === 'standard' || value.density === 'loose') density.value = value.density
     contentWidth.value = clampWidth(value.contentWidth)
-    theme.value = normalizeTheme({ ...DEFAULT_THEME, ...(value.theme || {}) })
+    if (value.themeMode === 'system' || value.themeMode === 'light' || value.themeMode === 'dark') themeMode.value = value.themeMode
+    const legacyTheme = normalizeTheme({ ...DEFAULT_THEME, ...(value.theme || {}) })
+    lightTheme.value = normalizeTheme({ ...DEFAULT_THEME, ...(value.lightTheme || legacyTheme) })
+    darkTheme.value = normalizeTheme({ ...DEFAULT_THEME, ...(value.darkTheme || legacyTheme) })
   }
 
   async function save() {
@@ -54,13 +104,40 @@ export function useCoreUiPreferences(storageKey: string, adapter: CoreUiPreferen
   }
 
   function snapshot(): CoreUiPreferencesValue {
-    return { density: density.value, contentWidth: contentWidth.value, theme: theme.value }
+    return {
+      density: density.value,
+      contentWidth: contentWidth.value,
+      theme: theme.value,
+      themeMode: themeMode.value,
+      lightTheme: lightTheme.value,
+      darkTheme: darkTheme.value,
+    }
   }
   function setDensity(value: CoreUiDensity) { density.value = value; void save() }
   function setContentWidth(value: number) { contentWidth.value = clampWidth(value); void save() }
-  function resetTheme() { theme.value = normalizeTheme({ ...DEFAULT_THEME }); void save() }
-  function applyThemePreset(preset: ThemePreset) { theme.value = normalizeTheme({ ...DEFAULT_THEME, ...preset.theme }); void save() }
-  function updateThemeStops(area: ThemeArea, stops: ThemeStop[]) { setThemeField(`${area}Stops`, stops) }
+  function setThemeMode(value: ThemeMode) {
+    if (themeMode.value === value) return
+    runThemeTransition(() => {
+      themeMode.value = value
+      void save()
+    })
+  }
+  function resetTheme() {
+    runThemeTransition(() => {
+      const next = normalizeTheme({ ...DEFAULT_THEME })
+      lightTheme.value = next
+      darkTheme.value = next
+      void save()
+    })
+  }
+  function applyThemePreset(preset: ThemePreset) {
+    runThemeTransition(() => {
+      lightTheme.value = normalizeTheme({ ...DEFAULT_THEME, ...themeForMode(preset, 'light') })
+      darkTheme.value = normalizeTheme({ ...DEFAULT_THEME, ...themeForMode(preset, 'dark') })
+      void save()
+    })
+  }
+  function updateThemeStops(area: ThemeArea, stops: ThemeStop[]) { setThemeField(`${area}Stops`, sortGradientStops(stops)) }
   function updateThemeAngle(area: ThemeArea, value: number) { setThemeField(`${area}Angle`, value) }
   function updateThemeOpacity(area: ThemeArea, value: number) { setThemeField(`${area}Opacity`, value) }
   function updateThemeText(area: ThemeArea, value: string) { setThemeField(`${area}Text`, value) }
@@ -72,12 +149,25 @@ export function useCoreUiPreferences(storageKey: string, adapter: CoreUiPreferen
     setThemeField(`${area}Stops`, edit(stops))
   }
   function setThemeField(key: string, value: unknown) {
-    ;(theme.value as Record<string, unknown>)[key] = value
+    const target = effectiveThemeMode.value === 'dark' ? darkTheme : lightTheme
+    target.value = { ...target.value, [key]: value } as ThemeData
     void save()
   }
 
+  onMounted(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return
+    systemThemeQuery = window.matchMedia('(prefers-color-scheme: dark)')
+    updateSystemTheme(systemThemeQuery)
+    systemThemeQuery.addEventListener('change', handleSystemThemeChange)
+  })
+
+  onUnmounted(() => {
+    systemThemeQuery?.removeEventListener('change', handleSystemThemeChange)
+    systemThemeQuery = null
+  })
+
   return {
-    density, contentWidth, theme, load, save, snapshot, setDensity, setContentWidth,
+    density, contentWidth, theme, themeMode, effectiveThemeMode, load, save, snapshot, setDensity, setContentWidth, setThemeMode,
     resetTheme, applyThemePreset, updateThemeStops, updateThemeAngle, updateThemeOpacity,
     updateThemeText, addStop, removeStop, sortStops,
   }

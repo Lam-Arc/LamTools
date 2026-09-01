@@ -1,0 +1,17 @@
+{
+  "id": "qwen",
+  "label": "Qwen Thinking",
+  "protocol": "openai-chat-completions",
+  "match_model": ["qwen", "qwq"],
+  "request": {
+    "reasoning": {
+      "cleanup": ["enable_thinking", "reasoning_effort", "thinking", "thinking_budget"],
+      "presets": {
+        "off": { "set": { "enable_thinking": false } },
+        "light": { "set": { "enable_thinking": true, "reasoning_effort": "low" } },
+        "high": { "set": { "enable_thinking": true, "reasoning_effort": "medium" } },
+        "max": { "set": { "enable_thinking": true, "reasoning_effort": "xhigh" } }
+      }
+    }
+  }
+}

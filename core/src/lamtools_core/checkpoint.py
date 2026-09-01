@@ -1183,10 +1183,44 @@ class CoreCheckpointConversationBackend:
     ) -> tuple[dict[str, Any], int]:
         """Build the durable conversation prefix ending with ``turn_id``.
 
-        A checkpoint is an optional, richer recovery mechanism.  Fork and the
-        conversation-only rollback path instead use the event log as their
-        boundary, which keeps the selected user/assistant turn itself.
+        Fork includes the selected user/assistant turn.  Rollback has the
+        deliberately different ``conversation_payload_before_turn`` boundary.
         """
+        return await self._conversation_payload_at_turn_boundary(
+            db,
+            session_id=session_id,
+            turn_id=turn_id,
+            include_turn=True,
+        )
+
+    async def conversation_payload_before_turn(
+        self,
+        db: Any,
+        *,
+        session_id: str,
+        turn_id: str,
+    ) -> tuple[dict[str, Any], int]:
+        """Build the durable conversation prefix before ``turn_id``.
+
+        Rollback removes the selected complete turn (its user message and all
+        assistant segments) and every later turn.  This must not share fork's
+        inclusive boundary.
+        """
+        return await self._conversation_payload_at_turn_boundary(
+            db,
+            session_id=session_id,
+            turn_id=turn_id,
+            include_turn=False,
+        )
+
+    async def _conversation_payload_at_turn_boundary(
+        self,
+        db: Any,
+        *,
+        session_id: str,
+        turn_id: str,
+        include_turn: bool,
+    ) -> tuple[dict[str, Any], int]:
         if session_id != _root_session_id(session_id):
             raise ValueError("Turn-based fork and rollback support main sessions only")
         normalized_turn_id = str(turn_id or "").strip()
@@ -1194,14 +1228,15 @@ class CoreCheckpointConversationBackend:
             raise ValueError("turn_id is required")
         event_store = SqlAlchemyAppEventStore(CoreAppEvent)
         events = await event_store.list_thread(db, thread_id=session_id)
-        boundary = max(
-            (index for index, event in enumerate(events) if str(event.turn_id or "") == normalized_turn_id),
-            default=-1,
-        )
-        if boundary < 0:
+        turn_indexes = [
+            index for index, event in enumerate(events)
+            if str(event.turn_id or "") == normalized_turn_id
+        ]
+        if not turn_indexes:
             raise LookupError(f"Turn not found: {normalized_turn_id}")
-        kept_events = events[: boundary + 1]
-        boundary_seq = int(kept_events[-1].seq or 0)
+        boundary = max(turn_indexes) if include_turn else min(turn_indexes) - 1
+        kept_events = events[: boundary + 1] if boundary >= 0 else []
+        boundary_seq = int(kept_events[-1].seq or 0) if kept_events else 0
         projection = CoreAppSnapshotProjector().reduce(session_id, kept_events)
         runtime = await db.get(CoreRuntimeSession, session_id)
         history = _conversation_history_from_events(kept_events)
@@ -1221,20 +1256,20 @@ class CoreCheckpointConversationBackend:
             "events": [event.to_dict() for event in kept_events],
         }, boundary_seq
 
-    async def rollback_conversation_through_turn(
+    async def rollback_conversation_before_turn(
         self,
         db: Any,
         *,
         session_id: str,
         turn_id: str,
     ) -> int:
-        """Discard only events after ``turn_id`` and rebuild its projection.
+        """Discard ``turn_id`` and later events, then rebuild the projection.
 
         This intentionally does not touch workspace files, tool side effects,
         or external systems.  The caller must have checked that the runtime is
         inactive before entering this transaction.
         """
-        payload, boundary_seq = await self.conversation_payload_through_turn(
+        payload, boundary_seq = await self.conversation_payload_before_turn(
             db,
             session_id=session_id,
             turn_id=turn_id,
@@ -1661,7 +1696,7 @@ def register_checkpoint_operations(
                     "restored_paths": list(result.restored_paths),
                 })
             boundary_seq = await coordinator(work_root).write_coordinator.run(
-                lambda db: turn_backend.rollback_conversation_through_turn(
+                lambda db: turn_backend.rollback_conversation_before_turn(
                     db,
                     session_id=session_id,
                     turn_id=turn_id,
@@ -2109,14 +2144,15 @@ async def _checkpoint_id_at_turn_boundary(
     turn_id: str,
     conversation_backend: CoreCheckpointConversationBackend,
 ) -> str:
-    """Return a checkpoint only when it represents this exact event prefix.
+    """Return a checkpoint immediately before the turn being removed.
 
-    Automatic checkpoints are taken *before* a user turn, so matching on
-    ``turn_id`` alone is incorrect and would drop the turn the user clicked.
-    The event sequence makes the full-recovery path safe to select.
+    Automatic checkpoints are taken before a user turn.  That is precisely
+    the safe full-recovery boundary for rollback, which removes the selected
+    complete turn; the event sequence prevents a same-named but later node
+    from being selected.
     """
     async with session_factory() as db:
-        _, boundary_seq = await conversation_backend.conversation_payload_through_turn(
+        _, boundary_seq = await conversation_backend.conversation_payload_before_turn(
             db,
             session_id=session_id,
             turn_id=turn_id,

@@ -75,6 +75,14 @@ describe('ChatThread → MessageView isolation', () => {
     expect(wrapper.find('[data-message-id]').exists()).toBe(false)
   })
 
+  it('can suppress the generic empty state while an external loader is visible', () => {
+    const wrapper = mount(ChatThread, {
+      props: { messages: [], showEmptyState: false },
+    })
+
+    expect(wrapper.find('.sidebar-empty').exists()).toBe(false)
+  })
+
   it('does not re-render historical messages when a new message arrives (Set reference changes)', async () => {
     // A new message mutates processExpandedIds (fresh Set with the new id).
     // The per-message v-memo key (has(msg.id)) must keep historical messages

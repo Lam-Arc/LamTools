@@ -67,6 +67,7 @@ export interface CoreAppRuntimeSnapshot {
   allow_access_outside_workdir?: boolean
   active_mode?: string | null
   model_id?: string | null
+  reasoning_level?: 'off' | 'light' | 'high' | 'max'
   thinking_enabled?: boolean
   thinking_budget?: number
   reasoning_effort?: string
@@ -86,6 +87,7 @@ export interface CoreAppCommandCatalogItem {
   icon?: string
   source?: 'core' | 'member' | string
   action?: 'insert_token' | 'run_action' | 'expand_on_send' | string
+  kind?: 'action' | 'skill' | string
   accepts_args?: boolean
 }
 
@@ -95,6 +97,7 @@ export interface CoreAppTurn {
   seq?: number
   last_seq?: number
   items: string[]
+  created_at?: string
   input?: CoreAppInputItem[] | unknown
   /** Provider-reported usage; absent token fields mean the provider did not report them. */
   usage?: Record<string, unknown>

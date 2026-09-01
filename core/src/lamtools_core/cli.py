@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 from urllib.parse import quote
 import asyncio
 import hashlib
@@ -45,12 +46,24 @@ from lamtools_core.llm import (
 )
 from lamtools_core.llm.shallow_thinking import ShallowThinkingClient
 from lamtools_core.llm.profiles import (
+    build_profiled_anthropic_request,
+    build_profiled_gemini_request,
     build_profiled_openai_request,
+    build_profiled_responses_request,
     load_adapter_profiles_from_dirs,
+    normalize_anthropic_response_with_profile,
+    normalize_gemini_response_with_profile,
+    normalize_gemini_stream_event,
     normalize_response_with_profile,
+    normalize_responses_response_with_profile,
+    normalize_responses_stream_event,
     normalize_stream_chunk_with_profile,
+    finalize_provider_stream_state,
+    reasoning_off_supported,
     resolve_adapter_profile_from_profiles,
+    update_provider_stream_state,
 )
+from lamtools_core.llm.reasoning import reasoning_level_from_legacy
 from lamtools_core.llm.model_capabilities import resolve_capability
 from lamtools_core.config.model_store import ModelConfig, ModelStore
 from lamtools_core.config.provider_store import ProviderConfig, ProviderStore
@@ -62,6 +75,7 @@ from lamtools_core.runtime import RuntimeTurnInput
 from lamtools_core.tool.default_toolbox import ApprovalPolicy, build_core_toolbox
 from lamtools_core.app.runtime_permissions import (
     load_global_runtime_controls,
+    read_global_runtime_controls,
     resolve_permission_preset,
     runtime_snapshot as build_runtime_snapshot,
     session_runtime_preferences,
@@ -96,6 +110,7 @@ class CoreCliRunOptions:
     thread_id: str = ""
     adapter_dirs: tuple[Path | str, ...] = ()
     plugin_roots: tuple[Path | str, ...] = ()
+    reasoning_level: str = ""
     thinking_enabled: bool = True
     thinking_budget: int = 10000
     shallow_thinking_enabled: bool = False
@@ -154,6 +169,7 @@ class LLMConfig:
     temperature: float = 0.2
     thinking_supported: bool = False
     thinking_budget: int = 10000
+    reasoning_effort: str = ""
     capability: str = ""  # "text" | "multimodal" | "" (resolved at request time)
     provider_extra: dict[str, Any] = field(default_factory=dict)
     model_extra: dict[str, Any] = field(default_factory=dict)
@@ -191,6 +207,78 @@ def _http_provider_error(status_code: int, text: str, headers: object) -> Except
     return LLMProviderError(message, status_code=status_code)
 
 
+def _normalize_anthropic_stream_event(
+    event: dict[str, Any],
+    profile: dict[str, Any],
+) -> LLMStreamEvent | None:
+    """Normalize Anthropic SSE data events into Core stream events."""
+    del profile
+    event_type = str(event.get("type") or "")
+    if event_type == "error":
+        error = event.get("error")
+        message = error.get("message") if isinstance(error, dict) else error
+        return LLMStreamEvent(kind="error", error=str(message or "Unknown error"), raw=event)
+
+    if event_type == "content_block_start":
+        block = event.get("content_block") if isinstance(event.get("content_block"), dict) else {}
+        if block.get("type") == "tool_use":
+            return LLMStreamEvent(
+                kind="tool_call_delta",
+                raw=event,
+                metadata={"tool_calls_delta": [{
+                    "index": int(event.get("index") or 0),
+                    "id": str(block.get("id") or ""),
+                    "type": "function",
+                    "function": {"name": str(block.get("name") or "")},
+                }]},
+            )
+        return None
+
+    if event_type == "content_block_delta":
+        delta = event.get("delta") if isinstance(event.get("delta"), dict) else {}
+        delta_type = str(delta.get("type") or "")
+        if delta_type == "thinking_delta":
+            content = delta.get("thinking") or ""
+            return LLMStreamEvent(kind="thinking_delta", content=str(content), raw=event) if content else None
+        if delta_type == "signature_delta":
+            # The signature is opaque provider state required on the next
+            # Anthropic request; it is not user-visible reasoning text.
+            return None
+        if delta_type == "text_delta":
+            content = delta.get("text") or ""
+            return LLMStreamEvent(kind="content_delta", content=str(content), raw=event) if content else None
+        if delta_type == "input_json_delta":
+            partial = str(delta.get("partial_json") or "")
+            if not partial:
+                return None
+            return LLMStreamEvent(
+                kind="tool_call_delta",
+                raw=event,
+                metadata={"tool_calls_delta": [{
+                    "index": int(event.get("index") or 0),
+                    "function": {"arguments": partial},
+                }]},
+            )
+        return None
+
+    if event_type == "message_delta":
+        usage = normalize_usage(event.get("usage"))
+        delta = event.get("delta") if isinstance(event.get("delta"), dict) else {}
+        stop_reason = str(delta.get("stop_reason") or "")
+        if stop_reason or usage is not None:
+            return LLMStreamEvent(
+                kind="finish",
+                finish_reason=stop_reason or "stop",
+                usage=usage,
+                raw=event,
+            )
+    if event_type == "message_start":
+        message = event.get("message") if isinstance(event.get("message"), dict) else {}
+        usage = normalize_usage(message.get("usage"))
+        return LLMStreamEvent(kind="usage", usage=usage, raw=event) if usage is not None else None
+    return None
+
+
 class CoreHttpLLMClient:
     def __init__(
         self,
@@ -200,26 +288,31 @@ class CoreHttpLLMClient:
         thinking_enabled: bool,
         thinking_budget: int,
         reasoning_effort: str = "",
+        reasoning_level: str = "",
         max_tokens: int,
         temperature: float,
     ) -> None:
         self.config = config
         self.adapter_profile = adapter_profile
-        self.thinking_enabled = thinking_enabled
+        self.thinking_enabled = bool(thinking_enabled) and bool(config.thinking_supported)
         self.thinking_budget = thinking_budget
         self.reasoning_effort = reasoning_effort
+        self.reasoning_level = (
+            reasoning_level_from_legacy(
+                reasoning_level=reasoning_level,
+                thinking_enabled=self.thinking_enabled,
+                reasoning_effort=reasoning_effort,
+                fallback="high" if self.thinking_enabled else "off",
+            )
+            if config.thinking_supported
+            else "off"
+        )
         self.max_tokens = max_tokens
         self.temperature = temperature
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
-        assembled = build_profiled_openai_request(
-            self._request_with_defaults(request),
-            self.adapter_profile,
-            thinking_enabled=self.thinking_enabled,
-            thinking_budget=self.thinking_budget,
-            reasoning_effort=self.reasoning_effort,
-            capability=self.config.capability,
-        )
+        prepared = self._request_with_defaults(request)
+        assembled = self._assemble_request(prepared, stream=False)
         async with httpx.AsyncClient(timeout=httpx.Timeout(360.0, connect=30.0)) as client:
             response = await client.post(
                 f"{self.config.base_url.rstrip('/')}{assembled['endpoint']}",
@@ -228,7 +321,7 @@ class CoreHttpLLMClient:
             )
         if response.status_code >= 400:
             raise _http_provider_error(response.status_code, response.text[:300], response.headers)
-        normalized = normalize_response_with_profile(response.json(), self.adapter_profile)
+        normalized = self._normalize_response(response.json(), model=prepared.model)
         return LLMResponse(
             content=str(normalized.get("content") or ""),
             thinking=str(normalized.get("thinking") or ""),
@@ -236,18 +329,14 @@ class CoreHttpLLMClient:
             usage=normalize_usage(normalized.get("usage")),
             finish_reason=str(normalized.get("finish_reason") or "stop"),
             raw=None,
+            provider_state=normalized.get("provider_state"),
         )
 
     async def stream(self, request: LLMRequest):
-        assembled = build_profiled_openai_request(
-            self._request_with_defaults(request),
-            self.adapter_profile,
-            stream=True,
-            thinking_enabled=self.thinking_enabled,
-            thinking_budget=self.thinking_budget,
-            reasoning_effort=self.reasoning_effort,
-            capability=self.config.capability,
-        )
+        prepared = self._request_with_defaults(request)
+        assembled = self._assemble_request(prepared, stream=True)
+        provider_state: Any = None
+        protocol = self._protocol()
         async with httpx.AsyncClient(timeout=httpx.Timeout(360.0, connect=30.0)) as client:
             async with client.stream(
                 "POST",
@@ -267,15 +356,85 @@ class CoreHttpLLMClient:
                         continue
                     data = line[6:]
                     if data == "[DONE]":
-                        yield LLMStreamEvent(kind="done", metadata={"finish_reason": "stop"})
+                        yield LLMStreamEvent(
+                            kind="done",
+                            metadata={"finish_reason": "stop"},
+                            provider_state=finalize_provider_stream_state(provider_state),
+                        )
                         return
                     try:
                         chunk = json.loads(data)
                     except json.JSONDecodeError:
                         continue
-                    event = normalize_stream_chunk_with_profile(chunk, self.adapter_profile)
+                    provider_state = update_provider_stream_state(
+                        provider_state,
+                        chunk,
+                        profile=self.adapter_profile,
+                        protocol=protocol,
+                        model=prepared.model,
+                    )
+                    event = self._normalize_stream_event(chunk)
                     if event is not None:
+                        event = replace(event, provider_state=copy.deepcopy(provider_state))
                         yield event
+
+    def _protocol(self) -> str:
+        protocol = str(self.adapter_profile.get("protocol") or "").strip().lower()
+        if protocol:
+            return protocol
+        return "anthropic-messages" if self.config.provider_api_type.strip().lower() == "anthropic" else "openai-chat-completions"
+
+    def _assemble_request(self, request: LLMRequest, *, stream: bool) -> dict[str, Any]:
+        protocol = self._protocol()
+        kwargs = {
+            "stream": stream,
+            "thinking_enabled": self.thinking_enabled,
+            "thinking_budget": self.thinking_budget,
+            "reasoning_effort": self.reasoning_effort,
+            "reasoning_level": self.reasoning_level,
+            "capability": self.config.capability,
+        }
+        if protocol == "anthropic-messages":
+            return build_profiled_anthropic_request(
+                [message.to_dict() for message in request.messages],
+                self.adapter_profile,
+                model=request.model,
+                max_tokens=int(request.max_tokens or self.max_tokens),
+                temperature=float(request.temperature if request.temperature is not None else self.temperature),
+                stream=stream,
+                top_p=request.top_p,
+                tools=request.tools,
+                tool_choice=request.tool_choice,
+                thinking_enabled=self.thinking_enabled,
+                thinking_budget=self.thinking_budget,
+                reasoning_level=self.reasoning_level,
+                capability=self.config.capability,
+            )
+        if protocol in {"gemini", "gemini-generative-language"}:
+            return build_profiled_gemini_request(request, self.adapter_profile, **kwargs)
+        if protocol in {"openai-responses", "responses"}:
+            return build_profiled_responses_request(request, self.adapter_profile, **kwargs)
+        return build_profiled_openai_request(request, self.adapter_profile, **kwargs)
+
+    def _normalize_response(self, response: dict[str, Any], *, model: str = "") -> dict[str, Any]:
+        protocol = self._protocol()
+        if protocol == "anthropic-messages":
+            return normalize_anthropic_response_with_profile(response, self.adapter_profile, model=model)
+        if protocol in {"gemini", "gemini-generative-language"}:
+            return normalize_gemini_response_with_profile(response, self.adapter_profile, model=model)
+        if protocol in {"openai-responses", "responses"}:
+            return normalize_responses_response_with_profile(response, self.adapter_profile, model=model)
+        return normalize_response_with_profile(response, self.adapter_profile, model=model)
+
+    def _normalize_stream_event(self, chunk: dict[str, Any]) -> LLMStreamEvent | None:
+        protocol = self._protocol()
+        if protocol == "anthropic-messages":
+            return _normalize_anthropic_stream_event(chunk, self.adapter_profile)
+        if protocol in {"gemini", "gemini-generative-language"}:
+            return normalize_gemini_stream_event(chunk, self.adapter_profile)
+        if protocol in {"openai-responses", "responses"}:
+            return normalize_responses_stream_event(chunk, self.adapter_profile)
+        return normalize_stream_chunk_with_profile(chunk, self.adapter_profile)
 
     def _request_with_defaults(self, request: LLMRequest) -> LLMRequest:
         return LLMRequest(
@@ -293,10 +452,23 @@ class CoreHttpLLMClient:
         )
 
     def _headers(self) -> dict[str, str]:
-        return {
-            "Authorization": f"Bearer {self.config.api_key}",
-            "Content-Type": "application/json",
-        }
+        headers = {"Content-Type": "application/json"}
+        protocol = self._protocol()
+        auth = str(self.adapter_profile.get("auth") or protocol).strip().lower()
+        if protocol in {"gemini", "gemini-generative-language"} or auth in {
+            "gemini",
+            "google-api-key",
+            "x-goog-api-key",
+        }:
+            headers["x-goog-api-key"] = self.config.api_key
+        elif auth in {"anthropic", "anthropic-messages", "x-api-key"}:
+            headers["x-api-key"] = self.config.api_key
+            headers["anthropic-version"] = str(self.adapter_profile.get("anthropic_version") or "2023-06-01")
+        else:
+            headers["Authorization"] = f"Bearer {self.config.api_key}"
+            if protocol == "anthropic-messages":
+                headers["anthropic-version"] = str(self.adapter_profile.get("anthropic_version") or "2023-06-01")
+        return headers
 
 
 async def run_core_cli_task(
@@ -314,6 +486,11 @@ async def run_core_cli_task(
     resolved_model_id = options.model_id
     context_window_tokens: int | None = None
     model_context: dict[str, Any] = {"model_id": resolved_model_id}
+    effective_reasoning_level = reasoning_level_from_legacy(
+        reasoning_level=options.reasoning_level,
+        thinking_enabled=options.thinking_enabled,
+        fallback="high" if options.thinking_enabled else "off",
+    )
     if llm_client is None:
         config = load_llm_config(model_ref=options.model_id)
         profile = _resolve_adapter_profile(config, options.adapter_dirs)
@@ -324,6 +501,7 @@ async def run_core_cli_task(
             "model_id": config.model_id,
             "display_name": config.display_name,
             "provider": config.provider_name,
+            "reasoning_level": effective_reasoning_level,
             "thinking_enabled": options.thinking_enabled,
             "thinking_budget": options.thinking_budget or config.thinking_budget,
             "shallow_thinking_enabled": options.shallow_thinking_enabled,
@@ -333,6 +511,8 @@ async def run_core_cli_task(
             adapter_profile=profile,
             thinking_enabled=options.thinking_enabled,
             thinking_budget=options.thinking_budget or config.thinking_budget,
+            reasoning_effort=config.reasoning_effort,
+            reasoning_level=effective_reasoning_level,
             max_tokens=options.max_tokens or config.max_output_tokens,
             temperature=options.temperature if options.temperature is not None else config.temperature,
         )
@@ -448,6 +628,7 @@ async def run_core_cli_task(
         permissions=resolved_permissions,
         active_mode=options.active_mode or None,
         model_id=resolved_model_id,
+        reasoning_level=effective_reasoning_level,
         thinking_enabled=options.thinking_enabled,
         thinking_budget=options.thinking_budget,
         shallow_thinking_enabled=options.shallow_thinking_enabled,
@@ -465,6 +646,7 @@ async def run_core_cli_task(
         instructions=core_instructions,
         temperature=options.temperature,
         max_tokens=options.max_tokens,
+        reasoning_level=effective_reasoning_level,
         thinking_enabled=options.thinking_enabled,
         thinking_budget=options.thinking_budget,
         approval_policy=resolved_permissions.approval_policy,
@@ -566,6 +748,7 @@ async def run_core_cli_task(
             instructions=core_instructions,
             temperature=options.temperature,
             max_tokens=options.max_tokens,
+            reasoning_level=effective_reasoning_level,
             thinking_enabled=options.thinking_enabled,
             thinking_budget=options.thinking_budget,
             approval_policy=resolved_permissions.approval_policy,
@@ -609,6 +792,7 @@ async def run_core_cli_task(
                 metadata={
                     "session_id": thread_id,
                     "model_id": resolved_model_id,
+                    "reasoning_level": effective_reasoning_level,
                     "thinking_enabled": options.thinking_enabled,
                     "thinking_budget": options.thinking_budget,
                     "shallow_thinking_enabled": options.shallow_thinking_enabled,
@@ -693,6 +877,7 @@ def load_llm_config(*, model_ref: str = "") -> LLMConfig:
         temperature=model.temperature,
         thinking_supported=model.thinking_supported,
         thinking_budget=model.thinking_budget,
+        reasoning_effort=model.reasoning_effort,
         capability=model.resolved_capability,
         provider_extra=_provider_extra(provider),
         model_extra=model.to_extra(),
@@ -767,6 +952,29 @@ def list_llm_model_configs(*, work_root: str | None = None) -> list[dict[str, An
                 "thinking_budget": m.thinking_budget,
                 "temperature": m.temperature,
                 "capability": m.resolved_capability,
+                "reasoning_off_supported": reasoning_off_supported(
+                    _resolve_adapter_profile(
+                        LLMConfig(
+                            provider_name=provider.name if provider is not None else m.provider,
+                            provider_api_type=provider.api_type if provider is not None else "openai",
+                            base_url=(provider.base_url if provider is not None else "").rstrip("/"),
+                            api_key="",
+                            model_record_id=m.model_id,
+                            model_id=m.model_id,
+                            display_name=m.display_name,
+                            context_window=m.context_window,
+                            max_output_tokens=m.max_output_tokens,
+                            temperature=m.temperature,
+                            thinking_supported=m.thinking_supported,
+                            thinking_budget=m.thinking_budget,
+                            reasoning_effort=m.reasoning_effort,
+                            capability=m.resolved_capability,
+                            provider_extra=_provider_extra(provider) if provider is not None else {},
+                            model_extra=m.to_extra(),
+                        ),
+                        (),
+                    )
+                ),
                 "notes": m.notes,
                 "is_default": m.is_default,
                 "adapter_profile_id": m.adapter_profile_id,
@@ -792,6 +1000,7 @@ def build_parser(
     serve.add_argument("--work-root", "--project", dest="work_root", default="")
     serve.add_argument("--frontend-dir", default="", help="Path to built frontend SPA directory (desktop/packaged mode)")
     serve.add_argument("--thinking", choices=("enabled", "disabled"), default="enabled")
+    serve.add_argument("--reasoning-level", choices=("off", "light", "high", "max"), default="")
     serve.add_argument("--thinking-budget", type=int, default=10000)
     serve.add_argument("--max-tokens", type=int, default=None)
     serve.add_argument("--temperature", type=float, default=0.2)
@@ -818,6 +1027,7 @@ def build_parser(
     run.add_argument("--work-root", "--project", dest="work_root", default="")
     run.add_argument("--thinking-budget", type=int, default=10000)
     run.add_argument("--no-thinking", action="store_true")
+    run.add_argument("--reasoning-level", choices=("off", "light", "high", "max"), default=None)
     run.add_argument("--shallow-thinking", action="store_true", help="Require a prompt-based shallow thinking block")
     run.add_argument("--auto-approve", action="store_true", help="Run approval-gated Core tools without prompting")
     run.add_argument("--allow-outside-workdir", action="store_true", default=None, help="Allow file tools to access paths outside work_root")
@@ -845,6 +1055,7 @@ def build_parser(
     run_local.add_argument("--core-db", default="", help="Path to Core agent database")
     run_local.add_argument("--thinking-budget", type=int, default=10000)
     run_local.add_argument("--no-thinking", action="store_true")
+    run_local.add_argument("--reasoning-level", choices=("off", "light", "high", "max"), default=None)
     run_local.add_argument("--shallow-thinking", action="store_true", help="Require a prompt-based shallow thinking block")
     run_local.add_argument("--auto-approve", action="store_true", help="Run approval-gated tools without prompting")
     run_local.add_argument("--allow-outside-workdir", action="store_true", default=None, help="Allow file tools to access paths outside work_root")
@@ -880,6 +1091,7 @@ def build_parser(
     start.add_argument("--model-id", default="")
     start.add_argument("--thinking", choices=("enabled", "disabled"), default="enabled")
     start.add_argument("--thinking-budget", type=int, default=10000)
+    start.add_argument("--reasoning-level", choices=("off", "light", "high", "max"), default=None)
     start.add_argument("--shallow", action="store_true")
     start.add_argument("--auto-approve", action="store_true", help="Run approval-gated Core tools without prompting")
     start.add_argument("--approval-policy", choices=("require", "auto_approve"), default=None)
@@ -1020,6 +1232,36 @@ def build_parser(
     plugin_operations_list.add_argument("--raw", action="store_true")
     plugin_operations_list.set_defaults(func=cmd_plugin_operations_list)
 
+    skill = sub.add_parser("skill", help="Manage Core skills (list/create/enable/disable/delete)")
+    skill_sub = skill.add_subparsers(dest="skill_command", required=True)
+    skill_list = skill_sub.add_parser("list", help="List discovered skills")
+    _add_live_connection_arguments(skill_list)
+    skill_list.add_argument("--raw", action="store_true")
+    skill_list.set_defaults(func=cmd_skill_list)
+    skill_create = skill_sub.add_parser("create", help="Create a user skill")
+    skill_create.add_argument("name")
+    skill_create.add_argument("--description", required=True)
+    skill_create.add_argument("--content", required=True)
+    _add_live_connection_arguments(skill_create)
+    skill_create.add_argument("--raw", action="store_true")
+    skill_create.set_defaults(func=cmd_skill_create)
+    skill_enable = skill_sub.add_parser("enable", help="Enable a skill")
+    skill_enable.add_argument("name")
+    _add_live_connection_arguments(skill_enable)
+    skill_enable.add_argument("--raw", action="store_true")
+    skill_enable.set_defaults(func=cmd_skill_enable)
+    skill_disable = skill_sub.add_parser("disable", help="Disable a skill")
+    skill_disable.add_argument("name")
+    _add_live_connection_arguments(skill_disable)
+    skill_disable.add_argument("--raw", action="store_true")
+    skill_disable.set_defaults(func=cmd_skill_disable)
+    skill_delete = skill_sub.add_parser("delete", help="Delete a writable project or user skill")
+    skill_delete.add_argument("name")
+    skill_delete.add_argument("-y", "--yes", action="store_true", help="Skip the interactive confirmation")
+    _add_live_connection_arguments(skill_delete)
+    skill_delete.add_argument("--raw", action="store_true")
+    skill_delete.set_defaults(func=cmd_skill_delete)
+
     command = sub.add_parser("command", help="Use the Core command system")
     command_sub = command.add_subparsers(dest="command_action", required=True)
     command_catalog = command_sub.add_parser("catalog", help="List commands and skills")
@@ -1030,6 +1272,7 @@ def build_parser(
     command_execute = command_sub.add_parser("execute", help="Execute a Core command action")
     command_execute.add_argument("thread_id")
     command_execute.add_argument("name")
+    command_execute.add_argument("arguments", nargs="*", help="Command arguments")
     command_execute.add_argument("--work-root", default="")
     _add_live_connection_arguments(command_execute)
     command_execute.add_argument("--raw", action="store_true")
@@ -1289,6 +1532,28 @@ def build_parser(
     models_default.add_argument("--work-root", default="")
     models_default.set_defaults(func=cmd_models_default)
 
+    permissions = sub.add_parser("permissions", help="Manage Core permission defaults (设置 → 权限)")
+    permissions_sub = permissions.add_subparsers(dest="permissions_command", required=True)
+    permissions_show = permissions_sub.add_parser("show", help="Show the global permission defaults")
+    permissions_show.set_defaults(func=cmd_permissions_show)
+    permissions_config = permissions_sub.add_parser("config", help="Update global permission defaults")
+    permissions_config.add_argument(
+        "--mode",
+        choices=("read_only", "limited_edit", "full_edit"),
+        help="Default capability range for new sessions",
+    )
+    permissions_config.add_argument(
+        "--approval",
+        choices=("ask", "auto", "full_access"),
+        help="Default approval behavior for new sessions",
+    )
+    permissions_config.add_argument(
+        "--allow-outside-workdir",
+        choices=("true", "false"),
+        help="Whether new sessions may access paths outside the work directory",
+    )
+    permissions_config.set_defaults(func=cmd_permissions_config)
+
     loadtools = sub.add_parser("loadtools", help="Manage mode tool-set configuration (loadtools.jsonc)")
     loadtools_sub = loadtools.add_subparsers(dest="loadtools_command", required=True)
     loadtools_show = loadtools_sub.add_parser("show", help="Print the effective mode tool-sets")
@@ -1388,17 +1653,21 @@ async def cmd_serve(args: argparse.Namespace) -> int:
     ensure_default_config_files()
     from lamtools_core.app.http_agent_app import create_core_agent_http_app
 
-    app = create_core_agent_http_app(
-        model_id=args.model_id,
-        core_db=args.core_db or None,
-        data_dir=args.data_dir or None,
-        work_root=args.work_root or None,
-        frontend_dir=args.frontend_dir or None,
-        thinking_enabled=args.thinking == "enabled",
-        thinking_budget=args.thinking_budget,
-        max_tokens=args.max_tokens,
-        temperature=args.temperature,
-    )
+    app_kwargs = {
+        "model_id": args.model_id,
+        "core_db": args.core_db or None,
+        "data_dir": args.data_dir or None,
+        "work_root": args.work_root or None,
+        "frontend_dir": args.frontend_dir or None,
+        "thinking_enabled": args.thinking == "enabled",
+        "thinking_budget": args.thinking_budget,
+        "max_tokens": args.max_tokens,
+        "temperature": args.temperature,
+    }
+    reasoning_level = getattr(args, "reasoning_level", "")
+    if reasoning_level:
+        app_kwargs["reasoning_level"] = reasoning_level
+    app = create_core_agent_http_app(**app_kwargs)
     url = f"http://{args.host}:{args.port}"
     _print_live_result(args, {"url": url}, f"serving {url}")
     server = uvicorn.Server(uvicorn.Config(app, host=args.host, port=args.port, reload=bool(args.reload)))
@@ -1442,13 +1711,16 @@ async def cmd_start(args: argparse.Namespace) -> int:
         legacy_approval_policy = "auto_approve"
 
     async def start(client: CoreAppServerClient) -> dict[str, Any]:
+        reasoning_level = getattr(args, "reasoning_level", None)
+        if reasoning_level is None:
+            reasoning_level = "high" if args.thinking == "enabled" else "off"
         params: dict[str, Any] = {
             "thread_id": args.thread_id,
             "input_items": [{"type": "text", "text": " ".join(args.message)}],
             "work_root": args.work_root,
             "model_id": args.model_id or None,
             "goal_id": args.goal_id or None,
-            "thinking_enabled": args.thinking == "enabled",
+            "reasoning_level": reasoning_level,
             "thinking_budget": args.thinking_budget,
             "shallow_thinking_enabled": bool(args.shallow),
             # Keep this legacy key in the Python call shape for compatibility;
@@ -1732,6 +2004,63 @@ async def cmd_plugin_config_set(args: argparse.Namespace) -> int:
     return 0
 
 
+async def cmd_skill_list(args: argparse.Namespace) -> int:
+    result = await _invoke_live(args, lambda client: client.request("skill.list", {}))
+    if args.raw:
+        print(json.dumps(result, ensure_ascii=False), flush=True)
+        return 0
+    skills = result.get("skills") if isinstance(result, dict) else []
+    if not skills:
+        print("No skills discovered.", flush=True)
+        return 0
+    for item in skills:
+        state = "enabled" if item.get("enabled") else "disabled"
+        access = "deletable" if item.get("deletable") else "read-only"
+        print(
+            f"{item.get('name')} [{state}, {item.get('source')}, {access}] ({item.get('location')})",
+            flush=True,
+        )
+    return 0
+
+
+async def cmd_skill_create(args: argparse.Namespace) -> int:
+    result = await _invoke_live(
+        args,
+        lambda client: client.request(
+            "skill.create",
+            {"name": args.name, "description": args.description, "content": args.content},
+        ),
+    )
+    _print_live_result(args, result, f"skill '{args.name}' created")
+    return 0
+
+
+async def cmd_skill_enable(args: argparse.Namespace) -> int:
+    result = await _invoke_live(args, lambda client: client.request("skill.enable", {"name": args.name}))
+    _print_live_result(args, result, f"skill '{args.name}' enabled")
+    return 0
+
+
+async def cmd_skill_disable(args: argparse.Namespace) -> int:
+    result = await _invoke_live(args, lambda client: client.request("skill.disable", {"name": args.name}))
+    _print_live_result(args, result, f"skill '{args.name}' disabled")
+    return 0
+
+
+async def cmd_skill_delete(args: argparse.Namespace) -> int:
+    if not args.yes and not args.raw:
+        try:
+            reply = input(f"Delete skill '{args.name}' and its directory? [y/N] ").strip().lower()
+        except EOFError:
+            reply = ""
+        if reply not in ("y", "yes", "ok"):
+            print("Delete cancelled.", flush=True)
+            return 1
+    result = await _invoke_live(args, lambda client: client.request("skill.delete", {"name": args.name}))
+    _print_live_result(args, result, f"skill '{args.name}' deleted")
+    return 0
+
+
 async def cmd_command_catalog(args: argparse.Namespace) -> int:
     result = await _invoke_live(
         args,
@@ -1770,7 +2099,12 @@ async def cmd_command_execute(args: argparse.Namespace) -> int:
         args,
         lambda client: client.request(
             "command.execute",
-            {"thread_id": args.thread_id, "command": args.name, "work_root": args.work_root},
+            {
+                "thread_id": args.thread_id,
+                "command": args.name,
+                "arguments": " ".join(args.arguments).strip(),
+                "work_root": args.work_root,
+            },
         ),
     )
     _print_live_result(args, result, f"/{args.name} completed for {args.thread_id}")
@@ -1812,13 +2146,16 @@ async def cmd_run(args: argparse.Namespace) -> int:
     if not args.raw:
         print(f"[session] {thread_id}", flush=True)
     async def start(client: CoreAppServerClient) -> dict[str, Any]:
+        reasoning_level = getattr(args, "reasoning_level", None)
+        if reasoning_level is None:
+            reasoning_level = "off" if bool(args.no_thinking) else "high"
         params: dict[str, Any] = {
             "thread_id": thread_id,
             "input_items": [{"type": "text", "text": " ".join(args.message)}],
             "work_root": str(args.work_root or _default_work_root()),
             "model_id": args.model_id or None,
             "goal_id": args.goal_id or None,
-            "thinking_enabled": not bool(args.no_thinking),
+            "reasoning_level": reasoning_level,
             "thinking_budget": args.thinking_budget,
             "shallow_thinking_enabled": bool(args.shallow_thinking),
             "max_tokens": int(args.max_tokens) if args.max_tokens is not None else None,
@@ -1866,6 +2203,7 @@ async def cmd_run_local(args: argparse.Namespace) -> int:
         thread_id=args.thread_id or _resolve_thread_id(""),
         adapter_dirs=(),
         plugin_roots=(),
+        reasoning_level=(getattr(args, "reasoning_level", None) or ("off" if bool(args.no_thinking) else "high")),
         thinking_enabled=not bool(args.no_thinking),
         thinking_budget=args.thinking_budget,
         shallow_thinking_enabled=bool(args.shallow_thinking),
@@ -2559,6 +2897,50 @@ def _now_iso() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
+async def cmd_permissions_show(args: argparse.Namespace) -> int:
+    del args
+    raw = get_setting("core.runtimeControls")
+    controls = read_global_runtime_controls(raw)
+    print(f"capability:       {controls['base_tier']}")
+    print(f"default_approval: {controls['permission_preset']}")
+    print(
+        "outside_workdir:  "
+        f"{'yes' if controls['base_allow_access_outside_workdir'] else 'no'}"
+    )
+    print("说明:              这些值只作为新会话默认；当前任务可在输入框临时调整")
+    return 0
+
+
+async def cmd_permissions_config(args: argparse.Namespace) -> int:
+    current = get_setting("core.runtimeControls")
+    value = dict(current) if isinstance(current, dict) else {}
+    changed = False
+    if args.mode is not None:
+        value["permission_mode"] = args.mode
+        changed = True
+    if args.approval is not None:
+        value["permission_preset"] = args.approval
+        changed = True
+    if args.allow_outside_workdir is not None:
+        value["allow_access_outside_workdir"] = args.allow_outside_workdir == "true"
+        changed = True
+    if not changed:
+        print(
+            "error: nothing to change (pass --mode / --approval / --allow-outside-workdir)",
+            file=sys.stderr,
+        )
+        return 1
+    set_setting("core.runtimeControls", value)
+    controls = read_global_runtime_controls(value)
+    print(
+        "[permissions] saved: "
+        f"capability={controls['base_tier']} "
+        f"default_approval={controls['permission_preset']} "
+        f"outside_workdir={'yes' if controls['base_allow_access_outside_workdir'] else 'no'}"
+    )
+    return 0
+
+
 async def cmd_imagegen_show(args: argparse.Namespace) -> int:
     del args
     value = _imagegen_settings()
@@ -3049,6 +3431,8 @@ def _resolve_adapter_profile(config: LLMConfig, adapter_dirs: tuple[Path | str, 
         profiles,
         api_type=config.provider_api_type,
         base_url=config.base_url,
+        model_id=config.model_id,
+        provider_name=config.provider_name,
         provider_extra=config.provider_extra,
         model_extra=config.model_extra,
     )

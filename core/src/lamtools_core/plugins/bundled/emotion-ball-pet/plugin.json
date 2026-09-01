@@ -3,6 +3,21 @@
   "version": "0.2.8",
   "description": "Emotion Ball desktop companion for Core questions and approvals",
   "manifest_version": "1",
+  "commands": [
+    {
+      "name": "pet",
+      "title": "桌宠",
+      "description": "显示桌宠",
+      "icon": "paw-print",
+      "kind": "action",
+      "action": "run_action",
+      "acceptsArgs": false,
+      "effect": {
+        "type": "desktop_plugin",
+        "action": "show"
+      }
+    }
+  ],
   "desktop": {
     "entry": "./desktop/index.html",
     "title": "LamTools 桌宠",

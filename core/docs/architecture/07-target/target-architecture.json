@@ -1,0 +1,529 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "LamTools Core 目标架构",
+    "locale": "zh-CN",
+    "output": "target-architecture.html",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1320,
+      700
+    ],
+    "repository": {
+      "url": "https://github.com/Lam-Arc/LamTools.git",
+      "revision": "5c1371e717dfa86e125665f7669526d758ad5bce"
+    },
+    "views": [
+      {
+        "id": "inbound-flow",
+        "label": "入口主链路",
+        "focus": [
+          "presentation",
+          "transport",
+          "application",
+          "runtime-kernel",
+          "runtime-ports"
+        ],
+        "note": "表示层与传输层只做入口适配，应用层协调核心运行时。"
+      },
+      {
+        "id": "outbound-ports",
+        "label": "出口端口",
+        "focus": [
+          "runtime-kernel",
+          "runtime-ports",
+          "llm-tool-adapters",
+          "persistence-ports",
+          "storage-adapters"
+        ],
+        "note": "运行时依赖稳定端口，具体提供方、工具和 SQLite 实现在外围。"
+      },
+      {
+        "id": "extension-contract",
+        "label": "扩展契约",
+        "focus": [
+          "plugin-adapters",
+          "extension-api",
+          "runtime-ports",
+          "event-bus"
+        ],
+        "note": "插件通过稳定扩展 API 注入能力，不直接触碰内核内部。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "presentation",
+      "type": "frontend",
+      "label": "表示层",
+      "sublabel": "Vue 界面 + Tauri 宿主",
+      "tag": "入口适配器",
+      "pos": [
+        40,
+        300
+      ],
+      "size": [
+        170,
+        72
+      ],
+      "sources": [
+        {
+          "path": "core/ui/src/demo/App.vue",
+          "label": "Vue UI"
+        },
+        {
+          "path": "core/desktop/src/main.ts",
+          "label": "Tauri shell"
+        }
+      ]
+    },
+    {
+      "id": "transport",
+      "type": "backend",
+      "label": "传输适配器",
+      "sublabel": "HTTP / WebSocket 协议",
+      "tag": "入口端口",
+      "pos": [
+        250,
+        300
+      ],
+      "size": [
+        170,
+        72
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/http/routes.py",
+          "label": "HTTP 适配器"
+        },
+        {
+          "path": "core/src/lamtools_core/app/live_router.py",
+          "label": "live adapter"
+        }
+      ]
+    },
+    {
+      "id": "application",
+      "type": "backend",
+      "label": "应用服务",
+      "sublabel": "命令 + 会话编排",
+      "tag": "用例",
+      "pos": [
+        460,
+        300
+      ],
+      "size": [
+        180,
+        72
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/app/factory.py",
+          "label": "app factory"
+        },
+        {
+          "path": "core/src/lamtools_core/app/live_operations.py",
+          "label": "live operations"
+        }
+      ]
+    },
+    {
+      "id": "runtime-kernel",
+      "type": "backend",
+      "label": "***核心循环内核***",
+      "sublabel": "纯轮次编排",
+      "tag": "核心领域",
+      "pos": [
+        680,
+        300
+      ],
+      "size": [
+        180,
+        72
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/kernel/loop.py",
+          "label": "kernel"
+        },
+        {
+          "path": "core/docs/core-loop-kernel-design.md",
+          "label": "boundary contract"
+        }
+      ]
+    },
+    {
+      "id": "runtime-ports",
+      "type": "backend",
+      "label": "***运行时端口***",
+      "sublabel": "工具包 / LLM / 工具 / 状态",
+      "tag": "稳定端口",
+      "pos": [
+        900,
+        300
+      ],
+      "size": [
+        180,
+        72
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/kernel/kit.py",
+          "label": "RuntimeKit"
+        },
+        {
+          "path": "core/src/lamtools_core/runtime/__init__.py",
+          "label": "runtime protocols"
+        }
+      ]
+    },
+    {
+      "id": "extension-api",
+      "type": "backend",
+      "label": "***扩展 API***",
+      "sublabel": "上下文 + 目录 + 事件",
+      "tag": "稳定契约",
+      "pos": [
+        680,
+        120
+      ],
+      "size": [
+        180,
+        66
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/plugins/context.py",
+          "label": "PluginContext"
+        },
+        {
+          "path": "core/src/lamtools_core/plugins/tools.py",
+          "label": "tool contract"
+        }
+      ]
+    },
+    {
+      "id": "plugin-adapters",
+      "type": "external",
+      "label": "插件适配器",
+      "sublabel": "清单 / 后端 / 界面",
+      "tag": "可替换",
+      "pos": [
+        900,
+        120
+      ],
+      "size": [
+        180,
+        66
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/plugins/registry.py",
+          "label": "plugin registry"
+        },
+        {
+          "path": "core/src/lamtools_core/plugins/engine.py",
+          "label": "plugin lifecycle"
+        },
+        {
+          "path": "core/ui/src/plugins/registry.ts",
+          "label": "UI contribution"
+        }
+      ]
+    },
+    {
+      "id": "llm-tool-adapters",
+      "type": "external",
+      "label": "大语言模型 / 工具适配器",
+      "sublabel": "提供方 SDK + 工具处理器",
+      "tag": "出口适配器",
+      "pos": [
+        1120,
+        300
+      ],
+      "size": [
+        160,
+        72
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/llm/adapter.py",
+          "label": "LLM adapter"
+        },
+        {
+          "path": "core/src/lamtools_core/tool/default_toolbox.py",
+          "label": "tool handlers"
+        }
+      ]
+    },
+    {
+      "id": "event-bus",
+      "type": "messagebus",
+      "label": "事件端口",
+      "sublabel": "领域事件 → 适配器",
+      "tag": "出口端口",
+      "pos": [
+        680,
+        500
+      ],
+      "size": [
+        180,
+        66
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/event/__init__.py",
+          "label": "event model"
+        },
+        {
+          "path": "core/src/lamtools_core/app/live_hub.py",
+          "label": "事件中心"
+        }
+      ]
+    },
+    {
+      "id": "persistence-ports",
+      "type": "backend",
+      "label": "持久化端口",
+      "sublabel": "状态 / 事件 / 快照",
+      "tag": "稳定端口",
+      "pos": [
+        900,
+        500
+      ],
+      "size": [
+        180,
+        66
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/runtime/__init__.py",
+          "label": "状态端口"
+        },
+        {
+          "path": "core/src/lamtools_core/snapshot/__init__.py",
+          "label": "snapshot port"
+        }
+      ]
+    },
+    {
+      "id": "storage-adapters",
+      "type": "database",
+      "label": "存储适配器",
+      "sublabel": "SQLite + 投影",
+      "tag": "出口适配器",
+      "pos": [
+        1120,
+        500
+      ],
+      "size": [
+        160,
+        66
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/app/persistence_host.py",
+          "label": "persistence adapter"
+        },
+        {
+          "path": "core/src/lamtools_core/app/core_db.py",
+          "label": "SQLite"
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "入口适配器",
+      "wraps": [
+        "presentation",
+        "transport"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "核心领域与应用层",
+      "wraps": [
+        "application",
+        "runtime-kernel",
+        "runtime-ports",
+        "extension-api",
+        "event-bus",
+        "persistence-ports"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "出口适配器",
+      "wraps": [
+        "plugin-adapters",
+        "llm-tool-adapters",
+        "storage-adapters"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "presentation-to-transport",
+      "from": "presentation",
+      "to": "transport",
+      "label": "用户操作",
+      "variant": "emphasis",
+      "labelDy": -48
+    },
+    {
+      "id": "transport-to-application",
+      "from": "transport",
+      "to": "application",
+      "label": "命令",
+      "labelAt": [
+        440,
+        260
+      ]
+    },
+    {
+      "id": "application-to-kernel",
+      "from": "application",
+      "to": "runtime-kernel",
+      "label": "执行用例",
+      "variant": "emphasis",
+      "labelAt": [
+        660,
+        390
+      ]
+    },
+    {
+      "id": "kernel-to-ports",
+      "from": "runtime-kernel",
+      "to": "runtime-ports",
+      "label": "消费端口",
+      "variant": "emphasis",
+      "labelAt": [
+        880,
+        260
+      ]
+    },
+    {
+      "id": "ports-to-llm-tools",
+      "from": "runtime-ports",
+      "to": "llm-tool-adapters",
+      "label": "出口调用",
+      "labelAt": [
+        1100,
+        390
+      ]
+    },
+    {
+      "id": "plugin-implements-api",
+      "from": "plugin-adapters",
+      "to": "extension-api",
+      "label": "实现稳定 API",
+      "variant": "dashed",
+      "labelDy": -48
+    },
+    {
+      "id": "extension-to-ports",
+      "from": "extension-api",
+      "to": "runtime-ports",
+      "label": "注册能力",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "via": [
+        [
+          770,
+          220
+        ],
+        [
+          990,
+          220
+        ]
+      ]
+    },
+    {
+      "id": "kernel-to-events",
+      "from": "runtime-kernel",
+      "to": "event-bus",
+      "label": "发出领域事件",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        870,
+        440
+      ]
+    },
+    {
+      "id": "ports-to-persistence",
+      "from": "runtime-ports",
+      "to": "persistence-ports",
+      "label": "状态端口",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        1090,
+        430
+      ]
+    },
+    {
+      "id": "persistence-to-storage",
+      "from": "persistence-ports",
+      "to": "storage-adapters",
+      "label": "事件 / 快照",
+      "labelAt": [
+        1100,
+        590
+      ]
+    },
+    {
+      "id": "events-to-transport",
+      "from": "event-bus",
+      "to": "transport",
+      "label": "向外流式传输",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "bottom",
+      "via": [
+        [
+          770,
+          620
+        ],
+        [
+          335,
+          620
+        ]
+      ],
+      "labelAt": [
+        550,
+        640
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "目标规则",
+      "items": [
+        "***核心循环内核***只编排轮次；应用层只协调用例。",
+        "HTTP、WebSocket、Tauri、SQLite、提供方 SDK 都位于适配器侧。"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "稳定契约",
+      "items": [
+        "***运行时工具包***、运行时状态存储、插件上下文、事件 / 快照端口是稳定扩展面。",
+        "插件只能通过上下文、目录、权限与事件 API 进入核心。"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "迁移结果",
+      "items": [
+        "先从 HTTP / 持久化编排中抽出应用服务。",
+        "再把工具箱、插件引擎、恢复流程拆成可替换端口与适配器。"
+      ]
+    }
+  ]
+}

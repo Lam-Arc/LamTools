@@ -11,6 +11,7 @@ from .models import (
     PluginCLIArgument,
     PluginCLICommand,
     PluginCLIContribution,
+    PluginComposerCommand,
     PluginManifest,
     PluginUIContribution,
     PluginUIMode,
@@ -30,6 +31,7 @@ MANIFEST_CONFIG_SCHEMA_KEY = "configSchema"
 MANIFEST_DESKTOP_KEY = "desktop"
 MANIFEST_UI_KEY = "ui"
 MANIFEST_CLI_KEY = "cli"
+MANIFEST_COMMANDS_KEY = "commands"
 DEFAULT_DESKTOP_CARD_WIDTH = 376
 DEFAULT_DESKTOP_CARD_HEIGHT = 360
 
@@ -276,6 +278,7 @@ class PluginRegistry:
                 raise ValueError(f"plugin desktop.fileDrop must be a boolean: {manifest_path}")
         ui = self._ui_contribution(root, raw.get(MANIFEST_UI_KEY), manifest_path)
         cli = self._cli_contribution(raw.get(MANIFEST_CLI_KEY), manifest_path)
+        commands = self._composer_commands(raw.get(MANIFEST_COMMANDS_KEY), manifest_path)
         backend_entry = self._backend_entry(root, raw.get("backend"), manifest_path)
         enabled = self.state_store.is_enabled(name) if self.state_store else True
         return PluginManifest(
@@ -312,9 +315,62 @@ class PluginRegistry:
             desktop_file_drop=desktop_file_drop,
             ui=ui,
             cli=cli,
+            commands=commands,
             backend_entry=backend_entry,
             raw=dict(raw),
         )
+
+    def _composer_commands(
+        self, value: object, manifest_path: Path
+    ) -> list[PluginComposerCommand]:
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            raise ValueError(f"plugin commands must be an array: {manifest_path}")
+        commands: list[PluginComposerCommand] = []
+        seen: set[str] = set()
+        for index, raw_command in enumerate(value):
+            if not isinstance(raw_command, dict):
+                raise ValueError(f"plugin commands[{index}] must be an object: {manifest_path}")
+            name = str(raw_command.get("name") or "").strip().lstrip("/").lower()
+            if not name or any(char.isspace() for char in name):
+                raise ValueError(f"plugin commands[{index}].name must be one token: {manifest_path}")
+            if name in seen:
+                raise ValueError(f"duplicate plugin command '{name}': {manifest_path}")
+            seen.add(name)
+            kind = str(raw_command.get("kind") or "action").strip().lower()
+            action = str(raw_command.get("action") or "run_action").strip().lower()
+            if kind != "action" or action != "run_action":
+                raise ValueError(
+                    f"plugin command '{name}' currently requires kind=action and action=run_action: {manifest_path}"
+                )
+            operation = str(raw_command.get("operation") or "").strip()
+            payload = raw_command.get("payload") or {}
+            effect = raw_command.get("effect") or {}
+            if not isinstance(payload, dict) or not isinstance(effect, dict):
+                raise ValueError(f"plugin command '{name}' payload/effect must be objects: {manifest_path}")
+            if not operation and not effect:
+                raise ValueError(f"plugin command '{name}' requires operation or effect: {manifest_path}")
+            if effect:
+                effect_type = str(effect.get("type") or "").strip()
+                effect_action = str(effect.get("action") or "").strip()
+                if effect_type != "desktop_plugin" or effect_action != "show":
+                    raise ValueError(f"plugin command '{name}' has unsupported effect: {manifest_path}")
+            commands.append(
+                PluginComposerCommand(
+                    name=name,
+                    title=str(raw_command.get("title") or name).strip() or name,
+                    description=str(raw_command.get("description") or "").strip(),
+                    icon=str(raw_command.get("icon") or "puzzle").strip() or "puzzle",
+                    kind=kind,
+                    action=action,
+                    accepts_args=bool(raw_command.get("acceptsArgs", raw_command.get("accepts_args", False))),
+                    operation=operation,
+                    payload=dict(payload),
+                    effect=dict(effect),
+                )
+            )
+        return commands
 
     def _cli_contribution(
         self, value: object, manifest_path: Path

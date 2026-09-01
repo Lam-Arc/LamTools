@@ -105,6 +105,19 @@ def test_core_cli_exposes_generic_live_watch() -> None:
     assert args.raw is True
 
 
+def test_core_cli_exposes_skill_lifecycle_commands() -> None:
+    parser = build_parser()
+
+    disable = parser.parse_args(["skill", "disable", "reviewer"])
+    delete = parser.parse_args(["skill", "delete", "reviewer", "--yes", "--raw"])
+
+    assert disable.skill_command == "disable"
+    assert disable.name == "reviewer"
+    assert delete.skill_command == "delete"
+    assert delete.yes is True
+    assert delete.raw is True
+
+
 def test_core_cli_watch_uses_opt_in_timeout_and_explicit_machine_approval() -> None:
     parser = build_parser()
 

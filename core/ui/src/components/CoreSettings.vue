@@ -1,10 +1,11 @@
 <template>
   <Teleport to="body">
     <div
+      ref="settingsOverlayEl"
       class="settings-overlay"
       @click.self="requestCloseSettings"
     >
-      <div class="settings-card" :style="settingsThemeStyle">
+      <div ref="settingsCardEl" class="settings-card" :style="settingsThemeStyle">
         <SettingsShell
           :sections="sections"
           title="Core 设置"
@@ -12,109 +13,219 @@
           @close="requestCloseSettings"
         >
           <template #default="{ activeSection }">
-      <section v-if="activeSection === 'models'" class="settings-panel">
-        <header class="settings-title">
-          <h1>模型与供应商</h1>
-          <p>共享 Core 配置。更改会在所有接入 Core 的界面中生效。</p>
+      <section v-if="activeSection === 'models'" class="settings-panel models-panel">
+        <header class="settings-title models-title">
+          <div class="models-title-copy">
+            <h1>模型与供应商</h1>
+            <p>管理模型接入、供应商配置与默认模型选择。</p>
+          </div>
         </header>
 
         <div v-if="noticeText" class="settings-notice">{{ noticeText }}</div>
 
-        <div class="provider-actions">
-          <button class="small-btn primary" type="button" data-provider-create @click="startProviderCreate">新增供应商</button>
-          <button class="small-btn quiet" type="button" data-model-create @click="startModelCreate">新增模型</button>
-          <button v-if="allowEnvironmentImport" class="small-btn quiet" type="button" @click="$emit('import-environment')">从当前环境导入</button>
-          <button class="small-btn quiet" type="button" data-reopen-onboarding @click="$emit('reopen-onboarding')">重新显示首次引导</button>
-        </div>
-
-        <div v-if="providers.length" class="provider-list">
-          <section v-for="provider in providers" :key="provider.id" class="provider-group">
-            <header class="provider-head">
-              <div class="provider-identity">
-                <strong>{{ provider.name || provider.id }}</strong>
-                <span>{{ provider.has_api_key ? '已配置密钥' : '未配置密钥' }} · {{ provider.base_url || provider.id }}</span>
+        <div v-if="providers.length" class="models-workspace settings-surface">
+          <section class="models-overview-bar" aria-label="模型资源概览">
+            <dl class="models-overview-metrics">
+              <div>
+                <dt>默认模型</dt>
+                <dd>{{ defaultModel?.display_name || defaultModel?.model_id || defaultModel?.id || '未设置' }}</dd>
               </div>
-              <div class="row-actions">
-                <button class="text-btn" type="button" :data-provider-edit="provider.id" @click="startProviderUpdate(provider)">编辑</button>
-                <button class="text-btn danger" type="button" :data-provider-delete="provider.id" @click="$emit('delete-provider', provider.id)">删除</button>
+              <div>
+                <dt>当前供应商</dt>
+                <dd>{{ selectedProvider?.name || selectedProvider?.id || '未选择' }}</dd>
+              </div>
+              <div>
+                <dt>已就绪供应商</dt>
+                <dd>{{ configuredProviderCount }} / {{ providerCount }}</dd>
+              </div>
+              <div>
+                <dt>可用模型</dt>
+                <dd>{{ models.length }}</dd>
+              </div>
+            </dl>
+            <div class="models-overview-actions">
+              <button class="small-btn quiet" type="button" data-provider-create @click="startProviderCreate">＋ 新增供应商</button>
+              <button class="small-btn primary" type="button" data-model-create :disabled="!selectedProvider" @click="startSelectedModelCreate">＋ 新增模型</button>
+            </div>
+          </section>
+
+          <div class="models-workspace-body">
+          <aside class="provider-rail" aria-label="供应商列表">
+            <div class="provider-rail-head">
+              <div class="provider-rail-title">
+                <strong>供应商</strong>
+                <span>{{ providerCount }}</span>
+              </div>
+            </div>
+
+            <label class="resource-search provider-search">
+              <span class="sr-only">搜索供应商</span>
+              <input v-model.trim="providerQuery" type="search" placeholder="搜索供应商" />
+            </label>
+
+            <div class="provider-picker" role="listbox" aria-label="选择供应商">
+              <button
+                v-for="provider in filteredProviders"
+                :key="provider.id"
+                class="provider-picker-item"
+                :class="{ 'is-selected': selectedProvider?.id === provider.id }"
+                type="button"
+                role="option"
+                :aria-selected="selectedProvider?.id === provider.id ? 'true' : 'false'"
+                @click="selectProvider(provider.id)"
+              >
+                <span class="provider-picker-mark" aria-hidden="true">{{ (provider.name || provider.id).slice(0, 1).toUpperCase() }}</span>
+                <span class="provider-picker-copy">
+                  <strong>{{ provider.name || provider.id }}</strong>
+                  <span>{{ modelsForProvider(provider.id).length }} 个模型</span>
+                </span>
+                <span class="provider-picker-state" :class="{ 'is-configured': provider.has_api_key }">
+                  <span class="provider-picker-state-dot" aria-hidden="true" />
+                  <span>{{ provider.has_api_key ? '已就绪' : '待配置' }}</span>
+                </span>
+              </button>
+              <div v-if="!filteredProviders.length" class="provider-rail-empty">
+                <strong>没有匹配的供应商</strong>
+                <small>换个关键词试试</small>
+              </div>
+            </div>
+
+            <div class="provider-rail-footer">
+              <button class="provider-create-btn" type="button" data-provider-create @click="startProviderCreate">
+                <span aria-hidden="true">＋</span>
+                <span>新增供应商</span>
+              </button>
+              <div class="provider-rail-links">
+                <button v-if="allowEnvironmentImport" class="text-btn" type="button" @click="$emit('import-environment')">从当前环境导入</button>
+                <button class="text-btn" type="button" data-reopen-onboarding @click="$emit('reopen-onboarding')">重新显示首次引导</button>
+              </div>
+            </div>
+          </aside>
+
+          <section v-if="selectedProvider" class="provider-detail" aria-label="供应商详情">
+            <header class="provider-detail-head">
+              <div class="provider-detail-identity">
+                <span class="provider-detail-context">当前供应商</span>
+                <div class="provider-name-line">
+                  <h2>{{ selectedProvider.name || selectedProvider.id }}</h2>
+                  <span class="provider-type">{{ providerTypeLabel(selectedProvider.api_type) }}</span>
+                </div>
+                <div class="provider-meta">
+                  <span class="provider-url" :title="selectedProvider.base_url || selectedProvider.id">{{ selectedProvider.base_url || selectedProvider.id }}</span>
+                  <span class="provider-state" :class="{ 'is-configured': selectedProvider.has_api_key }">
+                    <span class="provider-state-dot" aria-hidden="true" />
+                    {{ selectedProvider.has_api_key ? '已就绪 · 已配置密钥' : '待配置 · 缺少 API Key' }}
+                  </span>
+                </div>
+              </div>
+              <div class="provider-head-actions">
+                <button class="text-btn" type="button" :data-provider-edit="selectedProvider.id" @click="startProviderUpdate(selectedProvider)">编辑</button>
+                <button class="text-btn danger" type="button" :data-provider-delete="selectedProvider.id" @click="$emit('delete-provider', selectedProvider.id)">删除</button>
               </div>
             </header>
-            <div class="model-list">
-                <div v-for="model in modelsForProvider(provider.id)" :key="model.id" class="model-row">
-                  <div class="model-identity">
-                    <strong>{{ model.display_name || model.model_id || model.id }}</strong>
-                    <span>
-                      {{ model.model_id || model.id }}{{ model.thinking_supported ? ' · 支持推理' : '' }}
-                      <span v-if="model.capability" class="capability-badge" :class="model.capability">{{ model.capability === 'multimodal' ? '多模态' : '文本' }}</span>
-                    </span>
+
+            <section class="model-section">
+              <header class="model-section-head">
+                <div class="model-section-title">
+                  <h2>模型</h2>
+                  <span>{{ selectedProviderModels.length }} 个模型</span>
+                </div>
+                <div class="model-section-tools">
+                  <label class="resource-search model-search">
+                    <span class="sr-only">搜索模型</span>
+                    <input v-model.trim="modelQuery" type="search" placeholder="搜索模型" />
+                  </label>
+                  <button class="small-btn primary" type="button" data-model-create @click="startSelectedModelCreate">＋ 新增模型</button>
+                </div>
+              </header>
+              <div class="model-list">
+                <div v-for="model in filteredSelectedProviderModels" :key="model.id" class="model-row" :class="{ 'is-default': model.is_default }">
+                  <div class="model-leading">
+                    <div class="model-identity">
+                      <div class="model-name-line">
+                        <strong>{{ model.display_name || model.model_id || model.id }}</strong>
+                        <span v-if="model.is_default" class="model-default-badge">当前默认</span>
+                      </div>
+                      <span class="model-meta">
+                        <span class="model-id">{{ model.model_id || model.id }}</span>
+                      </span>
+                    </div>
+                  </div>
+                  <div class="model-capabilities" aria-label="模型能力">
+                    <span class="model-capability">聊天</span>
+                    <span v-if="model.thinking_supported" class="model-capability">推理</span>
+                    <span v-if="model.capability === 'multimodal'" class="model-capability">视觉</span>
+                    <span v-else-if="model.capability === 'text'" class="model-capability">文本</span>
                   </div>
                   <div class="row-actions">
-                    <button class="text-btn" :class="{ active: model.is_default }" type="button" :data-model-default="model.id" @click="$emit('set-default-model', model.id)">
-                      <Star :size="12" :stroke-width="1.8" :fill="model.is_default ? 'currentColor' : 'none'" aria-hidden="true" /> 默认
-                    </button>
+                    <button v-if="!model.is_default" class="text-btn model-default-btn" type="button" :data-model-default="model.id" @click="$emit('set-default-model', model.id)">设为默认</button>
                     <button class="text-btn" type="button" :data-model-edit="model.id" @click="startModelUpdate(model)">编辑</button>
                     <button class="text-btn danger" type="button" :data-model-delete="model.id" @click="$emit('delete-model', model.id)">删除</button>
                   </div>
                 </div>
-                <p v-if="!modelsForProvider(provider.id).length" class="model-empty">暂无模型</p>
+                <div v-if="!filteredSelectedProviderModels.length" class="model-empty">
+                  <div>
+                    <strong>{{ modelQuery ? '没有匹配的模型' : '该供应商下还没有模型' }}</strong>
+                    <span>{{ modelQuery ? '换个关键词试试' : `为 ${selectedProvider.name || selectedProvider.id} 添加第一个模型` }}</span>
+                  </div>
+                  <button v-if="!modelQuery" class="small-btn quiet" type="button" @click="startSelectedModelCreate">新增模型</button>
+                </div>
+              </div>
+            </section>
+          </section>
+
+          <section v-else class="models-empty-state models-empty-state--main" aria-label="供应商空状态">
+            <div class="models-empty-mark" aria-hidden="true"><span>+</span></div>
+            <div class="models-empty-copy">
+              <h2>还没有供应商</h2>
+              <p>从左侧添加一个模型供应商，开始使用 Core。</p>
             </div>
           </section>
+          </div>
         </div>
-        <div v-else class="setting-card">
-          <h3>暂无配置</h3>
-          <p>Core 配置接口尚未返回可用的供应商或模型。</p>
-        </div>
+
+        <section v-else class="models-empty-state models-empty-state--full settings-surface" aria-label="供应商空状态">
+          <div class="models-empty-mark" aria-hidden="true"><span>＋</span></div>
+          <div class="models-empty-copy">
+            <h2>还没有供应商</h2>
+            <p>添加一个 OpenAI Compatible 或其他模型供应商</p>
+          </div>
+          <button class="small-btn primary" type="button" data-provider-create @click="startProviderCreate">新增供应商</button>
+        </section>
       </section>
 
-      <section v-if="activeSection === 'appearance'" class="settings-panel">
+      <section v-if="activeSection === 'appearance'" class="settings-panel settings-panel--appearance">
         <header class="settings-title">
           <h1>界面</h1>
           <p>主题和密度只影响当前 Core 界面。</p>
         </header>
 
-        <div class="setting-card">
-          <h3>界面密度</h3>
-          <div class="density-options" role="group" aria-label="界面密度">
-            <button
-              v-for="option in densityOptions"
-              :key="option.value"
-              type="button"
-              :data-density="option.value"
-              :class="{ active: density === option.value }"
-              @click="$emit('update:density', option.value)"
-            >{{ option.label }}</button>
-          </div>
-          <label v-if="contentWidth" class="field">内容宽度
-            <input
-              :value="contentWidth"
-              type="range"
-              min="560"
-              max="1120"
-              step="20"
-              @input="$emit('update:content-width', Number(($event.target as HTMLInputElement).value))"
-            />
-          </label>
-        </div>
-
         <ThemeEditor
           product-name="LamTools Core"
           content-description="Core 工作区"
+          :density="density"
+          :density-options="densityOptions"
+          :content-width="contentWidth"
+          :theme-mode="themeMode"
+          :effective-theme-mode="effectiveThemeMode"
           :get-stops="getStops"
           :get-angle="getAngle"
           :get-opacity="getOpacity"
           :get-text-color="getTextColor"
           :presets="presets"
-          :presets-by-group="presetsByGroup"
           :theme-preview-style="themePreviewStyle"
           :theme-preview-main-style="themePreviewMainStyle"
           :theme-preview-composer-style="themePreviewComposerStyle"
           :theme-preview-control-style="themePreviewControlStyle"
           @reset-theme="$emit('reset-theme')"
           @apply-preset="(preset) => $emit('apply-preset', preset)"
-          @update-stops="(area, stops) => $emit('update-stops', area, stops)"
-          @update-angle="(area, angle) => $emit('update-angle', area, angle)"
-          @update-opacity="(area, opacity) => $emit('update-opacity', area, opacity)"
-          @update-text-color="(area, color) => $emit('update-text-color', area, color)"
+          @update:theme-mode="(mode) => $emit('update:theme-mode', mode)"
+          @update:density="(value) => $emit('update:density', value as CoreSettingsDensity)"
+          @update:content-width="(value) => $emit('update:content-width', value)"
+          @update:stops="(area: ThemeArea, stops: ThemeStop[]) => $emit('update-stops', area, stops)"
+          @update:angle="(area: ThemeArea, angle: number) => $emit('update-angle', area, angle)"
+          @update:opacity="(area: ThemeArea, opacity: number) => $emit('update-opacity', area, opacity)"
+          @update:text-color="(area: ThemeArea, color: string) => $emit('update-text-color', area, color)"
           @add-stop="(area) => $emit('add-stop', area)"
           @remove-stop="(area, index) => $emit('remove-stop', area, index)"
           @sort-stops="(area) => $emit('sort-stops', area)"
@@ -130,54 +241,136 @@
         </KeepAlive>
       </section>
 
-      <section v-if="activeSection === 'permissions'" class="settings-panel">
+      <section v-if="activeSection === 'permissions'" class="settings-panel permissions-panel">
         <header class="settings-title">
-          <h1>权限策略</h1>
+          <h1>权限</h1>
+          <p>控制新会话的默认权限；当前任务可以在输入框中临时调整。</p>
         </header>
-        <article class="setting-card">
-          <h3>放行模式</h3>
-          <div class="permission-list">
-            <div v-for="tier in permissionTiers" :key="tier.id" class="permission-row">
-              <div class="permission-row-top" :class="{ active: permissionMode === tier.id }" @click="$emit('update-permission-mode', tier.id)" role="button" tabindex="0" :aria-pressed="permissionMode === tier.id ? 'true' : 'false'" :aria-label="'选择' + tier.label" @keydown.enter.prevent="$emit('update-permission-mode', tier.id)" @keydown.space.prevent="$emit('update-permission-mode', tier.id)">
-                <button type="button" class="permission-row-header" @click.stop="expandedTier = expandedTier === tier.id ? null : tier.id">
-                  {{ tier.label }}
+
+        <div class="settings-surface permissions-surface">
+          <section class="permission-summary" aria-label="当前默认状态">
+            <div class="permission-summary-copy">
+              <span class="permission-section-label">当前默认状态</span>
+              <h2>新会话将从这里开始</h2>
+              <p>这些设置只作为新会话的起点，不会静默改变已经运行的任务。</p>
+            </div>
+            <dl class="permission-summary-metrics">
+              <div>
+                <dt>权限审批</dt>
+                <dd>{{ permissionPresetLabel }}</dd>
+              </div>
+              <div>
+                <dt>文件边界</dt>
+                <dd>{{ effectiveAllowAccessOutsideWorkdir ? '允许工作目录外' : '仅限工作目录' }}</dd>
+              </div>
+            </dl>
+          </section>
+
+          <section class="permission-section">
+            <div class="permission-section-heading">
+              <div>
+                <h2>新会话默认</h2>
+                <p>权限审批与输入框保持一致；工具清单由“工具模式”管理。</p>
+              </div>
+              <span class="permission-section-hint">当前会话可临时切换</span>
+            </div>
+
+            <div class="permission-setting-group">
+              <div class="permission-setting-copy">
+                <strong>权限审批</strong>
+                <span>决定工具执行前是否需要你确认。</span>
+              </div>
+              <div class="permission-choice-grid permission-choice-grid--approval" role="group" aria-label="权限审批">
+                <button
+                  v-for="option in permissionPresetOptions"
+                  :key="option.id"
+                  type="button"
+                  class="permission-choice"
+                  :class="{ 'is-selected': permissionPreset === option.id }"
+                  :aria-label="'选择' + option.label"
+                  :aria-pressed="permissionPreset === option.id ? 'true' : 'false'"
+                  :data-default-permission-preset="option.id"
+                  @click="selectPermissionPreset(option.id)"
+                >
+                  <span class="permission-choice-state" aria-hidden="true">
+                    <span v-if="permissionPreset === option.id">✓</span>
+                  </span>
+                  <span class="permission-choice-copy">
+                    <strong>{{ option.label }}</strong>
+                    <small>{{ option.description }}</small>
+                  </span>
                 </button>
-                <span class="permission-radio" :class="{ active: permissionMode === tier.id }" aria-hidden="true">
-                  <span class="permission-radio-dot" />
-                </span>
-              </div>
-              <div v-if="expandedTier === tier.id" class="permission-tools">
-                <template v-if="tier.id === 'full_edit'">
-                  <p class="permission-tools-full">完全放行</p>
-                </template>
-                <template v-else>
-                  <div v-for="tool in tier.tools" :key="tool" class="permission-tool-row">{{ tool }}</div>
-                </template>
               </div>
             </div>
-          </div>
-        </article>
-        <article class="setting-card">
-          <h3>工作目录访问</h3>
-          <div class="dream-row">
-            <div class="dream-toggle">
-          <button
-            type="button"
-            class="toggle-btn"
-            data-allow-outside-workdir
-            :class="{ 'is-on': allowAccessOutsideWorkdir }"
-            :aria-label="'允许访问工作目录以外'"
-            :aria-pressed="allowAccessOutsideWorkdir ? 'true' : 'false'"
-            @click="toggleAllowOutsideWorkdir"
-          >
-            <ToggleRight v-if="allowAccessOutsideWorkdir" :size="16" :stroke-width="1.8" aria-hidden="true" />
-            <ToggleLeft v-else :size="16" :stroke-width="1.8" aria-hidden="true" />
-          </button>
-              <span class="dream-toggle-label">允许访问工作目录以外</span>
+
+          </section>
+
+          <section class="permission-section permission-boundary-section">
+            <div class="permission-section-heading">
+              <div>
+                <h2>安全边界</h2>
+                <p>控制文件操作的默认范围；更高风险的规则仍由 Core 强制执行。</p>
+              </div>
             </div>
-            <span class="muted">开启后 Agent 可读写工作目录之外的任意路径（敏感文件仍受拦截）</span>
-          </div>
-        </article>
+
+            <div class="permission-boundary-row">
+              <div class="permission-setting-copy">
+                <strong>工作目录外访问</strong>
+                <span>{{ permissionPreset === 'full_access' ? '完全访问模式会临时允许访问工作目录之外的路径。' : allowAccessOutsideWorkdir ? '允许读写工作目录之外的路径。' : '仅允许访问当前工作目录内的路径。' }}</span>
+              </div>
+              <button
+                type="button"
+                class="permission-switch"
+                data-allow-outside-workdir
+                :class="{ 'is-on': effectiveAllowAccessOutsideWorkdir }"
+                :disabled="permissionPreset === 'full_access'"
+                aria-label="允许访问工作目录以外"
+                :aria-pressed="effectiveAllowAccessOutsideWorkdir ? 'true' : 'false'"
+                @click="toggleAllowOutsideWorkdir"
+              >
+                <span class="permission-switch-track" aria-hidden="true"><span /></span>
+                <span>{{ permissionPreset === 'full_access' ? '完全访问已包含' : allowAccessOutsideWorkdir ? '已允许' : '仅工作目录' }}</span>
+              </button>
+            </div>
+
+            <ul class="permission-safety-list">
+              <li><span class="permission-safety-dot" aria-hidden="true" />敏感路径（如 .env、SSH 凭据）写入和编辑仍会阻断。</li>
+              <li><span class="permission-safety-dot" aria-hidden="true" />高危命令即使自动审批，也仍需运行前确认。</li>
+              <li><span class="permission-safety-dot" aria-hidden="true" />插件与 MCP 的 hard block 不能从此页解除。</li>
+            </ul>
+          </section>
+
+          <section class="permission-session-note" aria-label="当前会话说明">
+            <span class="permission-session-note-mark" aria-hidden="true">i</span>
+            <div>
+              <strong>当前会话</strong>
+              <p>输入框里的“询问 / 自动 / 完全访问”只作用于当前会话或当前运行；任务接受后会冻结权限快照。</p>
+            </div>
+          </section>
+
+          <details class="permission-related-settings">
+            <summary>
+              <span>
+                <strong>相关设置</strong>
+                <small>逐工具白名单、工具模式与扩展权限分别管理</small>
+              </span>
+            </summary>
+            <div class="permission-related-list">
+              <div>
+                <strong>工具模式</strong>
+                <span>控制模型能看到哪些工具，以及工具在思索 / 执行模式下的暴露方式。</span>
+              </div>
+              <div>
+                <strong>插件与 MCP</strong>
+                <span>扩展自身的审批等级与 hard block 由各自的管理入口负责。</span>
+              </div>
+              <div>
+                <strong>高级工具白名单</strong>
+                <span><code>access_tools.jsonc</code> 负责逐工具能力边界，不在这里重复配置。</span>
+              </div>
+            </div>
+          </details>
+        </div>
       </section>
 
       <section v-if="activeSection === 'agents'" class="settings-panel">
@@ -185,6 +378,7 @@
           <h1>上下文与记忆</h1>
           <p>全局上下文三件套，对所有项目生效。注入顺序：全局 AGENTS.md（优先级 5）→ 全局 memory.md（15）→ 项目 AGENTS.md / MEMORY.md（10 / 20）；load_context 的 addition/except 全局叠加到每个工作区。</p>
         </header>
+        <div class="settings-surface settings-surface--stack">
         <article class="setting-card">
           <div class="subhead">
             <span class="muted subhead-title">
@@ -335,6 +529,7 @@
           <p v-if="dreamingError" class="skill-error" role="alert">{{ dreamingError }}</p>
           <p class="hook-meta">内容写入 <code>&lt;workRoot&gt;/MEMORY.md</code>，下个会话自动加载；<code>/dream</code> 命令始终可手动触发；短期记忆存 SQLite（<code>core_memories</code> 表）。CLI：<code>core memory dream show/config</code>。</p>
         </article>
+        </div>
       </section>
 
       <section v-if="activeSection === 'subagent'" class="settings-panel">
@@ -348,6 +543,7 @@
           <h1>关于与更新</h1>
           <p>当前版本与软件更新（更新源：GitHub Releases）。</p>
         </header>
+        <div class="settings-surface settings-surface--stack">
         <article class="setting-card">
           <h3>版本信息</h3>
           <div class="about-version-row">
@@ -393,6 +589,7 @@
             <span class="muted">发现新版本时会在顶部显示提示条</span>
           </div>
         </article>
+        </div>
       </section>
     </template>
   </SettingsShell>
@@ -401,50 +598,73 @@
            内联渲染即可：Teleport 目标是自身祖先（settings-card），传送等同原地；
            且 ref+Teleport 组合在测试环境（Teleport stub）会触发渲染递归。 -->
       <div v-if="providerEditor || modelEditor" class="editor-overlay" @click.self="closeEditors">
-          <div class="editor-popover">
+          <div ref="editorPopoverEl" class="editor-popover" :class="{ 'editor-popover--model': Boolean(modelEditor) }">
             <!-- Validation errors must render INSIDE the popover — the outer
                  noticeText sits behind the overlay's dim/blur and was
                  invisible to the user (audit 17 S3). -->
             <p v-if="editorError" class="skill-error editor-error" role="alert">{{ editorError }}</p>
             <!-- Provider editor -->
             <form v-if="providerEditor" :data-provider-form="providerEditor.mode" class="config-form" @submit.prevent="submitProvider" @input="markSettingsDirty">
-              <div class="editor-popover-head">
-                <h3>{{ providerEditor.mode === 'create' ? '新增供应商' : '编辑供应商' }}</h3>
+              <div class="editor-popover-head field-wide">
+                <div>
+                  <span class="editor-overline">供应商配置</span>
+                  <h3>{{ providerEditor.mode === 'create' ? '新增供应商' : '编辑供应商' }}</h3>
+                  <p>{{ providerEditor.mode === 'create' ? '连接一个可用的模型服务。' : '更新连接信息，已有密钥不会被覆盖。' }}</p>
+                </div>
                 <button type="button" class="editor-popover-close" @click="providerEditor = null">
                   <X :size="14" :stroke-width="1.8" aria-hidden="true" />
                 </button>
               </div>
-              <label v-if="providerEditor.mode === 'create'" class="field">官方模板
-                <UiSelect
-                  :model-value="providerEditor.preset_id"
-                  :options="providerPresetOptions"
-                  placeholder="自定义"
-                  aria-label="官方模板"
-                  @update:model-value="onProviderPresetChange"
-                />
-              </label>
-              <div v-if="providerEditor.preset_id" class="preset-summary field-wide">
-                <strong>{{ providerEditor.name }}</strong>
-                <span>{{ providerEditor.base_url }} · 将自动添加模板内模型</span>
-              </div>
-              <label v-if="providerEditor.mode === 'update' || !providerEditor.preset_id" class="field">名称
-                <input v-model.trim="providerEditor.name" data-provider-name required />
-              </label>
-              <label v-if="providerEditor.mode === 'update' || !providerEditor.preset_id" class="field">服务地址
-                <input v-model.trim="providerEditor.base_url" data-provider-base-url type="url" required />
-              </label>
-              <label class="field">API Key
-                <input
-                  v-model="providerEditor.api_key"
-                  data-provider-api-key
-                  type="password"
-                  autocomplete="new-password"
-                  :required="providerEditor.mode === 'create'"
-                  :placeholder="providerEditor.mode === 'update' ? '留空以保留现有密钥' : ''"
-                />
-              </label>
-              <details class="settings-advanced field-wide">
-                <summary>高级设置</summary>
+              <section v-if="providerEditor.mode === 'create'" class="editor-section field-wide">
+                <div class="editor-section-heading">
+                  <strong>快速开始</strong>
+                  <span>使用官方模板自动填充连接信息和模型。</span>
+                </div>
+                <label class="field">官方模板
+                  <UiSelect
+                    :model-value="providerEditor.preset_id"
+                    :options="providerPresetOptions"
+                    placeholder="自定义"
+                    aria-label="官方模板"
+                    @update:model-value="onProviderPresetChange"
+                  />
+                </label>
+                <div v-if="providerEditor.preset_id" class="preset-summary">
+                  <strong>{{ providerEditor.name }}</strong>
+                  <span>{{ providerEditor.base_url }} · 将自动添加模板内模型</span>
+                </div>
+              </section>
+
+              <section class="editor-section editor-section--grid field-wide">
+                <div class="editor-section-heading field-wide">
+                  <strong>连接信息</strong>
+                  <span>这些信息用于连接模型服务。</span>
+                </div>
+                <label v-if="providerEditor.mode === 'update' || !providerEditor.preset_id" class="field">名称
+                  <input v-model.trim="providerEditor.name" data-provider-name required />
+                </label>
+                <label v-if="providerEditor.mode === 'update' || !providerEditor.preset_id" class="field">服务地址
+                  <input v-model.trim="providerEditor.base_url" data-provider-base-url type="url" required />
+                </label>
+                <label class="field field-wide">API Key
+                  <input
+                    v-model="providerEditor.api_key"
+                    data-provider-api-key
+                    type="password"
+                    autocomplete="new-password"
+                    :required="providerEditor.mode === 'create'"
+                    :placeholder="providerEditor.mode === 'update' ? '留空以保留现有密钥' : ''"
+                  />
+                </label>
+              </section>
+
+              <details class="settings-advanced editor-section field-wide">
+                <summary>
+                  <span>
+                    <strong>高级设置</strong>
+                    <small>接口类型与适配参数</small>
+                  </span>
+                </summary>
                 <div class="advanced-fields">
                   <label class="field">接口类型
                     <UiSelect
@@ -468,60 +688,47 @@
             </form>
 
             <!-- Model editor -->
-            <form v-if="modelEditor" :data-model-form="modelEditor.mode" class="config-form" @submit.prevent="submitModel" @input="markSettingsDirty">
-              <div class="editor-popover-head">
-                <h3>{{ modelEditor.mode === 'create' ? '新增模型' : '编辑模型' }}</h3>
+            <form v-if="modelEditor" :data-model-form="modelEditor.mode" class="config-form model-editor-form" @submit.prevent="submitModel" @input="markSettingsDirty">
+              <div class="editor-popover-head field-wide">
+                <div>
+                  <span class="editor-overline">模型配置</span>
+                  <h3>{{ modelEditor.mode === 'create' ? '新增模型' : '编辑模型' }}</h3>
+                  <p>{{ modelEditor.mode === 'create' ? '为供应商添加一个可调用的模型。' : '更新模型标识、能力和运行参数。' }}</p>
+                </div>
                 <button type="button" class="editor-popover-close" @click="modelEditor = null">
                   <X :size="14" :stroke-width="1.8" aria-hidden="true" />
                 </button>
               </div>
-              <label class="field">供应商
-                <UiSelect
-                  :model-value="modelEditor.provider_id"
-                  :options="providerOptions"
-                  data-model-provider-id
-                  aria-label="供应商"
-                  @update:model-value="modelEditor!.provider_id = $event"
-                />
-              </label>
-              <label class="field">模型标识
-                <input v-model.trim="modelEditor.model_id" data-model-id required />
-              </label>
-              <label class="field">显示名称
-                <input v-model.trim="modelEditor.display_name" data-model-display-name placeholder="选填" />
-              </label>
-              <label class="field field-wide">备注
-                <textarea v-model.trim="modelEditor.notes" rows="2" spellcheck="false" placeholder="选填，如限速、用途、注意事项等"></textarea>
-              </label>
-              <details class="settings-advanced field-wide">
-                <summary>高级参数</summary>
-                <div class="advanced-fields model-advanced-fields">
-                  <label class="field">上下文窗口
-                    <input v-model.number="modelEditor.context_window" type="number" min="1" />
+              <section class="editor-section model-editor-basics field-wide">
+                <div class="model-editor-provider">
+                  <span>添加到</span>
+                  <UiSelect
+                    :model-value="modelEditor.provider_id"
+                    :options="providerOptions"
+                    data-model-provider-id
+                    aria-label="供应商"
+                    @update:model-value="modelEditor!.provider_id = $event"
+                  />
+                </div>
+                <label class="field model-editor-id">模型 ID
+                  <input v-model.trim="modelEditor.model_id" data-model-id required placeholder="例如 deepseek-v4-flash" />
+                  <small>向供应商 API 发送的模型标识。</small>
+                </label>
+                <div class="model-editor-secondary">
+                  <label class="field">显示名称
+                    <input v-model.trim="modelEditor.display_name" data-model-display-name placeholder="选填，留空时使用模型 ID" />
                   </label>
-                  <label class="field">最大输出
-                    <input v-model.number="modelEditor.max_output_tokens" type="number" min="1" />
+                  <label class="field">备注
+                    <textarea v-model.trim="modelEditor.notes" rows="2" spellcheck="false" placeholder="选填，如限速、用途、注意事项等"></textarea>
                   </label>
-                  <label class="field">推理预算
-                    <input v-model.number="modelEditor.thinking_budget" type="number" min="0" />
-                  </label>
-                  <label class="field">Temperature
-                    <input v-model.number="modelEditor.temperature" type="number" min="0" max="2" step="0.1" />
-                  </label>
-                  <div class="field checkbox-field">
-                    <button
-                      type="button"
-                      class="toggle-btn"
-                      :class="{ 'is-on': modelEditor.thinking_supported }"
-                      aria-label="支持推理"
-                      :aria-pressed="modelEditor.thinking_supported ? 'true' : 'false'"
-                      @click="modelEditor.thinking_supported = !modelEditor.thinking_supported"
-                    >
-                      <ToggleRight v-if="modelEditor.thinking_supported" :size="16" :stroke-width="1.8" aria-hidden="true" />
-                      <ToggleLeft v-else :size="16" :stroke-width="1.8" aria-hidden="true" />
-                    </button>
-                    <span>支持推理</span>
-                  </div>
+                </div>
+              </section>
+              <section class="editor-section model-editor-capabilities field-wide">
+                <div class="editor-section-heading">
+                  <strong>能力</strong>
+                  <span>决定模型是否接收图片，以及是否启用推理参数。</span>
+                </div>
+                <div class="model-editor-capability-controls">
                   <label class="field">能力分类
                     <UiSelect
                       :model-value="modelEditor.capability ?? ''"
@@ -530,6 +737,45 @@
                       aria-label="能力分类"
                       @update:model-value="modelEditor!.capability = $event ?? ''"
                     />
+                  </label>
+                  <div class="model-reasoning-control">
+                    <div>
+                      <strong>支持推理</strong>
+                      <span>启用推理预算</span>
+                    </div>
+                    <button
+                      type="button"
+                      class="toggle-btn"
+                      :class="{ 'is-on': modelEditor.thinking_supported }"
+                      aria-label="支持推理"
+                      :aria-pressed="modelEditor.thinking_supported ? 'true' : 'false'"
+                      @click="modelEditor.thinking_supported = !modelEditor.thinking_supported"
+                    >
+                      <ToggleRight v-if="modelEditor.thinking_supported" :size="18" :stroke-width="1.8" aria-hidden="true" />
+                      <ToggleLeft v-else :size="18" :stroke-width="1.8" aria-hidden="true" />
+                    </button>
+                  </div>
+                </div>
+              </section>
+              <details class="settings-advanced model-editor-runtime field-wide">
+                <summary>
+                  <span>
+                    <strong>运行与适配</strong>
+                    <small>上下文、输出、Temperature 与高级适配</small>
+                  </span>
+                </summary>
+                <div class="advanced-fields model-advanced-fields">
+                  <label class="field">上下文窗口
+                    <input v-model.number="modelEditor.context_window" type="number" min="1" />
+                  </label>
+                  <label class="field">最大输出
+                    <input v-model.number="modelEditor.max_output_tokens" type="number" min="1" />
+                  </label>
+                  <label class="field">Temperature
+                    <input v-model.number="modelEditor.temperature" type="number" min="0" max="2" step="0.1" />
+                  </label>
+                  <label class="field">推理预算
+                    <input v-model.number="modelEditor.thinking_budget" type="number" min="0" />
                   </label>
                   <label class="field field-wide">高级适配 JSON
                     <textarea v-model="modelEditor.extra_json" rows="5" spellcheck="false" placeholder="{}"></textarea>
@@ -549,15 +795,22 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { Star, ToggleLeft, ToggleRight, X } from 'lucide-vue-next'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { gsap } from 'gsap'
+import { ToggleLeft, ToggleRight, X } from 'lucide-vue-next'
 import { PROVIDER_PRESETS } from '../data/provider-presets'
 import { THEME_PRESETS } from '../data/theme-presets'
+import {
+  CORE_PERMISSION_PRESET_DESCRIPTIONS,
+  CORE_PERMISSION_PRESET_LABELS,
+  type CorePermissionPreset,
+} from '../composer/execution'
 import {
   gradientFromStops,
   relativeLuminance,
   type ThemeArea,
   type ThemeData,
+  type ThemeMode,
   type ThemePreset,
   type ThemeStop,
 } from '../helpers/theme'
@@ -635,8 +888,10 @@ const props = defineProps<{
   density: CoreSettingsDensity
   theme: ThemeData
   contentWidth?: number
+  themeMode?: ThemeMode
+  effectiveThemeMode?: 'light' | 'dark'
   allowEnvironmentImport?: boolean
-  permissionMode?: 'read_only' | 'limited_edit' | 'full_edit'
+  permissionPreset?: CorePermissionPreset
   allowAccessOutsideWorkdir?: boolean
   requestRpc?: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>
   updateState?: CoreUpdateState
@@ -646,9 +901,10 @@ const emit = defineEmits<{
   close: []
   'update:density': [density: CoreSettingsDensity]
   'update:content-width': [width: number]
+  'update:theme-mode': [mode: ThemeMode]
   'import-environment': []
   'reopen-onboarding': []
-  'update-permission-mode': [mode: 'read_only' | 'limited_edit' | 'full_edit']
+  'update-permission-preset': [preset: CorePermissionPreset]
   'update-allow-outside-workdir': [value: boolean]
   'reset-theme': []
   'apply-preset': [preset: ThemePreset]
@@ -711,8 +967,6 @@ const noticeText = ref('')
 // Validation feedback shown INSIDE the editor overlay — noticeText renders
 // behind the overlay and was invisible while editing (audit 17 S3).
 const editorError = ref('')
-const expandedTier = ref<string | null>(null)
-
 // ── Global AGENTS.md (项目规则) editor state ──
 const agentsDraft = ref('')
 const agentsLoading = ref(false)
@@ -923,25 +1177,67 @@ const {
   download: downloadUpdate,
 } = update
 
-const permissionMode = computed(() => props.permissionMode || 'full_edit')
+const permissionPreset = computed<CorePermissionPreset>(() => (
+  props.permissionPreset === 'auto' || props.permissionPreset === 'full_access'
+    ? props.permissionPreset
+    : 'ask'
+))
+const permissionPresetLabel = computed(() => CORE_PERMISSION_PRESET_LABELS[permissionPreset.value])
+const effectiveAllowAccessOutsideWorkdir = computed(() => (
+  permissionPreset.value === 'full_access' || Boolean(props.allowAccessOutsideWorkdir)
+))
 function toggleAllowOutsideWorkdir() {
-  emit('update-allow-outside-workdir', !props.allowAccessOutsideWorkdir)
+  if (permissionPreset.value === 'full_access') return
+  emit('update-allow-outside-workdir', !Boolean(props.allowAccessOutsideWorkdir))
 }
-const permissionTiers = [
-  {
-    id: 'read_only' as const, label: '只读调查',
-    tools: ['read_file', 'list_dir', 'search_files', 'search_content', 'web_search', 'web_fetch', 'git_status', 'git_diff', 'load_skill', 'sub_agent'],
-  },
-  {
-    id: 'limited_edit' as const, label: '有限编辑',
-    tools: ['read_file', 'list_dir', 'search_files', 'search_content', 'web_search', 'web_fetch', 'git_status', 'git_diff', 'load_skill', 'sub_agent', 'write_file', 'edit_file'],
-  },
-  {
-    id: 'full_edit' as const, label: '完全编辑',
-    tools: [] as string[],
-  },
-]
+const permissionPresetOptions = (['ask', 'auto', 'full_access'] as CorePermissionPreset[]).map((id) => ({
+  id,
+  label: CORE_PERMISSION_PRESET_LABELS[id],
+  description: CORE_PERMISSION_PRESET_DESCRIPTIONS[id],
+}))
+
+function selectPermissionPreset(preset: CorePermissionPreset) {
+  emit('update-permission-preset', preset)
+}
 const providerPresets = PROVIDER_PRESETS
+
+const providerCount = computed(() => props.providers.length)
+const configuredProviderCount = computed(() => props.providers.filter(provider => provider.has_api_key).length)
+const selectedProviderId = ref<string | null>(null)
+const providerQuery = ref('')
+const modelQuery = ref('')
+const selectedProvider = computed(() =>
+  props.providers.find(provider => provider.id === selectedProviderId.value) || props.providers[0] || null,
+)
+const defaultModel = computed(() => props.models.find(model => model.is_default) || null)
+const selectedProviderModels = computed(() =>
+  selectedProvider.value
+    ? props.models.filter(model => model.provider_id === selectedProvider.value?.id)
+    : [],
+)
+const filteredProviders = computed(() => {
+  const query = providerQuery.value.toLocaleLowerCase()
+  if (!query) return props.providers
+  return props.providers.filter(provider => [provider.name, provider.id, provider.api_type]
+    .some(value => String(value || '').toLocaleLowerCase().includes(query)))
+})
+const filteredSelectedProviderModels = computed(() => {
+  const query = modelQuery.value.toLocaleLowerCase()
+  if (!query) return selectedProviderModels.value
+  return selectedProviderModels.value.filter(model => [model.display_name, model.model_id, model.id, model.capability]
+    .some(value => String(value || '').toLocaleLowerCase().includes(query)))
+})
+
+function providerTypeLabel(apiType?: string): string {
+  if (apiType === 'anthropic') return 'Anthropic'
+  if (apiType === 'openai') return 'OpenAI compatible'
+  return apiType || '自定义接口'
+}
+
+function selectProvider(providerId: string) {
+  selectedProviderId.value = providerId
+  modelQuery.value = ''
+}
 
 // ── UiSelect option lists for provider/model editors ──
 const providerPresetOptions = computed(() => [
@@ -1111,12 +1407,16 @@ function applyProviderPreset() {
   editor.extra_json = JSON.stringify(editor.extra, null, 2)
 }
 
-function startModelCreate() {
-  if (!props.providers.length) {
+function startSelectedModelCreate() {
+  const provider = selectedProvider.value
+  if (!provider) {
     noticeText.value = '请先新增供应商，再添加模型'
     return
   }
-  const provider = props.providers[0]
+  startModelCreateForProvider(provider)
+}
+
+function startModelCreateForProvider(provider: CoreSettingsProvider) {
   modelEditor.value = {
     mode: 'create',
     provider_id: provider?.id || '',
@@ -1205,10 +1505,6 @@ function getTextColor(area: ThemeArea): string {
   return props.theme[`${area}Text` as keyof ThemeData] as string
 }
 
-function presetsByGroup(group: ThemePreset['group']): ThemePreset[] {
-  return THEME_PRESETS.filter((preset) => preset.group === group)
-}
-
 const presets = THEME_PRESETS
 
 // ── Unsaved-changes guard (audit 17 S3) ─────────────────────────
@@ -1216,6 +1512,47 @@ const presets = THEME_PRESETS
 // save, makes a close without confirmation risky (Esc / backdrop click /
 // header close all discard silently today).
 const settingsDirty = ref(false)
+const settingsOverlayEl = ref<HTMLElement | null>(null)
+const settingsCardEl = ref<HTMLElement | null>(null)
+const editorPopoverEl = ref<HTMLElement | null>(null)
+
+let motionContext: gsap.Context | null = null
+let motionMedia: gsap.MatchMedia | null = null
+let settingsEnterTimeline: gsap.core.Timeline | null = null
+let editorEnterTimeline: gsap.core.Timeline | null = null
+let motionEnabled = false
+
+function animateEditorEnter() {
+  if (!motionEnabled || !motionContext || !editorPopoverEl.value) return
+  const editor = editorPopoverEl.value
+  const sections = Array.from(editor.querySelectorAll<HTMLElement>('.editor-popover-head, .editor-section, .settings-advanced, .editor-actions'))
+  editorEnterTimeline?.kill()
+  motionContext.add(() => {
+    editorEnterTimeline = gsap.timeline({ defaults: { overwrite: 'auto' } })
+    editorEnterTimeline
+      .fromTo(
+        editor,
+        { autoAlpha: 0, y: 10, scale: 0.975, transformOrigin: '50% 40%' },
+        { autoAlpha: 1, y: 0, scale: 1, duration: 0.28, ease: 'back.out(1.1)' },
+      )
+      .fromTo(
+        sections,
+        { autoAlpha: 0, y: 6 },
+        { autoAlpha: 1, y: 0, duration: 0.2, ease: 'power3.out', stagger: 0.035 },
+        '>-0.16',
+      )
+      .set([editor, ...sections], { clearProps: 'opacity,visibility,transform' })
+  })
+}
+
+watch(
+  () => Boolean(providerEditor.value || modelEditor.value),
+  async (isOpen) => {
+    if (!isOpen) return
+    await nextTick()
+    animateEditorEnter()
+  },
+)
 
 function markSettingsDirty() {
   settingsDirty.value = true
@@ -1234,12 +1571,46 @@ function onKeydown(e: KeyboardEvent) {
 
 onMounted(() => {
   document.addEventListener('keydown', onKeydown)
+  if (settingsOverlayEl.value && settingsCardEl.value) {
+    motionContext = gsap.context(() => {}, settingsOverlayEl.value)
+    motionMedia = gsap.matchMedia()
+    motionMedia.add('(prefers-reduced-motion: no-preference)', () => {
+      motionEnabled = true
+      motionContext?.add(() => {
+        settingsEnterTimeline = gsap.timeline({ defaults: { overwrite: 'auto' } })
+        settingsEnterTimeline
+          .fromTo(
+            settingsOverlayEl.value,
+            { autoAlpha: 0 },
+            { autoAlpha: 1, duration: 0.16, ease: 'power1.out' },
+          )
+          .fromTo(
+            settingsCardEl.value,
+            { autoAlpha: 0, y: 12, scale: 0.985, transformOrigin: '50% 40%' },
+            { autoAlpha: 1, y: 0, scale: 1, duration: 0.32, ease: 'back.out(1.1)' },
+            '<',
+          )
+          .set([settingsOverlayEl.value, settingsCardEl.value], { clearProps: 'opacity,visibility,transform' })
+      })
+      return () => { motionEnabled = false }
+    })
+  }
   void fetchGlobalAgentsMd()
   void fetchGlobalMemory()
   void fetchLoadContext()
   void fetchDreamingSettings()
 })
-onUnmounted(() => document.removeEventListener('keydown', onKeydown))
+onUnmounted(() => {
+  document.removeEventListener('keydown', onKeydown)
+  settingsEnterTimeline?.kill()
+  editorEnterTimeline?.kill()
+  motionMedia?.revert()
+  motionContext?.revert()
+  settingsEnterTimeline = null
+  editorEnterTimeline = null
+  motionMedia = null
+  motionContext = null
+})
 </script>
 
 <style scoped>
@@ -1708,5 +2079,2661 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
   display: flex;
   gap: 8px;
   margin-top: 12px;
+}
+
+/* ── 模型与供应商：资源管理页 ── */
+.models-panel {
+  gap: var(--space-5);
+}
+
+.models-title {
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-5);
+}
+
+.models-title-copy {
+  min-width: 0;
+}
+
+.models-title-copy p {
+  max-width: 58ch;
+}
+
+.models-header-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.models-header-actions .small-btn,
+.model-empty .small-btn,
+.models-empty-state .small-btn {
+  min-height: 36px;
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-4);
+  font-weight: 650;
+}
+
+.models-header-actions .small-btn.quiet {
+  border: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 12%, transparent);
+}
+
+.models-overview {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  border-top: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 12%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 12%, transparent);
+}
+
+.models-stat,
+.models-overview-default {
+  min-width: 0;
+  min-height: 68px;
+  padding: var(--space-3) var(--space-4);
+  display: grid;
+  align-content: center;
+  gap: var(--space-1);
+}
+
+.models-stat + .models-stat,
+.models-overview-default {
+  border-left: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 9%, transparent);
+}
+
+.models-stat span,
+.models-overview-default span {
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 54%, transparent);
+  font-size: 11px;
+}
+
+.models-stat strong {
+  color: var(--settings-main-text, var(--theme-main-text, #fff));
+  font-size: 18px;
+  line-height: 1;
+}
+
+.models-overview-default {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  column-gap: var(--space-3);
+}
+
+.models-overview-default strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--settings-main-text, var(--theme-main-text, #fff));
+  font-size: 13px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.models-overview-default .is-unset {
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 48%, transparent);
+  font-weight: 550;
+}
+
+.models-secondary-actions {
+  min-width: 0;
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 58%, transparent);
+  font-size: 12px;
+}
+
+.models-secondary-actions > span:first-child {
+  color: var(--settings-main-text, var(--theme-main-text, #fff));
+  font-weight: 650;
+}
+
+.models-secondary-summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.models-secondary-spacer {
+  flex: 1 1 auto;
+}
+
+.models-secondary-actions .text-btn {
+  min-height: 28px;
+  padding-inline: var(--space-2);
+}
+
+.provider-list {
+  display: grid;
+  gap: var(--space-4);
+  border: 0;
+}
+
+.provider-group,
+.provider-group + .provider-group {
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 13%, transparent);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 2%, transparent);
+}
+
+.provider-head {
+  min-height: 76px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  background: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 4%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 9%, transparent);
+}
+
+.provider-mark {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 10%, transparent);
+  color: var(--settings-main-text, var(--theme-main-text, #fff));
+  font-size: 15px;
+  font-weight: 750;
+}
+
+.provider-name-line,
+.provider-meta,
+.model-name-line,
+.model-meta {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+
+.provider-name-line {
+  gap: var(--space-2);
+}
+
+.provider-head strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--settings-main-text, var(--theme-main-text, #fff));
+  font-size: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.provider-state {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-top: 0;
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 52%, transparent);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.provider-state.is-configured {
+  color: color-mix(in srgb, var(--green) 76%, var(--settings-main-text, var(--theme-main-text, #fff)));
+}
+
+.provider-state-dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 42%, transparent);
+}
+
+.provider-state.is-configured .provider-state-dot {
+  background: var(--green);
+}
+
+.provider-meta {
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 54%, transparent);
+  font-size: 12px;
+}
+
+.provider-meta > span,
+.model-meta > span,
+.model-name-line > span {
+  display: inline-flex;
+  margin-top: 0;
+}
+
+.provider-type {
+  display: inline-flex;
+  flex: 0 0 auto;
+  margin-top: 0;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 8%, transparent);
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 72%, transparent);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.provider-url {
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.provider-head-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.model-list {
+  display: grid;
+}
+
+.model-list-head {
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 0 var(--space-4);
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 48%, transparent);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.model-list-head span:last-child {
+  font-family: var(--font-mono);
+  font-weight: 550;
+}
+
+.model-list-head-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.model-list-head-actions .model-add-btn {
+  min-height: 26px;
+  padding-inline: var(--space-2);
+  color: var(--settings-main-text, var(--theme-main-text, #fff));
+  font-weight: 650;
+}
+
+.model-row {
+  min-height: 64px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 8%, transparent);
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.model-row:hover {
+  background: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) var(--alpha-hover), transparent);
+}
+
+.model-leading {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.model-name-line {
+  gap: var(--space-2);
+}
+
+.model-row strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--settings-main-text, var(--theme-main-text, #fff));
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-default-badge {
+  flex: 0 0 auto;
+  padding: 2px var(--space-2);
+  border: 1px solid color-mix(in srgb, var(--settings-control-text, var(--theme-control-text, #fff)) 24%, transparent);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: color-mix(in srgb, var(--settings-control-text, var(--theme-control-text, #fff)) 74%, transparent);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.model-meta {
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 54%, transparent);
+  font-size: 12px;
+}
+
+.model-id {
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-feature {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.model-feature--thinking {
+  color: color-mix(in srgb, var(--blue) 72%, var(--settings-main-text, var(--theme-main-text, #fff)));
+}
+
+.models-panel .capability-badge {
+  flex: 0 0 auto;
+  margin-left: 0;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 9%, transparent);
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 62%, transparent);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.models-panel .capability-badge.multimodal {
+  background: color-mix(in srgb, var(--blue) 18%, transparent);
+  color: color-mix(in srgb, var(--blue) 82%, var(--settings-main-text, var(--theme-main-text, #fff)));
+}
+
+.models-panel .capability-badge.text {
+  background: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 10%, transparent);
+}
+
+.model-row .row-actions {
+  flex: 0 0 auto;
+  gap: var(--space-1);
+}
+
+.model-row .text-btn,
+.provider-head-actions .text-btn {
+  min-height: 30px;
+  padding-inline: var(--space-2);
+}
+
+.model-default-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.model-empty {
+  min-height: 58px;
+  margin: 0;
+  padding: var(--space-3) var(--space-4) var(--space-3) calc(var(--space-4) + 36px);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  border-top: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 8%, transparent);
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 52%, transparent);
+}
+
+.model-empty > div {
+  min-width: 0;
+  display: grid;
+  gap: var(--space-1);
+}
+
+.model-empty strong {
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 74%, transparent);
+  font-size: 13px;
+}
+
+.model-empty span {
+  font-size: 12px;
+}
+
+.models-empty-state {
+  min-height: 176px;
+  padding: var(--space-6);
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  border: 1px dashed color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 20%, transparent);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 3%, transparent);
+}
+
+.models-empty-mark {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 16%, transparent);
+  border-radius: var(--radius-sm);
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 64%, transparent);
+  font-size: 24px;
+  font-weight: 350;
+}
+
+.models-empty-copy {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.models-empty-copy h2 {
+  color: var(--settings-main-text, var(--theme-main-text, #fff));
+  font-size: 16px;
+  line-height: 1.3;
+}
+
+.models-empty-copy p {
+  margin-top: var(--space-1);
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 56%, transparent);
+  font-size: 13px;
+}
+
+/* ── 供应商 / 模型编辑器 ── */
+.editor-popover {
+  width: min(600px, 100%);
+  padding: var(--space-5);
+}
+
+.editor-popover .config-form {
+  gap: 0;
+}
+
+.editor-popover-head {
+  align-items: flex-start;
+  margin-bottom: var(--space-2);
+}
+
+.editor-overline {
+  display: block;
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 52%, transparent);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .02em;
+}
+
+.editor-popover-head h3 {
+  margin-top: var(--space-1);
+  color: var(--settings-main-text, var(--theme-main-text, #fff));
+  font-size: 18px;
+}
+
+.editor-popover-head p {
+  margin-top: var(--space-1);
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 56%, transparent);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.editor-section {
+  min-width: 0;
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4) 0;
+  border-top: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 9%, transparent);
+}
+
+.editor-section:first-of-type {
+  padding-top: var(--space-3);
+  border-top: 0;
+}
+
+.editor-section--grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: end;
+}
+
+.editor-section-heading {
+  min-width: 0;
+  display: grid;
+  gap: var(--space-1);
+}
+
+.editor-section-heading strong {
+  color: var(--settings-main-text, var(--theme-main-text, #fff));
+  font-size: 13px;
+}
+
+.editor-section-heading span,
+.editor-section-heading small {
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 50%, transparent);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.editor-section-heading small {
+  display: block;
+  font-size: 11px;
+}
+
+.editor-popover .field {
+  gap: var(--space-2);
+}
+
+.editor-popover .preset-summary {
+  padding: var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 10%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 5%, transparent);
+}
+
+.editor-popover .settings-advanced {
+  margin: 0;
+  padding: var(--space-3) 0 0;
+  border-top: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 9%, transparent);
+}
+
+.editor-popover .settings-advanced summary {
+  width: 100%;
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  color: var(--settings-main-text, var(--theme-main-text, #fff));
+  background: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 4%, transparent);
+  list-style: none;
+}
+
+.editor-popover .settings-advanced summary::-webkit-details-marker {
+  display: none;
+}
+
+.editor-popover .settings-advanced summary::after {
+  content: '+';
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 54%, transparent);
+  font-size: 18px;
+  font-weight: 350;
+  line-height: 1;
+}
+
+.editor-popover .settings-advanced[open] summary::after {
+  content: '−';
+}
+
+.editor-popover .settings-advanced summary > span {
+  min-width: 0;
+  display: grid;
+  gap: var(--space-1);
+}
+
+.editor-popover .settings-advanced summary strong {
+  font-size: 13px;
+}
+
+.editor-popover .settings-advanced summary small {
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 50%, transparent);
+  font-size: 11px;
+}
+
+.editor-popover .settings-advanced[open] summary {
+  margin-bottom: var(--space-3);
+}
+
+.editor-popover .advanced-fields {
+  gap: var(--space-3);
+}
+
+.editor-popover .checkbox-field {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 36px;
+}
+
+.editor-actions {
+  position: sticky;
+  bottom: calc(var(--space-5) * -1);
+  z-index: var(--z-main-surface, 20);
+  margin-top: var(--space-3);
+  padding: var(--space-3) 0 0;
+  border-top: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 10%, transparent);
+  background: var(--settings-card-background, var(--settings-main-background, var(--theme-main-background, #111111)));
+}
+
+.editor-actions .small-btn {
+  min-height: 36px;
+  border-radius: var(--radius-sm);
+  padding-inline: var(--space-4);
+  font-weight: 650;
+}
+
+/* 模型编辑器：让模型 ID 与能力成为主流程，低频参数留在折叠区。 */
+.editor-popover--model {
+  width: min(680px, 100%);
+}
+
+.model-editor-form {
+  min-width: 0;
+}
+
+.model-editor-basics {
+  gap: var(--space-4);
+}
+
+.model-editor-provider {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-3);
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 60%, transparent);
+  font-size: 12px;
+}
+
+.model-editor-provider > span {
+  white-space: nowrap;
+}
+
+.model-editor-id {
+  gap: var(--space-2);
+}
+
+.model-editor-id input {
+  font-family: var(--font-mono);
+}
+
+.model-editor-id small {
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 50%, transparent);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.model-editor-secondary {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: var(--space-3);
+}
+
+.model-editor-secondary textarea {
+  min-height: calc(var(--space-5) * 3);
+}
+
+.model-editor-capabilities {
+  gap: var(--space-3);
+}
+
+.model-editor-capability-controls {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, .7fr);
+  align-items: end;
+  gap: var(--space-3);
+}
+
+.model-reasoning-control {
+  min-height: calc(var(--space-5) * 2 + var(--space-1));
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--settings-control-text, var(--theme-control-text, #fff)) 12%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--settings-control-background, var(--theme-control-background, #222)) 70%, transparent);
+}
+
+.model-reasoning-control > div {
+  min-width: 0;
+  display: grid;
+  gap: var(--space-1);
+}
+
+.model-reasoning-control strong {
+  color: var(--settings-main-text, var(--theme-main-text, #fff));
+  font-size: 12px;
+}
+
+.model-reasoning-control span {
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 50%, transparent);
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+.model-reasoning-control .toggle-btn {
+  flex: 0 0 auto;
+}
+
+.model-editor-runtime {
+  padding-top: var(--space-4) !important;
+}
+
+.model-advanced-fields {
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+}
+
+@media (max-width: 720px) {
+  .models-title {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .models-header-actions {
+    justify-content: flex-end;
+  }
+
+  .provider-head {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .provider-head-actions {
+    grid-column: 2;
+    justify-content: flex-start;
+  }
+
+  .model-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .model-row .row-actions {
+    justify-content: flex-end;
+    padding-top: var(--space-2);
+    border-top: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 8%, transparent);
+  }
+
+  .editor-section--grid {
+    grid-template-columns: 1fr;
+  }
+
+  .editor-section--grid .field-wide {
+    grid-column: 1;
+  }
+
+  .model-editor-secondary,
+  .model-editor-capability-controls,
+  .model-advanced-fields {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+@media (max-width: 480px) {
+  .models-overview {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .models-overview-default {
+    grid-column: 1 / -1;
+    grid-template-columns: auto minmax(0, 1fr);
+    border-top: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 9%, transparent);
+    border-left: 0;
+  }
+
+  .models-secondary-actions {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .models-secondary-spacer {
+    display: none;
+  }
+
+  .provider-head-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-end;
+  }
+
+  .provider-meta {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+
+  .model-meta {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .model-empty {
+    align-items: flex-start;
+    flex-direction: column;
+    padding-left: var(--space-4);
+  }
+
+  .models-empty-state {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    padding: var(--space-5);
+  }
+
+  .models-empty-copy {
+    flex-basis: calc(100% - 56px);
+  }
+
+  .models-empty-state .small-btn {
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .model-row {
+    transition: none;
+  }
+}
+
+/* ── 模型与供应商：双栏工作区 ── */
+.models-panel {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.models-title {
+  flex: 0 0 auto;
+  align-items: flex-start;
+}
+
+.models-workspace {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(200px, .34fr) minmax(0, 1fr);
+  align-items: stretch;
+  gap: 0;
+  overflow: hidden;
+}
+
+.provider-rail {
+  position: static;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-4) var(--space-3) var(--space-3);
+  border: 0;
+  border-right: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 12%, transparent);
+  border-radius: 0;
+  background: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 2%, transparent);
+  overflow: hidden;
+}
+
+.provider-rail-head {
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 0 var(--space-1) var(--space-2);
+  border-bottom: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 9%, transparent);
+}
+
+.provider-rail-title {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.provider-rail-title strong {
+  color: var(--settings-main-text, var(--theme-main-text, #fff));
+  font-size: 13px;
+}
+
+.provider-rail-title span,
+.provider-rail-status {
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 48%, transparent);
+  font-size: 11px;
+}
+
+.provider-rail-status {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.provider-picker {
+  min-height: 0;
+  max-height: min(420px, 50vh);
+  display: grid;
+  align-content: start;
+  gap: var(--space-1);
+  overflow-y: auto;
+  padding-top: var(--space-2);
+}
+
+.provider-picker-item {
+  width: 100%;
+  min-width: 0;
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--settings-main-text, var(--theme-main-text, #fff));
+  text-align: left;
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+
+.provider-picker-item:hover {
+  background: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) var(--alpha-hover), transparent);
+}
+
+.provider-picker-item.is-selected {
+  border-color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 18%, transparent);
+  background: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) var(--alpha-active), transparent);
+}
+
+.provider-picker-mark {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 9%, transparent);
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 78%, transparent);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.provider-picker-copy {
+  min-width: 0;
+  display: grid;
+  gap: var(--space-1);
+}
+
+.provider-picker-copy strong,
+.provider-picker-copy span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.provider-picker-copy strong {
+  color: var(--settings-main-text, var(--theme-main-text, #fff));
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.provider-picker-copy span {
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 48%, transparent);
+  font-size: 11px;
+}
+
+.provider-picker-state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 46%, transparent);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.provider-picker-state.is-configured {
+  color: color-mix(in srgb, var(--green) 76%, var(--settings-main-text, var(--theme-main-text, #fff)));
+}
+
+.provider-picker-state-dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 38%, transparent);
+}
+
+.provider-picker-state.is-configured .provider-picker-state-dot {
+  background: var(--green);
+}
+
+.provider-rail-empty {
+  min-height: 86px;
+  display: grid;
+  align-content: center;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-2);
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 64%, transparent);
+  font-size: 12px;
+}
+
+.provider-rail-empty small {
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 42%, transparent);
+  font-size: 11px;
+}
+
+.provider-create-btn {
+  width: 100%;
+  min-height: 36px;
+  margin-top: var(--space-3);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  border: 1px dashed color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 20%, transparent);
+  border-radius: var(--radius-sm);
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 72%, transparent);
+  font-size: 12px;
+  font-weight: 650;
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.provider-create-btn:hover {
+  border-color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 34%, transparent);
+  background: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) var(--alpha-hover), transparent);
+  color: var(--settings-main-text, var(--theme-main-text, #fff));
+}
+
+.provider-rail-footer {
+  margin-top: auto;
+  padding-top: var(--space-2);
+  display: grid;
+  gap: var(--space-1);
+  border-top: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 9%, transparent);
+}
+
+.provider-rail-footer .text-btn {
+  min-height: 28px;
+  padding-inline: var(--space-2);
+  text-align: left;
+}
+
+.provider-detail {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  display: grid;
+  align-content: start;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-4) var(--space-5) var(--space-5);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.provider-detail-head {
+  min-width: 0;
+  min-height: 76px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-2) 0 var(--space-4);
+  border-bottom: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 12%, transparent);
+}
+
+.provider-detail-identity {
+  min-width: 0;
+}
+
+.provider-detail-context {
+  display: block;
+  margin-bottom: var(--space-1);
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 46%, transparent);
+  font-size: 11px;
+}
+
+.provider-detail-identity h2 {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--settings-main-text, var(--theme-main-text, #fff));
+  font-size: 18px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.provider-detail-identity .provider-meta {
+  margin-top: var(--space-1);
+}
+
+.provider-detail-head .provider-head-actions {
+  align-self: center;
+}
+
+.model-section {
+  min-width: 0;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.model-section-head {
+  min-width: 0;
+  min-height: 68px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: 0 0 var(--space-4);
+  background: transparent;
+  border-bottom: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 9%, transparent);
+}
+
+.model-section-title {
+  min-width: 0;
+  display: grid;
+  gap: var(--space-1);
+}
+
+.model-section-title h2 {
+  color: var(--settings-main-text, var(--theme-main-text, #fff));
+  font-size: 15px;
+  line-height: 1.3;
+}
+
+.model-section-title span {
+  overflow: hidden;
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 50%, transparent);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-section-head .small-btn {
+  min-height: 36px;
+  flex: 0 0 auto;
+  border-radius: var(--radius-sm);
+  padding-inline: var(--space-4);
+  font-weight: 650;
+}
+
+.model-section .model-row:first-child {
+  border-top: 0;
+}
+
+.models-empty-state--main {
+  min-height: 0;
+  height: 100%;
+  align-self: stretch;
+  border: 0;
+  border-radius: 0;
+}
+
+/* The settings main surface is already the card. Keep its chrome and move
+   only the provider details into an inner scroll region. */
+:deep(.settings-main--models) {
+  overflow: hidden;
+  border-radius: var(--radius) var(--radius) 0 0;
+}
+
+:deep(.settings-main--models .settings-content) {
+  height: 100%;
+  min-height: 0;
+}
+
+@media (max-width: 720px) {
+  :deep(.settings-main--models) {
+    overflow-y: auto;
+  }
+
+  :deep(.settings-main--models .settings-content) {
+    height: auto;
+  }
+
+  .models-panel {
+    height: auto;
+  }
+
+  .models-workspace {
+    grid-template-columns: 1fr;
+    height: auto;
+    flex: 0 0 auto;
+    overflow: visible;
+  }
+
+  .provider-rail {
+    position: static;
+    min-height: 0;
+    height: auto;
+    border-right: 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 12%, transparent);
+    overflow: visible;
+  }
+
+  .provider-picker {
+    display: flex;
+    max-height: none;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding-bottom: var(--space-1);
+  }
+
+  .provider-picker-item {
+    flex: 0 0 min(230px, 68vw);
+  }
+
+  .provider-rail-footer {
+    display: flex;
+    flex-wrap: wrap;
+  }
+
+  .provider-detail-head {
+    grid-template-columns: 1fr;
+    gap: var(--space-3);
+  }
+
+  .provider-detail {
+    height: auto;
+    padding: var(--space-4) 0 0;
+    overflow: visible;
+  }
+
+  .provider-detail-head .provider-head-actions {
+    justify-content: flex-end;
+  }
+
+  .model-section-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .model-section-head .small-btn {
+    align-self: flex-end;
+  }
+}
+
+@media (max-width: 480px) {
+  .provider-picker-item {
+    flex-basis: min(236px, calc(100vw - 72px));
+  }
+
+  .provider-detail-identity .provider-meta {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .provider-picker-item,
+  .provider-create-btn {
+    transition: none;
+  }
+}
+
+/* ── 模型与供应商：工作台终稿 ── */
+.settings-card {
+  width: min(1180px, calc(100vw - (var(--space-6) * 2)));
+  height: calc(100dvh - var(--titlebar-offset, 36px) - (var(--space-6) + var(--space-4)));
+  border-radius: var(--radius);
+}
+
+:deep(.settings-main--models) {
+  overflow: hidden;
+}
+
+:deep(.settings-main--models .settings-content) {
+  width: min(1180px, 100%);
+  height: 100%;
+  min-height: 0;
+}
+
+.models-panel {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.models-title {
+  flex: 0 0 auto;
+  align-items: flex-start;
+}
+
+.models-workspace {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(260px, 280px) minmax(0, 1fr);
+  align-items: stretch;
+  gap: 0;
+  overflow: hidden;
+  border-top: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 8%, transparent);
+}
+
+.provider-rail {
+  position: static;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-5) var(--space-4) var(--space-4);
+  border: 0;
+  border-right: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 8%, transparent);
+  border-radius: 0;
+  background: transparent;
+  overflow: hidden;
+}
+
+.provider-rail-head {
+  min-height: 36px;
+  padding: 0 0 var(--space-2);
+}
+
+.provider-picker {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  display: grid;
+  align-content: start;
+  gap: var(--space-1);
+  overflow-y: auto;
+  padding: var(--space-2) 0;
+}
+
+.provider-picker-item {
+  width: 100%;
+  min-width: 0;
+  min-height: 64px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--settings-main-text, var(--theme-main-text, #fff));
+  text-align: left;
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+
+.provider-picker-item:hover {
+  background: color-mix(in srgb, var(--blue) 6%, transparent);
+}
+
+.provider-picker-item.is-selected {
+  border-color: color-mix(in srgb, var(--blue) 30%, transparent);
+  background: color-mix(in srgb, var(--blue) 11%, transparent);
+}
+
+.provider-picker-item.is-selected .provider-picker-mark {
+  background: color-mix(in srgb, var(--blue) 16%, transparent);
+  color: var(--blue);
+}
+
+.provider-picker-mark {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 8%, transparent);
+}
+
+.provider-picker-copy {
+  gap: var(--space-1);
+}
+
+.provider-picker-copy strong {
+  font-size: 13px;
+}
+
+.provider-picker-copy span {
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 54%, transparent);
+}
+
+.provider-picker-state {
+  font-size: 11px;
+}
+
+.provider-rail-footer {
+  flex: 0 0 auto;
+  margin-top: auto;
+  padding-top: var(--space-3);
+  display: grid;
+  gap: var(--space-3);
+  border-top: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 9%, transparent);
+}
+
+.provider-create-btn {
+  width: 100%;
+  min-height: 40px;
+  margin-top: 0;
+  border: 1px dashed color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 24%, transparent);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 72%, transparent);
+}
+
+.provider-create-btn:hover {
+  border-color: color-mix(in srgb, var(--blue) 40%, transparent);
+  background: color-mix(in srgb, var(--blue) 7%, transparent);
+  color: var(--settings-main-text, var(--theme-main-text, #fff));
+}
+
+.provider-rail-links {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.provider-rail-links .text-btn {
+  min-height: 28px;
+  padding-inline: var(--space-2);
+  text-align: left;
+}
+
+.provider-detail {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  display: grid;
+  align-content: start;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5) var(--space-5);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.provider-detail-head {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-4);
+  padding: 0 0 var(--space-3);
+  border-bottom: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 12%, transparent);
+}
+
+.provider-detail-context {
+  margin-bottom: var(--space-1);
+}
+
+.provider-detail-identity h2 {
+  font-size: 20px;
+  font-weight: 720;
+}
+
+.provider-url {
+  color: var(--blue);
+}
+
+.provider-head-actions .text-btn {
+  min-height: 32px;
+  padding-inline: var(--space-2);
+}
+
+.provider-head-actions .text-btn.danger {
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 58%, transparent);
+}
+
+.provider-head-actions .text-btn.danger:hover {
+  color: var(--red);
+}
+
+.model-section {
+  min-width: 0;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.model-section-head {
+  min-width: 0;
+  min-height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: 0 0 var(--space-3);
+  background: transparent;
+  border-bottom: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 10%, transparent);
+}
+
+.model-section-title {
+  gap: var(--space-1);
+}
+
+.model-section-title h2 {
+  font-size: 16px;
+}
+
+.model-section-title span {
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 58%, transparent);
+}
+
+.model-section-head .small-btn {
+  min-height: 38px;
+  border-radius: var(--radius-sm);
+  padding-inline: var(--space-4);
+}
+
+.model-list {
+  display: grid;
+}
+
+.model-row {
+  min-height: 72px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: var(--space-3);
+  row-gap: var(--space-1);
+  padding: var(--space-2) 0;
+  border-top: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 8%, transparent);
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.model-row:hover {
+  background: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) var(--alpha-hover), transparent);
+}
+
+.model-leading {
+  min-width: 0;
+  grid-column: 1;
+  grid-row: 1;
+  gap: var(--space-2);
+}
+
+.model-identity {
+  min-width: 0;
+}
+
+.model-row strong {
+  font-size: 15px;
+}
+
+.model-meta {
+  margin-top: var(--space-1);
+}
+
+.model-capabilities {
+  min-width: 0;
+  grid-column: 1;
+  grid-row: 2;
+  display: flex;
+  align-items: center;
+  align-content: center;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.model-capability {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 8%, transparent);
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 66%, transparent);
+  font-size: 11px;
+  line-height: 1;
+}
+
+.model-row .row-actions {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: nowrap;
+  gap: var(--space-1);
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: end;
+}
+
+.model-row .text-btn {
+  min-height: 32px;
+  padding-inline: var(--space-2);
+}
+
+.model-empty {
+  min-height: 140px;
+  padding: var(--space-6) 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: var(--space-3);
+  border-top: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 8%, transparent);
+  text-align: center;
+}
+
+.model-empty > div {
+  text-align: center;
+}
+
+.model-empty strong {
+  color: var(--settings-main-text, var(--theme-main-text, #fff));
+}
+
+.models-empty-state--main,
+.models-empty-state--full {
+  min-height: 0;
+  height: 100%;
+  align-self: stretch;
+  justify-content: center;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.models-empty-state--full {
+  flex: 1 1 auto;
+  height: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  padding: var(--space-6);
+}
+
+.models-empty-state--full .models-empty-copy {
+  flex: 0 1 auto;
+}
+
+@media (max-width: 799px) {
+  :deep(.settings-main--models) {
+    overflow-y: auto;
+  }
+
+  :deep(.settings-main--models .settings-content) {
+    width: 100%;
+    height: auto;
+  }
+
+  .models-panel {
+    height: auto;
+  }
+
+  .models-workspace {
+    grid-template-columns: 1fr;
+    height: auto;
+    flex: 0 0 auto;
+    overflow: visible;
+  }
+
+  .provider-rail {
+    height: auto;
+    padding: var(--space-5) 0;
+    border-right: 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 12%, transparent);
+    overflow: visible;
+  }
+
+  .provider-picker {
+    flex: 0 0 auto;
+    display: flex;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding-bottom: 0;
+  }
+
+  .provider-picker-item {
+    flex: 0 0 min(260px, 70vw);
+  }
+
+  .provider-rail-footer {
+    margin-top: var(--space-4);
+  }
+
+  .provider-rail-links {
+    display: flex;
+    flex-wrap: wrap;
+  }
+
+  .provider-detail {
+    height: auto;
+    padding: var(--space-6) 0 0;
+    overflow: visible;
+  }
+
+  .model-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .model-capabilities {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .model-row .row-actions {
+    grid-column: 2;
+    grid-row: 1;
+  }
+}
+
+@media (max-width: 480px) {
+  .settings-card {
+    width: calc(100vw - var(--space-6));
+  }
+
+  .provider-detail {
+    padding-top: var(--space-5);
+  }
+
+  .model-row {
+    grid-template-columns: 1fr;
+    min-height: 0;
+  }
+
+  .model-leading,
+  .model-capabilities,
+  .model-row .row-actions {
+    grid-column: 1;
+    grid-row: auto;
+  }
+
+  .model-row .row-actions {
+    justify-content: flex-start;
+    padding-top: var(--space-2);
+    border-top: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 8%, transparent);
+  }
+
+  .models-empty-state--full {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .models-empty-copy {
+    flex-basis: calc(100% - 56px);
+  }
+
+  .models-empty-state--full .small-btn {
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .model-row,
+  .provider-picker-item,
+  .provider-create-btn {
+    transition: none;
+  }
+}
+
+/* ── 模型与供应商：密度收敛 ── */
+.settings-card {
+  width: min(1240px, calc(100vw - (var(--space-6) * 2)));
+}
+
+:deep(.settings-main--models .settings-content) {
+  width: min(1240px, 100%);
+}
+
+.models-title-copy h1 {
+  font-size: 20px;
+}
+
+.models-title-copy p {
+  font-size: 12px;
+}
+
+.provider-detail {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  padding: var(--space-4) var(--space-5) var(--space-5);
+}
+
+.provider-detail-head {
+  flex: 0 0 auto;
+  min-height: calc(var(--space-6) * 2 + var(--space-2));
+  align-items: start;
+}
+
+.provider-detail-identity {
+  display: grid;
+  align-content: start;
+  gap: var(--space-1);
+}
+
+.provider-detail-context,
+.provider-detail-identity .provider-meta {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+.provider-detail-head .provider-head-actions {
+  align-self: center;
+}
+
+.model-section {
+  flex: 0 0 auto;
+}
+
+.provider-detail-context {
+  font-size: 10px;
+}
+
+.provider-detail-identity h2 {
+  font-size: 17px;
+}
+
+.provider-meta {
+  font-size: 11px;
+}
+
+.provider-type {
+  font-size: 10px;
+}
+
+.model-section-title h2 {
+  font-size: 14px;
+}
+
+.model-section-title span {
+  font-size: 10px;
+}
+
+.model-row {
+  min-height: 72px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: var(--space-3);
+  row-gap: var(--space-1);
+  padding: var(--space-2) 0;
+  position: relative;
+  isolation: isolate;
+  background: transparent;
+  transition: none;
+}
+
+.model-row:hover {
+  background: transparent;
+}
+
+.model-row::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) var(--alpha-hover), transparent);
+  -webkit-mask-image:
+    linear-gradient(to right, rgb(0 0 0 / 20%), #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgb(0 0 0 / 20%)),
+    linear-gradient(to bottom, transparent, #000 10%, #000 90%, transparent);
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-composite: source-in;
+  mask-image:
+    linear-gradient(to right, rgb(0 0 0 / 20%), #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgb(0 0 0 / 20%)),
+    linear-gradient(to bottom, transparent, #000 10%, #000 90%, transparent);
+  mask-repeat: no-repeat;
+  mask-composite: intersect;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+
+.model-row:hover::before {
+  opacity: 0.32;
+}
+
+.model-leading {
+  grid-column: 1;
+  grid-row: 1;
+  position: relative;
+  gap: var(--space-2);
+}
+
+.model-name-line {
+  min-width: 0;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.model-name-line strong {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.model-row strong {
+  font-size: 14px;
+}
+
+.model-id {
+  font-size: 11px;
+}
+
+.model-capability {
+  min-height: 22px;
+  padding-inline: var(--space-1);
+  font-size: 10px;
+}
+
+.model-row .text-btn {
+  min-height: 30px;
+  padding-inline: var(--space-1);
+  font-size: 11px;
+}
+
+.model-row .row-actions {
+  flex-wrap: nowrap;
+  white-space: nowrap;
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: end;
+}
+
+@media (max-width: 980px) {
+  .model-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .model-capabilities {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .model-row .row-actions {
+    grid-column: 2;
+    grid-row: 1;
+  }
+}
+
+@media (max-width: 799px) {
+  .model-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .model-capabilities {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .model-row .row-actions {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .provider-detail {
+    padding: var(--space-5) 0 0;
+  }
+}
+
+@media (max-width: 480px) {
+  .settings-card {
+    width: calc(100vw - var(--space-6));
+  }
+
+  .model-row {
+    grid-template-columns: 1fr;
+    min-height: 0;
+  }
+
+  .model-leading,
+  .model-capabilities,
+  .model-row .row-actions {
+    grid-column: 1;
+    grid-row: auto;
+  }
+
+  .model-row .row-actions {
+    justify-content: flex-start;
+    padding-top: var(--space-2);
+    border-top: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 8%, transparent);
+  }
+
+  .provider-detail {
+    padding-top: var(--space-4);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .model-row::before {
+    transition: none;
+  }
+}
+
+/* ── 设置页统一主表面 ── */
+.models-workspace.settings-surface {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 12%, transparent);
+  border-radius: var(--radius);
+  background: var(--settings-card-background, var(--settings-main-background, var(--theme-main-background, #111111)));
+}
+
+.models-overview-bar {
+  flex: 0 0 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-5);
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 10%, transparent);
+}
+
+.models-overview-metrics {
+  flex: 1 1 560px;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(150px, 1.5fr) minmax(130px, 1.25fr) minmax(110px, 1fr) minmax(90px, .7fr);
+  gap: var(--space-5);
+  margin: 0;
+}
+
+.models-overview-metrics > div {
+  min-width: 0;
+  display: grid;
+  gap: var(--space-1);
+}
+
+.models-overview-metrics dt {
+  color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 50%, transparent);
+  font-size: 10px;
+}
+
+.models-overview-metrics dd {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--settings-main-text, var(--theme-main-text, #fff));
+  font-size: 13px;
+  font-weight: 680;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.models-overview-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.models-overview-actions .small-btn {
+  min-height: 36px;
+  padding-inline: var(--space-3);
+  white-space: nowrap;
+}
+
+.models-workspace-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(260px, 280px) minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.resource-search {
+  min-width: 0;
+  display: block;
+}
+
+.resource-search input {
+  width: 100%;
+  min-width: 0;
+  min-height: 34px;
+  padding: 0 var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--settings-control-text, var(--theme-control-text, #fff)) 12%, transparent);
+  border-radius: var(--radius-sm);
+  outline: 0;
+  background: color-mix(in srgb, var(--settings-control-background, var(--theme-control-background)) 70%, transparent);
+  color: var(--settings-control-text, var(--theme-control-text, #fff));
+  font: inherit;
+  font-size: 11px;
+}
+
+.resource-search input::placeholder {
+  color: color-mix(in srgb, var(--settings-control-text, var(--theme-control-text, #fff)) 48%, transparent);
+}
+
+.provider-search {
+  flex: 0 0 auto;
+  margin: var(--space-2) 0;
+}
+
+.provider-picker-item {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.provider-picker-mark {
+  display: none;
+}
+
+.model-section-head {
+  min-height: 58px;
+}
+
+.model-section-tools {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.model-search {
+  width: min(220px, 30vw);
+}
+
+@media (max-width: 1100px) {
+  .models-overview-bar {
+    align-items: stretch;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  .models-overview-actions {
+    justify-content: flex-end;
+  }
+}
+
+@media (max-width: 799px) {
+  .models-overview-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-3) var(--space-5);
+  }
+
+  .models-workspace-body {
+    grid-template-columns: 1fr;
+    overflow: visible;
+  }
+
+  .provider-rail {
+    padding: var(--space-4);
+  }
+
+  .provider-search {
+    width: min(320px, 100%);
+  }
+
+  .provider-picker {
+    display: flex;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  .provider-picker-item {
+    flex: 0 0 min(240px, 72vw);
+  }
+
+  .provider-detail {
+    padding: var(--space-5);
+  }
+}
+
+@media (max-width: 600px) {
+  .models-overview-bar,
+  .provider-detail {
+    padding: var(--space-4);
+  }
+
+  .models-overview-actions,
+  .model-section-tools {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .models-overview-actions .small-btn,
+  .model-section-tools .small-btn,
+  .model-search {
+    width: 100%;
+  }
+
+  .model-section-head {
+    align-items: stretch;
+  }
+}
+
+.models-empty-state--full.settings-surface {
+  border: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 12%, transparent);
+  border-radius: var(--radius);
+  background: var(--settings-card-background, var(--settings-main-background, var(--theme-main-background, #111111)));
+}
+
+/* ── 权限：默认值工作面 ── */
+.permissions-panel {
+  --permission-main-text: var(--settings-main-text, var(--theme-main-text));
+  --permission-control-text: var(--settings-control-text, var(--theme-control-text));
+  --permission-control-solid: var(--settings-control-solid, var(--panel-2));
+  color: var(--permission-main-text);
+}
+
+.permissions-surface {
+  display: grid;
+  gap: 0;
+  overflow: hidden;
+}
+
+.permission-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 1.15fr);
+  align-items: center;
+  gap: var(--space-6);
+  padding: var(--space-6);
+  background: color-mix(in srgb, var(--permission-main-text) 4%, transparent);
+}
+
+.permission-summary-copy,
+.permission-section-heading,
+.permission-setting-copy,
+.permission-session-note > div,
+.permission-related-list > div {
+  min-width: 0;
+  display: grid;
+  gap: var(--space-1);
+}
+
+.permission-section-label,
+.permission-section-hint {
+  color: color-mix(in srgb, var(--permission-main-text) 52%, transparent);
+  font-size: 11px;
+}
+
+.permission-summary h2 {
+  font-size: 17px;
+  font-weight: 720;
+  letter-spacing: -.015em;
+}
+
+.permission-summary p,
+.permission-section-heading p,
+.permission-setting-copy span,
+.permission-session-note p,
+.permission-related-list span {
+  color: color-mix(in srgb, var(--permission-main-text) 58%, transparent);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.permission-summary-metrics {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+  margin: 0;
+}
+
+.permission-summary-metrics > div {
+  min-width: 0;
+  display: grid;
+  gap: var(--space-1);
+}
+
+.permission-summary-metrics dt {
+  color: color-mix(in srgb, var(--permission-main-text) 48%, transparent);
+  font-size: 10px;
+}
+
+.permission-summary-metrics dd {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--permission-main-text);
+  font-size: 12px;
+  font-weight: 680;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.permission-section {
+  display: grid;
+  gap: var(--space-5);
+  padding: var(--space-6);
+}
+
+.permission-section-heading {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--space-4);
+}
+
+.permission-section-heading h2 {
+  font-size: 15px;
+  font-weight: 720;
+}
+
+.permission-section-hint {
+  padding-top: 2px;
+  text-align: right;
+}
+
+.permission-setting-group {
+  display: grid;
+  grid-template-columns: minmax(150px, .34fr) minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-5);
+}
+
+.permission-setting-copy {
+  padding-top: var(--space-2);
+}
+
+.permission-setting-copy strong,
+.permission-session-note strong,
+.permission-related-list strong {
+  color: var(--permission-main-text);
+  font-size: 13px;
+  font-weight: 680;
+}
+
+.permission-choice-grid {
+  min-width: 0;
+  display: grid;
+  gap: var(--space-2);
+}
+
+.permission-choice-grid--approval {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  max-width: 620px;
+}
+
+.permission-choice {
+  position: relative;
+  min-width: 0;
+  min-height: 96px;
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-content: start;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--permission-control-text) 12%, transparent);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--permission-control-solid) 72%, transparent);
+  color: var(--permission-control-text);
+  text-align: left;
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
+}
+
+.permission-choice:hover {
+  background: color-mix(in srgb, var(--permission-control-text) var(--alpha-hover), transparent);
+}
+
+.permission-choice:active {
+  transform: translateY(1px);
+}
+
+.permission-choice.is-selected {
+  border-color: color-mix(in srgb, var(--blue) 42%, transparent);
+  background: color-mix(in srgb, var(--blue) var(--alpha-active), var(--permission-control-solid));
+}
+
+.permission-choice-state {
+  width: 20px;
+  height: 20px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--permission-control-text) 28%, transparent);
+  border-radius: 999px;
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 760;
+  line-height: 1;
+}
+
+.permission-choice.is-selected .permission-choice-state {
+  border-color: color-mix(in srgb, var(--blue) 72%, transparent);
+  background: color-mix(in srgb, var(--blue) 18%, transparent);
+}
+
+.permission-choice-copy {
+  min-width: 0;
+  display: grid;
+  gap: var(--space-1);
+}
+
+.permission-choice-copy strong {
+  overflow: hidden;
+  color: var(--permission-control-text);
+  font-size: 13px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.permission-choice-copy small {
+  color: color-mix(in srgb, var(--permission-control-text) 62%, transparent);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.permission-boundary-section {
+  padding-top: 0;
+}
+
+.permission-boundary-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-5);
+}
+
+.permission-switch {
+  flex: 0 0 auto;
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  color: color-mix(in srgb, var(--permission-main-text) 68%, transparent);
+  font-size: 11px;
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.permission-switch:hover {
+  background: color-mix(in srgb, var(--permission-main-text) var(--alpha-hover), transparent);
+  color: var(--permission-main-text);
+}
+
+.permission-switch:active {
+  background: color-mix(in srgb, var(--permission-main-text) var(--alpha-active), transparent);
+}
+
+.permission-switch:disabled {
+  opacity: .72;
+  cursor: default;
+}
+
+.permission-switch-track {
+  width: 36px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--permission-main-text) 16%, transparent);
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+.permission-switch-track span {
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--permission-main-text) 68%, transparent);
+  transform: translateX(0);
+  transition: background var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
+}
+
+.permission-switch.is-on {
+  color: var(--blue);
+}
+
+.permission-switch.is-on .permission-switch-track {
+  background: color-mix(in srgb, var(--blue) 32%, transparent);
+}
+
+.permission-switch.is-on .permission-switch-track span {
+  background: var(--blue);
+  transform: translateX(16px);
+}
+
+.permission-safety-list {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: color-mix(in srgb, var(--permission-main-text) 58%, transparent);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.permission-safety-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.permission-safety-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  margin-top: 5px;
+  border-radius: 999px;
+  background: var(--green);
+}
+
+.permission-session-note {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  margin: 0 var(--space-6) var(--space-5);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--permission-main-text) 5%, transparent);
+}
+
+.permission-session-note-mark {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--permission-main-text) 22%, transparent);
+  border-radius: 999px;
+  color: color-mix(in srgb, var(--permission-main-text) 64%, transparent);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.permission-session-note p {
+  margin-top: var(--space-1);
+}
+
+.permission-related-settings {
+  margin: 0 var(--space-6) var(--space-6);
+  padding-top: var(--space-4);
+  border-top: 1px solid color-mix(in srgb, var(--permission-main-text) 9%, transparent);
+}
+
+.permission-related-settings summary {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  cursor: pointer;
+  list-style: none;
+}
+
+.permission-related-settings summary::-webkit-details-marker {
+  display: none;
+}
+
+.permission-related-settings summary::after {
+  content: '⌄';
+  color: color-mix(in srgb, var(--permission-main-text) 48%, transparent);
+  font-size: 14px;
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.permission-related-settings[open] summary::after {
+  transform: rotate(180deg);
+}
+
+.permission-related-settings summary > span,
+.permission-related-list {
+  min-width: 0;
+  display: grid;
+  gap: var(--space-1);
+}
+
+.permission-related-settings summary strong {
+  font-size: 13px;
+}
+
+.permission-related-settings summary small {
+  color: color-mix(in srgb, var(--permission-main-text) 52%, transparent);
+  font-size: 11px;
+}
+
+.permission-related-list {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-4);
+  padding-top: var(--space-4);
+}
+
+.permission-related-list code {
+  color: color-mix(in srgb, var(--permission-main-text) 74%, transparent);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+@media (max-width: 900px) {
+  .permission-summary {
+    grid-template-columns: 1fr;
+    gap: var(--space-4);
+  }
+
+  .permission-setting-group {
+    grid-template-columns: 1fr;
+    gap: var(--space-3);
+  }
+
+  .permission-setting-copy {
+    padding-top: 0;
+  }
+}
+
+@media (max-width: 640px) {
+  .permission-summary,
+  .permission-section {
+    padding: var(--space-4);
+  }
+
+  .permission-summary-metrics,
+  .permission-choice-grid--approval,
+  .permission-related-list {
+    grid-template-columns: 1fr;
+    max-width: none;
+  }
+
+  .permission-section-heading {
+    grid-template-columns: 1fr;
+    gap: var(--space-2);
+  }
+
+  .permission-section-hint {
+    text-align: left;
+  }
+
+  .permission-boundary-row {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  .permission-session-note {
+    margin-inline: var(--space-4);
+  }
+
+  .permission-related-settings {
+    margin-inline: var(--space-4);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .permission-choice,
+  .permission-switch,
+  .permission-switch-track,
+  .permission-switch-track span,
+  .permission-related-settings summary::after {
+    transition: none;
+  }
 }
 </style>

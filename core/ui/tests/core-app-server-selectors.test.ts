@@ -3,6 +3,41 @@ import { hydrateSnapshot, selectChatMessages, selectLatestTurnStatus } from '../
 import type { CoreAppSnapshot } from '../src/appServer'
 
 describe('core appServer selectors', () => {
+  it('attaches the turn acceptance time to the assistant message', () => {
+    const snapshot = hydrateSnapshot({
+      thread_id: 'thread-time',
+      snapshot_seq: 2,
+      turns: {
+        'turn-time': {
+          turn_id: 'turn-time',
+          status: 'completed',
+          items: ['answer-time'],
+          created_at: '2026-06-18T04:05:06',
+        },
+      },
+      core: {
+        thread_id: 'thread-time',
+        snapshot_seq: 2,
+        status: 'completed',
+        item_order: ['answer-time'],
+        turns: {
+          'turn-time': { turn_id: 'turn-time', status: 'completed', items: ['answer-time'] },
+        },
+        items: {
+          'answer-time': {
+            item_id: 'answer-time',
+            turn_id: 'turn-time',
+            kind: 'message',
+            status: 'completed',
+            payload: { type: 'agentMessage', content: '完成' },
+          },
+        },
+      },
+    } satisfies CoreAppSnapshot)
+
+    expect(selectChatMessages(snapshot)[0]?.timestamp).toBe('2026-06-18T04:05:06')
+  })
+
   it('merges runtime and tool-result metadata for checklist snapshots', () => {
     const snapshot = hydrateSnapshot({
       thread_id: 'thread-checklist',

@@ -3,6 +3,7 @@
   "title": "压缩上下文",
   "description": "压缩当前会话上下文",
   "icon": "archive",
+  "kind": "action",
   "action": "run_action",
   "accepts_args": false
 }

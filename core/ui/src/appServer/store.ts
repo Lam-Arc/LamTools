@@ -337,11 +337,17 @@ export function createCoreAppServerRuntimeController<
     return Array.isArray(response.commands) ? response.commands as CommandItem[] : []
   }
 
-  async function executeCommand(threadId: string, command: string, workRoot?: string): Promise<Record<string, unknown>> {
+  async function executeCommand(
+    threadId: string,
+    command: string,
+    workRoot?: string,
+    argumentsText = '',
+  ): Promise<Record<string, unknown>> {
     await ensureClient()
     const response = await runtime.client!.request('command.execute', {
       thread_id: threadId,
       command,
+      arguments: argumentsText,
       ...(workRoot ? { work_root: workRoot } : {}),
     })
     applyResponse(response)
@@ -666,6 +672,7 @@ function applyAppEvent(snapshot: CoreAppSnapshot, event: CoreAppEvent): CoreAppS
       ...turn,
       turn_id: turnId,
       status: typeof payload.status === 'string' ? payload.status : 'running',
+      created_at: typeof event.created_at === 'string' ? event.created_at : turn.created_at,
       input: input ?? turn.input,
       work_root: payload.work_root || payload.workRoot || turn.work_root || '',
       ...(isRecord(payload.runtime_snapshot)

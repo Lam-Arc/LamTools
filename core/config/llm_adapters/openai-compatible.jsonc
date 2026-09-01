@@ -1,0 +1,37 @@
+{
+  "id": "openai-compatible",
+  "label": "OpenAI Compatible (conservative)",
+  "protocol": "openai-chat-completions",
+  "request": {
+    "reasoning": {
+      "cleanup": [
+        "reasoning_effort",
+        "reasoning",
+        "thinking",
+        "enable_thinking",
+        "thinking_budget"
+      ],
+      "presets": {
+        "off": {},
+        "light": {},
+        "high": {},
+        "max": {}
+      }
+    }
+  },
+  "stream_response": {
+    "content_delta": "choices.0.delta.content",
+    "reasoning_delta": "choices.0.delta.reasoning_content",
+    "tool_calls_delta": "choices.0.delta.tool_calls",
+    "finish_reason": "choices.0.finish_reason",
+    "usage": "usage"
+  },
+  "non_stream_response": {
+    "content": "choices.0.message.content",
+    "reasoning": "choices.0.message.reasoning_content",
+    "tool_calls": "choices.0.message.tool_calls",
+    "finish_reason": "choices.0.finish_reason",
+    "usage": "usage",
+    "message": "choices.0.message"
+  }
+}

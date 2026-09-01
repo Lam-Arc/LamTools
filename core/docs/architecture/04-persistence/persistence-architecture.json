@@ -1,0 +1,500 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "LamTools Core 会话、事件与持久化架构",
+    "locale": "zh-CN",
+    "output": "persistence-architecture.html",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1320,
+      700
+    ],
+    "repository": {
+      "url": "https://github.com/Lam-Arc/LamTools.git",
+      "revision": "5c1371e717dfa86e125665f7669526d758ad5bce"
+    },
+    "views": [
+      {
+        "id": "state-owner",
+        "label": "状态所有权",
+        "focus": [
+          "core-loop",
+          "runtime-state",
+          "sql-adapter",
+          "persistence-host",
+          "core-db"
+        ],
+        "note": "运行时拥有执行状态，持久化只提供可替换的存储端口与适配器。"
+      },
+      {
+        "id": "facts-and-projections",
+        "label": "事实与投影",
+        "focus": [
+          "persistence-host",
+          "event-store",
+          "snapshot-store",
+          "checkpoint-store"
+        ],
+        "note": "事件记录事实，快照加速读取，检查点支撑可恢复执行。"
+      },
+      {
+        "id": "recovery-flow",
+        "label": "恢复链路",
+        "focus": [
+          "project-context",
+          "session-store",
+          "event-store",
+          "snapshot-store",
+          "recovery",
+          "runtime-state"
+        ],
+        "note": "会话范围与持久化记录共同把运行状态重新交给运行时。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "project-context",
+      "type": "backend",
+      "label": "项目上下文",
+      "sublabel": "工作区 / 项目范围",
+      "pos": [
+        40,
+        120
+      ],
+      "size": [
+        170,
+        66
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/app/project_context.py",
+          "label": "project scope"
+        }
+      ]
+    },
+    {
+      "id": "session-store",
+      "type": "backend",
+      "label": "***核心会话存储***",
+      "sublabel": "会话元数据 + 历史",
+      "pos": [
+        250,
+        120
+      ],
+      "size": [
+        180,
+        66
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/app/core_session_store.py",
+          "label": "session store"
+        }
+      ]
+    },
+    {
+      "id": "core-loop",
+      "type": "backend",
+      "label": "***核心循环内核***",
+      "sublabel": "领域状态转移",
+      "tag": "状态拥有者",
+      "pos": [
+        40,
+        300
+      ],
+      "size": [
+        170,
+        72
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/kernel/loop.py",
+          "label": "kernel state"
+        }
+      ]
+    },
+    {
+      "id": "runtime-state",
+      "type": "backend",
+      "label": "***运行时状态存储***",
+      "sublabel": "状态 + 检查点",
+      "tag": "领域端口",
+      "pos": [
+        250,
+        300
+      ],
+      "size": [
+        180,
+        72
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/runtime/__init__.py",
+          "label": "store protocol"
+        }
+      ]
+    },
+    {
+      "id": "sql-adapter",
+      "type": "backend",
+      "label": "***SQLAlchemy 运行时状态存储***",
+      "sublabel": "基于 SQLite 的适配器",
+      "tag": "基础设施",
+      "pos": [
+        470,
+        300
+      ],
+      "size": [
+        190,
+        72
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/app/core_db.py",
+          "label": "SQL 适配器"
+        }
+      ]
+    },
+    {
+      "id": "persistence-host",
+      "type": "backend",
+      "label": "***应用持久化宿主***",
+      "sublabel": "事件 + 快照协调",
+      "tag": "持久化边界",
+      "pos": [
+        700,
+        300
+      ],
+      "size": [
+        180,
+        72
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/app/persistence_host.py",
+          "label": "持久化宿主"
+        }
+      ]
+    },
+    {
+      "id": "core-db",
+      "type": "database",
+      "label": "核心应用数据库 / SQLite",
+      "sublabel": "持久化会话数据库",
+      "pos": [
+        930,
+        300
+      ],
+      "size": [
+        180,
+        72
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/app/core_db.py",
+          "label": "database aggregate"
+        }
+      ]
+    },
+    {
+      "id": "checkpoint-store",
+      "type": "database",
+      "label": "检查点状态",
+      "sublabel": "恢复边界",
+      "pos": [
+        470,
+        120
+      ],
+      "size": [
+        180,
+        66
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/runtime/__init__.py",
+          "label": "checkpoint protocol"
+        },
+        {
+          "path": "core/src/lamtools_core/checkpoint.py",
+          "label": "checkpoint model"
+        }
+      ]
+    },
+    {
+      "id": "event-store",
+      "type": "database",
+      "label": "***事件存储***",
+      "sublabel": "只追加的运行事实",
+      "pos": [
+        700,
+        120
+      ],
+      "size": [
+        180,
+        66
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/app/event_store.py",
+          "label": "event store"
+        },
+        {
+          "path": "core/src/lamtools_core/event/run_item.py",
+          "label": "run item"
+        }
+      ]
+    },
+    {
+      "id": "snapshot-store",
+      "type": "database",
+      "label": "***快照存储***",
+      "sublabel": "物化读取状态",
+      "pos": [
+        700,
+        500
+      ],
+      "size": [
+        180,
+        66
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/app/snapshot_store.py",
+          "label": "snapshot store"
+        },
+        {
+          "path": "core/src/lamtools_core/snapshot/__init__.py",
+          "label": "snapshot protocol"
+        }
+      ]
+    },
+    {
+      "id": "recovery",
+      "type": "backend",
+      "label": "恢复协调器",
+      "sublabel": "装载 / 过期轮次恢复",
+      "pos": [
+        930,
+        500
+      ],
+      "size": [
+        180,
+        66
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/app/live_operations.py",
+          "label": "recovery flow"
+        },
+        {
+          "path": "core/src/lamtools_core/app/http_agent_app.py",
+          "label": "startup recovery"
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "核心状态所有权",
+      "wraps": [
+        "core-loop",
+        "runtime-state"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "持久化边界",
+      "wraps": [
+        "sql-adapter",
+        "persistence-host",
+        "core-db",
+        "checkpoint-store",
+        "event-store",
+        "snapshot-store"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "会话与恢复",
+      "wraps": [
+        "project-context",
+        "session-store",
+        "recovery"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "project-to-session",
+      "from": "project-context",
+      "to": "session-store",
+      "label": "项目范围",
+      "labelDy": -48
+    },
+    {
+      "id": "kernel-to-state",
+      "from": "core-loop",
+      "to": "runtime-state",
+      "label": "转移 / 检查点",
+      "variant": "emphasis",
+      "labelAt": [
+        235,
+        390
+      ]
+    },
+    {
+      "id": "session-to-state",
+      "from": "session-store",
+      "to": "runtime-state",
+      "label": "装载会话",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        205,
+        240
+      ]
+    },
+    {
+      "id": "state-to-sql",
+      "from": "runtime-state",
+      "to": "sql-adapter",
+      "label": "状态端口",
+      "labelAt": [
+        460,
+        260
+      ]
+    },
+    {
+      "id": "sql-to-host",
+      "from": "sql-adapter",
+      "to": "persistence-host",
+      "label": "SQL 适配器",
+      "labelAt": [
+        685,
+        390
+      ]
+    },
+    {
+      "id": "host-to-db",
+      "from": "persistence-host",
+      "to": "core-db",
+      "label": "SQLite 事务",
+      "labelAt": [
+        915,
+        260
+      ]
+    },
+    {
+      "id": "host-to-events",
+      "from": "persistence-host",
+      "to": "event-store",
+      "label": "追加事实",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "labelAt": [
+        900,
+        240
+      ]
+    },
+    {
+      "id": "host-to-snapshots",
+      "from": "persistence-host",
+      "to": "snapshot-store",
+      "label": "保存投影",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        900,
+        440
+      ]
+    },
+    {
+      "id": "events-to-recovery",
+      "from": "event-store",
+      "to": "recovery",
+      "label": "重放事实",
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "top",
+      "via": [
+        [
+          1160,
+          153
+        ],
+        [
+          1160,
+          400
+        ],
+        [
+          1020,
+          400
+        ]
+      ],
+      "labelAt": [
+        1160,
+        270
+      ]
+    },
+    {
+      "id": "snapshot-to-recovery",
+      "from": "snapshot-store",
+      "to": "recovery",
+      "label": "快速装载",
+      "fromSide": "right",
+      "toSide": "left",
+      "labelAt": [
+        905,
+        590
+      ]
+    },
+    {
+      "id": "recovery-to-state",
+      "from": "recovery",
+      "to": "runtime-state",
+      "label": "装载 / 恢复",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "bottom",
+      "via": [
+        [
+          1020,
+          620
+        ],
+        [
+          340,
+          620
+        ]
+      ],
+      "labelDy": 24
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "状态所有权图",
+      "items": [
+        "***核心循环内核***驱动状态转移，***运行时状态存储***是领域侧存储端口。",
+        "界面与 SQLite 都不是执行状态的真实状态源。"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "事实与投影",
+      "items": [
+        "***事件存储***保存运行事实；***快照存储***保存可快速读取的物化状态。",
+        "检查点描述可恢复边界，不等同于完整会话历史。"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "风险与建议",
+      "items": [
+        "核心应用数据库、持久化宿主与核心会话存储仍在应用层交汇。",
+        "继续保持运行时 → 端口 → 适配器 → SQLite 的依赖方向，隔离恢复编排。"
+      ]
+    }
+  ]
+}

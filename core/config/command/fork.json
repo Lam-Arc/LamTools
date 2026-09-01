@@ -3,6 +3,7 @@
   "title": "分叉",
   "description": "从当前会话创建分叉",
   "icon": "git-branch",
+  "kind": "action",
   "action": "run_action",
   "accepts_args": false
 }

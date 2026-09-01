@@ -21,6 +21,7 @@ describe('core appServer workbench actions', () => {
       icon: '/',
       source: 'core',
       action: 'run_action',
+      kind: 'action',
     },
     {
       name: 'reviewer',
@@ -29,8 +30,23 @@ describe('core appServer workbench actions', () => {
       icon: '/',
       source: 'member',
       action: 'insert_token',
+      kind: 'skill',
     },
   ]
+
+  it('preserves plugin command ownership metadata', () => {
+    expect(normalizeCoreCommandCatalogItem({
+      name: 'pet',
+      source: 'plugin',
+      kind: 'action',
+      action: 'run_action',
+      metadata: { plugin_name: 'emotion-ball-pet', plugin_title: 'LamTools 桌宠' },
+    })).toMatchObject({
+      name: 'pet',
+      source: 'plugin',
+      metadata: { plugin_name: 'emotion-ball-pet', plugin_title: 'LamTools 桌宠' },
+    })
+  })
 
   it('chooses stop only for active empty composer submissions', () => {
     expect(coreComposerActionMode({ status: 'running', text: '', pendingAttachmentCount: 0 })).toBe('stop')
@@ -54,6 +70,7 @@ describe('core appServer workbench actions', () => {
       icon: '/',
       source: 'member',
       action: 'run_action',
+      kind: 'action',
       accepts_args: false,
     })
     expect(normalizeCoreCommandCatalogItem({ name: '' })).toBeNull()
@@ -162,8 +179,8 @@ describe('core appServer workbench actions', () => {
       text: '/compact',
       status: 'idle',
       commandCatalog: commands,
-      executeCommand: async (command) => {
-        calls.push(command)
+      executeCommand: async (command, argumentsText) => {
+        calls.push(`${command}:${argumentsText || ''}`)
         return true
       },
       queueInput: async () => {
@@ -174,8 +191,97 @@ describe('core appServer workbench actions', () => {
       },
     })
 
-    expect(result).toEqual({ status: 'command', command: 'compact', ok: true })
-    expect(calls).toEqual(['compact'])
+    expect(result).toEqual({ status: 'command', command: 'compact', arguments: '', ok: true })
+    expect(calls).toEqual(['compact:'])
+  })
+
+  it('passes action arguments once and rejects arguments for commands that do not accept them', async () => {
+    const calls: Array<[string, string | undefined]> = []
+    const result = await submitCoreComposerTask({
+      threadId: 'thread-1',
+      text: '/goal 创建发布计划',
+      status: 'idle',
+      commandCatalog: [
+        {
+          name: 'goal',
+          title: 'Goal',
+          description: '',
+          icon: '/',
+          source: 'core',
+          action: 'run_action',
+          kind: 'action',
+          accepts_args: true,
+        },
+      ],
+      executeCommand: async (command, argumentsText) => {
+        calls.push([command, argumentsText])
+        return true
+      },
+      queueInput: async () => { throw new Error('queue should not run') },
+      startTurn: async () => { throw new Error('turn should not start') },
+    })
+
+    expect(result).toEqual({
+      status: 'command',
+      command: 'goal',
+      arguments: '创建发布计划',
+      ok: true,
+    })
+    expect(calls).toEqual([['goal', '创建发布计划']])
+
+    await expect(submitCoreComposerTask({
+      threadId: 'thread-1',
+      text: '/compact abc',
+      status: 'idle',
+      commandCatalog: commands,
+      executeCommand: async () => { throw new Error('must not execute') },
+      queueInput: async () => { throw new Error('queue should not run') },
+      startTurn: async () => { throw new Error('turn should not start') },
+    })).rejects.toThrow('Command "compact" does not accept arguments')
+  })
+
+  it('keeps skills on the normal task path without calling command.execute', async () => {
+    const calls: string[] = []
+    let started: CoreInputItem[] = []
+    const result = await submitCoreComposerTask({
+      threadId: 'thread-1',
+      text: '/reviewer inspect these changes',
+      status: 'idle',
+      commandCatalog: commands,
+      executeCommand: async () => { calls.push('command'); return true },
+      queueInput: async () => { throw new Error('queue should not run') },
+      startTurn: async (_threadId, input) => { started = input; return true },
+    })
+
+    expect(result.status).toBe('started')
+    expect(calls).toEqual([])
+    expect(started).toEqual([
+      { type: 'skill', name: 'reviewer', source_text: '/reviewer' },
+      { type: 'text', text: ' inspect these changes' },
+    ])
+  })
+
+  it('keeps embedded and unknown slash text on the ordinary message path', async () => {
+    const started: CoreInputItem[][] = []
+    for (const text of ['帮我执行 /goal', '/unknown xxx', '"/compact"', '```md\n/compact\n```']) {
+      await submitCoreComposerTask({
+        threadId: 'thread-1',
+        text,
+        status: 'idle',
+        commandCatalog: commands,
+        executeCommand: async () => { throw new Error('must not execute') },
+        queueInput: async () => { throw new Error('queue should not run') },
+        startTurn: async (_threadId, input) => { started.push(input); return true },
+      })
+    }
+
+    expect(started).toHaveLength(4)
+    expect(started.map(input => input[0])).toEqual([
+      { type: 'text', text: '帮我执行 /goal' },
+      { type: 'text', text: '/unknown xxx' },
+      { type: 'text', text: '"/compact"' },
+      { type: 'text', text: '```md\n/compact\n```' },
+    ])
   })
 
   it('steers text while a turn is active, queues attachments, and starts turns while idle', async () => {

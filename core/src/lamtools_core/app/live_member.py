@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from collections.abc import Callable
 from typing import Any, Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -38,6 +39,8 @@ class CoreLiveMemberHooks(Protocol):
 
     def command_skill_registry(self) -> Any: ...
 
+    def command_skill_state_store(self) -> Any: ...
+
     def command_action_handlers(self) -> dict[str, Any]: ...
 
     async def materialize_thread(
@@ -69,6 +72,15 @@ class CoreLiveMemberHooks(Protocol):
     ) -> QueueMaterialization: ...
 
 class DefaultCoreLiveMemberHooks:
+    def __init__(
+        self,
+        *,
+        skill_registry_factory: Callable[[], Any] | None = None,
+        skill_state_store_factory: Callable[[], Any] | None = None,
+    ) -> None:
+        self._skill_registry_factory = skill_registry_factory
+        self._skill_state_store_factory = skill_state_store_factory
+
     def attachment_repository(self, db):
         del db
         return None
@@ -77,9 +89,15 @@ class DefaultCoreLiveMemberHooks:
         return []
 
     def command_skill_registry(self):
+        if self._skill_registry_factory is not None:
+            return self._skill_registry_factory()
         from lamtools_core.skills import SkillRegistry
+        from lamtools_core.composer_commands import default_core_skill_roots
 
-        return SkillRegistry()
+        return SkillRegistry(explicit_roots=default_core_skill_roots())
+
+    def command_skill_state_store(self):
+        return self._skill_state_store_factory() if self._skill_state_store_factory is not None else None
 
     def command_action_handlers(self):
         return {}
@@ -94,9 +112,16 @@ class DefaultCoreLiveMemberHooks:
 
     async def prepare_turn_input(self, *, thread_id, params, input_items):
         del thread_id
-        from .queue_state import input_item_attachment_ids, input_items_text
+        from lamtools_core.composer_commands import prepare_composer_input
+        from .queue_state import input_item_attachment_ids
 
-        text = input_items_text(input_items)
+        work_root = str(params.get("work_root") or params.get("workRoot") or "")
+        prepared = prepare_composer_input(
+            work_root=work_root,
+            input_items=input_items,
+            skill_registry=self.command_skill_registry(),
+            skill_state_store=self.command_skill_state_store(),
+        )
         attachment_ids = input_item_attachment_ids(input_items)
         runtime_extras: dict[str, Any] = {}
         if attachment_ids:
@@ -106,11 +131,11 @@ class DefaultCoreLiveMemberHooks:
             # model cannot process them) delegate to a sub_agent.
             runtime_extras["attachment_ids"] = attachment_ids
         return PreparedLiveInput(
-            visible_input=input_items,
-            runtime_input=input_items,
-            visible_text=text,
-            runtime_text=text,
-            work_root=str(params.get("work_root") or params.get("workRoot") or ""),
+            visible_input=prepared.visible_items,
+            runtime_input=prepared.runtime_items,
+            visible_text=prepared.visible_text,
+            runtime_text=prepared.runtime_text,
+            work_root=work_root,
             runtime_extras=runtime_extras,
         )
 

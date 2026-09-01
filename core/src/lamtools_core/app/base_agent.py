@@ -129,6 +129,7 @@ class CoreBaseAgentConfig:
     thinking_enabled: bool | None = None
     thinking_budget: int | None = None
     reasoning_effort: str = ""
+    reasoning_level: str = ""
     approval_policy: ApprovalPolicy = "require"
     runtime_controls: dict[str, dict[str, bool]] | None = None
     active_mode: str | None = None  # loadtools.jsonc mode name (e.g. "consider", "execute")
@@ -221,7 +222,7 @@ class CoreBaseAgentKit:
             state.metadata["runtime_snapshot"] = deepcopy(incoming_snapshot)
             for key, value in incoming_snapshot.items():
                 state.metadata[key] = deepcopy(value)
-        for key in ("model_id", "thinking_enabled", "thinking_budget", "shallow_thinking_enabled", "capability", "deferred_attachments", "context_window_tokens", "compact_trigger_tokens", "compact_limit_tokens"):
+        for key in ("model_id", "reasoning_level", "thinking_enabled", "thinking_budget", "reasoning_effort", "shallow_thinking_enabled", "capability", "deferred_attachments", "context_window_tokens", "compact_trigger_tokens", "compact_limit_tokens"):
             if key in turn_input.metadata:
                 state.metadata[key] = turn_input.metadata[key]
         if turn_input.user_message:
@@ -342,6 +343,11 @@ class CoreBaseAgentKit:
             tool_choice="auto",
             metadata={
                 "core_base_agent": True,
+                **(
+                    {"reasoning_level": self.config.reasoning_level}
+                    if self.config.reasoning_level
+                    else {}
+                ),
                 **(
                     {"thinking_enabled": self.config.thinking_enabled}
                     if self.config.thinking_enabled is not None
@@ -1097,10 +1103,18 @@ def build_core_plugin_operation_catalog(
         )
 
     def skill_registry_factory() -> SkillRegistry:
+        plugin_skill_roots = [
+            root
+            for plugin in plugin_registry.discover()
+            if plugin.enabled
+            for root in plugin.skill_roots
+            if root.exists()
+        ]
         return SkillRegistry(
             explicit_roots=[
                 core_skills_root(),
                 *default_core_skill_roots(),
+                *plugin_skill_roots,
             ],
         )
 
@@ -1121,6 +1135,8 @@ def build_core_plugin_operation_catalog(
         plugin_context.operation_catalog = catalog
     catalog.plugin_context = plugin_context
     catalog.plugin_runtimes = plugin_runtimes
+    catalog.plugin_registry = plugin_registry
+    catalog.plugin_state_store = plugin_state_store
     return catalog
 
 

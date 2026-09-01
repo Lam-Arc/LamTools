@@ -1,4 +1,10 @@
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
+import {
+  completeStartupSplash,
+  startStartupSplash,
+} from '../../ui/src/motion/startupSplash'
+
+startStartupSplash()
 
 async function init() {
   try {
@@ -54,6 +60,14 @@ async function init() {
     }
   }
 
+  ;(window as any).__LAMTOOLS_SHOW_DESKTOP_PLUGIN__ = async (pluginId: string): Promise<void> => {
+    await invoke('show_desktop_plugin_window', { pluginId })
+  }
+
+  ;(window as any).__LAMTOOLS_REFRESH_DESKTOP_PLUGINS__ = async (): Promise<void> => {
+    await invoke('reload_desktop_plugin_window')
+  }
+
   // Diagnostic: verify custom commands are registered
   try {
     const pong = await invoke<string>('ping');
@@ -65,6 +79,7 @@ async function init() {
   const { createApp } = await import('vue');
   const App = (await import('../../ui/src/demo/App.vue')).default;
   createApp(App).mount('#app');
+  completeStartupSplash()
 }
 
 init();

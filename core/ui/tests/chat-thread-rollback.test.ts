@@ -43,7 +43,7 @@ describe('ChatThread assistant message actions', () => {
     expect(wrapper.findAll('[data-assistant-actions]')).toHaveLength(1)
     expect(wrapper.get('[data-message-copy]').attributes('aria-label')).toBe('复制回复')
     expect(wrapper.get('[data-message-fork]').attributes('aria-label')).toBe('从此处另开会话')
-    expect(wrapper.get('[data-message-rollback]').attributes('aria-label')).toBe('回退到这条回复')
+    expect(wrapper.get('[data-message-rollback]').attributes('aria-label')).toBe('删除此轮及之后内容')
   })
 
   it('emits the turn payload for fork and rollback', async () => {

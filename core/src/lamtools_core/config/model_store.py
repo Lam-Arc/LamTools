@@ -52,6 +52,7 @@ class ModelConfig:
     thinking_supported: bool = False
     thinking_budget: int = 10000
     reasoning_effort: str = ""
+    reasoning: dict[str, Any] = field(default_factory=dict)
     adapter_profile_id: str = ""  # reference to a shared adapter profile
     request_body: dict[str, Any] = field(default_factory=dict)  # per-model override
     capability: str = ""          # "text" | "multimodal" | "" (→ builtin table)
@@ -77,6 +78,8 @@ class ModelConfig:
         if self.request_body:
             # The profile resolver reads ``adapter_profile_override.request.body``.
             extra["adapter_profile_override"] = {"request": {"body": dict(self.request_body)}}
+        if self.reasoning:
+            extra["reasoning"] = copy.deepcopy(self.reasoning)
         if self.capability:
             extra["capability"] = self.capability
         return extra
@@ -176,6 +179,9 @@ class ModelStore:
         request_body = data.get("request_body")
         if not isinstance(request_body, dict):
             request_body = {}
+        reasoning = data.get("reasoning")
+        if not isinstance(reasoning, dict):
+            reasoning = {}
         return ModelConfig(
             model_id=model_id,
             display_name=str(data.get("display_name") or "").strip(),
@@ -187,6 +193,7 @@ class ModelStore:
             thinking_supported=bool(thinking.get("supported", data.get("thinking_supported") or False)),
             thinking_budget=int(thinking.get("budget", data.get("thinking_budget") or 10000)),
             reasoning_effort=str(data.get("reasoning_effort") or "").strip(),
+            reasoning=copy.deepcopy(reasoning),
             adapter_profile_id=str(data.get("adapter_profile_id") or "").strip(),
             request_body=request_body,
             capability=str(data.get("capability") or "").strip().lower(),
@@ -294,6 +301,8 @@ class ModelStore:
             data["provider_id"] = model.provider_id
         if model.reasoning_effort:
             data["reasoning_effort"] = model.reasoning_effort
+        if model.reasoning:
+            data["reasoning"] = copy.deepcopy(model.reasoning)
         if model.request_body:
             data["request_body"] = copy.deepcopy(model.request_body)
         return json.dumps(data, ensure_ascii=False, indent=2)

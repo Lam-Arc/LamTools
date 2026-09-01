@@ -244,9 +244,11 @@ export interface CoreAttachmentInputItem {
   size?: number;
 }
 
-export type CoreCommandSource = 'core' | 'member';
+export type CoreCommandSource = 'core' | 'member' | 'plugin';
 
 export type CoreCommandAction = 'insert_token' | 'run_action' | 'expand_on_send';
+
+export type CoreCommandKind = 'action' | 'skill';
 
 export interface CoreCommandCatalogItem {
   name: string;
@@ -255,6 +257,8 @@ export interface CoreCommandCatalogItem {
   icon: string;
   source: CoreCommandSource;
   action: CoreCommandAction;
+  /** Canonical command category. Optional for compatibility with old catalogs. */
+  kind?: CoreCommandKind;
   accepts_args?: boolean;
   disabled?: boolean;
   metadata?: Record<string, unknown>;
@@ -399,6 +403,7 @@ export interface CoreSkillItem {
   location: string;
   source: string;
   enabled: boolean;
+  deletable: boolean;
 }
 
 export interface CoreSkillListPayload {

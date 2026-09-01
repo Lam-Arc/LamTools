@@ -1,0 +1,23 @@
+{
+  "id": "gemini",
+  "label": "Gemini Thinking",
+  "protocol": "gemini-generative-language",
+  "match_model": ["gemini"],
+  "endpoint": "/v1beta/models/{model}:generateContent",
+  "stream_endpoint": "/v1beta/models/{model}:streamGenerateContent?alt=sse",
+  "request": {
+    "reasoning": {
+      "cleanup": [
+        "generationConfig.thinkingConfig",
+        "reasoning_effort",
+        "thinking"
+      ],
+      "presets": {
+        "off": { "set": { "generationConfig.thinkingConfig.thinkingBudget": 0 } },
+        "light": { "set": { "generationConfig.thinkingConfig.thinkingBudget": 1024 } },
+        "high": { "set": { "generationConfig.thinkingConfig.thinkingBudget": 8192 } },
+        "max": { "set": { "generationConfig.thinkingConfig.thinkingBudget": 24576 } }
+      }
+    }
+  }
+}

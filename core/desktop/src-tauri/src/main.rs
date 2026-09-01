@@ -43,6 +43,7 @@ unsafe extern "system" {
 }
 
 const DESKTOP_PLUGIN_WINDOW_LABEL: &str = "desktop-plugin-host";
+const DESKTOP_PET_PLUGIN_ID: &str = "emotion-ball-pet";
 const TRAY_ID: &str = "lamtools-tray";
 const TRAY_TOGGLE_PET_ID: &str = "tray-toggle-pet";
 const TRAY_OPEN_MAIN_ID: &str = "tray-open-main";
@@ -866,6 +867,52 @@ fn show_current_window(window: tauri::WebviewWindow, app: tauri::AppHandle) {
 }
 
 #[tauri::command]
+fn show_desktop_plugin_window(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, BackendState>,
+    plugin_id: String,
+) -> Result<(), String> {
+    if plugin_id != DESKTOP_PET_PLUGIN_ID {
+        return Err(format!("unsupported desktop plugin: {plugin_id}"));
+    }
+    let ready = state
+        .desktop_windows
+        .lock()
+        .map_err(|_| "desktop window state lock failed".to_string())?
+        .contains_key(DESKTOP_PLUGIN_WINDOW_LABEL);
+    if !ready {
+        return Err("桌宠插件未启用或宿主尚未就绪".to_string());
+    }
+    let window = app
+        .get_webview_window(DESKTOP_PLUGIN_WINDOW_LABEL)
+        .ok_or_else(|| "桌宠宿主窗口不存在".to_string())?;
+    window.show().map_err(|error| error.to_string())?;
+    sync_pet_tray_item(&app);
+    Ok(())
+}
+
+#[tauri::command]
+fn reload_desktop_plugin_window(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, BackendState>,
+) -> Result<(), String> {
+    let window = app
+        .get_webview_window(DESKTOP_PLUGIN_WINDOW_LABEL)
+        .ok_or_else(|| "桌宠宿主窗口不存在".to_string())?;
+    let _ = window.hide();
+    state
+        .desktop_windows
+        .lock()
+        .map_err(|_| "desktop window state lock failed".to_string())?
+        .remove(DESKTOP_PLUGIN_WINDOW_LABEL);
+    window
+        .eval("window.location.reload()")
+        .map_err(|error| error.to_string())?;
+    sync_pet_tray_item(&app);
+    Ok(())
+}
+
+#[tauri::command]
 fn configure_desktop_plugin_window(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
@@ -1147,6 +1194,8 @@ fn main() {
             set_desktop_plugin_cursor_passthrough,
             hide_current_window,
             show_current_window,
+            show_desktop_plugin_window,
+            reload_desktop_plugin_window,
             configure_desktop_plugin_window,
             show_main_window,
             quit_app,

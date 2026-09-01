@@ -9,6 +9,39 @@ const commands = [
 ] as const
 
 describe('useCoreLiveComposerController', () => {
+  it('refreshes the command catalog when a new slash candidate starts', async () => {
+    const text = ref('')
+    const cursor = ref(0)
+    let requests = 0
+    useCoreLiveComposerController({
+      activeThreadId: ref<string | null>('thread-1'),
+      connectedThreadId: ref('thread-1'),
+      connectionState: ref<'connecting' | 'open' | 'closed' | 'error'>('open'),
+      text,
+      cursor,
+      status: ref('idle'),
+      attachments: ref<CoreInputItem[]>([]),
+      connect: async () => undefined,
+      startTurn: async () => undefined,
+      interruptTurn: async () => undefined,
+      forceResetTurn: async () => undefined,
+      queueInput: async () => undefined,
+      listCommands: async () => {
+        requests += 1
+        return []
+      },
+      getWorkRoot: () => 'E:\\LamTools',
+      executeCommand: async () => true,
+    })
+
+    text.value = '/'
+    cursor.value = 1
+    await nextTick()
+    await Promise.resolve()
+
+    expect(requests).toBe(1)
+  })
+
   it('starts the captured thread with its captured work root and turn options after a session switch', async () => {
     const activeThreadId = ref<string | null>('thread-a')
     const connectedThreadId = ref('')
@@ -221,15 +254,15 @@ describe('useCoreLiveComposerController', () => {
       queueInput: async () => undefined,
       listCommands: async () => [],
       getWorkRoot: () => activeThreadId.value === 'thread-a' ? 'E:\\A' : 'E:\\B',
-      executeCommand: async (threadId, command, workRoot) => {
-        calls.push(`command:${threadId}:${command}:${workRoot}`)
+      executeCommand: async (threadId, command, workRoot, argumentsText) => {
+        calls.push(`command:${threadId}:${command}:${workRoot}:${argumentsText || ''}`)
         return true
       },
     })
 
     await expect(controller.runCommand('compact')).resolves.toBe(true)
 
-    expect(calls).toEqual(['connect:thread-a', 'command:thread-a:compact:E:\\A'])
+    expect(calls).toEqual(['connect:thread-a', 'command:thread-a:compact:E:\\A:'])
   })
 
   it('clears a running action command immediately and exposes stop until it settles', async () => {
@@ -320,8 +353,8 @@ describe('useCoreLiveComposerController', () => {
       },
       listCommands: async () => [...commands],
       getWorkRoot: () => 'E:\\LamTools',
-      executeCommand: async (threadId, command, workRoot) => {
-        calls.push(`command:${threadId}:${command}:${workRoot}`)
+      executeCommand: async (threadId, command, workRoot, argumentsText) => {
+        calls.push(`command:${threadId}:${command}:${workRoot}:${argumentsText || ''}`)
         return true
       },
       clearComposer: (submittedText) => {
@@ -351,11 +384,15 @@ describe('useCoreLiveComposerController', () => {
     await controller.handleKeydown(new KeyboardEvent('keydown', { key: 'Enter' }))
     expect(text.value).toBe('/reviewer')
     expect(controller.paletteVisible.value).toBe(false)
+    expect(calls).not.toContain('command:thread-1:reviewer:E:\\LamTools:')
 
     text.value = '/compact'
     cursor.value = text.value.length
     await controller.selectCommand(commands[0])
-    expect(calls).toContain('command:thread-1:compact:E:\\LamTools')
+    expect(calls).not.toContain('command:thread-1:compact:E:\\LamTools:')
+    expect(text.value).toBe('/compact')
+    await controller.submit({ clearComposer: true })
+    expect(calls).toContain('command:thread-1:compact:E:\\LamTools:')
     expect(text.value).toBe('')
 
     text.value = 'stop now'

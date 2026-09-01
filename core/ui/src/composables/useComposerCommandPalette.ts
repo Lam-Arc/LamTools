@@ -1,5 +1,5 @@
 import { computed, ref, watch, type Ref } from 'vue'
-import { findActiveSlashCandidate } from '../composer/syntax'
+import { findActiveSlashCandidate, resolveComposerCommandKind } from '../composer/syntax'
 import type { CoreCommandCatalogItem } from '../types'
 
 export interface ComposerCommandPaletteOptions {
@@ -18,6 +18,13 @@ export function useComposerCommandPalette(options: ComposerCommandPaletteOptions
     const query = span.value.toLowerCase()
     return options.commands.value
       .filter(command => command.name.toLowerCase().startsWith(query))
+      .map((command, index) => ({ command, index }))
+      .sort((left, right) => {
+        const kindDelta = Number(resolveComposerCommandKind(left.command) === 'skill')
+          - Number(resolveComposerCommandKind(right.command) === 'skill')
+        return kindDelta || left.index - right.index
+      })
+      .map(item => item.command)
       .slice(0, 12)
   })
   const open = computed(() => filteredCommands.value.length > 0)

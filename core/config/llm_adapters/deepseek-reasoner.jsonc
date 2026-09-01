@@ -1,0 +1,20 @@
+{
+  "id": "deepseek-reasoner",
+  "label": "DeepSeek Reasoner",
+  "protocol": "openai-chat-completions",
+  "match_model": ["deepseek-reasoner", "deepseek-r1"],
+  "reasoning": {
+    "off_supported": false
+  },
+  "request": {
+    "reasoning": {
+      "cleanup": ["reasoning_effort", "thinking", "enable_thinking"],
+      "presets": {
+        "off": {},
+        "light": {},
+        "high": {},
+        "max": {}
+      }
+    }
+  }
+}

@@ -33,7 +33,7 @@ export const CORE_EXECUTION_CONTROLS_STORAGE_KEYS = {
 
 export interface CoreExecutionControlsStateInitial {
   modelId?: string
-  thinkingMode?: CoreThinkingMode
+  thinkingMode?: CoreThinkingMode | string
   shallowThinkingEnabled?: boolean
   activeMode?: string
   permissionPreset?: CorePermissionPreset
@@ -151,7 +151,7 @@ export function useCoreExecutionControlsState<
         selectedModelId.value = ''
       }
       if (thinkingModeOptions.value.some((option) => option.value === selectedThinkingMode.value)) return
-      selectedThinkingMode.value = thinkingModeOptions.value[0]?.value || 'none'
+      selectedThinkingMode.value = thinkingModeOptions.value[0]?.value || 'off'
     },
     { immediate: true },
   )
@@ -235,9 +235,10 @@ export function useCoreExecutionControlsState<
     selectMode,
     selectPermissionPreset,
     restorePermissionPreset,
-    turnOptions: () => ({
-      ...payload.value,
-      ...(activeModel.value?.id ? { model_id: activeModel.value.id } : {}),
+  turnOptions: () => ({
+    ...payload.value,
+    shallow_thinking_enabled: shallowThinkingEnabled.value,
+    ...(activeModel.value?.id ? { model_id: activeModel.value.id } : {}),
       ...(Number(activeModel.value?.context_window || 0) > 0
         ? { context_window_tokens: Number(activeModel.value?.context_window) }
         : {}),

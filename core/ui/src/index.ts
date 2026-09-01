@@ -21,6 +21,7 @@ export type {
   CoreAttachmentInputItem,
   CoreCommandSource,
   CoreCommandAction,
+  CoreCommandKind,
   CoreCommandCatalogItem,
   CoreCommandToken,
   CoreInputItem,
@@ -75,6 +76,7 @@ export { default as LeftSidebarShell } from './components/LeftSidebarShell.vue';
 export { default as SessionSidebar } from './components/SessionSidebar.vue';
 export { default as ChatThread } from './components/ChatThread.vue';
 export { default as ComposerBar } from './components/ComposerBar.vue';
+export { default as CoreSendStopButton } from './components/CoreSendStopButton.vue';
 export { default as CoreExecutionControls } from './components/CoreExecutionControls.vue';
 export { default as CoreRuntimeMenu } from './components/CoreRuntimeMenu.vue';
 export { default as CoreModelThinkingMenu } from './components/CoreModelThinkingMenu.vue';
@@ -248,9 +250,11 @@ export { useTheme } from './composables/useTheme';
 
 export {
   parseComposerSyntax,
+  parseComposerInput,
   findActiveSlashCandidate,
   type ComposerSyntaxKind,
   type ComposerSyntaxSpan,
+  type ParsedComposerCommand,
 } from './composer/syntax';
 
 export {

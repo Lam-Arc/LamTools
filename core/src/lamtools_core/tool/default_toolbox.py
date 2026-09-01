@@ -1178,7 +1178,7 @@ class CoreToolbox:
         return core_model_tools(self.tool_specs(), include_tools=include_tools, exclude_tools=effective_exclude or None)
 
     def skill_index(self) -> str:
-        return self.skill_registry.prompt_index(self.work_root)
+        return self.skill_registry.prompt_index(self.work_root, self.skill_state_store)
 
     def _mode_block_reason(self, name: str) -> str | None:
         """Return the fixed mode-enforcement error when ``name`` is not allowed

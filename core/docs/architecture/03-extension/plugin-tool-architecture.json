@@ -1,0 +1,536 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "LamTools Core 插件 / 工具扩展架构",
+    "locale": "zh-CN",
+    "output": "plugin-tool-architecture.html",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1320,
+      700
+    ],
+    "repository": {
+      "url": "https://github.com/Lam-Arc/LamTools.git",
+      "revision": "5c1371e717dfa86e125665f7669526d758ad5bce"
+    },
+    "views": [
+      {
+        "id": "extension-path",
+        "label": "能力接入主链路",
+        "focus": [
+          "plugin-package",
+          "plugin-registry",
+          "plugin-context",
+          "capability-catalog",
+          "core-toolbox",
+          "core-loop"
+        ],
+        "note": "插件从清单进入注册表，再以工具 / 操作能力交给运行时。"
+      },
+      {
+        "id": "stable-contract",
+        "label": "稳定扩展契约",
+        "focus": [
+          "plugin-context",
+          "capability-catalog",
+          "core-toolbox",
+          "approval-gate"
+        ],
+        "note": "稳定 API 应停留在上下文、目录、工具箱与权限端口。"
+      },
+      {
+        "id": "secondary-surfaces",
+        "label": "侧向扩展面",
+        "focus": [
+          "plugin-lifecycle",
+          "hook-engine",
+          "mcp-registry",
+          "ui-contributions",
+          "provider-adapter"
+        ],
+        "note": "生命周期、钩子、MCP、界面与适配器是侧向能力面。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "plugin-package",
+      "type": "external",
+      "label": "插件包",
+      "sublabel": "清单 + 资源",
+      "pos": [
+        40,
+        300
+      ],
+      "size": [
+        150,
+        66
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/plugins/models.py",
+          "label": "plugin model"
+        }
+      ]
+    },
+    {
+      "id": "plugin-registry",
+      "type": "backend",
+      "label": "***插件注册表***",
+      "sublabel": "发现 / 解析 / 暴露",
+      "tag": "加载边界",
+      "pos": [
+        230,
+        300
+      ],
+      "size": [
+        170,
+        66
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/plugins/registry.py",
+          "label": "registry"
+        },
+        {
+          "path": "core/src/lamtools_core/plugins/install.py",
+          "label": "installation"
+        }
+      ]
+    },
+    {
+      "id": "plugin-lifecycle",
+      "type": "security",
+      "label": "生命周期与信任",
+      "sublabel": "启用 / 停用 / 权限",
+      "pos": [
+        230,
+        120
+      ],
+      "size": [
+        170,
+        66
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/plugins/lifecycle.py",
+          "label": "lifecycle"
+        },
+        {
+          "path": "core/src/lamtools_core/plugins/trust.py",
+          "label": "trust policy"
+        }
+      ]
+    },
+    {
+      "id": "plugin-context",
+      "type": "backend",
+      "label": "***插件上下文***",
+      "sublabel": "受限运行时访问",
+      "tag": "稳定 API",
+      "pos": [
+        440,
+        300
+      ],
+      "size": [
+        170,
+        72
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/plugins/context.py",
+          "label": "context contract"
+        }
+      ]
+    },
+    {
+      "id": "capability-catalog",
+      "type": "backend",
+      "label": "***能力目录***",
+      "sublabel": "工具 + 操作 + 规格",
+      "tag": "扩展 API",
+      "pos": [
+        650,
+        300
+      ],
+      "size": [
+        180,
+        72
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/plugins/tools.py",
+          "label": "tool registration"
+        },
+        {
+          "path": "core/src/lamtools_core/plugins/operations_loader.py",
+          "label": "operation loading"
+        }
+      ]
+    },
+    {
+      "id": "hook-engine",
+      "type": "backend",
+      "label": "***钩子引擎***",
+      "sublabel": "执行前 / 执行后策略钩子",
+      "pos": [
+        650,
+        120
+      ],
+      "size": [
+        170,
+        66
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/plugins/engine.py",
+          "label": "hook engine"
+        }
+      ]
+    },
+    {
+      "id": "mcp-registry",
+      "type": "external",
+      "label": "MCP 注册表",
+      "sublabel": "远程工具发现",
+      "pos": [
+        860,
+        120
+      ],
+      "size": [
+        170,
+        66
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/mcp/registry.py",
+          "label": "MCP registry"
+        },
+        {
+          "path": "core/src/lamtools_core/plugins/adapters.py",
+          "label": "adapter boundary"
+        }
+      ]
+    },
+    {
+      "id": "core-toolbox",
+      "type": "backend",
+      "label": "***核心工具箱***",
+      "sublabel": "规范化 + 执行",
+      "tag": "运行时端口",
+      "pos": [
+        880,
+        300
+      ],
+      "size": [
+        170,
+        72
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/tool/default_toolbox.py",
+          "label": "toolbox"
+        },
+        {
+          "path": "core/src/lamtools_core/tool/approval.py",
+          "label": "approval gate"
+        }
+      ]
+    },
+    {
+      "id": "core-loop",
+      "type": "backend",
+      "label": "***核心循环内核***",
+      "sublabel": "轮次执行",
+      "tag": "运行时内部",
+      "pos": [
+        1100,
+        300
+      ],
+      "size": [
+        170,
+        72
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/kernel/loop.py",
+          "label": "kernel"
+        }
+      ]
+    },
+    {
+      "id": "ui-contributions",
+      "type": "frontend",
+      "label": "界面扩展",
+      "sublabel": "插件注册表 / 面板",
+      "pos": [
+        440,
+        500
+      ],
+      "size": [
+        170,
+        66
+      ],
+      "sources": [
+        {
+          "path": "core/ui/src/plugins/registry.ts",
+          "label": "UI registry"
+        },
+        {
+          "path": "core/ui/src/plugins/api.ts",
+          "label": "UI API"
+        }
+      ]
+    },
+    {
+      "id": "provider-adapter",
+      "type": "external",
+      "label": "提供方 / 适配器",
+      "sublabel": "能力实现",
+      "pos": [
+        650,
+        500
+      ],
+      "size": [
+        180,
+        66
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/plugins/adapters.py",
+          "label": "adapter API"
+        },
+        {
+          "path": "core/src/lamtools_core/llm/adapter.py",
+          "label": "LLM adapter"
+        }
+      ]
+    },
+    {
+      "id": "approval-gate",
+      "type": "security",
+      "label": "权限与审批",
+      "sublabel": "执行前策略",
+      "pos": [
+        1100,
+        500
+      ],
+      "size": [
+        170,
+        66
+      ],
+      "sources": [
+        {
+          "path": "core/src/lamtools_core/tool/permission.py",
+          "label": "permission"
+        },
+        {
+          "path": "core/src/lamtools_core/tool/approval.py",
+          "label": "approval"
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "扩展边界",
+      "wraps": [
+        "plugin-registry",
+        "plugin-lifecycle",
+        "plugin-context",
+        "capability-catalog",
+        "hook-engine",
+        "mcp-registry",
+        "provider-adapter"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "运行时消费边界",
+      "wraps": [
+        "core-toolbox",
+        "core-loop",
+        "approval-gate"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "表示层扩展",
+      "wraps": [
+        "ui-contributions"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "package-to-registry",
+      "from": "plugin-package",
+      "to": "plugin-registry",
+      "label": "清单 + 资源",
+      "variant": "emphasis",
+      "labelDy": -48
+    },
+    {
+      "id": "lifecycle-to-registry",
+      "from": "plugin-lifecycle",
+      "to": "plugin-registry",
+      "label": "启用 / 停用",
+      "variant": "security",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        190,
+        240
+      ]
+    },
+    {
+      "id": "registry-to-context",
+      "from": "plugin-registry",
+      "to": "plugin-context",
+      "label": "构造上下文",
+      "labelDy": -48
+    },
+    {
+      "id": "context-to-catalog",
+      "from": "plugin-context",
+      "to": "capability-catalog",
+      "label": "注册能力",
+      "variant": "emphasis",
+      "labelAt": [
+        630,
+        400
+      ]
+    },
+    {
+      "id": "catalog-to-toolbox",
+      "from": "capability-catalog",
+      "to": "core-toolbox",
+      "label": "规格 + 处理器",
+      "labelAt": [
+        855,
+        260
+      ]
+    },
+    {
+      "id": "toolbox-to-kernel",
+      "from": "core-toolbox",
+      "to": "core-loop",
+      "label": "调用 / 结果",
+      "variant": "emphasis",
+      "labelDy": -48
+    },
+    {
+      "id": "hook-to-toolbox",
+      "from": "hook-engine",
+      "to": "core-toolbox",
+      "label": "执行前 / 执行后钩子",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "via": [
+        [
+          735,
+          205
+        ],
+        [
+          965,
+          205
+        ]
+      ]
+    },
+    {
+      "id": "mcp-to-catalog",
+      "from": "mcp-registry",
+      "to": "capability-catalog",
+      "label": "发现工具",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "left",
+      "via": [
+        [
+          945,
+          60
+        ],
+        [
+          630,
+          60
+        ],
+        [
+          630,
+          336
+        ]
+      ]
+    },
+    {
+      "id": "context-to-ui",
+      "from": "plugin-context",
+      "to": "ui-contributions",
+      "label": "界面入口",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        395,
+        430
+      ]
+    },
+    {
+      "id": "adapter-to-toolbox",
+      "from": "provider-adapter",
+      "to": "core-toolbox",
+      "label": "能力实现",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "via": [
+        [
+          740,
+          460
+        ],
+        [
+          965,
+          460
+        ]
+      ]
+    },
+    {
+      "id": "kernel-to-approval",
+      "from": "core-loop",
+      "to": "approval-gate",
+      "label": "审批请求",
+      "variant": "security",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        1050,
+        430
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "扩展边界",
+      "items": [
+        "***插件上下文***、***能力目录***是最适合稳定化的扩展面。",
+        "运行时只应消费工具 / 操作 / 适配器端口。"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "稳定 API 与内部实现",
+      "items": [
+        "清单、注册表、生命周期属于插件基础设施。",
+        "***核心工具箱***与***核心循环内核***是运行时内部实现，不应被插件直接穿透。"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "耦合信号",
+      "items": [
+        "钩子、MCP、界面扩展、权限与执行链交汇于工具箱。",
+        "若注册表、引擎同时承担加载、配置和执行，容易演化为上帝对象。"
+      ]
+    }
+  ]
+}

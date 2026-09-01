@@ -450,6 +450,7 @@ async def test_load_skill_disabled_rejected(tmp_path):
     result = await toolbox.execute(ToolCall(id="c1", name="load_skill", arguments={"name": "demo-skill"}))
     assert result.status == "failed"
     assert "disabled" in (result.error or "")
+    assert "demo-skill" not in toolbox.skill_index()
 
 
 # ── 用户权限覆盖（E3） ────────────────────────────────────────────

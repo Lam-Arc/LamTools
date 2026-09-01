@@ -1,0 +1,17 @@
+{
+  "id": "grok-non-reasoning",
+  "label": "Grok Non-reasoning",
+  "protocol": "openai-chat-completions",
+  "match_model": ["grok-4.20-0309-non-reasoning"],
+  "request": {
+    "reasoning": {
+      "cleanup": ["reasoning_effort", "reasoning", "thinking", "enable_thinking"],
+      "presets": {
+        "off": {},
+        "light": {},
+        "high": {},
+        "max": {}
+      }
+    }
+  }
+}

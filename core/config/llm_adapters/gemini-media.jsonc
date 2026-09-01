@@ -1,0 +1,35 @@
+{
+  "id": "gemini-media",
+  "label": "Gemini Image/Video (no reasoning)",
+  "protocol": "gemini-generative-language",
+  "match_model": [
+    "gemini-2.5-flash-image",
+    "gemini-3.1-flash-image",
+    "gemini-3.1-flash-image-preview",
+    "gemini-3-pro-image",
+    "gemini-3-pro-image-preview",
+    "gemini-veo3.1",
+    "canvas-video",
+    "gemini-veo",
+    "veo-"
+  ],
+  "endpoint": "/v1beta/models/{model}:generateContent",
+  "stream_endpoint": "/v1beta/models/{model}:streamGenerateContent?alt=sse",
+  "request": {
+    "reasoning": {
+      "cleanup": [
+        "generationConfig.thinkingConfig",
+        "reasoning_effort",
+        "reasoning",
+        "thinking",
+        "enable_thinking"
+      ],
+      "presets": {
+        "off": {},
+        "light": {},
+        "high": {},
+        "max": {}
+      }
+    }
+  }
+}

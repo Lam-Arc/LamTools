@@ -8,6 +8,26 @@
 *::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--theme-main-text, #fff) 18%, transparent); border-radius: 999px; border: 2px solid transparent; background-clip: content-box; }
 *::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--theme-main-text, #fff) 34%, transparent); }
 
+/* Cross-fade the complete document when theme CSS variables change so the
+   backdrop gradient and every themed surface change together. */
+@supports (view-transition-name: root) {
+  :root { view-transition-name: root; }
+  ::view-transition-group(root),
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation-duration: var(--dur-theme, 600ms);
+    animation-timing-function: var(--ease-inout, cubic-bezier(.2, .8, .2, 1));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(root),
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation-duration: 1ms;
+  }
+}
+
 .sr-only {
   position: absolute !important;
   width: 1px !important;

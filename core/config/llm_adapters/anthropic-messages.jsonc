@@ -2,12 +2,41 @@
   "id": "anthropic-messages",
   "label": "Anthropic Messages",
   "protocol": "anthropic-messages",
+  "auth": "bearer",
   "request": {
-    "thinking": {
-      "when_enabled": {
-        "thinking": {
-          "type": "enabled",
-          "budget_tokens": "$thinking_budget"
+    "omit_sampling_when_reasoning": true,
+    "reasoning": {
+      "cleanup": [
+        "thinking",
+        "output_config.effort",
+        "reasoning_effort",
+        "reasoning"
+      ],
+      "presets": {
+        "off": {},
+        "light": {
+          "set": {
+            "thinking": {
+              "type": "enabled",
+              "budget_tokens": "$thinking_budget_light"
+            }
+          }
+        },
+        "high": {
+          "set": {
+            "thinking": {
+              "type": "enabled",
+              "budget_tokens": "$thinking_budget_high"
+            }
+          }
+        },
+        "max": {
+          "set": {
+            "thinking": {
+              "type": "enabled",
+              "budget_tokens": "$thinking_budget_max"
+            }
+          }
         }
       }
     }

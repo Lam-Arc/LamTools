@@ -1,5 +1,9 @@
 import type { CoreCommandCatalogItem, CoreInputItem } from '../types'
-import { parseComposerSyntax } from './syntax.ts'
+import {
+  parseComposerInput,
+  parseComposerSyntax,
+  resolveComposerCommandKind,
+} from './syntax.ts'
 
 export interface CoreComposerHighlightSegment {
   text: string
@@ -12,7 +16,7 @@ export function buildCoreComposerHighlightSegments(
 ): CoreComposerHighlightSegment[] {
   const spans = parseComposerSyntax(text)
     .filter(span => span.kind === 'slash')
-    .filter(span => Boolean(findCommand(commands, span.value, 'insert_token')))
+    .filter(span => Boolean(findCommand(commands, span.value)))
   if (!spans.length) return [{ text, command: false }]
 
   const segments: CoreComposerHighlightSegment[] = []
@@ -33,7 +37,7 @@ export function buildCoreComposerInputItems(
 ): CoreInputItem[] {
   const spans = parseComposerSyntax(text)
     .filter(span => span.kind === 'slash')
-    .filter(span => Boolean(findCommand(commands, span.value, 'insert_token')))
+    .filter(span => Boolean(findSkillCommand(commands, span.value)))
 
   if (!spans.length) return [{ type: 'text', text }, ...attachments]
 
@@ -41,7 +45,7 @@ export function buildCoreComposerInputItems(
   let cursor = 0
   for (const span of spans) {
     if (span.start > cursor) items.push({ type: 'text', text: text.slice(cursor, span.start) })
-    const command = findCommand(commands, span.value, 'insert_token')
+    const command = findSkillCommand(commands, span.value)
     if (command) items.push({ type: 'skill', name: command.name, source_text: span.raw })
     cursor = span.end
   }
@@ -50,19 +54,24 @@ export function buildCoreComposerInputItems(
 }
 
 export function coreStandaloneActionCommand(text: string, commands: CoreCommandCatalogItem[] = []): string {
-  const spans = parseComposerSyntax(text)
-  if (spans.length !== 1) return ''
-  const span = spans[0]
-  if (span.kind !== 'slash') return ''
-  if (text.slice(0, span.start).trim() || text.slice(span.end).trim()) return ''
-  return findCommand(commands, span.value, 'run_action')?.name ?? ''
+  const parsed = parseComposerInput(text, commands)
+  return parsed?.kind === 'action' ? parsed.name : ''
+}
+
+function findSkillCommand(
+  commands: CoreCommandCatalogItem[],
+  name: string,
+): CoreCommandCatalogItem | undefined {
+  const normalized = name.toLowerCase()
+  return commands.find(command => (
+    command.name.toLowerCase() === normalized && resolveComposerCommandKind(command) === 'skill'
+  ))
 }
 
 function findCommand(
   commands: CoreCommandCatalogItem[],
   name: string,
-  action: CoreCommandCatalogItem['action'],
 ): CoreCommandCatalogItem | undefined {
   const normalized = name.toLowerCase()
-  return commands.find(command => command.name.toLowerCase() === normalized && command.action === action)
+  return commands.find(command => command.name.toLowerCase() === normalized)
 }

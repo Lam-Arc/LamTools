@@ -65,6 +65,7 @@ export function buildCoreResourceSummary(
   let inputTokens = 0
   let outputTokens = 0
   let cachedTokens = 0
+  let cacheReportedInputTokens = 0
   let hasCalls = false
   let hasInput = false
   let hasOutput = false
@@ -80,20 +81,26 @@ export function buildCoreResourceSummary(
     if (callCount >= 0) { calls += callCount; hasCalls = true }
     if (input >= 0) { inputTokens += input; hasInput = true }
     if (output >= 0) { outputTokens += output; hasOutput = true }
-    if (cached >= 0) { cachedTokens += cached; hasCache = true }
+    if (cached >= 0) {
+      cachedTokens += cached
+      // A provider that omits its cache field has reported an unknown cache
+      // result, not a cache miss. Keep its input out of this denominator.
+      if (input >= 0) cacheReportedInputTokens += input
+      hasCache = true
+    }
     usageReported = usageReported
       || metrics.usage_available === true
       || input >= 0
       || output >= 0
       || firstNumber(metrics.total_tokens, metrics.totalTokens) >= 0
   }
-  // Aggregate rate over the whole window: Σ cached / Σ input. The
-  // per-record backend rate only describes one turn — showing the last turn's
-  // rate for a multi-turn thread would be misleading. Falls back to a
-  // backend-computed rate when the cache token counts are unavailable.
+  // Aggregate only calls that explicitly reported cache data. An omitted
+  // `cached_tokens` field means "unknown", not zero; including that call's
+  // input in the denominator would turn a valid 92.8% hit rate into a false
+  // 46% rate when one of two calls did not expose cache metrics.
   const directRate = firstNumber(...providerRecords.map(r => firstNumber(r.cache_hit_rate, r.cacheHitRate)))
-  const cacheHitRate = hasCache && inputTokens > 0
-    ? cachedTokens / inputTokens
+  const cacheHitRate = hasCache && cacheReportedInputTokens > 0
+    ? cachedTokens / cacheReportedInputTokens
     : directRate >= 0
       ? directRate
       : -1
@@ -114,7 +121,7 @@ export function buildCoreResourceSummary(
       { label: '调用', value: hasCalls ? String(calls) : '--' },
       { label: '输入', value: hasInput ? formatCompactNumber(inputTokens) : '--' },
       { label: '输出', value: hasOutput ? formatCompactNumber(outputTokens) : '--' },
-      { label: '缓存', value: cacheHitRate >= 0 ? formatPercent(cacheHitRate) : '--' },
+      ...(cacheHitRate >= 0 ? [{ label: '缓存', value: formatPercent(cacheHitRate) }] : []),
     ],
   }
 }
@@ -227,6 +234,6 @@ function formatCompactNumber(value: number): string {
 }
 
 function formatPercent(rate: number): string {
-  const pct = Math.round(rate * 100)
+  const pct = Math.round(rate * 1000) / 10
   return `${pct}%`
 }

@@ -81,7 +81,7 @@ describe('useCoreExecutionControlsState', () => {
       storage,
     })
 
-    expect(state.selectedThinkingMode.value).toBe('low')
+    expect(state.selectedThinkingMode.value).toBe('light')
     expect(state.shallowThinkingEnabled.value).toBe(true)
 
     state.selectedThinkingMode.value = 'high'
@@ -128,10 +128,9 @@ describe('useCoreExecutionControlsState', () => {
     models.value = [{ id: 'model-1', provider_id: 'provider-1', thinking_supported: false }]
     await nextTick()
 
-    expect(state.selectedThinkingMode.value).toBe('none')
+    expect(state.selectedThinkingMode.value).toBe('off')
     expect(state.payload.value).toEqual({
-      thinking_enabled: false,
-      shallow_thinking_enabled: false,
+      reasoning_level: 'off',
     })
   })
 
@@ -148,7 +147,7 @@ describe('useCoreExecutionControlsState', () => {
     selectedProviders.value = [{ id: 'provider-1', name: 'xfyun', base_url: 'https://maas-coding.example.test' }]
     await nextTick()
 
-    expect(state.thinkingModeOptions.value.map((option) => option.value)).toEqual(['high', 'medium', 'low', 'none'])
+    expect(state.thinkingModeOptions.value.map((option) => option.value)).toEqual(['max', 'high', 'light', 'off'])
     expect(state.selectedThinkingMode.value).toBe('high')
   })
 
@@ -176,9 +175,7 @@ describe('useCoreExecutionControlsState', () => {
 
     expect(state.turnOptions()).toEqual({
       model_id: 'model-1',
-      thinking_enabled: true,
-      thinking_budget: 8_192,
-      reasoning_effort: undefined,
+      reasoning_level: 'high',
       shallow_thinking_enabled: true,
       context_window_tokens: 128_000,
       active_mode: 'execute',

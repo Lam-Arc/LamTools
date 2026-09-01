@@ -17,6 +17,8 @@ describe('CommandPalette', () => {
       props: { commands, activeIndex: 0 },
     })
     expect(wrapper.text()).toContain('/compact')
+    expect(wrapper.text()).toContain('操作')
+    expect(wrapper.text()).toContain('技能')
     expect(wrapper.text()).toContain('Enter')
     expect(wrapper.text()).toContain('Esc')
     await wrapper.find('[data-command-name="compact"]').trigger('click')

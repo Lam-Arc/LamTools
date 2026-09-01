@@ -2,12 +2,26 @@
   "id": "openai-chat",
   "label": "OpenAI Chat Completions compatible",
   "protocol": "openai-chat-completions",
+  "match_model": ["gpt-5", "gpt-4", "o1", "o3", "o4", "o5", "codex-"],
   "request": {
-    "thinking": {
-      "when_enabled": {
-        "thinking": {
-          "type": "enabled",
-          "budget_tokens": "$thinking_budget"
+    "reasoning": {
+      "cleanup": [
+        "reasoning_effort",
+        "reasoning",
+        "thinking",
+        "enable_thinking",
+        "thinking_budget"
+      ],
+      "presets": {
+        "off": {},
+        "light": {
+          "set": { "reasoning_effort": "low" }
+        },
+        "high": {
+          "set": { "reasoning_effort": "medium" }
+        },
+        "max": {
+          "set": { "reasoning_effort": "high" }
         }
       }
     }

@@ -1,0 +1,20 @@
+{
+  "id": "kimi",
+  "label": "Kimi Thinking",
+  "protocol": "openai-chat-completions",
+  "match_model": ["kimi", "moonshot"],
+  "reasoning": {
+    "off_supported": false
+  },
+  "request": {
+    "reasoning": {
+      "cleanup": ["reasoning_effort", "thinking", "enable_thinking"],
+      "presets": {
+        "off": {},
+        "light": { "set": { "reasoning_effort": "low" } },
+        "high": { "set": { "reasoning_effort": "high" } },
+        "max": { "set": { "reasoning_effort": "max" } }
+      }
+    }
+  }
+}

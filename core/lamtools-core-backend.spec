@@ -141,6 +141,7 @@ _hiddenimports = [
     "lamtools_core.llm.helpers",
     "lamtools_core.llm.policy",
     "lamtools_core.llm.profiles",
+    "lamtools_core.llm.reasoning",
     "lamtools_core.llm.retry",
     "lamtools_core.llm.shallow_thinking",
 

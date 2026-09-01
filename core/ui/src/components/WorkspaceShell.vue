@@ -149,7 +149,6 @@
       variant="floating"
       :placeholder="composerPlaceholder"
       :disabled="composerDisabled"
-      :active="composerActive"
       :action-mode="composerActionMode"
       :send-label="composerSendLabel"
       :stop-label="composerStopLabel"
@@ -158,6 +157,9 @@
       @submit="$emit('composer-submit')"
       @drop="$emit('composer-drop', $event)"
     >
+      <template #popover>
+        <slot name="composer-popover" />
+      </template>
       <template #preamble>
         <slot name="composer-preamble" />
       </template>
@@ -180,14 +182,14 @@
       </template>
       <template #action>
         <slot name="composer-action">
-          <button
-            class="send"
-            :class="{ 'send--stop': composerActionMode === 'stop' }"
-            type="submit"
+          <CoreSendStopButton
+            :action-mode="composerActionMode"
             :disabled="composerActionMode === 'send' && composerSendDisabled"
-            :title="composerActionMode === 'stop' ? composerStopTitle : composerSendTitle"
-            :aria-label="composerActionMode === 'stop' ? composerStopTitle : composerSendTitle"
-          >{{ composerActionMode === 'stop' ? composerStopLabel : composerSendLabel }}</button>
+            :send-label="composerSendLabel"
+            :stop-label="composerStopLabel"
+            :send-title="composerSendTitle"
+            :stop-title="composerStopTitle"
+          />
         </slot>
       </template>
     </ComposerBar>
@@ -231,6 +233,7 @@ import { useShellLayout } from '../composables/useShellLayout'
 import type { ThemeData } from '../composables/useShellLayout'
 import { dismissToast, showToast } from '../composables/useCoreToast'
 import ComposerBar from './ComposerBar.vue'
+import CoreSendStopButton from './CoreSendStopButton.vue'
 import CoreToastHost from './CoreToastHost.vue'
 import LeftSidebarShell from './LeftSidebarShell.vue'
 
@@ -260,8 +263,6 @@ const props = withDefaults(
     hideComposer?: boolean
     /** Host-controlled layout state for a Core session with no messages yet. */
     emptySession?: boolean
-    /** 透传给 ComposerBar：运行时驱动输入框背景粒子动效 */
-    composerActive?: boolean
   }>(),
   {
     storageKey: 'lamtools.ui',
@@ -284,7 +285,6 @@ const props = withDefaults(
     showRightPanel: true,
     stageOpen: false,
     emptySession: false,
-    composerActive: false,
   },
 )
 

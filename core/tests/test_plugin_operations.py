@@ -12,11 +12,100 @@ from lamtools_core.plugins import (
     PluginStateStore,
     build_plugin_operation_catalog,
 )
+from lamtools_core.skills import SkillRegistry, SkillStateStore
 
 
 def write_json(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+
+def write_skill(path: Path, name: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f"---\nname: {name}\ndescription: {name} skill\n---\n\nInstructions\n",
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.asyncio
+async def test_skill_delete_removes_project_directory_and_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("LAMTOOLS_HOME", str(tmp_path / "user-home"))
+    work_root = tmp_path / "workspace"
+    skill_file = work_root / ".lam" / "skills" / "reviewer" / "SKILL.md"
+    write_skill(skill_file, "reviewer")
+    state = SkillStateStore(tmp_path / "skill-state.json")
+    state.set_enabled("reviewer", False)
+    catalog = build_plugin_operation_catalog(
+        plugin_registry=PluginRegistry(plugin_roots=[]),
+        plugin_state_store=PluginStateStore(tmp_path / "plugin-state.json"),
+        hook_registry_factory=lambda: HookRegistry(),
+        hook_trust_store=HookTrustStore(tmp_path / "hook-trust.json"),
+        skill_state_store=state,
+        skill_registry_factory=lambda: SkillRegistry(),
+        work_root=work_root,
+    )
+
+    listed = await catalog.execute("skill.list", {})
+    assert listed.payload["skills"][0]["deletable"] is True
+
+    deleted = await catalog.execute("skill.delete", {"name": "reviewer"})
+
+    assert deleted.status == "ok"
+    assert not skill_file.parent.exists()
+    assert state.is_enabled("reviewer") is True
+
+
+@pytest.mark.asyncio
+async def test_skill_delete_rejects_core_skill(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("LAMTOOLS_HOME", str(tmp_path / "user-home"))
+    core_skills = tmp_path / "core-skills"
+    skill_file = core_skills / "reviewer" / "SKILL.md"
+    write_skill(skill_file, "reviewer")
+    catalog = build_plugin_operation_catalog(
+        plugin_registry=PluginRegistry(plugin_roots=[]),
+        plugin_state_store=PluginStateStore(tmp_path / "plugin-state.json"),
+        hook_registry_factory=lambda: HookRegistry(),
+        hook_trust_store=HookTrustStore(tmp_path / "hook-trust.json"),
+        skill_state_store=SkillStateStore(tmp_path / "skill-state.json"),
+        skill_registry_factory=lambda: SkillRegistry(explicit_roots=[core_skills]),
+        work_root=tmp_path / "workspace",
+    )
+
+    deleted = await catalog.execute("skill.delete", {"name": "reviewer"})
+
+    assert deleted.status == "error"
+    assert "read-only" in deleted.payload["error"]
+    assert skill_file.exists()
+
+
+@pytest.mark.asyncio
+async def test_plugin_skill_is_listed_as_read_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("LAMTOOLS_HOME", str(tmp_path / "user-home"))
+    plugin_root = tmp_path / "workspace" / ".lam" / "core" / "plugins" / "review-plugin"
+    write_json(plugin_root / "plugin.json", {"name": "review-plugin", "skills": ["./skills"]})
+    skill_file = plugin_root / "skills" / "reviewer" / "SKILL.md"
+    write_skill(skill_file, "reviewer")
+    plugin_state = PluginStateStore(tmp_path / "plugin-state.json")
+    plugin_registry = PluginRegistry(plugin_roots=[plugin_root.parent], state_store=plugin_state)
+    catalog = build_plugin_operation_catalog(
+        plugin_registry=plugin_registry,
+        plugin_state_store=plugin_state,
+        hook_registry_factory=lambda: HookRegistry(),
+        hook_trust_store=HookTrustStore(tmp_path / "hook-trust.json"),
+        skill_state_store=SkillStateStore(tmp_path / "skill-state.json"),
+        skill_registry_factory=lambda: SkillRegistry(explicit_roots=[plugin_root / "skills"]),
+        work_root=tmp_path / "workspace",
+    )
+
+    listed = await catalog.execute("skill.list", {})
+    skill = listed.payload["skills"][0]
+    deleted = await catalog.execute("skill.delete", {"name": "reviewer"})
+
+    assert skill["source"] == "plugin"
+    assert skill["deletable"] is False
+    assert deleted.status == "error"
+    assert skill_file.exists()
 
 
 @pytest.mark.asyncio

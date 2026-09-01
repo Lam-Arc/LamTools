@@ -1,0 +1,46 @@
+{
+  "id": "anthropic-adaptive",
+  "label": "Anthropic Adaptive Thinking",
+  "protocol": "anthropic-messages",
+  "match_model": [
+    "claude-opus-4-6",
+    "claude-opus-4-7",
+    "claude-opus-4-8",
+    "claude-opus-5",
+    "claude-sonnet-4-6",
+    "claude-sonnet-5",
+    "claude-fable-5"
+  ],
+  "endpoint": "/v1/messages",
+  "request": {
+    "omit_sampling_always": true,
+    "reasoning": {
+      "cleanup": [
+        "thinking",
+        "output_config.effort",
+        "reasoning_effort"
+      ],
+      "presets": {
+        "off": {},
+        "light": {
+          "set": {
+            "thinking": { "type": "adaptive" },
+            "output_config.effort": "low"
+          }
+        },
+        "high": {
+          "set": {
+            "thinking": { "type": "adaptive" },
+            "output_config.effort": "high"
+          }
+        },
+        "max": {
+          "set": {
+            "thinking": { "type": "adaptive" },
+            "output_config.effort": "max"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>发送 / 停止</title>
+  <link rel="stylesheet" href="./ui/src/styles/variables.css">
+  <style>
+    :root {
+      --theme-main-background: var(--bg);
+      --theme-main-text: var(--text);
+      --theme-control-background: var(--text);
+      --theme-control-text: var(--bg);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+    }
+
+    body {
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+      background: var(--theme-main-background);
+    }
+
+    button {
+      --glyph-x: 0px;
+      --glyph-y: 0px;
+      --glyph-scale-x: 1;
+      --glyph-scale-y: 1;
+      --glyph-rotate: 0deg;
+      --glyph-opacity: 1;
+      --trail-x: -9px;
+      --trail-scale: 0;
+      --trail-opacity: 0;
+      position: relative;
+      width: 28px;
+      height: 28px;
+      padding: 0;
+      border: 0;
+      border-radius: 999px;
+      color: var(--theme-control-background);
+      background: var(--theme-control-text);
+      box-shadow: var(--shadow-sm);
+      cursor: pointer;
+      isolation: isolate;
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
+      will-change: transform;
+    }
+
+    button::before,
+    button::after {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      content: "";
+      pointer-events: none;
+    }
+
+    button::before {
+      width: 13px;
+      height: 13px;
+      background: currentColor;
+      clip-path: polygon(4% 45%, 94% 7%, 68% 95%, 48% 62%, 31% 79%, 31% 57%);
+      opacity: var(--glyph-opacity);
+      transform: translate(calc(-50% + var(--glyph-x)), calc(-50% + var(--glyph-y)))
+        rotate(var(--glyph-rotate)) scale(var(--glyph-scale-x), var(--glyph-scale-y));
+      transform-origin: 50% 55%;
+      will-change: transform, opacity;
+    }
+
+    button::after {
+      z-index: -1;
+      width: 18px;
+      height: 5px;
+      border-radius: 999px;
+      background: currentColor;
+      opacity: var(--trail-opacity);
+      filter: blur(3px);
+      transform: translate(calc(-50% + var(--trail-x)), -50%) scaleX(var(--trail-scale));
+      transform-origin: right center;
+      will-change: transform, opacity;
+    }
+
+    button[data-state="stop"] {
+      color: var(--theme-control-background);
+      background: var(--theme-control-text);
+      border-radius: var(--radius-sm);
+    }
+
+    button[data-state="stop"]::before {
+      width: 11px;
+      height: 11px;
+      border-radius: var(--space-1);
+      clip-path: inset(0 round var(--space-1));
+    }
+
+    button:focus-visible {
+      outline: 2px solid color-mix(in srgb, var(--theme-main-text) 72%, transparent);
+      outline-offset: var(--space-1);
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      button {
+        will-change: auto;
+      }
+    }
+  </style>
+</head>
+<body>
+  <button type="button" data-state="send" aria-label="发送" aria-pressed="false" title="发送"></button>
+
+  <script src="./ui/node_modules/gsap/dist/gsap.min.js"></script>
+  <script>
+    const button = document.querySelector("button");
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const sendColor = getComputedStyle(document.documentElement)
+      .getPropertyValue("--theme-control-text").trim();
+    const stopColor = sendColor;
+    let busy = false;
+
+    const xTo = gsap.quickTo(button, "x", { duration: 0.24, ease: "power3.out" });
+    const yTo = gsap.quickTo(button, "y", { duration: 0.24, ease: "power3.out" });
+    const rotateTo = gsap.quickTo(button, "rotation", { duration: 0.24, ease: "power3.out" });
+
+    const setState = (state) => {
+      const stopping = state === "stop";
+      button.dataset.state = state;
+      button.ariaLabel = stopping ? "停止" : "发送";
+      button.ariaPressed = String(stopping);
+      button.title = stopping ? "停止" : "发送";
+    };
+
+    const settle = (timeline, position) => {
+      timeline
+        .to(button, {
+          scaleX: 0.94,
+          scaleY: 1.07,
+          duration: 0.09,
+          ease: "power2.out"
+        }, position)
+        .to(button, {
+          scaleX: 1.025,
+          scaleY: 0.985,
+          duration: 0.11,
+          ease: "power2.inOut"
+        })
+        .to(button, {
+          scaleX: 1,
+          scaleY: 1,
+          duration: 0.14,
+          ease: "expo.out"
+        });
+    };
+
+    const animateToStop = () => {
+      const timeline = gsap.timeline({
+        defaults: { overwrite: "auto" },
+        onComplete: () => { busy = false; }
+      });
+
+      timeline
+        .to(button, {
+          scaleX: 1.1,
+          scaleY: 0.86,
+          duration: 0.085,
+          ease: "power2.in"
+        })
+        .to(button, {
+          "--glyph-x": "15px",
+          "--glyph-y": "-24px",
+          "--glyph-scale-x": 0.72,
+          "--glyph-scale-y": 1.25,
+          "--glyph-rotate": "12deg",
+          "--glyph-opacity": 0,
+          "--trail-scale": 1,
+          "--trail-opacity": 0.58,
+          duration: 0.16,
+          ease: "power3.in"
+        }, 0.045)
+        .add(() => {
+          setState("stop");
+          gsap.set(button, {
+            "--glyph-x": "0px",
+            "--glyph-y": "8px",
+            "--glyph-scale-x": 0.5,
+            "--glyph-scale-y": 0.5,
+            "--glyph-rotate": "0deg",
+            "--glyph-opacity": 0,
+            "--trail-scale": 0,
+            "--trail-opacity": 0
+          });
+        }, 0.205)
+        .to(button, {
+          backgroundColor: stopColor,
+          "--glyph-y": "0px",
+          "--glyph-scale-x": 1,
+          "--glyph-scale-y": 1,
+          "--glyph-opacity": 1,
+          duration: 0.13,
+          ease: "expo.out"
+        }, 0.205);
+
+      settle(timeline, 0.205);
+    };
+
+    const animateToSend = () => {
+      const timeline = gsap.timeline({
+        defaults: { overwrite: "auto" },
+        onComplete: () => { busy = false; }
+      });
+
+      timeline
+        .to(button, {
+          scaleX: 1.08,
+          scaleY: 0.88,
+          "--glyph-scale-x": 0.68,
+          "--glyph-scale-y": 0.68,
+          duration: 0.09,
+          ease: "power2.in"
+        })
+        .to(button, {
+          "--glyph-opacity": 0,
+          "--glyph-rotate": "-9deg",
+          duration: 0.07,
+          ease: "power2.in"
+        }, 0.055)
+        .add(() => {
+          setState("send");
+          gsap.set(button, {
+            "--glyph-x": "-8px",
+            "--glyph-y": "7px",
+            "--glyph-scale-x": 0.55,
+            "--glyph-scale-y": 0.55,
+            "--glyph-rotate": "-18deg",
+            "--glyph-opacity": 0,
+            "--trail-scale": 0,
+            "--trail-opacity": 0
+          });
+        }, 0.125)
+        .to(button, {
+          backgroundColor: sendColor,
+          "--glyph-x": "0px",
+          "--glyph-y": "0px",
+          "--glyph-scale-x": 1,
+          "--glyph-scale-y": 1,
+          "--glyph-rotate": "0deg",
+          "--glyph-opacity": 1,
+          duration: 0.15,
+          ease: "expo.out"
+        }, 0.125);
+
+      settle(timeline, 0.125);
+    };
+
+    button.addEventListener("pointermove", (event) => {
+      if (reduceMotion || busy || event.pointerType === "touch") return;
+      const bounds = button.getBoundingClientRect();
+      const dx = (event.clientX - bounds.left) / bounds.width - 0.5;
+      const dy = (event.clientY - bounds.top) / bounds.height - 0.5;
+      xTo(dx * 5);
+      yTo(dy * 5);
+      rotateTo(dx * 2.5);
+    });
+
+    button.addEventListener("pointerleave", () => {
+      xTo(0);
+      yTo(0);
+      rotateTo(0);
+    });
+
+    button.addEventListener("click", () => {
+      if (busy) return;
+      busy = true;
+
+      if (reduceMotion) {
+        const state = button.dataset.state === "send" ? "stop" : "send";
+        setState(state);
+        gsap.set(button, {
+          backgroundColor: state === "stop" ? stopColor : sendColor,
+          clearProps: "scale,scaleX,scaleY"
+        });
+        busy = false;
+        return;
+      }
+
+      if (button.dataset.state === "send") animateToStop();
+      else animateToSend();
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+{
+  "id": "gemini-non-reasoning",
+  "label": "Gemini Non-reasoning",
+  "protocol": "gemini-generative-language",
+  "match_model": ["gemini-2.0-flash"],
+  "request": {
+    "reasoning": {
+      "presets": {
+        "off": {},
+        "light": {},
+        "high": {},
+        "max": {}
+      }
+    }
+  }
+}

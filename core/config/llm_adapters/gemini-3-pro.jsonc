@@ -1,0 +1,27 @@
+{
+  "id": "gemini-3-pro",
+  "label": "Gemini 3 Pro Thinking",
+  "protocol": "gemini-generative-language",
+  "match_model": ["gemini-3.1-pro", "gemini-3-pro"],
+  "reasoning": {
+    "off_supported": false
+  },
+  "endpoint": "/v1beta/models/{model}:generateContent",
+  "stream_endpoint": "/v1beta/models/{model}:streamGenerateContent?alt=sse",
+  "request": {
+    "reasoning": {
+      "cleanup": [
+        "generationConfig.thinkingConfig",
+        "reasoning_effort",
+        "reasoning",
+        "thinking"
+      ],
+      "presets": {
+        "off": {},
+        "light": { "set": { "generationConfig.thinkingConfig.thinkingLevel": "LOW" } },
+        "high": { "set": { "generationConfig.thinkingConfig.thinkingLevel": "HIGH" } },
+        "max": { "set": { "generationConfig.thinkingConfig.thinkingLevel": "HIGH" } }
+      }
+    }
+  }
+}

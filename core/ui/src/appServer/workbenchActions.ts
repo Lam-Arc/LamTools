@@ -1,5 +1,6 @@
 import type { CoreCommandCatalogItem, CoreInputItem, MessagePart } from '../types.ts'
-import { buildCoreComposerInputItems, coreStandaloneActionCommand } from '../composer/inputItems.ts'
+import { buildCoreComposerInputItems } from '../composer/inputItems.ts'
+import { parseComposerInput, resolveComposerCommandKind } from '../composer/syntax.ts'
 
 export type CoreComposerActionMode = 'send' | 'stop'
 export type CoreWorkbenchTurnStatus = 'idle' | 'running' | 'waiting' | 'interrupting' | 'completed' | 'failed' | string
@@ -11,7 +12,7 @@ export interface SubmitCoreComposerTaskOptions {
   status: CoreWorkbenchTurnStatus
   commandCatalog?: CoreCommandCatalogItem[]
   attachments?: CoreInputItem[]
-  executeCommand?: (command: string) => Promise<boolean>
+  executeCommand?: (command: string, argumentsText?: string) => Promise<boolean>
   steerTurn?: (threadId: string, turnId: string, inputItems: CoreInputItem[]) => Promise<void>
   queueInput: (threadId: string, inputItems: CoreInputItem[], turnOptions?: Record<string, unknown>) => Promise<void>
   startTurn: (threadId: string, inputItems: CoreInputItem[], workRoot?: string, turnOptions?: Record<string, unknown>) => Promise<boolean>
@@ -22,7 +23,7 @@ export interface SubmitCoreComposerTaskOptions {
 
 export type SubmitCoreComposerTaskResult =
   | { status: 'ignored' }
-  | { status: 'command'; command: string; ok: boolean }
+  | { status: 'command'; command: string; arguments?: string; ok: boolean }
   | { status: 'guided'; inputItems: CoreInputItem[] }
   | { status: 'queued'; inputItems: CoreInputItem[] }
   | { status: 'started'; inputItems: CoreInputItem[]; ok: boolean }
@@ -81,12 +82,17 @@ export async function submitCoreComposerTask(
   if (!cleaned && attachments.length === 0) return { status: 'ignored' }
 
   const commandCatalog = options.commandCatalog || []
-  const standaloneCommand = attachments.length === 0
-    ? coreStandaloneActionCommand(cleaned, commandCatalog)
-    : ''
-  if (standaloneCommand) {
-    const ok = await options.executeCommand?.(standaloneCommand)
-    return { status: 'command', command: standaloneCommand, ok: ok === true }
+  const parsed = attachments.length === 0 ? parseComposerInput(cleaned, commandCatalog) : null
+  if (parsed?.kind === 'action') {
+    const definition = commandCatalog.find((item) => (
+      item.name.trim().replace(/^\/+/, '').toLowerCase() === parsed.name
+      && resolveComposerCommandKind(item) === 'action'
+    ))
+    if (parsed.arguments && !definition?.accepts_args) {
+      throw new Error(`Command "${parsed.name}" does not accept arguments`)
+    }
+    const ok = await options.executeCommand?.(parsed.name, parsed.arguments)
+    return { status: 'command', command: parsed.name, arguments: parsed.arguments, ok: ok === true }
   }
 
   if (isCoreActiveTurnStatus(options.status)) {
@@ -159,7 +165,15 @@ export function normalizeCoreCommandCatalogItem(item: unknown): CoreCommandCatal
   const rawAction = String(item.action || 'run_action')
   const action: CoreCommandCatalogItem['action'] =
     rawAction === 'insert_token' || rawAction === 'expand_on_send' ? rawAction : 'run_action'
-  const source: CoreCommandCatalogItem['source'] = item.source === 'member' ? 'member' : 'core'
+  const source: CoreCommandCatalogItem['source'] = item.source === 'member'
+    ? 'member'
+    : item.source === 'plugin'
+      ? 'plugin'
+      : 'core'
+  const rawKind = String(item.kind || '').toLowerCase()
+  const kind: CoreCommandCatalogItem['kind'] = rawKind === 'action' || rawKind === 'skill'
+    ? rawKind
+    : action === 'insert_token' || action === 'expand_on_send' ? 'skill' : 'action'
   return {
     name,
     title: String(item.title || name),
@@ -167,7 +181,9 @@ export function normalizeCoreCommandCatalogItem(item: unknown): CoreCommandCatal
     icon: String(item.icon || '/'),
     source,
     action,
+    kind,
     accepts_args: Boolean(item.accepts_args),
+    ...(isRecord(item.metadata) ? { metadata: { ...item.metadata } } : {}),
   }
 }
 

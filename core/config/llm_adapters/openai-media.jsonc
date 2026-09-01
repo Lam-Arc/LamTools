@@ -1,0 +1,30 @@
+{
+  "id": "openai-media",
+  "label": "OpenAI Image/Media (no reasoning)",
+  "protocol": "openai-chat-completions",
+  "match_model": [
+    "gpt-image",
+    "canvas-image",
+    "firefly-",
+    "flux-",
+    "nano-banana",
+    "imagine-1.5"
+  ],
+  "request": {
+    "reasoning": {
+      "cleanup": [
+        "reasoning_effort",
+        "reasoning",
+        "thinking",
+        "enable_thinking",
+        "thinking_budget"
+      ],
+      "presets": {
+        "off": {},
+        "light": {},
+        "high": {},
+        "max": {}
+      }
+    }
+  }
+}

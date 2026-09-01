@@ -30,6 +30,7 @@ export interface CoreAppServerChatMessage {
   id: string
   role: 'user' | 'assistant'
   content: string
+  timestamp?: string
   parts: CoreAppItem[]
   attachments?: Array<{
     id: string
@@ -119,12 +120,14 @@ export function selectChatMessages(
         ? coreTurn.context_metrics
         : providerUsage
       const runtimeModelId = runtimeModelIdForTurn(appTurn, coreTurn)
+      const timestamp = runtimeTimestampForTurn(appTurn, coreTurn)
       messages.push({
         // Real turn ids contain colons (`<session>:turn:<run>`), so segments
         // are separated with `#` — never a colon.
         id: segment === 1 ? `assistant:${turnId}` : `assistant:${turnId}#${segment}`,
         role: 'assistant',
         content: '',
+        ...(timestamp ? { timestamp } : {}),
         parts: [],
         // Carry the item metadata through (audit 15 S1: the source item's
         // ``metadata.live`` flag was dropped here, so the projection could
@@ -281,10 +284,15 @@ function maybeAppendInitialAssistantWaiting(state: CoreAppSnapshot, messages: Co
     turnId ? state.turns?.[turnId] : undefined,
     turnId ? state.core?.turns?.[turnId] : undefined,
   )
+  const timestamp = runtimeTimestampForTurn(
+    turnId ? state.turns?.[turnId] : undefined,
+    turnId ? state.core?.turns?.[turnId] : undefined,
+  )
   messages.push({
     id: `assistant:waiting:${last.id}`,
     role: 'assistant',
     content: '',
+    ...(timestamp ? { timestamp } : {}),
     parts: [],
     metadata: {
       live: true,
@@ -302,6 +310,16 @@ function runtimeModelIdForTurn(
   const coreSnapshot = isRecord(coreTurn?.runtime_snapshot) ? coreTurn.runtime_snapshot : null
   const modelId = appSnapshot?.model_id ?? coreSnapshot?.model_id
   return typeof modelId === 'string' ? modelId.trim() : ''
+}
+
+function runtimeTimestampForTurn(
+  appTurn: unknown,
+  coreTurn: unknown,
+): string {
+  const appRecord = isRecord(appTurn) ? appTurn : null
+  const coreRecord = isRecord(coreTurn) ? coreTurn : null
+  const timestamp = appRecord?.created_at ?? coreRecord?.created_at
+  return typeof timestamp === 'string' ? timestamp.trim() : ''
 }
 
 /**

@@ -57,6 +57,21 @@ describe('CoreSettings', () => {
     expect(wrapper.text()).not.toContain('Writer')
   })
 
+  it('shows the resource overview and filters providers and models', async () => {
+    const wrapper = mountSettings()
+
+    expect(wrapper.get('.models-overview-bar').text()).toContain('可用模型')
+    expect(wrapper.get('.models-overview-bar').text()).toContain('1')
+
+    await wrapper.get('.provider-search input').setValue('missing')
+    expect(wrapper.text()).toContain('没有匹配的供应商')
+    await wrapper.get('.provider-search input').setValue('open')
+    expect(wrapper.text()).not.toContain('没有匹配的供应商')
+
+    await wrapper.get('.model-search input').setValue('missing')
+    expect(wrapper.text()).toContain('没有匹配的模型')
+  })
+
   it('emits provider create and update contracts without replaying a stored API key', async () => {
     const wrapper = mountSettings()
 
@@ -120,27 +135,57 @@ describe('CoreSettings', () => {
     expect(wrapper.emitted('delete-model')).toEqual([['model-1']])
   })
 
-  it('reuses ThemeEditor and emits density changes', async () => {
+  it('opens ThemeEditor and emits appearance settings changes', async () => {
     const wrapper = mountSettings()
 
     await wrapper.get('[data-settings-section="appearance"]').trigger('click')
 
     expect(wrapper.findComponent({ name: 'ThemeEditor' }).exists()).toBe(true)
+    await wrapper.get('.theme-advanced > summary').trigger('click')
     await wrapper.get('[data-density="loose"]').trigger('click')
+    await wrapper.get('[data-theme-mode="dark"]').trigger('click')
 
     expect(wrapper.emitted('update:density')).toEqual([['loose']])
+    expect(wrapper.emitted('update:theme-mode')).toEqual([['dark']])
   })
 
-  it('owns writable permission mode controls', async () => {
+  it('opens the matching floating editor from the theme preview', async () => {
+    const wrapper = mountSettings()
+
+    await wrapper.get('[data-settings-section="appearance"]').trigger('click')
+    await wrapper.get('[data-theme-preview-area="composer"]').trigger('click')
+
+    expect(wrapper.findAll('.theme-area-popover')).toHaveLength(1)
+    expect(wrapper.get('.theme-area-popover').text()).toContain('输入栏')
+
+    await wrapper.get('[data-theme-area="control"]').trigger('click')
+    expect(wrapper.findAll('.theme-area-popover')).toHaveLength(1)
+    expect(wrapper.get('[data-theme-area="composer"]').attributes('aria-expanded')).toBe('false')
+    expect(wrapper.get('[data-theme-area="control"]').attributes('aria-expanded')).toBe('true')
+  })
+
+  it('forwards theme area angle changes from the floating editor', async () => {
+    const wrapper = mountSettings()
+
+    await wrapper.get('[data-settings-section="appearance"]').trigger('click')
+    await wrapper.get('[data-theme-preview-area="backdrop"]').trigger('click')
+    await wrapper.get('.theme-area-popover input[type="range"]').setValue(45)
+
+    expect(wrapper.emitted('update-angle')).toContainEqual(['backdrop', 45])
+  })
+
+  it('uses the same three permission presets as the composer', async () => {
     const wrapper = mountSettings()
 
     await wrapper.get('[data-settings-section="permissions"]').trigger('click')
 
-    expect(wrapper.text()).toContain('权限策略')
-    expect(wrapper.text()).toContain('放行模式')
+    expect(wrapper.text()).toContain('权限审批')
+    expect(wrapper.text()).not.toContain('只读调查')
+    expect(wrapper.text()).not.toContain('有限编辑')
     expect(wrapper.findAll('input, select, textarea').length).toBe(0)
-    await wrapper.get('[aria-label="选择完全编辑"]').trigger('click')
-    expect(wrapper.emitted('update-permission-mode')).toEqual([['full_edit']])
+    expect(wrapper.findAll('[data-default-permission-preset]')).toHaveLength(3)
+    await wrapper.get('[data-default-permission-preset="full_access"]').trigger('click')
+    expect(wrapper.emitted('update-permission-preset')).toEqual([['full_access']])
     await wrapper.get('[data-allow-outside-workdir]').trigger('click')
     expect(wrapper.emitted('update-allow-outside-workdir')).toEqual([[true]])
   })
@@ -186,7 +231,9 @@ describe('Core settings permission contract', () => {
     expect(source).toContain("'update-allow-outside-workdir': [value: boolean]")
     expect(source).toContain('data-allow-outside-workdir')
     expect(source).toContain('允许访问工作目录以外')
-    expect(source).toContain("emit('update-allow-outside-workdir', !props.allowAccessOutsideWorkdir)")
+    expect(source).toContain("emit('update-allow-outside-workdir', !Boolean(props.allowAccessOutsideWorkdir))")
+    expect(source).toContain("['ask', 'auto', 'full_access']")
+    expect(source).not.toContain("'update-permission-mode'")
   })
 
   it('binds the toggle state in the Core demo App', () => {

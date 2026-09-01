@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+from copy import deepcopy
 from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 from typing import Any
@@ -281,6 +282,9 @@ def _chat_message_from_dict(value: Any) -> ChatMessage | None:
         tool_call_id=str(value.get("tool_call_id") or ""),
         tool_calls=tool_calls,
         metadata=dict(value.get("metadata") or {}),
+        provider_state=deepcopy(value.get("provider_state"))
+        if "provider_state" in value
+        else None,
     )
 
 

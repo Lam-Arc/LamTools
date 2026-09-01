@@ -10,6 +10,7 @@ from lamtools_core.app.default_agent import (
     _persist_core_event_live,
     create_core_agent_operations,
 )
+from lamtools_core.app.operation_catalog import OperationResult
 from lamtools_core.app import command_execution
 from lamtools_core.context_compaction import ContextCompactionResult
 from lamtools_core.app.live_hub import CoreAppEventHub
@@ -354,8 +355,193 @@ async def test_core_agent_operations_expose_command_catalog(tmp_path):
         "icon": "search",
         "action": "insert_token",
         "source": "core",
+        "kind": "skill",
         "accepts_args": False,
     }
+
+
+@pytest.mark.asyncio
+async def test_core_agent_catalog_filters_disabled_skills(tmp_path):
+    work_root = tmp_path / "work"
+    skill_file = work_root / ".lam" / "skills" / "reviewer" / "SKILL.md"
+    skill_file.parent.mkdir(parents=True)
+    skill_file.write_text(
+        "---\nname: reviewer\ndescription: Review changes\n---\n\nReview instructions\n",
+        encoding="utf-8",
+    )
+    catalog = create_core_agent_operations(
+        spec=CoreAgentSpec(),
+        paths=CoreAgentPaths(data_dir=tmp_path / "data", work_root=work_root),
+        model_provider=_fake_model,
+    )
+
+    before = await catalog.execute("command.catalog", {})
+    assert any(item["name"] == "reviewer" for item in before.payload["commands"])
+
+    await catalog.execute("skill.disable", {"name": "reviewer"})
+    after = await catalog.execute("command.catalog", {})
+
+    assert all(item["name"] != "reviewer" for item in after.payload["commands"])
+
+
+@pytest.mark.asyncio
+async def test_enabled_plugin_command_is_catalogued_and_returns_validated_effect(tmp_path):
+    catalog = create_core_agent_operations(
+        spec=CoreAgentSpec(),
+        paths=CoreAgentPaths(data_dir=tmp_path / "data", work_root=tmp_path / "work"),
+        model_provider=_fake_model,
+    )
+
+    listed = await catalog.execute("command.catalog", {})
+    pet = next(item for item in listed.payload["commands"] if item["name"] == "pet")
+    assert pet["source"] == "plugin"
+    assert pet["metadata"]["plugin_id"] == "emotion-ball-pet"
+
+    executed = await catalog.execute(
+        "command.execute",
+        {"thread_id": "thread-pet", "command": "pet"},
+    )
+
+    assert executed.status == "ok"
+    assert executed.payload["result"]["effects"] == [{
+        "type": "desktop_plugin",
+        "action": "show",
+        "plugin_id": "emotion-ball-pet",
+    }]
+
+    await catalog.execute("plugin.disable", {"name": "emotion-ball-pet"})
+    disabled = await catalog.execute("command.catalog", {})
+    assert all(item["name"] != "pet" for item in disabled.payload["commands"])
+
+
+@pytest.mark.asyncio
+async def test_core_agent_command_execute_passes_arguments_to_action_handler(tmp_path):
+    core_root = tmp_path / "core-root"
+    command_dir = core_root / "config" / "command"
+    command_dir.mkdir(parents=True)
+    (command_dir / "goal.json").write_text(
+        json.dumps(
+            {
+                "name": "goal",
+                "title": "Goal",
+                "description": "Create a goal",
+                "icon": "target",
+                "kind": "action",
+                "action": "run_action",
+                "accepts_args": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    captured: dict[str, str] = {}
+
+    async def goal_action(*, thread_id: str, arguments: str, work_root: str, **_: object):
+        captured.update(thread_id=thread_id, arguments=arguments, work_root=work_root)
+        return {"status": "created", "objective": arguments}
+
+    catalog = create_core_agent_operations(
+        spec=CoreAgentSpec(),
+        paths=CoreAgentPaths(data_dir=tmp_path / "data", work_root=tmp_path / "work"),
+        model_provider=_fake_model,
+        command_core_roots=[core_root],
+        command_action_handlers={"goal": goal_action},
+    )
+
+    result = await catalog.execute(
+        "command.execute",
+        {
+            "thread_id": "thread-goal",
+            "command": "goal",
+            "arguments": "创建发布计划",
+            "work_root": str(tmp_path / "workspace"),
+        },
+    )
+
+    assert result.status == "ok"
+    assert result.payload["result"] == {"status": "created", "objective": "创建发布计划"}
+    assert captured == {
+        "thread_id": "thread-goal",
+        "arguments": "创建发布计划",
+        "work_root": str(tmp_path / "workspace"),
+    }
+
+
+@pytest.mark.asyncio
+async def test_core_agent_command_execute_rejects_skill_commands(tmp_path):
+    core_root = tmp_path / "core-root"
+    command_dir = core_root / "config" / "command"
+    command_dir.mkdir(parents=True)
+    (command_dir / "review.json").write_text(
+        json.dumps(
+            {
+                "name": "review",
+                "title": "Review",
+                "description": "Review changes",
+                "icon": "scan",
+                "kind": "skill",
+                "action": "insert_token",
+                "accepts_args": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    catalog = create_core_agent_operations(
+        spec=CoreAgentSpec(),
+        paths=CoreAgentPaths(data_dir=tmp_path / "data", work_root=tmp_path / "work"),
+        model_provider=_fake_model,
+        command_core_roots=[core_root],
+    )
+
+    result = await catalog.execute(
+        "command.execute",
+        {"thread_id": "thread-review", "command": "review"},
+    )
+
+    assert result.status == "error"
+    assert result.payload["error"] == "Command is not executable as an action: review"
+
+
+@pytest.mark.asyncio
+async def test_core_agent_fork_command_delegates_to_session_fork_operation(tmp_path):
+    core_root = tmp_path / "core-root"
+    command_dir = core_root / "config" / "command"
+    command_dir.mkdir(parents=True)
+    (command_dir / "fork.json").write_text(
+        json.dumps(
+            {
+                "name": "fork",
+                "title": "Fork",
+                "description": "Fork session",
+                "icon": "git-branch",
+                "kind": "action",
+                "action": "run_action",
+                "accepts_args": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    catalog = create_core_agent_operations(
+        spec=CoreAgentSpec(),
+        paths=CoreAgentPaths(data_dir=tmp_path / "data", work_root=tmp_path / "work"),
+        model_provider=_fake_model,
+        command_core_roots=[core_root],
+    )
+    calls: list[dict[str, object]] = []
+
+    async def session_fork(request):
+        calls.append(dict(request.payload))
+        return OperationResult(name=request.name, payload={"session_id": "forked-thread"})
+
+    catalog.register("session.fork", session_fork)
+
+    result = await catalog.execute(
+        "command.execute",
+        {"thread_id": "thread-source", "command": "fork"},
+    )
+
+    assert result.status == "ok"
+    assert result.payload["result"] == {"session_id": "forked-thread"}
+    assert calls == [{"thread_id": "thread-source"}]
 
 
 @pytest.mark.asyncio

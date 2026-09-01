@@ -1,0 +1,20 @@
+{
+  "id": "grok-always-on",
+  "label": "Grok 4.5 Reasoning (always on)",
+  "protocol": "openai-chat-completions",
+  "match_model": ["grok-4.5"],
+  "reasoning": {
+    "off_supported": false
+  },
+  "request": {
+    "reasoning": {
+      "cleanup": ["reasoning_effort", "reasoning", "thinking", "enable_thinking"],
+      "presets": {
+        "off": {},
+        "light": { "set": { "reasoning_effort": "low" } },
+        "high": { "set": { "reasoning_effort": "medium" } },
+        "max": { "set": { "reasoning_effort": "high" } }
+      }
+    }
+  }
+}

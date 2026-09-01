@@ -102,15 +102,13 @@ def read_global_runtime_controls(value: object) -> dict[str, Any]:
 
     ``core.runtimeControls`` historically stores ``permission_mode`` and
     ``allow_access_outside_workdir``.  ``permission_preset`` and
-    ``approval_policy`` are accepted as optional forward-compatible fields,
-    but an absent preset remains ``ask`` for new sessions.
+    ``approval_policy`` are accepted as optional forward-compatible fields;
+    all three user-facing presets are valid global defaults, while an absent
+    preset remains ``ask`` for new sessions.
     """
     raw = _as_mapping(value) or {}
     preset_value = raw.get("permission_preset")
-    try:
-        preset = normalize_permission_preset(preset_value)
-    except ValueError:
-        preset = DEFAULT_PERMISSION_PRESET
+    preset = preset_value if preset_value in PERMISSION_PRESETS else DEFAULT_PERMISSION_PRESET
     if preset_value is None:
         approval = normalize_approval_policy(raw.get("approval_policy"), default="require")
         if approval == "auto_approve":
@@ -290,6 +288,7 @@ def runtime_snapshot(
     permissions: ResolvedRuntimePermissions,
     active_mode: str | None = None,
     model_id: str | None = None,
+    reasoning_level: str | None = None,
     thinking_enabled: bool | None = None,
     thinking_budget: int | None = None,
     reasoning_effort: str | None = None,
@@ -305,6 +304,7 @@ def runtime_snapshot(
     optional = {
         "active_mode": active_mode,
         "model_id": model_id,
+        "reasoning_level": reasoning_level,
         "thinking_enabled": thinking_enabled,
         "thinking_budget": thinking_budget,
         "reasoning_effort": reasoning_effort,

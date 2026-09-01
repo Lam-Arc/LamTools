@@ -36,6 +36,26 @@ def test_registry_discovers_plugin_resources(tmp_path: Path):
     assert plugins[0].mcp_files == [plugin.resolve() / "mcp" / "mcp.json"]
 
 
+def test_registry_discovers_composer_commands(tmp_path: Path):
+    plugin = tmp_path / "plugins" / "pet"
+    write_json(plugin / "plugin.json", {
+        "name": "pet",
+        "commands": [{
+            "name": "pet",
+            "title": "桌宠",
+            "description": "显示桌宠",
+            "icon": "paw-print",
+            "effect": {"type": "desktop_plugin", "action": "show"},
+        }],
+    })
+
+    item = PluginRegistry(plugin_roots=[tmp_path / "plugins"]).discover()[0]
+
+    assert len(item.commands) == 1
+    assert item.commands[0].name == "pet"
+    assert item.commands[0].effect == {"type": "desktop_plugin", "action": "show"}
+
+
 def test_registry_uses_default_hook_and_mcp_paths(tmp_path: Path):
     plugin = tmp_path / "plugins" / "defaulted"
     write_json(plugin / "plugin.json", {"name": "defaulted", "version": "1.0.0"})
