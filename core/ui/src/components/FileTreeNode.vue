@@ -5,6 +5,7 @@
       class="file-tree-row"
       :style="{ paddingLeft: `${depth * 14 + 4}px` }"
       @click="onClick"
+      @contextmenu="onContextMenu"
     >
       <span class="file-tree-icon" aria-hidden="true">
         <component v-if="typeof icon !== 'string'" :is="icon" :size="13" :stroke-width="1.8" />
@@ -33,8 +34,11 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { ChevronDown, ChevronRight, Image, Music, Video, type LucideIcon } from 'lucide-vue-next'
+import { ChevronDown, ChevronRight, Copy, Image, Music, Video, type LucideIcon } from 'lucide-vue-next'
 import type { CoreProjectClient, CoreFileEntry } from '../projects/client'
+import { copyText } from '../helpers/clipboard'
+import { openContextMenu } from './context-menu/context-menu'
+import type { ContextMenuEntry } from './context-menu/types'
 import FileTreeNode from './FileTreeNode.vue'
 
 const props = defineProps<{
@@ -81,17 +85,50 @@ function fileIcon(ext: string): LucideIcon | string {
 
 async function onClick() {
   if (props.entry.type === 'directory') {
-    expanded.value = !expanded.value
-    if (expanded.value && children.value.length === 0) {
-      await loadChildren()
-    }
+    await toggleDirectory()
   } else {
-    emit('open-file', {
-      path: childPath.value,
-      name: props.entry.name,
-      ext: props.entry.ext,
-    })
+    openFile()
   }
+}
+
+function openFile(): void {
+  emit('open-file', {
+    path: childPath.value,
+    name: props.entry.name,
+    ext: props.entry.ext,
+  })
+}
+
+async function toggleDirectory(): Promise<void> {
+  if (props.entry.type !== 'directory') return
+  expanded.value = !expanded.value
+  if (expanded.value && children.value.length === 0) await loadChildren()
+}
+
+function menuPath(): string {
+  return childPath.value || props.entry.name
+}
+
+function onContextMenu(event: MouseEvent): void {
+  const path = menuPath()
+  const items: ContextMenuEntry[] = props.entry.type === 'directory'
+    ? [
+        { id: 'toggle', label: expanded.value ? '收起' : '展开', action: () => toggleDirectory() },
+        { type: 'separator', id: 'path-separator' },
+        { id: 'copy-relative-path', label: '复制相对路径', icon: Copy, action: () => copyText(path).catch(() => undefined) },
+      ]
+    : [
+        { id: 'open', label: '打开', action: () => openFile() },
+        { type: 'separator', id: 'path-separator' },
+        { id: 'copy-relative-path', label: '复制相对路径', icon: Copy, action: () => copyText(path).catch(() => undefined) },
+      ]
+  openContextMenu({
+    event,
+    items,
+    ownerId: `file:${props.projectId}:${path}`,
+    ariaLabel: `${props.entry.name} 文件操作`,
+    panelAttributes: { 'data-file-tree-menu': path },
+  })
 }
 
 async function loadChildren() {

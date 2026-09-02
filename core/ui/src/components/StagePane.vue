@@ -8,6 +8,7 @@
         class="stage-tab"
         :class="{ active: tab.id === activeId }"
         @click="$emit('activate', tab.id)"
+        @contextmenu="onTabContextMenu($event, tab)"
       >
         <span class="stage-tab-icon" aria-hidden="true">
           <component v-if="typeof kindIcon(tab.kind) !== 'string'" :is="kindIcon(tab.kind)" :size="12" :stroke-width="1.8" />
@@ -131,6 +132,7 @@ import StageImagePreview from './StageImagePreview.vue'
 import StageMediaPreview from './StageMediaPreview.vue'
 import StageBrowser from './StageBrowser.vue'
 import MarkdownRenderer from './MarkdownRenderer.vue'
+import { openContextMenu } from './context-menu/context-menu'
 
 const StageCodeEditor = defineAsyncComponent(() => import('./StageCodeEditor.vue'))
 type StageCodeEditorInstance = InstanceType<(typeof import('./StageCodeEditor.vue'))['default']>
@@ -167,6 +169,18 @@ function togglePreview() {
   if (!activeTab.value) return
   const next = activeTab.value.previewMode === 'preview' ? 'code' : 'preview'
   emit('toggle-preview', activeTab.value.id, next)
+}
+
+function onTabContextMenu(event: MouseEvent, tab: StageResource): void {
+  openContextMenu({
+    event,
+    items: [
+      { id: 'close', label: '关闭', icon: X, action: () => emit('close', tab.id) },
+    ],
+    ownerId: `stage-tab:${tab.id}`,
+    ariaLabel: `${tab.label || tab.id} 标签操作`,
+    panelAttributes: { 'data-stage-tab-menu': tab.id },
+  })
 }
 
 function onSaved() {

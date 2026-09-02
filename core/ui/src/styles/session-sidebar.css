@@ -247,57 +247,6 @@
     transition: none;
   }
 }
-.project-menu {
-  position: absolute;
-  z-index: var(--z-popover);
-  top: 36px;
-  right: 4px;
-  width: 154px;
-  padding: 5px;
-  border: 1px solid color-mix(in srgb, var(--theme-backdrop-text) 12%, transparent);
-  border-radius: var(--radius);
-  background: var(--theme-backdrop-background);
-  box-shadow: var(--shadow-md);
-  /* 弹出入场：scale+淡入（popover-in 与 UiSelect 菜单同源） */
-  animation: popover-in var(--dur-base) var(--ease-out);
-  transform-origin: top right;
-}
-.project-menu button {
-  width: 100%;
-  min-height: var(--sidebar-item-height);
-  padding: 0 var(--space-2);
-  border-radius: 0;
-  background: transparent;
-  color: var(--sidebar-text-secondary);
-  font: inherit;
-  font-size: var(--sidebar-font);
-  font-weight: 400;
-  text-align: left;
-  position: relative;
-}
-.project-menu button::before {
-  content: ""; position: absolute; inset: 0;
-  border-radius: 0; background: transparent; pointer-events: none;
-  -webkit-mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
-  mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
-}
-.project-menu button:hover::before,
-.project-menu button:focus-visible::before {
-  background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-hover), transparent);
-}
-.project-menu button:disabled {
-  color: var(--sidebar-text-disabled);
-  opacity: 1;
-}
-.project-menu button.danger {
-  color: var(--red);
-}
-.project-menu-separator {
-  display: block;
-  height: 1px;
-  margin: 4px 5px;
-  background: var(--sidebar-divider);
-}
 .conversation-list {
   margin-top: var(--sidebar-list-gap);
   padding-left: 0;
@@ -449,109 +398,6 @@
   transition: opacity .12s ease;
 }
 
-/* Session context menus are teleported out of the clipped sidebar body. */
-.session-context-menu,
-.session-export-menu {
-  position: fixed;
-  z-index: var(--z-popover);
-  box-sizing: border-box;
-  padding: var(--space-1);
-  border: 1px solid color-mix(in srgb, var(--theme-backdrop-text) 12%, transparent);
-  border-radius: var(--radius);
-  background: var(--theme-backdrop-background);
-  color: var(--theme-backdrop-text);
-  box-shadow: var(--shadow-md);
-  animation: popover-in var(--dur-base) var(--ease-out);
-  max-width: calc(100vw - var(--space-4));
-  max-height: calc(100dvh - var(--space-4));
-  overflow-y: auto;
-}
-.session-context-menu {
-  width: 192px;
-}
-.session-export-menu {
-  width: 176px;
-}
-.session-context-menu[data-placement="up"],
-.session-export-menu[data-placement="left"] {
-  transform-origin: bottom right;
-}
-.session-context-menu button,
-.session-export-menu button {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  min-height: var(--sidebar-item-height);
-  padding: 0 var(--space-2);
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  font-size: var(--sidebar-text-size);
-  text-align: left;
-  cursor: pointer;
-}
-.session-context-menu button::before,
-.session-export-menu button::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: 0;
-  background: transparent;
-  pointer-events: none;
-  -webkit-mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
-  mask-image: linear-gradient(to right, rgba(0,0,0,.2) 0, #000 var(--row-fade), #000 calc(100% - var(--row-fade)), rgba(0,0,0,.2) 100%);
-}
-.session-context-menu button:hover::before,
-.session-context-menu button:focus-visible::before,
-.session-export-menu button:hover::before,
-.session-export-menu button:focus-visible::before {
-  background: color-mix(in srgb, var(--theme-backdrop-text) var(--alpha-hover), transparent);
-}
-.session-context-menu button:focus-visible,
-.session-export-menu button:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--blue) 75%, transparent);
-  outline-offset: -1px;
-}
-.session-context-menu button.danger {
-  color: var(--red);
-}
-.session-menu-chevron {
-  flex: 0 0 auto;
-  color: color-mix(in srgb, var(--theme-backdrop-text) 58%, transparent);
-}
-.session-menu-separator {
-  display: block;
-  height: 1px;
-  margin: var(--space-1) var(--space-2);
-  background: color-mix(in srgb, var(--theme-backdrop-text) 10%, transparent);
-}
-.session-export-group-label {
-  min-height: var(--sidebar-item-height);
-  display: flex;
-  align-items: center;
-  padding: 0 var(--space-2);
-  color: var(--sidebar-text-muted);
-  font-size: var(--sidebar-meta-text-size);
-  font-weight: 500;
-  letter-spacing: .02em;
-}
-.session-export-menu button[data-session-export-format="markdown"],
-.session-export-menu button[data-session-export-format="txt"],
-.session-export-menu button[data-session-export-format="jsonl"] {
-  padding-left: var(--space-3);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .session-context-menu,
-  .session-export-menu {
-    animation: none;
-  }
-}
-
 /* Session status indicators — 点色以 backdrop area 文字为底，靠动画/混合区分状态 */
 .conversation .status {
   width: 7px;
@@ -677,15 +523,6 @@
   .project-menu-button {
     width: 44px;
     flex-basis: 44px;
-  }
-  .project-menu {
-    width: min(154px, calc(100vw - var(--space-6)));
-    max-width: calc(100vw - var(--space-6));
-    max-height: calc(100dvh - var(--space-6));
-    overflow-y: auto;
-  }
-  .project-menu button {
-    min-height: 44px;
   }
   .conversation,
   .conversation-select {

@@ -13,11 +13,17 @@ import {
 } from '../src/helpers/slotValidation';
 import WorkspaceShell from '../src/components/WorkspaceShell.vue';
 import SessionSidebar from '../src/components/SessionSidebar.vue';
+import ContextMenuHost from '../src/components/context-menu/ContextMenuHost.vue';
+import { closeContextMenu } from '../src/components/context-menu/context-menu';
 import CoreExecutionControls from '../src/components/CoreExecutionControls.vue';
 
 const defaultViewportWidth = window.innerWidth;
+let contextMenuHost: ReturnType<typeof mount> | null = null;
 
 afterEach(() => {
+  closeContextMenu();
+  contextMenuHost?.unmount();
+  contextMenuHost = null;
   Object.defineProperty(window, 'innerWidth', { configurable: true, value: defaultViewportWidth });
   window.dispatchEvent(new Event('resize'));
 });
@@ -309,6 +315,7 @@ describe('SessionSidebar numbering', () => {
   });
 
   it('emits delete-session from a single session row without selecting it', async () => {
+    contextMenuHost = mount(ContextMenuHost, { attachTo: document.body });
     const wrapper = mount(SessionSidebar, {
       props: {
         projectGroups: [{
@@ -338,5 +345,6 @@ describe('SessionSidebar numbering', () => {
 
     expect(wrapper.emitted('delete-session')).toEqual([['s1']]);
     expect(wrapper.emitted('select-session')).toBeUndefined();
+    wrapper.unmount();
   });
 });

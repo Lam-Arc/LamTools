@@ -6,12 +6,41 @@ import {
 
 startStartupSplash()
 
+const BACKEND_API_RETRY_ATTEMPTS = 80
+const BACKEND_API_RETRY_DELAY_MS = 250
+
+function isTauriRuntime(): boolean {
+  return typeof (window as any).__TAURI_INTERNALS__ === 'object'
+}
+
+async function resolveBackendApiBase(): Promise<string | null> {
+  if (!isTauriRuntime()) return null
+
+  let lastError: unknown
+  for (let attempt = 0; attempt < BACKEND_API_RETRY_ATTEMPTS; attempt++) {
+    try {
+      const apiBase = await invoke<string>('get_api_base')
+      if (/^http:\/\/127\.0\.0\.1:\d+$/.test(apiBase)) return apiBase
+      throw new Error(`invalid backend API base: ${apiBase}`)
+    } catch (error) {
+      lastError = error
+      if (attempt + 1 < BACKEND_API_RETRY_ATTEMPTS) {
+        await new Promise((resolve) => setTimeout(resolve, BACKEND_API_RETRY_DELAY_MS))
+      }
+    }
+  }
+
+  throw new Error(`LamCore backend API unavailable: ${String(lastError)}`)
+}
+
 async function init() {
-  try {
-    // In Tauri: ask Rust for the dynamically chosen port
-    const apiBase = await invoke<string>('get_api_base');
+  const apiBase = await resolveBackendApiBase()
+  if (apiBase) {
+    // In Tauri: wait for Rust to publish the dynamically chosen backend port.
+    // Never fall back to a relative URL here: packaged Tauri serves index.html
+    // for that path, which then fails as "<!DOCTYPE ... is not valid JSON".
     (window as any).__LAMTOOLS_API_BASE__ = apiBase + '/api/core';
-  } catch {
+  } else {
     console.log('[Main] Not running in Tauri, using default API base');
   }
 

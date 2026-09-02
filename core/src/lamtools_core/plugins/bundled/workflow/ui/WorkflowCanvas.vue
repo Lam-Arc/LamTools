@@ -1,5 +1,5 @@
 <template>
-  <div class="wf-canvas" @contextmenu.prevent="onContextMenu">
+  <div class="wf-canvas" @contextmenu="onContextMenu">
     <VueFlow
       v-model:nodes="vfNodes"
       v-model:edges="vfEdges"
@@ -10,81 +10,12 @@
       fit-view-on-init
       @node-click="onNodeClick"
       @connect="onConnect"
+      @pane-click="handleCanvasInteraction"
+      @move-start="handleCanvasInteraction"
+      @node-drag-start="handleCanvasInteraction"
     >
       <Background :gap="22" :size="1" pattern-color="transparent" />
     </VueFlow>
-
-    <!-- pane (empty-space) context menu -->
-    <div
-      v-if="paneMenu"
-      class="wf-context-menu"
-      role="menu"
-      :style="{ left: paneMenu.x + 'px', top: paneMenu.y + 'px' }"
-      @pointerdown.stop
-      @click.stop
-      @keydown.escape.prevent="closeMenus"
-    >
-        <div class="wf-menu-group">
-          <div class="wf-menu-label">新建节点</div>
-          <button class="menu-item" type="button" role="menuitem" @click="addNodeAt('ai', paneMenu)">AI</button>
-          <button class="menu-item" type="button" role="menuitem" @click="addNodeAt('command', paneMenu)">Command</button>
-          <button class="menu-item" type="button" role="menuitem" @click="addNodeAt('script', paneMenu)">Script</button>
-          <button class="menu-item" type="button" role="menuitem" @click="addNodeAt('content', paneMenu)">Content</button>
-          <button class="menu-item" type="button" role="menuitem" @click="addNodeAt('subgraph', paneMenu)">Subgraph</button>
-        </div>
-      <span class="wf-menu-sep" />
-      <button class="menu-item" type="button" role="menuitem" :disabled="!clipboard" @click="pasteAt(paneMenu)">粘贴</button>
-    </div>
-
-    <!-- node context menu -->
-    <div
-      v-if="nodeMenu"
-      class="wf-context-menu"
-      role="menu"
-      :style="{ left: nodeMenu.x + 'px', top: nodeMenu.y + 'px' }"
-      @pointerdown.stop
-      @click.stop
-      @keydown.escape.prevent="closeMenus"
-    >
-      <div class="wf-menu-group">
-        <div class="wf-menu-label">运行</div>
-        <button class="menu-item" type="button" role="menuitem" @click="runFromNode(nodeMenu.id)">从此节点运行</button>
-        <button class="menu-item" type="button" role="menuitem" @click="runNode(nodeMenu.id)">运行此节点</button>
-      </div>
-      <span class="wf-menu-sep" />
-      <button class="menu-item" type="button" role="menuitem" @click="configNode(nodeMenu.id)">配置</button>
-      <button class="menu-item" type="button" role="menuitem" @click="copyNode(nodeMenu.id)">复制</button>
-      <button class="menu-item" type="button" role="menuitem" @click="cutNode(nodeMenu.id)">剪切</button>
-      <span class="wf-menu-sep" />
-      <button class="menu-item" type="button" role="menuitem" @click="addPort(nodeMenu.id, 'in')">+ 输入端口</button>
-      <button class="menu-item" type="button" role="menuitem" @click="addPort(nodeMenu.id, 'out')">+ 输出端口</button>
-      <span class="wf-menu-sep" />
-      <button class="menu-item danger" type="button" role="menuitem" @click="deleteNode(nodeMenu.id)">删除</button>
-    </div>
-
-    <!-- edge context menu -->
-    <div
-      v-if="edgeMenu"
-      class="wf-context-menu"
-      role="menu"
-      :style="{ left: edgeMenu.x + 'px', top: edgeMenu.y + 'px' }"
-      @pointerdown.stop
-      @click.stop
-      @keydown.escape.prevent="closeMenus"
-    >
-      <div class="wf-menu-group">
-        <div class="wf-menu-label">连线条件</div>
-        <AutoTextarea
-          :min-rows="2"
-          :max-rows="4"
-          placeholder="Python 表达式（空=无条件）"
-          :model-value="edgeCondition(edgeMenu.id)"
-          @update:model-value="setEdgeCondition(edgeMenu.id, $event)"
-        />
-      </div>
-      <span class="wf-menu-sep" />
-      <button class="menu-item danger" type="button" role="menuitem" @click="deleteEdge(edgeMenu.id)">删除连线</button>
-    </div>
 
     <NodeEditCard
       v-if="editNode"
@@ -94,20 +25,30 @@
       @close="editNode = null"
       @update="onUpdateNode"
     />
+    <EdgeConditionEditor
+      v-if="edgeConditionEditor"
+      :value="edgeConditionEditor.value"
+      :anchor="edgeConditionAnchor"
+      @close="edgeConditionEditor = null"
+      @save="saveEdgeCondition"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { markRaw, provide, ref, watch } from 'vue'
+import { markRaw, onBeforeUnmount, provide, ref, watch } from 'vue'
 import { VueFlow, useVueFlow, type Node, type Edge } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
+import { Copy, Pencil, Play, Plus, Scissors, Settings, Trash2 } from 'lucide-vue-next'
 // Vue Flow styles must load as global CSS (not inside <style scoped> @import,
 // which Vite scopes and breaks internal class selectors + load order).
 import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
 import WorkflowNodeComp from './WorkflowNode.vue'
 import NodeEditCard from './NodeEditCard.vue'
-import AutoTextarea from '../../../../../../ui/src/components/AutoTextarea.vue'
+import EdgeConditionEditor from './EdgeConditionEditor.vue'
+import { closeContextMenu, contextMenuState, isNativeContextTarget, openContextMenu } from '../../../../../../ui/src/components/context-menu/context-menu'
+import type { ContextMenuEntry } from '../../../../../../ui/src/components/context-menu/types'
 import type { WorkflowDef, WorkflowNodeKind, WorkflowNodeData, NodeStateStatus, WorkflowPort } from './types'
 
 const props = defineProps<{
@@ -240,21 +181,83 @@ function setEdgeCondition(edgeId: string, value: string) {
 
 // ---- context menus ----
 type MenuPos = { x: number; y: number }
-const paneMenu = ref<MenuPos | null>(null)
-const nodeMenu = ref<MenuPos & { id: string } | null>(null)
-const edgeMenu = ref<MenuPos & { id: string } | null>(null)
 const editNode = ref<WorkflowNodeData | null>(null)
 const editAnchor = ref<MenuPos>({ x: 0, y: 0 })
 const clipboard = ref<WorkflowNodeData | null>(null)
+const edgeConditionEditor = ref<{ id: string; value: string } | null>(null)
+const edgeConditionAnchor = ref<MenuPos>({ x: 0, y: 0 })
+
+onBeforeUnmount(() => {
+  if (contextMenuState.ownerId?.startsWith('workflow:')) closeContextMenu()
+})
 
 // Single native contextmenu handler on the canvas root. Detects whether the
 // right-click hit a Vue Flow node (DOM traversal to .vue-flow__node[data-id])
 // and shows the node menu, otherwise the pane menu. This avoids relying on
 // Vue Flow's pane/node context-menu events, which are unreliable with
 // panOnDrag={[2]} (right-button drag is interpreted as panning).
+function workflowMenuOwner(kind: 'pane' | 'node' | 'edge', id = ''): string {
+  return `workflow:${kind}${id ? `:${id}` : ''}`
+}
+
+function workflowMenuAttributes(kind: 'pane' | 'node' | 'edge', id = ''): Record<string, string> {
+  return { 'data-workflow-context-menu': id ? `${kind}:${id}` : kind }
+}
+
+function handleCanvasInteraction(): void {
+  closeContextMenu()
+  edgeConditionEditor.value = null
+}
+
+function buildPaneMenu(pos: MenuPos): ContextMenuEntry[] {
+  return [
+    { type: 'label', label: '新建节点' },
+    { id: 'ai', label: 'AI', action: () => addNodeAt('ai', pos) },
+    { id: 'command', label: 'Command', action: () => addNodeAt('command', pos) },
+    { id: 'script', label: 'Script', action: () => addNodeAt('script', pos) },
+    { id: 'content', label: 'Content', action: () => addNodeAt('content', pos) },
+    { id: 'subgraph', label: 'Subgraph', action: () => addNodeAt('subgraph', pos) },
+    { type: 'separator', id: 'paste-separator' },
+    { id: 'paste', label: '粘贴', disabled: !clipboard.value, action: () => pasteAt(pos) },
+  ]
+}
+
+function buildNodeMenu(id: string): ContextMenuEntry[] {
+  return [
+    { type: 'label', label: '运行' },
+    { id: 'run-from', label: '从此节点运行', icon: Play, action: () => runFromNode(id) },
+    { id: 'run-node', label: '运行此节点', icon: Play, action: () => runNode(id) },
+    { type: 'separator', id: 'node-config-separator' },
+    { id: 'configure', label: '配置', icon: Settings, action: () => configNode(id) },
+    { id: 'copy', label: '复制', icon: Copy, action: () => copyNode(id) },
+    { id: 'cut', label: '剪切', icon: Scissors, action: () => cutNode(id) },
+    { type: 'separator', id: 'node-port-separator' },
+    { id: 'add-input', label: '+ 输入端口', icon: Plus, action: () => addPort(id, 'in') },
+    { id: 'add-output', label: '+ 输出端口', icon: Plus, action: () => addPort(id, 'out') },
+    { type: 'separator', id: 'node-danger-separator' },
+    { id: 'delete', label: '删除', icon: Trash2, destructive: true, action: () => deleteNode(id) },
+  ]
+}
+
+function editEdgeCondition(id: string, anchor: MenuPos): void {
+  edgeConditionEditor.value = { id, value: edgeCondition(id) }
+  edgeConditionAnchor.value = anchor
+  closeContextMenu()
+}
+
+function buildEdgeMenu(id: string, anchor: MenuPos): ContextMenuEntry[] {
+  return [
+    { id: 'condition', label: '编辑条件', icon: Pencil, action: () => editEdgeCondition(id, anchor) },
+    { type: 'separator', id: 'edge-danger-separator' },
+    { id: 'delete', label: '删除连线', icon: Trash2, destructive: true, action: () => deleteEdge(id) },
+  ]
+}
+
 function onContextMenu(evt: MouseEvent) {
+  if (isNativeContextTarget(evt.target)) return
   const x = evt.clientX
   const y = evt.clientY
+  edgeConditionEditor.value = null
   let el = evt.target as HTMLElement | null
   let nodeId = ''
   let edgeId = ''
@@ -269,21 +272,29 @@ function onContextMenu(evt: MouseEvent) {
     }
     el = el.parentElement
   }
-  paneMenu.value = null
-  nodeMenu.value = null
-  edgeMenu.value = null
+  let items: ContextMenuEntry[]
+  let ownerId: string
+  let menuKind: 'pane' | 'node' | 'edge'
   if (edgeId && props.definition.edges.some((e) => e.id === edgeId)) {
-    edgeMenu.value = { x, y, id: edgeId }
+    menuKind = 'edge'
+    ownerId = workflowMenuOwner(menuKind, edgeId)
+    items = buildEdgeMenu(edgeId, { x, y })
   } else if (nodeId && props.definition.nodes.some((n) => n.id === nodeId)) {
-    nodeMenu.value = { x, y, id: nodeId }
+    menuKind = 'node'
+    ownerId = workflowMenuOwner(menuKind, nodeId)
+    items = buildNodeMenu(nodeId)
   } else {
-    paneMenu.value = { x, y }
+    menuKind = 'pane'
+    ownerId = workflowMenuOwner(menuKind)
+    items = buildPaneMenu({ x, y })
   }
-}
-function closeMenus() {
-  paneMenu.value = null
-  nodeMenu.value = null
-  edgeMenu.value = null
+  openContextMenu({
+    event: evt,
+    items,
+    ownerId,
+    ariaLabel: menuKind === 'pane' ? '工作流画布操作' : menuKind === 'node' ? '工作流节点操作' : '工作流连线操作',
+    panelAttributes: workflowMenuAttributes(menuKind, menuKind === 'pane' ? '' : menuKind === 'node' ? nodeId : edgeId),
+  })
 }
 
 // ---- node click → select + config ----
@@ -307,7 +318,15 @@ function openEdit(id: string, x?: number, y?: number) {
     editNode.value = n
     editAnchor.value = { x: x ?? window.innerWidth / 2, y: y ?? 120 }
   }
-  closeMenus()
+  edgeConditionEditor.value = null
+  closeContextMenu()
+}
+
+function saveEdgeCondition(value: string): void {
+  const editor = edgeConditionEditor.value
+  if (!editor) return
+  setEdgeCondition(editor.id, value)
+  edgeConditionEditor.value = null
 }
 
 // ---- node mutations ----
@@ -356,7 +375,7 @@ function addNodeAt(kind: WorkflowNodeKind, pos: MenuPos) {
     position: flowPos,
   }
   emit('update:definition', { ...props.definition, nodes: [...props.definition.nodes, node] })
-  closeMenus()
+  closeContextMenu()
 }
 
 function defaultTitle(kind: WorkflowNodeKind): string {
@@ -429,7 +448,7 @@ function addPort(id: string, direction: 'in' | 'out') {
       n.id === id ? { ...n, ports: [...n.ports, newPort] } : n
     ),
   })
-  closeMenus()
+  closeContextMenu()
 }
 
 function deleteNode(id: string) {
@@ -438,20 +457,20 @@ function deleteNode(id: string) {
     nodes: props.definition.nodes.filter((n) => n.id !== id),
     edges: props.definition.edges.filter((e) => e.source !== id && e.target !== id),
   })
-  closeMenus()
+  closeContextMenu()
 }
 function deleteEdge(id: string) {
   emit('update:definition', {
     ...props.definition,
     edges: props.definition.edges.filter((e) => e.id !== id),
   })
-  closeMenus()
+  closeContextMenu()
 }
 
 function copyNode(id: string) {
   const n = props.definition.nodes.find((node) => node.id === id)
   if (n) clipboard.value = JSON.parse(JSON.stringify(n))
-  closeMenus()
+  closeContextMenu()
 }
 function cutNode(id: string) {
   copyNode(id)
@@ -464,21 +483,22 @@ function pasteAt(pos: MenuPos) {
   copy.id = `${copy.kind}-${Math.random().toString(36).slice(2, 6)}`
   copy.position = flowPos
   emit('update:definition', { ...props.definition, nodes: [...props.definition.nodes, copy] })
-  closeMenus()
+  closeContextMenu()
 }
 
-function runFromNode(id: string) { emit('run-from', id); closeMenus() }
-function runNode(id: string) { emit('run-node', id); closeMenus() }
+function runFromNode(id: string) { emit('run-from', id); closeContextMenu() }
+function runNode(id: string) { emit('run-node', id); closeContextMenu() }
+
+watch(() => props.definition.edges, (edges) => {
+  if (edgeConditionEditor.value && !edges.some((edge) => edge.id === edgeConditionEditor.value?.id)) {
+    edgeConditionEditor.value = null
+  }
+}, { deep: false })
 
 function safeScreenToFlow(pos: MenuPos): { x: number; y: number } {
   try { return screenToFlowCoordinate(pos) } catch { return { x: 100 + Math.random() * 200, y: 80 + Math.random() * 120 } }
 }
 
-// close menus on outside pointerdown / Esc
-if (typeof document !== 'undefined') {
-  document.addEventListener('pointerdown', closeMenus)
-  document.addEventListener('keydown', (e: KeyboardEvent) => { if (e.key === 'Escape') closeMenus() })
-}
 </script>
 
 <style scoped>
@@ -503,36 +523,4 @@ if (typeof document !== 'undefined') {
 .wf-canvas :deep(.vue-flow__node.wf-node-selected .wf-node) {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--blue) 70%, transparent), var(--shadow);
 }
-.wf-context-menu {
-  position: fixed;
-  z-index: var(--z-popover, 60);
-  min-width: 150px;
-  padding: 4px;
-  border-radius: var(--radius);
-  border: 1px solid var(--theme-main-border);
-  background: var(--theme-main-background);
-  color: var(--theme-main-text);
-  box-shadow: var(--shadow);
-}
-.wf-menu-group { display: flex; flex-direction: column; }
-.wf-menu-label { font-size: 10px; opacity: 0.4; padding: 4px 8px 2px; text-transform: uppercase; letter-spacing: 0.04em; }
-.wf-menu-sep { display: block; height: 1px; margin: 4px 6px; background: var(--theme-main-border); }
-.wf-edge-cond-input {
-  width: 100%;
-  background: var(--theme-main-subtle-background, transparent);
-  border: 1px solid var(--theme-main-border);
-  border-radius: var(--radius-sm);
-  color: inherit;
-  padding: 5px 8px;
-  font-size: 11px;
-  font-family: var(--font-mono, monospace);
-  box-sizing: border-box;
-}
-.menu-item {
-  border: 0; background: transparent; color: inherit; text-align: left;
-  padding: 6px 10px; border-radius: 6px; font-size: 12px; cursor: pointer;
-}
-.menu-item:hover:not(:disabled) { background: var(--theme-main-soft-background); }
-.menu-item:disabled { opacity: 0.35; cursor: default; }
-.menu-item.danger { color: var(--red); }
 </style>

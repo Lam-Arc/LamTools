@@ -1,7 +1,7 @@
 ﻿<template>
   <!-- inheritAttrs: false — 模板根节点是 div + Teleport 双根，自动继承会把 class/attrs 丢掉；
        显式把 $attrs 绑到消息根节点，保证 class（如 sub-line-chat）能落到 DOM 上 -->
-  <div ref="rootEl" class="message-view" v-bind="$attrs">
+  <div ref="rootEl" class="message-view" v-bind="$attrs" @contextmenu="onContextMenu">
       <!-- Per-message override: product provides full rendering -->
       <slot
         v-if="$slots['message-product']"
@@ -725,8 +725,11 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { gsap } from 'gsap'
 import { Check, Copy, GitFork, Hourglass, Info, Pencil, Undo2, X, type LucideIcon } from 'lucide-vue-next'
 import { assistantSegmentTurnId, projectAssistantMessageParts } from '../appServer'
+import { copyText } from '../helpers/clipboard'
 import AutoTextarea from './AutoTextarea.vue'
 import MarkdownRenderer from './MarkdownRenderer.vue'
+import { isNativeContextTarget, openContextMenu } from './context-menu/context-menu'
+import type { ContextMenuEntry } from './context-menu/types'
 import MessageView from './MessageView.vue'
 import { autoFollowScrollDirective as vAutoFollowScroll } from '../directives/autoFollowScroll'
 import { panelEnter, panelLeave } from '../motion/expandPanel'
@@ -1668,22 +1671,55 @@ function assistantActionPayload(msg: CoreMessage): AssistantActionPayload {
   return { turnId: assistantTurnId(msg), content: answerContent(msg) }
 }
 
+function messageCopyContent(msg: CoreMessage): string {
+  return msg.role === 'user' ? String(msg.content || '') : answerContent(msg)
+}
+
+function copyMessage(msg: CoreMessage): Promise<void> {
+  const content = messageCopyContent(msg)
+  return content ? copyText(content) : Promise.resolve()
+}
+
+function hasSelectedMessageText(): boolean {
+  const selection = typeof window !== 'undefined' ? window.getSelection() : null
+  return Boolean(selection && !selection.isCollapsed && selection.toString().trim())
+}
+
+function onContextMenu(event: MouseEvent): void {
+  if (!props.messageActions || hasSelectedMessageText() || isNativeContextTarget(event.target)) return
+
+  const msg = props.msg
+  const items: ContextMenuEntry[] = []
+  if (userActionable(msg)) {
+    items.push({ id: 'copy', label: '复制消息', icon: Copy, action: () => copyMessage(msg) })
+    if (userHasCheckpoint(msg)) {
+      items.push({ id: 'edit', label: '编辑消息', icon: Pencil, action: () => startEditMessage(msg) })
+    }
+  } else if (assistantActionable(msg)) {
+    items.push(
+      { id: 'copy', label: '复制回复', icon: Copy, action: () => copyMessage(msg) },
+      { type: 'separator', id: 'message-fork-separator' },
+      { id: 'fork', label: '从此处另开会话', icon: GitFork, action: () => emit('fork-message', assistantActionPayload(msg)) },
+      { id: 'rollback', label: '回滚', icon: Undo2, destructive: true, action: () => emit('rollback-message', assistantActionPayload(msg)) },
+    )
+  }
+  if (!items.length) return
+  openContextMenu({
+    event,
+    items,
+    ownerId: `message:${msg.id}`,
+    ariaLabel: `${msg.role === 'user' ? '用户消息' : '助手回复'}操作`,
+    panelAttributes: { 'data-message-menu': msg.id },
+  })
+}
+
 async function copyAssistantMessage(msg: CoreMessage) {
-  const content = answerContent(msg)
+  const content = messageCopyContent(msg)
   if (!content) return
   try {
-    await navigator.clipboard.writeText(content)
+    await copyText(content)
   } catch {
-    // Clipboard API unavailable (older webviews / permissions): fall back to a
-    // hidden textarea + execCommand so copy still works without user friction.
-    const textarea = document.createElement('textarea')
-    textarea.value = content
-    textarea.style.position = 'fixed'
-    textarea.style.opacity = '0'
-    document.body.appendChild(textarea)
-    textarea.select()
-    try { document.execCommand('copy') } catch { /* clipboard unavailable */ }
-    document.body.removeChild(textarea)
+    // Clipboard can be unavailable in an embedded desktop context.
   }
   copiedActionId.value = msg.id
   if (copiedActionTimer) clearTimeout(copiedActionTimer)

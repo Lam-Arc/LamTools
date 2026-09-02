@@ -1,12 +1,14 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import CoreAgentsEditor from '../src/components/CoreAgentsEditor.vue'
 import CoreProjectCreate from '../src/components/CoreProjectCreate.vue'
 import CoreProjectPicker from '../src/components/CoreProjectPicker.vue'
 import SessionSidebar from '../src/components/SessionSidebar.vue'
+import ContextMenuHost from '../src/components/context-menu/ContextMenuHost.vue'
+import { closeContextMenu } from '../src/components/context-menu/context-menu'
 
 describe('CoreProjectCreate', () => {
   it('submits name and path without a Git option', async () => {
@@ -118,6 +120,18 @@ describe('CoreAgentsEditor', () => {
 })
 
 describe('SessionSidebar compatibility groups', () => {
+  let contextMenuHost: ReturnType<typeof mount> | null = null
+
+  beforeEach(() => {
+    contextMenuHost = mount(ContextMenuHost, { attachTo: document.body })
+  })
+
+  afterEach(() => {
+    closeContextMenu()
+    contextMenuHost?.unmount()
+    contextMenuHost = null
+  })
+
   it('does not expose project actions for an unassigned compatibility group', () => {
     const wrapper = mount(SessionSidebar, {
       props: {
@@ -154,12 +168,12 @@ describe('SessionSidebar compatibility groups', () => {
 
     const entry = wrapper.get('[data-project-entry="project-1"]')
     await wrapper.get('[data-project-menu-trigger="project-1"]').trigger('click')
-    const create = wrapper.get('[data-project-new="project-1"]')
+    const create = document.body.querySelector<HTMLButtonElement>('[data-project-new="project-1"]')
     expect(entry.element.tagName).toBe('BUTTON')
-    expect(create.attributes('disabled')).toBeDefined()
+    expect(create).not.toBeNull()
+    expect(create!.disabled).toBe(true)
     await entry.trigger('keydown.enter')
     await entry.trigger('keydown.space')
-    await create.trigger('click')
 
     expect(wrapper.emitted('select-project')).toEqual([['project-1'], ['project-1']])
     expect(wrapper.emitted('new-session')).toBeUndefined()

@@ -161,6 +161,7 @@
         @new-session="handleSidebarNewSession"
         @delete-project="deleteProject"
         @project-context-menu="openProjectActions"
+        @rename-project="openProjectRename"
         @delete-session="deleteSession"
         @rename-session="renameSessionFromSidebar"
         @export-session="exportSession"
@@ -445,6 +446,8 @@
     </template>
   </WorkspaceShell>
 
+  <ContextMenuHost />
+
   <!-- 全窗口拖拽上传遮罩：拖入文件时亮起，松开即上传到当前会话 -->
   <div
     v-if="dragActive"
@@ -535,6 +538,7 @@ import CoreProjectPicker from '../components/CoreProjectPicker.vue'
 import CoreStartPage, { type CoreRecentProject } from '../components/CoreStartPage.vue'
 import CoreSessionTitleEditor from '../components/CoreSessionTitleEditor.vue'
 import ArtifactPanel from '../components/ArtifactPanel.vue'
+import { ContextMenuHost } from '../components/context-menu'
 import OnboardingWizard from '../components/OnboardingWizard.vue'
 import PluginsShell from '../components/PluginsShell.vue'
 import SearchShell from '../components/SearchShell.vue'
@@ -1400,6 +1404,15 @@ function openProjectActions(projectId: string) {
   showProjectSettings.value = true
   // Load AGENTS.md content for the in-place editor inside project settings.
   void loadAgentsForProject(project.id)
+}
+
+function openProjectRename(projectId: string): void {
+  openProjectActions(projectId)
+  void nextTick(() => {
+    const input = document.querySelector<HTMLInputElement>('[data-project-name-input]')
+    input?.focus()
+    input?.select()
+  })
 }
 
 async function createStartPageSession(): Promise<void> {

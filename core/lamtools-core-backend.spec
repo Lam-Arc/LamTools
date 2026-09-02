@@ -14,6 +14,8 @@ Requires the frontend to be built first (optional — for SPA fallback):
 from pathlib import Path
 
 _PROJECT_ROOT = Path(".").resolve()
+_BUNDLED_PLUGINS_ROOT = _PROJECT_ROOT / "src" / "lamtools_core" / "plugins" / "bundled"
+_EXCLUDED_BUNDLED_PLUGINS = {"emotion-ball-pet"}
 
 # ---------------------------------------------------------------------------
 # Bundled data files
@@ -26,9 +28,19 @@ _datas: list[tuple[str, str]] = [
     ("config/resources", "config/resources"),
     ("config/command", "config/command"),
     ("config/llm_adapters", "config/llm_adapters"),
-    # Bundled plugins may now include self-contained desktop UI assets.
-    ("src/lamtools_core/plugins/bundled", "resources/plugins/bundled"),
 ]
+
+# Core-owned bundled plugins ship with the backend.  The desktop pet remains
+# an optional source plugin and must not be embedded in the installer.
+for _plugin_dir in sorted(_BUNDLED_PLUGINS_ROOT.iterdir()):
+    if not _plugin_dir.is_dir() or _plugin_dir.name in _EXCLUDED_BUNDLED_PLUGINS:
+        continue
+    _datas.append(
+        (
+            str(_plugin_dir.relative_to(_PROJECT_ROOT)),
+            f"resources/plugins/bundled/{_plugin_dir.name}",
+        )
+    )
 
 # ---------------------------------------------------------------------------
 # Hidden imports — every submodule reachable in lamtools_core

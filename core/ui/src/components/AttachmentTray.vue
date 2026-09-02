@@ -8,6 +8,7 @@
         'attachment-card--image': isDisplayImage(item),
         'attachment-card--failed': item.status === 'failed',
       }"
+      @contextmenu="onContextMenu($event, item)"
     >
       <button
         type="button"
@@ -71,10 +72,16 @@ import {
   FileArchive,
   FileImage,
   FileText,
+  Eye,
+  ExternalLink,
   Sheet,
+  RotateCcw,
+  Trash2,
   X,
 } from 'lucide-vue-next';
 import type { CoreAttachment } from '../types';
+import { isNativeContextTarget, openContextMenu } from './context-menu/context-menu';
+import type { ContextMenuEntry } from './context-menu/types';
 
 const props = withDefaults(defineProps<{
   attachments: CoreAttachment[];
@@ -84,12 +91,36 @@ const props = withDefaults(defineProps<{
 });
 const thumbnailUrls = reactive<Record<string, string>>({});
 
-defineEmits<{
+const emit = defineEmits<{
   remove: [id: string];
   retry: [id: string];
   preview: [id: string];
   open: [id: string];
 }>();
+
+function onContextMenu(event: MouseEvent, item: CoreAttachment): void {
+  if (isNativeContextTarget(event.target)) return;
+  const failed = item.status === 'failed'
+  const items: ContextMenuEntry[] = failed
+    ? [
+        { id: 'retry', label: '重试', icon: RotateCcw, action: () => emit('retry', item.id) },
+        { type: 'separator', id: 'attachment-danger-separator' },
+        { id: 'remove', label: '移除', icon: Trash2, destructive: true, action: () => emit('remove', item.id) },
+      ]
+    : [
+        { id: 'preview', label: '预览', icon: Eye, action: () => emit('preview', item.id) },
+        { id: 'open', label: '系统打开', icon: ExternalLink, action: () => emit('open', item.id) },
+        { type: 'separator', id: 'attachment-danger-separator' },
+        { id: 'remove', label: '移除', icon: Trash2, destructive: true, action: () => emit('remove', item.id) },
+      ];
+  openContextMenu({
+    event,
+    items,
+    ownerId: `attachment:${item.id}`,
+    ariaLabel: `${item.label || item.filename} 附件操作`,
+    panelAttributes: { 'data-attachment-menu': item.id },
+  });
+}
 
 function extension(item: CoreAttachment): string {
   return item.filename.split('.').pop()?.toLowerCase() || '';

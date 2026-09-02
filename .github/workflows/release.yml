@@ -107,6 +107,24 @@ jobs:
           cd core
           python -m PyInstaller lamtools-core-backend.spec --clean --noconfirm
 
+      - name: Verify bundled plugin boundary
+        shell: pwsh
+        run: |
+          $plugins = "core/dist/LamCore/_internal/resources/plugins/bundled"
+          $pet = "$plugins/emotion-ball-pet"
+          if (Test-Path -LiteralPath $pet) {
+            Write-Error "Optional desktop pet must not be embedded in the installer: $pet"
+            exit 1
+          }
+          foreach ($name in @("git", "websearch", "imagegen", "workflow")) {
+            $required = "$plugins/$name"
+            if (-not (Test-Path -LiteralPath $required)) {
+              Write-Error "Required bundled plugin is missing: $required"
+              exit 1
+            }
+          }
+          Write-Host "Bundled plugin boundary OK (desktop pet excluded)"
+
       - name: Smoke-test backend binary
         # desktop_backend.py 不解析参数（--help 会被忽略直接起 uvicorn），所以
         # 用「启动 + 轮询 /api/health」真冒烟：FastAPI 装配、hiddenimports、

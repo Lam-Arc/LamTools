@@ -26,6 +26,7 @@
                     <input
                       v-model="projectNameInput"
                       class="field-input"
+                      data-project-name-input
                       :disabled="projectActionLoading"
                     />
                   </label>

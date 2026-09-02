@@ -2623,7 +2623,6 @@
   .conversation .status.waiting {
     animation: none;
   }
-  .project-menu,
   .settings-panel {
     animation: none;
   }

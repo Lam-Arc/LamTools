@@ -46,6 +46,20 @@ try {
         Write-Host "[FAIL] PyInstaller build failed." -ForegroundColor Red
         exit 1
     }
+    $BundledPluginsDir = "$Root\core\dist\LamCore\_internal\resources\plugins\bundled"
+    $BundledPetDir = "$BundledPluginsDir\emotion-ball-pet"
+    if (Test-Path -LiteralPath $BundledPetDir) {
+        Write-Host "[FAIL] Optional desktop pet was embedded in the backend bundle: $BundledPetDir" -ForegroundColor Red
+        exit 1
+    }
+    foreach ($RequiredPlugin in @("git", "websearch", "imagegen", "workflow")) {
+        $RequiredPluginDir = "$BundledPluginsDir\$RequiredPlugin"
+        if (-not (Test-Path -LiteralPath $RequiredPluginDir)) {
+            Write-Host "[FAIL] Required bundled plugin is missing: $RequiredPluginDir" -ForegroundColor Red
+            exit 1
+        }
+    }
+    Write-Host "  Plugin boundary verified (desktop pet excluded)." -ForegroundColor Green
     Write-Host "  Backend -> core/dist/LamCore/" -ForegroundColor Green
 } finally {
     Pop-Location

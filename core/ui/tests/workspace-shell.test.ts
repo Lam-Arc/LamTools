@@ -109,8 +109,10 @@ describe('WorkspaceShell responsive drawers', () => {
     expect(shellCss).toMatch(/--sidebar-width: min\(86vw, 320px\)/)
     expect(shellCss).toMatch(/\.sidebar-root \.sidebar-pin-button \{[\s\S]*?width: 44px;[\s\S]*?height: 44px;/)
     expect(shellCss).toMatch(/\.drawer-footer \.settings-entry,[\s\S]*?\.drawer-footer \.sidebar-action,[\s\S]*?\.sidebar-create-project \{[\s\S]*?min-height: 44px;/)
-    expect(sidebarCss).toMatch(/\.project-menu \{[\s\S]*?max-width: calc\(100vw - var\(--space-6\)\);[\s\S]*?max-height: calc\(100dvh - var\(--space-6\)\);/)
     expect(sidebarCss).toMatch(/\.sidebar-search,[\s\S]*?\.sidebar-search-clear,[\s\S]*?\.sidebar-project-empty-action \{[\s\S]*?min-height: 44px;/)
+    expect(sidebarCss).toMatch(/\.project-action \{[\s\S]*?min-width: 44px;[\s\S]*?min-height: 44px;/)
+    const contextMenuCss = readFileSync(resolve(import.meta.dirname, '../src/components/context-menu/ContextMenuPanel.vue'), 'utf8')
+    expect(contextMenuCss).toMatch(/@media \(max-width: 640px\)[\s\S]*?\.context-menu-panel \{[\s\S]*?max-width: calc\(100vw - var\(--space-6\)\);[\s\S]*?max-height: calc\(100dvh - var\(--space-6\)\);[\s\S]*?\.context-menu-item \{[\s\S]*?min-height: 44px;/)
   })
 
   it('renders the configured sidebar title and keeps the default fallback', () => {

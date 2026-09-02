@@ -42,6 +42,7 @@
         :class="{ 'artifact-node--selected': selectedArtifact?.artifact_id === row.item.artifact_id }"
         :style="{ paddingLeft: `${10 + row.depth * 14}px` }"
         @click="selectArtifact(row.item)"
+        @contextmenu="onArtifactContextMenu($event, row.item)"
       >
         <label v-if="cleanupMode" class="artifact-check" @click.stop>
           <input
@@ -111,7 +112,10 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { File, FileText, Film, Image as ImageIcon, Music, Package, RefreshCw, Upload, type LucideIcon } from 'lucide-vue-next'
+import { Copy, Eye, File, FileText, Film, Image as ImageIcon, Music, Package, RefreshCw, Trash2, Upload, type LucideIcon } from 'lucide-vue-next'
+import { copyText } from '../helpers/clipboard'
+import { isNativeContextTarget, openContextMenu } from './context-menu/context-menu'
+import type { ContextMenuEntry } from './context-menu/types'
 
 interface ArtifactItem {
   artifact_id: string
@@ -205,6 +209,38 @@ function formatTime(value: string): string {
 
 function selectArtifact(item: ArtifactItem): void {
   selectedArtifact.value = item
+}
+
+function onArtifactContextMenu(event: MouseEvent, item: ArtifactItem): void {
+  if (isNativeContextTarget(event.target)) return
+  openContextMenu({
+    event,
+    items: [
+      { id: 'preview', label: '预览', icon: Eye, action: () => selectArtifact(item) },
+      { type: 'separator', id: 'artifact-path-separator' },
+      { id: 'copy-path', label: '复制路径', icon: Copy, action: () => copyText(item.path).catch(() => undefined) },
+      { type: 'separator', id: 'artifact-danger-separator' },
+      { id: 'delete', label: '删除', icon: Trash2, destructive: true, action: () => deleteArtifact(item) },
+    ],
+    ownerId: `artifact:${item.artifact_id}`,
+    ariaLabel: `${item.name} Artifact 操作`,
+    panelAttributes: { 'data-artifact-menu': item.artifact_id },
+  })
+}
+
+async function deleteArtifact(item: ArtifactItem): Promise<void> {
+  if (!props.projectId || !window.confirm(`确定删除 Artifact「${item.name}」？`)) return
+  error.value = ''
+  try {
+    await props.requestRpc('artifact.delete', {
+      project_id: props.projectId,
+      artifact_ids: [item.artifact_id],
+    })
+    await fetchArtifacts()
+    if (selectedArtifact.value?.artifact_id === item.artifact_id) selectedArtifact.value = null
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : String(e)
+  }
 }
 
 function enterCleanup(): void {

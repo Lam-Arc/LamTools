@@ -2,9 +2,11 @@ import { mount } from '@vue/test-utils'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { nextTick } from 'vue'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import SessionSidebar from '../src/components/SessionSidebar.vue'
+import ContextMenuHost from '../src/components/context-menu/ContextMenuHost.vue'
+import { closeContextMenu } from '../src/components/context-menu/context-menu'
 
 const groups = [
   {
@@ -41,11 +43,21 @@ function dispatchClick(element: Element): void {
 }
 
 describe('SessionSidebar sections', () => {
+  let contextMenuHost: ReturnType<typeof mount> | null = null
+
   beforeEach(() => {
     document.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
     localStorage.clear()
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-07-13T08:00:00Z'))
+    contextMenuHost = mount(ContextMenuHost, { attachTo: document.body })
+  })
+
+  afterEach(() => {
+    closeContextMenu()
+    contextMenuHost?.unmount()
+    contextMenuHost = null
+    vi.useRealTimers()
   })
 
   it('groups unpinned projects by activity and sorts newest first', () => {
@@ -210,7 +222,8 @@ describe('SessionSidebar sections', () => {
     })
 
     await wrapper.get('[data-project-menu-trigger="earlier"]').trigger('click')
-    await wrapper.get('[data-project-pin="earlier"]').trigger('click')
+    document.body.querySelector<HTMLElement>('[data-project-pin="earlier"]')!.click()
+    await nextTick()
 
     expect(wrapper.get('[data-sidebar-section="pinned"]').text()).toContain('Earlier')
     expect(localStorage.getItem('test.sidebar.pins')).toBe('["earlier"]')
@@ -221,7 +234,8 @@ describe('SessionSidebar sections', () => {
     expect(restored.get('[data-sidebar-section="pinned"]').text()).toContain('Earlier')
 
     await restored.get('[data-project-menu-trigger="earlier"]').trigger('click')
-    await restored.get('[data-project-pin="earlier"]').trigger('click')
+    document.body.querySelector<HTMLElement>('[data-project-pin="earlier"]')!.click()
+    await nextTick()
     expect(restored.find('[data-sidebar-section="pinned"]').exists()).toBe(false)
     expect(restored.get('[data-sidebar-section="default"]').text()).toContain('Earlier')
   })
@@ -238,12 +252,13 @@ describe('SessionSidebar sections', () => {
 
     await wrapper.get('[data-project-menu-trigger="recent-new"]').trigger('click')
 
-    const menu = wrapper.get('[data-project-menu="recent-new"]')
-    expect(menu.attributes('role')).toBe('menu')
-    expect(menu.text()).toContain('新建会话')
-    expect(menu.text()).toContain('置顶项目')
-    expect(menu.text()).toContain('项目设置')
-    expect(menu.text()).toContain('删除项目')
+    const menu = document.body.querySelector<HTMLElement>('[data-project-menu="recent-new"]')
+    expect(menu).not.toBeNull()
+    expect(menu!.getAttribute('role')).toBe('menu')
+    expect(menu!.textContent).toContain('新建会话')
+    expect(menu!.textContent).toContain('置顶项目')
+    expect(menu!.textContent).toContain('项目设置')
+    expect(menu!.textContent).toContain('删除项目')
   })
 
   it('keeps project toggle, main action, and menu as separate row controls', async () => {
@@ -262,7 +277,7 @@ describe('SessionSidebar sections', () => {
     expect(row.querySelector('.project-main button')).toBeNull()
 
     await wrapper.get('[data-project-menu-trigger="recent-new"]').trigger('click')
-    expect(wrapper.find('[data-project-menu="recent-new"]').exists()).toBe(true)
+    expect(document.body.querySelector('[data-project-menu="recent-new"]')).not.toBeNull()
     expect(wrapper.get('[data-project-fold="recent-new"]').attributes('aria-expanded')).toBe('true')
   })
 
@@ -282,14 +297,14 @@ describe('SessionSidebar sections', () => {
     expect(triggers).toHaveLength(2)
 
     await triggers[0].trigger('click')
-    expect(wrapper.findAll('[data-project-menu="recent-new"]')).toHaveLength(1)
-    expect(wrapper.find('[data-sidebar-section="pinned"] [data-project-menu="recent-new"]').exists()).toBe(true)
-    expect(wrapper.find('[data-sidebar-section="default"] [data-project-menu="recent-new"]').exists()).toBe(false)
+    expect(document.body.querySelectorAll('[data-project-menu="recent-new"]')).toHaveLength(1)
+    expect(triggers[0].attributes('aria-expanded')).toBe('true')
+    expect(triggers[1].attributes('aria-expanded')).toBe('false')
 
     await triggers[1].trigger('click')
-    expect(wrapper.findAll('[data-project-menu="recent-new"]')).toHaveLength(1)
-    expect(wrapper.find('[data-sidebar-section="pinned"] [data-project-menu="recent-new"]').exists()).toBe(false)
-    expect(wrapper.find('[data-sidebar-section="default"] [data-project-menu="recent-new"]').exists()).toBe(true)
+    expect(document.body.querySelectorAll('[data-project-menu="recent-new"]')).toHaveLength(1)
+    expect(triggers[0].attributes('aria-expanded')).toBe('false')
+    expect(triggers[1].attributes('aria-expanded')).toBe('true')
   })
 
   it('keeps the menu mounted through pointerdown and dispatches every project action', async () => {
@@ -305,16 +320,39 @@ describe('SessionSidebar sections', () => {
     for (const [selector, event] of [
       ['[data-project-new="recent-new"]', 'new-session'],
       ['[data-project-pin="recent-new"]', null],
+      ['[data-project-rename="recent-new"]', 'rename-project'],
       ['[data-project-menu="recent-new"] button:nth-last-of-type(2)', 'project-context-menu'],
       ['[data-project-menu="recent-new"] button:last-of-type', 'delete-project'],
     ] as const) {
       await wrapper.get('[data-project-menu-trigger="recent-new"]').trigger('click')
-      const action = wrapper.get(selector)
-      await action.trigger('pointerdown')
-      expect(wrapper.find('[data-project-menu="recent-new"]').exists()).toBe(true)
-      await action.trigger('click')
+      const action = document.body.querySelector<HTMLElement>(selector)
+      expect(action).not.toBeNull()
+      action!.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+      expect(document.body.querySelector('[data-project-menu="recent-new"]')).not.toBeNull()
+      action!.click()
+      await nextTick()
       if (event) expect(wrapper.emitted(event)?.at(-1)).toEqual(['recent-new'])
     }
+  })
+
+  it('suppresses the browser menu when a plugin disables project or session actions', async () => {
+    const wrapper = mount(SessionSidebar, {
+      props: {
+        projectGroups: groups,
+        allowProjectContextMenu: false,
+        allowSessionContextMenu: false,
+      },
+    })
+
+    const projectEvent = new MouseEvent('contextmenu', { bubbles: true, cancelable: true })
+    const sessionEvent = new MouseEvent('contextmenu', { bubbles: true, cancelable: true })
+    wrapper.get('[data-project-entry="recent-new"]').element.dispatchEvent(projectEvent)
+    wrapper.get('[data-session-row="s1"]').element.dispatchEvent(sessionEvent)
+
+    expect(projectEvent.defaultPrevented).toBe(true)
+    expect(sessionEvent.defaultPrevented).toBe(true)
+    expect(document.body.querySelector('[data-project-menu="recent-new"]')).toBeNull()
+    expect(document.body.querySelector('[data-session-menu="s1"]')).toBeNull()
   })
 
   it('selects a session when its title text is clicked', async () => {
@@ -352,6 +390,7 @@ describe('SessionSidebar sections', () => {
     expect(css).toMatch(/\.session-title \{[\s\S]*?width: 100%;[\s\S]*?overflow: hidden;[\s\S]*?text-overflow: ellipsis;/)
 
     await wrapper.get('[data-session-row="long"]').trigger('contextmenu', { clientX: 120, clientY: 80 })
+    await nextTick()
     expect(document.querySelector('[data-session-menu="long"]')?.getAttribute('aria-label')).toBe('调查输入框权限切换改动画面 会话操作')
   })
 
@@ -377,7 +416,10 @@ describe('SessionSidebar sections', () => {
     expect(css).toMatch(/\.project-btns \{[\s\S]*?opacity: 0;[\s\S]*?pointer-events: none;/)
     expect(css).toMatch(/\.project-block:hover \.project-btns,[\s\S]*?\.project-btns:has\(\.project-menu-button\[aria-expanded="true"\]\)/)
     expect(css).not.toContain('.conversation-hover-actions')
-    expect(css).toMatch(/\.session-context-menu,[\s\S]*?\.session-export-menu\s*\{[\s\S]*?position: fixed;[\s\S]*?z-index: var\(--z-popover\)/)
+    expect(css).not.toContain('.session-context-menu')
+    expect(css).not.toContain('.session-export-menu')
+    const contextMenuCss = readFileSync(resolve(import.meta.dirname, '../src/components/context-menu/ContextMenuPanel.vue'), 'utf8')
+    expect(contextMenuCss).toMatch(/\.context-menu-panel\s*\{[\s\S]*?position: fixed;[\s\S]*?z-index: var\(--z-popover/)
   })
 
   it('uses a transparent native drag image while sorting', async () => {

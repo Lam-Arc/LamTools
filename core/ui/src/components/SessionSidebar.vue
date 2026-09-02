@@ -97,7 +97,7 @@
           @click="selectProject(group.id, group.canManage !== false)"
           @keydown.enter.prevent="selectProject(group.id, group.canManage !== false)"
           @keydown.space.prevent="selectProject(group.id, group.canManage !== false)"
-          @contextmenu.prevent="allowProjectContextMenu && group.canManage !== false && emit('project-context-menu', group.id)"
+          @contextmenu="handleProjectContextMenu(section.id, group, $event)"
         >
           <strong>{{ group.name }}</strong>
         </button>
@@ -107,9 +107,10 @@
             type="button"
             title="项目操作"
             :aria-label="`${group.name} 项目操作`"
-            :aria-expanded="openProjectMenuKey === projectMenuKey(section.id, group.id)"
+            :aria-expanded="isContextMenuOpen(projectMenuOwner(section.id, group.id))"
+            data-context-menu-trigger
             :data-project-menu-trigger="group.id"
-            @click.stop="toggleProjectMenu(section.id, group.id)"
+            @click.stop="toggleProjectMenu(section.id, group, $event)"
           ><MoreHorizontal :size="14" :stroke-width="1.8" aria-hidden="true" /></button>
         </div>
       </div>
@@ -149,7 +150,7 @@
             @dragover.prevent="handleSessionDragOver(group.id, s.id, section.id, $event)"
             @drop.prevent="dropSession(group.id, s.id, section.id)"
             @dragend="finishDrag"
-            @contextmenu.prevent.stop="handleSessionContextMenu(s.id, $event)"
+            @contextmenu="handleSessionContextMenu(s.id, $event)"
           >
           <button
             v-if="editingSessionId !== s.id"
@@ -202,127 +203,28 @@
           还有 {{ hiddenCount(group, section.id) }} 个会话
         </button>
         </div>
-        <div
-          v-if="openProjectMenuKey === projectMenuKey(section.id, group.id)"
-          class="project-menu"
-          role="menu"
-          :aria-label="`${group.name} 项目操作`"
-          :data-project-menu="group.id"
-          @pointerdown.stop
-          @click.stop
-          @keydown.escape.prevent="closeProjectMenu"
-        >
-        <button
-          v-if="allowProjectNewSession && group.canManage !== false"
-          role="menuitem"
-          :disabled="isProjectBusy(group.id)"
-          :data-project-new="group.id"
-          @click="runProjectAction(group.id, 'new-session')"
-        >{{ isProjectBusy(group.id) ? '正在创建…' : newSessionLabel }}</button>
-        <button role="menuitem" :data-project-pin="group.id" @click="runProjectAction(group.id, 'pin')">
-          {{ isPinned(group.id) ? '取消置顶' : '置顶项目' }}
-        </button>
-        <button
-          v-if="group.sessions.length > projectSessionLimit && projectSessionLimit > 0"
-          role="menuitem"
-          @click="runProjectAction(group.id, 'fold')"
-        >{{ groupExpanded[group.id] ? '收起会话' : '展开全部会话' }}</button>
-        <button
-          v-if="allowProjectContextMenu && group.canManage !== false"
-          role="menuitem"
-          @click="runProjectAction(group.id, 'settings')"
-        >项目设置</button>
-        <span v-if="allowProjectDelete && group.canManage !== false" class="project-menu-separator"></span>
-        <button
-          v-if="allowProjectDelete && group.canManage !== false"
-          class="danger"
-          role="menuitem"
-          @click="runProjectAction(group.id, 'delete')"
-        >删除项目</button>
-        </div>
         </article>
       </TransitionGroup>
     </section>
 
-    <Teleport to="body">
-      <div
-        v-if="openSessionMenuState"
-        ref="sessionMenuRef"
-        class="session-context-menu"
-        role="menu"
-        :aria-label="`${sessionMenuTitle} 会话操作`"
-        :data-session-menu="openSessionId"
-        :data-placement="sessionMenuPlacement"
-        :style="sessionMenuPosition"
-        @pointerdown.stop
-        @click.stop
-        @keydown.escape.prevent="closeSessionMenus"
-      >
-        <button
-          type="button"
-          role="menuitem"
-          :aria-pressed="isSessionPinned(openSessionId)"
-          :data-session-menu-pin="openSessionId"
-          @click="runSessionAction('pin', openSessionId)"
-        >{{ isSessionPinned(openSessionId) ? '取消置顶' : '置顶会话' }}</button>
-        <button
-          type="button"
-          role="menuitem"
-          :data-session-menu-rename="openSessionId"
-          @click="runSessionAction('rename', openSessionId)"
-        >重命名</button>
-        <button
-          ref="sessionExportTriggerRef"
-          type="button"
-          role="menuitem"
-          aria-haspopup="menu"
-          :aria-expanded="sessionExportMenuOpen"
-          :data-session-menu-export="openSessionId"
-          @click="runSessionAction('export', openSessionId)"
-        >
-          <span>导出</span>
-          <ChevronRight class="session-menu-chevron" :size="14" :stroke-width="1.8" aria-hidden="true" />
-        </button>
-        <span v-if="allowSessionDelete" class="session-menu-separator" aria-hidden="true"></span>
-        <button
-          v-if="allowSessionDelete"
-          class="danger"
-          type="button"
-          role="menuitem"
-          :data-session-menu-delete="openSessionId"
-          @click="runSessionAction('delete', openSessionId)"
-        >删除</button>
-      </div>
-
-      <div
-        v-if="openSessionMenuState && sessionExportMenuOpen"
-        ref="sessionExportMenuRef"
-        class="session-export-menu"
-        role="menu"
-        aria-label="导出"
-        :data-session-export-menu="openSessionId"
-        :data-placement="sessionExportPlacement"
-        :style="sessionExportMenuPosition"
-        @pointerdown.stop
-        @click.stop
-        @keydown.escape.prevent="closeSessionMenus"
-      >
-        <div class="session-export-group-label" role="presentation">文本记录</div>
-        <button type="button" role="menuitem" data-session-export-format="markdown" @click="exportSession(openSessionId, 'markdown')">Markdown</button>
-        <button type="button" role="menuitem" data-session-export-format="txt" @click="exportSession(openSessionId, 'txt')">TXT</button>
-        <button type="button" role="menuitem" data-session-export-format="jsonl" @click="exportSession(openSessionId, 'jsonl')">JSONL</button>
-        <button type="button" role="menuitem" data-session-export-format="handoff" :data-session-export-handoff="openSessionId" @click="exportSession(openSessionId, 'handoff')">Agent Handoff</button>
-        <span class="session-menu-separator" aria-hidden="true"></span>
-        <button type="button" role="menuitem" data-session-export-format="zip" :data-session-export-full="openSessionId" @click="exportSession(openSessionId, 'zip')">完整归档</button>
-      </div>
-    </Teleport>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref, reactive, onBeforeUnmount, onMounted, watch } from 'vue'
-import { ChevronRight, MoreHorizontal, Search } from 'lucide-vue-next'
+import { computed, nextTick, onBeforeUnmount, ref, reactive, watch } from 'vue'
+import {
+  MessageSquarePlus,
+  MoreHorizontal,
+  Pencil,
+  Pin,
+  PinOff,
+  Search,
+  Settings,
+  Trash2,
+} from 'lucide-vue-next'
 import { motionEnterDirective } from '../directives/motionEnter'
+import { closeContextMenu, contextMenuState, isContextMenuOpen, openContextMenu } from './context-menu/context-menu'
+import type { ContextMenuEntry } from './context-menu/types'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -413,6 +315,7 @@ const emit = defineEmits<{
   'rename-session': [sessionId: string, title: string]
   'export-session': [sessionId: string, format: SessionExportFormat]
   'project-context-menu': [projectGroupId: string]
+  'rename-project': [projectGroupId: string]
 }>()
 
 export type SessionExportFormat = 'markdown' | 'txt' | 'jsonl' | 'handoff' | 'zip'
@@ -428,24 +331,6 @@ const projectOrderIds = ref<string[]>(loadOrderIds('order.projects'))
 const sessionOrderIds = ref<Record<string, string[]>>(loadSessionOrderIds())
 const dragState = ref<DragState | null>(null)
 const dragOverTarget = ref<DragOverTarget | null>(null)
-const openProjectMenuKey = ref<string | null>(null)
-type SessionMenuAction = 'pin' | 'rename' | 'export' | 'delete'
-interface SessionMenuState {
-  sessionId: string
-  clientX: number
-  clientY: number
-}
-type FixedMenuPosition = { left: string; top: string }
-
-const openSessionMenuState = ref<SessionMenuState | null>(null)
-const sessionMenuPosition = ref<FixedMenuPosition>({ left: '0px', top: '0px' })
-const sessionExportMenuPosition = ref<FixedMenuPosition>({ left: '0px', top: '0px' })
-const sessionMenuPlacement = ref<'down' | 'up'>('down')
-const sessionExportPlacement = ref<'right' | 'left'>('right')
-const sessionExportMenuOpen = ref(false)
-const sessionMenuRef = ref<HTMLElement | null>(null)
-const sessionExportTriggerRef = ref<HTMLButtonElement | null>(null)
-const sessionExportMenuRef = ref<HTMLElement | null>(null)
 const editingSessionId = ref<string | null>(null)
 const sessionNameDraft = ref('')
 const searchQuery = ref('')
@@ -454,11 +339,6 @@ const searchInputRef = ref<HTMLInputElement | null>(null)
 const dragImageRef = ref<HTMLElement | null>(null)
 const normalizedQuery = computed(() => searchQuery.value.trim().toLocaleLowerCase())
 const hasProjectData = computed(() => props.hasProjects ?? props.projectGroups.length > 0)
-const openSessionId = computed(() => openSessionMenuState.value?.sessionId || '')
-const sessionMenuTitle = computed(() => {
-  const session = findSession(openSessionId.value)
-  return session?.title || (openSessionId.value ? `Session ${openSessionId.value.slice(0, 8)}` : '会话')
-})
 
 // ── 新会话条目入场（C14）：挂载时已在列表中的会话不播，之后新出现的会话淡入。
 //    集合 setup 期捕获、只读，不引入响应式状态（会话列表变更频率极低）。
@@ -725,141 +605,187 @@ function findSession(sessionId: string): SessionItem | undefined {
 }
 
 function selectSession(sessionId: string): void {
-  closeSessionMenus()
+  closeContextMenu()
   cancelSessionRename()
   emit('select-session', sessionId)
 }
 
+function projectMenuOwner(sectionId: string, groupId: string): string {
+  return `project:${sectionId}:${groupId}`
+}
+
+function sessionMenuOwner(sessionId: string): string {
+  return `session:${sessionId}`
+}
+
+function contextMenuAttributes(attribute: string, value: string): Record<string, string> {
+  return { [attribute]: value }
+}
+
+function projectMenuEntries(group: ProjectGroup): ContextMenuEntry[] {
+  const entries: ContextMenuEntry[] = []
+  if (props.allowProjectNewSession && group.canManage !== false) {
+    entries.push({
+      id: 'new-session',
+      label: isProjectBusy(group.id) ? '正在创建…' : props.newSessionLabel,
+      icon: MessageSquarePlus,
+      disabled: isProjectBusy(group.id),
+      attributes: contextMenuAttributes('data-project-new', group.id),
+      action: () => emit('new-session', group.id),
+    })
+  }
+  entries.push({
+    id: 'pin',
+    label: isPinned(group.id) ? '取消置顶' : '置顶项目',
+    icon: isPinned(group.id) ? PinOff : Pin,
+    attributes: contextMenuAttributes('data-project-pin', group.id),
+    action: () => toggleProjectPin(group.id),
+  })
+  if (group.sessions.length > props.projectSessionLimit && props.projectSessionLimit > 0) {
+    entries.push({
+      id: 'fold',
+      label: groupExpanded[group.id] ? '收起会话' : '展开全部会话',
+      action: () => toggleGroupExpand(group.id),
+    })
+  }
+  if (props.allowProjectContextMenu && group.canManage !== false) {
+    entries.push({
+      id: 'rename',
+      label: '重命名',
+      icon: Pencil,
+      attributes: contextMenuAttributes('data-project-rename', group.id),
+      action: () => emit('rename-project', group.id),
+    })
+    entries.push({
+      id: 'settings',
+      label: '项目设置',
+      icon: Settings,
+      action: () => emit('project-context-menu', group.id),
+    })
+  }
+  if (props.allowProjectDelete && group.canManage !== false) {
+    entries.push(
+      { type: 'separator', id: 'project-danger-separator' },
+      {
+        id: 'delete',
+        label: '删除项目',
+        icon: Trash2,
+        destructive: true,
+        action: () => emit('delete-project', group.id),
+      },
+    )
+  }
+  return entries
+}
+
+function openProjectContextMenu(sectionId: string, group: ProjectGroup, event: MouseEvent): void {
+  const ownerId = projectMenuOwner(sectionId, group.id)
+  const items = projectMenuEntries(group)
+  if (!items.length) return
+  openContextMenu({
+    event,
+    items,
+    ownerId,
+    ariaLabel: `${group.name} 项目操作`,
+    panelAttributes: contextMenuAttributes('data-project-menu', group.id),
+  })
+}
+
+function handleProjectContextMenu(sectionId: string, group: ProjectGroup, event: MouseEvent): void {
+  if (!props.allowProjectContextMenu || group.canManage === false) {
+    event.preventDefault()
+    event.stopPropagation()
+    return
+  }
+  openProjectContextMenu(sectionId, group, event)
+}
+
+function toggleProjectMenu(sectionId: string, group: ProjectGroup, event: MouseEvent): void {
+  const ownerId = projectMenuOwner(sectionId, group.id)
+  if (isContextMenuOpen(ownerId)) {
+    closeContextMenu()
+    return
+  }
+  openProjectContextMenu(sectionId, group, event)
+}
+
+function sessionMenuEntries(sessionId: string): ContextMenuEntry[] {
+  return [
+    {
+      id: 'pin',
+      label: isSessionPinned(sessionId) ? '取消置顶' : '置顶会话',
+      icon: isSessionPinned(sessionId) ? PinOff : Pin,
+      attributes: {
+        ...contextMenuAttributes('data-session-menu-pin', sessionId),
+        'aria-pressed': isSessionPinned(sessionId),
+      },
+      action: () => toggleSessionPin(sessionId),
+    },
+    {
+      id: 'rename',
+      label: '重命名',
+      icon: Pencil,
+      attributes: contextMenuAttributes('data-session-menu-rename', sessionId),
+      action: () => startSessionRename(sessionId),
+    },
+    {
+      type: 'submenu',
+      id: 'export',
+      label: '导出',
+      panelAttributes: contextMenuAttributes('data-session-export-menu', sessionId),
+      attributes: contextMenuAttributes('data-session-menu-export', sessionId),
+      children: [
+        { type: 'label', label: '文本记录' },
+        { id: 'markdown', label: 'Markdown', attributes: { 'data-session-export-format': 'markdown' }, action: () => exportSession(sessionId, 'markdown') },
+        { id: 'txt', label: 'TXT', attributes: { 'data-session-export-format': 'txt' }, action: () => exportSession(sessionId, 'txt') },
+        { id: 'jsonl', label: 'JSONL', attributes: { 'data-session-export-format': 'jsonl' }, action: () => exportSession(sessionId, 'jsonl') },
+        { id: 'handoff', label: 'Agent Handoff', attributes: { 'data-session-export-format': 'handoff', 'data-session-export-handoff': sessionId }, action: () => exportSession(sessionId, 'handoff') },
+        { type: 'separator', id: 'export-separator' },
+        { id: 'zip', label: '完整归档', attributes: { 'data-session-export-format': 'zip', 'data-session-export-full': sessionId }, action: () => exportSession(sessionId, 'zip') },
+      ],
+    },
+    ...(props.allowSessionDelete ? [
+      { type: 'separator' as const, id: 'session-danger-separator' },
+      {
+        id: 'delete',
+        label: '删除',
+        icon: Trash2,
+        destructive: true,
+        attributes: contextMenuAttributes('data-session-menu-delete', sessionId),
+        action: () => emit('delete-session', sessionId),
+      },
+    ] : []),
+  ]
+}
+
 function handleSessionContextMenu(sessionId: string, event: MouseEvent): void {
-  if (!props.allowSessionContextMenu) return
-  closeProjectMenu()
-  cancelSessionRename()
-  openSessionMenuState.value = {
-    sessionId,
-    clientX: event.clientX,
-    clientY: event.clientY,
-  }
-  sessionExportMenuOpen.value = false
-  sessionMenuPosition.value = {
-    left: `${event.clientX}px`,
-    top: `${event.clientY}px`,
-  }
-  void nextTick(positionSessionMenu)
-}
-
-function closeSessionMenus(): void {
-  openSessionMenuState.value = null
-  sessionExportMenuOpen.value = false
-}
-
-function viewportSize(): { width: number; height: number } {
-  return {
-    width: Math.max(window.innerWidth || 0, document.documentElement?.clientWidth || 0),
-    height: Math.max(window.innerHeight || 0, document.documentElement?.clientHeight || 0),
-  }
-}
-
-function clampMenuPosition(value: number, size: number, viewport: number, margin: number): number {
-  const maximum = Math.max(margin, viewport - size - margin)
-  return Math.min(Math.max(value, margin), maximum)
-}
-
-function positionSessionMenu(): void {
-  const state = openSessionMenuState.value
-  const menu = sessionMenuRef.value
-  if (!state || !menu) return
-
-  const { width: viewportWidth, height: viewportHeight } = viewportSize()
-  if (viewportWidth <= 0 || viewportHeight <= 0) return
-
-  const rect = menu.getBoundingClientRect()
-  const width = rect.width || 192
-  const height = rect.height || (props.allowSessionDelete ? 184 : 144)
-  const margin = 8
-  let left = state.clientX
-  let top = state.clientY
-  sessionMenuPlacement.value = 'down'
-
-  if (left + width + margin > viewportWidth) {
-    left = state.clientX - width
-  }
-  if (top + height + margin > viewportHeight) {
-    top = state.clientY - height
-    sessionMenuPlacement.value = 'up'
-  }
-
-  sessionMenuPosition.value = {
-    left: `${Math.round(clampMenuPosition(left, width, viewportWidth, margin))}px`,
-    top: `${Math.round(clampMenuPosition(top, height, viewportHeight, margin))}px`,
-  }
-  if (sessionExportMenuOpen.value) void nextTick(positionSessionExportMenu)
-}
-
-function toggleSessionExportMenu(): void {
-  sessionExportMenuOpen.value = !sessionExportMenuOpen.value
-  if (sessionExportMenuOpen.value) void nextTick(positionSessionExportMenu)
-}
-
-function positionSessionExportMenu(): void {
-  const menu = sessionExportMenuRef.value
-  const trigger = sessionExportTriggerRef.value
-  if (!menu || !trigger) return
-
-  const { width: viewportWidth, height: viewportHeight } = viewportSize()
-  if (viewportWidth <= 0 || viewportHeight <= 0) return
-
-  const triggerRect = trigger.getBoundingClientRect()
-  const menuRect = menu.getBoundingClientRect()
-  const width = menuRect.width || 176
-  const height = menuRect.height || 232
-  const margin = 8
-  const gap = 4
-  let left = triggerRect.right + gap
-  let top = triggerRect.top
-  sessionExportPlacement.value = 'right'
-
-  if (left + width + margin > viewportWidth) {
-    left = triggerRect.left - width - gap
-    sessionExportPlacement.value = 'left'
-  }
-  if (top + height + margin > viewportHeight) {
-    top = triggerRect.bottom - height
-  }
-
-  sessionExportMenuPosition.value = {
-    left: `${Math.round(clampMenuPosition(left, width, viewportWidth, margin))}px`,
-    top: `${Math.round(clampMenuPosition(top, height, viewportHeight, margin))}px`,
-  }
-}
-
-function runSessionAction(action: SessionMenuAction, sessionId: string): void {
-  if (!sessionId) return
-  if (action === 'pin') {
-    closeSessionMenus()
-    toggleSessionPin(sessionId)
+  // During inline rename the input must keep its browser editing menu.
+  if (editingSessionId.value === sessionId) return
+  if (!props.allowSessionContextMenu) {
+    event.preventDefault()
+    event.stopPropagation()
     return
   }
-  if (action === 'rename') {
-    startSessionRename(sessionId)
-    return
-  }
-  if (action === 'export') {
-    toggleSessionExportMenu()
-    return
-  }
-  closeSessionMenus()
-  emit('delete-session', sessionId)
+  const session = findSession(sessionId)
+  if (!session) return
+  openContextMenu({
+    event,
+    items: sessionMenuEntries(sessionId),
+    ownerId: sessionMenuOwner(sessionId),
+    ariaLabel: `${session.title || `Session ${sessionId.slice(0, 8)}`} 会话操作`,
+    panelAttributes: contextMenuAttributes('data-session-menu', sessionId),
+  })
 }
 
 function exportSession(sessionId: string, format: SessionExportFormat): void {
-  closeSessionMenus()
+  closeContextMenu()
   emit('export-session', sessionId, format)
 }
 
 function startSessionRename(sessionId: string): void {
   const session = findSession(sessionId)
   if (!session) return
-  closeSessionMenus()
+  closeContextMenu()
   editingSessionId.value = sessionId
   sessionNameDraft.value = session.title || `Session ${sessionId.slice(0, 8)}`
   void nextTick(() => {
@@ -885,67 +811,27 @@ function commitSessionRename(sessionId: string): void {
   emit('rename-session', sessionId, title)
 }
 
-function projectMenuKey(sectionId: string, groupId: string): string {
-  return `${sectionId}:${groupId}`
-}
-
-function toggleProjectMenu(sectionId: string, groupId: string) {
-  closeSessionMenus()
-  const key = projectMenuKey(sectionId, groupId)
-  openProjectMenuKey.value = openProjectMenuKey.value === key ? null : key
-}
-
-function closeProjectMenu() {
-  openProjectMenuKey.value = null
-}
-
-function handleDocumentPointerDown() {
-  closeProjectMenu()
-  closeSessionMenus()
-}
-
-function handleDocumentKeyDown(event: KeyboardEvent) {
-  if (event.key === 'Escape') {
-    closeProjectMenu()
-    closeSessionMenus()
-  }
-}
-
-function handleDocumentScroll() {
-  closeProjectMenu()
-  closeSessionMenus()
-}
-
-onMounted(() => {
-  document.addEventListener('pointerdown', handleDocumentPointerDown)
-  document.addEventListener('keydown', handleDocumentKeyDown)
-  document.addEventListener('scroll', handleDocumentScroll, true)
-})
-
-onBeforeUnmount(() => {
-  document.removeEventListener('pointerdown', handleDocumentPointerDown)
-  document.removeEventListener('keydown', handleDocumentKeyDown)
-  document.removeEventListener('scroll', handleDocumentScroll, true)
-})
-
 watch(() => props.activeSessionId, () => {
-  closeSessionMenus()
+  closeContextMenu()
   cancelSessionRename()
 })
 
-watch(() => props.projectGroups, () => {
-  if (openSessionId.value && !findSession(openSessionId.value)) closeSessionMenus()
-  if (editingSessionId.value && !findSession(editingSessionId.value)) cancelSessionRename()
+onBeforeUnmount(() => {
+  const ownerId = contextMenuState.ownerId || ''
+  if (ownerId.startsWith('project:') || ownerId.startsWith('session:')) closeContextMenu()
 })
 
-function runProjectAction(groupId: string, action: 'new-session' | 'pin' | 'fold' | 'settings' | 'delete') {
-  closeProjectMenu()
-  if (action === 'new-session') emit('new-session', groupId)
-  if (action === 'pin') toggleProjectPin(groupId)
-  if (action === 'fold') toggleGroupExpand(groupId)
-  if (action === 'settings') emit('project-context-menu', groupId)
-  if (action === 'delete') emit('delete-project', groupId)
-}
+watch(() => props.projectGroups, () => {
+  const ownerId = contextMenuState.ownerId || ''
+  if (ownerId.startsWith('session:') && !findSession(ownerId.slice('session:'.length))) {
+    closeContextMenu()
+  }
+  if (editingSessionId.value && !findSession(editingSessionId.value)) cancelSessionRename()
+  if (ownerId.startsWith('project:')) {
+    const projectId = ownerId.slice(ownerId.lastIndexOf(':') + 1)
+    if (!props.projectGroups.some((group) => group.id === projectId)) closeContextMenu()
+  }
+})
 
 function toggleGroupExpand(groupId: string) {
   groupExpanded[groupId] = !groupExpanded[groupId]

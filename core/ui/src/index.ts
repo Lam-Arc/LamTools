@@ -129,6 +129,29 @@ export { default as StageBrowser } from './components/StageBrowser.vue';
 export { default as FileTreePanel } from './components/FileTreePanel.vue';
 export { default as FileTreeNode } from './components/FileTreeNode.vue';
 export { default as FolderBrowserDialog } from './components/FolderBrowserDialog.vue';
+export {
+  ContextMenuHost,
+  ContextMenuPanel,
+  ContextMenuItem,
+  ContextMenuSubmenu,
+  closeContextMenu,
+  contextMenuState,
+  isNativeContextTarget,
+  isContextMenuOpen,
+  openContextMenu,
+} from './components/context-menu';
+export type {
+  ContextMenuAction,
+  ContextMenuAnchor,
+  ContextMenuAttributes,
+  ContextMenuEntry,
+  ContextMenuLabel,
+  ContextMenuPointAnchor,
+  ContextMenuRectAnchor,
+  ContextMenuSeparator,
+  ContextMenuSubmenu as ContextMenuSubmenuEntry,
+  OpenContextMenuOptions,
+} from './components/context-menu';
 export type {
   CoreSettingsDensity,
   CoreSettingsModel,
@@ -164,6 +187,8 @@ export {
   removeGradientStop,
   sortGradientStops,
 } from './helpers/theme';
+
+export { copyText } from './helpers/clipboard';
 
 // Data
 export { THEME_PRESETS, THEME_PRESET_GROUPS } from './data/theme-presets';
