@@ -25,6 +25,7 @@ ENV/
 *.db-journal
 *.sqlite
 *.sqlite3
+data_backup*/
 
 # Default project workspaces
 lam_projects/
