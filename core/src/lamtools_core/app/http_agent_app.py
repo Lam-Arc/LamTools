@@ -28,7 +28,7 @@ from lamtools_core.llm import LLMRequest
 from lamtools_core.llm.profiles import reasoning_off_supported
 from lamtools_core.config import build_config_operation_catalog
 from lamtools_core.config.provider_store import ProviderConfig, ProviderStore, mask_api_key
-from lamtools_core.config.root import ensure_projects_root
+from lamtools_core.config.root import fallback_project_root
 from lamtools_core.update.operations import build_update_operation_catalog
 from lamtools_core.attachment import CoreAttachmentStore
 from lamtools_core.export import ConversationExportService, build_handoff_context
@@ -255,15 +255,14 @@ def create_core_agent_http_app(
     )
 
     core_db_path = _resolve_core_db(core_db)
-    # Single work-root contract (audit 20 S4): unless explicitly overridden,
-    # the agent work root is always projects_root/default — the Tauri shell
-    # sets LAMTOOLS_PROJECTS_ROOT (prod: app_dir\lam_projects, dev/CLI:
-    # repo\lam_projects), and desktop_backend.py no longer pre-sets a
-    # divergent LAMTOOLS_CORE_WORK_ROOT, so dev/prod/CLI all converge here.
+    # Single work-root contract: unless explicitly overridden, the agent work
+    # root is the app-side MyProject fallback. LAMTOOLS_PROJECTS_ROOT still
+    # identifies the managed-project container; its parent identifies the app
+    # directory consistently in packaged and development environments.
     resolved_work_root = Path(
         work_root
         or os.environ.get("LAMTOOLS_CORE_WORK_ROOT")
-        or (ensure_projects_root() / "default")
+        or fallback_project_root()
     ).resolve()
     resolved_data_dir = Path(data_dir or os.environ.get("LAMTOOLS_CORE_DATA_DIR") or core_db_path.parent / "core-agent").resolve()
     resolved_work_root.mkdir(parents=True, exist_ok=True)
@@ -297,6 +296,7 @@ def create_core_agent_http_app(
     session_store = CoreDbSessionStore(
         lambda: app_state["core_db"],
         session_visible=plugin_session_visibility,
+        fallback_work_root=resolved_work_root,
     )
     desktop_plugin_session_store = DesktopPluginSessionStore(resolved_data_dir / "desktop-plugin-sessions.json")
     desktop_plugin_session_lock = asyncio.Lock()
@@ -341,9 +341,29 @@ def create_core_agent_http_app(
         core_db_handle = await open_core_app_db(
             core_db_path,
             member_defaults={"session": {"member_id": runtime_spec.member_id}},
+            project_roots=[resolved_work_root],
+            project_roots_file=resolved_data_dir / "project-roots.json",
+        )
+        existing_project_roots = core_db_handle.project_store.project_roots()
+        if str(resolved_work_root) not in existing_project_roots:
+            core_db_handle.project_store.set_project_roots([
+                resolved_work_root,
+                *existing_project_roots,
+            ])
+        await core_db_handle.project_store.ensure_fallback_project(
+            resolved_work_root,
+            name="MyProject",
         )
         app_state["core_db"] = core_db_handle
+        session_store.set_sync_journal(core_db_handle.sync_journal)
+        session_store.set_sync_publisher(lambda change: live_hub.broadcast(change))
         core_db_handle.project_store.set_session_visibility(plugin_session_visibility)
+        core_db_handle.project_store.set_sync_publisher(
+            lambda change: live_hub.broadcast(change)
+        )
+        core_db_handle.runtime_state_store.set_sync_publisher(
+            lambda change: live_hub.broadcast(change)
+        )
         app_state["attachment_store"] = CoreAttachmentStore(core_db_handle.session_factory, resolved_data_dir)
         goal_manager = GoalManager(core_db_handle.goal_store)
         arrange_manager = ArrangeManager(core_db_handle.arrange_store)
@@ -377,6 +397,7 @@ def create_core_agent_http_app(
             app_event_store=core_db_handle.event_store,
             thread_snapshot_store=core_db_handle.snapshot_store,
             app_event_hub=live_hub,
+            write_coordinator=core_db_handle.persistence.write_coordinator,
             runtime_state_store=core_db_handle.runtime_state_store,
             runtime_task_registry=runtime_task_registry,
             goal_manager=goal_manager,
@@ -556,6 +577,8 @@ def create_core_agent_http_app(
                 llm_client=llm_client,
                 default_model_id=config.model_id,
                 session_store=session_store,
+                sync_journal=core_db_handle.sync_journal,
+                session_actors=core_db_handle.session_actors,
                 member_hooks=_MemberDefaultsHooks(
                     core_db_handle.member_defaults,
                     skill_registry_factory=getattr(actual_operations, "command_skill_registry_factory", None),
@@ -828,6 +851,27 @@ def create_core_agent_http_app(
 
 
 def _register_core_project_operations(catalog: OperationCatalog, *, project_store: CoreProjectStore) -> None:
+    async def project_roots_get(request: OperationRequest) -> OperationResult:
+        del request
+        return OperationResult(
+            name="project.roots.get",
+            payload={"roots": project_store.project_roots()},
+        )
+
+    async def project_roots_set(request: OperationRequest) -> OperationResult:
+        raw_roots = request.payload.get("roots")
+        if not isinstance(raw_roots, list) or not all(isinstance(item, str) for item in raw_roots):
+            return OperationResult(
+                name=request.name,
+                status="error",
+                payload={"error": "roots must be a list of paths"},
+            )
+        try:
+            roots = project_store.set_project_roots(raw_roots)
+        except (OSError, ValueError) as exc:
+            return OperationResult(name=request.name, status="error", payload={"error": str(exc)})
+        return OperationResult(name=request.name, payload={"roots": roots})
+
     async def project_list(request: OperationRequest) -> OperationResult:
         del request
         return OperationResult(
@@ -917,6 +961,8 @@ def _register_core_project_operations(catalog: OperationCatalog, *, project_stor
         return OperationResult(name=request.name, payload={"agents_md": agents_md})
 
     handlers = {
+        "project.roots.get": project_roots_get,
+        "project.roots.set": project_roots_set,
         "project.list": project_list,
         "project.create": project_create,
         "project.get": project_get,

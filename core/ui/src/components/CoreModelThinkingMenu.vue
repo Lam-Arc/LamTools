@@ -15,7 +15,7 @@
       <Brain class="core-model-thinking-menu__compact-icon" :size="16" :stroke-width="2" aria-hidden="true" />
     </button>
 
-    <div v-if="open" class="core-model-thinking-menu__panel" role="menu">
+    <div v-if="open" class="core-model-thinking-menu__panel" :style="viewportStyle" role="menu">
       <section ref="parameterCard" class="core-model-thinking-menu__card core-model-thinking-menu__card--parameters" aria-label="模型与思考参数">
         <button
           class="core-model-thinking-menu__option core-model-thinking-menu__parameter"
@@ -152,6 +152,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { Brain, ChevronDown, ChevronRight } from 'lucide-vue-next'
 import { coreModelDisplayLabel, normalizeCoreThinkingMode, type CoreSelectOption, type CoreThinkingMode, type CoreThinkingModeOption } from '../composer/execution'
 import { useComposerMenuMotion } from '../motion/composerMenu'
+import { useComposerMenuViewport } from '../composables/useComposerMenuViewport'
 
 const props = withDefaults(defineProps<{
   modelValue?: string
@@ -187,6 +188,7 @@ const root = ref<HTMLElement | null>(null)
 const parameterCard = ref<HTMLElement | null>(null)
 const submenuCard = ref<HTMLElement | null>(null)
 const { animatePrimaryCard, animateProviderOptions, animateSubmenuCard, cancel } = useComposerMenuMotion(root)
+const { updateViewportPosition, viewportStyle } = useComposerMenuViewport(root)
 const COLLAPSED_PROVIDER_GROUPS_STORAGE_KEY = 'lamtools.core.modelMenu.collapsedProviders'
 const collapsedProviderGroups = ref<Record<string, boolean>>(readCollapsedProviderGroups())
 
@@ -223,6 +225,7 @@ function toggle(): void {
     cancel()
     return
   }
+  updateViewportPosition()
   void nextTick(() => animatePrimaryCard(parameterCard.value, ':scope > .core-model-thinking-menu__option'))
 }
 
@@ -630,6 +633,38 @@ function persistCollapsedProviderGroups(groups: Record<string, boolean>): void {
 
   .core-model-thinking-menu__compact-icon {
     display: block;
+  }
+}
+
+@media (max-width: 640px) {
+  .core-model-thinking-menu__panel {
+    position: fixed;
+    right: var(--space-3);
+    bottom: var(--composer-menu-bottom);
+    left: var(--space-3);
+    width: auto;
+    max-width: none;
+    max-height: calc(100dvh - var(--composer-menu-bottom) - var(--space-3));
+    overflow-x: hidden;
+    overflow-y: auto;
+    transform: none;
+    display: flex;
+    flex-direction: column-reverse;
+    gap: var(--space-2);
+  }
+
+  .core-model-thinking-menu__card {
+    box-sizing: border-box;
+    width: 100%;
+    max-width: none;
+  }
+
+  .core-model-thinking-menu__card--submenu {
+    position: static;
+  }
+
+  .core-model-thinking-menu__parameter {
+    max-width: none;
   }
 }
 

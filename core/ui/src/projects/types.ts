@@ -43,8 +43,6 @@ export function buildCoreProjectGroups(
     canManage: true,
   }))
   const groupsByWorkRoot = new Map(groups.map((group) => [group.workRoot, group]))
-  const unassigned: SessionItem[] = []
-
   for (const session of sessions) {
     const workRoot = typeof session.metadata?.work_root === 'string'
       ? session.metadata.work_root
@@ -52,18 +50,7 @@ export function buildCoreProjectGroups(
     const group = workRoot ? groupsByWorkRoot.get(workRoot) : undefined
     if (group) {
       group.sessions.push(session)
-    } else {
-      unassigned.push(session)
     }
-  }
-
-  if (unassigned.length > 0) {
-    groups.push({
-      id: 'unassigned',
-      name: 'Unassigned',
-      sessions: unassigned,
-      canManage: false,
-    })
   }
 
   return groups

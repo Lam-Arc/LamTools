@@ -16,7 +16,7 @@
         :assistant-label="assistantLabelForMessage(msg)"
         :process-expanded-ids="processExpandedIds"
         :message-actions="messageActions"
-      :api-base="apiBase"
+        :transport="transport"
       :project-id="projectId"
       :work-root="workRoot"
       :active-turn-id="activeTurnId"
@@ -48,6 +48,7 @@
 
 <script setup lang="ts">
 import type { CoreAttachment, CoreMessage } from '../types'
+import type { LamToolsTransport } from '../transport'
 import MessageView from './MessageView.vue'
 
 defineOptions({ name: 'ChatThread' })
@@ -73,8 +74,8 @@ const props = withDefaults(
     processExpandedIds?: Set<string>
     /** Show hover actions (copy / fork / roll back) under assistant replies */
     messageActions?: boolean
-    /** API base for building file raw URLs (e.g. /api/core); used for image artifact previews */
-    apiBase?: string
+    /** Connection-neutral backend used for artifact bytes. */
+    transport: LamToolsTransport
     /** Project id whose work_root contains the image artifact paths */
     projectId?: string | null
     /** Project work_root — enables direct local file reads in Tauri (asset protocol) */
@@ -92,7 +93,6 @@ const props = withDefaults(
     assistantModelLabels: () => ({}),
     processExpandedIds: () => new Set(),
     messageActions: false,
-    apiBase: '/api/core',
     projectId: null,
     workRoot: null,
     activeTurnId: null,

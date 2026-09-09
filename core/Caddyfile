@@ -1,0 +1,4 @@
+{$LAMTOOLS_DOMAIN} {
+    encode zstd gzip
+    reverse_proxy lamtools-server:8787
+}

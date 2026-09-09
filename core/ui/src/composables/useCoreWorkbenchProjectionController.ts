@@ -36,6 +36,7 @@ export function useCoreWorkbenchProjectionController(options: UseCoreWorkbenchPr
   let observedThreadId: string | null = null
   let previousStatus: string | null = null
   let previousTurnWasActive = false
+  let previousLiveProcessMessageIds = new Set<string>()
 
   // History windowing: only the most recent N messages are projected/rendered
   // initially; `loadMoreHistory` widens the window toward older messages. This
@@ -70,6 +71,7 @@ export function useCoreWorkbenchProjectionController(options: UseCoreWorkbenchPr
         observedThreadId = threadId
         previousStatus = null
         previousTurnWasActive = false
+        previousLiveProcessMessageIds = new Set()
         processExpandedIds.value = new Set()
         projectionCache.clear()
         resetHistoryWindow()
@@ -93,6 +95,7 @@ export function useCoreWorkbenchProjectionController(options: UseCoreWorkbenchPr
 
       if (!snapshotMatchesActiveThread || !snapshot) {
         messages.value = systemMessages
+        previousLiveProcessMessageIds = new Set()
         return
       }
 
@@ -110,14 +113,26 @@ export function useCoreWorkbenchProjectionController(options: UseCoreWorkbenchPr
       hasMoreHistory.value = projected.startIndex > 0
       totalMessages.value = projected.total
 
-      if (!finished) {
+      if (finished) {
+        // The active message was expanded automatically while streaming.
+        // Remove only those ids on completion so unrelated user-expanded
+        // historical messages remain open.
+        const next = new Set(processExpandedIds.value)
+        for (const id of previousLiveProcessMessageIds) next.delete(id)
+        processExpandedIds.value = next
+      } else {
         processExpandedIds.value = nextCoreProcessExpandedIds(
           messages.value,
           processExpandedIds.value,
           isCoreGuidableTurnStatus(rawStatus),
         )
       }
-  }
+      previousLiveProcessMessageIds = new Set(
+        messages.value
+          .filter(message => message.role === 'assistant' && message.metadata?.live === true)
+          .map(message => message.id),
+      )
+    }
 
   watch(
     [

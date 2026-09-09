@@ -192,8 +192,8 @@ async def test_core_app_server_client_runs_live_operation_matrix_against_real_we
             cancelled_snapshot = (await client.read_thread(thread_id="thread-cancel"))["snapshot"]
             cancelled_turn = cancelled_snapshot["core"]["turns"][cancelled_turn_id]
             assert cancelled_turn["status"] == "cancelled"
-            assert cancelled_turn["usage"]["context_window_tokens"] == 128_000
-            assert cancelled_turn["usage"]["estimated_prompt_tokens"] > 0
+            assert cancelled_turn["context_metrics"]["context_window_tokens"] == 128_000
+            assert cancelled_turn["context_metrics"]["estimated_prompt_tokens"] > 0
             assert next_started["runtime_start"]["thread_id"] == "thread-next"
 
             failed = await client.start_turn(
@@ -205,8 +205,8 @@ async def test_core_app_server_client_runs_live_operation_matrix_against_real_we
             failed_snapshot = (await client.read_thread(thread_id="thread-failed"))["snapshot"]
             failed_turn = failed_snapshot["core"]["turns"][failed["runtime_start"]["turn_id"]]
             assert failed_turn["status"] == "failed"
-            assert failed_turn["usage"]["context_window_tokens"] == 128_000
-            assert failed_turn["usage"]["estimated_prompt_tokens"] > 0
+            assert failed_turn["context_metrics"]["context_window_tokens"] == 128_000
+            assert failed_turn["context_metrics"]["estimated_prompt_tokens"] > 0
 
             await client.start_turn(
                 thread_id="thread-approval",

@@ -1,5 +1,5 @@
 import { ref, type Ref } from 'vue'
-import { listGoals, updateGoal } from '../durable/api'
+import { createDurableApi, type CoreDurableRequest } from '../durable/api'
 import type { CoreGoal } from '../durable/types'
 
 /** Max goal refresh frequency during a stream (stream-tick watchers fire far more often). */
@@ -7,10 +7,12 @@ const GOAL_REFRESH_THROTTLE_MS = 2_000
 
 export interface UseCoreGoalsOptions {
   activeSessionId: Ref<string | null>
+  requestRpc: CoreDurableRequest
 }
 
 export function useCoreGoals(options: UseCoreGoalsOptions) {
   const { activeSessionId } = options
+  const durable = createDurableApi(options.requestRpc)
   const activeGoal = ref<CoreGoal | null>(null)
   const goalError = ref('')
   let goalRequestGeneration = 0
@@ -30,7 +32,7 @@ export function useCoreGoals(options: UseCoreGoalsOptions) {
     const generation = ++goalRequestGeneration
     goalError.value = ''
     try {
-      const goals = await listGoals(tid)
+      const goals = await durable.listGoals(tid)
       if (generation !== goalRequestGeneration || activeSessionId.value !== tid) return
       activeGoal.value = goals.find(goal => ['active', 'blocked'].includes(goal.status)) ?? null
     } catch (error) {
@@ -41,7 +43,7 @@ export function useCoreGoals(options: UseCoreGoalsOptions) {
 
   async function handleCancelGoal(goal: CoreGoal) {
     try {
-      await updateGoal(goal.id, 'archived', 'cancelled by user')
+      await durable.updateGoal(goal.id, 'archived', 'cancelled by user')
       if (activeGoal.value?.id === goal.id) activeGoal.value = null
     } catch (error) {
       goalError.value = error instanceof Error ? error.message : '目标取消失败'

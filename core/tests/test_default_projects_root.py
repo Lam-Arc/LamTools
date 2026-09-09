@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from lamtools_core.config import root as root_module
-from lamtools_core.config.root import default_projects_root, ensure_projects_root
+from lamtools_core.config.root import default_projects_root, ensure_projects_root, fallback_project_root
 
 
 def test_env_override_takes_priority(monkeypatch, tmp_path):
@@ -40,3 +40,8 @@ def test_ensure_projects_root_idempotent(monkeypatch, tmp_path):
     ensure_projects_root()
     result = ensure_projects_root()
     assert result.is_dir()
+
+
+def test_fallback_project_sits_beside_the_managed_projects_container(monkeypatch, tmp_path):
+    monkeypatch.setenv("LAMTOOLS_PROJECTS_ROOT", str(tmp_path / "lam_projects"))
+    assert fallback_project_root() == (tmp_path / "MyProject").resolve()

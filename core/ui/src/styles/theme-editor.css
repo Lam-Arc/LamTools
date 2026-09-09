@@ -16,7 +16,7 @@
   grid-template-columns: minmax(128px, .3fr) minmax(0, 1fr);
   gap: var(--space-3);
   padding: var(--space-3);
-  border: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text)) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text)) var(--alpha-active), transparent);
   border-radius: var(--radius-sm);
   overflow: hidden;
   transition: background var(--dur-theme) ease-out, color var(--dur-theme) ease-out;
@@ -25,7 +25,7 @@
 .theme-preview-stage aside,
 .theme-preview-stage main {
   min-width: 0;
-  border: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+  border: 1px solid color-mix(in srgb, currentColor var(--alpha-active), transparent);
   border-radius: var(--radius-sm);
 }
 
@@ -81,7 +81,7 @@
 .theme-preview-composer {
   min-height: 28px;
   padding: var(--space-2) var(--space-3);
-  border: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+  border: 1px solid color-mix(in srgb, currentColor var(--alpha-active), transparent);
   border-radius: var(--radius-sm);
   font-size: 11px;
   transition: background var(--dur-theme) ease-out, color var(--dur-theme) ease-out;
@@ -91,7 +91,7 @@
   min-height: 28px;
   justify-self: start;
   padding-inline: var(--space-3);
-  border: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+  border: 1px solid color-mix(in srgb, currentColor var(--alpha-active), transparent);
   border-radius: var(--radius-sm);
   font-size: 11px;
   transition: background var(--dur-theme) ease-out, color var(--dur-theme) ease-out;
@@ -365,7 +365,7 @@
   height: 44px;
   display: block;
   position: relative;
-  border: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text)) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text)) var(--alpha-active), transparent);
   border-radius: var(--radius-sm);
   overflow: hidden;
   transition: background var(--dur-theme) ease-out;
@@ -375,7 +375,7 @@
 .theme-preset-swatch b {
   position: absolute;
   display: block;
-  border: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+  border: 1px solid color-mix(in srgb, currentColor var(--alpha-active), transparent);
   border-radius: var(--space-1);
   transition: background var(--dur-theme) ease-out;
 }

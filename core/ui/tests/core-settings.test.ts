@@ -236,17 +236,17 @@ describe('Core settings permission contract', () => {
     expect(source).not.toContain("'update-permission-mode'")
   })
 
-  it('binds the toggle state in the Core demo App', () => {
-    const source = readFileSync(resolve(process.cwd(), 'src/demo/App.vue'), 'utf8')
+  it('binds the toggle state in the Shared Core App', () => {
+const source = readFileSync(resolve(process.cwd(), 'src/app/LamToolsApp.vue'), 'utf8')
     expect(source).toContain(':allow-access-outside-workdir="allowAccessOutsideWorkdir"')
     expect(source).toContain('@update-allow-outside-workdir="updateAllowAccessOutsideWorkdir"')
     expect(source).toContain("allow_access_outside_workdir")
   })
 })
 
-describe('Core demo settings entry', () => {
+describe('Shared Core App settings entry', () => {
   it('connects the WorkspaceShell settings action to Core config operations', () => {
-    const source = readFileSync(resolve(process.cwd(), 'src/demo/App.vue'), 'utf8')
+    const source = readFileSync(resolve(process.cwd(), 'src/app/LamToolsApp.vue'), 'utf8')
 
     expect(source).toContain('@settings="openSettings"')
     expect(source).toContain('<CoreSettings')

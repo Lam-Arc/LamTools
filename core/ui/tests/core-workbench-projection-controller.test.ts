@@ -135,6 +135,12 @@ describe('useCoreWorkbenchProjectionController', () => {
     await nextTick()
 
     expect([...fixture.controller.processExpandedIds.value].sort()).toEqual(['assistant:turn-1', 'manual'])
+
+    fixture.status.value = 'completed'
+    fixture.currentSnapshot.value = snapshot('thread-a', 'completed', { includeTool: true, snapshotSeq: 2 })
+    await nextTick()
+
+    expect(fixture.controller.processExpandedIds.value).toEqual(new Set(['manual']))
   })
 
   it('clears projection and expansion when switching threads before a new snapshot arrives', async () => {
@@ -265,6 +271,6 @@ describe('useCoreWorkbenchProjectionController', () => {
     expect(assistant?.metadata?.shallowThinkingPending).toBeUndefined()
     expect(fixture.statusChanges).toEqual(['thread-a:completed'])
     expect(fixture.finished).toEqual(['thread-a:completed'])
-    expect(fixture.controller.processExpandedIds.value).toEqual(new Set(['assistant:turn-1']))
+    expect(fixture.controller.processExpandedIds.value).toEqual(new Set())
   })
 })

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import inspect
 import logging
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field, replace
@@ -47,7 +48,7 @@ from lamtools_core.app.core_db import (
     CoreThreadSnapshotItem,
     CoreWorkspaceManifest,
 )
-from lamtools_core.app.event_store import SqlAlchemyAppEventStore
+from lamtools_core.app.event_store import AppEventInput, AppEventEnvelope, SqlAlchemyAppEventStore
 from lamtools_core.app.snapshot_store import CoreAppSnapshotProjector, SqlAlchemyThreadSnapshotStore
 from lamtools_core.app.sqlite_write import SQLiteWriteCoordinator
 from lamtools_core.app.operation_catalog import OperationCatalog, OperationRequest, OperationResult
@@ -86,6 +87,7 @@ class RestoreResult:
     scope: RestoreScope
     status: str
     restored_paths: tuple[str, ...]
+    rollback_event: AppEventEnvelope | None = None
 
 
 @dataclass(frozen=True)
@@ -138,6 +140,19 @@ class CheckpointConversationBackend(Protocol):
     async def restore(self, db: Any, session_id: str, payload: dict[str, Any]) -> None: ...
 
     async def require_inactive(self, session_id: str) -> None: ...
+
+    async def append_rollback_event(
+        self,
+        db: Any,
+        *,
+        session_id: str,
+        target_checkpoint_id: str,
+        target_turn_id: str,
+        target_event_seq: int,
+        target_revision: int,
+        scope: str,
+        operation_id: str = "",
+    ) -> AppEventEnvelope: ...
 
     async def fork(
         self,
@@ -493,6 +508,7 @@ class CoreCheckpointCoordinator:
             restored_paths: tuple[str, ...] = ()
             workspace_touched = False
             conversation_touched = False
+            rollback_event: AppEventEnvelope | None = None
             try:
                 if restore_scope in {"workspace", "all"}:
                     workspace_touched = True
@@ -503,6 +519,21 @@ class CoreCheckpointCoordinator:
                 if restore_scope in {"conversation", "all"}:
                     conversation_touched = True
                     await self._restore_conversation(target, operation_id)
+                append_rollback_event = getattr(self.conversation_backend, "append_rollback_event", None)
+                if callable(append_rollback_event):
+                    target_event_seq = await self._checkpoint_event_seq(target)
+                    rollback_event = await self.write_coordinator.run(
+                        lambda db: append_rollback_event(
+                            db,
+                            session_id=target.session_id,
+                            target_checkpoint_id=target.id,
+                            target_turn_id=str(target.turn_id or ""),
+                            target_event_seq=target_event_seq,
+                            target_revision=0,
+                            scope=restore_scope,
+                            operation_id=operation_id,
+                        )
+                    )
                 derived = await self._capture(
                     session_id=target.session_id,
                     turn_id=f"rollback:{operation_id}",
@@ -535,6 +566,7 @@ class CoreCheckpointCoordinator:
                 scope=restore_scope,
                 status="committed",
                 restored_paths=restored_paths,
+                rollback_event=rollback_event,
             )
 
     async def restore(
@@ -976,6 +1008,29 @@ class CoreCheckpointCoordinator:
             db.expunge(row)
             return row
 
+    async def _checkpoint_event_seq(self, checkpoint: CoreCheckpoint) -> int:
+        """Resolve the event boundary for both V2 and legacy checkpoints."""
+
+        async with self.session_factory() as db:
+            v2 = await db.get(CoreCheckpointV2, checkpoint.id)
+        if v2 is not None:
+            return max(0, int(v2.event_seq or 0))
+        conversation = checkpoint.conversation_json if isinstance(checkpoint.conversation_json, dict) else {}
+        projection = conversation.get("projection") if isinstance(conversation.get("projection"), dict) else {}
+        snapshot_seq = projection.get("snapshot_seq")
+        if snapshot_seq is not None:
+            try:
+                return max(0, int(snapshot_seq))
+            except (TypeError, ValueError):
+                pass
+        events = conversation.get("events")
+        if isinstance(events, list):
+            return max(
+                (int(item.get("seq") or 0) for item in events if isinstance(item, dict)),
+                default=0,
+            )
+        return 0
+
     async def _manifest(self, manifest_hash: str) -> dict[str, Any]:
         if not manifest_hash:
             return {}
@@ -1138,8 +1193,20 @@ class CoreCheckpointCoordinator:
 class CoreCheckpointConversationBackend:
     """Standalone Core conversation persistence behind the shared checkpoint graph."""
 
-    def __init__(self, session_factory: async_sessionmaker) -> None:
+    def __init__(
+        self,
+        session_factory: async_sessionmaker,
+        *,
+        event_store: SqlAlchemyAppEventStore | None = None,
+        snapshot_store: SqlAlchemyThreadSnapshotStore | None = None,
+    ) -> None:
         self.session_factory = session_factory
+        self.event_store = event_store or SqlAlchemyAppEventStore(CoreAppEvent)
+        self.snapshot_store = snapshot_store or SqlAlchemyThreadSnapshotStore(
+            CoreThreadSnapshot,
+            item_model=CoreThreadSnapshotItem,
+            event_model=CoreAppEvent,
+        )
 
     async def capture(self, session_id: str, *, exclude_turn_id: str = "") -> dict[str, Any]:
         root_session_id = _root_session_id(session_id)
@@ -1147,14 +1214,12 @@ class CoreCheckpointConversationBackend:
         async with self.session_factory() as db:
             runtime = await db.get(CoreRuntimeSession, session_id)
             snapshot = (
-                await SqlAlchemyThreadSnapshotStore(
-                    CoreThreadSnapshot, item_model=CoreThreadSnapshotItem
-                ).load(db, session_id)
+                await self.snapshot_store.load(db, session_id)
                 if is_root_session
                 else None
             )
             events = (
-                await SqlAlchemyAppEventStore(CoreAppEvent).list_thread(db, thread_id=session_id)
+                await self.event_store.list_thread(db, thread_id=session_id)
                 if is_root_session
                 else []
             )
@@ -1226,8 +1291,7 @@ class CoreCheckpointConversationBackend:
         normalized_turn_id = str(turn_id or "").strip()
         if not normalized_turn_id:
             raise ValueError("turn_id is required")
-        event_store = SqlAlchemyAppEventStore(CoreAppEvent)
-        events = await event_store.list_thread(db, thread_id=session_id)
+        events = await self.event_store.list_thread(db, thread_id=session_id)
         turn_indexes = [
             index for index, event in enumerate(events)
             if str(event.turn_id or "") == normalized_turn_id
@@ -1256,12 +1320,80 @@ class CoreCheckpointConversationBackend:
             "events": [event.to_dict() for event in kept_events],
         }, boundary_seq
 
+    async def append_rollback_event(
+        self,
+        db: Any,
+        *,
+        session_id: str,
+        target_checkpoint_id: str,
+        target_turn_id: str,
+        target_event_seq: int,
+        target_revision: int,
+        scope: str,
+        operation_id: str = "",
+    ) -> AppEventEnvelope:
+        """Append the durable control event that announces a rollback.
+
+        The event is intentionally small.  Clients must not try to reverse
+        their local projection from the control event itself: restoring a
+        checkpoint can delete an arbitrary tail or replace a branch.  The
+        ``snapshot_required`` marker tells Local-First clients to fetch one
+        authoritative snapshot before applying later deltas.
+        """
+
+        snapshot = await self.snapshot_store.load(db, session_id)
+        resolved_revision = int(target_revision or snapshot.get("revision") or 0)
+        payload = {
+            "type": "session",
+            "operation": "rollback",
+            "target_checkpoint_id": str(target_checkpoint_id or ""),
+            "target_turn_id": str(target_turn_id or ""),
+            "target_event_seq": max(0, int(target_event_seq or 0)),
+            "target_revision": max(0, resolved_revision),
+            "scope": str(scope or "all"),
+            "snapshot_required": True,
+        }
+        if operation_id:
+            payload["operation_id"] = str(operation_id)
+        event = await self.event_store.append(
+            db,
+            AppEventInput(
+                thread_id=session_id,
+                method="session/rollback",
+                payload=payload,
+                entity_type="thread.event",
+                entity_id=session_id,
+                event_type="session.rollback",
+            ),
+        )
+        await self.snapshot_store.apply(db, event)
+        refreshed = (await self.event_store.refresh_envelopes(db, [event]))[0]
+
+        # The event store creates the journal row atomically with the event.
+        # Add the marker at the journal envelope level too, so a sync client
+        # can decide to recover without decoding the nested Core event.
+        sync_change_model = getattr(self.event_store, "sync_change_model", None)
+        if sync_change_model is not None:
+            change = await db.scalar(
+                select(sync_change_model).where(
+                    sync_change_model.change_id == refreshed.event_id
+                )
+            )
+            if change is not None and hasattr(change, "entity_json"):
+                entity = dict(change.entity_json or {})
+                entity["snapshot_required"] = True
+                entity["rollback"] = dict(payload)
+                change.entity_json = entity
+        await db.flush()
+        return refreshed
+
     async def rollback_conversation_before_turn(
         self,
         db: Any,
         *,
         session_id: str,
         turn_id: str,
+        event_sink: list[AppEventEnvelope] | None = None,
     ) -> int:
         """Discard ``turn_id`` and later events, then rebuild the projection.
 
@@ -1298,13 +1430,21 @@ class CoreCheckpointConversationBackend:
             if isinstance(event, dict)
         ]
         envelopes = [
-            SqlAlchemyAppEventStore(CoreAppEvent)._to_envelope(_app_event_row(event, thread_id=session_id))
+            self.event_store._to_envelope(_app_event_row(event, thread_id=session_id))
             for event in kept_events
         ]
-        await SqlAlchemyThreadSnapshotStore(
-            CoreThreadSnapshot,
-            item_model=CoreThreadSnapshotItem,
-        ).rebuild(db, session_id, envelopes)
+        await self.snapshot_store.rebuild(db, session_id, envelopes)
+        rollback_event = await self.append_rollback_event(
+            db,
+            session_id=session_id,
+            target_checkpoint_id="",
+            target_turn_id=turn_id,
+            target_event_seq=boundary_seq,
+            target_revision=0,
+            scope="conversation_only",
+        )
+        if event_sink is not None:
+            event_sink.append(rollback_event)
         return boundary_seq
 
     async def restore(self, db: Any, session_id: str, payload: dict[str, Any]) -> None:
@@ -1372,7 +1512,7 @@ class CoreCheckpointConversationBackend:
             history = [dict(item) for item in list(boundary_history.history_json or []) if isinstance(item, dict)]
             await db.execute(delete(CoreHistoryEntry).where(CoreHistoryEntry.thread_id == session_id))
             for seq, message in enumerate(history, 1):
-                db.add(CoreHistoryEntry(thread_id=session_id, seq=seq, message_json=message))
+                db.add(CoreHistoryEntry(thread_id=session_id, seq=seq, revision=seq, message_json=message))
         else:
             history_rows = list((await db.execute(
                 select(CoreHistoryEntry).where(
@@ -1437,7 +1577,7 @@ class CoreCheckpointConversationBackend:
                 metadata = dict(message["metadata"])
                 metadata["history_seq"] = seq
                 message["metadata"] = metadata
-            db.add(CoreHistoryEntry(thread_id=session_id, seq=seq, message_json=message))
+            db.add(CoreHistoryEntry(thread_id=session_id, seq=seq, revision=seq, message_json=message))
 
         runtime = await db.get(CoreRuntimeSession, session_id)
         if materialized.runtime_present:
@@ -1575,11 +1715,19 @@ def register_checkpoint_operations(
     default_work_root: str | Path,
     conversation_backend: CheckpointConversationBackend | None = None,
     work_root_resolver: Callable[[str], Awaitable[str | Path]] | None = None,
+    app_event_store: SqlAlchemyAppEventStore | None = None,
+    thread_snapshot_store: SqlAlchemyThreadSnapshotStore | None = None,
+    app_event_hub: Any | None = None,
 ) -> None:
     """Register the one public operation surface used by RPC and CLI."""
 
     storage_root = Path(data_dir).resolve() / "checkpoints"
     coordinators: dict[str, CoreCheckpointCoordinator] = {}
+    effective_conversation_backend = conversation_backend or CoreCheckpointConversationBackend(
+        session_factory,
+        event_store=app_event_store,
+        snapshot_store=thread_snapshot_store,
+    )
 
     def coordinator(work_root: str | Path) -> CoreCheckpointCoordinator:
         normalized = str(Path(work_root).resolve())
@@ -1590,7 +1738,7 @@ def register_checkpoint_operations(
             work_root=work_root,
             session_factory=session_factory,
             storage_root=storage_root,
-            conversation_backend=conversation_backend,
+            conversation_backend=effective_conversation_backend,
         )
         coordinators[normalized] = created
         return created
@@ -1599,6 +1747,15 @@ def register_checkpoint_operations(
         if work_root_resolver is not None:
             return str(Path(await work_root_resolver(session_id)).resolve())
         return await _session_work_root(session_factory, session_id, default_work_root)
+
+    async def publish_rollback_event(event: AppEventEnvelope | None) -> None:
+        if event is None or app_event_hub is None:
+            return
+        publish = getattr(app_event_hub, "publish", None)
+        if callable(publish):
+            result = publish(event)
+            if inspect.isawaitable(result):
+                await result
 
     async def checkpoint_create(request: OperationRequest) -> OperationResult:
         session_id = str(request.payload.get("session_id") or request.payload.get("thread_id") or "").strip()
@@ -1661,13 +1818,19 @@ def register_checkpoint_operations(
                 scope=scope,
                 requesting_session_id=session_id,
             )
+            await publish_rollback_event(result.rollback_event)
         except (LookupError, ValueError, OSError) as exc:
             return _operation_error(request, str(exc))
         return OperationResult(name=request.name, payload=_restore_payload(result))
 
     async def rollback_to_turn(request: OperationRequest, *, session_id: str, turn_id: str) -> OperationResult:
         work_root = await session_work_root(session_id)
-        turn_backend = CoreCheckpointConversationBackend(session_factory)
+        turn_backend = CoreCheckpointConversationBackend(
+            session_factory,
+            event_store=app_event_store,
+            snapshot_store=thread_snapshot_store,
+        )
+        rollback_events: list[AppEventEnvelope] = []
         try:
             await turn_backend.require_inactive(session_id)
             checkpoint_id = await _checkpoint_id_at_turn_boundary(
@@ -1682,11 +1845,18 @@ def register_checkpoint_operations(
                     scope="all",
                     requesting_session_id=session_id,
                 )
+                await publish_rollback_event(result.rollback_event)
                 return OperationResult(name=request.name, payload={
                     "mode": "checkpoint",
                     "turn_id": turn_id,
                     "checkpoint_id": checkpoint_id,
                     "operation_id": result.operation_id,
+                    "rollback_event": (
+                        result.rollback_event.to_dict()
+                        if result.rollback_event is not None
+                        else None
+                    ),
+                    "rollback_event_seq": result.rollback_event.seq if result.rollback_event is not None else 0,
                     "restored": {
                         "conversation": True,
                         "runtime": True,
@@ -1700,14 +1870,19 @@ def register_checkpoint_operations(
                     db,
                     session_id=session_id,
                     turn_id=turn_id,
+                    event_sink=rollback_events,
                 )
             )
         except (LookupError, ValueError, OSError) as exc:
             return _operation_error(request, str(exc))
+        for event in rollback_events:
+            await publish_rollback_event(event)
         return OperationResult(name=request.name, payload={
             "mode": "conversation_only",
             "turn_id": turn_id,
             "event_seq": boundary_seq,
+            "rollback_event_seq": rollback_events[0].seq if rollback_events else 0,
+            "rollback_event": rollback_events[0].to_dict() if rollback_events else None,
             "restored": {
                 "conversation": True,
                 "runtime": False,
@@ -1727,7 +1902,11 @@ def register_checkpoint_operations(
         try:
             if turn_id:
                 work_root = await session_work_root(session_id)
-                turn_backend = CoreCheckpointConversationBackend(session_factory)
+                turn_backend = CoreCheckpointConversationBackend(
+                    session_factory,
+                    event_store=app_event_store,
+                    snapshot_store=thread_snapshot_store,
+                )
                 await turn_backend.require_inactive(session_id)
                 fork_session_id = str(new_session_id or uuid.uuid4().hex).strip()
                 if not fork_session_id or _root_session_id(fork_session_id) != fork_session_id:
@@ -1906,7 +2085,7 @@ def _checkpoint_payload(row: CheckpointRef) -> dict[str, Any]:
 
 
 def _restore_payload(result: RestoreResult) -> dict[str, Any]:
-    return {
+    payload = {
         "operation_id": result.operation_id,
         "checkpoint_id": result.checkpoint_id,
         "undo_checkpoint_id": result.undo_checkpoint_id,
@@ -1915,6 +2094,10 @@ def _restore_payload(result: RestoreResult) -> dict[str, Any]:
         "status": result.status,
         "restored_paths": list(result.restored_paths),
     }
+    if result.rollback_event is not None:
+        payload["rollback_event"] = result.rollback_event.to_dict()
+        payload["rollback_event_seq"] = result.rollback_event.seq
+    return payload
 
 
 def _operation_error(request: OperationRequest, message: str) -> OperationResult:
@@ -2226,6 +2409,12 @@ def _app_event_row(payload: dict[str, Any], *, thread_id: str) -> CoreAppEvent:
         client_message_id=str(payload.get("client_message_id") or "") or None,
         method=str(payload.get("method") or ""),
         payload_json=dict(payload.get("payload") or {}),
+        workspace_id=str(payload.get("workspace_id") or ""),
+        entity_type=str(payload.get("entity_type") or "thread.event"),
+        entity_id=str(payload.get("entity_id") or thread_id),
+        event_seq=int(payload.get("event_seq") or payload.get("seq") or 0),
+        revision=max(0, int(payload.get("revision") or 0)),
+        event_type=str(payload.get("event_type") or payload.get("method") or ""),
         created_at=created_at,
     )
 

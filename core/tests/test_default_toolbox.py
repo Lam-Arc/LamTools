@@ -251,6 +251,11 @@ def test_core_toolbox_exposes_generic_tool_specs(tmp_path):
     assert "path_outside_root" in {
         item["type"] for item in specs["write_file"].metadata["failure_modes"]
     }
+    assert specs["write_file"].input_schema["properties"]["expected_file_hash"]["type"] == ["string", "null"]
+    assert specs["write_file"].input_schema["properties"]["must_not_exist"]["type"] == ["boolean", "null"]
+    assert specs["edit_file"].input_schema["properties"]["occurrence"]["type"] == ["integer", "null"]
+    assert "before_context" in specs["edit_file"].input_schema["properties"]
+    assert "expected_content_hash" in specs["edit_file"].input_schema["properties"]
     assert specs["write_file"].metadata["recovery"]
 
 

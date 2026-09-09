@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { createCoreProjectClient } from '../src/projects/client'
+import { createDirectTransport } from '../src/transport/directTransport'
 
 describe('Core project client', () => {
   afterEach(() => {
@@ -22,7 +23,7 @@ describe('Core project client', () => {
       .mockResolvedValueOnce(new Response(null, { status: 204 }))
     vi.stubGlobal('fetch', fetch)
 
-    const client = createCoreProjectClient('/api/core/')
+    const client = createCoreProjectClient(createDirectTransport({ apiBase: '/api/core/', fetchImpl: fetch }))
 
     await expect(client.list()).resolves.toEqual([{ id: 'project-1', name: 'Docs', workRoot: 'E:\\docs' }])
     await expect(client.create({ name: 'Docs', work_root: 'E:\\docs' })).resolves.toMatchObject({
@@ -36,22 +37,22 @@ describe('Core project client', () => {
     await expect(client.writeAgents('project-1', '# Updated')).resolves.toEqual({ content: '# Updated', exists: true })
     await expect(client.delete('project-1')).resolves.toBeUndefined()
 
-    expect(fetch.mock.calls).toEqual(expect.arrayContaining([
-      ['/api/core/projects', expect.objectContaining({ method: 'GET' })],
-      ['/api/core/projects', expect.objectContaining({ method: 'POST', body: JSON.stringify({ name: 'Docs', work_root: 'E:\\docs' }) })],
-      ['/api/core/projects/project-1', expect.objectContaining({ method: 'GET' })],
-      ['/api/core/projects/project-1', expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ name: 'Documentation' }) })],
-      ['/api/core/projects/project-1/sessions', expect.objectContaining({ method: 'GET' })],
-      ['/api/core/projects/project-1/agents-md', expect.objectContaining({ method: 'GET' })],
-      ['/api/core/projects/project-1/agents-md', expect.objectContaining({ method: 'PUT', body: JSON.stringify({ content: '# Updated' }) })],
-      ['/api/core/projects/project-1', expect.objectContaining({ method: 'DELETE' })],
+    expect(fetchCalls(fetch)).toEqual(expect.arrayContaining([
+      { url: '/api/core/projects', method: 'GET' },
+      { url: '/api/core/projects', method: 'POST', body: { name: 'Docs', work_root: 'E:\\docs' } },
+      { url: '/api/core/projects/project-1', method: 'GET' },
+      { url: '/api/core/projects/project-1', method: 'PATCH', body: { name: 'Documentation' } },
+      { url: '/api/core/projects/project-1/sessions', method: 'GET' },
+      { url: '/api/core/projects/project-1/agents-md', method: 'GET' },
+      { url: '/api/core/projects/project-1/agents-md', method: 'PUT', body: { content: '# Updated' } },
+      { url: '/api/core/projects/project-1', method: 'DELETE' },
     ]))
   })
 
   it('reports the backend response when an operation fails', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('Project is active', { status: 409 })))
 
-    await expect(createCoreProjectClient('/api/core').delete('project-1'))
+    await expect(createCoreProjectClient(createDirectTransport({ apiBase: '/api/core', fetchImpl: fetch })).delete('project-1'))
       .rejects.toThrow('Project is active')
   })
 })
@@ -61,4 +62,25 @@ function jsonResponse(value: unknown): Response {
     status: 200,
     headers: { 'Content-Type': 'application/json' },
   })
+}
+
+function fetchCalls(fetch: ReturnType<typeof vi.fn>): Array<{ url: string; method: string; body?: unknown }> {
+  return fetch.mock.calls.map(([url, init]) => ({
+    url: String(url),
+    method: String((init as RequestInit | undefined)?.method || 'GET'),
+    ...decodeBody((init as RequestInit | undefined)?.body),
+  }))
+}
+
+function decodeBody(body: BodyInit | null | undefined): { body?: unknown } {
+  if (body == null) return {}
+  if (ArrayBuffer.isView(body)) {
+    const bytes = new Uint8Array(body.buffer, body.byteOffset, body.byteLength)
+    const text = new TextDecoder().decode(bytes)
+    return { body: JSON.parse(text) }
+  }
+  if (body instanceof ArrayBuffer) {
+    return { body: JSON.parse(new TextDecoder().decode(new Uint8Array(body))) }
+  }
+  return { body: JSON.parse(String(body)) }
 }

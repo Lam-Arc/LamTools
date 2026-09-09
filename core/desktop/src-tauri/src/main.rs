@@ -26,6 +26,13 @@ use tauri::{
     Emitter, Manager, WebviewWindow, WebviewWindowBuilder,
 };
 
+mod remote;
+use remote::{
+    start_local_control_server, ControlServer, DesktopAccountSession, DesktopAccountStatus,
+    GatewayStartOptions, GatewayStatus, NodeIdentityStatus, PairingCodePayload,
+    RemoteGatewayManager,
+};
+
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 #[cfg(windows)]
@@ -57,6 +64,8 @@ static NEXT_DESKTOP_DROP_ID: AtomicU64 = AtomicU64::new(1);
 struct BackendState {
     api_base: Mutex<Option<String>>,
     child: Mutex<Option<Child>>,
+    remote_gateway: RemoteGatewayManager,
+    control_server: Mutex<Option<ControlServer>>,
     desktop_windows: Mutex<HashMap<String, DesktopWindowRegistration>>,
     desktop_drops: Mutex<HashMap<String, Vec<PathBuf>>>,
     tray_pet_item: Mutex<Option<MenuItem<tauri::Wry>>>,
@@ -954,8 +963,88 @@ fn show_main_window(app: tauri::AppHandle) {
 #[tauri::command]
 fn quit_app(app: tauri::AppHandle, state: tauri::State<'_, BackendState>) {
     state.quitting.store(true, Ordering::SeqCst);
+    let _ = state.remote_gateway.shutdown();
+    stop_local_control_server(state.inner());
     stop_backend(state.inner());
     app.exit(0);
+}
+
+/// Start the desktop-only RemoteGateway.  Core itself remains on the
+/// loopback address returned by `get_api_base`; no caller can supply a remote
+/// Core URL through this command.
+#[tauri::command]
+fn remote_gateway_start(
+    state: tauri::State<'_, BackendState>,
+    options: Option<GatewayStartOptions>,
+) -> Result<GatewayStatus, String> {
+    let api_base = state
+        .api_base
+        .lock()
+        .map_err(|_| "backend state lock failed".to_string())?
+        .clone()
+        .ok_or_else(|| "backend not yet started".to_string())?;
+    state
+        .remote_gateway
+        .start(&api_base, options.unwrap_or_default())
+}
+
+#[tauri::command]
+fn remote_gateway_stop(state: tauri::State<'_, BackendState>) -> Result<GatewayStatus, String> {
+    state.remote_gateway.stop()
+}
+
+#[tauri::command]
+fn remote_gateway_status(state: tauri::State<'_, BackendState>) -> Result<GatewayStatus, String> {
+    state.remote_gateway.status()
+}
+
+#[tauri::command]
+fn remote_pairing_create(
+    state: tauri::State<'_, BackendState>,
+) -> Result<PairingCodePayload, String> {
+    state.remote_gateway.pairing_create()
+}
+
+#[tauri::command]
+fn remote_device_revoke(
+    state: tauri::State<'_, BackendState>,
+    device_id: String,
+) -> Result<bool, String> {
+    state.remote_gateway.revoke_device(&device_id)
+}
+
+#[tauri::command]
+fn remote_account_status(
+    state: tauri::State<'_, BackendState>,
+) -> Result<Option<DesktopAccountStatus>, String> {
+    state.remote_gateway.account_status()
+}
+
+#[tauri::command]
+fn remote_account_identity(
+    state: tauri::State<'_, BackendState>,
+    server_id: Option<String>,
+    username: Option<String>,
+) -> Result<NodeIdentityStatus, String> {
+    match (server_id, username) {
+        (Some(server_id), Some(username)) => state
+            .remote_gateway
+            .node_identity_for_account(&server_id, &username),
+        _ => state.remote_gateway.node_identity(),
+    }
+}
+
+#[tauri::command]
+fn remote_account_save(
+    state: tauri::State<'_, BackendState>,
+    session: DesktopAccountSession,
+) -> Result<DesktopAccountStatus, String> {
+    state.remote_gateway.save_account_session(session)
+}
+
+#[tauri::command]
+fn remote_account_logout(state: tauri::State<'_, BackendState>) -> Result<(), String> {
+    state.remote_gateway.account_logout()
 }
 
 #[tauri::command]
@@ -1114,9 +1203,17 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 // ---------------------------------------------------------------------------
 
 fn main() {
+    // tungstenite uses rustls for the remote Relay connection. Rustls 0.23
+    // can expose more than one crypto backend through the dependency graph;
+    // install the explicitly selected ring provider before any Relay thread
+    // attempts a TLS handshake.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     let state = BackendState {
         api_base: Mutex::new(None),
         child: Mutex::new(None),
+        remote_gateway: RemoteGatewayManager::default(),
+        control_server: Mutex::new(None),
         desktop_windows: Mutex::new(HashMap::new()),
         desktop_drops: Mutex::new(HashMap::new()),
         tray_pet_item: Mutex::new(None),
@@ -1140,6 +1237,25 @@ fn main() {
                         .api_base
                         .lock()
                         .map_err(|_| "backend state lock failed")? = Some(api_base.clone());
+                    match start_local_control_server(state.remote_gateway.clone(), api_base.clone())
+                    {
+                        Ok(server) => {
+                            if let Ok(mut slot) = state.control_server.lock() {
+                                slot.replace(server);
+                            }
+                        }
+                        Err(error) => {
+                            eprintln!("[lamcore] remote CLI control server failed: {error}")
+                        }
+                    }
+                    if state.remote_gateway.auto_start_enabled().unwrap_or(false) {
+                        if let Err(error) = state
+                            .remote_gateway
+                            .start(&api_base, GatewayStartOptions::default())
+                        {
+                            eprintln!("[lamcore] remote gateway auto-start failed: {error}");
+                        }
+                    }
                     setup_tray(app)?;
                     // Watch the backend process: if it dies mid-run (panic,
                     // fatal Python exception) the frontend gets an event and
@@ -1199,6 +1315,15 @@ fn main() {
             configure_desktop_plugin_window,
             show_main_window,
             quit_app,
+            remote_gateway_start,
+            remote_gateway_stop,
+            remote_gateway_status,
+            remote_pairing_create,
+            remote_device_revoke,
+            remote_account_status,
+            remote_account_identity,
+            remote_account_save,
+            remote_account_logout,
             ping,
             get_app_info,
             pick_directory,
@@ -1214,6 +1339,8 @@ fn main() {
                     let _ = window.hide();
                 }
                 tauri::WindowEvent::Destroyed if window.label() == "main" => {
+                    let _ = state.remote_gateway.shutdown();
+                    stop_local_control_server(state.inner());
                     stop_backend(state.inner());
                 }
                 tauri::WindowEvent::Destroyed if window.label().starts_with("desktop-plugin-") => {
@@ -1416,6 +1543,14 @@ fn wait_for_health(port: u16) -> Result<(), Box<dyn std::error::Error>> {
         thread::sleep(Duration::from_millis(250));
     }
     Err("backend health check timed out after 90s".into())
+}
+
+fn stop_local_control_server(state: &BackendState) {
+    if let Ok(mut slot) = state.control_server.lock() {
+        if let Some(server) = slot.take() {
+            server.stop();
+        }
+    }
 }
 
 fn stop_backend(state: &BackendState) {

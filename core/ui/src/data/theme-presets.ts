@@ -41,8 +41,8 @@ const morningMistLightBackdrop = {
 }
 const morningMistDarkBackdrop = {
   backdropStops: [
-    { color: '#111a19', position: 0 },
-    { color: '#0d1216', position: 100 },
+    { color: '#110e11', position: 0 },
+    { color: '#1a140f', position: 100 },
   ],
   backdropAngle: 185,
   backdropText: '#f2efeb',
@@ -50,7 +50,7 @@ const morningMistDarkBackdrop = {
 const morningMistDarkTheme = {
   ...neutralDark,
   ...morningMistDarkBackdrop,
-  mainStops: [{ color: '#151616', position: 0 }],
+  mainStops: [{ color: '#151514', position: 0 }],
   mainAngle: 180,
   mainText: '#f2efeb',
   mainOpacity: 1,

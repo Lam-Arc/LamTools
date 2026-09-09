@@ -15,8 +15,8 @@ CoreLoopKernel
 
 - `ContextCompactionController` 负责完整请求的触发测量、摘要模型切换 fallback，以及调用通用压缩 facade。
 - `CompactionPlanner` 只划分 leading system prefix、待摘要历史和 recent tail，不调用 LLM，也不写运行时状态。
-- `summarizer.py` 只负责分段、摘要、合并和 streaming/fallback。
-- `CompactionFitter` 只负责用 exact estimator 把 summary + recent tail 塞进目标预算；缩减顺序有界，最多 `MAX_FIT_ATTEMPTS` 次。
+- `summarizer.py` 只负责分段、摘要、合并和 streaming/fallback；模型返回的非空文本直接作为 summary，不做结构化解析或本地摘要替换。
+- `CompactionFitter` 只负责用 exact estimator 把 summary + recent tail 塞进目标预算；仅在预算要求下做通用 token 截断，缩减顺序有界，最多 `MAX_FIT_ATTEMPTS` 次。
 - Kernel 只维护 request metadata、runtime metrics、`summary_seq`/`lam_compaction_resume` 和 checkpoint。
 
 ## Token 预算
@@ -35,9 +35,9 @@ exact_tokens(result.messages) <= compact_limit_tokens
 
 摘要请求另行预留输出、协议和 safety margin。`SummaryTokenBudget.max_input_tokens` 是摘要请求允许的输入上限，segment 和 merge 请求都必须遵守它。`LoopPolicy.compact_summary_output_tokens` 与 `LoopPolicy.compact_safety_margin_tokens` 可覆盖摘要输出上限和 safety margin；保持 `None` 时使用按窗口推导的默认值。
 
-## 有界缩减策略
+## 摘要与有界缩减策略
 
-Fitter 按固定顺序尝试：原始 summary、压缩 summary 两次、删除最旧 recent turn 两次、token-aware 截断 summary、最小结构化摘要、只保留最新必需 turn。最新必需 turn 单独超过目标时抛出 `CompactionBudgetExceeded`，不会截断当前用户输入或无限重试。
+模型返回空文本时压缩失败，不生成本地 fallback 摘要；模型返回的文本只有在超出预算时才会被通用 token-aware 截断。Fitter 按固定顺序尝试：原始 summary、截断 summary 两次、删除最旧 recent turn 两次、进一步截断 summary、清空 summary、只保留最新必需 turn。最新必需 turn 单独超过目标时抛出 `CompactionBudgetExceeded`，不会截断当前用户输入或无限重试。
 
 文本截断按 `estimate_text_tokens` 二分，截断标记本身也计入预算；禁止使用字符数乘常数近似 token 数。
 

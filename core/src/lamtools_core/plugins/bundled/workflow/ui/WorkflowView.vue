@@ -98,7 +98,7 @@
                 :messages="chat.messages.value"
                 :process-expanded-ids="chat.processExpandedIds.value"
                 :message-actions="true"
-                :api-base="apiBase"
+                :transport="transport"
                 :project-id="activeProjectId ?? selectedProjectId"
                 :work-root="activeProject?.workRoot"
                 :active-turn-id="chat.activeTurnId.value"
@@ -130,7 +130,7 @@
           :messages="chat.messages.value"
           :process-expanded-ids="chat.processExpandedIds.value"
           :message-actions="true"
-          :api-base="apiBase"
+          :transport="transport"
           :project-id="activeProjectId ?? selectedProjectId"
           :work-root="activeProject?.workRoot"
           :active-turn-id="chat.activeTurnId.value"
@@ -199,7 +199,7 @@ const modeRuntime = usePluginModeRuntime()
 const workflowApi: WorkflowApi = createWorkflowApi(context.requestRpc)
 
 const {
-  apiBase,
+  transport,
   projects,
   selectedProjectId,
   selectedProject,

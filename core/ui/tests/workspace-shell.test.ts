@@ -5,7 +5,6 @@ import { mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import WorkspaceShell from '../src/components/WorkspaceShell.vue'
-import { __resetCoreToastStoreForTests } from '../src/composables/useCoreToast'
 
 type MediaListener = (event: MediaQueryListEvent) => void
 
@@ -28,20 +27,35 @@ function installMatchMedia(matches: boolean) {
   })
 }
 
+function dispatchPointerEvent(
+  element: Element,
+  type: string,
+  init: { pointerId: number; pointerType: string; clientX: number; clientY: number },
+): void {
+  const event = new Event(type, { bubbles: true, cancelable: true })
+  Object.defineProperties(event, {
+    pointerId: { configurable: true, value: init.pointerId },
+    pointerType: { configurable: true, value: init.pointerType },
+    button: { configurable: true, value: 0 },
+    clientX: { configurable: true, value: init.clientX },
+    clientY: { configurable: true, value: init.clientY },
+  })
+  element.dispatchEvent(event)
+}
+
 describe('WorkspaceShell responsive drawers', () => {
   beforeEach(() => {
     localStorage.clear()
     installMatchMedia(true)
-    __resetCoreToastStoreForTests()
   })
 
   afterEach(() => {
     vi.unstubAllGlobals()
   })
 
-  it('keeps both mobile navigation surfaces reachable without leaving closed drawers focusable', async () => {
+  it('opens the mobile drawers from a horizontal swipe starting anywhere', async () => {
     const wrapper = mount(WorkspaceShell, {
-      props: { productName: 'Sage', errorText: '连接失败' },
+      props: { productName: 'Sage' },
       slots: {
         'sidebar-body': '<button data-left-action>会话</button>',
         'right-panel': '<button data-right-action>运行状态</button>',
@@ -50,47 +64,93 @@ describe('WorkspaceShell responsive drawers', () => {
     })
     await wrapper.vm.$nextTick()
 
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 390 })
     const leftDrawer = wrapper.get('[data-workspace-left-drawer]')
     const rightDrawer = wrapper.get('[data-workspace-right-drawer]')
-    const leftToggle = wrapper.get('[data-mobile-left-toggle]')
-    const rightToggle = wrapper.get('[data-mobile-right-toggle]')
+    const shell = wrapper.get('.workspace-shell')
 
     expect(leftDrawer.attributes('inert')).toBeDefined()
     expect(rightDrawer.attributes('inert')).toBeDefined()
-    expect(leftToggle.attributes('aria-expanded')).toBe('false')
-    expect(rightToggle.attributes('aria-expanded')).toBe('false')
+    expect(wrapper.find('[data-mobile-left-toggle]').exists()).toBe(false)
+    expect(wrapper.find('[data-mobile-right-toggle]').exists()).toBe(false)
 
-    await leftToggle.trigger('click')
+    dispatchPointerEvent(shell.element, 'pointerdown', {
+      pointerId: 1,
+      pointerType: 'touch',
+      clientX: 195,
+      clientY: 280,
+    })
+    dispatchPointerEvent(shell.element, 'pointermove', {
+      pointerId: 1,
+      pointerType: 'touch',
+      clientX: 231,
+      clientY: 284,
+    })
+    dispatchPointerEvent(shell.element, 'pointerup', {
+      pointerId: 1,
+      pointerType: 'touch',
+      clientX: 231,
+      clientY: 284,
+    })
+    await wrapper.vm.$nextTick()
     expect(leftDrawer.attributes('inert')).toBeUndefined()
-    expect(leftToggle.attributes('aria-expanded')).toBe('true')
-    expect(leftToggle.attributes('aria-label')).toBe('关闭会话与导航')
 
-    const leftAction = wrapper.get('[data-left-action]')
-    ;(leftAction.element as HTMLElement).focus()
     await wrapper.get('.mobile-drawer-backdrop').trigger('click')
     await wrapper.vm.$nextTick()
     expect(leftDrawer.attributes('inert')).toBeDefined()
-    expect(document.activeElement).toBe(leftToggle.element)
 
-    await rightToggle.trigger('click')
-    expect(rightDrawer.attributes('inert')).toBeUndefined()
-    expect(rightToggle.attributes('aria-expanded')).toBe('true')
-    expect(rightToggle.attributes('aria-label')).toBe('关闭运行状态')
-
-    const rightAction = wrapper.get('[data-right-action]')
-    ;(rightAction.element as HTMLElement).focus()
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    dispatchPointerEvent(shell.element, 'pointerdown', {
+      pointerId: 2,
+      pointerType: 'mouse',
+      clientX: 195,
+      clientY: 280,
+    })
+    dispatchPointerEvent(shell.element, 'pointermove', {
+      pointerId: 2,
+      pointerType: 'mouse',
+      clientX: 159,
+      clientY: 284,
+    })
+    dispatchPointerEvent(shell.element, 'pointerup', {
+      pointerId: 2,
+      pointerType: 'mouse',
+      clientX: 159,
+      clientY: 284,
+    })
     await wrapper.vm.$nextTick()
-    expect(rightDrawer.attributes('inert')).toBeDefined()
-    expect(document.activeElement).toBe(rightToggle.element)
+    expect(rightDrawer.attributes('inert')).toBeUndefined()
 
-    // Legacy errorText prop is bridged into the global toast service and
-    // rendered by CoreToastHost with a dismiss button.
-    const error = wrapper.get('.core-toast--error')
-    expect(error.attributes('role')).toBe('alert')
-    expect(error.attributes('aria-atomic')).toBe('true')
-    expect(error.text()).toContain('连接失败')
+    wrapper.unmount()
+  })
 
+  it('does not treat mouse text selection as a drawer gesture', async () => {
+    const wrapper = mount(WorkspaceShell, {
+      props: { productName: 'Sage' },
+      slots: {
+        default: '<p data-selectable>可选择的正文内容</p>',
+        'right-panel': '<button>运行状态</button>',
+      },
+      attachTo: document.body,
+    })
+    await wrapper.vm.$nextTick()
+
+    const shell = wrapper.get('.workspace-shell')
+    dispatchPointerEvent(shell.element, 'pointerdown', {
+      pointerId: 3,
+      pointerType: 'mouse',
+      clientX: 240,
+      clientY: 280,
+    })
+    shell.element.dispatchEvent(new Event('selectstart', { bubbles: true, cancelable: true }))
+    dispatchPointerEvent(shell.element, 'pointerup', {
+      pointerId: 3,
+      pointerType: 'mouse',
+      clientX: 160,
+      clientY: 282,
+    })
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.get('[data-workspace-right-drawer]').attributes('inert')).toBeDefined()
     wrapper.unmount()
   })
 
@@ -149,6 +209,25 @@ describe('WorkspaceShell responsive drawers', () => {
     expect(wrapper.emitted('update:left-pinned')).toEqual([[true]])
   })
 
+  it('exposes a mobile drawer opener for host-level controls', async () => {
+    const wrapper = mount(WorkspaceShell, { props: { productName: 'Core' } })
+    const shell = wrapper.vm as unknown as { openLeftDrawer: () => void }
+    const leftDrawer = wrapper.get('[data-workspace-left-drawer]')
+    await wrapper.vm.$nextTick()
+
+    expect(leftDrawer.attributes('inert')).toBeDefined()
+    shell.openLeftDrawer()
+    await wrapper.vm.$nextTick()
+    expect(leftDrawer.attributes('inert')).toBeUndefined()
+    expect(wrapper.emitted('update:left-open')?.at(-1)).toEqual([true])
+
+    await wrapper.get('.mobile-drawer-backdrop').trigger('click')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.emitted('update:left-open')?.at(-1)).toEqual([false])
+
+    wrapper.unmount()
+  })
+
   it('marks the shared shell and composer for an empty Core session', () => {
     const wrapper = mount(WorkspaceShell, {
       props: { productName: 'Core', emptySession: true },
@@ -157,5 +236,103 @@ describe('WorkspaceShell responsive drawers', () => {
     expect(wrapper.get('.workspace-shell').classes()).toContain('workspace-shell--empty-session')
     expect(wrapper.get('.composer-root').classes()).toContain('composer-root--empty-session')
     expect(wrapper.find('.floating-composer').exists()).toBe(true)
+  })
+
+  it('moves the single composer to bottom on focus and keeps it there after closing the stage', async () => {
+    const wrapper = mount(WorkspaceShell, {
+      props: { productName: 'Core', emptySession: true },
+    })
+
+    expect(wrapper.get('.workspace-shell').classes()).toContain('workspace-shell--composer-center')
+
+    await wrapper.get('.floating-composer textarea').trigger('focusin')
+    expect(wrapper.get('.workspace-shell').classes()).toContain('workspace-shell--composer-bottom')
+
+    await wrapper.setProps({ stageOpen: true })
+    await wrapper.setProps({ stageOpen: false })
+    expect(wrapper.get('.workspace-shell').classes()).toContain('workspace-shell--composer-bottom')
+
+    wrapper.unmount()
+  })
+
+  it('syncs the keyboard inset immediately when the composer receives focus', async () => {
+    const resizeListeners = new Set<() => void>()
+    const visualViewport = {
+      height: 480,
+      offsetTop: 0,
+      addEventListener(type: string, listener: () => void) {
+        if (type === 'resize') resizeListeners.add(listener)
+      },
+      removeEventListener(type: string, listener: () => void) {
+        if (type === 'resize') resizeListeners.delete(listener)
+      },
+    }
+    const originalViewport = Object.getOwnPropertyDescriptor(window, 'visualViewport')
+    const originalInnerHeight = Object.getOwnPropertyDescriptor(window, 'innerHeight')
+    Object.defineProperty(window, 'visualViewport', {
+      configurable: true,
+      value: visualViewport,
+    })
+    Object.defineProperty(window, 'innerHeight', {
+      configurable: true,
+      value: 800,
+    })
+
+    const wrapper = mount(WorkspaceShell, {
+      props: { productName: 'Core' },
+      attachTo: document.body,
+    })
+    const textarea = wrapper.get('.floating-composer textarea').element as HTMLTextAreaElement
+    textarea.focus()
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.get('.workspace-shell').attributes('style')).toContain('--keyboard-inset: 320px')
+
+    visualViewport.height = 800
+    resizeListeners.forEach((listener) => listener())
+    await wrapper.vm.$nextTick()
+    expect(wrapper.get('.workspace-shell').attributes('style')).toContain('--keyboard-inset: 0px')
+
+    wrapper.unmount()
+    if (originalViewport) Object.defineProperty(window, 'visualViewport', originalViewport)
+    else Reflect.deleteProperty(window, 'visualViewport')
+    if (originalInnerHeight) Object.defineProperty(window, 'innerHeight', originalInnerHeight)
+  })
+
+  it('resets placement only when the host starts another session', async () => {
+    const wrapper = mount(WorkspaceShell, {
+      props: {
+        productName: 'Core',
+        emptySession: true,
+        composerSessionKey: 'session-a',
+      },
+    })
+
+    await wrapper.get('.floating-composer textarea').trigger('focusin')
+    expect(wrapper.get('.workspace-shell').classes()).toContain('workspace-shell--composer-bottom')
+
+    await wrapper.setProps({ composerSessionKey: 'session-b' })
+    expect(wrapper.get('.workspace-shell').classes()).toContain('workspace-shell--composer-center')
+
+    wrapper.unmount()
+  })
+
+  it('restores bottom placement when returning to a session that already entered work mode', async () => {
+    const wrapper = mount(WorkspaceShell, {
+      props: {
+        productName: 'Core',
+        emptySession: true,
+        composerSessionKey: 'session-a',
+      },
+    })
+
+    await wrapper.get('.floating-composer textarea').trigger('focusin')
+    await wrapper.setProps({ composerSessionKey: 'session-b' })
+    expect(wrapper.get('.workspace-shell').classes()).toContain('workspace-shell--composer-center')
+
+    await wrapper.setProps({ composerSessionKey: 'session-a' })
+    expect(wrapper.get('.workspace-shell').classes()).toContain('workspace-shell--composer-bottom')
+
+    wrapper.unmount()
   })
 })

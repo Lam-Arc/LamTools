@@ -1,43 +1,19 @@
 <template>
   <div
+    ref="shellElement"
     class="workspace-shell"
-    :class="[shellClass, { 'workspace-shell--empty-session': emptySession }]"
-    :style="shellStyle"
+    :class="[shellClass, composerShellClass, { 'workspace-shell--empty-session': emptySession }]"
+    :style="{ ...shellStyle, ...composerLayoutStyle }"
+    @pointerdown="onSwipePointerDown"
+    @pointermove="onSwipePointerMove"
+    @pointerup="onSwipePointerUp"
+    @pointercancel="onSwipePointerCancel"
+    @selectstart="onSwipeSelectStart"
+    @focusin="onShellFocusIn"
+    @focusout="onShellFocusOut"
   >
-    <!-- Notifications: single global host fed by the useCoreToast service.
-         errorText/noticeText props are bridged into the service for legacy
-         hosts (audit: previously two fixed slots, no dismissal, no
-         auto-expiry for several error sources). -->
+    <!-- Notifications are owned by the shared toast service. -->
     <CoreToastHost />
-
-    <nav class="mobile-shell-nav" aria-label="工作区面板">
-      <span class="mobile-shell-title">{{ productName }}</span>
-      <button
-        ref="leftToggleButton"
-        class="mobile-shell-button"
-        type="button"
-        data-mobile-left-toggle
-        :aria-controls="leftDrawerId"
-        :aria-expanded="leftOpen"
-        :aria-label="leftOpen ? '关闭会话与导航' : '打开会话与导航'"
-        @click="toggleLeftDrawer"
-      >
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /></svg>
-      </button>
-      <button
-        v-if="showRightPanel"
-        ref="rightToggleButton"
-        class="mobile-shell-button"
-        type="button"
-        data-mobile-right-toggle
-        :aria-controls="rightDrawerId"
-        :aria-expanded="rightOpen"
-        :aria-label="rightOpen ? '关闭运行状态' : '打开运行状态'"
-        @click="toggleRightDrawer"
-      >
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4zM15 5v14M7 9h5M7 13h5" /></svg>
-      </button>
-    </nav>
 
     <button
       v-if="isNarrowViewport && (leftOpen || rightOpen)"
@@ -61,7 +37,6 @@
     ></div>
     <div
       v-if="showRightPanel"
-      ref="rightToggle"
       class="edge edge-right"
       role="button"
       tabindex="0"
@@ -91,23 +66,14 @@
       <template v-if="$slots['sidebar-header-action']" #sidebar-header-action>
         <slot name="sidebar-header-action" />
       </template>
-      <template v-else-if="$slots['header-actions']" #header-actions>
-        <slot name="header-actions" />
-      </template>
       <template v-if="$slots.primary" #primary>
         <slot name="primary" />
-      </template>
-      <template v-else-if="$slots['sidebar-primary']" #sidebar-primary>
-        <slot name="sidebar-primary" />
       </template>
       <template v-if="$slots['sidebar-body']" #sidebar-body>
         <slot name="sidebar-body" />
       </template>
       <template v-if="$slots['sidebar-footer']" #sidebar-footer>
         <slot name="sidebar-footer" />
-      </template>
-      <template v-else-if="$slots.footer" #footer>
-        <slot name="footer" />
       </template>
     </LeftSidebarShell>
 
@@ -144,7 +110,7 @@
     <!-- ===== Floating Composer ===== -->
     <ComposerBar
       v-if="!hideComposer"
-      :class="{ 'composer-root--empty-session': emptySession }"
+      :class="[composerRootClass, { 'composer-root--empty-session': emptySession }]"
       :inert="rightDrawerModal || undefined"
       variant="floating"
       :placeholder="composerPlaceholder"
@@ -154,8 +120,8 @@
       :stop-label="composerStopLabel"
       :send-title="composerSendTitle"
       :stop-title="composerStopTitle"
-      @submit="$emit('composer-submit')"
-      @drop="$emit('composer-drop', $event)"
+      @submit="onComposerSubmit"
+      @drop="onComposerDrop"
     >
       <template #popover>
         <slot name="composer-popover" />
@@ -228,10 +194,10 @@
  * Uses useShellLayout for all drawer/pin/theme/density state.
  * Product provides slots for actual content.
  */
-import { ref, useId, watch } from 'vue'
+import { ref, toRef, useId, watch } from 'vue'
+import { useComposerLayout } from '../composables/useComposerLayout'
 import { useShellLayout } from '../composables/useShellLayout'
 import type { ThemeData } from '../composables/useShellLayout'
-import { dismissToast, showToast } from '../composables/useCoreToast'
 import ComposerBar from './ComposerBar.vue'
 import CoreSendStopButton from './CoreSendStopButton.vue'
 import CoreToastHost from './CoreToastHost.vue'
@@ -256,13 +222,15 @@ const props = withDefaults(
     composerStopLabel?: string
     composerSendTitle?: string
     composerStopTitle?: string
-    errorText?: string
-    noticeText?: string
     showRightPanel?: boolean
     stageOpen?: boolean
     hideComposer?: boolean
     /** Host-controlled layout state for a Core session with no messages yet. */
     emptySession?: boolean
+    /** Stable host session identity used to retain working-state placement. */
+    composerSessionKey?: string | null
+    /** False while the host is still loading the selected session history. */
+    composerSessionReady?: boolean
   }>(),
   {
     storageKey: 'lamtools.ui',
@@ -280,16 +248,17 @@ const props = withDefaults(
     composerStopLabel: 'stop',
     composerSendTitle: '发送',
     composerStopTitle: '停止运行',
-    errorText: '',
-    noticeText: '',
     showRightPanel: true,
     stageOpen: false,
     emptySession: false,
+    composerSessionKey: null,
+    composerSessionReady: true,
   },
 )
 
 const emit = defineEmits<{
   'new-session': []
+  'update:left-open': [value: boolean]
   'update:left-pinned': [value: boolean]
   settings: []
   plugins: []
@@ -310,30 +279,6 @@ function onComposerEnter(event: KeyboardEvent) {
 const drawerId = useId()
 const leftDrawerId = `${drawerId}-left-drawer`
 const rightDrawerId = `${drawerId}-right-drawer`
-const leftToggleButton = ref<HTMLButtonElement | null>(null)
-const rightToggleButton = ref<HTMLButtonElement | null>(null)
-
-// Legacy props bridge: hosts that still pass errorText/noticeText get them
-// routed through the global toast service (auto-expiry + manual dismiss)
-// instead of the removed fixed two-slot render. Clearing the prop dismisses
-// the toast it opened.
-const propToastIds: Record<'error' | 'notice', number | null> = { error: null, notice: null }
-watch(() => props.errorText, (value) => {
-  if (value) {
-    propToastIds.error = showToast('error', value)
-  } else if (propToastIds.error !== null) {
-    dismissToast(propToastIds.error)
-    propToastIds.error = null
-  }
-}, { immediate: true })
-watch(() => props.noticeText, (value) => {
-  if (value) {
-    propToastIds.notice = showToast('notice', value)
-  } else if (propToastIds.notice !== null) {
-    dismissToast(propToastIds.notice)
-    propToastIds.notice = null
-  }
-}, { immediate: true })
 
 const {
   leftOpen,
@@ -355,8 +300,6 @@ const {
   onRightDrawerLeave,
   openLeftDrawer,
   openRightDrawer,
-  toggleLeftDrawer,
-  toggleRightDrawer,
   closeDrawers,
   toggleStage,
   startStageResize,
@@ -370,22 +313,135 @@ const {
   showRightPanel: props.showRightPanel,
 })
 
+const shellElement = ref<HTMLElement | null>(null)
+const composerLayout = useComposerLayout({
+  root: shellElement,
+  emptySession: toRef(props, 'emptySession'),
+  viewportOpen: stageOpen,
+  sessionKey: toRef(props, 'composerSessionKey'),
+  sessionReady: toRef(props, 'composerSessionReady'),
+})
+const composerShellClass = composerLayout.shellClass
+const composerRootClass = composerLayout.rootClass
+const composerLayoutStyle = composerLayout.style
+
+function syncComposerKeyboardInset(): void {
+  composerLayout.syncKeyboardInset()
+  composerLayout.scheduleKeyboardSync()
+}
+
+function onShellFocusIn(event: FocusEvent): void {
+  const target = event.target
+  if (target instanceof Element && target.closest('.floating-composer')) {
+    composerLayout.enterBottom()
+    syncComposerKeyboardInset()
+  }
+}
+
+function onShellFocusOut(): void {
+  syncComposerKeyboardInset()
+}
+
+function onComposerSubmit(): void {
+  composerLayout.enterBottom()
+  emit('composer-submit')
+}
+
+function onComposerDrop(event: DragEvent): void {
+  composerLayout.enterBottom()
+  emit('composer-drop', event)
+}
+
 function onSidebarTogglePinned() {
   toggleLeftPinned()
   emit('update:left-pinned', leftPinned.value)
 }
 
-let lastMobileDrawer: 'left' | 'right' | null = null
-watch([leftOpen, rightOpen], ([left, right], [previousLeft, previousRight]) => {
-  if (!isNarrowViewport.value) return
-  if (!previousLeft && left) lastMobileDrawer = 'left'
-  if (!previousRight && right) lastMobileDrawer = 'right'
-  if (left || right || lastMobileDrawer === null) return
+type SwipeGesture = {
+  pointerId: number
+  pointerType: string
+  startX: number
+  startY: number
+  selectingText: boolean
+}
 
-  const target = lastMobileDrawer === 'left' ? leftToggleButton : rightToggleButton
-  lastMobileDrawer = null
-  target.value?.focus()
-}, { flush: 'post' })
+// Mobile OSes reserve the physical screen edges for back navigation, so the
+// drawer gesture deliberately starts anywhere in the shell. A clearly
+// horizontal gesture is still required to preserve ordinary vertical scroll.
+const SWIPE_TRIGGER_DISTANCE = 28
+const SWIPE_AXIS_RATIO = 1.15
+let swipeGesture: SwipeGesture | null = null
+
+function onSwipePointerDown(event: PointerEvent): void {
+  swipeGesture = null
+  if (!isNarrowViewport.value || !['touch', 'pen', 'mouse'].includes(event.pointerType)) return
+  if (event.pointerType === 'mouse' && event.button !== 0) return
+
+  swipeGesture = {
+    pointerId: event.pointerId,
+    pointerType: event.pointerType,
+    startX: event.clientX,
+    startY: event.clientY,
+    selectingText: false,
+  }
+
+  // The finger may leave the original child element while swiping. Capturing
+  // it on the shell keeps move/up events together in WebViews and Tauri.
+  const shell = event.currentTarget
+  if (event.pointerType !== 'mouse' && shell instanceof HTMLElement && shell.setPointerCapture) {
+    try {
+      shell.setPointerCapture(event.pointerId)
+    } catch {
+      // Some test/WebView implementations do not support capture for a
+      // synthetic or already-released pointer.
+    }
+  }
+}
+
+function onSwipePointerMove(event: PointerEvent): void {
+  const gesture = swipeGesture
+  if (!gesture || gesture.pointerId !== event.pointerId) return
+
+  // Mouse dragging must remain available for native text selection. Touch and
+  // pen have no desktop-style selection conflict and may suppress horizontal
+  // browser handling once the gesture direction is clear.
+  if (gesture.pointerType === 'mouse') return
+
+  const deltaX = event.clientX - gesture.startX
+  const deltaY = event.clientY - gesture.startY
+  if (
+    Math.abs(deltaX) >= Math.abs(deltaY) * SWIPE_AXIS_RATIO &&
+    Math.abs(deltaX) > 6 &&
+    event.cancelable
+  ) {
+    event.preventDefault()
+  }
+}
+
+function onSwipeSelectStart(): void {
+  if (swipeGesture?.pointerType === 'mouse') swipeGesture.selectingText = true
+}
+
+function onSwipePointerUp(event: PointerEvent): void {
+  const gesture = swipeGesture
+  swipeGesture = null
+  if (!gesture || gesture.pointerId !== event.pointerId) return
+  if (gesture.pointerType === 'mouse' && gesture.selectingText) return
+
+  const deltaX = event.clientX - gesture.startX
+  const deltaY = event.clientY - gesture.startY
+  if (
+    Math.abs(deltaX) < SWIPE_TRIGGER_DISTANCE ||
+    Math.abs(deltaX) < Math.abs(deltaY) * SWIPE_AXIS_RATIO
+  ) return
+
+  if (deltaX > 0) openLeftDrawer()
+  if (deltaX < 0 && props.showRightPanel) openRightDrawer()
+}
+
+function onSwipePointerCancel(): void {
+  swipeGesture = null
+}
 
 // Sync stageOpen: prop → useShellLayout, and useShellLayout → emit
 watch(() => props.stageOpen, (val) => {
@@ -394,6 +450,9 @@ watch(() => props.stageOpen, (val) => {
 watch(stageOpen, (val) => {
   if (val !== props.stageOpen) emit('update:stageOpen', val)
 })
+watch(leftOpen, (value) => {
+  emit('update:left-open', value)
+}, { immediate: true })
 
 // Sync theme/density/contentWidth from parent into useShellLayout state
 watch(() => props.theme, (val) => {
@@ -406,12 +465,12 @@ watch(() => props.contentWidth, (val) => {
   if (val !== undefined && val !== shellContentWidth.value) shellContentWidth.value = val
 })
 
-defineExpose({ leftPinned, rightPinned, toggleLeftPinned, toggleRightPinned })
+defineExpose({
+  leftPinned,
+  rightPinned,
+  openLeftDrawer,
+  toggleLeftPinned,
+  toggleRightPinned,
+  resetComposerLayout: composerLayout.resetForSession,
+})
 </script>
-
-<style scoped>
-/* 移动端导航条标题：桌面端不渲染（无独立 CSS 曾导致桌面显示多余 productName 行） */
-.mobile-shell-title {
-  display: none;
-}
-</style>

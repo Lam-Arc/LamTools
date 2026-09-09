@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 
 from sqlalchemy import delete, select
 
@@ -17,7 +17,7 @@ from .core_db import (
     CoreCheckpointV2SessionMessages,
     CoreCheckpointV2SessionHistory,
     CoreGoal, CoreHandoffContext, CoreHistoryEntry, CoreRestoreOperation, CoreRuntimeSession,
-    CoreThreadSnapshot, CoreThreadSnapshotItem, CoreWorkspaceManifest,
+    CoreProject, CoreThreadSnapshot, CoreThreadSnapshotItem, CoreWorkspaceManifest,
 )
 from .session_autotitle import is_default_title
 from .snapshot_store import CoreAppSnapshotProjector
@@ -30,9 +30,32 @@ class CoreDbSessionStore:
         db_provider: Callable[[], CoreAppDb],
         *,
         session_visible: Callable[[str, dict[str, Any]], bool] | None = None,
+        sync_publisher: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+        fallback_work_root: Path | str | None = None,
     ) -> None:
         self._db_provider = db_provider
         self._session_visible = session_visible or (lambda _session_id, _metadata: True)
+        self._sync_journal: Any = None
+        self._sync_publisher = sync_publisher
+        self._fallback_work_root = (
+            str(Path(fallback_work_root).expanduser().resolve())
+            if fallback_work_root is not None
+            else ""
+        )
+
+    def set_sync_journal(self, sync_journal: Any) -> None:
+        self._sync_journal = sync_journal
+
+    def set_sync_publisher(self, publisher: Callable[[dict[str, Any]], Awaitable[None]] | None) -> None:
+        self._sync_publisher = publisher
+
+    async def _publish_sync_changes(self, change_ids: list[str]) -> None:
+        if self._sync_journal is None or self._sync_publisher is None:
+            return
+        for change_id in change_ids:
+            change = await self._sync_journal.get_change(change_id)
+            if change is not None:
+                await self._sync_publisher({"method": "sync/change", "params": change})
 
     def _is_visible(self, session_id: str, metadata: dict[str, Any]) -> bool:
         try:
@@ -50,9 +73,26 @@ class CoreDbSessionStore:
         db = self._db_provider()
         if not self._is_visible(session.id, session.metadata):
             raise ValueError("Session owner plugin is disabled or unavailable")
+        if self._fallback_work_root:
+            requested_root = str(session.metadata.get("work_root") or "").strip()
+            project_exists = False
+            if requested_root:
+                async with db.session_factory() as connection:
+                    project_exists = await connection.scalar(
+                        select(CoreProject.id).where(CoreProject.work_root == requested_root)
+                    ) is not None
+            if not project_exists:
+                await db.project_store.ensure_fallback_project(
+                    self._fallback_work_root,
+                    name="MyProject",
+                )
+                session.metadata = {**session.metadata, "work_root": self._fallback_work_root}
         session.metadata = with_session_runtime_preferences(session.metadata)
 
+        change_ids: list[str] = []
+
         async def write(connection):
+            change_ids.clear()
             if await connection.get(CoreThreadSnapshot, session.id) is not None:
                 raise ValueError(f"Session '{session.id}' already exists")
             state = session_snapshot(session, projector=db.snapshot_store.projector)
@@ -64,9 +104,21 @@ class CoreDbSessionStore:
                     updated_at=session.updated_at,
                 )
             )
+            if self._sync_journal is not None:
+                change = self._sync_journal.append(
+                    connection,
+                    entity_type="thread",
+                    operation="upsert",
+                    entity_id=session.id,
+                    thread_id=session.id,
+                    revision=int(state.get("revision") or 0),
+                    entity=_thread_entity(session, state),
+                )
+                change_ids.append(change.change_id)
             await connection.flush()
 
         await db.persistence.write(write)
+        await self._publish_sync_changes(change_ids)
         return session
 
     async def get(self, session_id: str) -> SessionRecord | None:
@@ -108,28 +160,48 @@ class CoreDbSessionStore:
             await _persist_legacy_runtime_preferences(db, *legacy_records)
         return [record for record in records if member_id is None or record.member_id == member_id]
 
-    async def update(self, session: SessionRecord) -> SessionRecord:
+    async def update(self, session: SessionRecord, *, expected_revision: int | None = None) -> SessionRecord:
         db = self._db_provider()
         if not self._is_visible(session.id, session.metadata):
             raise KeyError(session.id)
         session.updated_at = datetime.now()
 
+        change_ids: list[str] = []
+
         async def write(connection):
+            change_ids.clear()
             row = await connection.get(CoreThreadSnapshot, session.id)
             if row is None:
                 raise KeyError(session.id)
             if not self._row_is_visible(row):
                 raise KeyError(session.id)
             existing = session_record_from_snapshot(row)
+            current_revision = _snapshot_revision(row)
+            await db.persistence.assert_revision(connection, session.id, expected_revision)
             session.metadata = _canonicalize_project_metadata(existing.metadata, session.metadata)
             session.metadata = merge_session_runtime_preferences(existing.metadata, session.metadata)
             state = dict(row.snapshot_json or {})
             state.update(_session_state(session, messages=state.get("messages")))
+            state["revision"] = current_revision + 1
             row.snapshot_json = state
+            if hasattr(row, "revision"):
+                row.revision = current_revision + 1
             row.updated_at = session.updated_at
+            if self._sync_journal is not None:
+                change = self._sync_journal.append(
+                    connection,
+                    entity_type="thread",
+                    operation="upsert",
+                    entity_id=session.id,
+                    thread_id=session.id,
+                    revision=current_revision + 1,
+                    entity=_thread_entity(session, state),
+                )
+                change_ids.append(change.change_id)
             await connection.flush()
 
         await db.persistence.write(write)
+        await self._publish_sync_changes(change_ids)
         return session
 
     async def patch(
@@ -140,16 +212,20 @@ class CoreDbSessionStore:
         status: str | None = None,
         metadata: dict | None = None,
         only_if_title_default: bool = False,
+        expected_revision: int | None = None,
     ) -> SessionRecord | None:
         db = self._db_provider()
+        change_ids: list[str] = []
 
         async def write(connection):
+            change_ids.clear()
             row = await connection.get(CoreThreadSnapshot, session_id)
             if row is None:
                 return None
             if not self._row_is_visible(row):
                 return None
             record = session_record_from_snapshot(row)
+            current_revision = _snapshot_revision(row)
             if (
                 only_if_title_default
                 and title is not None
@@ -160,6 +236,7 @@ class CoreDbSessionStore:
                 # Returning None is indistinguishable from a missing row, which
                 # is exactly what callers need: nothing was updated.
                 return None
+            await db.persistence.assert_revision(connection, session_id, expected_revision)
             if title is not None:
                 record.title = title
             if status is not None:
@@ -170,45 +247,103 @@ class CoreDbSessionStore:
             record.updated_at = datetime.now()
             state = dict(row.snapshot_json or {})
             state.update(_session_state(record, messages=state.get("messages")))
+            state["revision"] = current_revision + 1
             row.snapshot_json = state
+            if hasattr(row, "revision"):
+                row.revision = current_revision + 1
             row.updated_at = record.updated_at
+            if self._sync_journal is not None:
+                change = self._sync_journal.append(
+                    connection,
+                    entity_type="thread",
+                    operation="upsert",
+                    entity_id=session_id,
+                    thread_id=session_id,
+                    revision=current_revision + 1,
+                    entity=_thread_entity(record, state),
+                )
+                change_ids.append(change.change_id)
             await connection.flush()
             return record
 
-        return await db.persistence.write(write)
+        result = await db.persistence.write(write)
+        await self._publish_sync_changes(change_ids)
+        return result
 
-    async def delete(self, session_id: str) -> bool:
+    async def delete(self, session_id: str, *, expected_revision: int | None = None) -> bool:
         db = self._db_provider()
+        change_ids: list[str] = []
 
         async def write(connection):
+            change_ids.clear()
             row = await connection.get(CoreThreadSnapshot, session_id)
             if row is None:
                 return False
             if not self._row_is_visible(row):
                 return False
+            current_revision = _snapshot_revision(row)
+            await db.persistence.assert_revision(connection, session_id, expected_revision)
+            if self._sync_journal is not None:
+                change = self._sync_journal.append(
+                    connection,
+                    entity_type="thread",
+                    operation="delete",
+                    entity_id=session_id,
+                    thread_id=session_id,
+                    revision=current_revision + 1,
+                    entity={"id": session_id, "deleted": True},
+                )
+                change_ids.append(change.change_id)
             await delete_session_records(connection, [session_id])
             return True
 
-        return bool(await db.persistence.write(write))
+        result = bool(await db.persistence.write(write))
+        await self._publish_sync_changes(change_ids)
+        return result
 
-    async def add_message(self, message: MessageRecord) -> MessageRecord:
+    async def add_message(self, message: MessageRecord, *, expected_revision: int | None = None) -> MessageRecord:
         db = self._db_provider()
+        change_ids: list[str] = []
 
         async def write(connection):
+            change_ids.clear()
             row = await connection.get(CoreThreadSnapshot, message.session_id)
             if row is None:
                 raise KeyError(message.session_id)
             if not self._row_is_visible(row):
                 raise KeyError(message.session_id)
+            current_revision = _snapshot_revision(row)
+            await db.persistence.assert_revision(connection, message.session_id, expected_revision)
             state = dict(row.snapshot_json or {})
             messages = list(state.get("messages") or [])
             messages.append(message.to_dict())
             state["messages"] = messages
+            state["revision"] = current_revision + 1
             row.snapshot_json = state
+            if hasattr(row, "revision"):
+                row.revision = current_revision + 1
             row.updated_at = datetime.now()
+            if self._sync_journal is not None:
+                change = self._sync_journal.append(
+                    connection,
+                    entity_type="message",
+                    operation="upsert",
+                    entity_id=message.id,
+                    thread_id=message.session_id,
+                    entity={
+                        "id": message.id,
+                        "thread_id": message.session_id,
+                        "seq": int(message.metadata.get("history_seq") or 0),
+                        "message": message.to_dict(),
+                        "deleted": False,
+                    },
+                    revision=current_revision + 1,
+                )
+                change_ids.append(change.change_id)
             await connection.flush()
 
         await db.persistence.write(write)
+        await self._publish_sync_changes(change_ids)
         return message
 
     async def list_messages(self, session_id: str) -> list[MessageRecord]:
@@ -238,6 +373,21 @@ def _session_state(session: SessionRecord, *, messages=None) -> dict:
     if messages is not None:
         state["messages"] = messages
     return state
+
+
+def _thread_entity(session: SessionRecord, state: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": session.id,
+        "title": session.title,
+        "status": session.status,
+        "created_at": session.created_at.isoformat(),
+        "updated_at": session.updated_at.isoformat(),
+        "metadata": dict(session.metadata),
+        "project_id": session.metadata.get("project_id"),
+        "revision": int(state.get("revision") or 0),
+        "snapshot": state,
+        "deleted": False,
+    }
 
 
 def _session_metadata(snapshot: object) -> dict[str, Any]:
@@ -311,6 +461,7 @@ def session_snapshot(
     session.metadata = with_session_runtime_preferences(session.metadata)
     state = (projector or CoreAppSnapshotProjector()).empty(session.id)
     state.update(_session_state(session))
+    state.setdefault("revision", 0)
     return state
 
 
@@ -396,6 +547,17 @@ def session_record_from_snapshot(row: CoreThreadSnapshot) -> SessionRecord:
         created_at=_datetime(session.get("created_at"), fallback=updated_at),
         updated_at=updated_at,
     )
+
+
+def _snapshot_revision(row: CoreThreadSnapshot) -> int:
+    value = getattr(row, "revision", None)
+    if value is None:
+        state = row.snapshot_json if isinstance(getattr(row, "snapshot_json", None), dict) else {}
+        value = state.get("revision", 0)
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _message_from_dict(value: dict) -> MessageRecord:

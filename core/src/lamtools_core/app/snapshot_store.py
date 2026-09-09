@@ -33,6 +33,7 @@ class CoreAppSnapshotProjector:
         state = {
             "thread_id": thread_id,
             "snapshot_seq": 0,
+            "revision": 0,
             "seen_event_ids": [],
             "turns": {},
             "items": {},
@@ -456,10 +457,12 @@ class SqlAlchemyThreadSnapshotStore:
         *,
         item_model: type[Any],
         projector: CoreAppSnapshotProjector | None = None,
+        event_model: type[Any] | None = None,
     ) -> None:
         self.snapshot_model = snapshot_model
         self.item_model = item_model
         self.projector = projector or CoreAppSnapshotProjector()
+        self.event_model = event_model
 
     async def load(self, db: AsyncSession, thread_id: str) -> dict[str, Any]:
         row = await db.get(self.snapshot_model, thread_id)
@@ -475,6 +478,7 @@ class SqlAlchemyThreadSnapshotStore:
         """
         state = dict(row.snapshot_json or self.projector.empty(thread_id))
         state["snapshot_seq"] = row.snapshot_seq
+        state["revision"] = _row_revision(row, state)
         items: dict[str, Any] = {}
         order: list[str] = []
         result = await db.execute(
@@ -512,6 +516,7 @@ class SqlAlchemyThreadSnapshotStore:
         """
         state = dict(row.snapshot_json or self.projector.empty(thread_id))
         state["snapshot_seq"] = row.snapshot_seq
+        state["revision"] = _row_revision(row, state)
         core = state.get("core")
         if not isinstance(core, dict):
             core = empty_thread_snapshot(thread_id)
@@ -573,11 +578,19 @@ class SqlAlchemyThreadSnapshotStore:
             if _already_projected(base, event):
                 return await self._assemble(db, row, event.thread_id)
             state = self.projector.apply(base, event)
+            state["revision"] = _row_revision(row, base) + 1
         else:
             state = self.projector.apply(None, event)
+            state["revision"] = 1
             row = self.snapshot_model(thread_id=event.thread_id)
             db.add(row)
-        await self._persist(db, row, state, event.thread_id)
+        await self._persist(
+            db,
+            row,
+            state,
+            event.thread_id,
+            event_revisions={event.event_id: int(state.get("revision") or 0)},
+        )
         await db.flush()
         return state
 
@@ -594,14 +607,26 @@ class SqlAlchemyThreadSnapshotStore:
             state = await self._partial_state(db, row, thread_id, events)
         else:
             state = self.projector.empty(thread_id)
+        revision = _row_revision(row, state) if row is not None else 0
+        event_revisions: dict[str, int] = {}
         for event in sorted(events, key=lambda item: item.seq):
             if _already_projected(state, event):
                 continue
             self.projector.apply_in_place(state, event)
+            revision += 1
+            state["revision"] = revision
+            event_revisions[event.event_id] = revision
         if row is None:
             row = self.snapshot_model(thread_id=thread_id)
             db.add(row)
-        await self._persist(db, row, state, thread_id)
+        state.setdefault("revision", revision)
+        await self._persist(
+            db,
+            row,
+            state,
+            thread_id,
+            event_revisions=event_revisions,
+        )
         await db.flush()
         return state
 
@@ -642,9 +667,12 @@ class SqlAlchemyThreadSnapshotStore:
     ) -> dict[str, Any]:
         state = self.projector.reduce(thread_id, events)
         row = await db.get(self.snapshot_model, thread_id)
+        prior_revision = _row_revision(row, {}) if row is not None else 0
         if row is None:
             row = self.snapshot_model(thread_id=thread_id)
             db.add(row)
+        event_revision = max((int(event.revision or 0) for event in events), default=0)
+        state["revision"] = max(prior_revision, event_revision, len(events))
         await db.execute(delete(self.item_model).where(self.item_model.thread_id == thread_id))
         await self._persist(db, row, state, thread_id)
         await db.flush()
@@ -665,6 +693,11 @@ class SqlAlchemyThreadSnapshotStore:
         state = dict(projection_payload.get("snapshot_json") or {})
         state["snapshot_seq"] = int(projection_payload.get("snapshot_seq") or 0)
         row = await db.get(self.snapshot_model, thread_id)
+        if "revision" not in state:
+            state["revision"] = int(
+                projection_payload.get("revision")
+                or (_row_revision(row, {}) if row is not None else 0)
+            )
         if row is None:
             row = self.snapshot_model(thread_id=thread_id)
             db.add(row)
@@ -679,6 +712,8 @@ class SqlAlchemyThreadSnapshotStore:
         row: Any,
         state: dict[str, Any],
         thread_id: str,
+        *,
+        event_revisions: dict[str, int] | None = None,
     ) -> None:
         """Write the projected state back incrementally.
 
@@ -721,11 +756,24 @@ class SqlAlchemyThreadSnapshotStore:
                 existing.item_json = item
                 existing.updated_at = now
         row.snapshot_seq = int(state.get("snapshot_seq") or 0)
+        if hasattr(row, "revision"):
+            row.revision = max(0, int(state.get("revision") or 0))
         row.snapshot_json = metadata_state
         if hasattr(row, "updated_at"):
             row.updated_at = now
         flag_modified(row, "snapshot_json")
         flag_modified(row, "snapshot_seq")
+        if hasattr(row, "revision"):
+            flag_modified(row, "revision")
+        if self.event_model is not None and event_revisions:
+            for event_id, revision in event_revisions.items():
+                event_row = await db.get(self.event_model, event_id)
+                if event_row is None:
+                    continue
+                if hasattr(event_row, "revision"):
+                    event_row.revision = max(0, int(revision))
+                if hasattr(event_row, "event_seq") and hasattr(event_row, "seq"):
+                    event_row.event_seq = int(event_row.seq or 0)
         # Keep the returned state clean of the internal anchor map.
         if isinstance(core, dict):
             core.pop("_item_seq_map", None)
@@ -736,3 +784,15 @@ __all__ = [
     "CoreAppSnapshotProjector",
     "SqlAlchemyThreadSnapshotStore",
 ]
+
+
+def _row_revision(row: Any | None, state: dict[str, Any] | None = None) -> int:
+    """Read revision from both current and legacy snapshot row shapes."""
+
+    value = getattr(row, "revision", None) if row is not None else None
+    if value is None and isinstance(state, dict):
+        value = state.get("revision")
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0

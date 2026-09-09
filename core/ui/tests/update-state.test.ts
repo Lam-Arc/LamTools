@@ -124,8 +124,8 @@ describe('CoreSettings 关于与更新 section (source contract)', () => {
     expect(source).toContain('info: Info,')
   })
 
-  it('wires the shared update state and startup banner in the demo App', () => {
-    const source = readFileSync(resolve(process.cwd(), 'src/demo/App.vue'), 'utf8')
+  it('wires the shared update state and startup banner in the Shared Core App', () => {
+const source = readFileSync(resolve(process.cwd(), 'src/app/LamToolsApp.vue'), 'utf8')
     expect(source).toContain('useCoreUpdateState(requestConfigOperation)')
     expect(source).toContain(':update-state="updateState"')
     expect(source).toContain('data-update-banner')

@@ -7,7 +7,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
 import uuid
 
 from sqlalchemy import DateTime, Float, Index, Integer, JSON, String, UniqueConstraint, delete, func, select, text, update
@@ -31,6 +31,7 @@ from lamtools_core.runtime.goal import Goal, GoalStatus, GoalStore
 from .event_store import SqlAlchemyAppEventStore
 from .persistence_host import AppPersistenceHost
 from .snapshot_store import CoreAppSnapshotProjector, SqlAlchemyThreadSnapshotStore
+from .session_actor import SessionActorRegistry
 from .sqlite_write import SQLiteWriteCoordinator, configure_sqlite_engine
 
 if TYPE_CHECKING:
@@ -39,6 +40,20 @@ if TYPE_CHECKING:
 
 class CoreDbBase(DeclarativeBase):
     pass
+
+
+class CoreWorkspaceIdentity(CoreDbBase):
+    """Stable identity for this local Workspace Host.
+
+    It lives in the Core database so moving ``/data`` to another machine does
+    not silently create a new Workspace for the same stored work data.
+    """
+
+    __tablename__ = "core_workspace_identity"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
 
 
 class CoreAppEvent(CoreDbBase):
@@ -56,6 +71,15 @@ class CoreAppEvent(CoreDbBase):
     client_message_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     method: Mapped[str] = mapped_column(String(100), nullable=False)
     payload_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    # Canonical event-log fields.  ``seq``/``method`` remain as compatibility
+    # aliases for the original Core live protocol; the fields below are the
+    # stable sync contract shared by desktop and mobile clients.
+    workspace_id: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    entity_type: Mapped[str] = mapped_column(String(64), nullable=False, default="thread.event")
+    entity_id: Mapped[str] = mapped_column(String(256), nullable=False, default="")
+    event_seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    event_type: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
 
 
@@ -64,6 +88,7 @@ class CoreThreadSnapshot(CoreDbBase):
 
     thread_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     snapshot_seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     snapshot_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
 
@@ -134,6 +159,9 @@ class CoreHistoryEntry(CoreDbBase):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     thread_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
     seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Per-message revision used by Local-First snapshots. History rows are
+    # append-only, so the stable sequence is also a safe migration fallback.
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     message_json: Mapped[dict] = mapped_column(JSON, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
 
@@ -227,6 +255,31 @@ class CoreCheckpoint(CoreDbBase):
     manifest_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     conversation_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="ready")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+
+
+class CoreSyncChange(CoreDbBase):
+    """Global, append-only cursor used by Local-First mobile clients.
+
+    ``core_app_events`` intentionally has a sequence per thread because the
+    desktop live protocol orders a conversation that way. Mobile sync needs a
+    single cursor across projects, threads and runtime changes, so it gets a
+    separate journal. Rows are never updated in place; deletions are recorded
+    as tombstones in ``entity_json``.
+    """
+
+    __tablename__ = "core_sync_changes"
+
+    seq: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    change_id: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    workspace_id: Mapped[str] = mapped_column(String(128), index=True, nullable=False, default="")
+    entity_type: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    event_type: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    operation: Mapped[str] = mapped_column(String(32), nullable=False)
+    entity_id: Mapped[str] = mapped_column(String(256), index=True, nullable=False)
+    thread_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False, default="")
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    entity_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
 
 
@@ -370,8 +423,10 @@ class CoreProject(CoreDbBase):
     __tablename__ = "core_projects"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     work_root: Mapped[str] = mapped_column(String(2048), unique=True, nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,
@@ -424,9 +479,28 @@ class CoreMemory(CoreDbBase):
 
 
 class SqlAlchemyRuntimeStateStore:
-    def __init__(self, session_factory: async_sessionmaker, write_coordinator: SQLiteWriteCoordinator) -> None:
+    def __init__(
+        self,
+        session_factory: async_sessionmaker,
+        write_coordinator: SQLiteWriteCoordinator,
+        *,
+        sync_journal: Any | None = None,
+        sync_publisher: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+    ) -> None:
         self.session_factory = session_factory
         self.write_coordinator = write_coordinator
+        self._sync_journal = sync_journal
+        self._sync_publisher = sync_publisher
+
+    def set_sync_publisher(self, publisher: Callable[[dict[str, Any]], Awaitable[None]] | None) -> None:
+        self._sync_publisher = publisher
+
+    async def _publish_sync_change(self, change_id: str | None) -> None:
+        if not change_id or self._sync_journal is None or self._sync_publisher is None:
+            return
+        change = await self._sync_journal.get_change(change_id)
+        if change is not None:
+            await self._sync_publisher({"method": "sync/change", "params": change})
 
     async def get(self, session_id: str) -> RuntimeState | None:
         async with self.session_factory() as db:
@@ -443,7 +517,8 @@ class SqlAlchemyRuntimeStateStore:
         return state
 
     async def save(self, state: RuntimeState) -> None:
-        await self._save(state, history=None)
+        change_id = await self._save(state, history=None)
+        await self._publish_sync_change(change_id)
 
     async def get_history(self, session_id: str, *, after_seq: int = 0) -> list[dict[str, Any]]:
         async with self.session_factory() as db:
@@ -464,7 +539,8 @@ class SqlAlchemyRuntimeStateStore:
         return _json_safe(row.history_json)
 
     async def save_checkpoint(self, state: RuntimeState, history: list[dict[str, Any]]) -> None:
-        await self._save(state, history=history)
+        change_id = await self._save(state, history=history)
+        await self._publish_sync_change(change_id)
 
     async def history_max_seq(self, session_id: str) -> int:
         async with self.session_factory() as db:
@@ -514,6 +590,7 @@ class SqlAlchemyRuntimeStateStore:
                             CoreHistoryEntry(
                                 thread_id=session_id,
                                 seq=i,
+                                revision=i,
                                 message_json=_json_safe(msg),
                             )
                         )
@@ -528,6 +605,7 @@ class SqlAlchemyRuntimeStateStore:
                     CoreHistoryEntry(
                         thread_id=session_id,
                         seq=max_seq,
+                        revision=max_seq,
                         message_json=_json_safe(msg),
                     )
                 )
@@ -559,6 +637,7 @@ class SqlAlchemyRuntimeStateStore:
                     CoreHistoryEntry(
                         thread_id=session_id,
                         seq=i,
+                        revision=i,
                         message_json=_json_safe(msg),
                     )
                 )
@@ -596,7 +675,7 @@ class SqlAlchemyRuntimeStateStore:
                 return await self.get(row.thread_id)
         return None
 
-    async def _save(self, state: RuntimeState, *, history: list[dict[str, Any]] | None) -> None:
+    async def _save(self, state: RuntimeState, *, history: list[dict[str, Any]] | None) -> str | None:
         state_payload, pending_payload = _runtime_state_payloads(state)
         expected_revision = getattr(state, "_runtime_store_revision", None)
         now = datetime.now()
@@ -617,7 +696,8 @@ class SqlAlchemyRuntimeStateStore:
                     )
                 )
                 await db.flush()
-                return 1
+                change = self._append_runtime_change(db, state, state_payload, pending_payload, now)
+                return 1, change.change_id if change is not None else None
 
             current_revision = int(row.revision or 0)
             if expected_revision is None or int(expected_revision) != current_revision:
@@ -642,13 +722,40 @@ class SqlAlchemyRuntimeStateStore:
             )
             if result.rowcount != 1:
                 raise RuntimeStateConflictError(f"Runtime state revision conflict for {state.session_id}")
-            return next_revision
+            change = self._append_runtime_change(db, state, state_payload, pending_payload, now)
+            return next_revision, change.change_id if change is not None else None
 
         try:
-            next_revision = await self.write_coordinator.run(write)
+            next_revision, change_id = await self.write_coordinator.run(write)
         except IntegrityError as exc:
             raise RuntimeStateConflictError(f"Runtime state revision conflict for {state.session_id}") from exc
         setattr(state, "_runtime_store_revision", next_revision)
+        return change_id
+
+    def _append_runtime_change(
+        self,
+        db: Any,
+        state: RuntimeState,
+        state_payload: dict[str, Any],
+        pending_payload: dict[str, Any],
+        now: datetime,
+    ) -> Any | None:
+        if self._sync_journal is None:
+            return None
+        entity = {
+            "thread_id": state.session_id,
+            **dict(state_payload),
+            **dict(pending_payload),
+            "updated_at": now.isoformat(),
+        }
+        return self._sync_journal.append(
+            db,
+            entity_type="runtime",
+            operation="upsert",
+            entity_id=state.session_id,
+            thread_id=state.session_id,
+            entity=entity,
+        )
 
 
 class SqlAlchemyHandoffContextStore:
@@ -1256,15 +1363,25 @@ class CoreAppDb:
     goal_store: GoalStore
     arrange_store: ArrangeStore
     project_store: CoreProjectStore
+    sync_journal: Any
+    workspace_id: str
     persistence: AppPersistenceHost
     memory_store: Any = None  # MemoryStoreProtocol; typed as Any to avoid import cycle
     member_defaults: dict = field(default_factory=dict)
+    session_actors: SessionActorRegistry = field(default_factory=SessionActorRegistry)
 
     async def close(self) -> None:
         await self.engine.dispose()
 
 
-async def open_core_app_db(path: Path | str, *, member_defaults: dict | None = None) -> CoreAppDb:
+async def open_core_app_db(
+    path: Path | str,
+    *,
+    member_defaults: dict | None = None,
+    workspace_id: str | None = None,
+    project_roots: list[Path | str] | None = None,
+    project_roots_file: Path | str | None = None,
+) -> CoreAppDb:
     db_path = Path(path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     engine = create_async_engine(
@@ -1275,17 +1392,29 @@ async def open_core_app_db(path: Path | str, *, member_defaults: dict | None = N
     configure_sqlite_engine(engine)
     async with engine.begin() as conn:
         await conn.run_sync(CoreDbBase.metadata.create_all)
-        await _migrate_core_app_schema(conn)
+        resolved_workspace_id = await _ensure_workspace_identity(conn, workspace_id)
+        await _migrate_core_app_schema(conn, workspace_id=resolved_workspace_id)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     write_coordinator = SQLiteWriteCoordinator(session_factory)
     from .project_store import CoreProjectStore
+    from .sync_store import CoreSyncJournal
     from lamtools_core.mem.store import SqlAlchemyMemoryStore
 
-    event_store = SqlAlchemyAppEventStore(CoreAppEvent)
+    sync_journal = CoreSyncJournal(
+        session_factory,
+        write_coordinator,
+        workspace_id=resolved_workspace_id,
+    )
+    event_store = SqlAlchemyAppEventStore(
+        CoreAppEvent,
+        sync_change_model=CoreSyncChange,
+        workspace_id=resolved_workspace_id,
+    )
     snapshot_store = SqlAlchemyThreadSnapshotStore(
         CoreThreadSnapshot,
         item_model=CoreThreadSnapshotItem,
         projector=CoreAppSnapshotProjector(),
+        event_model=CoreAppEvent,
     )
     persistence = AppPersistenceHost(
         event_store,
@@ -1293,20 +1422,35 @@ async def open_core_app_db(path: Path | str, *, member_defaults: dict | None = N
         session_factory=session_factory,
         write_coordinator=write_coordinator,
     )
+    session_actors = SessionActorRegistry()
     return CoreAppDb(
         path=db_path,
         engine=engine,
         session_factory=session_factory,
         event_store=event_store,
         snapshot_store=snapshot_store,
-        runtime_state_store=SqlAlchemyRuntimeStateStore(session_factory, write_coordinator),
+        runtime_state_store=SqlAlchemyRuntimeStateStore(
+            session_factory,
+            write_coordinator,
+            sync_journal=sync_journal,
+        ),
         handoff_context_store=SqlAlchemyHandoffContextStore(session_factory, write_coordinator),
         goal_store=SqlAlchemyGoalStore(session_factory, write_coordinator),
         arrange_store=SqlAlchemyArrangeStore(session_factory, write_coordinator),
-        project_store=CoreProjectStore(session_factory, write_coordinator),
+        project_store=CoreProjectStore(
+            session_factory,
+            write_coordinator,
+            project_roots=project_roots,
+            project_roots_file=project_roots_file,
+            workspace_id=resolved_workspace_id,
+            sync_journal=sync_journal,
+        ),
+        sync_journal=sync_journal,
+        workspace_id=resolved_workspace_id,
         persistence=persistence,
         memory_store=SqlAlchemyMemoryStore(session_factory, write_coordinator),
         member_defaults=dict(member_defaults or {}),
+        session_actors=session_actors,
     )
 
 
@@ -1322,6 +1466,7 @@ async def persist_core_run_items(db: CoreAppDb, run_items: list[RunItemEvent]) -
             envelopes_by_thread.setdefault(envelope.thread_id, []).append(envelope)
         for envelopes in envelopes_by_thread.values():
             snapshot = await db.snapshot_store.apply_many(session, envelopes)
+            await db.event_store.refresh_envelopes(session, envelopes)
         return snapshot
 
     return await db.persistence.write(write)
@@ -1359,7 +1504,134 @@ def _sqlite_url(path: Path) -> str:
     return f"sqlite+aiosqlite:///{path.resolve().as_posix()}"
 
 
-async def _migrate_core_app_schema(connection: Any) -> None:
+async def _ensure_workspace_identity(connection: Any, requested: str | None) -> str:
+    result = await connection.execute(
+        text("SELECT workspace_id FROM core_workspace_identity WHERE id = 1")
+    )
+    row = result.first()
+    if row is not None and str(row[0] or "").strip():
+        return str(row[0]).strip()
+    value = str(requested or "").strip() or f"workspace_{uuid.uuid4().hex}"
+    await connection.execute(
+        text(
+            "INSERT INTO core_workspace_identity (id, workspace_id, created_at) "
+            "VALUES (1, :workspace_id, :created_at)"
+        ),
+        {"workspace_id": value, "created_at": datetime.now(timezone.utc)},
+    )
+    return value
+
+
+async def _migrate_core_app_schema(connection: Any, *, workspace_id: str = "") -> None:
+    app_event_columns = {
+        row["name"]
+        for row in (await connection.execute(text("PRAGMA table_info(core_app_events)"))).mappings()
+    }
+    app_event_additions = {
+        "workspace_id": "VARCHAR(128) NOT NULL DEFAULT ''",
+        "entity_type": "VARCHAR(64) NOT NULL DEFAULT 'thread.event'",
+        "entity_id": "VARCHAR(256) NOT NULL DEFAULT ''",
+        "event_seq": "INTEGER NOT NULL DEFAULT 0",
+        "revision": "INTEGER NOT NULL DEFAULT 0",
+        "event_type": "VARCHAR(128) NOT NULL DEFAULT ''",
+    }
+    for column, definition in app_event_additions.items():
+        if column not in app_event_columns:
+            await connection.execute(text(
+                f"ALTER TABLE core_app_events ADD COLUMN {column} {definition}"
+            ))
+    # Backfill compatibility rows created before the canonical envelope was
+    # introduced.  The identity is already resolved before this migration so
+    # old events cannot remain invisible to Local-First sync.
+    if workspace_id:
+        await connection.execute(text(
+            "UPDATE core_app_events SET workspace_id = :workspace_id "
+            "WHERE workspace_id = '' OR workspace_id IS NULL"
+        ), {"workspace_id": workspace_id})
+    await connection.execute(text(
+        "UPDATE core_app_events SET entity_id = thread_id "
+        "WHERE entity_id = '' OR entity_id IS NULL"
+    ))
+    await connection.execute(text(
+        "UPDATE core_app_events SET event_seq = seq WHERE event_seq = 0 OR event_seq IS NULL"
+    ))
+    await connection.execute(text(
+        "UPDATE core_app_events SET event_type = method "
+        "WHERE event_type = '' OR event_type IS NULL"
+    ))
+
+    snapshot_columns = {
+        row["name"]
+        for row in (await connection.execute(text("PRAGMA table_info(core_thread_snapshots)"))).mappings()
+    }
+    if "revision" not in snapshot_columns:
+        await connection.execute(text(
+            "ALTER TABLE core_thread_snapshots ADD COLUMN revision INTEGER NOT NULL DEFAULT 0"
+        ))
+        # Existing snapshots already have a monotonic event anchor.  Using it
+        # as the initial revision preserves optimistic-concurrency safety on
+        # upgraded databases without inventing a lower revision than clients
+        # may have cached.
+        await connection.execute(text(
+            "UPDATE core_thread_snapshots SET revision = snapshot_seq "
+            "WHERE revision = 0 AND snapshot_seq > 0"
+        ))
+
+    project_columns = {
+        row["name"]
+        for row in (await connection.execute(text("PRAGMA table_info(core_projects)"))).mappings()
+    }
+    if "workspace_id" not in project_columns:
+        await connection.execute(text(
+            "ALTER TABLE core_projects ADD COLUMN workspace_id VARCHAR(128) NOT NULL DEFAULT ''"
+        ))
+    if "revision" not in project_columns:
+        await connection.execute(text(
+            "ALTER TABLE core_projects ADD COLUMN revision INTEGER NOT NULL DEFAULT 1"
+        ))
+    if workspace_id:
+        await connection.execute(text(
+            "UPDATE core_projects SET workspace_id = :workspace_id "
+            "WHERE workspace_id = '' OR workspace_id IS NULL"
+        ), {"workspace_id": workspace_id})
+
+    history_columns = {
+        row["name"]
+        for row in (await connection.execute(text("PRAGMA table_info(core_history_entries)"))).mappings()
+    }
+    if "revision" not in history_columns:
+        await connection.execute(text(
+            "ALTER TABLE core_history_entries ADD COLUMN revision INTEGER NOT NULL DEFAULT 0"
+        ))
+    # History entries are append-only. Their sequence is a deterministic
+    # revision for upgraded rows and for rows created by older checkpoint
+    # restore code that did not know about the column yet.
+    await connection.execute(text(
+        "UPDATE core_history_entries SET revision = seq "
+        "WHERE revision = 0 OR revision IS NULL"
+    ))
+
+    sync_columns = {
+        row["name"]
+        for row in (await connection.execute(text("PRAGMA table_info(core_sync_changes)"))).mappings()
+    }
+    if "workspace_id" not in sync_columns:
+        await connection.execute(text(
+            "ALTER TABLE core_sync_changes ADD COLUMN workspace_id VARCHAR(128) NOT NULL DEFAULT ''"
+        ))
+    if "event_type" not in sync_columns:
+        await connection.execute(text(
+            "ALTER TABLE core_sync_changes ADD COLUMN event_type VARCHAR(128) NOT NULL DEFAULT ''"
+        ))
+    if "revision" not in sync_columns:
+        await connection.execute(text(
+            "ALTER TABLE core_sync_changes ADD COLUMN revision INTEGER NOT NULL DEFAULT 0"
+        ))
+    if workspace_id:
+        await connection.execute(text(
+            "UPDATE core_sync_changes SET workspace_id = :workspace_id "
+            "WHERE workspace_id = '' OR workspace_id IS NULL"
+        ), {"workspace_id": workspace_id})
     checkpoint_columns = {
         row["name"]
         for row in (await connection.execute(text("PRAGMA table_info(core_checkpoints)"))).mappings()
@@ -1621,6 +1893,8 @@ __all__ = [
     "CoreGoal",
     "CoreHandoffContext",
     "CoreProject",
+    "CoreSyncChange",
+    "CoreWorkspaceIdentity",
     "CoreRestoreOperation",
     "CoreRuntimeSession",
     "CoreThreadSnapshot",

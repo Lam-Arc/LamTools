@@ -1,7 +1,21 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import MessageView from '../src/components/MessageView.vue'
 import type { CoreMessage, MessagePart, ToolArtifact } from '../src/types'
+import { createFakeTransport } from './fake-transport'
+
+const testTransport = createFakeTransport()
+
+function mountMessageView(options: any = {}) {
+  return mount(MessageView, {
+    ...options,
+    props: { transport: testTransport, ...(options.props ?? {}) },
+  })
+}
+
+afterEach(() => {
+  vi.restoreAllMocks()
+})
 
 /**
  * 「本轮产出」面板（message-artifacts）契约：
@@ -31,7 +45,7 @@ function msg(id: string, parts: MessagePart[]): CoreMessage {
 describe('「本轮产出」面板：实时与历史同位置显示', () => {
   it('本轮运行中即可显示，轮次结束后保持显示', async () => {
     const m = msg('assistant:t1', [part('p1', [artifact('workspace://.lam/artifacts/a.png')])])
-    const wrapper = mount(MessageView, { props: { msg: m, turnActive: true, activeTurnId: 't1' } })
+    const wrapper = mountMessageView( { props: { msg: m, turnActive: true, activeTurnId: 't1' } })
     const livePanel = wrapper.find('.message-artifacts')
     expect(livePanel.exists()).toBe(true)
 
@@ -42,19 +56,19 @@ describe('「本轮产出」面板：实时与历史同位置显示', () => {
 
   it('同轮分段消息（assistant:<turn>#<n>）同样显示', () => {
     const m = msg('assistant:t1#2', [part('p1', [artifact('workspace://.lam/artifacts/a.png')])])
-    const wrapper = mount(MessageView, { props: { msg: m, turnActive: true, activeTurnId: 't1' } })
+    const wrapper = mountMessageView( { props: { msg: m, turnActive: true, activeTurnId: 't1' } })
     expect(wrapper.find('.message-artifacts').exists()).toBe(true)
   })
 
   it('历史消息（非活跃轮）直接显示', () => {
     const m = msg('assistant:t0', [part('p1', [artifact('workspace://.lam/artifacts/a.png')])])
-    const wrapper = mount(MessageView, { props: { msg: m } })
+    const wrapper = mountMessageView( { props: { msg: m } })
     expect(wrapper.find('.message-artifacts').exists()).toBe(true)
   })
 
   it('live 标记的消息同样显示（turn 状态边界不改变位置）', () => {
     const m = msg('assistant:t9', [part('p1', [artifact('workspace://.lam/artifacts/a.png')])])
-    const wrapper = mount(MessageView, {
+    const wrapper = mountMessageView( {
       props: { msg: { ...m, metadata: { live: true } }, turnActive: false },
     })
     expect(wrapper.find('.message-artifacts').exists()).toBe(true)
@@ -62,7 +76,7 @@ describe('「本轮产出」面板：实时与历史同位置显示', () => {
 
   it('sub-line 子消息经 suppressArtifactsPanel 传播隐藏', async () => {
     const m = msg('sub-line-1:assistant', [part('p1', [artifact('workspace://.lam/artifacts/a.png')])])
-    const wrapper = mount(MessageView, { props: { msg: m, suppressArtifactsPanel: true } })
+    const wrapper = mountMessageView( { props: { msg: m, suppressArtifactsPanel: true } })
     expect(wrapper.find('.message-artifacts').exists()).toBe(false)
 
     await wrapper.setProps({ suppressArtifactsPanel: false })
@@ -71,15 +85,34 @@ describe('「本轮产出」面板：实时与历史同位置显示', () => {
 })
 
 describe('「本轮产出」面板：内部去重', () => {
-  it('同一 uri 跨 part 只保留一张，优先保留带 artifact_id 的条目', () => {
+  it('同一 uri 跨 part 只保留一张，优先保留带 artifact_id 的条目', async () => {
     const m = msg('assistant:t2', [
       part('p1', [artifact('workspace://.lam/artifacts/x.png')]),
       part('p2', [artifact('workspace://.lam/artifacts/x.png', { artifact_id: 'art-x' })]),
     ])
-    const wrapper = mount(MessageView, { props: { msg: m, projectId: 'proj-1' } })
+    const createObjectURL = vi.fn(() => 'blob:artifact-preview')
+    Object.defineProperty(URL, 'createObjectURL', {
+      configurable: true,
+      writable: true,
+      value: createObjectURL,
+    })
+    const wrapper = mountMessageView( {
+      props: {
+        msg: m,
+        projectId: 'proj-1',
+        transport: createFakeTransport({
+          status: 200,
+          headers: { 'content-type': 'image/png' },
+          body: new Uint8Array([137, 80, 78, 71]),
+        }),
+      },
+    })
     expect(wrapper.findAll('.message-artifacts figure')).toHaveLength(1)
     // 保留的是带 id 的条目：src 走 artifact 端点而非 files/raw
-    expect(wrapper.get('.message-artifacts img').attributes('src')).toContain('/projects/proj-1/artifacts/art-x/file')
+    await vi.waitFor(() => {
+      expect(createObjectURL).toHaveBeenCalled()
+      expect(wrapper.get('.message-artifacts img').attributes('src')).toBe('blob:artifact-preview')
+    })
   })
 
   it('read_file base64 图（无 id/uri）按内容去重', () => {
@@ -87,7 +120,7 @@ describe('「本轮产出」面板：内部去重', () => {
       part('p1', [artifact(undefined, { dataUrl: 'data:image/png;base64,AAAA' })]),
       part('p2', [artifact(undefined, { dataUrl: 'data:image/png;base64,AAAA' })]),
     ])
-    const wrapper = mount(MessageView, { props: { msg: m } })
+    const wrapper = mountMessageView( { props: { msg: m } })
     expect(wrapper.findAll('.message-artifacts figure')).toHaveLength(1)
   })
 
@@ -96,7 +129,7 @@ describe('「本轮产出」面板：内部去重', () => {
       part('p1', [artifact('workspace://.lam/artifacts/a.png')]),
       part('p2', [artifact('workspace://.lam/artifacts/b.png')]),
     ])
-    const wrapper = mount(MessageView, { props: { msg: m } })
+    const wrapper = mountMessageView( { props: { msg: m } })
     expect(wrapper.findAll('.message-artifacts figure')).toHaveLength(2)
   })
 })
@@ -111,7 +144,7 @@ describe('决策答复 GSAP Transition（jsdom 降级）', () => {
         metadata: { waitingResponse: { action: 'approve', response: 'ok' } },
       },
     ])
-    const wrapper = mount(MessageView, { props: { msg: m, processExpandedIds: new Set([m.id]) } })
+    const wrapper = mountMessageView( { props: { msg: m, processExpandedIds: new Set([m.id]) } })
     expect(wrapper.find('.decision-card-decision').exists()).toBe(true)
     expect(wrapper.find('.decision-card-decision').text()).toContain('批准')
   })

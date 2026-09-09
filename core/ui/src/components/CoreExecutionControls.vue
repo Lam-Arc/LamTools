@@ -11,6 +11,7 @@
       @update:active-mode="$emit('update:activeMode', $event)"
       @update:permission-preset="$emit('update:permissionPreset', $event)"
     />
+    <slot name="after-runtime" />
     <CoreModelThinkingMenu
       :model-value="modelValue"
       :model-options="modelOptions"
@@ -91,6 +92,7 @@ const emit = defineEmits<{
 }
 
 .core-execution-controls :deep(.core-runtime-menu),
+.core-execution-controls :deep(.core-workspace-menu),
 .core-execution-controls :deep(.core-model-thinking-menu) {
   min-width: 0;
   flex: 0 1 auto;
@@ -101,6 +103,7 @@ const emit = defineEmits<{
 }
 
 :global(.floating-composer:has(.core-execution-controls [data-core-runtime-menu]),
+.floating-composer:has(.core-execution-controls [data-core-workspace-menu]),
 .floating-composer:has(.core-execution-controls [data-core-model-thinking-menu])) {
   overflow: visible;
 }

@@ -1449,6 +1449,7 @@ class CoreLoopKernel:
                 "status": result.status,
                 "content": bounded(result.content, 4_000),
                 "error": bounded(result.error, 4_000),
+                "error_code": result.error_code,
                 "exit_code": result.metadata.get("exit_code"),
                 "error_type": result.metadata.get("error_type"),
                 "timed_out": result.metadata.get("timed_out"),
@@ -2402,6 +2403,7 @@ class CoreLoopKernel:
             "status": result.status,
             "content": result.content,
             "error": result.error,
+            **({"error_code": result.error_code} if result.error_code else {}),
         }
 
     def _apply_tool_result_updates(self, result: ToolResult, updates: dict[str, Any]) -> ToolResult:
@@ -2414,6 +2416,7 @@ class CoreLoopKernel:
             error=str(updates.get("error") or result.error),
             artifacts=result.artifacts,
             usage=result.usage,
+            error_code=str(updates.get("error_code") or result.error_code),
             metadata={
                 **result.metadata,
                 **({"hook_updated_output": True} if updates else {}),
@@ -3341,6 +3344,7 @@ class CoreLoopKernel:
                 "error": result.error or "",
                 "artifacts": [artifact.to_dict() for artifact in result.artifacts],
                 "metadata": result.metadata if isinstance(result.metadata, dict) else {},
+                **({"error_code": result.error_code} if result.error_code else {}),
                 **({"response_index": response_index} if response_index is not None else {}),
             },
             session_id=state.session_id,
@@ -3363,6 +3367,7 @@ class CoreLoopKernel:
                 "tool_error": (result.error or "") if result.status == "failed" else "",
                 "tool_args": call.arguments if isinstance(call.arguments, dict) else {},
                 "metadata": result.metadata if isinstance(result.metadata, dict) else {},
+                **({"error_code": result.error_code} if result.error_code else {}),
                 "part_id": f"part-{call.id}",
                 "message_id": state.run_id or "",
                 **({"response_index": response_index} if response_index is not None else {}),

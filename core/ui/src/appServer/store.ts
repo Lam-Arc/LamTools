@@ -9,12 +9,25 @@ import type {
   CoreRuntimeSnapshot,
   CoreAppThreadStatus,
 } from './protocol.ts'
+import { TransportRpcError } from '../transport'
+import {
+  compareSnapshotVersion,
+  CoreSessionStateStore,
+  snapshotRevision as sessionSnapshotRevision,
+  snapshotSequence,
+} from './sessionState.ts'
 
 export interface CoreAppServerRuntimeClient {
   connect(params?: { threadId?: string; lastSeenSeq?: number }): Promise<void>
   request(method: string, params?: Record<string, unknown>, timeoutMs?: number): Promise<Record<string, unknown>>
-  respondServerRequest?(requestId: string, result: Record<string, unknown>): boolean
+  respondServerRequest(requestId: string, result: Record<string, unknown>): boolean
   close(): void
+}
+
+export interface CoreAppServerThreadSwitchOptions {
+  lastSeenSeq?: number
+  includeSnapshot?: boolean
+  preserveState?: boolean
 }
 
 export interface CoreAppServerRuntimeState<
@@ -25,7 +38,6 @@ export interface CoreAppServerRuntimeState<
   connectionState: 'connecting' | 'open' | 'closed' | 'error'
   client: Client | null
   lastError: string
-  activeApiBase: string
   activeThreadId: string
   reconnectAttempt: number
   reconnectTimer: ReturnType<typeof setTimeout> | null
@@ -37,7 +49,6 @@ export interface CoreAppServerRuntimeControllerOptions<
   Client extends CoreAppServerRuntimeClient = CoreAppServerRuntimeClient,
 > {
   createClient(params: {
-    apiBase: string
     onEvent: (event: CoreAppEvent) => void
     onSnapshot: (snapshot: Snapshot) => void
     onConnectionState: (state: CoreAppServerRuntimeState<Snapshot, Client>['connectionState']) => void
@@ -59,7 +70,6 @@ export function createCoreAppServerRuntimeState<
     connectionState: 'closed',
     client: null,
     lastError: '',
-    activeApiBase: '',
     activeThreadId: '',
     reconnectAttempt: 0,
     reconnectTimer: null,
@@ -81,6 +91,7 @@ export function createCoreAppServerRuntimeController<
   const hydrateSnapshot = options.hydrateSnapshot ?? ((snapshot: Snapshot) => defaultHydrateSnapshot(snapshot) as Snapshot)
   const scheduleFrame = options.scheduleFrame ?? defaultScheduleFrame
   const pendingEvents: CoreAppEvent[] = []
+  const sessionStateStore = new CoreSessionStateStore()
   let eventFrameScheduled = false
   // Event ids the client has received on the wire (non-reactive, kept outside
   // the snapshot state on purpose). The snapshot hydrate guard compares an
@@ -88,20 +99,74 @@ export function createCoreAppServerRuntimeController<
   // events" without forcing a full state replacement (and full re-render) for
   // snapshots that carry nothing new.
   const receivedEventIds = new Set<string>()
+  let threadSwitchQueue: Promise<void> = Promise.resolve()
+  let threadSelectionGeneration = 0
 
-  async function connect(apiBase: string, threadId?: string) {
+  async function connect(threadId?: string) {
     clearReconnectTimer()
-    runtime.activeApiBase = apiBase
+    // A live App Server client is connection-scoped, not thread-scoped. A
+    // session switch must only move the server subscription and resume the
+    // selected thread; closing the client here cancels every in-flight RPC
+    // on the shared tunnel.
+    if (threadId && runtime.client && runtime.connectionState === 'open') {
+      await switchThread(threadId)
+      return
+    }
     runtime.activeThreadId = threadId || ''
     runtime.reconnectAttempt = 0
-    await openClient(apiBase, threadId)
+    await openClient(threadId)
   }
 
-  async function openClient(apiBase: string, threadId?: string) {
+  function switchThread(
+    threadId: string,
+    switchOptions: CoreAppServerThreadSwitchOptions = {},
+  ): Promise<void> {
+    const task = threadSwitchQueue.then(() => switchThreadNow(threadId, switchOptions))
+    // A failed stale switch must not poison the next selection.
+    threadSwitchQueue = task.catch(() => undefined)
+    return task
+  }
+
+  async function switchThreadNow(
+    threadId: string,
+    switchOptions: CoreAppServerThreadSwitchOptions,
+  ): Promise<void> {
+    if (!threadId) return
+    clearReconnectTimer()
+    const generation = ++threadSelectionGeneration
+    runtime.activeThreadId = threadId
+    if (!switchOptions.preserveState) {
+      runtime.state = null
+      sessionStateStore.clear(threadId)
+    }
+    pendingEvents.length = 0
+    receivedEventIds.clear()
+
+    const client = runtime.client
+    if (!client || runtime.connectionState !== 'open') {
+      // The physical connection generation is owned by openClient(). This
+      // branch only hands the selected thread to that connection lifecycle.
+      await connect(threadId)
+      return
+    }
+
+    const response = await client.request(
+      'thread/resume',
+      {
+        thread_id: threadId,
+        last_seen_seq: switchOptions.lastSeenSeq ?? 0,
+        ...(switchOptions.includeSnapshot === false ? { include_snapshot: false } : {}),
+      },
+      60_000,
+    )
+    if (threadSelectionGeneration !== generation || runtime.client !== client) return
+    applyResponse(response)
+  }
+
+  async function openClient(threadId?: string) {
     const generation = ++runtime.connectionGeneration
     runtime.client?.close()
     const client = await options.createClient({
-      apiBase,
       onEvent: (event) => enqueueEvent(event),
       onSnapshot: (snapshot) => hydrate(snapshot),
       onConnectionState: (state) => {
@@ -124,12 +189,13 @@ export function createCoreAppServerRuntimeController<
 
   function disconnect() {
     clearReconnectTimer()
-    runtime.activeApiBase = ''
     runtime.activeThreadId = ''
     runtime.connectionGeneration += 1
+    threadSelectionGeneration += 1
     runtime.client?.close()
     runtime.client = null
     runtime.state = null
+    sessionStateStore.clear()
     pendingEvents.length = 0
     runtime.connectionState = 'closed'
   }
@@ -141,7 +207,7 @@ export function createCoreAppServerRuntimeController<
   }
 
   function scheduleReconnect() {
-    if (!runtime.activeApiBase || runtime.reconnectTimer) return
+    if (!runtime.activeThreadId || runtime.reconnectTimer) return
     const delay = Math.min(reconnectMaxMs, reconnectBaseMs * 2 ** runtime.reconnectAttempt)
     runtime.reconnectAttempt += 1
     runtime.reconnectTimer = setTimeout(() => {
@@ -151,9 +217,9 @@ export function createCoreAppServerRuntimeController<
   }
 
   async function reconnectActiveThread() {
-    if (!runtime.activeApiBase) return
+    if (!runtime.activeThreadId) return
     try {
-      await openClient(runtime.activeApiBase, runtime.activeThreadId || undefined)
+      await openClient(runtime.activeThreadId || undefined)
     } catch (error) {
       runtime.lastError = error instanceof Error ? error.message : String(error)
       runtime.connectionState = 'error'
@@ -162,12 +228,32 @@ export function createCoreAppServerRuntimeController<
   }
 
   function hydrate(snapshot: Snapshot) {
-    const incoming = snapshot as CoreAppSnapshot
+    const incoming = hydrateSnapshot(snapshot as Snapshot) as CoreAppSnapshot
+    const currentState = sessionStateStore.get(incoming.thread_id)
+    const incomingVersion = {
+      revision: sessionSnapshotRevision(incoming),
+      snapshotSeq: snapshotSequence(incoming),
+    }
+    // A delayed cache/snapshot must never roll a completed turn back to
+    // running, even when it contains different content.
+    if (currentState && compareSnapshotVersion(incomingVersion, currentState) < 0) return
     // The guard must see the received set BEFORE this snapshot's ids are
     // recorded, otherwise "unseen event" would always be satisfied (an
     // incoming snapshot's own ids would count as received).
-    const current = runtime.state
+    const current = runtime.state?.thread_id === incoming.thread_id ? runtime.state : null
     const shouldReplace = !current || shouldHydrateSnapshot(current, incoming, receivedEventIds)
+    if (!shouldReplace) {
+      // A snapshot can be redundant at the content level while still carrying
+      // a newer CAS revision (for example after a remote queue mutation). Keep
+      // the local projection object stable, but advance its revision so the
+      // next mutation is based on the server's latest version.
+      if (current && incomingVersion.revision > sessionSnapshotRevision(current)) {
+        sessionStateStore.applySnapshot(incoming)
+        runtime.state = sessionStateStore.get(incoming.thread_id)?.snapshot as Snapshot
+      }
+      return
+    }
+    if (!sessionStateStore.applySnapshot(incoming)) return
     for (const id of [
       ...(incoming.core?.seen_event_ids ?? []),
       ...(incoming.seen_event_ids ?? []),
@@ -177,10 +263,28 @@ export function createCoreAppServerRuntimeController<
     if (receivedEventIds.size > 200_000) {
       receivedEventIds.clear()
     }
-    if (!shouldReplace) {
-      return
-    }
-    runtime.state = hydrateSnapshot(snapshot)
+    runtime.state = sessionStateStore.get(incoming.thread_id)?.snapshot as Snapshot
+  }
+
+  function applyRuntimeEvent(
+    event: CoreAppEvent,
+    options: { allowSequenceRegression?: boolean } = {},
+  ): boolean {
+    const current = runtime.state
+    if (!current || current.thread_id !== event.thread_id) return false
+    if (!sessionStateStore.get(event.thread_id)) sessionStateStore.applySnapshot(current)
+    const result = sessionStateStore.applyEvent(
+      event,
+      (state, value) => (
+        value.method === 'core/runItem'
+          ? applyCoreRunItemEvent(state, value)
+          : applyAppEvent(state, value)
+      ),
+      options,
+    )
+    if (!result.applied || !result.state) return false
+    runtime.state = result.state.snapshot as Snapshot
+    return true
   }
 
   function enqueueEvent(event: CoreAppEvent) {
@@ -191,6 +295,7 @@ export function createCoreAppServerRuntimeController<
       return
     }
     if (event.method === 'session/updated') {
+      applyRuntimeEvent(event, { allowSequenceRegression: true })
       const session = (event.payload as { session?: { title?: string } } | null)?.session || {}
       options.onSessionUpdated?.(session)
       return
@@ -214,7 +319,7 @@ export function createCoreAppServerRuntimeController<
         }
         return
       }
-      runtime.state = applyAppEvent(runtime.state as CoreAppSnapshot, event) as Snapshot
+      applyRuntimeEvent(event)
     }
   }
 
@@ -232,15 +337,13 @@ export function createCoreAppServerRuntimeController<
       return
     }
     const events = pendingEvents.splice(0)
-    let next = runtime.state as CoreAppSnapshot
     // Coalesce same-frame deltas for the same item. On very large threads
     // (thousands of items) each apply() copies the whole items map — doing
     // that once per frame instead of once per incoming chunk keeps the
     // frame budget flat. (A/B: removing it made big-thread streaming worse.)
     for (const pending of coalesceRunItemEvents(events)) {
-      next = applyCoreRunItemEvent(next, pending)
+      applyRuntimeEvent(pending)
     }
-    runtime.state = next as Snapshot
   }
 
   function applyResponse(response: Record<string, unknown>) {
@@ -248,11 +351,32 @@ export function createCoreAppServerRuntimeController<
     if (isCoreAppSnapshot(snapshot)) {
       hydrate(snapshot as Snapshot)
     }
+    // Local-First switches can ask the server for events only. Apply those
+    // events onto the already-hydrated local snapshot without replacing the
+    // whole conversation object.
+    if (Array.isArray(response.events) && runtime.state) {
+      for (const value of response.events) {
+        if (!isRecord(value)) continue
+        const event = value as unknown as CoreAppEvent
+        if (event.thread_id && runtime.activeThreadId && event.thread_id !== runtime.activeThreadId) continue
+        applyRuntimeEvent(event, { allowSequenceRegression: true })
+      }
+    }
+  }
+
+  function mergeSnapshotPage(snapshotPage: Snapshot): boolean {
+    if (!runtime.state || runtime.state.thread_id !== snapshotPage.thread_id) return false
+    const incoming = hydrateSnapshot(snapshotPage)
+    const current = runtime.state
+    const merged = mergeHistorySnapshot(current, incoming)
+    if (!sessionStateStore.applySnapshot(merged)) return false
+    runtime.state = merged
+    return true
   }
 
   async function startThread(threadId: string) {
     await ensureClient()
-    const response = await runtime.client!.request('thread/start', { thread_id: threadId })
+    const response = await requestMutation('thread/start', { thread_id: threadId }, threadId)
     applyResponse(response)
   }
 
@@ -264,9 +388,12 @@ export function createCoreAppServerRuntimeController<
   ) {
     await ensureClient()
     const inputItems = typeof input === 'string' ? [{ type: 'text' as const, text: input }] : input
-    const response = await runtime.client!.request('turn/start', {
+    // The message id is the server-side idempotency key. It stays unchanged
+    // if the first CAS check races with a terminal event and we retry once.
+    const clientMessageId = crypto.randomUUID()
+    const response = await requestMutation('turn/start', {
       thread_id: threadId,
-      client_message_id: crypto.randomUUID(),
+      client_message_id: clientMessageId,
       input: inputItems,
       work_root: workRoot,
       // The turn/accepted + item/started events already carry everything the
@@ -274,7 +401,7 @@ export function createCoreAppServerRuntimeController<
       // (~1s main-thread stall at send time). Skip it — callers can override.
       include_snapshot: false,
       ...turnOptions,
-    }, 60_000)
+    }, threadId, 60_000, true)
     applyResponse(response)
   }
 
@@ -285,43 +412,43 @@ export function createCoreAppServerRuntimeController<
   ) {
     await ensureClient()
     const inputItems = typeof input === 'string' ? [{ type: 'text' as const, text: input }] : input
-    const response = await runtime.client!.request('queue/create', {
+    const response = await requestMutation('queue/create', {
       thread_id: threadId,
       client_message_id: crypto.randomUUID(),
       input: inputItems,
       ...turnOptions,
-    })
+    }, threadId)
     applyResponse(response)
   }
 
   async function updateQueueInput(threadId: string, queueItemId: string, text: string) {
     await ensureClient()
-    const response = await runtime.client!.request('queue/update', {
+    const response = await requestMutation('queue/update', {
       thread_id: threadId,
       queue_item_id: queueItemId,
       text,
-    })
+    }, threadId)
     applyResponse(response)
   }
 
   async function deleteQueueInput(threadId: string, queueItemId: string) {
     await ensureClient()
-    const response = await runtime.client!.request('queue/delete', {
+    const response = await requestMutation('queue/delete', {
       thread_id: threadId,
       queue_item_id: queueItemId,
-    })
+    }, threadId)
     applyResponse(response)
   }
 
   async function guideQueueInput(threadId: string, turnId: string, queueItemId: string, text?: string) {
     await ensureClient()
-    const response = await runtime.client!.request('queue/guide', {
+    const response = await requestMutation('queue/guide', {
       thread_id: threadId,
       turn_id: turnId,
       queue_item_id: queueItemId,
       client_message_id: `queue-guide:${queueItemId}`,
       ...(text?.trim() ? { text: text.trim() } : {}),
-    })
+    }, threadId)
     applyResponse(response)
     return {
       applied: response.applied === true,
@@ -344,12 +471,12 @@ export function createCoreAppServerRuntimeController<
     argumentsText = '',
   ): Promise<Record<string, unknown>> {
     await ensureClient()
-    const response = await runtime.client!.request('command.execute', {
+    const response = await requestMutation('command.execute', {
       thread_id: threadId,
       command,
       arguments: argumentsText,
       ...(workRoot ? { work_root: workRoot } : {}),
-    })
+    }, threadId)
     applyResponse(response)
     return response.result && typeof response.result === 'object'
       ? response.result as Record<string, unknown>
@@ -359,32 +486,32 @@ export function createCoreAppServerRuntimeController<
   async function steerTurn(threadId: string, turnId: string, input: string | InputItem[]) {
     await ensureClient()
     const inputItems = typeof input === 'string' ? [{ type: 'text' as const, text: input }] : input
-    const response = await runtime.client!.request('turn/steer', {
+    const response = await requestMutation('turn/steer', {
       thread_id: threadId,
       turn_id: turnId,
       client_message_id: crypto.randomUUID(),
       input: inputItems,
-    })
+    }, threadId)
     applyResponse(response)
   }
 
   async function interruptTurn(threadId: string, turnId?: string) {
     await ensureClient()
-    const response = await runtime.client!.request('turn/interrupt', {
+    const response = await requestMutation('turn/interrupt', {
       thread_id: threadId,
       ...(turnId ? { turn_id: turnId } : {}),
       include_snapshot: false,
-    })
+    }, threadId)
     applyResponse(response)
   }
 
   async function forceResetTurn(threadId: string, turnId?: string) {
     await ensureClient()
-    const response = await runtime.client!.request('turn/force_reset', {
+    const response = await requestMutation('turn/force_reset', {
       thread_id: threadId,
       ...(turnId ? { turn_id: turnId } : {}),
       include_snapshot: true,
-    })
+    }, threadId)
     applyResponse(response)
   }
 
@@ -393,13 +520,59 @@ export function createCoreAppServerRuntimeController<
     // The backend binds an approval response to the subscribed thread, so the
     // responding thread must be explicit (audit 03 S1: untrusted pages could
     // otherwise answer approvals for other threads).
-    const response = await runtime.client!.request('approval/respond', {
+    const threadId = runtime.activeThreadId || runtime.state?.thread_id || ''
+    const response = await requestMutation('approval/respond', {
       request_id: requestId,
-      thread_id: runtime.activeThreadId,
+      thread_id: threadId,
       decision,
       guidance,
-    })
+    }, threadId)
     applyResponse(response)
+  }
+
+  /**
+   * Add the current snapshot revision to every state-changing request. An
+   * explicit snake_case or camelCase value is always respected so callers can
+   * intentionally opt out or target a known revision.
+   */
+  async function requestMutation(
+    method: string,
+    params: Record<string, unknown>,
+    threadId: string,
+    timeoutMs = 30_000,
+    retryOnRevisionConflict = false,
+  ): Promise<Record<string, unknown>> {
+    await ensureClient()
+    const requestParams = withExpectedRevision(
+      params,
+      runtime.state?.thread_id === threadId ? sessionSnapshotRevision(runtime.state) : 0,
+    )
+    try {
+      return await runtime.client!.request(method, requestParams, timeoutMs)
+    } catch (error) {
+      if (isRevisionConflict(error)) {
+        // Refresh the canonical state first. turn/start is safe to retry once
+        // because client_message_id makes acceptance idempotent; other
+        // mutations preserve the explicit-retry behavior.
+        await refreshAfterRevisionConflict(threadId)
+        if (retryOnRevisionConflict && runtime.state?.thread_id === threadId) {
+          const retryParams = withExpectedRevision(params, sessionSnapshotRevision(runtime.state))
+          return await runtime.client!.request(method, retryParams, timeoutMs)
+        }
+      }
+      throw error
+    }
+  }
+
+  async function refreshAfterRevisionConflict(threadId: string): Promise<void> {
+    if (!threadId || !runtime.client) return
+    try {
+      const response = await runtime.client.request('thread/read', { thread_id: threadId }, 60_000)
+      applyResponse(response)
+    } catch {
+      // Preserve the original structured conflict for the UI. A secondary
+      // refresh failure must not hide the actionable error that caused it.
+    }
   }
 
   async function ensureClient() {
@@ -425,11 +598,13 @@ export function createCoreAppServerRuntimeController<
     interruptTurn,
     lastSeenSeq,
     listCommands,
+    mergeSnapshotPage,
     openClient,
     queueInput,
     reconnectActiveThread,
     respondApproval,
     scheduleReconnect,
+    switchThread,
     startThread,
     startTurn,
     steerTurn,
@@ -658,6 +833,61 @@ function applyCoreRunItemEvent(snapshot: CoreAppSnapshot, event: CoreAppEvent): 
   }
 }
 
+/** Apply one persisted or transient event to a thread snapshot. Shared by
+ * the desktop runtime and the mobile Local-First repository. */
+export function applyCoreAppEvent(snapshot: CoreAppSnapshot, event: CoreAppEvent): CoreAppSnapshot {
+  return event.method === 'core/runItem'
+    ? applyCoreRunItemEvent(snapshot, event)
+    : applyAppEvent(snapshot, event)
+}
+
+function mergeHistorySnapshot<T extends CoreAppSnapshot>(current: T, page: T): T {
+  const mergeItems = <T>(older: Record<string, T> | undefined, newer: Record<string, T> | undefined) => ({
+    ...(older || {}),
+    ...(newer || {}),
+  })
+  const mergedCoreItems = mergeItems(page.core?.items, current.core?.items)
+  const mergedTopItems = mergeItems(page.items, current.items)
+  const orderBySeq = <T extends { seq?: number; last_seq?: number }>(items: Record<string, T>, ids: string[]) => (
+    [...new Set(ids)].filter(id => items[id]).sort((left, right) => {
+      const leftItem = items[left]
+      const rightItem = items[right]
+      return Number(leftItem?.seq || leftItem?.last_seq || 0) - Number(rightItem?.seq || rightItem?.last_seq || 0)
+        || left.localeCompare(right)
+    })
+  )
+  const mergeTurns = <T extends { items?: string[] }>(
+    older: Record<string, T> | undefined,
+    newer: Record<string, T> | undefined,
+  ): Record<string, T> => {
+    const result = { ...(older || {}), ...(newer || {}) }
+    for (const id of Object.keys(result)) {
+      const oldTurn = older?.[id]
+      const newTurn = newer?.[id]
+      if (!oldTurn || !newTurn) continue
+      result[id] = {
+        ...oldTurn,
+        ...newTurn,
+        items: [...new Set([...(oldTurn.items || []), ...(newTurn.items || [])])],
+      }
+    }
+    return result
+  }
+  return {
+    ...current,
+    history_page: page.history_page,
+    items: mergedTopItems,
+    item_order: orderBySeq(mergedTopItems, [...(page.item_order || []), ...(current.item_order || [])]),
+    turns: mergeTurns(page.turns, current.turns),
+    core: current.core ? {
+      ...current.core,
+      items: mergedCoreItems,
+      item_order: orderBySeq(mergedCoreItems, [...(page.core?.item_order || []), ...(current.core.item_order || [])]),
+      turns: mergeTurns(page.core?.turns, current.core.turns),
+    } : page.core,
+  }
+}
+
 function applyAppEvent(snapshot: CoreAppSnapshot, event: CoreAppEvent): CoreAppSnapshot {
   const payload = event.payload || {}
   const turnId = event.turn_id || (typeof payload.turn_id === 'string' ? payload.turn_id : '') || ''
@@ -851,6 +1081,31 @@ function snapshotCoreItemsChanged(current: CoreAppSnapshot, incoming: CoreAppSna
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value))
+}
+
+function withExpectedRevision(
+  params: Record<string, unknown>,
+  revision: number,
+): Record<string, unknown> {
+  if (Object.prototype.hasOwnProperty.call(params, 'expected_revision')
+    || Object.prototype.hasOwnProperty.call(params, 'expectedRevision')) {
+    return params
+  }
+  return {
+    ...params,
+    expected_revision: revision,
+  }
+}
+
+function isRevisionConflict(error: unknown): boolean {
+  if (error instanceof TransportRpcError) {
+    if (error.code === 'REVISION_CONFLICT') return true
+    return isRecord(error.data) && error.data.code === 'REVISION_CONFLICT'
+  }
+  if (!isRecord(error)) return false
+  if (error.code === 'REVISION_CONFLICT') return true
+  const data = isRecord(error.data) ? error.data : undefined
+  return data?.code === 'REVISION_CONFLICT'
 }
 
 const SUM_USAGE_FIELDS = [

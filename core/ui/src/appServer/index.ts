@@ -1,8 +1,6 @@
 export {
-  appServerUrl,
   CoreAppServerClient,
   CoreAppServerClosedError,
-  fetchAppServerToken,
   type CoreAppServerClientOptions,
   type JsonRpcClientResponse,
   type JsonRpcRequest,
@@ -73,10 +71,22 @@ export {
 export {
   createCoreAppServerRuntimeController,
   createCoreAppServerRuntimeState,
+  applyCoreAppEvent,
   type CoreAppServerRuntimeClient,
   type CoreAppServerRuntimeControllerOptions,
   type CoreAppServerRuntimeState,
+  type CoreAppServerThreadSwitchOptions,
 } from './store.ts'
+
+export {
+  compareSnapshotVersion,
+  CoreSessionStateStore,
+  snapshotRevision,
+  snapshotSequence,
+  snapshotStatus,
+  type CoreSessionState,
+  type SessionStateEventResult,
+} from './sessionState.ts'
 
 export {
   coreAppServerDecision,

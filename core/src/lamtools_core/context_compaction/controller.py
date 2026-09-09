@@ -19,12 +19,7 @@ from lamtools_core.llm.policy import RetryPolicy
 from lamtools_core.llm.retry import ModelRetrySink
 from lamtools_core.tokens import estimate_message_tokens
 
-from .fallback import fallback_structured_compaction_summary
 from .fitter import CompactionFitter
-from .formatting import (
-    inherit_prior_protected_context as _inherit_prior_protected_context,
-    parse_compaction_summary,
-)
 from .models import (
     CompactionBudgetExceeded,
     CompactionDeltaSink,
@@ -385,6 +380,35 @@ async def compact_context(request: ContextCompactionRequest) -> ContextCompactio
         request.messages,
         exact=request.estimate_exact_tokens is not None,
     )
+    # A manual command may be available in a runtime that has no model client
+    # (for example a local command catalog).  If the history already fits the
+    # requested target, report a harmless no-op instead of trying to summarize
+    # with an unavailable adapter.  Oversized history still proceeds to the
+    # normal failed result so callers can surface the missing capability.
+    if request.llm_client is None and before_tokens <= request.limit_tokens:
+        result = ContextCompactionResult(
+            status="not_needed",
+            trigger=request.trigger,
+            replacement_messages=list(request.messages),
+            before_tokens=before_tokens,
+            after_tokens=before_tokens,
+            limit_tokens=request.limit_tokens,
+            display_payload={
+                "type": "compaction",
+                "trigger": request.trigger,
+                "status": "not_needed",
+                "reason": "no_content",
+                "label": "无需压缩",
+                "before_tokens": before_tokens,
+                "after_tokens": before_tokens,
+                "limit_tokens": request.limit_tokens,
+                "compacted_messages": 0,
+                "retained_messages": len(request.messages),
+                "removed_messages": 0,
+            },
+        )
+        await _emit_compaction_event(request, result.display_payload)
+        return result
     if layout is None:
         result = ContextCompactionResult(
             status="not_needed",
@@ -444,28 +468,6 @@ async def compact_context(request: ContextCompactionRequest) -> ContextCompactio
         )
         await _emit_compaction_event(request, result.display_payload)
         return result
-    summary = _inherit_prior_protected_context(
-        summary,
-        [
-            request.existing_summary,
-            *(
-                str(message.content or "")
-                for message in layout.compacted_messages
-                if message.metadata.get("key") == "context_compaction_summary"
-            ),
-        ],
-    )
-    parsed_summary = parse_compaction_summary(summary)
-    if parsed_summary is None:
-        parsed_summary = parse_compaction_summary(
-            fallback_structured_compaction_summary(
-                layout.compacted_messages,
-                existing_summary=request.existing_summary,
-            )
-        )
-    if parsed_summary is None:
-        raise ContextCompactionError("Context compaction failed: invalid structured summary")
-    summary = parsed_summary.render()
     summary_message = ChatMessage(
         role="system",
         content=summary,

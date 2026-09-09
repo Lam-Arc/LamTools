@@ -238,6 +238,7 @@ def create_core_agent_operations(
     app_event_store: SqlAlchemyAppEventStore | None = None,
     thread_snapshot_store: SqlAlchemyThreadSnapshotStore | None = None,
     app_event_hub: Any | None = None,
+    write_coordinator: Any | None = None,
     command_core_roots: list[Path | str] | None = None,
     command_member_roots: list[Path | str] | None = None,
     command_action_handlers: Mapping[str, CommandActionHandler] | None = None,
@@ -458,6 +459,7 @@ def create_core_agent_operations(
                     app_event_store=app_event_store,
                     thread_snapshot_store=thread_snapshot_store,
                     app_event_hub=app_event_hub,
+                    write_coordinator=write_coordinator,
                 )
 
             sink = CollectingEventSink(
@@ -697,6 +699,7 @@ def create_core_agent_operations(
                 db_session_factory=db_session_factory,
                 app_event_store=app_event_store,
                 thread_snapshot_store=thread_snapshot_store,
+                write_coordinator=write_coordinator,
             )
             if snapshot is None:
                 snapshot = core_events_to_snapshot(sink.events, thread_id=thread_id)
@@ -919,6 +922,7 @@ def create_core_agent_operations(
                     db_session_factory=db_session_factory,
                     app_event_store=app_event_store,
                     thread_snapshot_store=thread_snapshot_store,
+                    write_coordinator=write_coordinator,
                     app_event_hub=app_event_hub,
                 ),
                 run_items_from_events=lambda events: core_events_to_run_items(events, thread_id=thread_id),
@@ -1015,6 +1019,7 @@ def create_core_agent_operations(
                         db_session_factory=db_session_factory,
                         app_event_store=app_event_store,
                         thread_snapshot_store=thread_snapshot_store,
+                        write_coordinator=write_coordinator,
                         app_event_hub=app_event_hub,
                     )
 
@@ -1106,6 +1111,7 @@ def create_core_agent_operations(
                             db_session_factory=db_session_factory,
                             app_event_store=app_event_store,
                             thread_snapshot_store=thread_snapshot_store,
+                            write_coordinator=write_coordinator,
                         )
                         if snapshot is None:
                             snapshot = core_events_to_snapshot(events, thread_id=thread_id)
@@ -1355,7 +1361,14 @@ def create_core_agent_operations(
                 approved_tool = ApprovedToolExecution(
                     tool_name=call.name,
                     tool_args=call.arguments,
-                    tool_content=tool_result.content or tool_result.error,
+                    tool_content=(
+                        (tool_result.content or tool_result.error)
+                        + (
+                            f"\nerror_code: {tool_result.error_code}"
+                            if tool_result.error_code
+                            else ""
+                        )
+                    ),
                     tool_status="completed" if tool_result.status == "ok" else "failed",
                 )
                 approval_events = [
@@ -1370,6 +1383,7 @@ def create_core_agent_operations(
                             "error": tool_result.error or "",
                             "artifacts": [artifact.to_dict() for artifact in tool_result.artifacts],
                             "metadata": tool_result.metadata if isinstance(tool_result.metadata, dict) else {},
+                            **({"error_code": tool_result.error_code} if tool_result.error_code else {}),
                         },
                         session_id=thread_id,
                         run_id=state.run_id,
@@ -1410,6 +1424,7 @@ def create_core_agent_operations(
                     db_session_factory=db_session_factory,
                     app_event_store=app_event_store,
                     thread_snapshot_store=thread_snapshot_store,
+                    write_coordinator=write_coordinator,
                     app_event_hub=app_event_hub,
                 )
 
@@ -1769,6 +1784,9 @@ def create_core_agent_operations(
             session_factory=db_session_factory,  # type: ignore[arg-type]
             data_dir=paths.data_dir,
             default_work_root=paths.work_root,
+            app_event_store=app_event_store,
+            thread_snapshot_store=thread_snapshot_store,
+            app_event_hub=app_event_hub,
         )
     from lamtools_core.plugins.context import PluginContext
     from lamtools_core.tool.approval import ApprovalGate
@@ -2158,6 +2176,7 @@ async def _persist_run_items(
     app_event_store: SqlAlchemyAppEventStore | None,
     thread_snapshot_store: SqlAlchemyThreadSnapshotStore | None,
     app_event_hub: Any | None = None,
+    write_coordinator: Any | None = None,
 ) -> dict[str, Any] | None:
     if not run_items or db_session_factory is None or app_event_store is None or thread_snapshot_store is None:
         return None
@@ -2165,6 +2184,7 @@ async def _persist_run_items(
         app_event_store,
         thread_snapshot_store,
         session_factory=db_session_factory,
+        write_coordinator=write_coordinator,
     )
 
     async def write(db):
@@ -2194,6 +2214,7 @@ async def _persist_core_event_live(
     app_event_store: SqlAlchemyAppEventStore | None,
     thread_snapshot_store: SqlAlchemyThreadSnapshotStore | None,
     app_event_hub: Any | None,
+    write_coordinator: Any | None = None,
 ) -> None:
     if getattr(event, "metadata", {}).get("delivery") == "transient":
         if app_event_hub is None:
@@ -2226,6 +2247,7 @@ async def _persist_core_event_live(
         app_event_store,
         thread_snapshot_store,
         session_factory=db_session_factory,
+        write_coordinator=write_coordinator,
     )
 
     async def write(db):

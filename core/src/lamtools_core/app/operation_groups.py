@@ -8,6 +8,8 @@ from .operation_catalog import OperationCatalog, OperationHandler
 CORE_WORKBENCH_OPERATION_NAMES: tuple[str, ...] = (
     "thread.read",
     "thread.resume",
+    "thread.history",
+    "sync.start",
     "thread.start",
     "turn.start",
     "turn.steer",

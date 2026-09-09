@@ -86,6 +86,7 @@ async def test_failed_tool_result_exposes_existing_execution_evidence_without_ad
         name=call.name,
         status="failed",
         error="Command exited with code 1",
+        error_code="command_failed",
         artifacts=[ToolArtifact(
             kind="command_output",
             metadata={"stdout": "out", "stderr": "boom"},
@@ -104,6 +105,7 @@ async def test_failed_tool_result_exposes_existing_execution_evidence_without_ad
     content = str(message.content)
 
     assert "status: failed" in content
+    assert "error_code: command_failed" in content
     assert "error: Command exited with code 1" in content
     assert "exit_code: 1" in content
     assert f"cwd: {tmp_path}" in content

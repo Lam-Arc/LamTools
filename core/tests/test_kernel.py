@@ -2999,7 +2999,9 @@ class TestKernelContextCompaction:
         # rewrites history rows, so the next run loads [summary, *retained].
         compaction_meta = store.state.metadata.get("context_compaction") if store.state else None
         assert compaction_meta is not None
-        assert "[Compacted Context]" in str(compaction_meta.get("summary", ""))
+        assert "1. Current Objective And Done Criteria" in str(
+            compaction_meta.get("summary", "")
+        )
         assert compaction_meta.get("summary_seq") == 0
         # Persisted history holds the compacted view after the loop exit:
         # compacted rows are replaced by the retained span + new messages,
@@ -3171,7 +3173,6 @@ class TestKernelContextCompaction:
             if message.metadata.get("key") == "context_compaction_summary"
         ]
         assert len(summary_messages) == 1
-        assert "[Compacted Context]" in summary_messages[0].content
         assert "Current Objective And Done Criteria" in summary_messages[0].content
         assert "Active User Instructions" in summary_messages[0].content
         assert "External Action Authorization" in summary_messages[0].content
@@ -3206,7 +3207,7 @@ class TestKernelContextCompaction:
         assert part_events[-1].payload["status"] == "compacted"
         assert part_events[-1].payload["label"] == "上下文已压缩"
         assert part_events[-1].payload["trigger"] == "auto"
-        assert "[Compacted Context]" in part_events[-1].payload["content"]
+        assert "Current Objective And Done Criteria" in part_events[-1].payload["content"]
 
     @pytest.mark.asyncio
     async def test_cjk_context_uses_exact_estimate_for_compaction_trigger(self):
@@ -3284,8 +3285,9 @@ class TestKernelContextCompaction:
         assert len(summary_messages) == 1
         assert "Active User Instructions" in summary_messages[0].content
         assert "effective information" in summary_messages[0].content
-        assert "verbose summary " not in summary_messages[0].content
+        assert "verbose summary " in summary_messages[0].content
         assert "tool output " not in summary_messages[0].content
+        assert "compaction summary truncated to fit budget" in summary_messages[0].content
 
     @pytest.mark.asyncio
     async def test_compaction_stream_model_call_uses_kernel_retry_policy(self):
@@ -3602,7 +3604,7 @@ class TestKernelContextCompaction:
         first = await kernel.run(_make_turn_input(user_message="current task"))
         assert first.decision == "done"
         compaction_meta = store.state.metadata["context_compaction"]
-        assert "[Compacted Context]" in compaction_meta["summary"]
+        assert "1. Current Objective And Done Criteria" in compaction_meta["summary"]
 
         # Second turn on the same session: context must be
         # [summary, *retained, *new] — the retained span must NOT be dropped

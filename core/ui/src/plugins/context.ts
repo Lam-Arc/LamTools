@@ -12,6 +12,7 @@ import type { CoreAppEvent } from '../appServer'
 import type { CoreMessage, CoreSessionListItem, ProjectGroup } from '../types'
 import type { CoreProject } from '../projects/types'
 import type { CoreProjectClient } from '../projects/client'
+import type { LamToolsTransport } from '../transport'
 import type { PluginRpc } from './types'
 
 export interface PluginSidebarSurface {
@@ -64,7 +65,7 @@ export interface CorePluginChatContext {
 }
 
 export interface CorePluginModeContext {
-  apiBase: string
+  transport: LamToolsTransport
   requestRpc: PluginRpc
   projectClient: CoreProjectClient
   projects: Ref<CoreProject[]>

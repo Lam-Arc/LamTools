@@ -22,6 +22,7 @@ function fakeClient(): CoreAppServerRuntimeClient {
   return {
     async connect() {},
     request: async () => ({ snapshot: snapshot('running') }),
+    respondServerRequest() { return false },
     close() {},
   }
 }
@@ -121,7 +122,7 @@ describe('sub-agent streaming through the projection cache', () => {
       },
       scheduleFrame: (callback) => frames.push(callback),
     })
-    await controller.connect('http://127.0.0.1:6173', THREAD)
+    await controller.connect(THREAD)
 
     const flush = () => {
       while (frames.length) frames.shift()!()

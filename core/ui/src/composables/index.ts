@@ -13,6 +13,14 @@ export {
 export { usePendingAttachments } from './usePendingAttachments'
 
 export {
+  calculateKeyboardInset,
+  useComposerLayout,
+  type ComposerLayoutOptions,
+  type ComposerLayoutState,
+  type ComposerPlacement,
+} from './useComposerLayout'
+
+export {
   CORE_EXECUTION_CONTROLS_STORAGE_KEYS,
   useCoreExecutionControlsState,
   type CoreExecutionControlsStorage,

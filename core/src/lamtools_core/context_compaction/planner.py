@@ -6,8 +6,7 @@ from lamtools_core.context_compaction_budget import TokenBudget
 from lamtools_core.llm import ChatMessage
 from lamtools_core.tokens import estimate_message_tokens
 
-from .fallback import compress_structured_compaction_summary
-from .formatting import format_messages_for_compaction
+from .formatting import format_messages_for_compaction, truncate_text_to_tokens
 from .models import (
     COMPACTION_PROMPT,
     CompactionPlan,
@@ -235,7 +234,7 @@ def _pair_compaction_messages(
                 pair = [
                     ChatMessage(
                         role=message.role,
-                        content=compress_structured_compaction_summary(str(message.content or ""), budget),
+                        content=truncate_text_to_tokens(str(message.content or ""), budget),
                     )
                     for message in source_pair
                 ]

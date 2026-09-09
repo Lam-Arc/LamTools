@@ -295,7 +295,16 @@ async def test_checkpoint_restore_keeps_runtime_projection_and_events_consistent
         restored_detail = await show_core_session(db, session_id)
 
         assert restored_detail["snapshot"]["status"] == "completed"
-        assert {event["turn_id"] for event in restored_detail["events"]} == {first_turn}
+        assert {
+            event["turn_id"]
+            for event in restored_detail["events"]
+            if event["method"] != "session/rollback"
+        } == {first_turn}
+        rollback_event = next(
+            event for event in restored_detail["events"]
+            if event["method"] == "session/rollback"
+        )
+        assert rollback_event["payload"]["snapshot_required"] is True
         assert await db.runtime_state_store.get_history(session_id) == [
             {"role": "user", "content": "first"},
             {"role": "assistant", "content": "FIRST_OK"},

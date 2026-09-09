@@ -275,7 +275,7 @@
            z-modal，只有作为其子节点才能保证对话框可交互） -->
       <FolderBrowserDialog
         v-model="browseDialogOpen"
-        :api-base="browseApiBase"
+        :transport="props.transport"
         teleport-target=".plugin-folder-host"
         @selected="onBrowseSelected"
         @update:model-value="onBrowseDismissed"
@@ -289,6 +289,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { Settings, ToggleLeft, ToggleRight, Trash2, X } from 'lucide-vue-next'
 import FolderBrowserDialog from './FolderBrowserDialog.vue'
+import type { LamToolsTransport } from '../transport'
 
 interface PluginToolDecl {
   name: string
@@ -349,6 +350,7 @@ interface ModelOption {
 
 const props = defineProps<{
   requestRpc: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>
+  transport: LamToolsTransport
 }>()
 
 const emit = defineEmits<{
@@ -421,7 +423,6 @@ const newPathDraft = ref<Record<string, string>>({})
 const allModels = ref<ModelOption[]>([])
 const modelLoadFailed = ref(false)
 const browseDialogOpen = ref(false)
-const browseApiBase = ((window as { __LAMTOOLS_API_BASE__?: string }).__LAMTOOLS_API_BASE__) || '/api/core'
 // 目录树对话框的挂起回调（非 Tauri 环境回落用）
 let pendingBrowseResolve: ((path: string | null) => void) | null = null
 
@@ -674,7 +675,7 @@ function toWorkspaceRelative(absolute: string): { value: string; outside: boolea
 }
 
 // 目录选择：优先原生选择器（Tauri desktop 已注册 __LAMTOOLS_PICK_DIRECTORY__），
-// 非 Tauri（浏览器 dev / demo）回落内置目录树对话框（/api/core/browse-directory）。
+// 非 Tauri 浏览器环境回落内置目录树对话框（/api/core/browse-directory）。
 // 不新增任何依赖——两条路径都是仓库既有能力。
 async function pickDirectory(): Promise<string | null> {
   const nativePick = (window as { __LAMTOOLS_PICK_DIRECTORY__?: () => Promise<string | null> }).__LAMTOOLS_PICK_DIRECTORY__

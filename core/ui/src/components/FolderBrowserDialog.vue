@@ -59,7 +59,7 @@
                   :entry="entry"
                   :base-path="treePath"
                   :selected-path="selectedPath"
-                  :api-base="apiBase"
+                  :transport="transport"
                   :depth="0"
                   @select="onSelect"
                   @navigate="onNavigate"
@@ -87,13 +87,14 @@
 <script setup lang="ts">
 import { ref, computed, watch, defineAsyncComponent } from 'vue'
 import { ArrowUp } from 'lucide-vue-next'
+import type { LamToolsTransport, TransportHttpResponse } from '../transport'
 
 const FbTreeItem = defineAsyncComponent(() => import('./FbTreeItem.vue'))
 
 interface Props {
   modelValue?: boolean
   initialPath?: string
-  apiBase?: string
+  transport: LamToolsTransport
   /** Teleport target selector; defaults to document.body (audit 19 S3). */
   teleportTarget?: string
 }
@@ -101,7 +102,6 @@ interface Props {
 const props = withDefaults(defineProps<Props>(), {
   modelValue: false,
   initialPath: '',
-  apiBase: '/api/core',
   teleportTarget: 'body',
 })
 
@@ -170,12 +170,16 @@ async function loadEntries() {
   error.value = ''
   try {
     const query = treePath.value ? `?path=${encodeURIComponent(treePath.value)}` : ''
-    const res = await fetch(`${props.apiBase}/browse-directory${query}`)
-    if (!res.ok) {
-      const text = await res.text()
+    const res = await props.transport.request<TransportHttpResponse>({
+      kind: 'http',
+      method: 'GET',
+      path: `/browse-directory${query}`,
+    })
+    if (res.status < 200 || res.status >= 300) {
+      const text = new TextDecoder().decode(res.body)
       throw new Error(text || `${res.status}`)
     }
-    const data = await res.json()
+    const data = JSON.parse(new TextDecoder().decode(res.body)) as { entries?: FbEntry[] }
     entries.value = data.entries || []
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)

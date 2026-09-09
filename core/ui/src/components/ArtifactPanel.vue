@@ -111,11 +111,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { Copy, Eye, File, FileText, Film, Image as ImageIcon, Music, Package, RefreshCw, Trash2, Upload, type LucideIcon } from 'lucide-vue-next'
 import { copyText } from '../helpers/clipboard'
 import { isNativeContextTarget, openContextMenu } from './context-menu/context-menu'
 import type { ContextMenuEntry } from './context-menu/types'
+import type { LamToolsTransport, TransportHttpResponse } from '../transport'
 
 interface ArtifactItem {
   artifact_id: string
@@ -138,7 +139,7 @@ interface ArtifactRow {
 
 const props = defineProps<{
   projectId: string | null
-  apiBase?: string
+  transport: LamToolsTransport
   requestRpc: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>
 }>()
 
@@ -148,6 +149,7 @@ const error = ref('')
 const cleanupMode = ref(false)
 const selectedSet = ref<Set<string>>(new Set())
 const selectedArtifact = ref<ArtifactItem | null>(null)
+const previewUrls = reactive<Record<string, string>>({})
 
 const activeCount = computed(() => artifacts.value.length)
 
@@ -189,15 +191,7 @@ function kindIcon(kind: string): LucideIcon {
 }
 
 function previewUrl(item: ArtifactItem): string {
-  const base = (props.apiBase || '/api/core').replace(/\/+$/, '')
-  if (item.path.startsWith('attachment://')) {
-    return `${base}/attachments/${encodeURIComponent(item.path.slice('attachment://'.length))}/download`
-  }
-  if (item.path.startsWith('workspace://') && props.projectId) {
-    const rel = item.path.slice('workspace://'.length)
-    return `${base}/projects/${encodeURIComponent(props.projectId)}/files/raw?path=${encodeURIComponent(rel)}`
-  }
-  return ''
+  return previewUrls[item.artifact_id] || ''
 }
 
 function formatTime(value: string): string {
@@ -209,6 +203,30 @@ function formatTime(value: string): string {
 
 function selectArtifact(item: ArtifactItem): void {
   selectedArtifact.value = item
+  void loadPreview(item)
+}
+
+async function loadPreview(item: ArtifactItem): Promise<void> {
+  if (previewUrls[item.artifact_id] || !props.transport) return
+  let path = ''
+  if (item.path.startsWith('attachment://')) {
+    path = `/attachments/${encodeURIComponent(item.path.slice('attachment://'.length))}/download`
+  } else if (item.path.startsWith('workspace://') && props.projectId) {
+    const rel = item.path.slice('workspace://'.length)
+    path = `/projects/${encodeURIComponent(props.projectId)}/files/raw?path=${encodeURIComponent(rel)}`
+  } else if (props.projectId) {
+    path = `/projects/${encodeURIComponent(props.projectId)}/artifacts/${encodeURIComponent(item.artifact_id)}/file`
+  }
+  if (!path) return
+  try {
+    const response = await props.transport.request<TransportHttpResponse>({ kind: 'http', method: 'GET', path })
+    if (response.status < 200 || response.status >= 300) return
+    previewUrls[item.artifact_id] = URL.createObjectURL(new Blob([Uint8Array.from(response.body)], {
+      type: response.headers['content-type'] || item.mime_type || 'application/octet-stream',
+    }))
+  } catch {
+    // The preview remains empty when the remote artifact is unavailable.
+  }
 }
 
 function onArtifactContextMenu(event: MouseEvent, item: ArtifactItem): void {
@@ -293,6 +311,10 @@ watch(() => props.projectId, () => {
 })
 
 onMounted(fetchArtifacts)
+
+onBeforeUnmount(() => {
+  for (const url of Object.values(previewUrls)) URL.revokeObjectURL(url)
+})
 </script>
 
 <style scoped>

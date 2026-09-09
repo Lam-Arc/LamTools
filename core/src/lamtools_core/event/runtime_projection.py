@@ -325,6 +325,11 @@ def runtime_fact_to_run_item_events(
                     "metadata": payload_metadata,
                     "status": completed_status,
                     "error": str(payload.get("error") or "") or None,
+                    **(
+                        {"error_code": str(payload.get("error_code") or "")}
+                        if str(payload.get("error_code") or "")
+                        else {}
+                    ),
                 },
                 artifacts=[
                     _artifact_payload(fact.thread_id, turn_id, item_id, artifact)
@@ -521,6 +526,15 @@ def runtime_fact_to_run_item_events(
                         "metadata": payload_metadata,
                         "status": "completed" if status in {"done", "ok"} else _canonical_status(status),
                         "error": str(payload.get("error") or payload.get("tool_error") or "") or None,
+                        **(
+                            {
+                                "error_code": str(
+                                    payload.get("error_code") or payload_metadata.get("error_code") or ""
+                                )
+                            }
+                            if str(payload.get("error_code") or payload_metadata.get("error_code") or "")
+                            else {}
+                        ),
                     },
                     **base,
                 )

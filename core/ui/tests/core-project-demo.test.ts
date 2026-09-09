@@ -32,7 +32,7 @@ function createWorkspace() {
     listFiles: vi.fn().mockResolvedValue({ entries: [], path: '' }),
     readFile: vi.fn().mockResolvedValue({ content: '', path: '' }),
     writeFile: vi.fn().mockResolvedValue({ content: '', path: '' }),
-    fileRawUrl: vi.fn(() => ''),
+    readRawFile: vi.fn().mockResolvedValue({ status: 200, headers: {}, body: new Uint8Array() }),
     browseDirectory: vi.fn().mockResolvedValue({ entries: [], path: '' }),
   } satisfies CoreProjectClient
   const projects = ref<CoreProject[]>([])
@@ -63,14 +63,13 @@ describe('Core project workspace grouping', () => {
     expect(groups[0].sessions).toHaveLength(1)
   })
 
-  it('keeps historical sessions without project_id in one explicit compatibility group', () => {
+  it('does not recreate an Unassigned compatibility group', () => {
     const groups = buildCoreProjectGroups([], [
       { id: 'old-1', title: 'Legacy one', metadata: { work_root: 'E:\\one' } },
       { id: 'old-2', title: 'Legacy two' },
     ])
 
-    expect(groups).toEqual([expect.objectContaining({ id: 'unassigned', name: 'Unassigned', sessions: expect.any(Array) })])
-    expect(groups[0].sessions).toHaveLength(2)
+    expect(groups).toEqual([])
   })
 })
 

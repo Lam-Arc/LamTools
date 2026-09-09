@@ -67,6 +67,7 @@ archive/members/writer/frontend/src-tauri/gen/
 archive/members/writer/frontend/.electron-app-stage/
 .acceptance/
 core/desktop/src-tauri/target/
+core/remote/relay/target/
 core/desktop/src-tauri/lamcore-backend/
 
 data/
@@ -142,4 +143,21 @@ core/scripts/
 # Scratch / debugging artifacts (local only)
 core/_swap_checkboxes.py
 *.png
+!core/mobile/android/app/src/main/res/**/ic_launcher*.png
+!core/mobile/android/app/src/main/res/**/splash.png
+!core/mobile/ios/App/App/Assets.xcassets/**/*.png
 dist-plugins/
+
+# Local E2E workspaces and packaged release artifacts
+/.e2e/
+/e2e-test/
+/playwright-test/
+/output/
+/0.1.0/
+/0.3.0/
+/0.3.1/
+
+# codex-workflow-managed-start
+.codex_workflow_hidden_resources/
+AGENTS.md
+# codex-workflow-managed-end

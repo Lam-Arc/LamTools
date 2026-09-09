@@ -1,6 +1,6 @@
 [package]
 name = "lamcore"
-version = "0.2.9"
+version = "0.3.1"
 description = "LamCore desktop app"
 authors = ["Lam"]
 edition = "2021"
@@ -12,6 +12,14 @@ tauri-build = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
+getrandom = "0.3"
+sha1 = "0.10"
+sha2 = "0.10"
+snow = "0.9"
+mdns-sd = "0.13"
+local-ip-address = "0.6"
+tungstenite = { version = "0.27", features = ["rustls-tls-native-roots"] }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 tauri = { version = "2", features = ["protocol-asset", "tray-icon"] }
 tauri-plugin-single-instance = "2"
 rfd = "0.17"
@@ -21,3 +29,11 @@ open = "5"
 # Strict URL parsing for scheme validation in open_external_url. Already a
 # transitive dependency of Tauri, so adding it directly adds no new build.
 url = "2"
+urlencoding = "2"
+ureq = { version = "3.4", default-features = false, features = ["json", "rustls"] }
+
+[target.'cfg(windows)'.dependencies]
+keyring = { version = "3", default-features = false, features = ["windows-native"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", default-features = false, features = ["apple-native"] }

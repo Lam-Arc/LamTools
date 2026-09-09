@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import logging
 import sys
 import time as time_module
@@ -37,7 +38,7 @@ from .live_member import DefaultCoreLiveMemberHooks, PreparedLiveInput
 from .live_protocol import INVALID_REQUEST, rpc_error, rpc_result
 from .operation_catalog import OperationCatalog, OperationHandler, OperationRequest, OperationResult
 from .operation_groups import CORE_WORKBENCH_OPERATION_NAMES
-from .persistence_host import AppPersistenceHost
+from .persistence_host import AppPersistenceHost, RevisionConflictError
 from .queue_state import (
     ACTIVE_TURN_STATUSES,
     build_queue_guidance_plan,
@@ -51,6 +52,8 @@ from .queue_state import (
     queue_item_payload,
 )
 from .snapshot_store import SqlAlchemyThreadSnapshotStore
+from .session_actor import SessionActorBusyError, SessionActorRegistry
+from .sync_store import SYNC_CURSOR_EXPIRED
 from .session_autotitle import generate_session_title, is_default_title
 from .turn_acceptance import (
     QUEUE_ITEM_ACCEPTED_METHODS,
@@ -72,6 +75,47 @@ from .runtime_permissions import (
 
 
 TERMINAL_TURN_STATUSES = {"completed", "failed", "cancelled", "skipped"}
+DEFAULT_THREAD_HISTORY_CHAR_LIMIT = 200_000
+MAX_THREAD_HISTORY_CHAR_LIMIT = 1_000_000
+
+SERIALIZED_SESSION_OPERATIONS = frozenset({
+    "thread.start",
+    "turn.start",
+    "turn.cancel",
+    "turn.force_reset",
+    "turn.steer",
+    "approval.respond",
+    "queue.create",
+    "queue.update",
+    "queue.delete",
+    "queue.guide",
+    "command.execute",
+})
+
+
+class SessionBusyError(RuntimeError):
+    """A live operation cannot start because its session is already busy."""
+
+    def __init__(
+        self,
+        *,
+        reason: str,
+        message: str = "session is busy",
+        active_run_id: str = "",
+    ) -> None:
+        self.reason = str(reason or "active_operation_exists")
+        self.active_run_id = str(active_run_id or "")
+        super().__init__(message)
+
+    @property
+    def data(self) -> dict[str, str]:
+        payload = {
+            "code": "SESSION_BUSY",
+            "reason": self.reason,
+        }
+        if self.active_run_id:
+            payload["active_run_id"] = self.active_run_id
+        return payload
 
 
 
@@ -127,8 +171,21 @@ async def handle_command_execute_operation(
                 message=f"Command does not accept arguments: {command}",
             )
         )
+    try:
+        expected_revision = _expected_revision(params)
+    except ValueError as exc:
+        return CoreLiveOperationOutcome(
+            response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc))
+        )
     work_root = str(params.get("work_root") or params.get("workRoot") or "")
     try:
+        # The CAS check is deliberately made immediately before dispatching
+        # the action.  The live host serializes ordinary commands for this
+        # session, while compact uses the runtime registry because it must
+        # remain cancellable by turn.cancel.
+        await context.persistence.write(
+            lambda db: context.persistence.assert_revision(db, thread_id, expected_revision)
+        )
         if command == "compact":
             result, snapshot = await _execute_compact_live_command(
                 context=context,
@@ -149,6 +206,24 @@ async def handle_command_execute_operation(
             )
             async with context.session_factory() as db:
                 snapshot = await context.persistence.load(db, thread_id)
+    except RevisionConflictError as exc:
+        return CoreLiveOperationOutcome(
+            response=rpc_error(
+                request_id,
+                code=INVALID_REQUEST,
+                message="Revision conflict; refresh the session and retry explicitly",
+                data=exc.data,
+            )
+        )
+    except SessionBusyError as exc:
+        return CoreLiveOperationOutcome(
+            response=rpc_error(
+                request_id,
+                code=INVALID_REQUEST,
+                message=str(exc),
+                data=exc.data,
+            )
+        )
     except (LookupError, RuntimeError, TypeError, ValueError) as exc:
         return CoreLiveOperationOutcome(
             response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc))
@@ -229,6 +304,13 @@ class CoreLiveOperationHost:
     # Optional session store used to persist auto-generated titles. When None,
     # title generation still runs but the result is only broadcast, not stored.
     session_store: Any = None
+    # Global journal used by Local-First mobile clients. It is optional so the
+    # operation host remains usable in focused unit tests.
+    sync_journal: Any = None
+    # Shared by every live connection created for this host.  The registry
+    # serializes only short state mutations; it never owns the long-running
+    # Agent task, which continues through RuntimeTaskRegistry.
+    session_actors: SessionActorRegistry = field(default_factory=SessionActorRegistry)
     _handlers: dict[str, OperationHandler] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -267,26 +349,60 @@ class CoreLiveOperationHost:
                 return CoreLiveOperationOutcome(
                     response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc))
                 )
-        handler = _CORE_LIVE_OPERATION_EXECUTORS.get(name)
-        if handler is not None:
-            return await handler(request_id=request_id, params=params, context=context)
-        handler = self.product_operation_executors.get(name)
-        if handler is not None:
-            return await handler(request_id=request_id, params=params, context=context)
-        if not context.operations.has(name):
-            raise KeyError(f"Unsupported core live operation: {name}")
-        result = await context.operations.execute(name, params, metadata={"source": "core_live"})
-        payload = dict(result.payload or {})
-        if result.status != "ok":
+
+        async def invoke() -> CoreLiveOperationOutcome:
+            handler = _CORE_LIVE_OPERATION_EXECUTORS.get(name)
+            if handler is not None:
+                return await handler(request_id=request_id, params=params, context=context)
+            handler = self.product_operation_executors.get(name)
+            if handler is not None:
+                return await handler(request_id=request_id, params=params, context=context)
+            if not context.operations.has(name):
+                raise KeyError(f"Unsupported core live operation: {name}")
+            result = await context.operations.execute(name, params, metadata={"source": "core_live"})
+            payload = dict(result.payload or {})
+            if result.status != "ok":
+                return CoreLiveOperationOutcome(
+                    response=rpc_error(
+                        request_id,
+                        code=INVALID_REQUEST,
+                        message=str(payload.get("error") or result.status),
+                        data=payload,
+                    )
+                )
+            return CoreLiveOperationOutcome(response=rpc_result(request_id, payload))
+
+        try:
+            actor_key = _serialized_actor_key(name, params)
+            if actor_key:
+                # Ordinary composer commands are short state mutations. Do
+                # not queue a second request behind one that may be waiting
+                # on an external command; report the conflict immediately.
+                if name == "command.execute":
+                    return await self.session_actors.try_run(actor_key, invoke)
+                return await self.session_actors.run(actor_key, invoke)
+            return await invoke()
+        except SessionActorBusyError:
             return CoreLiveOperationOutcome(
                 response=rpc_error(
                     request_id,
                     code=INVALID_REQUEST,
-                    message=str(payload.get("error") or result.status),
-                    data=payload,
+                    message="session has an active operation",
+                    data={
+                        "code": "SESSION_BUSY",
+                        "reason": "active_operation_exists",
+                    },
                 )
             )
-        return CoreLiveOperationOutcome(response=rpc_result(request_id, payload))
+        except RevisionConflictError as exc:
+            return CoreLiveOperationOutcome(
+                response=rpc_error(
+                    request_id,
+                    code=INVALID_REQUEST,
+                    message="Revision conflict; refresh the session and retry explicitly",
+                    data=exc.data,
+                )
+            )
 
     def _build_catalog_handler(self, name: str) -> OperationHandler:
         async def handle(request: OperationRequest) -> OperationResult:
@@ -323,6 +439,7 @@ class CoreLiveContext:
     persistence: AppPersistenceHost | None = None
     runtime_task_registry: Any = field(default_factory=default_runtime_task_registry)
     runtime_state_store: RuntimeStateStore | None = None
+    session_actors: SessionActorRegistry = field(default_factory=SessionActorRegistry)
     host: CoreLiveOperationHost | None = None
 
     def __post_init__(self) -> None:
@@ -334,6 +451,11 @@ class CoreLiveContext:
             object.__setattr__(self, "hub", self.host.hub)
             object.__setattr__(self, "runtime_task_registry", self.host.runtime_task_registry)
             object.__setattr__(self, "runtime_state_store", self.host.runtime_state_store)
+            object.__setattr__(
+                self,
+                "session_actors",
+                getattr(self.host, "session_actors", self.session_actors),
+            )
             return
         persistence = self.persistence
         if persistence is None:
@@ -354,6 +476,7 @@ class CoreLiveContext:
                 hub=self.hub,
                 runtime_task_registry=self.runtime_task_registry,
                 runtime_state_store=self.runtime_state_store,
+                session_actors=self.session_actors,
             ),
         )
 
@@ -384,26 +507,67 @@ async def handle_thread_resume_operation(
         return CoreLiveOperationOutcome(
             response=rpc_error(request_id, code=INVALID_REQUEST, message="thread not found")
         )
+    include_snapshot = params.get("include_snapshot") is not False
     page_limit = max(1, min(_int_param(params.get("limit"), default=500), 500))
     async with context.session_factory() as db:
-        events = await context.persistence.list_after(db, thread_id=thread_id, after_seq=after_seq, limit=page_limit)
+        events = [] if include_snapshot else await context.persistence.list_after(
+            db, thread_id=thread_id, after_seq=after_seq, limit=page_limit
+        )
         snapshot = await context.persistence.load(db, thread_id)
     await _reconcile_cancelled_runtime_state(context=context, thread_id=thread_id, snapshot=snapshot)
     last_event_seq = max((event.seq for event in events), default=after_seq)
     snapshot_seq = _int_param(snapshot.get("snapshot_seq") if isinstance(snapshot, dict) else None, default=last_event_seq)
     has_more = bool(events) and last_event_seq < snapshot_seq
-    return CoreLiveOperationOutcome(
-        response=rpc_result(
-            request_id,
-            {
-                "thread": {"id": thread_id},
-                "events": [event.to_dict() for event in events],
-                "snapshot": snapshot,
-                "has_more": has_more,
-                "next_after_seq": last_event_seq,
-            },
+    result: dict[str, Any] = {
+        "thread": {"id": thread_id},
+        "events": [event.to_dict() for event in events],
+        "has_more": has_more,
+        "next_after_seq": last_event_seq,
+    }
+    if include_snapshot:
+        result["snapshot"] = _character_page_snapshot(
+            snapshot,
+            before_item_id=None,
+            before_seq=None,
+            char_limit=_history_char_limit(params),
         )
+    return CoreLiveOperationOutcome(
+        response=rpc_result(request_id, result)
     )
+
+
+async def handle_sync_start_operation(
+    *,
+    request_id: int | str | None,
+    params: dict[str, Any],
+    context: "CoreLiveContext",
+) -> "CoreLiveOperationOutcome":
+    """Return one atomic Local-First snapshot or a bounded journal delta."""
+    journal = getattr(getattr(context, "host", None), "sync_journal", None)
+    if journal is None:
+        return CoreLiveOperationOutcome(
+            response=rpc_error(request_id, code=INVALID_REQUEST, message="sync journal is unavailable")
+        )
+    raw_cursor = params.get("cursor")
+    cursor: int | None
+    if raw_cursor is None or raw_cursor == "":
+        cursor = None
+    else:
+        try:
+            cursor = int(raw_cursor)
+        except (TypeError, ValueError):
+            return CoreLiveOperationOutcome(
+                response=rpc_error(request_id, code=INVALID_REQUEST, message="cursor must be an integer or null")
+            )
+        if cursor < 0:
+            return CoreLiveOperationOutcome(
+                response=rpc_error(request_id, code=INVALID_REQUEST, message="cursor must be non-negative")
+            )
+    result = await journal.sync(cursor=cursor, limit=int(params.get("limit") or 500))
+    # Cursor expiry is a protocol result, rather than a transport failure. It
+    # lets the mobile client atomically replace its local database with the
+    # next snapshot and keeps the long-lived tunnel alive.
+    return CoreLiveOperationOutcome(response=rpc_result(request_id, result))
 
 
 async def handle_thread_read_operation(
@@ -424,7 +588,7 @@ async def handle_thread_read_operation(
         )
     async with context.session_factory() as db:
         snapshot = await context.persistence.load(db, thread_id)
-        events = await context.persistence.list_thread(db, thread_id=thread_id)
+        events = []
         member_payload = await context.host.member_hooks.augment_thread_read(
             db=db,
             thread_id=thread_id,
@@ -437,11 +601,149 @@ async def handle_thread_read_operation(
             {
                 "thread": {"id": thread_id},
                 "events": [event.to_dict() for event in events],
-                "snapshot": snapshot,
+                "snapshot": _character_page_snapshot(
+                    snapshot,
+                    before_item_id=None,
+                    before_seq=None,
+                    char_limit=_history_char_limit(params),
+                ),
                 **member_payload,
             },
         )
     )
+
+
+async def handle_thread_history_operation(
+    *,
+    request_id: int | str | None,
+    params: dict[str, Any],
+    context: CoreLiveContext,
+) -> CoreLiveOperationOutcome:
+    """Return one older character-bounded page for an already opened thread."""
+    thread_id = str(params.get("thread_id") or params.get("threadId") or "").strip()
+    before_item_id = str(params.get("before_item_id") or params.get("beforeItemId") or "").strip()
+    before_seq = _int_param(params.get("before_seq") or params.get("beforeSeq"), default=0)
+    if not thread_id or (not before_item_id and before_seq <= 0):
+        return CoreLiveOperationOutcome(
+            response=rpc_error(
+                request_id,
+                code=INVALID_REQUEST,
+                message="thread_id and a history cursor are required",
+            )
+        )
+    session_store = getattr(getattr(context, "host", None), "session_store", None)
+    if session_store is not None and await session_store.get(thread_id) is None:
+        return CoreLiveOperationOutcome(
+            response=rpc_error(request_id, code=INVALID_REQUEST, message="thread not found")
+        )
+    async with context.session_factory() as db:
+        snapshot = await context.persistence.load(db, thread_id)
+    return CoreLiveOperationOutcome(
+        response=rpc_result(
+            request_id,
+            {
+                "thread": {"id": thread_id},
+                "snapshot_page": _character_page_snapshot(
+                    snapshot,
+                    before_item_id=before_item_id or None,
+                    before_seq=before_seq,
+                    char_limit=_history_char_limit(params),
+                ),
+            },
+        )
+    )
+
+
+def _history_char_limit(params: dict[str, Any]) -> int:
+    raw = params.get("char_limit") or params.get("charLimit")
+    return max(1_000, min(_int_param(raw, default=DEFAULT_THREAD_HISTORY_CHAR_LIMIT), MAX_THREAD_HISTORY_CHAR_LIMIT))
+
+
+def _character_page_snapshot(
+    snapshot: dict[str, Any],
+    *,
+    before_item_id: str | None,
+    before_seq: int | None,
+    char_limit: int,
+) -> dict[str, Any]:
+    """Keep snapshot metadata but include only one newest-first item page.
+
+    The budget is measured over compact UTF-8 JSON for each item. One item is
+    always returned even when that item alone exceeds the requested budget.
+    Artifact bodies are available through artifact operations and never ride
+    with conversation pages.
+    """
+    page = deepcopy(snapshot)
+    core = page.get("core") if isinstance(page.get("core"), dict) else {}
+    raw_items = core.get("items") if isinstance(core.get("items"), dict) else {}
+    raw_order = core.get("item_order") if isinstance(core.get("item_order"), list) else list(raw_items)
+    ordered: list[tuple[int, str, dict[str, Any]]] = []
+    before_index = None
+    if before_item_id:
+        try:
+            before_index = [str(value) for value in raw_order].index(before_item_id)
+        except ValueError:
+            before_index = None
+    for index, raw_id in enumerate(raw_order, 1):
+        if before_index is not None and index > before_index:
+            break
+        item_id = str(raw_id)
+        item = raw_items.get(item_id)
+        if not isinstance(item, dict):
+            continue
+        seq = _int_param(item.get("seq") or item.get("last_seq"), default=index)
+        if before_index is not None or before_seq is None or seq < before_seq:
+            ordered.append((seq, item_id, item))
+
+    selected: list[tuple[int, str, dict[str, Any]]] = []
+    character_count = 0
+    for seq, item_id, item in reversed(ordered):
+        item_chars = len(json.dumps(item, ensure_ascii=False, separators=(",", ":")))
+        if selected and character_count + item_chars > char_limit:
+            break
+        selected.append((seq, item_id, item))
+        character_count += item_chars
+    selected.reverse()
+    selected_ids = {item_id for _, item_id, _ in selected}
+    earliest_seq = min((seq for seq, _, _ in selected), default=None)
+    has_more = len(selected) < len(ordered)
+
+    def filtered_turns(value: Any) -> dict[str, Any]:
+        if not isinstance(value, dict):
+            return {}
+        result: dict[str, Any] = {}
+        for turn_id, raw_turn in value.items():
+            if not isinstance(raw_turn, dict):
+                continue
+            turn_items = [str(item_id) for item_id in raw_turn.get("items") or []]
+            kept = [item_id for item_id in turn_items if item_id in selected_ids]
+            if kept or str(raw_turn.get("status") or "") in ACTIVE_TURN_STATUSES:
+                result[str(turn_id)] = {**raw_turn, "items": kept}
+        return result
+
+    selected_items = {item_id: item for _, item_id, item in selected}
+    selected_order = [item_id for _, item_id, _ in selected]
+    core["items"] = selected_items
+    core["item_order"] = selected_order
+    core["turns"] = filtered_turns(core.get("turns"))
+    core["artifacts"] = {}
+    core["seen_event_ids"] = []
+    page["core"] = core
+    page["items"] = {item_id: item for item_id, item in (page.get("items") or {}).items() if item_id in selected_ids} if isinstance(page.get("items"), dict) else {}
+    page["item_order"] = [item_id for item_id in page.get("item_order") or [] if str(item_id) in selected_ids]
+    page["turns"] = filtered_turns(page.get("turns"))
+    page["artifacts"] = {}
+    page["seen_event_ids"] = []
+    page["history_page"] = {
+        "char_limit": char_limit,
+        "character_count": character_count,
+        "item_count": len(selected),
+        "total_items": len(raw_order),
+        "has_more": has_more,
+        "next_before_item_id": selected[0][1] if has_more and selected else None,
+        "next_before_seq": earliest_seq if has_more else None,
+    }
+    return page
 
 
 async def handle_thread_start_operation(
@@ -455,8 +757,13 @@ async def handle_thread_start_operation(
         return CoreLiveOperationOutcome(
             response=rpc_error(request_id, code=INVALID_REQUEST, message="thread_id is required")
         )
+    try:
+        expected_revision = _expected_revision(params)
+    except ValueError as exc:
+        return CoreLiveOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
 
     async def write(db: AsyncSession):
+        await context.persistence.assert_revision(db, thread_id, expected_revision)
         member_payload = await context.host.member_hooks.materialize_thread(
             db=db,
             thread_id=thread_id,
@@ -497,6 +804,10 @@ async def handle_turn_start_operation(
         return CoreLiveOperationOutcome(
             response=rpc_error(request_id, code=INVALID_REQUEST, message="thread_id and input are required")
         )
+    try:
+        expected_revision = _expected_revision(params)
+    except ValueError as exc:
+        return CoreLiveOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
 
     try:
         prepared = await context.host.member_hooks.prepare_turn_input(
@@ -526,6 +837,7 @@ async def handle_turn_start_operation(
         active_mode=resolved.get("active_mode"),
     )
 
+
     async def write(db):
         nonlocal run_claimed
         _w0 = time_module.perf_counter()
@@ -551,6 +863,7 @@ async def handle_turn_start_operation(
             )
 
         _w2 = time_module.perf_counter()
+        await context.persistence.assert_revision(db, thread_id, expected_revision)
         snapshot = await context.persistence.load(db, thread_id)
         _w3 = time_module.perf_counter()
         _logger.info("[PERF:turn_start:write] load#1=%.3fs snapshot_size=%s", _w3 - _w2, len(str(snapshot)) if isinstance(snapshot, dict) else 0)
@@ -560,8 +873,12 @@ async def handle_turn_start_operation(
                 response=rpc_error(
                     request_id,
                     code=INVALID_REQUEST,
-                    message="active turn already exists",
-                    data={"reason": "active_turn_exists", "active_run_id": active_run_id},
+                    message="session has an active turn",
+                    data={
+                        "code": "SESSION_BUSY",
+                        "reason": "active_turn_exists",
+                        "active_run_id": active_run_id,
+                    },
                 )
             )
         # Detect a first message: the snapshot has no items yet. Captured before
@@ -573,8 +890,9 @@ async def handle_turn_start_operation(
                 response=rpc_error(
                     request_id,
                     code=INVALID_REQUEST,
-                    message="active turn already exists",
+                    message="session has an active turn",
                     data={
+                        "code": "SESSION_BUSY",
                         "reason": "active_turn_exists",
                         "active_run_id": context.host.runtime_task_registry.active_run_id(thread_id),
                     },
@@ -1030,6 +1348,10 @@ async def handle_turn_cancel_operation(
         return CoreLiveOperationOutcome(
             response=rpc_error(request_id, code=INVALID_REQUEST, message="thread_id is required")
         )
+    try:
+        expected_revision = _expected_revision(params)
+    except ValueError as exc:
+        return CoreLiveOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
     async def write(db):
         snapshot = await context.persistence.load(db, thread_id)
         requested_turn_id = str(params.get("turn_id") or params.get("turnId") or "")
@@ -1049,6 +1371,7 @@ async def handle_turn_cancel_operation(
             if params.get("include_snapshot") is not False:
                 payload["snapshot"] = snapshot
             return CoreLiveOperationOutcome(response=rpc_result(request_id, payload))
+        await context.persistence.assert_revision(db, thread_id, expected_revision)
         interrupted_input = AppEventInput(
             thread_id=thread_id,
             method="turn/interrupted",
@@ -1124,6 +1447,10 @@ async def handle_turn_force_reset_operation(
         return CoreLiveOperationOutcome(
             response=rpc_error(request_id, code=INVALID_REQUEST, message="thread_id is required")
         )
+    try:
+        expected_revision = _expected_revision(params)
+    except ValueError as exc:
+        return CoreLiveOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
     requested_turn_id = str(params.get("turn_id") or params.get("turnId") or "").strip()
 
     async def write(db: AsyncSession) -> tuple[list[AppEventEnvelope], dict[str, Any]]:
@@ -1131,6 +1458,7 @@ async def handle_turn_force_reset_operation(
         turn_id = requested_turn_id or _latest_turn_id_any_status(snapshot)
         if not turn_id:
             return [], snapshot
+        await context.persistence.assert_revision(db, thread_id, expected_revision)
         events: list[AppEventEnvelope] = []
         # 1. Close dangling non-terminal items (half-baked tool_calls etc.)
         # before the turn-level terminal event, so the per-item cancelled
@@ -1209,6 +1537,10 @@ async def handle_turn_steer_operation(
         return CoreLiveOperationOutcome(
             response=rpc_error(request_id, code=INVALID_REQUEST, message="thread_id, turn_id and input are required")
         )
+    try:
+        expected_revision = _expected_revision(params)
+    except ValueError as exc:
+        return CoreLiveOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
     text = input_items_text(input_items)
     if not text:
         return CoreLiveOperationOutcome(
@@ -1232,6 +1564,7 @@ async def handle_turn_steer_operation(
                     {"applied": True, "reason": "already_applied", "events": [existing.to_dict()], "snapshot": snapshot},
                 )
             )
+        await context.persistence.assert_revision(db, thread_id, expected_revision)
         snapshot = await context.persistence.load(db, thread_id)
         registry_run_id = context.host.runtime_task_registry.active_run_id(thread_id)
         if not _is_active_turn(snapshot, turn_id) and registry_run_id != turn_id:
@@ -1302,6 +1635,10 @@ async def handle_approval_respond_operation(
         return CoreLiveOperationOutcome(
             response=rpc_error(request_id, code=INVALID_REQUEST, message="approval.respond operation is unavailable")
         )
+    try:
+        expected_revision = _expected_revision(params)
+    except ValueError as exc:
+        return CoreLiveOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
     loop = asyncio.get_running_loop()
     decision_ready: asyncio.Future[dict[str, Any]] = loop.create_future()
 
@@ -1332,13 +1669,13 @@ async def handle_approval_respond_operation(
             # global settings here; those may have changed since the request
             # was presented.
             approval_params = dict(params)
+            approval_thread_id = _thread_id_from_params(approval_params)
             approval_params.setdefault("approval_policy", "require")
             approval_params.setdefault("active_tier", None)
             approval_params.setdefault("tier_tools", None)
             approval_params.setdefault("allow_access_outside_workdir", False)
             state_store = context.host.runtime_state_store
             if state_store is not None:
-                approval_thread_id = _thread_id_from_params(approval_params)
                 approval_state = None
                 if approval_thread_id:
                     approval_state = await state_store.get(approval_thread_id)
@@ -1361,6 +1698,15 @@ async def handle_approval_respond_operation(
                     parsed_permissions = permissions_from_snapshot(raw_snapshot)
                     if parsed_permissions is not None:
                         approval_params.update(parsed_permissions.to_dict())
+                if approval_state is not None and not approval_thread_id:
+                    approval_thread_id = str(approval_state.session_id or "").strip()
+            if approval_thread_id and expected_revision is not None:
+                await context.persistence.write(
+                    lambda db: context.persistence.assert_revision(
+                        db, approval_thread_id, expected_revision
+                    )
+                )
+                thread_id = approval_thread_id
             result = await context.operations.execute(
                 "approval.respond",
                 approval_params,
@@ -1443,6 +1789,10 @@ async def handle_queue_create_operation(
             response=rpc_error(request_id, code=INVALID_REQUEST, message="thread_id and input are required")
         )
     try:
+        expected_revision = _expected_revision(params)
+    except ValueError as exc:
+        return CoreLiveOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
+    try:
         prepared = await context.host.member_hooks.prepare_queue_input(
             thread_id=thread_id, params=params, input_items=input_items
         )
@@ -1482,6 +1832,7 @@ async def handle_queue_create_operation(
         if existing is not None:
             snapshot = await context.persistence.load(db, thread_id)
             return existing, snapshot
+        await context.persistence.assert_revision(db, thread_id, expected_revision)
         materialized = await context.host.member_hooks.materialize_queue(
             db=db,
             thread_id=thread_id,
@@ -1532,6 +1883,10 @@ async def handle_queue_update_operation(
                 message="thread_id, queue_item_id and text are required",
             )
         )
+    try:
+        expected_revision = _expected_revision(params)
+    except ValueError as exc:
+        return CoreLiveOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
     input_items = params.get("input")
     if not isinstance(input_items, list):
         text = str(params.get("text") or "").strip()
@@ -1577,6 +1932,7 @@ async def handle_queue_update_operation(
                     },
                 )
             )
+        await context.persistence.assert_revision(db, thread_id, expected_revision)
         event = await _append_app_event(
             db,
             context=context,
@@ -1613,7 +1969,12 @@ async def handle_queue_delete_operation(
         return CoreLiveOperationOutcome(
             response=rpc_error(request_id, code=INVALID_REQUEST, message="thread_id and queue_item_id are required")
         )
+    try:
+        expected_revision = _expected_revision(params)
+    except ValueError as exc:
+        return CoreLiveOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
     async def write(db: AsyncSession) -> tuple[AppEventEnvelope, dict[str, Any]]:
+        await context.persistence.assert_revision(db, thread_id, expected_revision)
         event = await _append_app_event(
             db,
             context=context,
@@ -1652,6 +2013,10 @@ async def handle_queue_guidance_operation(
                 message="thread_id, turn_id and queue_item_id are required",
             )
         )
+    try:
+        expected_revision = _expected_revision(params)
+    except ValueError as exc:
+        return CoreLiveOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
     client_message_id = str(
         params.get("client_message_id") or params.get("clientMessageId") or f"queue-guide:{queue_item_id}"
     )
@@ -1686,6 +2051,7 @@ async def handle_queue_guidance_operation(
             replacement_text=replacement_text,
         )
         if plan.applied:
+            await context.persistence.assert_revision(db, thread_id, expected_revision)
             guidance_text = input_items_text(plan.runtime_input_items)
             guidance_status = context.host.runtime_task_registry.accept_guidance(
                 thread_id,
@@ -2633,14 +2999,18 @@ async def _execute_compact_live_command(
     work_root: str,
     actions: dict[str, Any],
     params: dict[str, Any],
-) -> tuple[dict[str, Any], dict[str, Any]]:
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
     ids = _compact_command_ids(
         thread_id,
         client_command_id=str(params.get("client_command_id") or params.get("clientCommandId") or ""),
     )
     registry = context.host.runtime_task_registry
     if not registry.accept_run(thread_id, ids["run_id"]):
-        raise RuntimeError("A context compaction is already running")
+        raise SessionBusyError(
+            reason="active_turn_exists",
+            message="A context compaction is already running",
+            active_run_id=registry.active_run_id(thread_id) or "",
+        )
     operation_task = asyncio.create_task(_execute_claimed_compact_live_command(
         context=context,
         thread_id=thread_id,
@@ -2656,7 +3026,11 @@ async def _execute_compact_live_command(
         except asyncio.CancelledError:
             pass
         registry.release_run(thread_id, run_id=ids["run_id"])
-        raise RuntimeError("A context compaction is already running")
+        raise SessionBusyError(
+            reason="active_turn_exists",
+            message="A context compaction is already running",
+            active_run_id=registry.active_run_id(thread_id) or "",
+        )
     try:
         return await operation_task
     finally:
@@ -2916,6 +3290,32 @@ def _thread_id_from_params(params: dict[str, Any]) -> str:
     return str(params.get("thread_id") or params.get("threadId") or params.get("session_id") or "").strip()
 
 
+def _serialized_actor_key(name: str, params: dict[str, Any]) -> str:
+    """Return the actor key for commands that mutate shared state.
+
+    Reads and long-running runtime workers intentionally bypass this lock.
+    Manual context compaction also bypasses it: it owns a RuntimeTaskRegistry
+    slot so turn.cancel can acquire the session actor and cancel the real task.
+    Project operations use their own key when no session id is available so a
+    project mutation cannot race another live connection's project command.
+    """
+
+    normalized = str(name or "").strip()
+    if normalized == "command.execute" and normalize_command_name(params.get("command")) == "compact":
+        return ""
+    if normalized not in SERIALIZED_SESSION_OPERATIONS and not (
+        normalized.startswith("session.") or normalized.startswith("project.")
+    ):
+        return ""
+    thread_id = _thread_id_from_params(params)
+    if thread_id:
+        return f"session:{thread_id}"
+    project_id = str(params.get("project_id") or params.get("projectId") or "").strip()
+    if project_id:
+        return f"project:{project_id}"
+    return ""
+
+
 def _command_arguments(params: dict[str, Any]) -> str:
     value = params.get("arguments")
     if value is None:
@@ -2939,10 +3339,32 @@ def _int_param(value: Any, *, default: int) -> int:
         return default
 
 
+def _expected_revision(params: dict[str, Any]) -> int | None:
+    """Parse the optional CAS revision without treating zero as absent."""
+
+    marker = object()
+    value = params.get("expected_revision", marker)
+    if value is marker:
+        value = params.get("expectedRevision", marker)
+    if value is marker or value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        raise ValueError("expected_revision must be a non-negative integer")
+    try:
+        revision = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("expected_revision must be a non-negative integer") from exc
+    if revision < 0:
+        raise ValueError("expected_revision must be a non-negative integer")
+    return revision
+
+
 _CORE_LIVE_OPERATION_EXECUTORS = {
+    "sync.start": handle_sync_start_operation,
     "thread.start": handle_thread_start_operation,
     "thread.read": handle_thread_read_operation,
     "thread.resume": handle_thread_resume_operation,
+    "thread.history": handle_thread_history_operation,
     "turn.start": handle_turn_start_operation,
     "turn.cancel": handle_turn_cancel_operation,
     "turn.force_reset": handle_turn_force_reset_operation,
@@ -2971,8 +3393,10 @@ __all__ = [
     "handle_queue_update_operation",
     "handle_approval_respond_operation",
     "handle_thread_read_operation",
+    "handle_thread_history_operation",
     "handle_thread_start_operation",
     "handle_thread_resume_operation",
+    "handle_sync_start_operation",
     "handle_turn_cancel_operation",
     "handle_turn_force_reset_operation",
     "handle_turn_start_operation",

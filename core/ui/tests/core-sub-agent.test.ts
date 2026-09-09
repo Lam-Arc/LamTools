@@ -8,6 +8,9 @@ import CoreSubAgentDialog from '../src/components/CoreSubAgentDialog.vue'
 import ComposerBar from '../src/components/ComposerBar.vue'
 import { selectCoreSubAgentRuns } from '../src/agents/subAgentProjection'
 import type { CoreMessage, CoreSubAgentRun, MessagePartStatus } from '../src/types'
+import { createFakeTransport } from './fake-transport'
+
+const testTransport = createFakeTransport()
 
 afterEach(() => {
   document.body.querySelectorAll('.core-sub-agent-tooltip').forEach(element => element.remove())
@@ -236,6 +239,7 @@ describe('CoreSubAgentDialog and composer reuse', () => {
     const wrapper = mount(CoreSubAgentDialog, {
       props: {
         run,
+        transport: testTransport,
         teleportTo: 'body',
         draft: '',
         modelOptions: [
@@ -277,7 +281,7 @@ describe('CoreSubAgentDialog and composer reuse', () => {
     hiddenRow.focus()
 
     const wrapper = mount(CoreSubAgentDialog, {
-      props: { run: fakeRun(1), open: true, teleportTo: 'body' },
+      props: { run: fakeRun(1), transport: testTransport, open: true, teleportTo: 'body' },
       global: { stubs: { Teleport: true } },
     })
     await nextTick()

@@ -16,15 +16,7 @@ from lamtools_core.llm.retry import (
 )
 from lamtools_core.tokens import estimate_message_tokens, estimate_text_tokens
 
-from .fallback import (
-    compress_structured_compaction_summary,
-    fallback_structured_compaction_summary,
-)
-from .formatting import (
-    format_messages_for_compaction,
-    normalize_legacy_compaction_summary,
-    parse_compaction_summary,
-)
+from .formatting import format_messages_for_compaction, truncate_text_to_tokens
 from .models import (
     COMPACTION_PROMPT,
     CompactionDeltaSink,
@@ -55,7 +47,7 @@ async def summarize_context_messages(
     retry_policy: RetryPolicy | None = None,
     on_model_retry: ModelRetrySink | None = None,
 ) -> tuple[str, int]:
-    """Return a structured summary and the number of source segments used."""
+    """Return the model's summary text and the number of source segments used."""
     summary_input_limit = (
         summary_budget.max_input_tokens
         if summary_budget is not None
@@ -158,21 +150,10 @@ async def summarize_context_messages(
             )
         summaries = merged
 
-    summary_text = summaries[0] if summaries else fallback_structured_compaction_summary(
-        messages,
-        existing_summary=existing_summary,
-    )
-    parsed_summary = parse_compaction_summary(summary_text)
-    if parsed_summary is None:
-        parsed_summary = parse_compaction_summary(
-            fallback_structured_compaction_summary(
-                messages,
-                existing_summary=existing_summary,
-            )
-        )
-    if parsed_summary is None:
-        raise ContextCompactionError("Context compaction failed: invalid structured summary")
-    return parsed_summary.render(), max(1, segment_count)
+    summary_text = summaries[0] if summaries else ""
+    if not summary_text:
+        raise ContextCompactionError("Context compaction failed: model returned an empty summary")
+    return summary_text, max(1, segment_count)
 
 
 async def _summarize_compaction_chunk(
@@ -246,8 +227,7 @@ async def _summarize_compaction_chunk(
                 retry_policy=retry_policy,
                 on_model_retry=on_model_retry,
             )
-            if streamed:
-                content = streamed
+            content = streamed
         except NotImplementedError:
             content = ""
         except AttributeError:
@@ -260,6 +240,10 @@ async def _summarize_compaction_chunk(
         except Exception as exc:
             raise ContextCompactionError(f"Context compaction failed: {exc}") from exc
         if not content:
+            # Whitespace-only streams are not summaries. Do not leave their
+            # transient deltas marked as the completed result when falling
+            # back to the non-streaming completion path.
+            emitted_delta = False
             try:
                 response = await complete_with_retry(
                     llm_client,
@@ -277,23 +261,9 @@ async def _summarize_compaction_chunk(
                 raise ContextCompactionError(f"Context compaction failed: {exc}") from exc
         if not content:
             raise ContextCompactionError("Context compaction failed: model returned an empty summary")
-    parsed_summary = parse_compaction_summary(content)
-    if parsed_summary is None:
-        parsed_summary = parse_compaction_summary(
-            normalize_legacy_compaction_summary(content)
-        )
-    if parsed_summary is None:
-        parsed_summary = parse_compaction_summary(
-            fallback_structured_compaction_summary(
-                messages,
-                existing_summary=existing_summary,
-            )
-        )
-    if parsed_summary is None:
-        raise ContextCompactionError("Context compaction failed: invalid structured summary")
-    summary = parsed_summary.render()
+    summary = content
     if estimate_text_tokens(summary) > output_tokens:
-        summary = compress_structured_compaction_summary(summary, output_tokens)
+        summary = truncate_text_to_tokens(summary, output_tokens)
     if not emitted_delta:
         if on_delta is not None:
             await emit_compaction_delta(on_delta, summary)

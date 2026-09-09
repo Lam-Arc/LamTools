@@ -3,13 +3,66 @@ import { describe, expect, it } from 'vitest'
 import {
   createCoreAppServerRuntimeController,
   createCoreAppServerRuntimeState,
+  hydrateSnapshot,
   selectChatMessages,
   type CoreAppServerRuntimeClient,
   type CoreAppEvent,
   type CoreAppSnapshot,
 } from '../src/appServer'
+import { TransportRpcError } from '../src/transport'
 
 describe('core appServer runtime store', () => {
+  it('preserves custom snapshot fields through hydrate and history-page merge', async () => {
+    interface ExtendedSnapshot extends CoreAppSnapshot {
+      extension: { owner: string }
+    }
+    const initial: ExtendedSnapshot = {
+      ...snapshot(2, 'completed'),
+      extension: { owner: 'mobile' },
+      history_page: {
+        char_limit: 200_000,
+        character_count: 20,
+        item_count: 1,
+        total_items: 2,
+        has_more: true,
+        next_before_seq: 2,
+      },
+    }
+    const hydrated = hydrateSnapshot(initial)
+    const owner: string = hydrated.extension.owner
+    expect(owner).toBe('mobile')
+
+    const runtime = createCoreAppServerRuntimeState<ExtendedSnapshot>()
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: () => fakeClient(async (method) => method === 'thread/resume'
+        ? { snapshot: initial }
+        : {}),
+    })
+    await controller.connect('thread-1')
+    const olderPage: ExtendedSnapshot = {
+      ...initial,
+      extension: { owner: 'older-page' },
+      core: {
+        ...initial.core!,
+        items: {
+          'older-item': { item_id: 'older-item', seq: 1, type: 'message', content: 'older' },
+        },
+        item_order: ['older-item'],
+      },
+      history_page: {
+        char_limit: 200_000,
+        character_count: 10,
+        item_count: 1,
+        total_items: 2,
+        has_more: false,
+        next_before_seq: null,
+      },
+    }
+    expect(controller.mergeSnapshotPage(olderPage)).toBe(true)
+    expect(runtime.state?.extension.owner).toBe('mobile')
+    expect(runtime.state?.core?.items?.['older-item']?.content).toBe('older')
+  })
+
   it('applies native run-item deltas in order with one render-frame flush', async () => {
     const runtime = createCoreAppServerRuntimeState()
     const frames: Array<() => void> = []
@@ -23,7 +76,7 @@ describe('core appServer runtime store', () => {
       },
       scheduleFrame: (callback) => frames.push(callback),
     })
-    await controller.connect('http://127.0.0.1:6173', 'thread-1')
+    await controller.connect('thread-1')
 
     onEvent?.(runItemDelta('delta-1', 'hel'))
     onEvent?.(runItemDelta('delta-2', 'lo'))
@@ -47,13 +100,90 @@ describe('core appServer runtime store', () => {
       },
       scheduleFrame: (callback) => frames.push(callback),
     })
-    await controller.connect('http://127.0.0.1:6173', 'thread-1')
+    await controller.connect('thread-1')
 
     onEvent?.(runStatusEvent('done-1', 'completed'))
     frames[0]()
 
     expect(runtime.state?.core?.turns?.['turn-1']?.status).toBe('completed')
     expect(runtime.state?.core?.status).toBe('completed')
+  })
+
+  it('does not let an older snapshot or event roll a terminal turn back to running', async () => {
+    const runtime = createCoreAppServerRuntimeState()
+    const frames: Array<() => void> = []
+    let onEvent: ((event: CoreAppEvent) => void) | undefined
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: (callbacks) => {
+        onEvent = callbacks.onEvent
+        return fakeClient(async (method) => method === 'thread/resume'
+          ? { snapshot: versionedSnapshot(1, 'running', 1) }
+          : {})
+      },
+      scheduleFrame: (callback) => frames.push(callback),
+    })
+    await controller.connect('thread-1')
+
+    onEvent?.({ ...runStatusEvent('terminal-ordered', 'completed'), revision: 3, seq: 3 })
+    onEvent?.({ ...runStatusEvent('stale-running', 'running'), revision: 2, seq: 2 })
+    frames[0]()
+
+    expect(runtime.state?.core?.status).toBe('completed')
+    expect(runtime.state?.revision).toBe(3)
+
+    controller.hydrate(versionedSnapshot(2, 'running', 2))
+    expect(runtime.state?.core?.status).toBe('completed')
+    expect(runtime.state?.revision).toBe(3)
+  })
+
+  it('applies a terminal event even when its persisted revision is stale', async () => {
+    const runtime = createCoreAppServerRuntimeState()
+    const frames: Array<() => void> = []
+    let onEvent: ((event: CoreAppEvent) => void) | undefined
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: (callbacks) => {
+        onEvent = callbacks.onEvent
+        return fakeClient(async (method) => method === 'thread/resume'
+          ? { snapshot: versionedSnapshot(8, 'running', 13) }
+          : {})
+      },
+      scheduleFrame: (callback) => frames.push(callback),
+    })
+    await controller.connect('thread-1')
+
+    // A raced live projection can stamp the final event with an older
+    // revision than a later stream item. The terminal event still closes the
+    // turn and must not be discarded by the CAS guard.
+    onEvent?.({ ...runStatusEvent('terminal-stale-revision', 'completed'), seq: 9, revision: 10 })
+    frames[0]()
+
+    expect(runtime.state?.core?.status).toBe('completed')
+    expect(runtime.state?.core?.turns?.['turn-1']?.status).toBe('completed')
+    expect(runtime.state?.revision).toBe(13)
+  })
+
+  it('refreshes and retries turn/start once with the same idempotency key', async () => {
+    const runtime = createCoreAppServerRuntimeState()
+    const calls: Array<{ method: string; params: Record<string, unknown> }> = []
+    let turnAttempts = 0
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: () => fakeClient(async (method, params) => {
+        calls.push({ method, params })
+        if (method === 'thread/resume') return { snapshot: versionedSnapshot(1, 'completed', 1) }
+        if (method === 'thread/read') return { snapshot: versionedSnapshot(2, 'completed', 2) }
+        if (method === 'turn/start' && turnAttempts++ === 0) {
+          throw new TransportRpcError('REVISION_CONFLICT', 'stale', { code: 'REVISION_CONFLICT' })
+        }
+        return {}
+      }),
+    })
+    await controller.connect('thread-1')
+    await controller.startTurn('thread-1', 'hello')
+
+    const turnCalls = calls.filter((call) => call.method === 'turn/start')
+    expect(turnCalls).toHaveLength(2)
+    expect(turnCalls.map((call) => call.params.expected_revision)).toEqual([1, 2])
+    expect(turnCalls[0].params.client_message_id).toBe(turnCalls[1].params.client_message_id)
   })
 
   it('aggregates multiple usage events of one turn instead of overwriting', async () => {
@@ -72,7 +202,7 @@ describe('core appServer runtime store', () => {
       },
       scheduleFrame: (callback) => frames.push(callback),
     })
-    await controller.connect('http://127.0.0.1:6173', 'thread-1')
+    await controller.connect('thread-1')
 
     onEvent?.(runUsageEvent('usage-1', {
       input_tokens: 1000,
@@ -118,7 +248,7 @@ describe('core appServer runtime store', () => {
       },
       scheduleFrame: (callback) => frames.push(callback),
     })
-    await controller.connect('http://127.0.0.1:6173', 'thread-1')
+    await controller.connect('thread-1')
 
     onEvent?.(runUsageEvent('usage-1', {
       input_tokens: 1000,
@@ -164,7 +294,7 @@ describe('core appServer runtime store', () => {
       },
       scheduleFrame: (callback) => frames.push(callback),
     })
-    await controller.connect('http://127.0.0.1:6173', 'thread-1')
+    await controller.connect('thread-1')
 
     onEvent?.(runUsageEvent('usage-1', {
       input_tokens: 100,
@@ -205,6 +335,22 @@ describe('core appServer runtime store', () => {
     expect(runtime.state?.status).toBe('idle')
   })
 
+  it('applies response events after hydrating a response snapshot', () => {
+    const runtime = createCoreAppServerRuntimeState()
+    const controller = createCoreAppServerRuntimeController(runtime, {
+      createClient: () => fakeClient(),
+    })
+
+    controller.applyResponse({
+      snapshot: snapshot(3, 'running'),
+      events: [runStatusEvent('terminal-1', 'completed')],
+    })
+
+    expect(runtime.state?.snapshot_seq).toBe(3)
+    expect(runtime.state?.core?.status).toBe('completed')
+    expect(runtime.state?.core?.seen_event_ids).toContain('terminal-1')
+  })
+
   it('transports text, structured input items, and command operations', async () => {
     const runtime = createCoreAppServerRuntimeState()
     const calls: Array<{ method: string; params: Record<string, unknown> }> = []
@@ -243,6 +389,7 @@ describe('core appServer runtime store', () => {
         command: 'compact',
         arguments: '创建发布计划',
         work_root: 'E:\\LamTools',
+        expected_revision: 0,
       },
     })
     expect(guided).toEqual({ applied: true, reason: '' })
@@ -282,6 +429,7 @@ describe('core appServer runtime store', () => {
           request_id: 'functions.write_file:0',
           decision: 'approve_once',
           guidance: '',
+          expected_revision: 0,
         },
       },
     ])
@@ -307,6 +455,7 @@ describe('core appServer runtime store', () => {
         thread_id: 'thread-large',
         turn_id: 'turn-active',
         include_snapshot: false,
+        expected_revision: 0,
       },
     }])
   })
@@ -333,6 +482,7 @@ describe('core appServer runtime store', () => {
         thread_id: 'thread-stuck',
         turn_id: 'turn-stuck',
         include_snapshot: true,
+        expected_revision: 0,
       },
     }])
     expect(runtime.state?.core?.status).toBe('idle')
@@ -349,7 +499,7 @@ describe('core appServer runtime store', () => {
       reconnectMaxMs: 2_000,
     })
 
-    await controller.connect('http://127.0.0.1:6173', 'thread-1')
+    await controller.connect('thread-1')
     expect(runtime.state?.snapshot_seq).toBe(8)
 
     ReconnectingClient.instances[0].close()
@@ -411,7 +561,7 @@ describe('core appServer runtime store', () => {
       },
       scheduleFrame: (callback) => frames.push(callback),
     })
-    await controller.connect('http://127.0.0.1:6173', 'thread-1')
+    await controller.connect('thread-1')
 
     onEvent?.(runItemDelta('wire-1', 'hel'))
 
@@ -461,7 +611,7 @@ describe('core appServer runtime store', () => {
       },
       scheduleFrame: (callback) => frames.push(callback),
     })
-    await controller.connect('http://127.0.0.1:6173', 'thread-1')
+    await controller.connect('thread-1')
 
     onEvent?.(runItemToolResult('tr-1', 'img-1'))
     frames[0]()
@@ -499,7 +649,7 @@ describe('core appServer runtime store', () => {
       },
       scheduleFrame: (callback) => frames.push(callback),
     })
-    await controller.connect('http://127.0.0.1:6173', 'thread-1')
+    await controller.connect('thread-1')
 
     onEvent?.({
       event_id: 'guide-event-1',
@@ -568,7 +718,7 @@ describe('core appServer runtime store', () => {
       },
       scheduleFrame: (callback) => frames.push(callback),
     })
-    await controller.connect('http://127.0.0.1:6173', 'thread-1')
+    await controller.connect('thread-1')
 
     // 1) First event for a new item is a transient delta (seq=0) — must NOT
     //    anchor the item at 0.
@@ -618,6 +768,7 @@ function fakeClient(
   return {
     async connect() {},
     request,
+    respondServerRequest() { return false },
     close() {},
   }
 }
@@ -651,6 +802,8 @@ class ReconnectingClient implements CoreAppServerRuntimeClient {
     return { ok: true }
   }
 
+  respondServerRequest() { return false }
+
   close() {
     this.onConnectionState('closed')
   }
@@ -670,6 +823,17 @@ function snapshot(seq: number, status: CoreAppSnapshot['status']): CoreAppSnapsh
     artifacts: {},
     core: coreState(seq, status),
   }
+}
+
+function versionedSnapshot(
+  seq: number,
+  status: CoreAppSnapshot['status'],
+  revision: number,
+): CoreAppSnapshot {
+  const value = snapshot(seq, status)
+  value.revision = revision
+  if (value.core) value.core.revision = revision
+  return value
 }
 
 function coreState(seq: number, status: CoreAppSnapshot['status']): NonNullable<CoreAppSnapshot['core']> {
@@ -819,7 +983,7 @@ function runItemToolResult(eventId: string, itemId: string): CoreAppEvent {
       scheduleFrame: (callback) => frames.push(callback),
     })
 
-    const connecting = controller.connect('http://127.0.0.1:6173', 'thread-1')
+    const connecting = controller.connect('thread-1')
     // A transient delta arrives while the resume snapshot is still in flight.
     onEvent?.(runItemDelta('delta-1', 'hel'))
 
@@ -848,7 +1012,7 @@ function runItemToolResult(eventId: string, itemId: string): CoreAppEvent {
       },
       scheduleFrame: (callback) => frames.push(callback),
     })
-    await controller.connect('http://127.0.0.1:6173', 'thread-1')
+    await controller.connect('thread-1')
 
     // One coalesced batch mixing an already-seen id and a fresh delta.
     onEvent?.({
@@ -875,7 +1039,7 @@ function runItemToolResult(eventId: string, itemId: string): CoreAppEvent {
       },
       scheduleFrame: (callback) => frames.push(callback),
     })
-    await controller.connect('http://127.0.0.1:6173', 'thread-1')
+    await controller.connect('thread-1')
 
     // Event-derived state with a truncated content.
     onEvent?.(runItemDelta('delta-1', 'part'))

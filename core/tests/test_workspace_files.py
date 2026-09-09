@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
+import lamtools_core.tool.workspace_files as workspace_files_module
 from lamtools_core.tool import ToolCall
 from lamtools_core.tool.document_normalize import (
     DEFAULT_DOCUMENT_LIMITS,
@@ -14,6 +16,7 @@ from lamtools_core.tool.document_normalize import (
 )
 from lamtools_core.tool.workspace_files import (
     WorkspaceReadOnlyTools,
+    compute_sha256,
     edit_file_tool,
     resolve_read_resource_path,
     write_file_tool,
@@ -24,7 +27,7 @@ from lamtools_core.tool.workspace_files import (
 async def test_read_file_returns_metadata_and_artifact(tmp_path):
     work_root = tmp_path / "project"
     work_root.mkdir()
-    (work_root / "hello.py").write_text("print('hello')\n", encoding="utf-8")
+    (work_root / "hello.py").write_bytes(b"print('hello')\n")
     tools = WorkspaceReadOnlyTools(work_root)
 
     result = await tools.read_file(ToolCall(id="read-1", name="read_file", arguments={"path": "hello.py"}))
@@ -519,3 +522,438 @@ async def test_workspace_tools_allow_access_outside_workdir(tmp_path):
     )
     assert edited.status == "ok"
     assert (outside / "new.txt").read_text(encoding="utf-8") == "updated\n"
+
+
+@pytest.mark.asyncio
+async def test_read_file_reports_raw_file_and_fragment_hashes(tmp_path):
+    work_root = tmp_path / "project"
+    work_root.mkdir()
+    raw = b"first\r\nsecond\n\xe4\xb8\xad\xe6\x96\x87"
+    (work_root / "mixed.txt").write_bytes(raw)
+
+    result = await WorkspaceReadOnlyTools(work_root).read_file(
+        ToolCall(id="read-hash", name="read_file", arguments={"path": "mixed.txt"})
+    )
+
+    assert result.status == "ok"
+    fragment = "first\r\nsecond\n中文"
+    assert result.artifacts[0].content == fragment
+    assert result.metadata["file_hash"] == compute_sha256(raw)
+    assert result.metadata["content_hash"] == compute_sha256(fragment.encode("utf-8"))
+    assert result.metadata["start"] == 0
+    assert result.metadata["end"] == len(fragment)
+    assert result.artifacts[0].metadata["file_hash"] == result.metadata["file_hash"]
+
+
+@pytest.mark.asyncio
+async def test_read_file_rejects_invalid_utf8_without_replacing_bytes(tmp_path):
+    work_root = tmp_path / "project"
+    work_root.mkdir()
+    raw = b"valid prefix\xff\n"
+    (work_root / "invalid.txt").write_bytes(raw)
+
+    result = await WorkspaceReadOnlyTools(work_root).read_file(
+        ToolCall(id="read-invalid-utf8", name="read_file", arguments={"path": "invalid.txt"})
+    )
+
+    assert result.status == "failed"
+    assert result.error_code == "invalid_utf8"
+    assert result.metadata["file_hash"] == compute_sha256(raw)
+    assert (work_root / "invalid.txt").read_bytes() == raw
+
+
+@pytest.mark.parametrize(
+    ("content", "expected_bytes"),
+    [
+        ("first\r\nsecond\r\n", b"first\r\nsecond\r\n"),
+        ("first\nsecond\n", b"first\nsecond\n"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_write_file_preserves_input_line_endings(tmp_path, content, expected_bytes):
+    work_root = tmp_path / "project"
+    work_root.mkdir()
+
+    result = await write_file_tool(
+        ToolCall(id="write-newlines", name="write_file", arguments={"path": "lines.txt", "content": content}),
+        work_root=work_root,
+    )
+
+    assert result.status == "ok"
+    assert (work_root / "lines.txt").read_bytes() == expected_bytes
+    assert result.metadata["file_hash"] == compute_sha256(expected_bytes)
+
+
+@pytest.mark.asyncio
+async def test_write_file_missing_content_fails_but_empty_content_is_valid(tmp_path):
+    work_root = tmp_path / "project"
+    work_root.mkdir()
+
+    missing = await write_file_tool(
+        ToolCall(id="write-missing", name="write_file", arguments={"path": "missing.txt"}),
+        work_root=work_root,
+    )
+    empty = await write_file_tool(
+        ToolCall(id="write-empty", name="write_file", arguments={"path": "empty.txt", "content": ""}),
+        work_root=work_root,
+    )
+
+    assert missing.status == "failed"
+    assert missing.error_code == "missing_argument"
+    assert not (work_root / "missing.txt").exists()
+    assert empty.status == "ok"
+    assert (work_root / "empty.txt").read_bytes() == b""
+
+
+@pytest.mark.asyncio
+async def test_edit_file_missing_new_string_fails_but_empty_new_string_is_valid(tmp_path):
+    work_root = tmp_path / "project"
+    work_root.mkdir()
+    target = work_root / "delete.txt"
+    target.write_bytes(b"remove me\r\n")
+
+    missing = await edit_file_tool(
+        ToolCall(id="edit-missing-new", name="edit_file", arguments={"path": "delete.txt", "old_string": "remove me"}),
+        work_root=work_root,
+    )
+    deleted = await edit_file_tool(
+        ToolCall(
+            id="edit-empty-new",
+            name="edit_file",
+            arguments={"path": "delete.txt", "old_string": "remove me", "new_string": ""},
+        ),
+        work_root=work_root,
+    )
+
+    assert missing.status == "failed"
+    assert missing.error_code == "missing_argument"
+    assert deleted.status == "ok"
+    assert target.read_bytes() == b"\r\n"
+
+
+@pytest.mark.asyncio
+async def test_invalid_utf8_write_does_not_truncate_existing_file(tmp_path):
+    work_root = tmp_path / "project"
+    work_root.mkdir()
+    target = work_root / "safe.txt"
+    original = b"keep me\r\n"
+    target.write_bytes(original)
+
+    result = await write_file_tool(
+        ToolCall(
+            id="write-surrogate",
+            name="write_file",
+            arguments={"path": "safe.txt", "content": "bad\ud800"},
+        ),
+        work_root=work_root,
+    )
+
+    assert result.status == "failed"
+    assert result.error_code == "invalid_utf8"
+    assert target.read_bytes() == original
+
+
+@pytest.mark.asyncio
+async def test_invalid_utf8_edit_does_not_truncate_existing_file(tmp_path):
+    work_root = tmp_path / "project"
+    work_root.mkdir()
+    target = work_root / "safe-edit.txt"
+    original = b"keep me\r\n"
+    target.write_bytes(original)
+
+    result = await edit_file_tool(
+        ToolCall(
+            id="edit-surrogate",
+            name="edit_file",
+            arguments={"path": "safe-edit.txt", "old_string": "keep", "new_string": "bad\ud800"},
+        ),
+        work_root=work_root,
+    )
+
+    assert result.status == "failed"
+    assert result.error_code == "invalid_utf8"
+    assert target.read_bytes() == original
+
+
+@pytest.mark.asyncio
+async def test_atomic_write_failure_keeps_existing_file_intact(tmp_path, monkeypatch):
+    work_root = tmp_path / "project"
+    work_root.mkdir()
+    target = work_root / "atomic.txt"
+    original = b"old\r\ncontent\n"
+    target.write_bytes(original)
+
+    def fail_replace(source, destination):
+        raise OSError("simulated replace interruption")
+
+    monkeypatch.setattr(workspace_files_module.os, "replace", fail_replace)
+    result = await write_file_tool(
+        ToolCall(id="write-interrupt", name="write_file", arguments={"path": "atomic.txt", "content": "new\n"}),
+        work_root=work_root,
+    )
+
+    assert result.status == "failed"
+    assert result.error_code == "write_failed"
+    assert target.read_bytes() == original
+    assert list(work_root.glob(".atomic.txt.*.tmp")) == []
+
+
+@pytest.mark.asyncio
+async def test_atomic_edit_failure_keeps_existing_file_intact(tmp_path, monkeypatch):
+    work_root = tmp_path / "project"
+    work_root.mkdir()
+    target = work_root / "atomic-edit.txt"
+    original = b"old\r\ncontent\n"
+    target.write_bytes(original)
+
+    def fail_replace(source, destination):
+        raise OSError("simulated replace interruption")
+
+    monkeypatch.setattr(workspace_files_module.os, "replace", fail_replace)
+    result = await edit_file_tool(
+        ToolCall(
+            id="edit-interrupt",
+            name="edit_file",
+            arguments={"path": "atomic-edit.txt", "old_string": "old", "new_string": "new"},
+        ),
+        work_root=work_root,
+    )
+
+    assert result.status == "failed"
+    assert result.error_code == "write_failed"
+    assert target.read_bytes() == original
+    assert list(work_root.glob(".atomic-edit.txt.*.tmp")) == []
+
+
+@pytest.mark.asyncio
+async def test_write_file_expected_hash_and_must_not_exist_prevent_overwrite(tmp_path):
+    work_root = tmp_path / "project"
+    work_root.mkdir()
+    target = work_root / "guarded.txt"
+    target.write_bytes(b"before\r\n")
+    expected = compute_sha256(target.read_bytes())
+
+    updated = await write_file_tool(
+        ToolCall(
+            id="write-expected-ok",
+            name="write_file",
+            arguments={
+                "path": "guarded.txt",
+                "content": "after\r\n",
+                "expected_file_hash": expected,
+            },
+        ),
+        work_root=work_root,
+    )
+    target.write_bytes(b"external\n")
+    conflict = await write_file_tool(
+        ToolCall(
+            id="write-expected-conflict",
+            name="write_file",
+            arguments={
+                "path": "guarded.txt",
+                "content": "should not win",
+                "expected_file_hash": expected,
+            },
+        ),
+        work_root=work_root,
+    )
+    create_only = await write_file_tool(
+        ToolCall(
+            id="write-create-only",
+            name="write_file",
+            arguments={"path": "guarded.txt", "content": "overwrite", "must_not_exist": True},
+        ),
+        work_root=work_root,
+    )
+
+    assert updated.status == "ok"
+    assert conflict.status == "failed"
+    assert conflict.error_code == "file_version_changed"
+    assert conflict.metadata["current_file_hash"] == compute_sha256(b"external\n")
+    assert create_only.status == "failed"
+    assert create_only.error_code == "file_already_exists"
+    assert target.read_bytes() == b"external\n"
+
+
+@pytest.mark.asyncio
+async def test_edit_file_requires_unique_match_or_explicit_occurrence(tmp_path):
+    work_root = tmp_path / "project"
+    work_root.mkdir()
+    target = work_root / "matches.txt"
+    target.write_bytes(b"same\nother\nsame\n")
+
+    ambiguous = await edit_file_tool(
+        ToolCall(
+            id="edit-ambiguous",
+            name="edit_file",
+            arguments={"path": "matches.txt", "old_string": "same", "new_string": "changed"},
+        ),
+        work_root=work_root,
+    )
+    selected = await edit_file_tool(
+        ToolCall(
+            id="edit-occurrence",
+            name="edit_file",
+            arguments={
+                "path": "matches.txt",
+                "old_string": "same",
+                "new_string": "changed",
+                "occurrence": 2,
+            },
+        ),
+        work_root=work_root,
+    )
+
+    assert ambiguous.status == "failed"
+    assert ambiguous.error_code == "ambiguous_match"
+    assert selected.status == "ok"
+    assert target.read_bytes() == b"same\nother\nchanged\n"
+
+
+@pytest.mark.asyncio
+async def test_edit_file_preserves_crlf_and_rejects_non_exact_line_endings(tmp_path):
+    work_root = tmp_path / "project"
+    work_root.mkdir()
+    target = work_root / "crlf.txt"
+    target.write_bytes(b"first\r\nsecond\r\n")
+
+    rejected = await edit_file_tool(
+        ToolCall(
+            id="edit-lf-mismatch",
+            name="edit_file",
+            arguments={"path": "crlf.txt", "old_string": "first\n", "new_string": "changed\n"},
+        ),
+        work_root=work_root,
+    )
+    edited = await edit_file_tool(
+        ToolCall(
+            id="edit-crlf",
+            name="edit_file",
+            arguments={"path": "crlf.txt", "old_string": "first\r\n", "new_string": "changed\r\n"},
+        ),
+        work_root=work_root,
+    )
+
+    assert rejected.status == "failed"
+    assert rejected.error_code == "old_string_not_found"
+    assert edited.status == "ok"
+    assert target.read_bytes() == b"changed\r\nsecond\r\n"
+
+
+@pytest.mark.asyncio
+async def test_edit_file_context_and_content_hash_target_the_exact_match(tmp_path):
+    work_root = tmp_path / "project"
+    work_root.mkdir()
+    target = work_root / "context.txt"
+    target.write_bytes(b"left:target;one\nleft:target;two\n")
+    local_fragment = "left:target;two"
+
+    edited = await edit_file_tool(
+        ToolCall(
+            id="edit-context",
+            name="edit_file",
+            arguments={
+                "path": "context.txt",
+                "old_string": "target",
+                "new_string": "updated",
+                "before_context": "left:",
+                "after_context": ";two",
+                "expected_content_hash": compute_sha256(local_fragment.encode("utf-8")),
+            },
+        ),
+        work_root=work_root,
+    )
+    mismatch = await edit_file_tool(
+        ToolCall(
+            id="edit-context-mismatch",
+            name="edit_file",
+            arguments={
+                "path": "context.txt",
+                "old_string": "updated",
+                "new_string": "again",
+                "before_context": "wrong:",
+            },
+        ),
+        work_root=work_root,
+    )
+
+    assert edited.status == "ok"
+    assert edited.metadata["content_hash"] == compute_sha256(local_fragment.encode("utf-8"))
+    assert target.read_bytes() == b"left:target;one\nleft:updated;two\n"
+    assert mismatch.status == "failed"
+    assert mismatch.error_code == "context_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_edit_file_expected_hash_conflict_and_content_hash_conflict_keep_file(tmp_path):
+    work_root = tmp_path / "project"
+    work_root.mkdir()
+    target = work_root / "edit-guards.txt"
+    target.write_bytes(b"target\n")
+    expected_file_hash = compute_sha256(target.read_bytes())
+    target.write_bytes(b"changed\n")
+
+    file_conflict = await edit_file_tool(
+        ToolCall(
+            id="edit-file-conflict",
+            name="edit_file",
+            arguments={
+                "path": "edit-guards.txt",
+                "old_string": "changed",
+                "new_string": "new",
+                "expected_file_hash": expected_file_hash,
+            },
+        ),
+        work_root=work_root,
+    )
+    content_conflict = await edit_file_tool(
+        ToolCall(
+            id="edit-content-conflict",
+            name="edit_file",
+            arguments={
+                "path": "edit-guards.txt",
+                "old_string": "changed",
+                "new_string": "new",
+                "expected_content_hash": compute_sha256(b"not changed"),
+            },
+        ),
+        work_root=work_root,
+    )
+
+    assert file_conflict.status == "failed"
+    assert file_conflict.error_code == "file_version_changed"
+    assert content_conflict.status == "failed"
+    assert content_conflict.error_code == "content_version_changed"
+    assert target.read_bytes() == b"changed\n"
+
+
+@pytest.mark.asyncio
+async def test_same_path_concurrent_edits_are_serialized(tmp_path):
+    work_root = tmp_path / "project"
+    work_root.mkdir()
+    target = work_root / "concurrent.txt"
+    target.write_bytes(b"target\n")
+
+    results = await asyncio.gather(
+        edit_file_tool(
+            ToolCall(
+                id="edit-concurrent-a",
+                name="edit_file",
+                arguments={"path": "concurrent.txt", "old_string": "target", "new_string": "one"},
+            ),
+            work_root=work_root,
+        ),
+        edit_file_tool(
+            ToolCall(
+                id="edit-concurrent-b",
+                name="edit_file",
+                arguments={"path": "concurrent.txt", "old_string": "target", "new_string": "two"},
+            ),
+            work_root=work_root,
+        ),
+    )
+
+    assert [result.status for result in results].count("ok") == 1
+    assert [result.status for result in results].count("failed") == 1
+    assert target.read_bytes() in {b"one\n", b"two\n"}

@@ -3,6 +3,16 @@ import { describe, expect, it, vi } from 'vitest'
 
 import ChatThread from '../src/components/ChatThread.vue'
 import type { CoreMessage } from '../src/types'
+import { createFakeTransport } from './fake-transport'
+
+const testTransport = createFakeTransport()
+
+function mountChatThread(options: any = {}) {
+  return mount(ChatThread, {
+    ...options,
+    props: { transport: testTransport, ...(options.props ?? {}) },
+  })
+}
 
 const messages: CoreMessage[] = [
   {
@@ -30,12 +40,12 @@ const messages: CoreMessage[] = [
 
 describe('ChatThread assistant message actions', () => {
   it('hides the action row by default', () => {
-    const wrapper = mount(ChatThread, { props: { messages } })
+    const wrapper = mountChatThread( { props: { messages } })
     expect(wrapper.find('[data-assistant-actions]').exists()).toBe(false)
   })
 
   it('shows copy/fork/rollback actions only for assistant turns with content', async () => {
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: { messages, messageActions: true },
     })
 
@@ -47,7 +57,7 @@ describe('ChatThread assistant message actions', () => {
   })
 
   it('emits the turn payload for fork and rollback', async () => {
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: { messages, messageActions: true },
     })
 
@@ -61,7 +71,7 @@ describe('ChatThread assistant message actions', () => {
   it('copies the reply to the clipboard and shows a transient copied state', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
-    const wrapper = mount(ChatThread, { props: { messages, messageActions: true } })
+    const wrapper = mountChatThread( { props: { messages, messageActions: true } })
 
     await wrapper.get('[data-message-copy]').trigger('click')
     await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith('第一条回复'))
@@ -69,7 +79,7 @@ describe('ChatThread assistant message actions', () => {
   })
 
   it('keeps fork and rollback enabled without a checkpoint', async () => {
-    const wrapper = mount(ChatThread, { props: { messages, messageActions: true } })
+    const wrapper = mountChatThread( { props: { messages, messageActions: true } })
 
     expect(wrapper.get('[data-message-fork]').attributes('disabled')).toBeUndefined()
     expect(wrapper.get('[data-message-rollback]').attributes('disabled')).toBeUndefined()

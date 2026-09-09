@@ -2,12 +2,15 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { X } from 'lucide-vue-next'
 import type { CoreArrangeJob } from '../durable/types'
-import { listArrangeJobs, createArrangeJob, updateArrangeJob, renameArrangeJob, editArrangeJob as editArrangeJobApi, listArrangeOccurrences } from '../durable/api'
-import { CoreAppServerClient, appServerUrl } from '../appServer'
+import { createDurableApi, type CoreDurableRequest } from '../durable/api'
 import UiSelect from './UiSelect.vue'
 
-const props = defineProps<{ workRoot?: string }>()
+const props = defineProps<{
+  workRoot?: string
+  requestRpc: CoreDurableRequest
+}>()
 const emit = defineEmits<{ back: [] }>()
+const durable = createDurableApi(props.requestRpc)
 
 const jobs = ref<CoreArrangeJob[]>([])
 const loading = ref(false)
@@ -73,28 +76,10 @@ const threadOptions = computed(() => [
   ...availableSessions.value.map(s => ({ value: s.id, label: s.title || s.id.slice(0, 8) })),
 ])
 
-let _configClient: CoreAppServerClient | null = null
-async function configRequest(method: string, params: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
-  if (!_configClient) {
-    const client = new CoreAppServerClient({
-      // '' resolves to __LAMTOOLS_API_BASE__ (direct backend) in the desktop
-      // app; in browser dev it falls back to the vite origin (proxied). Using
-      // window.location.origin here forced the desktop app through the vite
-      // proxy to the dead 5172 port — the arrange dialog never worked there.
-      url: appServerUrl('', { path: '/api/core/app-server' }),
-      clientInfo: { name: 'lamtools_arrange', title: 'Arrange', version: '0.1.0' },
-      onConnectionState: (state) => { if (state === 'closed' || state === 'error') _configClient = null },
-    })
-    await client.connect()
-    _configClient = client
-  }
-  return await _configClient.request(method, params)
-}
-
 async function loadProjects() {
   if (availableProjects.value.length > 0) return
   try {
-    const result = await configRequest('project.list') as { projects?: Array<{ id: string; name: string; work_root: string }> }
+    const result = await props.requestRpc('project.list') as { projects?: Array<{ id: string; name: string; work_root: string }> }
     availableProjects.value = result.projects || []
   } catch (e) { console.error('loadProjects:', e) }
 }
@@ -102,7 +87,7 @@ async function loadProjects() {
 async function loadModels() {
   if (availableModels.value.length > 0) return
   try {
-    const result = await configRequest('config.models.list') as { models?: Array<{ id: string; model_id: string; display_name: string; provider_name: string }> }
+    const result = await props.requestRpc('config.models.list') as { models?: Array<{ id: string; model_id: string; display_name: string; provider_name: string }> }
     availableModels.value = (result.models || []).map(m => {
       const pn = m.provider_name || ''
       const mn = m.model_id || m.display_name
@@ -116,10 +101,10 @@ async function loadSessions(workRoot: string) {
   loadingSessions.value = true
   availableSessions.value = []
   try {
-    const result = await configRequest('project.list') as { projects?: Array<{ id: string; work_root: string }> }
+    const result = await props.requestRpc('project.list') as { projects?: Array<{ id: string; work_root: string }> }
     const project = (result.projects || []).find(p => p.work_root === workRoot)
     if (project) {
-      const sessions = await configRequest('project.sessions.list', { project_id: project.id }) as { sessions?: Array<{ id: string; title: string }> }
+      const sessions = await props.requestRpc('project.sessions.list', { project_id: project.id }) as { sessions?: Array<{ id: string; title: string }> }
       availableSessions.value = sessions.sessions || []
     }
   } catch (e) { console.error('loadSessions:', e) }
@@ -251,7 +236,7 @@ async function submitForm() {
   error.value = ''
   try {
     if (formMode.value === 'create') {
-      await createArrangeJob({
+      await durable.createArrangeJob({
         thread_id: formThreadId.value || '',
         work_root: formWorkRoot.value.trim() || '',
         kind: formKind.value,
@@ -270,7 +255,7 @@ async function submitForm() {
       fields.trigger = buildTrigger()
       fields.session_strategy = formSessionStrategy.value
       fields.model_id = formModelId.value || undefined
-      await editArrangeJobApi(editingJobId.value, fields as { instruction?: string; trigger?: Record<string, unknown>; session_strategy?: 'fixed' | 'new'; model_id?: string })
+      await durable.editArrangeJob(editingJobId.value, fields as { instruction?: string; trigger?: Record<string, unknown>; session_strategy?: 'fixed' | 'new'; model_id?: string })
     }
     showForm.value = false
     await loadJobs()
@@ -284,7 +269,7 @@ async function submitForm() {
 async function loadJobs() {
   loading.value = true
   error.value = ''
-  try { jobs.value = await listArrangeJobs() }
+  try { jobs.value = await durable.listArrangeJobs(props.workRoot) }
   catch (cause) { error.value = cause instanceof Error ? cause.message : '读取安排失败' }
   finally { loading.value = false }
 }
@@ -293,7 +278,7 @@ async function changeStatus(job: CoreArrangeJob, action: 'pause' | 'resume' | 'c
   busyIds.value = new Set([...busyIds.value, job.id])
   error.value = ''
   try {
-    const updated = await updateArrangeJob(job.id, action)
+    const updated = await durable.updateArrangeJob(job.id, action)
     jobs.value = jobs.value.map(item => item.id === updated.id ? updated : item)
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : '更新安排失败'
@@ -321,7 +306,7 @@ async function commitTitle(job: CoreArrangeJob) {
   }
   busyIds.value = new Set([...busyIds.value, job.id])
   try {
-    const updated = await renameArrangeJob(job.id, draft)
+    const updated = await durable.renameArrangeJob(job.id, draft)
     jobs.value = jobs.value.map(item => item.id === updated.id ? updated : item)
   } catch { /* keep old title */ }
   finally {
@@ -349,7 +334,7 @@ async function commitInstruction(job: CoreArrangeJob) {
   }
   busyIds.value = new Set([...busyIds.value, job.id])
   try {
-    const updated = await editArrangeJobApi(job.id, { instruction: draft })
+    const updated = await durable.editArrangeJob(job.id, { instruction: draft })
     jobs.value = jobs.value.map(item => item.id === updated.id ? updated : item)
   } catch { /* keep old */ }
   finally {
@@ -365,7 +350,7 @@ async function toggleSessionStrategy(job: CoreArrangeJob) {
   const next = job.session_strategy === 'fixed' ? 'new' : 'fixed'
   busyIds.value = new Set([...busyIds.value, job.id])
   try {
-    const updated = await editArrangeJobApi(job.id, { session_strategy: next })
+    const updated = await durable.editArrangeJob(job.id, { session_strategy: next })
     jobs.value = jobs.value.map(item => item.id === updated.id ? updated : item)
   } catch { /* keep old */ }
   finally {
@@ -387,7 +372,7 @@ async function toggleHistory(jobId: string) {
   expandedHistory.value = new Set([...expandedHistory.value, jobId])
   if (occurrences.value[jobId].length === 0) {
     try {
-      const items = await listArrangeOccurrences(jobId)
+      const items = await durable.listArrangeOccurrences(jobId)
       occurrences.value = { ...occurrences.value, [jobId]: items }
     } catch { /* ignore */ }
   }

@@ -4,6 +4,22 @@ import { describe, expect, it } from 'vitest'
 import CoreExecutionControls from '../src/components/CoreExecutionControls.vue'
 
 describe('CoreExecutionControls', () => {
+  it('places host controls directly after runtime permissions', () => {
+    const wrapper = mount(CoreExecutionControls, {
+      props: {
+        thinkingMode: 'off',
+        thinkingModeOptions: [],
+      },
+      slots: {
+        'after-runtime': '<button data-test-workspace>环境</button>',
+      },
+    })
+    const children = wrapper.get('.core-execution-controls').element.children
+    expect(children[0].getAttribute('data-core-runtime-menu')).not.toBeNull()
+    expect(children[1].getAttribute('data-test-workspace')).not.toBeNull()
+    expect(children[2].getAttribute('data-core-model-thinking-menu')).not.toBeNull()
+  })
+
   it('groups shallow thinking into the compact thinking selector without changing the thinking level', async () => {
     const wrapper = mount(CoreExecutionControls, {
       props: {

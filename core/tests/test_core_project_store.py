@@ -75,6 +75,65 @@ async def test_create_same_normalized_workspace_keeps_original_project_name(tmp_
 
 
 @pytest.mark.asyncio
+async def test_fallback_project_backfills_orphaned_sessions_without_changing_valid_ones(tmp_path: Path) -> None:
+    db = await open_core_app_db(tmp_path / "core.db")
+    store = CoreDbSessionStore(lambda: db)
+    valid_root = tmp_path / "valid"
+    fallback_root = tmp_path / "MyProject"
+    try:
+        valid_project, _ = await db.project_store.create(valid_root)
+        valid_session = (await db.project_store.list_sessions(valid_project.id))[0]
+        await store.create(SessionRecord(id="missing-root", member_id="core", title="Missing", status="idle"))
+        await store.create(SessionRecord(
+            id="dangling-root",
+            member_id="core",
+            title="Dangling",
+            status="idle",
+            metadata={"work_root": str(tmp_path / "not-a-project")},
+        ))
+
+        fallback, migrated = await db.project_store.ensure_fallback_project(fallback_root)
+        repeated, repeated_count = await db.project_store.ensure_fallback_project(fallback_root)
+
+        assert fallback.name == "MyProject"
+        assert fallback.work_root == str(fallback_root.resolve())
+        assert fallback_root.is_dir()
+        assert migrated == 2
+        assert repeated.id == fallback.id
+        assert repeated_count == 0
+        assert (await store.get("missing-root")).metadata["work_root"] == str(fallback_root.resolve())
+        assert (await store.get("dangling-root")).metadata["work_root"] == str(fallback_root.resolve())
+        assert (await store.get(valid_session.id)).metadata["work_root"] == str(valid_root.resolve())
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_configured_session_store_routes_direct_creates_to_fallback_project(tmp_path: Path) -> None:
+    fallback_root = tmp_path / "MyProject"
+    db = await open_core_app_db(tmp_path / "core.db", project_roots=[fallback_root])
+    store = CoreDbSessionStore(lambda: db, fallback_work_root=fallback_root)
+    try:
+        created = SessionRecord(
+            id="direct-create",
+            member_id="core",
+            title="Direct",
+            status="idle",
+            metadata={"work_root": str(tmp_path / "unknown")},
+        )
+
+        await store.create(created)
+
+        projects = await db.project_store.list()
+        assert [(project.name, project.work_root) for project in projects] == [
+            ("MyProject", str(fallback_root.resolve())),
+        ]
+        assert (await store.get(created.id)).metadata["work_root"] == str(fallback_root.resolve())
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
 async def test_public_delete_cleans_linked_session_records_without_deleting_workspace(tmp_path: Path) -> None:
     db = await open_core_app_db(tmp_path / "core.db")
     root = tmp_path / "workspace"

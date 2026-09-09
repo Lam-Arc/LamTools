@@ -2,9 +2,9 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-const source = readFileSync(resolve(process.cwd(), 'src/demo/App.vue'), 'utf8')
+const source = readFileSync(resolve(process.cwd(), 'src/app/LamToolsApp.vue'), 'utf8')
 
-describe('Core demo rollback host wiring', () => {
+describe('Shared Core App rollback host wiring', () => {
   it('wires rollback/fork through chat message turn boundaries, not the checkpoint graph', () => {
     expect(source).toMatch(/@rollback-message="handleRollbackMessage"/)
     expect(source).toMatch(/@fork-message="handleForkMessage"/)

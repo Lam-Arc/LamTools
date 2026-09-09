@@ -1,0 +1,11 @@
+**/target/
+**/node_modules/
+data/
+.lam/
+.pytest_cache/
+__pycache__/
+build/
+dist/
+*.db
+*.db-wal
+*.db-shm

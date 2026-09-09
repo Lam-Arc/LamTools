@@ -47,10 +47,17 @@ class TestToolTypes:
         assert d["content"] == "item contents"
 
     def test_tool_result_error(self):
-        r = ToolResult(call_id="c1", name="lookup_item", status="failed", error="not found")
+        r = ToolResult(
+            call_id="c1",
+            name="lookup_item",
+            status="failed",
+            error="not found",
+            error_code="file_not_found",
+        )
         d = r.to_dict()
         assert d["status"] == "failed"
         assert d["error"] == "not found"
+        assert d["error_code"] == "file_not_found"
 
     def test_tool_result_with_artifacts(self):
         art = ToolArtifact(kind="asset", uri="memory://asset-1")

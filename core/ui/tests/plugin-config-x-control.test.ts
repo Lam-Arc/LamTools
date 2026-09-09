@@ -2,6 +2,9 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { describe, expect, it, vi } from 'vitest'
 
 import CorePluginsEditor from '../src/components/CorePluginsEditor.vue'
+import { createFakeTransport } from './fake-transport'
+
+const transport = createFakeTransport()
 
 // lamtools-rag 的 configSchema（x-control 协议，见 plugins/lamtools-rag/config/schema.jsonc）
 const RAG_SCHEMA = {
@@ -87,7 +90,7 @@ describe('插件配置表单 x-control', () => {
       },
     })
     const wrapper = mount(CorePluginsEditor, {
-      props: { requestRpc: rpc },
+      props: { requestRpc: rpc, transport },
       global: { stubs: { Teleport: true } },
     })
     await openConfig(wrapper)
@@ -121,7 +124,7 @@ describe('插件配置表单 x-control', () => {
   it('path-list：浏览键在非 Tauri 环境回落内置目录树对话框', async () => {
     const rpc = makeRpc()
     const wrapper = mount(CorePluginsEditor, {
-      props: { requestRpc: rpc },
+      props: { requestRpc: rpc, transport },
       global: { stubs: { Teleport: true } },
     })
     await openConfig(wrapper)
@@ -143,7 +146,7 @@ describe('插件配置表单 x-control', () => {
       },
     })
     const wrapper = mount(CorePluginsEditor, {
-      props: { requestRpc: rpc },
+      props: { requestRpc: rpc, transport },
       global: { stubs: { Teleport: true } },
     })
     await openConfig(wrapper)
@@ -165,7 +168,7 @@ describe('插件配置表单 x-control', () => {
       },
     })
     const wrapper = mount(CorePluginsEditor, {
-      props: { requestRpc: rpc },
+      props: { requestRpc: rpc, transport },
       global: { stubs: { Teleport: true } },
     })
     await openConfig(wrapper)

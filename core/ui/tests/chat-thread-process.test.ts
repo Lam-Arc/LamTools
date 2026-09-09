@@ -6,8 +6,17 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import ChatThread from '../src/components/ChatThread.vue';
 import type { CoreMessage } from '../src/types';
+import { createFakeTransport } from './fake-transport';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const testTransport = createFakeTransport();
+
+function mountChatThread(options: any = {}) {
+  return mount(ChatThread, {
+    ...options,
+    props: { transport: testTransport, ...(options.props ?? {}) },
+  });
+}
 
 describe('ChatThread process cards', () => {
   it('renders live text directly without an artificial character-rate queue', () => {
@@ -21,7 +30,7 @@ describe('ChatThread process cards', () => {
   });
 
   it('shows a terminal failure without requiring the process panel to be expanded', () => {
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: {
         messages: [{
           id: 'failed-turn',
@@ -45,7 +54,7 @@ describe('ChatThread process cards', () => {
   });
 
   it('renders assistant Markdown through the shared default renderer', () => {
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: {
         messages: [{
           id: 'markdown-answer',
@@ -62,7 +71,7 @@ describe('ChatThread process cards', () => {
   });
 
   it('shows a compact assistant time and its full hover value', () => {
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: {
         messages: [{
           id: 'timestamped-answer',
@@ -100,7 +109,7 @@ describe('ChatThread process cards', () => {
       }],
     }];
 
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: {
         messages,
         processExpandedIds: new Set(['m-tool']),
@@ -134,7 +143,7 @@ describe('ChatThread process cards', () => {
       }],
     }];
 
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: {
         messages,
         processExpandedIds: new Set(['m-tool-row']),
@@ -204,7 +213,7 @@ describe('ChatThread process cards', () => {
       }],
     }];
 
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: { messages },
     });
 
@@ -239,7 +248,7 @@ describe('ChatThread process cards', () => {
       }],
     }];
 
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: {
         messages,
         processExpandedIds: new Set(['m-compaction-expanded']),
@@ -278,7 +287,7 @@ describe('ChatThread process cards', () => {
       }],
     }];
 
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: {
         messages,
         processExpandedIds: new Set(['m-compaction-skipped']),
@@ -308,7 +317,7 @@ describe('ChatThread process cards', () => {
       }],
     }];
 
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: { messages, processExpandedIds: new Set(['m-compaction-cancelled']) },
     });
 
@@ -336,7 +345,7 @@ describe('ChatThread process cards', () => {
       }],
     }];
 
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: { messages, processExpandedIds: new Set(['m-compaction-failed']) },
     });
 
@@ -377,7 +386,7 @@ describe('ChatThread process cards', () => {
       }],
     }];
 
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: {
         messages,
         processExpandedIds: new Set(['m-command-meta']),
@@ -414,7 +423,7 @@ describe('ChatThread process cards', () => {
       }],
     }];
 
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: {
         messages,
         processExpandedIds: new Set(['m-browser-check']),
@@ -452,7 +461,7 @@ describe('ChatThread process cards', () => {
       }],
     }];
 
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: {
         messages,
         processExpandedIds: new Set(['m-write']),
@@ -494,7 +503,7 @@ describe('ChatThread process cards', () => {
       }],
     }];
 
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: { messages },
     });
 
@@ -531,7 +540,7 @@ describe('ChatThread process cards', () => {
       }],
     }];
 
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: {
         messages,
         processExpandedIds: new Set(['m-edit']),
@@ -566,7 +575,7 @@ describe('ChatThread process cards', () => {
       }],
     }];
 
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: {
         messages,
         processExpandedIds: new Set(['m-write-title']),
@@ -601,7 +610,7 @@ describe('ChatThread process cards', () => {
       }],
     }];
 
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: {
         messages,
         processExpandedIds: new Set(['m-write-preview']),
@@ -638,7 +647,7 @@ describe('ChatThread process cards', () => {
         },
       }],
     });
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: {
         messages: [message('line 1', 'write_file')],
         processExpandedIds: new Set(['m-streaming-file-preview']),
@@ -691,7 +700,7 @@ describe('ChatThread process cards', () => {
       }],
     }];
 
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: {
         messages,
         processExpandedIds: new Set(['m-write-preview-tiny']),
@@ -725,7 +734,7 @@ describe('ChatThread process cards', () => {
       }],
     }];
 
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: {
         messages,
         processExpandedIds: new Set(['m-write-placeholder']),
@@ -772,7 +781,7 @@ describe('ChatThread process cards', () => {
       }],
     }];
 
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: {
         messages,
         processExpandedIds: new Set(['m-decision']),
@@ -840,7 +849,7 @@ describe('ChatThread process cards', () => {
       }],
     }];
 
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: {
         messages,
         processExpandedIds: new Set(['m-agent']),
@@ -927,7 +936,7 @@ describe('ChatThread process cards', () => {
       }],
     }];
 
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: {
         messages,
         processExpandedIds: new Set(['m-agent-shared-renderer']),
@@ -990,7 +999,7 @@ describe('ChatThread process cards', () => {
       }],
     }];
 
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: {
         messages,
         processExpandedIds: new Set(['m-agent-text-lifecycle']),
@@ -1033,7 +1042,7 @@ describe('ChatThread process cards', () => {
       }],
     }];
 
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: {
         messages,
         processExpandedIds: new Set(['m-agent-json']),
@@ -1071,7 +1080,7 @@ describe('ChatThread process cards', () => {
       }],
     }];
 
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: {
         messages,
         processExpandedIds: new Set(['m-agent-content']),
@@ -1108,7 +1117,7 @@ describe('ChatThread process cards', () => {
       }],
     }];
 
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: {
         messages,
         processExpandedIds: new Set(['m-checklist']),
@@ -1137,7 +1146,7 @@ describe('ChatThread process cards', () => {
       }],
     }];
 
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: { messages },
     });
 
@@ -1162,7 +1171,7 @@ describe('ChatThread process cards', () => {
       }],
     }];
 
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: {
         messages,
         processExpandedIds: new Set(['m-completed-decision']),
@@ -1189,7 +1198,7 @@ describe('ChatThread process cards', () => {
       }],
     }];
 
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: {
         messages,
         processExpandedIds: new Set(['m-completed-decision']),
@@ -1234,7 +1243,7 @@ describe('ChatThread process cards', () => {
       ],
     }];
 
-    const wrapper = mount(ChatThread, { props: { messages } });
+    const wrapper = mountChatThread( { props: { messages } });
 
     const process = wrapper.find('.process-stream');
     expect(process.text()).toContain('旧正文进入过程。');
@@ -1252,7 +1261,7 @@ describe('ChatThread process cards', () => {
       parts: [],
     }];
 
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: { messages },
     });
 
@@ -1272,7 +1281,7 @@ describe('ChatThread process cards', () => {
       parts: [],
     }];
 
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: { messages },
     });
 
@@ -1295,7 +1304,7 @@ describe('ChatThread process cards', () => {
       }],
     }];
 
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: { messages },
     });
 
@@ -1319,7 +1328,7 @@ describe('ChatThread process cards', () => {
       }],
     }];
 
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: {
         messages,
         processExpandedIds: new Set(['m-history-model-text']),
@@ -1347,7 +1356,7 @@ describe('ChatThread process cards', () => {
       }],
     }];
 
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: {
         messages,
         processExpandedIds: new Set(['m-history-raw-model-text']),
@@ -1391,7 +1400,7 @@ describe('ChatThread process cards', () => {
       ],
     }];
 
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: {
         messages,
         processExpandedIds: new Set(['m-history-command']),
@@ -1436,7 +1445,7 @@ describe('ChatThread process cards', () => {
       }],
     }];
 
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: { messages },
     });
 
@@ -1475,7 +1484,7 @@ describe('ChatThread process cards', () => {
       }],
     }];
 
-    const wrapper = mount(ChatThread, { props: { messages } });
+    const wrapper = mountChatThread( { props: { messages } });
     const descriptions = wrapper.findAll('.decision-option-desc');
     const groups = wrapper.findAll('.decision-option-group');
     const source = readFileSync(resolve(__dirname, '../src/components/ChatThread.vue'), 'utf8');
@@ -1538,7 +1547,7 @@ describe('ChatThread process cards', () => {
       }],
     }];
 
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: { messages },
     });
 
@@ -1582,7 +1591,7 @@ describe('ChatThread process cards', () => {
       }],
     }];
 
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: {
         messages,
         processExpandedIds: new Set(['m-completed-decision']),
@@ -1611,7 +1620,7 @@ describe('ChatThread process cards', () => {
       }],
     }];
 
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: {
         messages,
         processExpandedIds: new Set(['m-reasoning-slot']),
@@ -1648,7 +1657,7 @@ describe('ChatThread process cards', () => {
       }],
     }];
 
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: {
         messages,
         processExpandedIds: new Set(['m-completed-reasoning']),
@@ -1687,7 +1696,7 @@ describe('ChatThread process cards', () => {
       }],
     }];
 
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: {
         messages,
         processExpandedIds: new Set<string>(),
@@ -1728,7 +1737,7 @@ describe('ChatThread process cards', () => {
       }],
     }];
 
-    const wrapper = mount(ChatThread, { props: { messages } });
+    const wrapper = mountChatThread( { props: { messages } });
 
     expect(wrapper.find('.process-summary').exists()).toBe(false);
     expect(wrapper.find('.process-stream').exists()).toBe(false);
@@ -1776,7 +1785,7 @@ describe('ChatThread process cards', () => {
       }],
     }];
 
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: {
         messages,
         processExpandedIds: new Set(['m-history-running']),
@@ -1804,7 +1813,7 @@ describe('ChatThread process cards', () => {
       }],
     }];
 
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: { messages },
     });
 
@@ -1844,7 +1853,7 @@ describe('ChatThread process cards', () => {
       ],
     }];
 
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: { messages },
     });
 
@@ -1896,7 +1905,7 @@ describe('ChatThread process cards', () => {
       }],
     }];
 
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: { messages },
     });
 
@@ -1932,7 +1941,7 @@ describe('ChatThread process cards', () => {
       }],
     }];
 
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: { messages },
     });
 
@@ -1967,7 +1976,7 @@ describe('ChatThread process cards', () => {
       }],
     }];
 
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: { messages },
     });
 
@@ -2003,7 +2012,7 @@ describe('ChatThread process cards', () => {
       }],
     }];
 
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: { messages },
     });
 
@@ -2036,7 +2045,7 @@ describe('ChatThread process cards', () => {
       ],
     }];
 
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: { messages },
     });
 
@@ -2044,6 +2053,10 @@ describe('ChatThread process cards', () => {
     const html = wrapper.find('.assistant-message').html() || '';
     expect(html.indexOf('process-stream')).toBeLessThan(html.indexOf('assistant-answer'));
     expect(wrapper.find('.assistant-answer').text()).toContain('Final answer is streaming.');
+    expect(wrapper.findAll('.assistant-live-state')).toHaveLength(0);
+    expect(wrapper.findAll('.process-summary-state')).toHaveLength(1);
+    expect(wrapper.findAll('.process-summary-text')).toHaveLength(0);
+    expect(wrapper.find('.process-summary').text().match(/正在处理/g)).toHaveLength(1);
   });
 
   it('does not compute historical reasoning duration from wall clock when completion time is missing', () => {
@@ -2063,7 +2076,7 @@ describe('ChatThread process cards', () => {
       }],
     }];
 
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: {
         messages,
         processExpandedIds: new Set(['m-historical-running-reasoning']),
@@ -2073,7 +2086,7 @@ describe('ChatThread process cards', () => {
     expect(wrapper.text()).not.toContain('Thought for');
   });
 
-  it('keeps one process DOM and one final-answer position across live to complete', async () => {
+  it('collapses the process after live to complete and allows reopening', async () => {
     const liveMessage: CoreMessage = {
       id: 'm-unified-live-complete',
       role: 'assistant',
@@ -2086,7 +2099,7 @@ describe('ChatThread process cards', () => {
         { id: 'p-unified-answer', partType: 'model_text', status: 'running', content: '最终答案' },
       ],
     };
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: { messages: [liveMessage], processExpandedIds: new Set([liveMessage.id]) },
     });
 
@@ -2101,14 +2114,19 @@ describe('ChatThread process cards', () => {
         metadata: { ...liveMessage.metadata, live: false },
         parts: liveMessage.parts?.map(part => ({ ...part, status: 'completed' as const })),
       }],
+      processExpandedIds: new Set(),
     });
     await nextTick();
 
+    expect(wrapper.find('.process-stream').exists()).toBe(false);
+    expect(wrapper.findAll('.process-step')).toHaveLength(0);
+    expect(wrapper.find('.assistant-answer').text()).toContain('最终答案');
+
+    await wrapper.find('.process-summary').trigger('click');
+    await wrapper.setProps({ processExpandedIds: new Set([liveMessage.id]) });
+    expect(wrapper.find('.process-stream').exists()).toBe(true);
     expect(wrapper.findAll('.process-step')).toHaveLength(liveStepCount);
     expect((wrapper.find('.process-step--tool').attributes('class') || '').replace(/process-step--(?:running|completed|error)\b/g, '')).toBe(liveToolClass);
-    const completeHtml = wrapper.find('.assistant-message').html() || '';
-    expect(completeHtml.indexOf('process-stream')).toBeLessThan(completeHtml.indexOf('assistant-answer'));
-    expect(wrapper.find('.assistant-answer').text()).toContain('最终答案');
   });
 
   it('shows artifacts in the same bottom panel while live and after completion', async () => {
@@ -2126,7 +2144,7 @@ describe('ChatThread process cards', () => {
         artifacts: [{ kind: 'image', uri: 'data:image/png;base64,AA==' }],
       }],
     };
-    const wrapper = mount(ChatThread, { props: { messages: [message] } });
+    const wrapper = mountChatThread( { props: { messages: [message] } });
     const livePanel = wrapper.find('.message-artifacts');
     expect(livePanel.exists()).toBe(true);
 

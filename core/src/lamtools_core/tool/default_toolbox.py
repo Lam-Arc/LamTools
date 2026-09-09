@@ -153,18 +153,36 @@ DEFAULT_TOOL_CATEGORIES: dict[str, str] = {
 
 DEFAULT_TOOL_FAILURE_MODES: dict[str, list[dict[str, str]]] = {
     "read_file": [
+        {"type": "missing_argument", "message": "Required argument is missing"},
+        {"type": "invalid_argument", "message": "Argument has an invalid type or value"},
         {"type": "path_outside_root", "message": "Blocked: path is outside work_root"},
         {"type": "file_not_found", "message": "File not found"},
+        {"type": "invalid_utf8", "message": "File is not valid UTF-8"},
+        {"type": "read_failed", "message": "Error reading file"},
         {"type": "read_error", "message": "Error reading file"},
     ],
     "write_file": [
+        {"type": "missing_argument", "message": "Required argument is missing"},
+        {"type": "invalid_argument", "message": "Argument has an invalid type or value"},
         {"type": "path_outside_root", "message": "Blocked: path is outside work_root"},
         {"type": "sensitive_pattern", "message": "Blocked: path contains sensitive pattern"},
+        {"type": "file_already_exists", "message": "File already exists"},
+        {"type": "file_not_found", "message": "File not found"},
+        {"type": "file_version_changed", "message": "The file changed since it was read"},
+        {"type": "invalid_utf8", "message": "Content is not valid UTF-8"},
         {"type": "write_rejected", "message": "WRITE REJECTED: {reason}"},
     ],
     "edit_file": [
+        {"type": "missing_argument", "message": "Required argument is missing"},
+        {"type": "invalid_argument", "message": "Argument has an invalid type or value"},
         {"type": "old_string_empty", "message": "old_string is empty"},
+        {"type": "file_not_found", "message": "File not found"},
         {"type": "old_string_not_found", "message": "old_string not found in file"},
+        {"type": "ambiguous_match", "message": "old_string matched more than once"},
+        {"type": "context_mismatch", "message": "Edit context did not match"},
+        {"type": "content_version_changed", "message": "The selected content changed"},
+        {"type": "file_version_changed", "message": "The file changed since it was read"},
+        {"type": "invalid_utf8", "message": "File or replacement is not valid UTF-8"},
         {"type": "path_outside_root", "message": "Blocked: path is outside work_root"},
         {"type": "sensitive_pattern", "message": "Blocked: path contains sensitive pattern"},
         {"type": "edit_rejected", "message": "EDIT REJECTED: {reason}"},
@@ -206,8 +224,8 @@ DEFAULT_TOOL_FAILURE_MODES: dict[str, list[dict[str, str]]] = {
 
 DEFAULT_TOOL_RECOVERY: dict[str, str] = {
     "read_file": "Check path exists, use list_dir to find correct path",
-    "write_file": "Check path bounds, avoid sensitive patterns, ensure content is valid",
-    "edit_file": "Read file first to get exact content, use precise old_string match",
+    "write_file": "Check path bounds and content; on file_version_changed, re-read before retrying",
+    "edit_file": "Read file first; on a version or match conflict, re-read and use exact context or occurrence",
     "search_content": "Use an exact substring from the file or narrow the search path",
     "run_command": (
         "Fix command syntax, check platform compatibility, or increase timeout. For local preview servers, use "
@@ -231,6 +249,7 @@ DEFAULT_OUTPUT_SCHEMA: dict[str, Any] = {
         "status": {"type": "string", "enum": ["ok", "failed", "skipped", "blocked"]},
         "content": {"type": "string"},
         "error": {"type": "string"},
+        "error_code": {"type": "string"},
         "metadata": {"type": "object"},
         "artifacts": {"type": "array", "items": {"type": "object"}},
     },
@@ -299,24 +318,59 @@ DEFAULT_TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
         "name": "write_file",
         "description": (
             "Write content to a file. Use for creating files or full rewrites; prefer edit_file "
-            "for small changes to existing files."
+            "for small changes to existing files. Writes are UTF-8, newline-preserving, and atomic. "
+            "Use expected_file_hash for optimistic concurrency; use must_not_exist to create without overwriting."
         ),
         "input_schema": _schema(
             {
                 "path": {"type": "string", "description": "File path relative to the workspace"},
                 "content": {"type": "string", "description": "File content to write"},
+                "expected_file_hash": {
+                    "type": ["string", "null"],
+                    "description": "Expected full-file sha256:... hash, or null for no version check",
+                },
+                "must_not_exist": {
+                    "type": ["boolean", "null"],
+                    "description": "When true, fail if the target already exists; otherwise use null",
+                },
             },
             ["path", "content"],
         ),
     },
     {
         "name": "edit_file",
-        "description": "Replace one exact text segment in an existing file.",
+        "description": (
+            "Replace one exact UTF-8 text segment in an existing file. Matching is case-sensitive and preserves "
+            "all whitespace and line endings. The edit must be unique unless occurrence (1-based) or exact "
+            "before_context/after_context makes it unique; never guess among multiple matches."
+        ),
         "input_schema": _schema(
             {
                 "path": {"type": "string", "description": "File path relative to the workspace"},
                 "old_string": {"type": "string", "description": "Exact text to replace"},
                 "new_string": {"type": "string", "description": "Replacement text"},
+                "expected_file_hash": {
+                    "type": ["string", "null"],
+                    "description": "Expected full-file sha256:... hash, or null for no full-file check",
+                },
+                "occurrence": {
+                    "type": ["integer", "null"],
+                    "description": "Optional 1-based occurrence after context filtering",
+                },
+                "before_context": {
+                    "type": ["string", "null"],
+                    "description": "Exact text immediately before old_string, or null",
+                },
+                "after_context": {
+                    "type": ["string", "null"],
+                    "description": "Exact text immediately after old_string, or null",
+                },
+                "expected_content_hash": {
+                    "type": ["string", "null"],
+                    "description": (
+                        "Expected sha256:... hash of the selected old_string plus any supplied contexts, or null"
+                    ),
+                },
             },
             ["path", "old_string", "new_string"],
         ),

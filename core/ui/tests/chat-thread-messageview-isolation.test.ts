@@ -1,6 +1,7 @@
 import { defineComponent, h } from 'vue'
 import { mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { createFakeTransport } from './fake-transport'
 
 let renderCount = 0
 let lastRenderedIds: string[] = []
@@ -29,6 +30,15 @@ vi.mock('../src/components/MessageView.vue', () => ({
 
 import ChatThread from '../src/components/ChatThread.vue'
 
+const testTransport = createFakeTransport()
+
+function mountChatThread(options: any = {}) {
+  return mount(ChatThread, {
+    ...options,
+    props: { transport: testTransport, ...(options.props ?? {}) },
+  })
+}
+
 /**
  * MessageView isolation contract: with stable message references (guaranteed
  * by the projection cache), re-rendering the thread must not re-render
@@ -43,7 +53,7 @@ describe('ChatThread → MessageView isolation', () => {
   it('re-renders only the changed message when the array is replaced with stable references', async () => {
     const m1 = { id: 'assistant:1', role: 'assistant' as const, content: 'a', timestamp: '', parts: [] }
     const m2 = { id: 'assistant:2', role: 'assistant' as const, content: 'b', timestamp: '', parts: [] }
-    const wrapper = mount(ChatThread, { props: { messages: [m1, m2] } })
+    const wrapper = mountChatThread( { props: { messages: [m1, m2] } })
 
     // Initial mount rendered both messages.
     expect(lastRenderedIds).toEqual(['assistant:1', 'assistant:2'])
@@ -58,7 +68,7 @@ describe('ChatThread → MessageView isolation', () => {
 
   it('re-renders nothing when the same message objects are passed again', async () => {
     const m1 = { id: 'assistant:1', role: 'assistant' as const, content: 'a', timestamp: '', parts: [] }
-    const wrapper = mount(ChatThread, { props: { messages: [m1] } })
+    const wrapper = mountChatThread( { props: { messages: [m1] } })
 
     renderCount = 0
     await wrapper.setProps({ messages: [m1] })
@@ -67,7 +77,7 @@ describe('ChatThread → MessageView isolation', () => {
 
   it('renders the message-product slot instead of MessageView when provided', () => {
     const m1 = { id: 'assistant:1', role: 'assistant' as const, content: 'a', timestamp: '', parts: [] }
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: { messages: [m1] },
       slots: { 'message-product': '<div data-product-override>custom</div>' },
     })
@@ -76,7 +86,7 @@ describe('ChatThread → MessageView isolation', () => {
   })
 
   it('can suppress the generic empty state while an external loader is visible', () => {
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: { messages: [], showEmptyState: false },
     })
 
@@ -89,7 +99,7 @@ describe('ChatThread → MessageView isolation', () => {
     // cached — only the brand-new message mounts.
     const m1 = { id: 'assistant:1', role: 'assistant' as const, content: 'a', timestamp: '', parts: [] }
     const m2 = { id: 'assistant:2', role: 'assistant' as const, content: 'b', timestamp: '', parts: [] }
-    const wrapper = mount(ChatThread, {
+    const wrapper = mountChatThread( {
       props: { messages: [m1], processExpandedIds: new Set(['assistant:1']) },
     })
 

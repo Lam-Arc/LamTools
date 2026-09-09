@@ -31,6 +31,11 @@ class AppEventInput:
     item_id: str | None = None
     parent_item_id: str | None = None
     client_message_id: str | None = None
+    workspace_id: str | None = None
+    entity_type: str = "thread.event"
+    entity_id: str | None = None
+    event_type: str | None = None
+    revision: int | None = None
 
 
 @dataclass(frozen=True)
@@ -46,6 +51,12 @@ class AppEventEnvelope:
     item_id: str | None = None
     parent_item_id: str | None = None
     client_message_id: str | None = None
+    workspace_id: str = ""
+    entity_type: str = "thread.event"
+    entity_id: str = ""
+    event_seq: int = 0
+    revision: int = 0
+    event_type: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         data = {
@@ -59,6 +70,12 @@ class AppEventEnvelope:
             "item_id": self.item_id,
             "parent_item_id": self.parent_item_id,
             "client_message_id": self.client_message_id,
+            "workspace_id": self.workspace_id,
+            "entity_type": self.entity_type,
+            "entity_id": self.entity_id or self.thread_id,
+            "event_seq": self.event_seq or self.seq,
+            "revision": self.revision,
+            "event_type": self.event_type or self.method,
         }
         # seq=0 means "no persisted anchor" (transient stream deltas published
         # with a placeholder seq). Omitting it keeps clients from treating 0
@@ -76,10 +93,14 @@ class SqlAlchemyAppEventStore:
         *,
         protocol_version: str = "core.agent.v1",
         max_seq_allocate_attempts: int = MAX_SEQ_ALLOCATE_ATTEMPTS,
+        sync_change_model: type[Any] | None = None,
+        workspace_id: str = "",
     ) -> None:
         self.event_model = event_model
         self.protocol_version = protocol_version
         self.max_seq_allocate_attempts = max_seq_allocate_attempts
+        self.sync_change_model = sync_change_model
+        self.workspace_id = str(workspace_id or "").strip()
 
     async def append(self, db: AsyncSession, event: AppEventInput) -> AppEventEnvelope:
         event_id = event.event_id or _new_event_id()
@@ -117,7 +138,20 @@ class SqlAlchemyAppEventStore:
                 if attempt < self.max_seq_allocate_attempts - 1:
                     continue
                 raise
-            return self._to_envelope(row)
+            envelope = self._to_envelope(row)
+            if self.sync_change_model is not None:
+                db.add(self.sync_change_model(
+                    change_id=envelope.event_id,
+                    workspace_id=self.workspace_id,
+                    entity_type=envelope.entity_type,
+                    event_type=envelope.event_type or envelope.method,
+                    operation="upsert",
+                    entity_id=envelope.thread_id,
+                    thread_id=envelope.thread_id,
+                    revision=envelope.revision,
+                    entity_json={"event": envelope.to_dict()},
+                ))
+            return envelope
 
         if last_error is not None:
             raise last_error
@@ -192,6 +226,7 @@ class SqlAlchemyAppEventStore:
         return self._to_envelope(row) if row is not None else None
 
     def _to_envelope(self, row: Any) -> AppEventEnvelope:
+        event_seq = int(getattr(row, "event_seq", 0) or row.seq or 0)
         return AppEventEnvelope(
             event_id=str(row.event_id),
             protocol_version=self.protocol_version,
@@ -204,6 +239,12 @@ class SqlAlchemyAppEventStore:
             item_id=getattr(row, "item_id", None),
             parent_item_id=getattr(row, "parent_item_id", None),
             client_message_id=getattr(row, "client_message_id", None),
+            workspace_id=str(getattr(row, "workspace_id", "") or ""),
+            entity_type=str(getattr(row, "entity_type", "thread.event") or "thread.event"),
+            entity_id=str(getattr(row, "entity_id", None) or row.thread_id),
+            event_seq=event_seq,
+            revision=int(getattr(row, "revision", 0) or 0),
+            event_type=str(getattr(row, "event_type", None) or row.method),
         )
 
     def _row_kwargs(self, event: AppEventInput, *, event_id: str, seq: int) -> dict[str, Any]:
@@ -217,9 +258,52 @@ class SqlAlchemyAppEventStore:
             "client_message_id": event.client_message_id,
             "method": event.method,
             "payload_json": dict(event.payload or {}),
+            "workspace_id": str(event.workspace_id or self.workspace_id),
+            "entity_type": str(event.entity_type or "thread.event"),
+            "entity_id": str(event.entity_id or event.thread_id),
+            "event_seq": seq,
+            "revision": max(0, int(event.revision or 0)),
+            "event_type": str(event.event_type or event.method),
         }
         columns = set(self.event_model.__table__.columns.keys())
         return {key: value for key, value in values.items() if key in columns}
+
+    async def refresh_envelopes(
+        self, db: AsyncSession, envelopes: list[AppEventEnvelope]
+    ) -> list[AppEventEnvelope]:
+        """Reload canonical revision fields after snapshot projection."""
+
+        refreshed: list[AppEventEnvelope] = []
+        for envelope in envelopes:
+            row = await db.get(self.event_model, envelope.event_id)
+            if row is None:
+                refreshed.append(envelope)
+                continue
+            refreshed_envelope = self._to_envelope(row)
+            # The snapshot projector assigns the revision after the event row
+            # is inserted.  Keep the Local-First journal row and its embedded
+            # canonical envelope in lock-step with that update.
+            if self.sync_change_model is not None:
+                # CoreSyncChange is keyed by its workspace cursor ``seq``;
+                # the event id is the unique change_id, not the primary key.
+                change = await db.scalar(
+                    select(self.sync_change_model).where(
+                        self.sync_change_model.change_id == envelope.event_id
+                    )
+                )
+                if change is not None:
+                    if hasattr(change, "revision"):
+                        change.revision = refreshed_envelope.revision
+                    if hasattr(change, "entity_json"):
+                        entity = dict(change.entity_json or {})
+                        raw_event = entity.get("event")
+                        if isinstance(raw_event, dict):
+                            entity["event"] = refreshed_envelope.to_dict()
+                            change.entity_json = entity
+                    if hasattr(change, "event_type") and not getattr(change, "event_type", None):
+                        change.event_type = refreshed_envelope.event_type
+            refreshed.append(refreshed_envelope)
+        return refreshed
 
 
 __all__ = [

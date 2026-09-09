@@ -99,6 +99,14 @@ export interface CoreSessionListItem {
   metadata?: Record<string, unknown>;
 }
 
+/**
+ * Transcript formats exposed by the shared session sidebar.
+ *
+ * Keep this union in the product-neutral type layer so desktop and mobile
+ * shells cannot drift when they wire the same export menu to Core HTTP.
+ */
+export type CoreSessionExportFormat = 'markdown' | 'txt' | 'jsonl' | 'handoff' | 'zip';
+
 // ---------------------------------------------------------------------------
 // Message parts — typed content blocks within a message
 // ---------------------------------------------------------------------------
@@ -366,6 +374,8 @@ export interface SessionItem {
   createdAt?: string;
   updatedAt?: string;
   status?: string;
+  /** Optional secondary line rendered by the shared sidebar. */
+  meta?: string;
   metadata?: Record<string, unknown>;
 }
 
@@ -373,6 +383,8 @@ export interface ProjectGroup {
   id: string;
   name: string;
   workRoot?: string;
+  /** False marks compatibility/read-only groups that cannot be mutated. */
+  canManage?: boolean;
   sessions: SessionItem[];
 }
 

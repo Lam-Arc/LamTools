@@ -1,4 +1,97 @@
+<!-- codex-workflow-id: viettran-edgeAI/codex_workflow -->
+<!-- codex-workflow-managed-start -->
+# AGENTS.md
+
+## Design Principles
+
+- Keep modules cohesive, interfaces explicit, coupling minimal, and behavior
+  testable, replaceable, and reusable.
+- Define proportionate acceptance and verification before implementation. Never
+  weaken coverage, assertions, or failure visibility to save time or tokens.
+- Avoid unnecessary process or safeguards; preserve unrelated user work and use
+  verified facts in durable documentation.
+
+## Working State
+
+-`deployment state` : planning or executing a broad, possibly multi-session deployment plan.
+- `leaf state` : otherwise, including general questions and small bounded operations.
+
+## Project Documentation
+
+Use the durable project documents under `agent_docs/`:
+
+- `project_overview.md`: goals, architecture, workflow, and major decisions.
+- `project_core_tech.md`: concise special technology or architecture notes.
+- `project_structure.md`: layout, modules, components, and ownership.
+- `project_progress.md`: goal, overall progress, current position, next milestone.
+- `project_diary.md`: distilled decisions, discarded approaches, mistakes, and
+  reusable lessons.
+- `latest_session_work.md`: detailed handoff evidence and continuation point.
+- Module-specific documents, when present.
+
+In deployment state, you own `project_diary.md` and record only lasting
+decisions, discarded approaches, mistakes, and reusable lessons. Archivist owns
+assigned project and public documentation from verified facts, including
+overview, structure, core technologies, and closing updates to progress and
+latest-session documents. Assign module documents explicitly. Perform a direct
+user-requested document edit yourself outside deployment.
+
+Keep raw logs, temporary reasoning, and short-lived checkpoints out of durable
+documents; give each fact one canonical home. Never delete a main project
+document without warning and a second explicit confirmation.
+
+## Route Selection
+
+Select one of these routes: **Light** works directly in leaf state without subagents;
+**Medium** keeps planning, diagnosis, implementation, and verification with the
+main agent and uses bounded support from `~/.codex/codex_workflow/medium_route.md`;
+**Heavy** delegates bounded production, verification, documentation,
+project-context, and Internet research under `~/.codex/codex_workflow/heavy_route.md`.
+
+Follow the user's route selection. Use Light when none is selected; do not infer
+Medium or Heavy. Keep the route until the user changes it or the session ends.
+Enter deployment state for Medium or Heavy only when the work is substantive.
+
+## Rollout Efficiency
+
+Batch independent reads, searches, metadata checks, and other known-input
+operations. Keep dependencies and overlapping mutations sequential. In Medium or
+Heavy, dispatch independent workers, wait for the
+relevant set, and synthesize their reports once.
+
+Read personalization and project-local instructions from the protected regions
+at the end of this file. Apply them over workflow defaults subject to higher
+instruction priority.
+
+## Required Documentation Read
+
+On the first `deployment state` entry under either route, before planning,
+modifying files, or dispatching a worker, directly read the complete current
+`agent_docs/` framework exactly once: overview, core technology, structure,
+progress, diary, latest session work.
+
+This is one shared session-level read across both routes; reuse it for later
+deployments and route changes. Assign Companion a bounded delta or conflict
+check when documentation changes or freshness matters. Missing or unreadable
+required documents leave deployment entry incomplete; report the intake blocker.
+
+## Platform Paths
+
+Interpret `/` as a platform-neutral separator and translate paths for the
+current operating system and shell.
+<!-- codex-workflow-managed-end -->
+
+<!-- codex-workflow-project-personalization-start -->
+<!-- codex-workflow-project-personalization-end -->
+
+<!-- codex-workflow-project-local-instructions-start -->
 # LamTools
+
+## Setup 后置验收
+
+- 每次完成 Core Windows NSIS setup 构建或 setup 版本更新后，使用项目技能
+  `.agents/skills/lamtools-setup-install`，将对应版本安装到
+  `E:\setuptest\<版本号>`，启动并校验主程序与后端进程；不要改用开发模式启动代替。
 
 ## 项目结构
 
@@ -36,7 +129,7 @@
 - **不要用 `restart.ps1` / dev.ps1 管 Tauri**：`restart.ps1` 杀 5173 会误杀 Tauri dev 的 vite，破坏其加载链（Tauri 窗口 devUrl 写死 `127.0.0.1:5173`，前端由 `core/desktop` 的 vite 服务）。
 - Tauri dev 是独立体系：Rust 自己选随机空闲端口拉起后端（`py -3.14 -m lamtools_core.cli serve --port 随机 --reload`，cwd=`core/`，同一份 `data/core.db`），前端 `__LAMTOOLS_API_BASE__` 由 Rust `get_api_base` 下发，不走 5172/代理。
 - **Tauri 前后端重启 = 完全退出后在 `core/desktop` 下重新 `npm run tauri dev`**。重启前先确认 5173 没有别的 vite 占着（否则 desktop vite 抢不到端口挪到 5174，窗口仍加载 5173 会拿到错误页面）。
-- UI 改动经 HMR 即时生效（desktop 入口 `src/main.ts` 直接 import `../../ui/src/demo/App.vue`，`core/ui/src` 全部在依赖链上）；打包产物（`tauri build`）无热更新。
+- UI 改动经 HMR 即时生效（desktop 入口 `src/main.ts` 直接 import `../../ui/src/app/LamToolsApp.vue`，`core/ui/src` 全部在依赖链上）；打包产物（`tauri build`）无热更新。
 
 ## 数据库与配置
 
@@ -56,3 +149,4 @@
   - 快速见效包（delta 合并 / 滚动合并 / goal 节流 / watcher 裁剪）已完成。
   - 结构包（MessageView 组件化 + 投影增量更新 + Markdown 增量分段渲染）已完成（2026-08-07）。
   - part 级 v-memo 隔离（5 处 part 循环元素级 v-for + v-memo）已完成（2026-08-07）。
+<!-- codex-workflow-project-local-instructions-end -->

@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import json
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
+from sqlalchemy.orm.attributes import flag_modified
 
 from lamtools_core.session import SessionRecord
 
@@ -26,12 +28,16 @@ class CoreProjectRecord:
     work_root: str
     created_at: datetime
     updated_at: datetime
+    workspace_id: str = ""
+    revision: int = 1
 
     def to_dict(self) -> dict[str, str]:
         return {
             "id": self.id,
             "name": self.name,
             "work_root": self.work_root,
+            "workspace_id": self.workspace_id,
+            "revision": self.revision,
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
         }
@@ -82,14 +88,83 @@ class CoreProjectStore:
         write_coordinator: SQLiteWriteCoordinator,
         *,
         session_visible: Callable[[str, dict[str, Any]], bool] | None = None,
+        project_roots: list[Path | str] | None = None,
+        project_roots_file: Path | str | None = None,
+        workspace_id: str = "",
+        sync_journal: Any | None = None,
+        sync_publisher: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.write_coordinator = write_coordinator
         self._session_visible = session_visible or (lambda _session_id, _metadata: True)
+        self._project_roots_file = Path(project_roots_file).expanduser() if project_roots_file else None
+        self._project_roots = self._load_project_roots(project_roots)
+        self.workspace_id = str(workspace_id or "").strip()
+        self._sync_journal = sync_journal
+        self._sync_publisher = sync_publisher
+
+    def project_roots(self) -> list[str]:
+        return [str(root) for root in self._project_roots]
+
+    def set_project_roots(self, roots: list[Path | str]) -> list[str]:
+        normalized: list[Path] = []
+        for value in roots:
+            root = normalize_workspace_root(value)
+            if root not in normalized:
+                normalized.append(root)
+        self._project_roots = normalized
+        if self._project_roots_file is not None:
+            self._project_roots_file.parent.mkdir(parents=True, exist_ok=True)
+            self._project_roots_file.write_text(
+                json.dumps(self.project_roots(), ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        return self.project_roots()
+
+    def _load_project_roots(self, configured: list[Path | str] | None) -> list[Path]:
+        values: list[Path | str] | None = None
+        if self._project_roots_file is not None and self._project_roots_file.is_file():
+            try:
+                raw = json.loads(self._project_roots_file.read_text(encoding="utf-8"))
+                if isinstance(raw, list):
+                    values = [item for item in raw if isinstance(item, str)]
+            except (OSError, ValueError):
+                values = None
+        if values is None:
+            values = configured
+        normalized: list[Path] = []
+        for value in values or []:
+            try:
+                root = normalize_workspace_root(value)
+            except ValueError:
+                continue
+            if root not in normalized:
+                normalized.append(root)
+        return normalized
+
+    def _validate_project_root(self, root: Path) -> None:
+        if not self._project_roots:
+            return
+        if any(root == allowed or allowed in root.parents for allowed in self._project_roots):
+            return
+        allowed = ", ".join(self.project_roots())
+        raise ValueError(f"PROJECT_ROOT_NOT_ALLOWED: 项目目录必须位于已配置的 Project Root 下（{allowed}）")
 
     def set_session_visibility(self, session_visible: Callable[[str, dict[str, Any]], bool]) -> None:
         """Attach the host's live plugin-session gate after database startup."""
         self._session_visible = session_visible
+
+    def set_sync_publisher(self, publisher: Callable[[dict[str, Any]], Awaitable[None]] | None) -> None:
+        """Attach the live global broadcaster after the app hub is created."""
+        self._sync_publisher = publisher
+
+    async def _publish_sync_changes(self, change_ids: list[str]) -> None:
+        if self._sync_journal is None or self._sync_publisher is None:
+            return
+        for change_id in change_ids:
+            change = await self._sync_journal.get_change(change_id)
+            if change is not None:
+                await self._sync_publisher({"method": "sync/change", "params": change})
 
     def _is_session_visible(self, session: SessionRecord) -> bool:
         try:
@@ -99,19 +174,108 @@ class CoreProjectStore:
 
     async def create(self, work_root: Path | str, name: str | None = None) -> tuple[CoreProjectRecord, bool]:
         name = _normalize_project_name(name)
-        root = ensure_workspace_root(work_root)
+        root = normalize_workspace_root(work_root)
+        self._validate_project_root(root)
+        root = ensure_workspace_root(root)
         normalized_root = str(root)
 
+        change_ids: list[str] = []
+
         async def write(db: Any) -> tuple[CoreProjectRecord, bool]:
+            change_ids.clear()
             project, _, created = await _create_project_with_initial_session(
                 db,
                 root=root,
                 normalized_root=normalized_root,
                 name=name,
+                sync_journal=self._sync_journal,
+                change_ids=change_ids,
             )
             return project, created
 
-        return await self.write_coordinator.run(write)
+        result = await self.write_coordinator.run(write)
+        await self._publish_sync_changes(change_ids)
+        return result
+
+    async def ensure_fallback_project(
+        self,
+        work_root: Path | str,
+        *,
+        name: str = "MyProject",
+    ) -> tuple[CoreProjectRecord, int]:
+        """Ensure the fallback project and bind every orphaned session to it."""
+        root = normalize_workspace_root(work_root)
+        self._validate_project_root(root)
+        root = ensure_workspace_root(root)
+        normalized_root = str(root)
+        project_name = _normalize_project_name(name) or "MyProject"
+        change_ids: list[str] = []
+
+        async def write(db: Any) -> tuple[CoreProjectRecord, int]:
+            change_ids.clear()
+            project = await db.scalar(select(CoreProject).where(CoreProject.work_root == normalized_root))
+            if project is None:
+                project = CoreProject(
+                    id=uuid4().hex,
+                    workspace_id=self.workspace_id,
+                    name=project_name,
+                    work_root=normalized_root,
+                )
+                db.add(project)
+                await db.flush()
+                if self._sync_journal is not None:
+                    change = self._sync_journal.append(
+                        db,
+                        entity_type="project",
+                        operation="upsert",
+                        entity_id=project.id,
+                        revision=int(getattr(project, "revision", 1) or 1),
+                        entity=_project_entity(project),
+                    )
+                    change_ids.append(change.change_id)
+
+            project_roots = set((await db.execute(select(CoreProject.work_root))).scalars().all())
+            rows = (
+                await db.execute(select(CoreThreadSnapshot).order_by(CoreThreadSnapshot.updated_at.asc()))
+            ).scalars().all()
+            migrated = 0
+            for row in rows:
+                session = session_record_from_snapshot(row)
+                current_root = str(session.metadata.get("work_root") or "").strip()
+                if current_root in project_roots:
+                    continue
+                session.metadata = with_session_runtime_preferences({
+                    **session.metadata,
+                    "work_root": normalized_root,
+                })
+                state = dict(row.snapshot_json or {})
+                session_state = dict(state.get("session") or {})
+                session_state["metadata"] = session.metadata
+                state["session"] = session_state
+                revision = int(getattr(row, "revision", 0) or state.get("revision") or 0) + 1
+                state["revision"] = revision
+                row.snapshot_json = state
+                flag_modified(row, "snapshot_json")
+                if hasattr(row, "revision"):
+                    row.revision = revision
+                migrated += 1
+                if self._sync_journal is not None:
+                    change = self._sync_journal.append(
+                        db,
+                        entity_type="thread",
+                        operation="upsert",
+                        entity_id=session.id,
+                        thread_id=session.id,
+                        revision=revision,
+                        entity=_thread_entity(session, state, project.id),
+                    )
+                    change_ids.append(change.change_id)
+            await db.flush()
+            return _record(project), migrated
+
+        result = await self.write_coordinator.run(write)
+        await self._publish_sync_changes(change_ids)
+        return result
 
     async def create_with_initial_session(
         self,
@@ -119,18 +283,27 @@ class CoreProjectStore:
         name: str | None = None,
     ) -> tuple[CoreProjectRecord, SessionRecord, bool]:
         name = _normalize_project_name(name)
-        root = ensure_workspace_root(work_root)
+        root = normalize_workspace_root(work_root)
+        self._validate_project_root(root)
+        root = ensure_workspace_root(root)
         normalized_root = str(root)
 
+        change_ids: list[str] = []
+
         async def write(db: Any) -> tuple[CoreProjectRecord, SessionRecord, bool]:
+            change_ids.clear()
             return await _create_project_with_initial_session(
                 db,
                 root=root,
                 normalized_root=normalized_root,
                 name=name,
+                sync_journal=self._sync_journal,
+                change_ids=change_ids,
             )
 
-        return await self.write_coordinator.run(write)
+        result = await self.write_coordinator.run(write)
+        await self._publish_sync_changes(change_ids)
+        return result
 
     async def list(self) -> list[CoreProjectRecord]:
         async with self.session_factory() as db:
@@ -144,30 +317,68 @@ class CoreProjectStore:
             project = await db.get(CoreProject, project_id)
         return _record(project) if project is not None else None
 
-    async def rename(self, project_id: str, name: str) -> CoreProjectRecord | None:
+    async def rename(
+        self,
+        project_id: str,
+        name: str,
+        *,
+        expected_revision: int | None = None,
+    ) -> CoreProjectRecord | None:
         name = _normalize_project_name(name, required=True)
 
+        change_ids: list[str] = []
+
         async def write(db: Any) -> CoreProjectRecord | None:
+            change_ids.clear()
             project = await db.get(CoreProject, project_id)
             if project is None:
                 return None
+            current_revision = max(1, int(getattr(project, "revision", 1) or 1))
+            if expected_revision is not None and int(expected_revision) != current_revision:
+                raise ValueError(
+                    f"REVISION_CONFLICT: expected {int(expected_revision)}, current {current_revision}"
+                )
             project.name = name
+            project.revision = current_revision + 1
             await db.flush()
+            if self._sync_journal is not None:
+                change = self._sync_journal.append(
+                    db,
+                    entity_type="project",
+                    operation="upsert",
+                    entity_id=project.id,
+                    revision=int(project.revision or 0),
+                    entity=_project_entity(project),
+                )
+                change_ids.append(change.change_id)
             return _record(project)
 
-        return await self.write_coordinator.run(write)
+        result = await self.write_coordinator.run(write)
+        await self._publish_sync_changes(change_ids)
+        return result
 
     async def create_session(self, project_id: str, *, title: str = "New Session") -> SessionRecord:
         """Create a session only after resolving its persisted project in the write transaction."""
         session_title = str(title).strip() or "New Session"
 
+        change_ids: list[str] = []
+
         async def write(db: Any) -> SessionRecord:
+            change_ids.clear()
             project = await db.get(CoreProject, project_id)
             if project is None:
                 raise LookupError("Project not found")
-            return await _create_project_session(db, project, title=session_title)
+            return await _create_project_session(
+                db,
+                project,
+                title=session_title,
+                sync_journal=self._sync_journal,
+                change_ids=change_ids,
+            )
 
-        return await self.write_coordinator.run(write)
+        result = await self.write_coordinator.run(write)
+        await self._publish_sync_changes(change_ids)
+        return result
 
     async def ensure_session(
         self,
@@ -177,23 +388,39 @@ class CoreProjectStore:
         title: str,
     ) -> tuple[CoreProjectRecord, SessionRecord, bool]:
         """Bind a caller-owned session id to its workspace without creating a spare session."""
-        root = ensure_workspace_root(work_root)
+        root = normalize_workspace_root(work_root)
+        self._validate_project_root(root)
+        root = ensure_workspace_root(root)
         normalized_root = str(root)
         session_title = str(title).strip() or session_id
 
+        change_ids: list[str] = []
+
         async def write(db: Any) -> tuple[CoreProjectRecord, SessionRecord, bool]:
+            change_ids.clear()
             project = await db.scalar(select(CoreProject).where(CoreProject.work_root == normalized_root))
             created = project is None
             if project is None:
                 project = CoreProject(
                     id=uuid4().hex,
+                    workspace_id=self.workspace_id,
                     name=_default_project_name(root),
                     work_root=normalized_root,
                 )
                 db.add(project)
                 await db.flush()
+                if self._sync_journal is not None:
+                    change = self._sync_journal.append(
+                        db,
+                        entity_type="project",
+                        operation="upsert",
+                        entity_id=project.id,
+                        entity=_project_entity(project),
+                    )
+                    change_ids.append(change.change_id)
 
             row = await db.get(CoreThreadSnapshot, session_id)
+            session_created = row is None
             if row is None:
                 session = SessionRecord(
                     id=session_id,
@@ -202,15 +429,18 @@ class CoreProjectStore:
                     status="idle",
                     metadata=with_session_runtime_preferences({"work_root": project.work_root}),
                 )
+                state = session_snapshot(session)
                 db.add(
                     CoreThreadSnapshot(
                         thread_id=session.id,
                         snapshot_seq=0,
-                        snapshot_json=session_snapshot(session),
+                        revision=0,
+                        snapshot_json=state,
                         updated_at=session.updated_at,
                     )
                 )
             else:
+                current_revision = await _session_revision(db, session_id)
                 session = session_record_from_snapshot(row)
                 if not session.title or session.title in {session.id, "New Session"}:
                     session.title = session_title
@@ -226,15 +456,30 @@ class CoreProjectStore:
                     "metadata": session.metadata,
                     "created_at": session.created_at.isoformat(),
                 }
+                state["revision"] = current_revision + 1
                 row.snapshot_json = state
+                if hasattr(row, "revision"):
+                    row.revision = current_revision + 1
                 row.updated_at = session.updated_at
+            if self._sync_journal is not None and (session_created or created):
+                change = self._sync_journal.append(
+                    db,
+                    entity_type="thread",
+                    operation="upsert",
+                    entity_id=session.id,
+                    thread_id=session.id,
+                    entity=_thread_entity(session, state, project.id),
+                )
+                change_ids.append(change.change_id)
             await db.flush()
             return _record(project), session, created
 
-        return await self.write_coordinator.run(write)
+        result = await self.write_coordinator.run(write)
+        await self._publish_sync_changes(change_ids)
+        return result
 
-    async def delete(self, project_id: str) -> bool:
-        return await self._delete_with_sessions(project_id)
+    async def delete(self, project_id: str, *, expected_revision: int | None = None) -> bool:
+        return await self._delete_with_sessions(project_id, expected_revision=expected_revision)
 
     async def list_sessions(self, project_id: str) -> list[SessionRecord]:
         async with self.session_factory() as db:
@@ -244,14 +489,25 @@ class CoreProjectStore:
             sessions = await _project_sessions(db, project.work_root)
         return [session for session in sessions if self._is_session_visible(session)]
 
-    async def delete_with_sessions(self, project_id: str) -> bool:
-        return await self._delete_with_sessions(project_id)
+    async def delete_with_sessions(self, project_id: str, *, expected_revision: int | None = None) -> bool:
+        return await self._delete_with_sessions(project_id, expected_revision=expected_revision)
 
-    async def _delete_with_sessions(self, project_id: str) -> bool:
+    async def _delete_with_sessions(self, project_id: str, *, expected_revision: int | None = None) -> bool:
+        change_ids: list[str] = []
+
         async def write(db: Any) -> bool:
-            return await _delete_project_with_sessions(db, project_id)
+            change_ids.clear()
+            return await _delete_project_with_sessions(
+                db,
+                project_id,
+                expected_revision=expected_revision,
+                sync_journal=self._sync_journal,
+                change_ids=change_ids,
+            )
 
-        return bool(await self.write_coordinator.run(write))
+        result = bool(await self.write_coordinator.run(write))
+        await self._publish_sync_changes(change_ids)
+        return result
 
     async def read_agents_md(self, project_id: str) -> dict[str, str | bool] | None:
         project = await self.get(project_id)
@@ -290,6 +546,8 @@ def _record(project: CoreProject) -> CoreProjectRecord:
         work_root=project.work_root,
         created_at=project.created_at,
         updated_at=project.updated_at,
+        workspace_id=str(getattr(project, "workspace_id", "") or ""),
+        revision=max(1, int(getattr(project, "revision", 1) or 1)),
     )
 
 
@@ -299,27 +557,54 @@ async def _create_project_with_initial_session(
     root: Path,
     normalized_root: str,
     name: str | None,
+    sync_journal: Any | None = None,
+    change_ids: list[str] | None = None,
 ) -> tuple[CoreProjectRecord, SessionRecord, bool]:
     project = await db.scalar(select(CoreProject).where(CoreProject.work_root == normalized_root))
     created = project is None
     if project is None:
         project = CoreProject(
             id=uuid4().hex,
+            workspace_id=str(getattr(sync_journal, "workspace_id", "") or ""),
             name=name or _default_project_name(root),
             work_root=normalized_root,
         )
         db.add(project)
         await db.flush()
+        if sync_journal is not None:
+            change = sync_journal.append(
+                db,
+                entity_type="project",
+                operation="upsert",
+                entity_id=project.id,
+                revision=int(getattr(project, "revision", 1) or 1),
+                entity=_project_entity(project),
+            )
+            if change_ids is not None:
+                change_ids.append(change.change_id)
 
     sessions = await _project_sessions(db, project.work_root)
     if sessions:
         return _record(project), sessions[0], created
 
-    session = await _create_project_session(db, project, title=project.name)
+    session = await _create_project_session(
+        db,
+        project,
+        title=project.name,
+        sync_journal=sync_journal,
+        change_ids=change_ids,
+    )
     return _record(project), session, created
 
 
-async def _create_project_session(db: Any, project: CoreProject, *, title: str) -> SessionRecord:
+async def _create_project_session(
+    db: Any,
+    project: CoreProject,
+    *,
+    title: str,
+    sync_journal: Any | None = None,
+    change_ids: list[str] | None = None,
+) -> SessionRecord:
     session = SessionRecord(
         id=uuid4().hex,
         member_id="core",
@@ -327,28 +612,106 @@ async def _create_project_session(db: Any, project: CoreProject, *, title: str) 
         status="idle",
         metadata=with_session_runtime_preferences({"work_root": project.work_root}),
     )
+    state = session_snapshot(session)
     db.add(
-        CoreThreadSnapshot(
-            thread_id=session.id,
-            snapshot_seq=0,
-            snapshot_json=session_snapshot(session),
+            CoreThreadSnapshot(
+                thread_id=session.id,
+                snapshot_seq=0,
+                revision=0,
+                snapshot_json=state,
             updated_at=session.updated_at,
         )
     )
+    if sync_journal is not None:
+        change = sync_journal.append(
+            db,
+        entity_type="thread",
+        operation="upsert",
+        entity_id=session.id,
+        thread_id=session.id,
+        revision=int(state.get("revision") or 0),
+        entity=_thread_entity(session, state, project.id),
+        )
+        if change_ids is not None:
+            change_ids.append(change.change_id)
     await db.flush()
     return session
 
 
-async def _delete_project_with_sessions(db: Any, project_id: str) -> bool:
+async def _delete_project_with_sessions(
+    db: Any,
+    project_id: str,
+    *,
+    expected_revision: int | None = None,
+    sync_journal: Any | None = None,
+    change_ids: list[str] | None = None,
+) -> bool:
     project = await db.get(CoreProject, project_id)
     if project is None:
         return False
+    current_project_revision = max(1, int(getattr(project, "revision", 1) or 1))
+    if expected_revision is not None and int(expected_revision) != current_project_revision:
+        raise ValueError(
+            f"REVISION_CONFLICT: expected {int(expected_revision)}, current {current_project_revision}"
+        )
     sessions = await _project_sessions(db, project.work_root)
     if any(session.status.lower() in {"running", "waiting", "interrupting"} for session in sessions):
         raise ActiveProjectSessionsError("Stop the active session before deleting the project")
+    if sync_journal is not None:
+        change = sync_journal.append(
+            db,
+        entity_type="project",
+        operation="delete",
+        entity_id=project.id,
+        revision=int(getattr(project, "revision", 1) or 1) + 1,
+        entity={"id": project.id, "deleted": True},
+        )
+        if change_ids is not None:
+            change_ids.append(change.change_id)
+        for session in sessions:
+            change = sync_journal.append(
+                db,
+                entity_type="thread",
+                operation="delete",
+                entity_id=session.id,
+                thread_id=session.id,
+                revision=int((await _session_revision(db, session.id)) or 0) + 1,
+                entity={"id": session.id, "deleted": True},
+            )
+            if change_ids is not None:
+                change_ids.append(change.change_id)
     await delete_session_records(db, [session.id for session in sessions])
     await db.delete(project)
     return True
+
+
+def _project_entity(project: CoreProject) -> dict[str, Any]:
+    return {
+        "id": project.id,
+        "workspace_id": str(getattr(project, "workspace_id", "") or ""),
+        "name": project.name,
+        "path": project.work_root,
+        "work_root": project.work_root,
+        "created_at": project.created_at.isoformat(),
+        "updated_at": project.updated_at.isoformat(),
+        "revision": max(1, int(getattr(project, "revision", 1) or 1)),
+        "deleted": False,
+    }
+
+
+def _thread_entity(session: SessionRecord, state: dict[str, Any], project_id: str) -> dict[str, Any]:
+    return {
+        "id": session.id,
+        "project_id": project_id,
+        "title": session.title,
+        "status": session.status,
+        "created_at": session.created_at.isoformat(),
+        "updated_at": session.updated_at.isoformat(),
+        "metadata": dict(session.metadata),
+        "snapshot": state,
+        "revision": int(state.get("revision") or 0),
+        "deleted": False,
+    }
 
 
 async def _project_sessions(db: Any, work_root: str) -> list[SessionRecord]:
@@ -358,6 +721,20 @@ async def _project_sessions(db: Any, work_root: str) -> list[SessionRecord]:
     sessions = [session_record_from_snapshot(row) for row in rows]
     owned = [session for session in sessions if session.metadata.get("work_root") == work_root]
     return sorted(owned, key=lambda session: (session.created_at, session.id))
+
+
+async def _session_revision(db: Any, session_id: str) -> int:
+    row = await db.get(CoreThreadSnapshot, session_id)
+    if row is None:
+        return 0
+    value = getattr(row, "revision", None)
+    if value is None:
+        state = row.snapshot_json if isinstance(getattr(row, "snapshot_json", None), dict) else {}
+        value = state.get("revision", 0)
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 __all__ = [

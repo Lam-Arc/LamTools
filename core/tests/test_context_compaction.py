@@ -5,7 +5,6 @@ import asyncio
 import pytest
 
 from lamtools_core.context_compaction import (
-    COMPACTION_PREFIX,
     MAX_FIT_ATTEMPTS,
     CompactionBudgetExceeded,
     CompactionFitInput,
@@ -16,7 +15,6 @@ from lamtools_core.context_compaction import (
     ContextCompactor,
     ContextCompactionRequest,
     compact_context,
-    compress_structured_compaction_summary,
     parse_compaction_summary,
     select_context_compaction_layout,
     summarize_context_messages,
@@ -28,32 +26,34 @@ from lamtools_core.tokens import estimate_message_tokens, estimate_text_tokens
 
 
 class _CompactionClient:
+    summary = (
+        "1. Current Goal\n"
+        "- Continue.\n\n"
+        "2. User History, Instructions, And Decisions\n"
+        "- Preserve earlier user constraints.\n\n"
+        "3. Completed Work\n"
+        "- Old context was summarized.\n\n"
+        "4. Key Decisions And Constraints\n"
+        "- Use one compaction interface.\n\n"
+        "5. Files, APIs, Commands, And Results\n"
+        "- None.\n\n"
+        "6. Open Issues Or Risks\n"
+        "- None.\n\n"
+        "7. Next Best Actions\n"
+        "- Continue from the latest raw user message.\n\n"
+        "8. Rejected Or Superseded Directions\n"
+        "- None.\n\n"
+        "9. Next Actions\n"
+        "- Continue."
+    )
+
     def __init__(self) -> None:
         self.last_request = None
 
     async def complete(self, request):
         self.last_request = request
         return LLMResponse(
-            content=(
-                "1. Current Goal\n"
-                "- Continue.\n\n"
-                "2. User History, Instructions, And Decisions\n"
-                "- Preserve earlier user constraints.\n\n"
-                "3. Completed Work\n"
-                "- Old context was summarized.\n\n"
-                "4. Key Decisions And Constraints\n"
-                "- Use one compaction interface.\n\n"
-                "5. Files, APIs, Commands, And Results\n"
-                "- None.\n\n"
-                "6. Open Issues Or Risks\n"
-                "- None.\n\n"
-                "7. Next Best Actions\n"
-                "- Continue from the latest raw user message.\n\n"
-                "8. Rejected Or Superseded Directions\n"
-                "- None.\n\n"
-                "9. Next Actions\n"
-                "- Continue."
-            ),
+            content=self.summary,
             finish_reason="stop",
         )
 
@@ -70,23 +70,25 @@ class _AttributeErrorStreamingCompactionClient(_CompactionClient):
 
 
 class _SegmentingCompactionClient:
+    summary = (
+        "1. Current Goal\n- Continue.\n\n"
+        "2. User History, Instructions, And Decisions\n- Preserve constraints.\n\n"
+        "3. Completed Work\n- Segment summarized.\n\n"
+        "4. Key Decisions And Constraints\n- Keep evidence.\n\n"
+        "5. Files, APIs, Commands, And Results\n- Recorded.\n\n"
+        "6. Open Issues Or Risks\n- None.\n\n"
+        "7. Next Best Actions\n- Continue.\n\n"
+        "8. Rejected Or Superseded Directions\n- None.\n\n"
+        "9. Next Actions\n- Continue."
+    )
+
     def __init__(self) -> None:
         self.requests = []
 
     async def complete(self, request):
         self.requests.append(request)
         return LLMResponse(
-            content=(
-                "1. Current Goal\n- Continue.\n\n"
-                "2. User History, Instructions, And Decisions\n- Preserve constraints.\n\n"
-                "3. Completed Work\n- Segment summarized.\n\n"
-                "4. Key Decisions And Constraints\n- Keep evidence.\n\n"
-                "5. Files, APIs, Commands, And Results\n- Recorded.\n\n"
-                "6. Open Issues Or Risks\n- None.\n\n"
-                "7. Next Best Actions\n- Continue.\n\n"
-                "8. Rejected Or Superseded Directions\n- None.\n\n"
-                "9. Next Actions\n- Continue."
-            ),
+            content=self.summary,
             finish_reason="stop",
         )
 
@@ -113,6 +115,7 @@ class _CancelledCompactionClient:
 class _CharacterStreamingCompactionClient:
     summary = (
         "1. Current Goal\n- Continue.\n\n"
+        "1. Nested detail that must remain plain text.\n\n"
         "2. User History, Instructions, And Decisions\n- Preserve constraints.\n\n"
         "3. Completed Work\n- Work is recorded.\n\n"
         "4. Key Decisions And Constraints\n- Keep evidence.\n\n"
@@ -419,7 +422,7 @@ async def test_compact_context_auto_preserves_prefix_and_latest_user_message():
     assert result.trigger == "auto"
     assert result.compacted_count == 2
     assert result.retained_count == 1
-    assert result.summary.startswith(COMPACTION_PREFIX)
+    assert result.summary == llm.summary
     assert result.replacement_messages[0].content == "stable system prefix"
     assert result.replacement_messages[1].metadata["key"] == "context_compaction_summary"
     assert result.replacement_messages[-1].content == "latest user request"
@@ -436,7 +439,7 @@ async def test_compact_context_auto_preserves_prefix_and_latest_user_message():
 
 
 @pytest.mark.asyncio
-async def test_compact_context_fallback_produces_minimum_sufficient_continuation_state():
+async def test_compact_context_fails_without_model_summary_instead_of_using_local_fallback():
     messages = [
         ChatMessage(
             role="user",
@@ -465,17 +468,9 @@ async def test_compact_context_fallback_produces_minimum_sufficient_continuation
         )
     )
 
-    assert result.status == "compacted"
-    assert "1. Current Objective And Done Criteria" in result.summary
-    assert "2. Active User Instructions" in result.summary
-    assert "3. External Action Authorization" in result.summary
-    assert "4. Confirmed Facts And Decisions" in result.summary
-    assert "5. Current Execution State" in result.summary
-    assert "6. Verification Evidence" in result.summary
-    assert "7. Open Issues, Risks, And Hypotheses" in result.summary
-    assert "8. Rejected Or Superseded Directions" in result.summary
-    assert "9. Next Actions" in result.summary
-    assert "Do not push, create a pull request, or deploy without my confirmation." in result.summary
+    assert result.status == "failed"
+    assert result.replacement_messages == messages
+    assert "model returned an empty summary" in result.display_payload["message"]
 
 
 @pytest.mark.asyncio
@@ -550,7 +545,7 @@ async def test_compact_context_manual_reuses_same_entry_and_retains_tail_message
 
 
 @pytest.mark.asyncio
-async def test_recursive_compaction_does_not_erase_prior_user_instructions():
+async def test_recursive_compaction_uses_model_output_without_post_processing():
     prior_summary = (
         "[Compacted Context]\n\n"
         "1. Current Objective And Done Criteria\n- Finish acceptance.\n\n"
@@ -587,33 +582,22 @@ async def test_recursive_compaction_does_not_erase_prior_user_instructions():
     )
 
     assert result.status == "compacted"
-    assert "Use Kimi-K2.6 without thinking." in result.summary
-    assert "Preserve user messages in the visible transcript." in result.summary
-    assert "Do not commit, publish, or deploy without user confirmation." in result.summary
+    assert "Use Kimi-K2.6 without thinking." not in result.summary
+    assert "Preserve user messages in the visible transcript." not in result.summary
+    assert "Do not commit, publish, or deploy without user confirmation." not in result.summary
     assert "2. Active User Instructions" in result.summary
     assert "3. External Action Authorization" in result.summary
-    assert "No explicit user instructions" not in result.summary
-    assert "None confirmed" not in result.summary
+    assert "No explicit user instructions" in result.summary
+    assert "None confirmed" in result.summary
 
 
-def test_summary_budget_preserves_user_instructions_and_external_authorization_first():
-    summary = (
-        "[Compacted Context]\n\n"
-        "1. Current Objective And Done Criteria\n- Finish the task.\n\n"
-        "2. Active User Instructions\n- Keep the public interface unchanged.\n\n"
-        "3. External Action Authorization\n- Do not commit, push, deploy, or create a PR.\n\n"
-        "4. Confirmed Facts And Decisions\n- " + ("confirmed detail " * 80) + "\n\n"
-        "5. Current Execution State\n- " + ("execution detail " * 80) + "\n\n"
-        "6. Verification Evidence\n- " + ("verification detail " * 80) + "\n\n"
-        "7. Open Issues, Risks, And Hypotheses\n- " + ("open issue " * 80) + "\n\n"
-        "8. Rejected Or Superseded Directions\n- " + ("rejected detail " * 80) + "\n\n"
-        "9. Next Actions\n- Continue."
-    )
+def test_summary_budget_truncates_plain_text_without_parsing():
+    summary = "Keep the public interface unchanged. " + ("detail " * 800)
 
-    compressed = compress_structured_compaction_summary(summary, 100)
+    compressed = truncate_text_to_tokens(summary, 100)
 
-    assert "Keep the public interface unchanged." in compressed
-    assert "Do not commit, push, deploy, or create a PR." in compressed
+    assert estimate_text_tokens(compressed) <= 100
+    assert compressed.startswith("Keep the public interface unchanged.")
 
 
 @pytest.mark.asyncio
@@ -736,7 +720,7 @@ async def test_summary_budget_limits_segment_and_merge_requests():
         summary_budget=budget,
     )
 
-    assert summary.startswith(COMPACTION_PREFIX)
+    assert summary == llm.summary
     assert segment_count > 1
     assert len(llm.requests) > segment_count
     assert all(
@@ -771,6 +755,7 @@ async def test_compact_context_forwards_native_character_stream_events_without_l
 
     deltas = [event["delta"] for event in progress if event.get("delta")]
     assert result.status == "compacted"
+    assert result.summary == llm.summary
     assert "".join(deltas) == llm.summary
     assert deltas == list(llm.summary)
 
@@ -903,7 +888,7 @@ class _UnstructuredCompactionClient:
 
 
 @pytest.mark.asyncio
-async def test_model_output_without_nine_sections_falls_back_to_structured_summary():
+async def test_model_output_is_used_verbatim_without_parsing_or_fallback():
     messages = [
         ChatMessage(role="user", content="keep this requirement visible " + ("x" * 6000)),
         ChatMessage(role="assistant", content="implemented export route " + ("y" * 6000)),
@@ -922,21 +907,9 @@ async def test_model_output_without_nine_sections_falls_back_to_structured_summa
     )
 
     assert result.status == "compacted"
-    assert result.summary.startswith(COMPACTION_PREFIX)
-    assert "Just some notes" not in result.summary
-    for section in (
-        "1. Current Objective And Done Criteria",
-        "2. Active User Instructions",
-        "3. External Action Authorization",
-        "4. Confirmed Facts And Decisions",
-        "5. Current Execution State",
-        "6. Verification Evidence",
-        "7. Open Issues, Risks, And Hypotheses",
-        "8. Rejected Or Superseded Directions",
-        "9. Next Actions",
-    ):
-        assert section in result.summary
-    assert "keep this requirement visible" in result.summary
+    assert result.summary == "Just some notes without the required nine-section structure at all."
+    assert result.summary_message is not None
+    assert result.summary_message.content == result.summary
 
 
 @pytest.mark.asyncio
@@ -980,7 +953,7 @@ async def test_auto_compaction_transcript_includes_prior_summary_and_excludes_re
     )
 
     assert result.status == "compacted"
-    assert "Use Kimi-K2.6 without thinking." in result.summary
+    assert result.summary == llm.summary
     transcript = str(llm.last_request.messages[-1].content)
     # The prior summary is part of the compacted span (a) and is fed to the
     # compaction model as a regular message; the retained span (c) is excluded.

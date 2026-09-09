@@ -1,0 +1,24 @@
+[package]
+name = "lamtools-relay"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+axum = { version = "0.8", features = ["ws"] }
+axum-server = { version = "0.7", features = ["tls-rustls"] }
+argon2 = "0.5"
+base64 = "0.22"
+futures-util = "0.3"
+getrandom = "0.3"
+hex = "0.4"
+rusqlite = { version = "0.32", features = ["backup", "bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tokio = { version = "1", features = ["full"] }
+uuid = { version = "1", features = ["v4"] }
+url = "2"
+
+[dev-dependencies]
+tokio-tungstenite = "0.27"

@@ -6,7 +6,7 @@
 ## 1. 会话模型记忆（已完成）✅
 
 - 每个会话记住自己选择的模型（如：会话 A 选 DeepSeek-V4 Pro，会话 B 选 MIMO V2.5），来回切换不串扰。
-- 实现：切会话时从 `session.metadata.model_id` 恢复（`demo/App.vue` `restoreSessionModel`）；选模型时 PATCH 写入会话 metadata。分叉会话自动继承源会话模型。
+- 实现：切会话时从 `session.metadata.model_id` 恢复（`app/LamToolsApp.vue` 的共享 Workbench 接线）；选模型时 PATCH 写入会话 metadata。分叉会话自动继承源会话模型。
 
 ## 2. 分叉（fork）bug 修复（已完成）✅
 

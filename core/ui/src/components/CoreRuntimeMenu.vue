@@ -16,7 +16,7 @@
       <ShieldCheck class="core-runtime-menu__compact-icon" :size="16" :stroke-width="2" aria-hidden="true" />
     </button>
 
-    <div v-if="open" class="core-runtime-menu__panel" role="menu">
+    <div v-if="open" class="core-runtime-menu__panel" :style="viewportStyle" role="menu">
       <section ref="parameterCard" class="core-runtime-menu__card core-runtime-menu__card--parameters" aria-label="运行模式与权限参数">
         <button
           class="core-runtime-menu__option core-runtime-menu__parameter"
@@ -124,6 +124,7 @@ import {
   type CoreSelectOption,
 } from '../composer/execution'
 import { useComposerMenuMotion } from '../motion/composerMenu'
+import { useComposerMenuViewport } from '../composables/useComposerMenuViewport'
 
 const props = withDefaults(defineProps<{
   activeMode: string
@@ -148,6 +149,7 @@ const root = ref<HTMLElement | null>(null)
 const parameterCard = ref<HTMLElement | null>(null)
 const submenuCard = ref<HTMLElement | null>(null)
 const { animatePrimaryCard, animateSubmenuCard, cancel } = useComposerMenuMotion(root)
+const { updateViewportPosition, viewportStyle } = useComposerMenuViewport(root)
 
 const permissionOptions = computed(() => (
   (['ask', 'auto', 'full_access'] as CorePermissionPreset[]).map((value) => ({
@@ -179,6 +181,7 @@ function toggle(): void {
     cancel()
     return
   }
+  updateViewportPosition()
   void nextTick(() => animatePrimaryCard(parameterCard.value, ':scope > .core-runtime-menu__option'))
 }
 
@@ -515,6 +518,38 @@ onUnmounted(() => {
 
   .core-runtime-menu__compact-icon {
     display: block;
+  }
+}
+
+@media (max-width: 640px) {
+  .core-runtime-menu__panel {
+    position: fixed;
+    right: var(--space-3);
+    bottom: var(--composer-menu-bottom);
+    left: var(--space-3);
+    width: auto;
+    max-width: none;
+    max-height: calc(100dvh - var(--composer-menu-bottom) - var(--space-3));
+    overflow-x: hidden;
+    overflow-y: auto;
+    transform: none;
+    display: flex;
+    flex-direction: column-reverse;
+    gap: var(--space-2);
+  }
+
+  .core-runtime-menu__card {
+    box-sizing: border-box;
+    width: 100%;
+    max-width: none;
+  }
+
+  .core-runtime-menu__card--submenu {
+    position: static;
+  }
+
+  .core-runtime-menu__parameter {
+    max-width: none;
   }
 }
 

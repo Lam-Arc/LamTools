@@ -65,11 +65,11 @@ describe('theme gradient normalization', () => {
     expect(preset.lightTheme?.controlText).toBe('#1f1f1f')
     expect(preset.darkTheme?.backdropAngle).toBe(185)
     expect(preset.darkTheme?.backdropStops).toEqual([
-      { color: '#111a19', position: 0 },
-      { color: '#0d1216', position: 100 },
+      { color: '#110e11', position: 0 },
+      { color: '#1a140f', position: 100 },
     ])
     expect(preset.darkTheme?.backdropText).toBe('#f2efeb')
-    expect(preset.darkTheme?.mainStops).toEqual([{ color: '#151616', position: 0 }])
+    expect(preset.darkTheme?.mainStops).toEqual([{ color: '#151514', position: 0 }])
     expect(preset.darkTheme?.composerStops).toEqual([
       { color: '#242525', position: 0 },
       { color: '#282929', position: 100 },

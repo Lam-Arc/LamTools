@@ -197,13 +197,13 @@ describe('SessionSidebar sections', () => {
     expect(wrapper.find('[data-project-empty]').isVisible()).toBe(false)
   })
 
-  it('uses the explicit project boundary when compatibility sessions have no project', () => {
+  it('uses the explicit project boundary when a host reports no projects', () => {
     const wrapper = mount(SessionSidebar, {
       props: {
         hasProjects: false,
         projectGroups: [{
-          id: 'unassigned',
-          name: 'Unassigned',
+          id: 'internal',
+          name: 'Internal',
           canManage: false,
           sessions: [{ id: 'legacy-1', title: 'Legacy session', createdAt: '2026-07-12T08:00:00Z' }],
         }],
@@ -259,6 +259,24 @@ describe('SessionSidebar sections', () => {
     expect(menu!.textContent).toContain('置顶项目')
     expect(menu!.textContent).toContain('项目设置')
     expect(menu!.textContent).toContain('删除项目')
+  })
+
+  it('can omit desktop-only project settings while retaining mobile actions', async () => {
+    const wrapper = mount(SessionSidebar, {
+      props: {
+        projectGroups: groups,
+        allowProjectContextMenu: true,
+        allowProjectDelete: true,
+        allowProjectSettings: false,
+      },
+      attachTo: document.body,
+    })
+
+    await wrapper.get('[data-project-menu-trigger="recent-new"]').trigger('click')
+    const menu = document.body.querySelector<HTMLElement>('[data-project-menu="recent-new"]')
+    expect(menu?.textContent).toContain('重命名')
+    expect(menu?.textContent).toContain('删除项目')
+    expect(menu?.textContent).not.toContain('项目设置')
   })
 
   it('keeps project toggle, main action, and menu as separate row controls', async () => {
@@ -475,7 +493,7 @@ describe('SessionSidebar sections', () => {
 
     const original = wrapper.get('[data-sidebar-section="default"]')
     expect(original.findAll('[data-session-row]').map((row) => row.attributes('data-session-row')))
-      .toEqual(['older', 'newer'])
+      .toEqual(['older'])
     expect(localStorage.getItem('test.sidebar.pins.sessions')).toBe('["newer"]')
     expect(pinned.get('[data-session-row="newer"]')).toBeTruthy()
   })
@@ -617,6 +635,27 @@ describe('SessionSidebar sections', () => {
     expect(menu.querySelector('[data-session-menu-pin="s1"]')).not.toBeNull()
     await row.trigger('keydown', { key: 'Enter' })
     expect(wrapper.emitted('select-session')).toBeUndefined()
+  })
+
+  it('exposes the same session menu through a touch-friendly action button', async () => {
+    const wrapper = mount(SessionSidebar, {
+      props: {
+        projectGroups: groups,
+        allowSessionDelete: true,
+        showSessionActions: true,
+      },
+      attachTo: document.body,
+    })
+
+    const action = wrapper.get('[data-session-menu-trigger="s1"]')
+    expect(action.attributes('aria-label')).toBe('One 会话操作')
+    await action.trigger('click', { clientX: 120, clientY: 80 })
+    await nextTick()
+    const menu = document.body.querySelector<HTMLElement>('[data-session-menu="s1"]')
+    expect(menu?.textContent).toContain('置顶会话')
+    expect(menu?.textContent).toContain('重命名')
+    expect(menu?.textContent).toContain('导出')
+    expect(menu?.textContent).toContain('删除')
   })
 
   it('supports pin, rename, export submenu, and delete from the session context menu', async () => {

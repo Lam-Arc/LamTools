@@ -26,5 +26,5 @@
     }
   },
   "include": ["src/**/*.ts", "src/**/*.vue", "vite-env.d.ts"],
-  "exclude": ["node_modules", "dist", "src/demo"]
+  "exclude": ["node_modules", "dist"]
 }

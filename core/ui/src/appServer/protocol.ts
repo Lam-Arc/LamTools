@@ -12,12 +12,19 @@ export interface CoreAppEvent {
   item_id?: string | null
   parent_item_id?: string | null
   client_message_id?: string | null
+  workspace_id?: string
+  entity_type?: string
+  entity_id?: string
+  event_seq?: number
+  revision?: number
+  event_type?: string
   transient?: boolean
 }
 
 export interface CoreAppSnapshot {
   thread_id: string
   snapshot_seq: number
+  revision?: number
   seen_event_ids?: string[]
   turns?: Record<string, CoreAppTurn>
   items?: Record<string, CoreAppItem>
@@ -27,6 +34,17 @@ export interface CoreAppSnapshot {
   artifacts?: Record<string, Record<string, unknown>>
   core?: CoreRuntimeSnapshot
   status?: CoreAppThreadStatus
+  history_page?: CoreHistoryPage
+}
+
+export interface CoreHistoryPage {
+  char_limit: number
+  character_count: number
+  item_count: number
+  total_items: number
+  has_more: boolean
+  next_before_item_id?: string | null
+  next_before_seq?: number | null
 }
 
 export type CoreAppThreadStatus = 'idle' | 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled'
@@ -149,6 +167,7 @@ export interface CoreAppRequestState {
 export interface CoreRuntimeSnapshot {
   thread_id: string
   snapshot_seq: number
+  revision?: number
   seen_event_ids?: string[]
   turns?: Record<string, CoreRuntimeTurn>
   items?: Record<string, CoreRuntimeItem>

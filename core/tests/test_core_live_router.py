@@ -1218,3 +1218,159 @@ def test_core_live_connection_skips_snapshot_for_plain_run_item() -> None:
                 await reader
 
     asyncio.run(run())
+
+
+def test_core_live_multi_client_fans_out_events_and_keeps_rpc_responses_owned() -> None:
+    """Two subscribed clients share Core events without sharing RPC responses.
+
+    This is the protocol-level contract behind the desktop/mobile topology:
+    either client may start, interrupt, or resolve work, while the matching
+    response remains on the requesting connection and state events reach both
+    subscribers.
+    """
+
+    async def run() -> None:
+        hub = CoreAppEventHub()
+
+        class SessionContext:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return None
+
+        class SnapshotStore:
+            async def load(self, _db, thread_id: str):
+                return {
+                    "thread_id": thread_id,
+                    "snapshot_seq": 3,
+                    "core": {"status": "cancelled"},
+                }
+
+        class Host:
+            def operation_handlers(self):
+                return {"turn.start", "turn.cancel", "approval.respond"}
+
+            async def execute(self, method, *, request_id, params, context):
+                thread_id = params["thread_id"]
+                event_methods = {
+                    "turn.start": "item/started",
+                    "turn.cancel": "turn/interrupted",
+                    "approval.respond": "approval/updated",
+                }
+                event = {
+                    "event_id": f"{method}:{request_id}",
+                    "thread_id": thread_id,
+                    "seq": int(request_id),
+                    "method": event_methods[method],
+                    "payload": {"source": method, "request_id": request_id},
+                }
+                await context.hub.publish(event)
+                return CoreLiveOperationOutcome(
+                    response=rpc_result(request_id, {"accepted": True}),
+                )
+
+        context = SimpleNamespace(
+            host=Host(),
+            hub=hub,
+            session_factory=lambda: SessionContext(),
+            snapshot_store=SnapshotStore(),
+        )
+        desktop = CoreLiveConnection(DummyWebSocket(), context=context)
+        mobile = CoreLiveConnection(DummyWebSocket(), context=context)
+        desktop.initialized = True
+        mobile.initialized = True
+        desktop._subscribe("thread-shared")
+        mobile._subscribe("thread-shared")
+        readers = [
+            asyncio.create_task(desktop._hub_reader()),
+            asyncio.create_task(mobile._hub_reader()),
+        ]
+
+        async def collect_until(connection: CoreLiveConnection, predicate):
+            messages = []
+            for _ in range(8):
+                message = await asyncio.wait_for(connection.outbound.get(), timeout=1)
+                messages.append(message)
+                if predicate(message):
+                    return messages
+            raise AssertionError(f"expected protocol message, got {messages}")
+
+        async def drain(connection: CoreLiveConnection) -> None:
+            await asyncio.sleep(0)
+            while True:
+                try:
+                    connection.outbound.get_nowait()
+                except asyncio.QueueEmpty:
+                    return
+
+        try:
+            # Mobile starts the turn. Both clients receive the event, but only
+            # mobile receives request id 1's response.
+            await mobile.handle_raw({
+                "id": 1,
+                "method": "turn.start",
+                "params": {"thread_id": "thread-shared", "input": []},
+            })
+            desktop_messages = await collect_until(
+                desktop,
+                lambda message: message.get("method") == "item/started",
+            )
+            mobile_messages = await collect_until(
+                mobile,
+                lambda message: message.get("id") == 1,
+            )
+            assert any(message.get("method") == "item/started" for message in mobile_messages)
+            assert mobile_messages[-1] == {"id": 1, "result": {"accepted": True}}
+            assert not any(message.get("id") == 1 for message in desktop_messages)
+
+            await drain(desktop)
+            await drain(mobile)
+
+            # Desktop interrupts. Mobile observes the boundary event and the
+            # synchronized snapshot, while the response remains desktop-only.
+            await desktop.handle_raw({
+                "id": 2,
+                "method": "turn/interrupt",
+                "params": {"thread_id": "thread-shared"},
+            })
+            desktop_messages = await collect_until(desktop, lambda message: message.get("id") == 2)
+            mobile_messages = await collect_until(
+                mobile,
+                lambda message: message.get("method") == "thread/snapshot",
+            )
+            assert any(message.get("method") == "turn/interrupted" for message in desktop_messages)
+            assert any(message.get("method") == "turn/interrupted" for message in mobile_messages)
+            assert mobile_messages[-1]["params"]["core"]["status"] == "cancelled"
+            assert desktop_messages[-1] == {"id": 2, "result": {"accepted": True}}
+            assert not any(message.get("id") == 2 for message in mobile_messages)
+
+            await drain(desktop)
+            await drain(mobile)
+
+            # Mobile resolves an approval. The approval update fans out to the
+            # desktop, but the RPC response still belongs only to mobile.
+            await mobile.handle_raw({
+                "id": 3,
+                "method": "approval/respond",
+                "params": {
+                    "thread_id": "thread-shared",
+                    "request_id": "approval-1",
+                    "decision": "approve",
+                },
+            })
+            desktop_messages = await collect_until(
+                desktop,
+                lambda message: message.get("method") == "approval/updated",
+            )
+            mobile_messages = await collect_until(mobile, lambda message: message.get("id") == 3)
+            assert mobile_messages[-1] == {"id": 3, "result": {"accepted": True}}
+            assert not any(message.get("id") == 3 for message in desktop_messages)
+        finally:
+            for reader in readers:
+                reader.cancel()
+            await asyncio.gather(*readers, return_exceptions=True)
+            desktop._unsubscribe()
+            mobile._unsubscribe()
+
+    asyncio.run(run())

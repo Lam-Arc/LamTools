@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -95,6 +96,35 @@ def test_core_agent_http_app_exposes_live_app_server(tmp_path: Path, isolated_co
             initialized = websocket.receive_json()
 
     assert initialized["result"]["protocolVersion"] == "core.app_server.v1"
+
+
+def test_core_agent_http_app_keeps_myproject_in_configured_project_roots(
+    tmp_path: Path,
+    isolated_config_root: Path,
+) -> None:
+    _write_jsonc_config(isolated_config_root)
+    data_dir = tmp_path / "core-data"
+    data_dir.mkdir()
+    other_root = tmp_path / "other"
+    (data_dir / "project-roots.json").write_text(
+        json.dumps([str(other_root)]),
+        encoding="utf-8",
+    )
+    fallback_root = tmp_path / "MyProject"
+    app = create_core_agent_http_app(
+        model_id="model-record",
+        core_db=tmp_path / "core.db",
+        data_dir=data_dir,
+        work_root=fallback_root,
+    )
+
+    with TestClient(app):
+        pass
+
+    assert json.loads((data_dir / "project-roots.json").read_text(encoding="utf-8")) == [
+        str(fallback_root.resolve()),
+        str(other_root.resolve()),
+    ]
 
 
 def test_core_agent_http_app_uses_member_identity_and_manifest(tmp_path: Path, isolated_config_root: Path) -> None:
@@ -542,6 +572,7 @@ def test_core_http_sessions_survive_app_restart(tmp_path: Path, isolated_config_
             "status": "idle",
             "metadata": {
                 "source": "restart-test",
+                "work_root": str((tmp_path / "workspace").resolve()),
                 "runtime_preferences": {
                     "base_tier": "full_edit",
                     "base_allow_access_outside_workdir": False,
@@ -603,6 +634,7 @@ def test_core_http_session_delete_removes_persisted_thread(tmp_path: Path, isola
 def test_project_http_round_trip_survives_restart_and_uses_agents_md(tmp_path: Path, isolated_config_root: Path) -> None:
     core_db = tmp_path / "core.db"
     root = tmp_path / "workspace"
+    docs_root = root / "docs"
     _write_jsonc_config(isolated_config_root)
 
     app = create_core_agent_http_app(
@@ -614,16 +646,16 @@ def test_project_http_round_trip_survives_restart_and_uses_agents_md(tmp_path: P
     with TestClient(app) as client:
         unnamed = client.post(
             "/api/core/projects",
-            json={"name": "   ", "work_root": str(tmp_path / "invalid-name")},
+            json={"name": "   ", "work_root": str(root / "invalid-name")},
         )
         assert unnamed.status_code == 201
         assert unnamed.json()["project"]["name"] == "invalid-name"
-        created = client.post("/api/core/projects", json={"name": "Docs", "work_root": str(root)})
+        created = client.post("/api/core/projects", json={"name": "Docs", "work_root": str(docs_root)})
         assert created.status_code == 201
         result = created.json()
         project_id = result["project"]["id"]
         assert result["session"]["metadata"] == {
-            "work_root": str(root.resolve()),
+            "work_root": str(docs_root.resolve()),
             "runtime_preferences": {
                 "base_tier": "full_edit",
                 "base_allow_access_outside_workdir": False,
@@ -647,7 +679,7 @@ def test_project_http_round_trip_survives_restart_and_uses_agents_md(tmp_path: P
         )
         assert created_session.status_code == 201
         assert created_session.json()["metadata"] == {
-            "work_root": str(root.resolve()),
+            "work_root": str(docs_root.resolve()),
             "runtime_preferences": {
                 "base_tier": "full_edit",
                 "base_allow_access_outside_workdir": False,
@@ -698,7 +730,11 @@ def test_project_http_delete_rejects_active_session_and_app_server_uses_project_
             session_id = created["session"]["id"]
 
             websocket.send_json(
-                {"id": 31, "method": "project.create", "params": {"name": "   ", "work_root": str(tmp_path / "invalid")}},
+                {
+                    "id": 31,
+                    "method": "project.create",
+                    "params": {"name": "   ", "work_root": str(tmp_path / "workspace" / "invalid")},
+                },
             )
             assert _receive_rpc_response(websocket, 31)["result"]["project"]["name"] == "invalid"
 
@@ -824,6 +860,7 @@ def test_core_http_websocket_active_turn_steer_and_second_start_matrix(tmp_path:
                 })
                 rejected_start = _receive_rpc_response(websocket, 4)
                 assert rejected_start["error"]["data"] == {
+                    "code": "SESSION_BUSY",
                     "reason": "active_turn_exists",
                     "active_run_id": turn_id,
                 }

@@ -22,28 +22,24 @@
         <Pin :size="14" :stroke-width="1.8" aria-hidden="true" />
       </button>
       <div
-        v-if="$slots['sidebar-header-action'] || $slots['header-actions'] || props.showDefaultHeaderAction"
+        v-if="$slots['sidebar-header-action'] || props.showDefaultHeaderAction"
         class="sidebar-header-actions"
       >
         <slot name="sidebar-header-action">
-          <slot name="header-actions">
-            <button
-              v-if="props.showDefaultHeaderAction"
-              class="icon-btn"
-              type="button"
-              title="新建"
-              aria-label="新建会话"
-              @click="emit('new-session')"
-            >+</button>
-          </slot>
+          <button
+            v-if="props.showDefaultHeaderAction"
+            class="icon-btn"
+            type="button"
+            title="新建"
+            aria-label="新建会话"
+            @click="emit('new-session')"
+          >+</button>
         </slot>
       </div>
     </header>
 
-    <div v-if="$slots.primary || $slots['sidebar-primary']" class="sidebar-primary">
-      <slot name="primary">
-        <slot name="sidebar-primary" />
-      </slot>
+    <div v-if="$slots.primary" class="sidebar-primary">
+      <slot name="primary" />
     </div>
 
     <div class="sidebar-scroll-shell">
@@ -100,9 +96,7 @@
         <span aria-hidden="true"><Command :size="14" :stroke-width="1.8" /></span>
         <span>设置</span>
       </button>
-      <slot name="sidebar-footer">
-        <slot name="footer" />
-      </slot>
+      <slot name="sidebar-footer" />
     </footer>
   </aside>
 </template>

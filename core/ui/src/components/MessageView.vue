@@ -114,7 +114,10 @@
               <span class="assistant-timestamp__compact">{{ assistantTimestamp.compact }}</span>
               <span class="assistant-timestamp__expanded" aria-hidden="true">{{ assistantTimestamp.expanded }}</span>
             </span>
-            <span v-if="isLiveMessage(msg) && !isInitialWaitingMessage(msg)" class="assistant-live-state">
+            <span
+              v-if="isLiveMessage(msg) && !isInitialWaitingMessage(msg) && isCompactionOnlyMessage(msg)"
+              class="assistant-live-state"
+            >
               <span class="stream-spinner" />
               {{ liveStatusText(msg) }}
             </span>
@@ -130,7 +133,7 @@
               </span>
               <span v-if="isLiveMessage(msg) && liveDetailText(msg)" class="process-summary-detail">{{ liveDetailText(msg) }}</span>
               <span class="process-summary-icon" :class="processBarStatus(msg)" />
-              <span class="process-summary-text">{{ isLiveMessage(msg) ? liveStatusText(msg) : processSummary(msg).text }}</span>
+              <span v-if="!isLiveMessage(msg)" class="process-summary-text">{{ processSummary(msg).text }}</span>
             </button>
           </div>
 
@@ -539,7 +542,8 @@
                           <MessageView
                             v-for="subMsg in agentSubMessages(group.part)" :key="subMsg.id"
                             class="sub-line-chat"
-:msg="subMsg"
+                            :msg="subMsg"
+                            :transport="props.transport"
                             :assistant-label="agentTitle(group.part)"
                             :process-expanded-ids="agentProcessExpandedIds(group.part)"
                             :suppress-artifacts-panel="artifactsPanelSuppressed"
@@ -721,7 +725,8 @@
 
 <script setup lang="ts">
 import type { CoreAttachment, CoreMessage, MessagePart, ToolArtifact } from '../types'
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import type { LamToolsTransport, TransportHttpResponse } from '../transport'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { gsap } from 'gsap'
 import { Check, Copy, GitFork, Hourglass, Info, Pencil, Undo2, X, type LucideIcon } from 'lucide-vue-next'
 import { assistantSegmentTurnId, projectAssistantMessageParts } from '../appServer'
@@ -819,8 +824,8 @@ const props = withDefaults(
     processExpandedIds?: Set<string>
     /** Show hover actions (copy / fork / roll back) under assistant replies */
     messageActions?: boolean
-    /** API base for building file raw URLs (e.g. /api/core); used for image artifact previews */
-    apiBase?: string
+    /** Connection-neutral backend used to load artifact bytes. */
+    transport: LamToolsTransport
     /** Project id whose work_root contains the image artifact paths */
     projectId?: string | null
     /** Project work_root — enables direct local file reads in Tauri (asset protocol) */
@@ -842,7 +847,6 @@ const props = withDefaults(
     assistantLabel: 'Assistant',
     processExpandedIds: () => new Set(),
     messageActions: false,
-    apiBase: '/api/core',
     projectId: null,
     workRoot: null,
     activeTurnId: null,
@@ -1061,18 +1065,8 @@ function isPartExpanded(part: MessagePart, live = false): boolean {
 const autoExpandedPartIds = ref<Set<string>>(new Set())
 const userExpandedPartIds = ref<Set<string>>(new Set())
 const userCollapsedPartIds = ref<Set<string>>(new Set())
-const liveExpandedMessageIds = ref<Set<string>>(new Set())
 const expandedGroupIds = ref<Set<string>>(new Set())
 const partCompletionTimers = new Map<string, ReturnType<typeof setTimeout>>()
-
-watch(
-  () => isLiveMessage(props.msg),
-  (live) => {
-    if (!live) return
-    liveExpandedMessageIds.value = new Set([...liveExpandedMessageIds.value, props.msg.id])
-  },
-  { immediate: true },
-)
 
 function schedulePartAutoCollapse(partId: string) {
   const existing = partCompletionTimers.get(partId)
@@ -1532,9 +1526,6 @@ function systemIcon(msg: CoreMessage): LucideIcon {
 function isProcessExpanded(msg: CoreMessage): boolean {
   // During live streaming: auto-expand so user sees process unfolding (like GPT)
   if (isLiveMessage(msg)) return true
-  // Preserve the open state across the live -> complete transition. A freshly
-  // mounted historical message has no local live state and starts collapsed.
-  if (liveExpandedMessageIds.value.has(msg.id)) return true
   // Compaction is already a concise status row. Keep it visible so native
   // summary deltas and the terminal result are never hidden by a second,
   // redundant process disclosure.
@@ -2054,11 +2045,32 @@ function imageArtifacts(part: MessagePart): Array<ToolArtifact & { artifact_id?:
   )
 }
 
+const artifactUrls = reactive<Record<string, string>>({})
+
+function artifactKey(artifact: { uri?: string; artifact_id?: string; metadata?: Record<string, unknown> }): string {
+  return String(artifact.artifact_id || artifact.uri || artifact.metadata?.image_data_url || '')
+}
+
+function artifactPath(artifact: { uri?: string; artifact_id?: string; metadata?: Record<string, unknown> }): string {
+  let path = typeof artifact.uri === 'string' ? artifact.uri : ''
+  if (props.projectId && artifact.artifact_id) {
+    const query = path ? `?path=${encodeURIComponent(path)}` : ''
+    return `/projects/${encodeURIComponent(props.projectId)}/artifacts/${encodeURIComponent(artifact.artifact_id)}/file${query}`
+  }
+  if (path.startsWith('attachment://')) {
+    return `/attachments/${encodeURIComponent(path.slice('attachment://'.length))}/download`
+  }
+  if (props.projectId && path.startsWith('workspace://')) path = path.slice('workspace://'.length)
+  if (props.projectId && path) {
+    return `/projects/${encodeURIComponent(props.projectId)}/files/raw?path=${encodeURIComponent(path)}`
+  }
+  return ''
+}
+
 function imageSrc(artifact: { uri?: string; artifact_id?: string; metadata?: Record<string, unknown> }): string {
   // read_file 图片结果：base64 data URL 直接内联渲染，不走 HTTP/本地文件路径
   const dataUrl = artifact.metadata?.image_data_url
   if (typeof dataUrl === 'string' && dataUrl.startsWith('data:image')) return dataUrl
-  const base = (props.apiBase || '/api/core').replace(/\/+$/, '')
   let path = typeof artifact.uri === 'string' ? artifact.uri : ''
   if (path.startsWith('workspace://')) path = path.slice('workspace://'.length)
   // Tauri 桌面端：work_root 内相对路径（.lam/artifacts/...）直接读本地文件
@@ -2075,14 +2087,7 @@ function imageSrc(artifact: { uri?: string; artifact_id?: string; metadata?: Rec
     const src = localFileSrc(abs)
     if (src) return src
   }
-  // 按 artifact id 读取（manifest 为权威路径，兼容 workspace:// 与 attachment://）
-  if (props.projectId && artifact.artifact_id) {
-    const query = path ? `?path=${encodeURIComponent(path)}` : ''
-    return `${base}/projects/${encodeURIComponent(props.projectId)}/artifacts/${encodeURIComponent(artifact.artifact_id)}/file${query}`
-  }
-  if (path.startsWith('attachment://')) return ''
-  if (!props.projectId || !path) return ''
-  return `${base}/projects/${encodeURIComponent(props.projectId)}/files/raw?path=${encodeURIComponent(path)}`
+  return artifactUrls[artifactKey(artifact)] || ''
 }
 
 function imageAlt(artifact: { name?: string; uri?: string }): string {
@@ -2146,7 +2151,33 @@ const messageImages = computed<Array<ToolArtifact & { artifact_id?: string }>>((
   return [...seen.values()]
 })
 
-function openImagePreview(artifact: NonNullable<MessagePart['artifacts']>[number]): void {
+async function loadArtifactSource(artifact: { uri?: string; artifact_id?: string; metadata?: Record<string, unknown> }): Promise<void> {
+  const key = artifactKey(artifact)
+  if (!key || artifactUrls[key] || artifact.metadata?.image_data_url) return
+  const path = artifactPath(artifact)
+  if (!path) return
+  try {
+    const response = await props.transport.request<TransportHttpResponse>({ kind: 'http', method: 'GET', path })
+    if (response.status < 200 || response.status >= 300) return
+    artifactUrls[key] = URL.createObjectURL(new Blob([Uint8Array.from(response.body)], {
+      type: response.headers['content-type'] || 'application/octet-stream',
+    }))
+  } catch {
+    // Artifact previews are best-effort; the message remains usable if the
+    // backing file was removed or the connection is temporarily unavailable.
+  }
+}
+
+watch(messageImages, (items) => {
+  for (const artifact of items) void loadArtifactSource(artifact)
+}, { immediate: true })
+
+onBeforeUnmount(() => {
+  for (const url of Object.values(artifactUrls)) URL.revokeObjectURL(url)
+})
+
+async function openImagePreview(artifact: NonNullable<MessagePart['artifacts']>[number]): Promise<void> {
+  await loadArtifactSource(artifact)
   previewImageSrc.value = imageSrc(artifact)
   previewImageAlt.value = imageAlt(artifact)
 }

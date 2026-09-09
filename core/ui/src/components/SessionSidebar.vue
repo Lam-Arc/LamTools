@@ -191,6 +191,19 @@
               :aria-label="`状态：${statusLabel(s.status || '')}`"
               role="img"
             ></span>
+            <button
+              v-if="showSessionActions && editingSessionId !== s.id"
+              class="conversation-action session-menu-button"
+              type="button"
+              title="会话操作"
+              :aria-label="`${s.title || s.id.slice(0, 8)} 会话操作`"
+              :aria-expanded="isContextMenuOpen(sessionMenuOwner(s.id))"
+              data-context-menu-trigger
+              :data-session-menu-trigger="s.id"
+              @click.stop="toggleSessionMenu(s.id, $event)"
+            >
+              <MoreHorizontal :size="14" :stroke-width="1.8" aria-hidden="true" />
+            </button>
           </span>
           </div>
         </TransitionGroup>
@@ -225,27 +238,19 @@ import {
 import { motionEnterDirective } from '../directives/motionEnter'
 import { closeContextMenu, contextMenuState, isContextMenuOpen, openContextMenu } from './context-menu/context-menu'
 import type { ContextMenuEntry } from './context-menu/types'
+import type {
+  CoreSessionExportFormat,
+  ProjectGroup as CoreProjectGroup,
+  SessionItem as CoreSessionItem,
+} from '../types'
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
-export interface SessionItem {
-  id: string
-  title: string
-  createdAt?: string
-  updatedAt?: string
-  status?: string
-  meta?: string
-  metadata?: Record<string, unknown>
-}
-
-export interface ProjectGroup {
-  id: string
-  name: string
-  workRoot?: string
-  sessions: SessionItem[]
-  canManage?: boolean
-}
+// Keep the component import path stable while the actual contract lives in
+// the product-neutral type layer shared by desktop, mobile, and plugins.
+export type SessionItem = CoreSessionItem
+export type ProjectGroup = CoreProjectGroup
 
 type DragPosition = 'before' | 'after'
 
@@ -290,6 +295,10 @@ const props = withDefaults(
     busyProjectIds?: readonly string[]
     /** localStorage key used to persist pins, collapse state, and manual order. Empty disables persistence. */
     pinStorageKey?: string
+    /** Render a touch-friendly session action button in addition to context menus. */
+    showSessionActions?: boolean
+    /** Include the project settings entry in the project action menu. */
+    allowProjectSettings?: boolean
   }>(),
   {
     hasProjects: undefined,
@@ -303,6 +312,8 @@ const props = withDefaults(
     allowProjectContextMenu: false,
     busyProjectIds: () => [],
     pinStorageKey: '',
+    showSessionActions: false,
+    allowProjectSettings: true,
   },
 )
 
@@ -318,7 +329,7 @@ const emit = defineEmits<{
   'rename-project': [projectGroupId: string]
 }>()
 
-export type SessionExportFormat = 'markdown' | 'txt' | 'jsonl' | 'handoff' | 'zip'
+export type SessionExportFormat = CoreSessionExportFormat
 
 // ---------------------------------------------------------------------------
 // Group expand/collapse
@@ -656,12 +667,14 @@ function projectMenuEntries(group: ProjectGroup): ContextMenuEntry[] {
       attributes: contextMenuAttributes('data-project-rename', group.id),
       action: () => emit('rename-project', group.id),
     })
-    entries.push({
-      id: 'settings',
-      label: '项目设置',
-      icon: Settings,
-      action: () => emit('project-context-menu', group.id),
-    })
+    if (props.allowProjectSettings) {
+      entries.push({
+        id: 'settings',
+        label: '项目设置',
+        icon: Settings,
+        action: () => emit('project-context-menu', group.id),
+      })
+    }
   }
   if (props.allowProjectDelete && group.canManage !== false) {
     entries.push(
@@ -707,6 +720,23 @@ function toggleProjectMenu(sectionId: string, group: ProjectGroup, event: MouseE
     return
   }
   openProjectContextMenu(sectionId, group, event)
+}
+
+function toggleSessionMenu(sessionId: string, event: MouseEvent): void {
+  const ownerId = sessionMenuOwner(sessionId)
+  if (isContextMenuOpen(ownerId)) {
+    closeContextMenu()
+    return
+  }
+  const session = findSession(sessionId)
+  if (!session) return
+  openContextMenu({
+    event,
+    items: sessionMenuEntries(sessionId),
+    ownerId,
+    ariaLabel: `${session.title || `Session ${sessionId.slice(0, 8)}`} 会话操作`,
+    panelAttributes: contextMenuAttributes('data-session-menu', sessionId),
+  })
 }
 
 function sessionMenuEntries(sessionId: string): ContextMenuEntry[] {
@@ -1030,7 +1060,11 @@ function previewSessionOrderIds(group: ProjectGroup, sectionId = 'default'): str
 
 function orderedSessions(group: ProjectGroup, sectionId = 'default'): SessionItem[] {
   const sessionsById = new Map(group.sessions.map((session) => [session.id, session]))
-  return previewSessionOrderIds(group, sectionId).flatMap((id) => {
+  const orderedIds = previewSessionOrderIds(group, sectionId)
+  const visibleIds = sectionId === 'default' && !isPinned(group.id)
+    ? orderedIds.filter((id) => !isSessionPinned(id))
+    : orderedIds
+  return visibleIds.flatMap((id) => {
     const session = sessionsById.get(id)
     return session ? [session] : []
   })
@@ -1058,7 +1092,7 @@ function hiddenCount(group: ProjectGroup, sectionId = 'default'): number {
     || props.projectSessionLimit <= 0
     || groupExpanded[group.id]
   ) return 0
-  return Math.max(0, orderedSessionIds(group).length - props.projectSessionLimit)
+  return Math.max(0, orderedSessions(group, sectionId).length - props.projectSessionLimit)
 }
 
 function isGroupActive(group: ProjectGroup): boolean {

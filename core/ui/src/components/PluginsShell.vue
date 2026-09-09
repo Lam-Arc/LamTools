@@ -12,6 +12,7 @@
             <section v-if="activeSection === 'plugins'" class="settings-panel">
               <CorePluginsEditor
                 :request-rpc="props.requestRpc"
+                :transport="props.transport"
                 @changed="(refreshDesktop) => $emit('capabilities-changed', refreshDesktop)"
               />
             </section>
@@ -49,9 +50,11 @@ import CorePluginsEditor from './CorePluginsEditor.vue'
 import CoreSkillsEditor from './CoreSkillsEditor.vue'
 import CoreHooksEditor from './CoreHooksEditor.vue'
 import { gradientFromStops, relativeLuminance, type ThemeData } from '../helpers/theme'
+import type { LamToolsTransport } from '../transport'
 
 const props = defineProps<{
   requestRpc: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>
+  transport: LamToolsTransport
   theme?: ThemeData | null
 }>()
 

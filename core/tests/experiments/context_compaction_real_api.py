@@ -51,6 +51,7 @@ from lamtools_core.tokens import estimate_message_tokens
 
 MODEL = "gpt-5.6-terra"
 BASE_URL = "https://api.codex666ai.com"
+API_BASE_URL = f"{BASE_URL}/v1"
 WINDOW = 236_000
 TRIGGER = 188_800
 LIMIT = 141_600
@@ -114,7 +115,13 @@ class ObservedOpenAIChatClient:
         self.profile = {"id": "openai-chat"}
 
     def _url(self, endpoint: str) -> str:
-        return f"{BASE_URL}{endpoint}"
+        # ``build_profiled_openai_request`` returns protocol-relative paths
+        # (for example ``/chat/completions``), while this gateway exposes the
+        # OpenAI-compatible API under ``/v1``.  The endpoint probes below use
+        # the public URL explicitly; keep the two forms aligned here too.
+        if endpoint.startswith("/v1/"):
+            return f"{BASE_URL}{endpoint}"
+        return f"{API_BASE_URL}{endpoint}"
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -128,6 +135,7 @@ class ObservedOpenAIChatClient:
         return {
             "started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "endpoint": assembled["endpoint"],
+            "url": self._url(assembled["endpoint"]),
             "stream": stream,
             "phase": "compaction" if is_compaction else "model",
             "request": _redact(assembled["payload"]),

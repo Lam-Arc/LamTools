@@ -1,4 +1,8 @@
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
+import { createApp } from 'vue'
+import { createDirectTransport } from '../../ui/src/transport'
+import { createLamToolsRuntime } from '../../ui/src/app/runtime'
+import LamToolsApp from '../../ui/src/app/LamToolsApp.vue'
 import {
   completeStartupSplash,
   startStartupSplash,
@@ -36,10 +40,9 @@ async function resolveBackendApiBase(): Promise<string | null> {
 async function init() {
   const apiBase = await resolveBackendApiBase()
   if (apiBase) {
-    // In Tauri: wait for Rust to publish the dynamically chosen backend port.
-    // Never fall back to a relative URL here: packaged Tauri serves index.html
-    // for that path, which then fails as "<!DOCTYPE ... is not valid JSON".
-    (window as any).__LAMTOOLS_API_BASE__ = apiBase + '/api/core';
+    // In Tauri, wait for Rust to publish the dynamically chosen backend port
+    // before constructing the direct transport. Packaged windows never rely
+    // on a relative Core URL.
   } else {
     console.log('[Main] Not running in Tauri, using default API base');
   }
@@ -97,6 +100,36 @@ async function init() {
     await invoke('reload_desktop_plugin_window')
   }
 
+  // Mobile Control bridge.  Core UI keeps these callbacks optional so the
+  // same settings component can render in the website/browser showcase.
+  ;(window as any).__LAMTOOLS_REMOTE_STATUS__ = async (): Promise<unknown> => {
+    return await invoke('remote_gateway_status')
+  }
+  ;(window as any).__LAMTOOLS_REMOTE_START__ = async (): Promise<unknown> => {
+    return await invoke('remote_gateway_start')
+  }
+  ;(window as any).__LAMTOOLS_REMOTE_STOP__ = async (): Promise<unknown> => {
+    return await invoke('remote_gateway_stop')
+  }
+  ;(window as any).__LAMTOOLS_REMOTE_PAIRING_CREATE__ = async (): Promise<unknown> => {
+    return await invoke('remote_pairing_create')
+  }
+  ;(window as any).__LAMTOOLS_REMOTE_REVOKE__ = async (deviceId: string): Promise<boolean> => {
+    return await invoke<boolean>('remote_device_revoke', { deviceId })
+  }
+  ;(window as any).__LAMTOOLS_REMOTE_ACCOUNT_STATUS__ = async (): Promise<unknown> => {
+    return await invoke('remote_account_status')
+  }
+  ;(window as any).__LAMTOOLS_REMOTE_ACCOUNT_IDENTITY__ = async (scope?: { serverId: string; username: string }): Promise<unknown> => {
+    return await invoke('remote_account_identity', scope || {})
+  }
+  ;(window as any).__LAMTOOLS_REMOTE_ACCOUNT_SAVE__ = async (session: unknown): Promise<unknown> => {
+    return await invoke('remote_account_save', { session })
+  }
+  ;(window as any).__LAMTOOLS_REMOTE_ACCOUNT_LOGOUT__ = async (): Promise<void> => {
+    await invoke('remote_account_logout')
+  }
+
   // Diagnostic: verify custom commands are registered
   try {
     const pong = await invoke<string>('ping');
@@ -105,9 +138,18 @@ async function init() {
     console.error('[Main] ping failed:', e);
   }
 
-  const { createApp } = await import('vue');
-  const App = (await import('../../ui/src/demo/App.vue')).default;
-  createApp(App).mount('#app');
+  if (!apiBase) throw new Error('LamCore backend API unavailable')
+  const transport = createDirectTransport({ apiBase: `${apiBase}/api/core` })
+  const runtime = createLamToolsRuntime({
+    transport,
+    platform: 'desktop',
+    capabilities: {
+      filePicker: true,
+      notifications: true,
+      desktopWindow: true,
+    },
+  })
+  createApp(LamToolsApp, { runtime }).mount('#app')
   completeStartupSplash()
 }
 

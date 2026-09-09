@@ -373,6 +373,25 @@
         </div>
       </section>
 
+      <MobileControlPanel
+        v-if="activeSection === 'mobile-control'"
+        :account-status="remoteAccountStatus"
+        :account-identity="remoteAccountIdentity"
+        :account-loading="remoteAccountLoading"
+        :account-devices="remoteAccountDevices"
+        :status="remoteGatewayStatus"
+        :pairing="remotePairing"
+        :loading="remoteGatewayLoading"
+        :error="remoteGatewayError"
+        :available="remoteGatewayAvailable"
+        @gateway-start="$emit('remote-gateway-start')"
+        @gateway-stop="$emit('remote-gateway-stop')"
+        @pairing-create="$emit('remote-pairing-create')"
+        @revoke="(deviceId) => $emit('remote-device-revoke', deviceId)"
+        @account-submit="(payload) => $emit('remote-account-submit', payload)"
+        @account-logout="$emit('remote-account-logout')"
+      />
+
       <section v-if="activeSection === 'agents'" class="settings-panel">
         <header class="settings-title">
           <h1>上下文与记忆</h1>
@@ -819,6 +838,14 @@ import SettingsShell, { type SettingsSection } from './SettingsShell.vue'
 import ThemeEditor from './ThemeEditor.vue'
 import CoreSubAgentEditor from './CoreSubAgentEditor.vue'
 import CoreLoadToolsEditor from './CoreLoadToolsEditor.vue'
+import MobileControlPanel, {
+  type MobileControlAccountDevice,
+  type MobileControlAccountPayload,
+  type MobileControlAccountStatus,
+  type MobileControlGatewayStatus,
+  type MobileControlIdentity,
+  type MobileControlPairing,
+} from './MobileControlPanel.vue'
 import UiSelect from './UiSelect.vue'
 import {
   readUpdateAutoCheck,
@@ -895,6 +922,15 @@ const props = defineProps<{
   allowAccessOutsideWorkdir?: boolean
   requestRpc?: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>
   updateState?: CoreUpdateState
+  remoteGatewayStatus?: MobileControlGatewayStatus | null
+  remotePairing?: MobileControlPairing | null
+  remoteGatewayLoading?: boolean
+  remoteGatewayError?: string
+  remoteGatewayAvailable?: boolean
+  remoteAccountStatus?: MobileControlAccountStatus | null
+  remoteAccountIdentity?: MobileControlIdentity | null
+  remoteAccountLoading?: boolean
+  remoteAccountDevices?: MobileControlAccountDevice[]
 }>()
 
 const emit = defineEmits<{
@@ -922,6 +958,12 @@ const emit = defineEmits<{
   'update-model': [payload: CoreSettingsModelPayload]
   'delete-model': [modelRecordId: string]
   'set-default-model': [modelId: string]
+  'remote-gateway-start': []
+  'remote-gateway-stop': []
+  'remote-pairing-create': []
+  'remote-device-revoke': [deviceId: string]
+  'remote-account-submit': [payload: MobileControlAccountPayload]
+  'remote-account-logout': []
 }>()
 
 const sections: SettingsSection[] = [
@@ -929,6 +971,7 @@ const sections: SettingsSection[] = [
   { id: 'appearance', label: '界面', icon: 'palette' },
   { id: 'loadtools', label: '工具模式', icon: 'list-checks' },
   { id: 'permissions', label: '权限', icon: 'lock' },
+  { id: 'mobile-control', label: '手机控制', icon: 'smartphone' },
   { id: 'agents', label: '上下文与记忆', icon: 'file-code' },
   { id: 'subagent', label: 'Sub agent', icon: 'bot' },
   { id: 'about', label: '关于与更新', icon: 'info' },
@@ -3395,7 +3438,7 @@ onUnmounted(() => {
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(260px, 280px) minmax(0, 1fr);
+  grid-template-columns: 260px minmax(420px, 1fr);
   align-items: stretch;
   gap: 0;
   overflow: hidden;
@@ -3731,7 +3774,7 @@ onUnmounted(() => {
   flex: 0 1 auto;
 }
 
-@media (max-width: 799px) {
+@media (max-width: 959px) {
   :deep(.settings-main--models) {
     overflow-y: auto;
   }
@@ -3762,14 +3805,15 @@ onUnmounted(() => {
 
   .provider-picker {
     flex: 0 0 auto;
-    display: flex;
-    overflow-x: auto;
-    overflow-y: hidden;
-    padding-bottom: 0;
+    display: grid;
+    max-height: 280px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding-bottom: var(--space-1);
   }
 
   .provider-picker-item {
-    flex: 0 0 min(260px, 70vw);
+    flex: 0 0 auto;
   }
 
   .provider-rail-footer {
@@ -4095,21 +4139,20 @@ onUnmounted(() => {
 .models-overview-bar {
   flex: 0 0 auto;
   min-width: 0;
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: var(--space-5);
-  padding: var(--space-4) var(--space-5);
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
   border-bottom: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 10%, transparent);
 }
 
 .models-overview-metrics {
-  flex: 1 1 560px;
+  flex: 0 1 auto;
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(150px, 1.5fr) minmax(130px, 1.25fr) minmax(110px, 1fr) minmax(90px, .7fr);
-  gap: var(--space-5);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-4);
   margin: 0;
 }
 
@@ -4139,6 +4182,8 @@ onUnmounted(() => {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: var(--space-2);
 }
 
@@ -4153,7 +4198,7 @@ onUnmounted(() => {
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(260px, 280px) minmax(0, 1fr);
+  grid-template-columns: 260px minmax(420px, 1fr);
   overflow: hidden;
 }
 
@@ -4209,19 +4254,21 @@ onUnmounted(() => {
   width: min(220px, 30vw);
 }
 
-@media (max-width: 1100px) {
+@media (max-width: 1199px) {
   .models-overview-bar {
-    align-items: stretch;
-    flex-direction: column;
-    gap: var(--space-3);
+    grid-template-columns: 1fr;
+  }
+
+  .models-overview-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .models-overview-actions {
-    justify-content: flex-end;
+    justify-content: flex-start;
   }
 }
 
-@media (max-width: 799px) {
+@media (max-width: 959px) {
   .models-overview-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: var(--space-3) var(--space-5);
@@ -4241,13 +4288,14 @@ onUnmounted(() => {
   }
 
   .provider-picker {
-    display: flex;
-    overflow-x: auto;
-    overflow-y: hidden;
+    display: grid;
+    max-height: 280px;
+    overflow-x: hidden;
+    overflow-y: auto;
   }
 
   .provider-picker-item {
-    flex: 0 0 min(240px, 72vw);
+    flex: 0 0 auto;
   }
 
   .provider-detail {
@@ -4275,6 +4323,13 @@ onUnmounted(() => {
 
   .model-section-head {
     align-items: stretch;
+  }
+}
+
+@media (min-width: 960px) and (max-width: 1199px) {
+  .models-workspace,
+  .models-workspace-body {
+    grid-template-columns: 260px minmax(360px, 1fr);
   }
 }
 

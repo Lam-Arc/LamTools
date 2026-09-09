@@ -25,10 +25,10 @@ describe('LeftSidebarShell', () => {
         title: '工作区',
       },
       slots: {
-        'header-actions': '<button data-header-action>+</button>',
+        'sidebar-header-action': '<button data-header-action>+</button>',
         primary: '<div data-primary>快捷入口</div>',
-        default: '<div data-body>项目树</div>',
-        footer: '<div data-footer>长期安排</div>',
+        'sidebar-body': '<div data-body>项目树</div>',
+        'sidebar-footer': '<div data-footer>长期安排</div>',
       },
     })
 

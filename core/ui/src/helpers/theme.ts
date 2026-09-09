@@ -259,6 +259,7 @@ export interface ThemeCSSVars {
   '--theme-composer-text': string
   '--theme-composer-soft-background': string
   '--theme-control-background': string
+  '--theme-control-solid': string
   '--theme-control-text': string
   '--theme-control-soft-background': string
 }
@@ -296,6 +297,7 @@ export function themeToCSSVars(theme: ThemeData): ThemeCSSVars {
     '--theme-composer-text': theme.composerText,
     '--theme-composer-soft-background': lightComposer ? 'rgba(255, 254, 250, 0.70)' : 'rgba(255, 255, 255, 0.045)',
     '--theme-control-background': gradientFromStops(theme.controlAngle, theme.controlStops, theme.controlOpacity),
+    '--theme-control-solid': theme.controlStops[0]?.color || '#3a3834',
     '--theme-control-text': theme.controlText,
     '--theme-control-soft-background': lightControl ? 'rgba(255, 255, 252, 0.82)' : 'rgba(255, 255, 255, 0.055)',
   }

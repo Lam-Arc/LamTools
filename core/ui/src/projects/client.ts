@@ -5,6 +5,7 @@ import type {
   CoreProjectCreateResult,
   CoreProjectSession,
 } from './types'
+import type { LamToolsTransport, TransportHttpResponse } from '../transport'
 
 export interface CoreFileEntry {
   name: string
@@ -26,7 +27,7 @@ export interface CoreProjectClient {
   listFiles(projectId: string, path?: string): Promise<{ entries: CoreFileEntry[]; path: string }>
   readFile(projectId: string, path: string): Promise<{ content: string; path: string }>
   writeFile(projectId: string, path: string, content: string): Promise<{ content: string; path: string }>
-  fileRawUrl(projectId: string, path: string): string
+  readRawFile(projectId: string, path: string): Promise<TransportHttpResponse>
   browseDirectory(path?: string): Promise<{ entries: CoreFileEntry[]; path: string }>
 }
 
@@ -43,74 +44,72 @@ type RawProjectSession = CoreProjectSession & {
   updated_at?: string
 }
 
-export function createCoreProjectClient(apiBase: string): CoreProjectClient {
-  const base = apiBase.replace(/\/+$/, '')
-
+export function createCoreProjectClient(transport: LamToolsTransport): CoreProjectClient {
   return {
     async list() {
-      const response = await request<{ projects: RawProject[] }>(base, '/projects')
+      const response = await requestJson<{ projects: RawProject[] }>(transport, '/projects')
       return response.projects.map(toProject)
     },
     async create(payload) {
-      const response = await request<{ project: RawProject; session: RawProjectSession }>(base, '/projects', {
+      const response = await requestJson<{ project: RawProject; session: RawProjectSession }>(transport, '/projects', {
         method: 'POST',
         body: payload,
       })
       return { project: toProject(response.project), session: toSession(response.session) }
     },
     async get(projectId) {
-      return toProject(await request<RawProject>(base, projectPath(projectId)))
+      return toProject(await requestJson<RawProject>(transport, projectPath(projectId)))
     },
     async rename(projectId, name) {
-      return toProject(await request<RawProject>(base, projectPath(projectId), {
+      return toProject(await requestJson<RawProject>(transport, projectPath(projectId), {
         method: 'PATCH',
         body: { name },
       }))
     },
     async delete(projectId) {
-      await request(base, projectPath(projectId), { method: 'DELETE' })
+      await requestJson(transport, projectPath(projectId), { method: 'DELETE' })
     },
     async createSession(projectId, title = 'New Session') {
-      return toSession(await request<RawProjectSession>(base, `${projectPath(projectId)}/sessions`, {
+      return toSession(await requestJson<RawProjectSession>(transport, `${projectPath(projectId)}/sessions`, {
         method: 'POST',
         body: { title },
       }))
     },
     async listSessions(projectId) {
-      const response = await request<{ sessions: RawProjectSession[] }>(base, `${projectPath(projectId)}/sessions`)
+      const response = await requestJson<{ sessions: RawProjectSession[] }>(transport, `${projectPath(projectId)}/sessions`)
       return response.sessions.map(toSession)
     },
     async readAgents(projectId) {
-      return await request<CoreProjectAgents>(base, `${projectPath(projectId)}/agents-md`)
+      return await requestJson<CoreProjectAgents>(transport, `${projectPath(projectId)}/agents-md`)
     },
     async writeAgents(projectId, content) {
-      return await request<CoreProjectAgents>(base, `${projectPath(projectId)}/agents-md`, {
+      return await requestJson<CoreProjectAgents>(transport, `${projectPath(projectId)}/agents-md`, {
         method: 'PUT',
         body: { content },
       })
     },
     async listFiles(projectId, path = '') {
       const query = path ? `?path=${encodeURIComponent(path)}` : ''
-      return await request<{ entries: CoreFileEntry[]; path: string }>(base, `${projectPath(projectId)}/files${query}`)
+      return await requestJson<{ entries: CoreFileEntry[]; path: string }>(transport, `${projectPath(projectId)}/files${query}`)
     },
     async readFile(projectId, path) {
       const query = `?path=${encodeURIComponent(path)}`
-      return await request<{ content: string; path: string }>(base, `${projectPath(projectId)}/files/content${query}`)
+      return await requestJson<{ content: string; path: string }>(transport, `${projectPath(projectId)}/files/content${query}`)
     },
     async writeFile(projectId, path, content) {
       const query = `?path=${encodeURIComponent(path)}`
-      return await request<{ content: string; path: string }>(base, `${projectPath(projectId)}/files/content${query}`, {
+      return await requestJson<{ content: string; path: string }>(transport, `${projectPath(projectId)}/files/content${query}`, {
         method: 'PUT',
         body: { content },
       })
     },
-    fileRawUrl(projectId, path) {
+    async readRawFile(projectId, path) {
       const query = `?path=${encodeURIComponent(path)}`
-      return `${base}${projectPath(projectId)}/files/raw${query}`
+      return await requestBytes(transport, `${projectPath(projectId)}/files/raw${query}`)
     },
     async browseDirectory(path = '') {
       const query = path ? `?path=${encodeURIComponent(path)}` : ''
-      return await request<{ entries: CoreFileEntry[]; path: string }>(base, `/browse-directory${query}`)
+      return await requestJson<{ entries: CoreFileEntry[]; path: string }>(transport, `/browse-directory${query}`)
     },
   }
 }
@@ -137,20 +136,32 @@ function toSession(session: RawProjectSession): CoreProjectSession {
   }
 }
 
-async function request<T = undefined>(
-  base: string,
+async function requestBytes(
+  transport: LamToolsTransport,
+  path: string,
+  options: { method?: string; body?: unknown } = {},
+): Promise<TransportHttpResponse> {
+  const body = options.body === undefined ? undefined : new TextEncoder().encode(JSON.stringify(options.body))
+  const response = await transport.request<TransportHttpResponse>({
+    kind: 'http',
+    method: options.method || 'GET',
+    path,
+    headers: options.body === undefined ? {} : { 'Content-Type': 'application/json' },
+    ...(body ? { body } : {}),
+  })
+  if (response.status < 200 || response.status >= 300) {
+    const text = new TextDecoder().decode(response.body)
+    throw new Error(text || `请求失败（${response.status}）`)
+  }
+  return response
+}
+
+async function requestJson<T = undefined>(
+  transport: LamToolsTransport,
   path: string,
   options: { method?: string; body?: unknown } = {},
 ): Promise<T> {
-  const response = await fetch(`${base}${path}`, {
-    method: options.method || 'GET',
-    headers: options.body === undefined ? undefined : { 'Content-Type': 'application/json' },
-    body: options.body === undefined ? undefined : JSON.stringify(options.body),
-  })
-  if (!response.ok) {
-    const text = await response.text()
-    throw new Error(text || `${response.status} ${response.statusText}`)
-  }
-  if (response.status === 204) return undefined as T
-  return await response.json() as T
+  const response = await requestBytes(transport, path, options)
+  if (response.status === 204 || response.body.length === 0) return undefined as T
+  return JSON.parse(new TextDecoder().decode(response.body)) as T
 }

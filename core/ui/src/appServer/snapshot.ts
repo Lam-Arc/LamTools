@@ -1,8 +1,9 @@
 import type { CoreAppSnapshot } from './protocol.ts'
 
-export function hydrateSnapshot(snapshot: CoreAppSnapshot): CoreAppSnapshot {
+export function hydrateSnapshot<T extends CoreAppSnapshot>(snapshot: T): T {
   return {
     ...snapshot,
+    revision: Number.isFinite(Number(snapshot.revision)) ? Number(snapshot.revision) : 0,
     seen_event_ids: snapshot.seen_event_ids ?? [],
     turns: snapshot.turns ?? {},
     items: snapshot.items ?? {},
@@ -13,6 +14,7 @@ export function hydrateSnapshot(snapshot: CoreAppSnapshot): CoreAppSnapshot {
     core: snapshot.core ?? {
       thread_id: snapshot.thread_id,
       snapshot_seq: 0,
+      revision: 0,
       seen_event_ids: [],
       turns: {},
       items: {},

@@ -389,6 +389,44 @@
   align-items: center;
   justify-content: flex-end;
 }
+.conversation-actions:has(.session-menu-button) {
+  min-width: 44px;
+  min-height: 44px;
+  gap: 2px;
+}
+.session-menu-button {
+  flex: 0 0 36px;
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  min-height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--sidebar-text-muted);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition: background .14s ease, color .14s ease;
+}
+.session-menu-button:hover,
+.session-menu-button:focus-visible {
+  background: var(--sidebar-hover);
+  color: var(--sidebar-text-primary);
+}
+.session-menu-button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--blue) 75%, transparent);
+  outline-offset: 1px;
+}
+.session-menu-button svg {
+  width: var(--sidebar-icon-size);
+  height: var(--sidebar-icon-size);
+  stroke-width: 1.8;
+}
+.conversation-actions:has(.session-menu-button) .conversation-status {
+  position: static;
+}
 .session-status {
   flex: 0 0 auto;
 }

@@ -154,6 +154,8 @@ def test_core_app_server_uses_one_operation_contract_for_list_and_rollback(
         "scope",
         "status",
         "restored_paths",
+        "rollback_event",
+        "rollback_event_seq",
     }
     # Lazy capture: the file was edited without backup_file(), so rollback
     # intentionally does NOT restore it (only tool-backed edits are restored).

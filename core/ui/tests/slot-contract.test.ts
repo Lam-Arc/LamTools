@@ -20,6 +20,21 @@ import CoreExecutionControls from '../src/components/CoreExecutionControls.vue';
 const defaultViewportWidth = window.innerWidth;
 let contextMenuHost: ReturnType<typeof mount> | null = null;
 
+function dispatchPointerEvent(
+  element: Element,
+  type: string,
+  init: { pointerId: number; pointerType: string; clientX: number; clientY: number },
+): void {
+  const event = new Event(type, { bubbles: true, cancelable: true });
+  Object.defineProperties(event, {
+    pointerId: { configurable: true, value: init.pointerId },
+    pointerType: { configurable: true, value: init.pointerType },
+    clientX: { configurable: true, value: init.clientX },
+    clientY: { configurable: true, value: init.clientY },
+  });
+  element.dispatchEvent(event);
+}
+
 afterEach(() => {
   closeContextMenu();
   contextMenuHost?.unmount();
@@ -126,7 +141,7 @@ describe('slot helpers', () => {
 });
 
 describe('WorkspaceShell rendering', () => {
-  it('renders the current shell frame with required product name', () => {
+  it('renders the current shell frame without redundant mobile navigation chrome', () => {
     const wrapper = mountShell();
 
     expect(wrapper.find('.workspace-shell').exists()).toBe(true);
@@ -134,7 +149,9 @@ describe('WorkspaceShell rendering', () => {
     expect(wrapper.find('.workspace-main').exists()).toBe(true);
     expect(wrapper.find('.floating-composer').exists()).toBe(true);
     expect(wrapper.find('.drawer-right').exists()).toBe(true);
-    expect(wrapper.text()).toContain('LamTools');
+    expect(wrapper.find('.mobile-shell-nav').exists()).toBe(false);
+    expect(wrapper.find('[data-mobile-left-toggle]').exists()).toBe(false);
+    expect(wrapper.find('[data-mobile-right-toggle]').exists()).toBe(false);
   });
 
   it('can hide the right panel', () => {
@@ -148,24 +165,7 @@ describe('WorkspaceShell rendering', () => {
     expect(wrapper.find('.edge-right').exists()).toBe(false);
   });
 
-  it('provides a touch-friendly control that toggles the right panel', async () => {
-    const wrapper = mountShell();
-    const trigger = wrapper.get('[data-mobile-right-toggle]');
-
-    expect(trigger.element.tagName).toBe('BUTTON');
-    expect(trigger.attributes('aria-controls')).toBeDefined();
-    expect(trigger.attributes('aria-expanded')).toBe('false');
-
-    await trigger.trigger('click');
-    expect(wrapper.get('.drawer-right').classes()).toContain('open');
-    expect(trigger.attributes('aria-expanded')).toBe('true');
-
-    await trigger.trigger('click');
-    expect(wrapper.get('.drawer-right').classes()).not.toContain('open');
-    expect(wrapper.get('.drawer-right').attributes('inert')).toBeDefined();
-  });
-
-  it('isolates focus behind the right panel on compact viewports', async () => {
+  it('opens the right panel from a right-edge swipe on compact viewports', async () => {
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 390 });
     // setup.ts mocks matchMedia with matches: false; make the narrow-viewport
     // query follow innerWidth so the shell enters compact mode
@@ -180,32 +180,38 @@ describe('WorkspaceShell rendering', () => {
       dispatchEvent: () => false,
     });
     const wrapper = mountShell({ attachTo: document.body });
-    const trigger = wrapper.get('[data-mobile-right-toggle]');
+    const shell = wrapper.get('.workspace-shell');
 
-    await trigger.trigger('click');
+    dispatchPointerEvent(shell.element, 'pointerdown', {
+      pointerId: 1,
+      pointerType: 'touch',
+      clientX: 386,
+      clientY: 280,
+    });
+    dispatchPointerEvent(shell.element, 'pointermove', {
+      pointerId: 1,
+      pointerType: 'touch',
+      clientX: 306,
+      clientY: 284,
+    });
+    dispatchPointerEvent(shell.element, 'pointerup', {
+      pointerId: 1,
+      pointerType: 'touch',
+      clientX: 306,
+      clientY: 284,
+    });
     await nextTick();
 
     const drawer = wrapper.get('.drawer-right');
     expect(drawer.classes()).toContain('open');
-    // The drawer never steals focus; jsdom does not focus buttons on click
     expect(document.activeElement).not.toBe(drawer.element);
     expect(wrapper.get('.drawer-left').attributes('inert')).toBeDefined();
     expect(wrapper.get('.workspace-main').attributes('inert')).toBeDefined();
     expect(wrapper.get('.composer-root').attributes('inert')).toBeDefined();
 
-    (trigger.element as HTMLElement).focus();
-    await trigger.trigger('click');
-    await nextTick();
+    await wrapper.get('.mobile-drawer-backdrop').trigger('click');
     expect(drawer.classes()).not.toContain('open');
     expect(drawer.attributes('inert')).toBeDefined();
-    expect(document.activeElement).toBe(trigger.element);
-
-    await trigger.trigger('click');
-    await nextTick();
-    await wrapper.trigger('keydown', { key: 'Escape' });
-    await nextTick();
-    expect(drawer.classes()).not.toContain('open');
-    expect(document.activeElement).toBe(trigger.element);
     wrapper.unmount();
   });
 
@@ -246,9 +252,9 @@ describe('WorkspaceShell rendering', () => {
       },
     });
 
-    const button = wrapper.find('.floating-composer .send');
+    const button = wrapper.find('.floating-composer .core-send-stop-button');
     expect(button.text()).toBe('stop');
-    expect(button.classes()).toContain('send--stop');
+    expect(button.classes()).toContain('core-send-stop-button--stop');
     expect(button.attributes('aria-label')).toBe('停止运行');
   });
 });

@@ -552,7 +552,8 @@ onMounted(fetchModes)
 }
 
 :global(.settings-main:has(.loadtools-panel)) {
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 :global(.settings-main:has(.loadtools-panel) .settings-content) {
@@ -659,6 +660,7 @@ onMounted(fetchModes)
   min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: visible;
   border-color: color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 12%, transparent);
   border-radius: var(--radius);
   background: var(--settings-card-background, var(--settings-main-background, var(--theme-main-background, #111111)));
@@ -728,7 +730,7 @@ onMounted(fetchModes)
   min-height: 0;
   flex: 1 1 auto;
   display: grid;
-  grid-template-columns: minmax(236px, 280px) minmax(0, 1fr);
+  grid-template-columns: 260px minmax(420px, 1fr);
   overflow: hidden;
 }
 
@@ -1284,7 +1286,7 @@ onMounted(fetchModes)
   font-size: 15px;
 }
 
-@media (max-width: 920px) {
+@media (max-width: 959px) {
   .loadtools-title {
     align-items: stretch;
     flex-direction: column;
@@ -1295,8 +1297,18 @@ onMounted(fetchModes)
   }
 }
 
-@media (max-width: 799px) {
+@media (max-width: 959px) {
+  :global(.settings-main:has(.loadtools-panel) .settings-content),
+  :global(.settings-main:has(.loadtools-panel) .settings-content > .settings-panel) {
+    height: auto;
+  }
+
+  .loadtools-panel {
+    height: auto;
+  }
+
   .loadtools-workspace {
+    flex: 0 0 auto;
     overflow: visible;
   }
 
@@ -1316,16 +1328,19 @@ onMounted(fetchModes)
     padding: var(--space-4);
     border-right: 0;
     border-bottom: 1px solid color-mix(in srgb, var(--settings-main-text, var(--theme-main-text, #fff)) 10%, transparent);
+    overflow: visible;
   }
 
   .mode-picker {
-    display: flex;
-    overflow-x: auto;
-    overflow-y: hidden;
+    flex: 0 1 auto;
+    display: grid;
+    max-height: 320px;
+    overflow-x: hidden;
+    overflow-y: auto;
   }
 
   .mode-picker-item {
-    flex: 0 0 min(240px, 72vw);
+    flex: 0 0 auto;
   }
 
   .mode-rail-footer {
@@ -1335,6 +1350,12 @@ onMounted(fetchModes)
   .mode-detail {
     padding: var(--space-5) var(--space-4) var(--space-4);
     overflow: visible;
+  }
+}
+
+@media (min-width: 960px) and (max-width: 1199px) {
+  .loadtools-workspace-body {
+    grid-template-columns: 260px minmax(360px, 1fr);
   }
 }
 

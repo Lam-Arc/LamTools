@@ -2,6 +2,16 @@ import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 import MessageView from '../src/components/MessageView.vue'
 import type { MessagePart } from '../src/types'
+import { createFakeTransport } from './fake-transport'
+
+const testTransport = createFakeTransport()
+
+function mountMessageView(options: any = {}) {
+	return mount(MessageView, {
+		...options,
+		props: { transport: testTransport, ...(options.props ?? {}) },
+	})
+}
 
 function bigLiveMessage(text: string) {
 	const parts: MessagePart[] = [
@@ -33,7 +43,7 @@ function bigLiveMessage(text: string) {
 describe('big live message update bench', () => {
 	it('measures per-tick update cost for a 300-part live message', async () => {
 		const base = bigLiveMessage('')
-		const wrapper = mount(MessageView, { props: { msg: base, processExpandedIds: new Set<string>() } })
+		const wrapper = mountMessageView( { props: { msg: base, processExpandedIds: new Set<string>() } })
 		await wrapper.vm.$nextTick()
 
 		const runs = 30

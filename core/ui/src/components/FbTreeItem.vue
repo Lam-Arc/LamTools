@@ -23,7 +23,7 @@
           :entry="child"
           :base-path="childBase"
           :selected-path="selectedPath"
-          :api-base="apiBase"
+          :transport="transport"
           :depth="depth + 1"
           @select="onChildSelect"
           @navigate="onChildNavigate"
@@ -36,12 +36,13 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { ChevronDown, ChevronRight, EyeOff, FileText, Image, Lock, Music, Video, type LucideIcon } from 'lucide-vue-next'
+import type { LamToolsTransport, TransportHttpResponse } from '../transport'
 
 const props = defineProps<{
   entry: { name: string; type: 'directory' | 'file'; size: number; ext: string; path?: string }
   basePath: string
   selectedPath: string
-  apiBase: string
+  transport: LamToolsTransport
   depth: number
 }>()
 
@@ -117,11 +118,15 @@ async function loadChildren() {
   loadingChildren.value = true
   loadError.value = ''
   try {
-    const res = await fetch(`${props.apiBase}/browse-directory?path=${encodeURIComponent(childBase.value)}`)
-    if (!res.ok) throw new Error(`${res.status}`)
-    const data = await res.json()
+    const res = await props.transport.request<TransportHttpResponse>({
+      kind: 'http',
+      method: 'GET',
+      path: `/browse-directory?path=${encodeURIComponent(childBase.value)}`,
+    })
+    if (res.status < 200 || res.status >= 300) throw new Error(new TextDecoder().decode(res.body) || `${res.status}`)
+    const data = JSON.parse(new TextDecoder().decode(res.body)) as { entries?: unknown[] }
     if (generation === loadGeneration) {
-      children.value = (data.entries || []).filter((e: { type: string }) => e.type === 'directory')
+      children.value = (data.entries || []).filter(isDirectoryEntry)
     }
   } catch (e) {
     // Surface the failure instead of silently showing an empty directory
@@ -133,6 +138,15 @@ async function loadChildren() {
   } finally {
     if (generation === loadGeneration) loadingChildren.value = false
   }
+}
+
+function isDirectoryEntry(value: unknown): value is typeof children.value[number] {
+  return Boolean(value)
+    && typeof value === 'object'
+    && (value as { type?: unknown }).type === 'directory'
+    && typeof (value as { name?: unknown }).name === 'string'
+    && typeof (value as { size?: unknown }).size === 'number'
+    && typeof (value as { ext?: unknown }).ext === 'string'
 }
 
 function onChildSelect(path: string) {

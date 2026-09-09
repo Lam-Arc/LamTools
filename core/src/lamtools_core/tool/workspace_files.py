@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import datetime
 import difflib
+import hashlib
 import os
+import tempfile
+import threading
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
@@ -48,6 +54,147 @@ SKIP_SEARCH_DIRS = frozenset({
     ".next",
     ".cache",
 })
+
+
+_FILE_LOCKS: dict[str, asyncio.Lock] = {}
+_FILE_LOCKS_GUARD = threading.Lock()
+
+
+def read_file_bytes(path: str | Path) -> bytes:
+    """Read a file without applying platform newline or encoding transforms."""
+    return Path(path).read_bytes()
+
+
+def decode_utf8(data: bytes) -> str:
+    """Decode file bytes strictly as UTF-8."""
+    return data.decode("utf-8")
+
+
+def compute_sha256(data: bytes) -> str:
+    """Return the externally visible hash format used by workspace tools."""
+    return f"sha256:{hashlib.sha256(data).hexdigest()}"
+
+
+def atomic_write_bytes(path: str | Path, data: bytes) -> None:
+    """Replace *path* with *data* only after the complete payload is durable.
+
+    The temporary file is created beside the target so ``os.replace`` stays on
+    the same filesystem.  Any error before replacement leaves an existing
+    target untouched.
+    """
+    target = Path(path)
+    temporary_path: Path | None = None
+    file_descriptor = -1
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        file_descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{target.name}.",
+            suffix=".tmp",
+            dir=str(target.parent),
+        )
+        temporary_path = Path(temporary_name)
+        with os.fdopen(file_descriptor, "wb") as stream:
+            file_descriptor = -1
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary_path, target)
+        temporary_path = None
+    finally:
+        if file_descriptor != -1:
+            try:
+                os.close(file_descriptor)
+            except OSError:
+                pass
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                # The original write/replace exception is more useful to the
+                # caller than a best-effort temporary-file cleanup failure.
+                pass
+
+
+def _file_lock_key(path: str | Path) -> str:
+    resolved = Path(path).resolve()
+    return os.path.normcase(os.path.normpath(str(resolved)))
+
+
+def _get_file_lock(path: str | Path) -> asyncio.Lock:
+    key = _file_lock_key(path)
+    with _FILE_LOCKS_GUARD:
+        lock = _FILE_LOCKS.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            _FILE_LOCKS[key] = lock
+        return lock
+
+
+@asynccontextmanager
+async def file_lock(path: str | Path) -> AsyncIterator[None]:
+    """Serialize workspace operations targeting the same resolved path."""
+    lock = _get_file_lock(path)
+    async with lock:
+        yield
+
+
+def _failed_result(
+    call: ToolCall,
+    error_code: str,
+    message: str,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> ToolResult:
+    return ToolResult(
+        call_id=call.id,
+        name=call.name,
+        status="failed",
+        error=message,
+        error_code=error_code,
+        metadata=dict(metadata or {}),
+    )
+
+
+def _find_non_overlapping_occurrences(content: str, needle: str) -> list[tuple[int, int]]:
+    positions: list[tuple[int, int]] = []
+    offset = 0
+    while True:
+        start = content.find(needle, offset)
+        if start < 0:
+            return positions
+        end = start + len(needle)
+        positions.append((start, end))
+        offset = end
+
+
+def _context_matches(
+    content: str,
+    start: int,
+    end: int,
+    before_context: str | None,
+    after_context: str | None,
+) -> bool:
+    if before_context is not None:
+        before_start = start - len(before_context)
+        if before_start < 0 or content[before_start:start] != before_context:
+            return False
+    if after_context is not None and content[end:end + len(after_context)] != after_context:
+        return False
+    return True
+
+
+def _selected_content_hash(
+    content: str,
+    start: int,
+    end: int,
+    before_context: str | None,
+    after_context: str | None,
+) -> str:
+    local_start = start - len(before_context or "") if before_context is not None else start
+    local_end = end + len(after_context or "") if after_context is not None else end
+    return compute_sha256(content[local_start:local_end].encode("utf-8"))
 
 
 def resolve_read_resource_path(
@@ -131,19 +278,33 @@ class WorkspaceReadOnlyTools:
         }
 
     async def read_file(self, call: ToolCall) -> ToolResult:
-        path_str = call.arguments.get("path", "") if isinstance(call.arguments, dict) else ""
-        if not path_str:
-            return ToolResult(call_id=call.id, name=call.name, status="failed", error="Missing 'path' argument")
+        args = call.arguments if isinstance(call.arguments, dict) else {}
+        if "path" not in args:
+            return _failed_result(call, "missing_argument", "Missing 'path' argument")
+        path_str = args["path"]
+        if not isinstance(path_str, str):
+            return _failed_result(call, "invalid_argument", "'path' must be a string")
+        if not path_str.strip():
+            return _failed_result(call, "missing_argument", "Missing 'path' argument")
 
         try:
             resolved, access_root = resolve_read_resource_path(
                 path_str, self._work_root, self.resource_roots(), allow_outside=self._allow_access_outside_workdir
             )
         except ValueError as exc:
-            return ToolResult(call_id=call.id, name=call.name, status="failed", error=str(exc))
+            return _failed_result(call, "path_outside_root", str(exc))
 
         if not resolved.is_file():
-            return ToolResult(call_id=call.id, name=call.name, status="failed", error=f"File not found: {path_str}")
+            return _failed_result(call, "file_not_found", f"File not found: {path_str}")
+
+        try:
+            async with file_lock(resolved):
+                raw_bytes = read_file_bytes(resolved)
+        except FileNotFoundError:
+            return _failed_result(call, "file_not_found", f"File not found: {path_str}")
+        except OSError as exc:
+            return _failed_result(call, "read_failed", f"Read error: {exc}")
+        file_hash = compute_sha256(raw_bytes)
 
         document_metadata: dict[str, Any] = {}
         image_data_url: str | None = None
@@ -154,11 +315,11 @@ class WorkspaceReadOnlyTools:
                 max_text_length=self._max_text_length,
             )
         except DocumentNormalizationError as exc:
-            return ToolResult(
-                call_id=call.id,
-                name=call.name,
-                status="failed",
-                error=f"Document normalize error for {path_str}: {exc}",
+            return _failed_result(
+                call,
+                "read_failed",
+                f"Document normalize error for {path_str}: {exc}",
+                metadata={"file_hash": file_hash},
             )
         if normalized is not None:
             content = normalized.markdown
@@ -171,10 +332,6 @@ class WorkspaceReadOnlyTools:
         elif resolved.suffix.lower() in IMAGE_MIME_TYPES:
             # 图片：二进制读取 + base64 data URL。像素内容不放进文本（会变乱码），
             # 而是以 image_url 块随工具结果返回，由 base_agent 按模型 capability 决定是否发送。
-            try:
-                raw_bytes = resolved.read_bytes()
-            except OSError as exc:
-                return ToolResult(call_id=call.id, name=call.name, status="failed", error=f"Read error: {exc}")
             mime = IMAGE_MIME_TYPES[resolved.suffix.lower()]
             image_data_url = f"data:{mime};base64,{base64.b64encode(raw_bytes).decode('ascii')}"
             rel_preview = relative_workspace_uri(resolved, access_root)
@@ -184,16 +341,21 @@ class WorkspaceReadOnlyTools:
             )
         else:
             try:
-                content = resolved.read_text(encoding="utf-8", errors="replace")
-            except OSError as exc:
-                return ToolResult(call_id=call.id, name=call.name, status="failed", error=f"Read error: {exc}")
+                content = decode_utf8(raw_bytes)
+            except UnicodeDecodeError as exc:
+                return _failed_result(
+                    call,
+                    "invalid_utf8",
+                    f"File is not valid UTF-8: {exc}",
+                    metadata={"file_hash": file_hash},
+                )
 
         try:
             stat = resolved.stat()
-            file_size = stat.st_size
+            file_size = len(raw_bytes)
             mtime = datetime.datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M")
         except OSError:
-            file_size = len(content.encode("utf-8", errors="replace"))
+            file_size = len(raw_bytes)
             mtime = "unknown"
         total_lines = line_count(content)
 
@@ -201,6 +363,22 @@ class WorkspaceReadOnlyTools:
         if len(content) > self._max_text_length:
             content = content[: self._max_text_length]
             truncated = True
+
+        try:
+            content_hash = compute_sha256(content.encode("utf-8"))
+        except UnicodeError as exc:
+            return _failed_result(
+                call,
+                "invalid_utf8",
+                f"File content cannot be represented as UTF-8: {exc}",
+                metadata={"file_hash": file_hash},
+            )
+        version_metadata = {
+            "file_hash": file_hash,
+            "start": 0,
+            "end": len(content),
+            "content_hash": content_hash,
+        }
 
         meta_suffix = f"\n[file: {total_lines} lines, {format_file_size(file_size)}, modified {mtime}]"
         suffix = ("\n[... truncated]" if truncated else "") + meta_suffix
@@ -211,6 +389,7 @@ class WorkspaceReadOnlyTools:
             "size_bytes": file_size,
             "modified": mtime,
             "truncated": truncated,
+            **version_metadata,
             **document_metadata,
         }
         result_metadata = dict(artifact_metadata)
@@ -232,7 +411,7 @@ class WorkspaceReadOnlyTools:
                     metadata=artifact_metadata,
                 )
             ],
-            metadata=result_metadata,
+            metadata={**result_metadata, **version_metadata},
         )
 
     async def list_dir(self, call: ToolCall) -> ToolResult:
@@ -420,90 +599,164 @@ async def write_file_tool(
     allow_access_outside_workdir: bool = False,
 ) -> ToolResult:
     args = call.arguments if isinstance(call.arguments, dict) else {}
-    path_str = args.get("path", "")
-    content = args.get("content", "")
-
-    if not path_str:
-        return ToolResult(call_id=call.id, name=call.name, status="failed", error="Missing 'path' argument")
+    if "path" not in args:
+        return _failed_result(call, "missing_argument", "Missing 'path' argument")
+    path_str = args["path"]
     if not isinstance(path_str, str):
-        return ToolResult(call_id=call.id, name=call.name, status="failed", error="'path' must be a string")
+        return _failed_result(call, "invalid_argument", "'path' must be a string")
+    if not path_str.strip():
+        return _failed_result(call, "missing_argument", "Missing 'path' argument")
+    if "content" not in args:
+        return _failed_result(call, "missing_argument", "Missing 'content' argument")
+    content = args["content"]
     if not isinstance(content, str):
-        return ToolResult(call_id=call.id, name=call.name, status="failed", error="'content' must be a string")
+        return _failed_result(call, "invalid_argument", "'content' must be a string")
+
+    expected_file_hash = args.get("expected_file_hash")
+    if expected_file_hash is not None and not isinstance(expected_file_hash, str):
+        return _failed_result(call, "invalid_argument", "'expected_file_hash' must be a string or null")
+    must_not_exist = args.get("must_not_exist")
+    if must_not_exist is not None and type(must_not_exist) is not bool:
+        return _failed_result(call, "invalid_argument", "'must_not_exist' must be a boolean or null")
+
+    try:
+        new_bytes = content.encode("utf-8")
+    except UnicodeError as exc:
+        return _failed_result(call, "invalid_utf8", f"Content is not valid UTF-8: {exc}")
 
     try:
         resolved = validate_workspace_path(path_str, work_root, allow_outside=allow_access_outside_workdir)
     except ValueError as exc:
-        return ToolResult(call_id=call.id, name=call.name, status="failed", error=str(exc))
+        return _failed_result(call, "path_outside_root", str(exc))
 
-    try:
-        resolved.parent.mkdir(parents=True, exist_ok=True)
-    except OSError as exc:
-        return ToolResult(call_id=call.id, name=call.name, status="failed", error=f"Cannot create parent directory: {exc}")
+    async with file_lock(resolved):
+        exists_before = resolved.exists()
+        if must_not_exist is True and exists_before:
+            return _failed_result(call, "file_already_exists", f"File already exists: {path_str}")
+        if exists_before and not resolved.is_file():
+            return _failed_result(call, "write_failed", f"Target is not a file: {path_str}")
 
-    existed_before = resolved.is_file()
-    old_content = ""
-    if existed_before:
+        old_bytes = b""
+        old_file_hash: str | None = None
+        if exists_before:
+            try:
+                old_bytes = read_file_bytes(resolved)
+            except FileNotFoundError:
+                exists_before = False
+            except OSError as exc:
+                return _failed_result(call, "write_failed", f"Read error before overwrite: {exc}")
+
+        if exists_before:
+            old_file_hash = compute_sha256(old_bytes)
+            if expected_file_hash is not None and old_file_hash != expected_file_hash:
+                return _failed_result(
+                    call,
+                    "file_version_changed",
+                    "The file changed since it was read.",
+                    metadata={
+                        "expected_file_hash": expected_file_hash,
+                        "current_file_hash": old_file_hash,
+                    },
+                )
+            try:
+                old_content = decode_utf8(old_bytes)
+            except UnicodeDecodeError as exc:
+                return _failed_result(
+                    call,
+                    "invalid_utf8",
+                    f"Existing file is not valid UTF-8: {exc}",
+                    metadata={"current_file_hash": old_file_hash},
+                )
+        else:
+            old_content = ""
+            if expected_file_hash is not None:
+                return _failed_result(
+                    call,
+                    "file_not_found",
+                    f"File not found: {path_str}",
+                    metadata={"expected_file_hash": expected_file_hash},
+                )
+
+        # Recheck preconditions immediately before replacement.  This closes
+        # the most important TOCTOU window for callers using a version guard.
+        if expected_file_hash is not None or must_not_exist is True:
+            current_exists = resolved.exists()
+            if must_not_exist is True and current_exists:
+                return _failed_result(call, "file_already_exists", f"File already exists: {path_str}")
+            if expected_file_hash is not None:
+                if not current_exists or not resolved.is_file():
+                    return _failed_result(call, "file_not_found", f"File not found: {path_str}")
+                try:
+                    latest_hash = compute_sha256(read_file_bytes(resolved))
+                except FileNotFoundError:
+                    return _failed_result(call, "file_not_found", f"File not found: {path_str}")
+                except OSError as exc:
+                    return _failed_result(call, "write_failed", f"Read error before overwrite: {exc}")
+                if latest_hash != expected_file_hash:
+                    return _failed_result(
+                        call,
+                        "file_version_changed",
+                        "The file changed since it was read.",
+                        metadata={
+                            "expected_file_hash": expected_file_hash,
+                            "current_file_hash": latest_hash,
+                        },
+                    )
+
+        rel = relative_workspace_uri(resolved, Path(work_root).resolve())
+        lines = content.split("\n")
+        total_lines = line_count(content)
+        action = "Overwrote" if exists_before else "Created"
+        preview_lines: list[str] = []
+        if total_lines <= 6:
+            for i, line in enumerate(lines):
+                preview_lines.append(f"  {i + 1:4d} | {line}")
+        else:
+            for i in range(3):
+                preview_lines.append(f"  {i + 1:4d} | {lines[i]}")
+            preview_lines.append(f"       | ... ({total_lines - 6} lines omitted) ...")
+            for i in range(total_lines - 3, total_lines):
+                preview_lines.append(f"  {i + 1:4d} | {lines[i]}")
+        preview = "\n".join(preview_lines)
+        content_summary = (
+            f"{action} {rel}: {len(content)} chars, {total_lines} lines.\n"
+            f"--- preview ---\n{preview}\n--- end preview ---"
+        )
+        diff = unified_diff(old_content, content, rel)
+
         try:
-            old_content = resolved.read_text(encoding="utf-8", errors="replace")
+            atomic_write_bytes(resolved, new_bytes)
         except OSError as exc:
-            return ToolResult(call_id=call.id, name=call.name, status="failed", error=f"Read error before overwrite: {exc}")
+            return _failed_result(call, "write_failed", f"Write error: {exc}")
 
-    try:
-        resolved.write_text(content, encoding="utf-8")
-    except (OSError, UnicodeError) as exc:
-        return ToolResult(call_id=call.id, name=call.name, status="failed", error=f"Write error: {exc}")
-
-    rel = relative_workspace_uri(resolved, work_root)
-    lines = content.split("\n")
-    total_lines = line_count(content)
-    action = "Overwrote" if existed_before else "Created"
-    preview_lines: list[str] = []
-    if total_lines <= 6:
-        for i, line in enumerate(lines):
-            preview_lines.append(f"  {i + 1:4d} | {line}")
-    else:
-        for i in range(3):
-            preview_lines.append(f"  {i + 1:4d} | {lines[i]}")
-        preview_lines.append(f"       | ... ({total_lines - 6} lines omitted) ...")
-        for i in range(total_lines - 3, total_lines):
-            preview_lines.append(f"  {i + 1:4d} | {lines[i]}")
-    preview = "\n".join(preview_lines)
-
-    content_summary = (
-        f"{action} {rel}: {len(content)} chars, {total_lines} lines.\n"
-        f"--- preview ---\n{preview}\n--- end preview ---"
-    )
-    diff = unified_diff(old_content, content, rel)
-
-    return ToolResult(
-        call_id=call.id,
-        name=call.name,
-        status="ok",
-        content=content_summary,
-        artifacts=[
-            ToolArtifact(
-                kind="file_change",
-                uri=rel,
-                content=diff,
-                metadata={
-                    "path": rel,
-                    "action": "overwrite" if existed_before else "create",
-                    "old_line_count": line_count(old_content),
-                    "new_line_count": total_lines,
-                    "old_size": len(old_content),
-                    "new_size": len(content),
-                },
-            )
-        ],
-        metadata={
+        new_file_hash = compute_sha256(new_bytes)
+        metadata = {
             "path": rel,
-            "action": "overwrite" if existed_before else "create",
+            "action": "overwrite" if exists_before else "create",
             "old_line_count": line_count(old_content),
             "new_line_count": total_lines,
             "old_size": len(old_content),
             "new_size": len(content),
-        },
-    )
+            "old_size_bytes": len(old_bytes),
+            "new_size_bytes": len(new_bytes),
+            "file_hash": new_file_hash,
+            **({"old_file_hash": old_file_hash} if old_file_hash is not None else {}),
+        }
+        return ToolResult(
+            call_id=call.id,
+            name=call.name,
+            status="ok",
+            content=content_summary,
+            artifacts=[
+                ToolArtifact(
+                    kind="file_change",
+                    uri=rel,
+                    content=diff,
+                    metadata=dict(metadata),
+                )
+            ],
+            metadata=metadata,
+        )
 
 
 async def edit_file_tool(
@@ -513,110 +766,218 @@ async def edit_file_tool(
     allow_access_outside_workdir: bool = False,
 ) -> ToolResult:
     args = call.arguments if isinstance(call.arguments, dict) else {}
-    path_str = args.get("path", "")
-    old_string = args.get("old_string") or args.get("old_text", "")
-    new_string = args.get("new_string") or args.get("new_text", "")
-
-    if not path_str:
-        return ToolResult(call_id=call.id, name=call.name, status="failed", error="Missing 'path' argument")
-    if not old_string:
-        return ToolResult(call_id=call.id, name=call.name, status="failed", error="Missing 'old_string' argument")
+    if "path" not in args:
+        return _failed_result(call, "missing_argument", "Missing 'path' argument")
+    path_str = args["path"]
     if not isinstance(path_str, str):
-        return ToolResult(call_id=call.id, name=call.name, status="failed", error="'path' must be a string")
+        return _failed_result(call, "invalid_argument", "'path' must be a string")
+    if not path_str.strip():
+        return _failed_result(call, "missing_argument", "Missing 'path' argument")
+    if "old_string" not in args:
+        return _failed_result(call, "missing_argument", "Missing 'old_string' argument")
+    old_string = args["old_string"]
     if not isinstance(old_string, str):
-        return ToolResult(call_id=call.id, name=call.name, status="failed", error="'old_string' must be a string")
+        return _failed_result(call, "invalid_argument", "'old_string' must be a string")
+    if not old_string:
+        return _failed_result(call, "old_string_empty", "'old_string' must not be empty")
+    if "new_string" not in args:
+        return _failed_result(call, "missing_argument", "Missing 'new_string' argument")
+    new_string = args["new_string"]
     if not isinstance(new_string, str):
-        return ToolResult(call_id=call.id, name=call.name, status="failed", error="'new_string' must be a string")
+        return _failed_result(call, "invalid_argument", "'new_string' must be a string")
+
+    expected_file_hash = args.get("expected_file_hash")
+    if expected_file_hash is not None and not isinstance(expected_file_hash, str):
+        return _failed_result(call, "invalid_argument", "'expected_file_hash' must be a string or null")
+    expected_content_hash = args.get("expected_content_hash")
+    if expected_content_hash is not None and not isinstance(expected_content_hash, str):
+        return _failed_result(call, "invalid_argument", "'expected_content_hash' must be a string or null")
+    before_context = args.get("before_context")
+    if before_context is not None and not isinstance(before_context, str):
+        return _failed_result(call, "invalid_argument", "'before_context' must be a string or null")
+    after_context = args.get("after_context")
+    if after_context is not None and not isinstance(after_context, str):
+        return _failed_result(call, "invalid_argument", "'after_context' must be a string or null")
+    occurrence = args.get("occurrence")
+    if occurrence is not None and (type(occurrence) is not int or occurrence < 1):
+        return _failed_result(call, "invalid_argument", "'occurrence' must be a positive 1-based integer or null")
 
     try:
         resolved = validate_workspace_path(path_str, work_root, allow_outside=allow_access_outside_workdir)
     except ValueError as exc:
-        return ToolResult(call_id=call.id, name=call.name, status="failed", error=str(exc))
+        return _failed_result(call, "path_outside_root", str(exc))
 
     if not resolved.is_file():
-        return ToolResult(call_id=call.id, name=call.name, status="failed", error=f"File not found: {path_str}")
+        return _failed_result(call, "file_not_found", f"File not found: {path_str}")
 
-    try:
-        content = resolved.read_text(encoding="utf-8")
-    except (OSError, UnicodeError) as exc:
-        return ToolResult(call_id=call.id, name=call.name, status="failed", error=f"Read error: {exc}")
-
-    count = content.count(old_string)
-    if count == 0:
-        return ToolResult(
-            call_id=call.id,
-            name=call.name,
-            status="failed",
-            error=f"old_string not found in {path_str}",
-        )
-    if count > 1:
-        return ToolResult(
-            call_id=call.id,
-            name=call.name,
-            status="failed",
-            error=f"old_string found {count} times in {path_str} - provide more context to make it unique",
-        )
-
-    match_offset = content.find(old_string)
-    match_line_no = content.count("\n", 0, match_offset) + 1
-    new_content = content.replace(old_string, new_string, 1)
-
-    try:
-        resolved.write_text(new_content, encoding="utf-8")
-    except (OSError, UnicodeError) as exc:
-        return ToolResult(call_id=call.id, name=call.name, status="failed", error=f"Write error: {exc}")
-
-    rel = relative_workspace_uri(resolved, work_root)
-    new_lines = new_content.split("\n")
-    replaced_line_count = new_string.count("\n") + 1
-    start_idx = max(0, match_line_no - 1 - 3)
-    end_idx = min(len(new_lines), match_line_no - 1 + replaced_line_count + 3)
-    snippet_lines = []
-    for i in range(start_idx, end_idx):
-        marker = ">>" if (match_line_no - 1) <= i < (match_line_no - 1 + replaced_line_count) else "  "
-        snippet_lines.append(f"{marker} {i + 1:4d} | {new_lines[i]}")
-    snippet = "\n".join(snippet_lines)
-
-    total_lines = line_count(new_content)
-    content_summary = (
-        f"Edited {rel} (line {match_line_no}): "
-        f"replaced {len(old_string)} chars with {len(new_string)} chars. "
-        f"File now {total_lines} lines, {len(new_content)} chars.\n"
-        f"--- context around edit ---\n{snippet}\n--- end context ---"
-    )
-    diff = unified_diff(content, new_content, rel)
-
-    return ToolResult(
-        call_id=call.id,
-        name=call.name,
-        status="ok",
-        content=content_summary,
-        artifacts=[
-            ToolArtifact(
-                kind="file_change",
-                uri=rel,
-                content=diff,
+    async with file_lock(resolved):
+        try:
+            current_bytes = read_file_bytes(resolved)
+        except FileNotFoundError:
+            return _failed_result(call, "file_not_found", f"File not found: {path_str}")
+        except OSError as exc:
+            return _failed_result(call, "read_failed", f"Read error: {exc}")
+        current_file_hash = compute_sha256(current_bytes)
+        if expected_file_hash is not None and current_file_hash != expected_file_hash:
+            return _failed_result(
+                call,
+                "file_version_changed",
+                "The file changed since it was read.",
                 metadata={
-                    "path": rel,
-                    "action": "edit",
-                    "start_line": match_line_no,
-                    "old_line_count": line_count(content),
-                    "new_line_count": total_lines,
-                    "old_size": len(content),
-                    "new_size": len(new_content),
+                    "expected_file_hash": expected_file_hash,
+                    "current_file_hash": current_file_hash,
                 },
             )
-        ],
-        metadata={
+        try:
+            content = decode_utf8(current_bytes)
+        except UnicodeDecodeError as exc:
+            return _failed_result(
+                call,
+                "invalid_utf8",
+                f"File is not valid UTF-8: {exc}",
+                metadata={"current_file_hash": current_file_hash},
+            )
+
+        matches = _find_non_overlapping_occurrences(content, old_string)
+        if not matches:
+            return _failed_result(call, "old_string_not_found", f"old_string not found in {path_str}")
+
+        has_context = before_context is not None or after_context is not None
+        candidates = [
+            (start, end)
+            for start, end in matches
+            if not has_context or _context_matches(content, start, end, before_context, after_context)
+        ]
+        if has_context and not candidates:
+            return _failed_result(
+                call,
+                "context_mismatch",
+                f"Context did not match any occurrence of old_string in {path_str}",
+            )
+        if occurrence is not None:
+            if occurrence > len(candidates):
+                return _failed_result(
+                    call,
+                    "context_mismatch" if has_context else "old_string_not_found",
+                    f"Occurrence {occurrence} is not available for old_string in {path_str}",
+                )
+            match_offset, match_end = candidates[occurrence - 1]
+        else:
+            if len(candidates) > 1:
+                return _failed_result(
+                    call,
+                    "ambiguous_match",
+                    f"old_string found {len(candidates)} times in {path_str} - provide context or a 1-based occurrence",
+                )
+            match_offset, match_end = candidates[0]
+
+        local_content_hash = _selected_content_hash(
+            content,
+            match_offset,
+            match_end,
+            before_context,
+            after_context,
+        )
+        if expected_content_hash is not None and local_content_hash != expected_content_hash:
+            return _failed_result(
+                call,
+                "content_version_changed",
+                "The selected file content changed since it was read.",
+                metadata={
+                    "expected_content_hash": expected_content_hash,
+                    "current_content_hash": local_content_hash,
+                    "current_file_hash": current_file_hash,
+                },
+            )
+
+        new_content = content[:match_offset] + new_string + content[match_end:]
+        try:
+            new_bytes = new_content.encode("utf-8")
+        except UnicodeError as exc:
+            return _failed_result(
+                call,
+                "invalid_utf8",
+                f"Replacement content is not valid UTF-8: {exc}",
+                metadata={"current_file_hash": current_file_hash},
+            )
+
+        # An edit is always based on the exact bytes read above.  Re-read just
+        # before replacement so an external editor cannot silently be lost.
+        try:
+            latest_bytes = read_file_bytes(resolved)
+        except FileNotFoundError:
+            return _failed_result(call, "file_not_found", f"File not found: {path_str}")
+        except OSError as exc:
+            return _failed_result(call, "read_failed", f"Read error before edit: {exc}")
+        latest_file_hash = compute_sha256(latest_bytes)
+        if latest_file_hash != current_file_hash:
+            return _failed_result(
+                call,
+                "file_version_changed",
+                "The file changed while the edit was being prepared.",
+                metadata={"current_file_hash": latest_file_hash},
+            )
+
+        match_line_no = content.count("\n", 0, match_offset) + 1
+        try:
+            atomic_write_bytes(resolved, new_bytes)
+        except OSError as exc:
+            return _failed_result(call, "write_failed", f"Write error: {exc}")
+
+        rel = relative_workspace_uri(resolved, Path(work_root).resolve())
+        new_lines = new_content.split("\n")
+        replaced_line_count = new_string.count("\n") + 1
+        start_idx = max(0, match_line_no - 1 - 3)
+        end_idx = min(len(new_lines), match_line_no - 1 + replaced_line_count + 3)
+        snippet_lines = []
+        for i in range(start_idx, end_idx):
+            marker = ">>" if (match_line_no - 1) <= i < (match_line_no - 1 + replaced_line_count) else "  "
+            snippet_lines.append(f"{marker} {i + 1:4d} | {new_lines[i]}")
+        snippet = "\n".join(snippet_lines)
+
+        total_lines = line_count(new_content)
+        content_summary = (
+            f"Edited {rel} (line {match_line_no}): "
+            f"replaced {len(old_string)} chars with {len(new_string)} chars. "
+            f"File now {total_lines} lines, {len(new_content)} chars.\n"
+            f"--- context around edit ---\n{snippet}\n--- end context ---"
+        )
+        diff = unified_diff(content, new_content, rel)
+        new_file_hash = compute_sha256(new_bytes)
+        raw_occurrence = matches.index((match_offset, match_end)) + 1
+        metadata = {
             "path": rel,
             "action": "edit",
             "start_line": match_line_no,
+            "start": match_offset,
+            "end": match_end,
+            "occurrence": raw_occurrence,
             "old_line_count": line_count(content),
             "new_line_count": total_lines,
             "old_size": len(content),
             "new_size": len(new_content),
-        },
-    )
+            "old_size_bytes": len(current_bytes),
+            "new_size_bytes": len(new_bytes),
+            "old_file_hash": current_file_hash,
+            "file_hash": new_file_hash,
+            "content_hash": local_content_hash,
+            "matched_content_hash": local_content_hash,
+        }
+        return ToolResult(
+            call_id=call.id,
+            name=call.name,
+            status="ok",
+            content=content_summary,
+            artifacts=[
+                ToolArtifact(
+                    kind="file_change",
+                    uri=rel,
+                    content=diff,
+                    metadata=dict(metadata),
+                )
+            ],
+            metadata=metadata,
+        )
 
 
 __all__ = [
@@ -625,9 +986,14 @@ __all__ = [
     "DEFAULT_MAX_TEXT_LENGTH",
     "SKIP_SEARCH_DIRS",
     "WorkspaceReadOnlyTools",
+    "atomic_write_bytes",
+    "compute_sha256",
+    "decode_utf8",
     "edit_file_tool",
+    "file_lock",
     "make_edit_file_handler",
     "make_write_file_handler",
+    "read_file_bytes",
     "resolve_read_resource_path",
     "unified_diff",
     "write_file_tool",

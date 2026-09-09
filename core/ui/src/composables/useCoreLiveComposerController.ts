@@ -1,4 +1,4 @@
-import { computed, onScopeDispose, ref, watch, type Ref } from 'vue'
+import { computed, getCurrentScope, onScopeDispose, ref, watch, type Ref } from 'vue'
 import {
   coreComposerActionMode,
   coreComposerSubmissionEffects,
@@ -80,10 +80,12 @@ export function useCoreLiveComposerController(options: UseCoreLiveComposerContro
   // The 3s grace timer must never fire after the owning component unmounts —
   // escalateForceReset would target whatever thread activeThreadId points at
   // by then (possibly another session, or none) (audit 19 S2).
-  onScopeDispose(() => {
-    clearStopGraceTimer()
-    stopPending = false
-  })
+  if (getCurrentScope()) {
+    onScopeDispose(() => {
+      clearStopGraceTimer()
+      stopPending = false
+    })
+  }
   const liveTurnController = useCoreLiveTurnController<CoreInputItem[]>({
     activeThreadId: options.activeThreadId,
     activeTurnId: options.activeTurnId,

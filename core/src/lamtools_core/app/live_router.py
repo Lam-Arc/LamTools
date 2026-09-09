@@ -4,6 +4,7 @@ import asyncio
 import inspect
 import json
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
@@ -34,6 +35,13 @@ from .security import is_allowed_origin, is_same_server_origin
 
 
 logger = logging.getLogger(__name__)
+
+
+def _trace(event: str, **fields: Any) -> None:
+    """Write correlation metadata without logging request or response bodies."""
+    payload: dict[str, Any] = {"component": "core", "event": event}
+    payload.update(fields)
+    logger.info("[lamtools-remote] %s", json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
 
 # Events that change cross-client state outside the runItem stream and are
 # rare enough to justify a full snapshot push (multi-window sync). Every other
@@ -165,9 +173,11 @@ class CoreLiveConnection:
         self._run_item_buffer: dict[tuple[str, str, str], dict[str, Any]] = {}
         self._run_item_flush_task: asyncio.Task[None] | None = None
         self._run_item_flush_interval: float = 0.02
+        self._request_methods: dict[str, str] = {}
 
     async def run(self) -> None:
         await self.websocket.accept()
+        _trace("core.connection_started")
         sender = asyncio.create_task(self._sender())
         hub_reader = asyncio.create_task(self._hub_reader())
         try:
@@ -210,6 +220,7 @@ class CoreLiveConnection:
             if pending:
                 await asyncio.gather(*pending, return_exceptions=True)
             self._unsubscribe()
+            _trace("core.connection_closed", thread_id=self.thread_id or "")
 
     def _request_task_done(self, task: asyncio.Task[None]) -> None:
         self.request_tasks.discard(task)
@@ -226,6 +237,18 @@ class CoreLiveConnection:
         while True:
             message = await self.outbound.get()
             await self.websocket.send_json(message)
+            if "id" in message:
+                request_id = message.get("id")
+                method = self._request_methods.pop(str(request_id), "")
+                error = message.get("error")
+                _trace(
+                    "core.rpc.response_sent",
+                    request_id=request_id,
+                    method=method,
+                    ok=not isinstance(error, dict),
+                )
+            else:
+                _trace_outbound_notification(message)
 
     async def _send(self, message: dict[str, Any]) -> None:
         try:
@@ -257,7 +280,26 @@ class CoreLiveConnection:
                 return
             if event is None:
                 continue
+            # Project/session mutations can be committed outside a thread
+            # subscription.  They are already protocol-shaped notifications
+            # from the global sync broadcaster; do not wrap them a second time
+            # through event_notification().
+            if isinstance(event, dict) and event.get("method") == "sync/change":
+                await self._send(event)
+                continue
             event_method = event.get("method") if isinstance(event, dict) else getattr(event, "method", "")
+            # Persisted app events are also mobile sync deltas. Forward the
+            # journal row as a protocol-neutral notification; the normal live
+            # event remains below for the existing desktop projector.
+            event_id = event.get("event_id") if isinstance(event, dict) else getattr(event, "event_id", "")
+            journal = getattr(getattr(self.context, "host", None), "sync_journal", None)
+            if event_id and journal is not None:
+                try:
+                    change = await journal.get_change(str(event_id))
+                except Exception:
+                    change = None
+                if change is not None:
+                    await self._send({"method": "sync/change", "params": change})
             if event_method == CORE_RUN_ITEM_METHOD:
                 await self._enqueue_run_item(event)
                 # approval_request（审批请求）是重要边界：事件流可能因订阅者
@@ -418,6 +460,10 @@ class CoreLiveConnection:
         try:
             request = JsonRpcRequest.model_validate(raw)
         except ValidationError as exc:
+            _trace(
+                "core.rpc.invalid",
+                request_id=raw.get("id") if isinstance(raw, dict) else None,
+            )
             await self._send(
                 rpc_error(
                     raw.get("id") if isinstance(raw, dict) else None,
@@ -427,22 +473,70 @@ class CoreLiveConnection:
                 )
             )
             return
+        request_id = request.id
+        thread_id = _thread_id_from_params(request.params)
+        turn_id = _turn_id_from_params(request.params)
+        if request_id is not None:
+            self._request_methods[str(request_id)] = request.method
+        _trace(
+            "core.rpc.received",
+            request_id=request_id,
+            method=request.method,
+            thread_id=thread_id,
+            turn_id=turn_id,
+        )
+        started_at = time.monotonic()
         if await self._handle_control_request(request):
+            _trace(
+                "core.rpc.processed",
+                request_id=request_id,
+                method=request.method,
+                path="control",
+                elapsed_ms=round((time.monotonic() - started_at) * 1000, 1),
+            )
             return
         if not self.initialized:
+            _trace(
+                "core.rpc.rejected",
+                request_id=request_id,
+                method=request.method,
+                reason="not_initialized",
+            )
             await self._send_not_initialized(request)
             return
-        thread_id = _thread_id_from_params(request.params)
         if thread_id:
             self._subscribe(thread_id)
         if await self._handle_operation_request(request):
+            _trace(
+                "core.rpc.processed",
+                request_id=request_id,
+                method=request.method,
+                path="operation_handler",
+                elapsed_ms=round((time.monotonic() - started_at) * 1000, 1),
+            )
             return
         try:
             outcome = await self._dispatch(request)
         except Exception as exc:
             logger.exception("Core app-server operation failed: %s", request.method)
+            _trace(
+                "core.rpc.failed",
+                request_id=request_id,
+                method=request.method,
+                error=type(exc).__name__,
+                elapsed_ms=round((time.monotonic() - started_at) * 1000, 1),
+            )
             await self._send(rpc_error(request.id, code=SERVER_ERROR, message=str(exc)))
             return
+        response_error = outcome.response.get("error") if isinstance(outcome.response, dict) else None
+        _trace(
+            "core.rpc.processed",
+            request_id=request_id,
+            method=request.method,
+            path="dispatch",
+            ok=not isinstance(response_error, dict),
+            elapsed_ms=round((time.monotonic() - started_at) * 1000, 1),
+        )
         await self._send(outcome.response)
         await self.send_operation_outcome(
             outcome,
@@ -626,6 +720,7 @@ def _normalize_method(method: str) -> str:
     aliases = {
         "thread/resume": "thread.resume",
         "thread/read": "thread.read",
+        "thread/history": "thread.history",
         "turn/start": "turn.start",
         "turn/cancel": "turn.cancel",
         "turn/interrupt": "turn.cancel",
@@ -645,6 +740,39 @@ def _normalize_method(method: str) -> str:
 
 def _thread_id_from_params(params: dict[str, Any]) -> str:
     return str(params.get("thread_id") or params.get("threadId") or params.get("session_id") or params.get("sessionId") or "")
+
+
+def _turn_id_from_params(params: dict[str, Any]) -> str:
+    return str(params.get("turn_id") or params.get("turnId") or "")
+
+
+def _trace_outbound_notification(message: dict[str, Any]) -> None:
+    method = str(message.get("method") or "")
+    if not method:
+        return
+    params = message.get("params")
+    fields: dict[str, Any] = {"method": method}
+    if isinstance(params, dict):
+        fields.update(
+            thread_id=str(params.get("thread_id") or ""),
+            turn_id=str(params.get("turn_id") or ""),
+            item_id=str(params.get("item_id") or ""),
+            kind=str(params.get("kind") or ""),
+        )
+        if _contains_stream_delta(params):
+            return
+    _trace("core.event_sent", **fields)
+
+
+def _contains_stream_delta(value: Any) -> bool:
+    current = value
+    for _ in range(4):
+        if not isinstance(current, dict):
+            return False
+        if isinstance(current.get("delta"), str):
+            return True
+        current = current.get("payload")
+    return False
 
 
 def _thread_id_from_outcome(outcome: CoreLiveOperationOutcome) -> str:

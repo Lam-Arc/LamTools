@@ -3,6 +3,7 @@ import { flushPromises, mount } from '@vue/test-utils';
 import AttachmentTray from '../src/components/AttachmentTray.vue';
 import ChatThread from '../src/components/ChatThread.vue';
 import type { CoreAttachment, CoreMessage } from '../src/types';
+import { createFakeTransport } from './fake-transport'
 
 const uploaded: CoreAttachment = {
   id: 'att-1',
@@ -14,11 +15,27 @@ const uploaded: CoreAttachment = {
   status: 'uploaded',
 };
 
+const testTransport = createFakeTransport()
+
+function mountAttachmentTray(options: any = {}) {
+  return mount(AttachmentTray, {
+    ...options,
+    props: { transport: testTransport, ...(options.props ?? {}) },
+  })
+}
+
+function mountChatThread(options: any = {}) {
+  return mount(ChatThread, {
+    ...options,
+    props: { transport: testTransport, ...(options.props ?? {}) },
+  })
+}
+
 describe('AttachmentTray', () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it('renders uploaded and failed attachments with stable actions', async () => {
-    const wrapper = mount(AttachmentTray, {
+    const wrapper = mountAttachmentTray({
       props: {
         attachments: [
           uploaded,
@@ -67,20 +84,21 @@ describe('AttachmentTray', () => {
       }],
     }];
 
-    const wrapper = mount(ChatThread, { props: { messages } });
+    const wrapper = mountChatThread({ props: { messages } });
 
     expect(wrapper.text()).toContain('看附件');
     expect(wrapper.text()).toContain('note.md');
   });
 
   it('renders image attachments as thumbnail-only cards', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-      ok: true,
-      blob: async () => new window.Blob(['thumbnail'], { type: 'image/png' }),
-    }));
-    const wrapper = mount(AttachmentTray, {
+    const transport = createFakeTransport({
+      status: 200,
+      headers: { 'content-type': 'image/png' },
+      body: Uint8Array.from([137, 80, 78, 71]),
+    })
+    const wrapper = mountAttachmentTray({
       props: {
-        apiBase: 'http://127.0.0.1:5172/api/core',
+        transport,
         attachments: [{
           ...uploaded,
           id: 'image-1',
@@ -97,8 +115,5 @@ describe('AttachmentTray', () => {
     await flushPromises();
     await vi.waitFor(() => expect(wrapper.find('.attachment-thumbnail').exists()).toBe(true));
     expect(wrapper.get('.attachment-thumbnail').attributes('src')).toMatch(/^data:image\/png;base64,/);
-    expect(fetch).toHaveBeenCalledWith(
-      'http://127.0.0.1:5172/api/core/attachments/image-1/download',
-    );
   });
 });

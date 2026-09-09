@@ -72,7 +72,7 @@
     <FolderBrowserDialog
       v-model="showBrowser"
       :initial-path="workRoot"
-      :api-base="apiBase"
+      :transport="transport"
       @selected="onDirectorySelected"
     />
   </div>
@@ -82,16 +82,16 @@
 <script setup lang="ts">
 import { nextTick, onMounted, ref } from 'vue'
 import FolderBrowserDialog from './FolderBrowserDialog.vue'
+import type { LamToolsTransport } from '../transport'
 
 const props = withDefaults(defineProps<{
   loading?: boolean
   error?: string
-  apiBase?: string
+  transport: LamToolsTransport
   teleportTarget?: string
 }>(), {
   loading: false,
   error: '',
-  apiBase: '/api/core',
   teleportTarget: 'body',
 })
 
@@ -128,7 +128,7 @@ async function openBrowser() {
     if (picked) workRoot.value = picked
     return
   }
-  // Fallback: in-browser tree dialog (non-Tauri / demo mode).
+  // Browser capability: use the in-app tree dialog when native picking is absent.
   showBrowser.value = true
 }
 

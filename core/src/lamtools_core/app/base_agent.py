@@ -55,6 +55,13 @@ _MODEL_EVIDENCE_KEYS = (
     "exit_code",
     "timed_out",
     "error_type",
+    "file_hash",
+    "current_file_hash",
+    "content_hash",
+    "current_content_hash",
+    "start",
+    "end",
+    "occurrence",
     "stdout_log",
     "stderr_log",
     "log_path",
@@ -89,6 +96,8 @@ def _find_image_data_url(result: ToolResult) -> str | None:
 def _format_model_tool_evidence(result: ToolResult) -> str:
     metadata = result.metadata if isinstance(result.metadata, dict) else {}
     lines = [f"status: {result.status}"]
+    if result.error_code:
+        lines.append(f"error_code: {result.error_code}")
     if result.content:
         lines.extend(("content:", result.content))
     if result.error:

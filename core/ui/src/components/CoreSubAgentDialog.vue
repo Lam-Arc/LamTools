@@ -30,6 +30,7 @@
       >
         <ChatThread
           :messages="run.timeline"
+          :transport="transport"
           :assistant-label="run.name"
           :process-expanded-ids="expandedMessageIds"
           @toggle-process="toggleProcess"
@@ -82,6 +83,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import { X } from 'lucide-vue-next'
 import type { CoreSubAgentRun, MessagePartStatus } from '../types'
+import type { LamToolsTransport } from '../transport'
 import type { CoreSelectOption, CoreThinkingModeOption } from '../composer/execution'
 import { useCoreAutoFollowScroll } from '../composables/useCoreAutoFollowScroll'
 import ChatThread from './ChatThread.vue'
@@ -90,6 +92,7 @@ import CoreExecutionControls from './CoreExecutionControls.vue'
 
 const props = withDefaults(defineProps<{
   run: CoreSubAgentRun
+  transport: LamToolsTransport
   open?: boolean
   dialogId?: string
   teleportTo?: string
@@ -425,7 +428,7 @@ onBeforeUnmount(() => {
   }
 
   .core-sub-agent-dialog__composer :deep(.ui-select-trigger),
-  .core-sub-agent-dialog__composer :deep(.send) {
+  .core-sub-agent-dialog__composer :deep(.core-send-stop-button) {
     min-height: 2.75rem;
     height: 2.75rem;
   }
@@ -433,7 +436,7 @@ onBeforeUnmount(() => {
 
 @media (pointer: coarse) {
   .core-sub-agent-dialog__composer :deep(.ui-select-trigger),
-  .core-sub-agent-dialog__composer :deep(.send) {
+  .core-sub-agent-dialog__composer :deep(.core-send-stop-button) {
     min-height: 2.75rem;
     height: 2.75rem;
   }

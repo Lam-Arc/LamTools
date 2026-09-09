@@ -5,6 +5,24 @@
  */
 
 /* =========================================================================
+   Shared shell layer tokens
+   ========================================================================= */
+:root {
+  /* Keep the layer scale available to shells that reuse the shared UI
+     components without mounting the desktop .workspace-shell wrapper (the
+     Capacitor mobile shell is one such host). */
+  --z-background-info: 10;
+  --z-stage: 15;
+  --z-main-surface: 20;
+  --z-edge-trigger: 35;
+  --z-composer: 40;
+  --z-popover: 60;
+  --z-modal: 80;
+  --z-toast: 90;
+  --z-fullscreen: 100;
+}
+
+/* =========================================================================
    Shell — backdrop layer (full viewport)
    ========================================================================= */
 .workspace-shell {
@@ -21,16 +39,13 @@
   --right-reveal: calc(var(--right-drawer-width) - var(--right-overlap));
   --main-x-padding: max(22px, 5vw);
   --content-width: 780px;
-  --z-background-info: 10;
-  --z-stage: 15;
   --stage-reveal: 0px;
-  --z-main-surface: 20;
-  --z-edge-trigger: 35;
-  --z-composer: 40;
-  --z-popover: 60;
-  --z-modal: 80;
-  --z-toast: 90;
-  --z-fullscreen: 100;
+  --keyboard-inset: 0px;
+  --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+  --composer-bottom-offset: max(var(--keyboard-inset), var(--safe-area-bottom));
+  --composer-height: 120px;
+  --composer-rest-bottom: 16px;
+  --composer-clearance: 24px;
   --theme-backdrop-background: linear-gradient(180deg, #202020 0%, #202020 100%);
   --theme-backdrop-text: #f2efeb;
   --theme-main-background: linear-gradient(180deg, #111111 0%, #111111 100%);
@@ -43,6 +58,7 @@
   --theme-composer-text: #f2efeb;
   --theme-composer-soft-background: rgba(255, 255, 255, 0.045);
   --theme-control-background: linear-gradient(180deg, rgba(52, 51, 49, 1) 0%, rgba(52, 51, 49, 1) 100%);
+  --theme-control-solid: #343331;
   --theme-control-text: #f2efeb;
   --theme-control-soft-background: rgba(255, 255, 255, 0.055);
   position: fixed;
@@ -60,11 +76,8 @@
 .workspace-shell.stage-open { --main-left: var(--left-reveal); }
 .workspace-shell.stage-open { --main-right: var(--right-reveal); }
 
-/* Mobile nav bar + drawer backdrop are desktop-hidden here; their ≤640px
-   rules live in the responsive section at the bottom (audit 19: the whole
-   mobile block was accidentally dropped, leaving an unstyled floating bar
-   on desktop and a zero-width drawer on mobile). */
-.mobile-shell-nav,
+/* The drawer backdrop is only needed while a gesture-opened drawer is active;
+   its ≤640px surface rule lives in the responsive section below. */
 .mobile-drawer-backdrop {
   display: none;
 }
@@ -83,7 +96,7 @@
    ========================================================================= */
 .edge {
   position: fixed;
-  top: var(--titlebar-offset, 0);
+  top: var(--titlebar-offset, 0px);
   bottom: 0;
   z-index: var(--z-edge-trigger, 35);
   width: 12px;
@@ -124,7 +137,7 @@
 }
 
 .drawer-left {
-  top: var(--titlebar-offset, 0); bottom: 0; left: 0;
+  top: var(--titlebar-offset, 0px); bottom: 0; left: 0;
   width: var(--left-visible-width);
   border-radius: 0;
   transform: none;
@@ -148,7 +161,7 @@
 }
 
 .drawer-right {
-  top: var(--titlebar-offset, 0); bottom: 0; right: 0;
+  top: var(--titlebar-offset, 0px); bottom: 0; right: 0;
   width: var(--right-drawer-width);
   max-height: none;
   border-radius: 0;
@@ -472,39 +485,9 @@
     opacity: 1;
     pointer-events: auto;
   }
-  .mobile-shell-nav {
-    position: fixed;
-    inset: 8px 10px auto;
-    z-index: calc(var(--z-edge-trigger, 35) + 1);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    pointer-events: none;
-  }
-  .mobile-shell-button {
-    width: 44px;
-    height: 44px;
-    padding: 0;
-    border: 1px solid color-mix(in srgb, var(--theme-main-text) 14%, transparent);
-    border-radius: var(--radius-sm);
-    background: var(--theme-main-background);
-    color: var(--theme-main-text);
-    display: grid;
-    place-items: center;
-    pointer-events: auto;
-  }
-  .mobile-shell-button svg {
-    width: 20px;
-    height: 20px;
-    fill: none;
-    stroke: currentColor;
-    stroke-width: 1.7;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-  }
-  .mobile-shell-button:focus-visible {
-    outline: 2px solid var(--blue);
-    outline-offset: 2px;
+  .workspace-shell {
+    touch-action: pan-y;
+    overscroll-behavior-x: none;
   }
   .mobile-drawer-backdrop {
     position: fixed;

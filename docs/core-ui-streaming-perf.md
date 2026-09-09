@@ -18,8 +18,8 @@
 2. **ChatThread 巨型组件无 per-message 边界**（`components/ChatThread.vue`，5237 行）：`messages` 数组整体替换 → 整棵树重渲，`groupParts`/`compactGroups`/`processSummary`/`timelineParts`/`diffDisplayLines` 等 O(全部 part) 的函数对每条历史消息每帧全部重跑（ChatThread.vue:3240-3394）。
 3. **ChatThread.vue:1606 watcher**：每帧把所有 part 拼成一个大字符串 `id:status|id:status|…`（O(全部 part)），回调里对每个 running part 又做 `new Set([...])` 复制。
 4. **MarkdownRenderer 流式渲染每帧全量**（`components/MarkdownRenderer.vue:221`）：`renderStreaming` 多轮正则 + `DOMPurify.sanitize` 全文 + `v-html` 整体 innerHTML 替换（成本随内容长度线性增长，还会打断文本选区）。
-5. **每帧强制回流**：`demo/App.vue:2072` `watch(messages, {deep:true})` → `scrollToBottom` 双次写 `scrollTop`（`composables/useCoreAutoFollowScroll.ts:83-85`）+ `syncThreadResizeObserver` + ResizeObserver 回调再次 scrollToBottom——一帧内多次强制布局。
-6. **每帧 HTTP 请求**：`demo/App.vue:2086` `watch([activeSessionId, messages, latestStatus])` → `refreshGoal` 每帧发 `listGoals` 请求（有 generation guard 但请求照样发出）。
+5. **每帧强制回流**：`app/LamToolsApp.vue` 的 `watch(messages, {deep:true})` → `scrollToBottom` 双次写 `scrollTop`（`composables/useCoreAutoFollowScroll.ts`）+ `syncThreadResizeObserver` + ResizeObserver 回调再次 scrollToBottom——一帧内多次强制布局。
+6. **每帧 HTTP 请求**：`app/LamToolsApp.vue` 的 `watch([activeSessionId, messages, latestStatus])` → `refreshGoal` 每帧发 `listGoals` 请求（有 generation guard 但请求照样发出）。
 7. **快照不可变拷贝 O(items×events)**（`appServer/store.ts:377`）：每帧 N 个事件逐个 spread 拷贝全部 items + `seen_event_ids`（2000 条 slice）+ `deltas` 数组只增不减。
 8. **后端每 chunk 都做投影转换**（`core/src/lamtools_core/app/default_agent.py:362` live_callback → `core_events_to_run_items`），模型快时 20-100+ events/s。
 
@@ -32,8 +32,8 @@
 | # | 改动 | 文件 | 用户可见影响 |
 |---|------|------|------------|
 | 1 | rAF 帧内先按 item_id 合并 delta 事件再 apply（`coalesceRunItemEvents`） | `appServer/store.ts` | 无（渲染结果同为帧末最新内容；deltas 粒度无 UI 消费） |
-| 5 | 滚动合并为一帧一次；`scrollToBottom` 单次写 + 帧后仅 scrollHeight 变化时校正 | `composables/useCoreAutoFollowScroll.ts`、`demo/App.vue` | 无（最迟 1 帧跟随到位；force 保持立即） |
-| 6 | `refreshGoal` 节流 2s（非防抖）+ `force` 参数；turn 结束 / 会话切换 force 刷新 | `composables/useCoreGoals.ts`、`demo/App.vue` | 趋近于零（长流式中 goal 每 2s 刷新一次；turn 结束立即） |
+| 5 | 滚动合并为一帧一次；`scrollToBottom` 单次写 + 帧后仅 scrollHeight 变化时校正 | `composables/useCoreAutoFollowScroll.ts`、`app/LamToolsApp.vue` | 无（最迟 1 帧跟随到位；force 保持立即） |
+| 6 | `refreshGoal` 节流 2s（非防抖）+ `force` 参数；turn 结束 / 会话切换 force 刷新 | `composables/useCoreGoals.ts`、`app/LamToolsApp.vue` | 趋近于零（长流式中 goal 每 2s 刷新一次；turn 结束立即） |
 | 7 | ChatThread:1606 watcher getter 只收集 live 消息 parts | `components/ChatThread.vue` | 无（回调本就只处理 live 消息） |
 
 ### 验证
@@ -72,10 +72,10 @@
 
 - `ChatThread.vue`（原 5237 行）瘦身为薄壳：v-for + 插槽转发；消息渲染整体迁入新组件 `MessageView.vue`（单消息组件，自递归处理 sub-line）
 - 模板零变换搬移（prop 名保持 `msg`）；`<style>` 全局 CSS 留在 ChatThread（测试契约 + 零视觉回归）；内部 UI 状态（展开/折叠/decision draft/copy 反馈）全部下放到 MessageView 实例（状态变更只重渲对应消息）
-- **关键机制**：`v-memo` 使用消息引用、每消息过程展开状态及其他渲染输入 + 命名事件处理器（内联箭头会让所有消息随父渲染重渲——slots/事件每次父渲染重建引用）。v-memo 依赖 = 消息渲染的全部外部输入；当前消费方（demo/CoreSubAgentDialog）不提供命名插槽，无 stale 风险
+- **关键机制**：`v-memo` 使用消息引用、每消息过程展开状态及其他渲染输入 + 命名事件处理器（内联箭头会让所有消息随父渲染重渲——slots/事件每次父渲染重建引用）。v-memo 依赖 = 消息渲染的全部外部输入；当前消费方（LamToolsApp/CoreSubAgentDialog）不提供命名插槽，无 stale 风险
 - 新增 `tests/chat-thread-messageview-isolation.test.ts`（3 个隔离契约测试：只重渲变化消息 / 同数组零重渲 / message-product 路由，全绿）
 - 附带收益：`vue-tsc -b` 与 `npm run build` 恢复全绿（此前被「样式精进」WIP 的 ChatThread:1016 类型错误挡住）
-- 回归验证：chat-thread-process 55 测试与基线逐项一致（18 红为 WIP 既有）；chat-thread-rollback 4/4、demo/scroll/projection 相关 32/32 全绿
+- 回归验证：chat-thread-process 55 测试与基线逐项一致（18 红为 WIP 既有）；chat-thread-rollback 4/4、shared-app/scroll/projection 相关 32/32 全绿
 - 适配：`chat-thread-process.test.ts` 的模板源码契约测试改读 `MessageView.vue`（一行路径）
 
 ### 阶段 3 — #4 Markdown 流式瘦身（已完成 2026-08-07）
@@ -131,7 +131,7 @@
 - 消息投影：`core/ui/src/appServer/workbenchProjection.ts`、`selectors.ts`、`messageParts.ts`
 - 聊天渲染：`core/ui/src/components/ChatThread.vue`、`MarkdownRenderer.vue`
 - 滚动跟随：`core/ui/src/composables/useCoreAutoFollowScroll.ts`、`core/ui/src/directives/autoFollowScroll.ts`
-- 主界面接线：`core/ui/src/demo/App.vue`
+- 主界面接线：`core/ui/src/app/LamToolsApp.vue`
 - 后端 delta 发射：`core/src/lamtools_core/kernel/loop.py`（`_stream_model`，`_STREAM_TEXT_PROGRESS_CHARS=128` 仅限 content 全量）、`core/src/lamtools_core/event/runtime_projection.py:276`（reply_delta 逐 chunk 投影）
 - 后端事件持久化/发布：`core/src/lamtools_core/app/default_agent.py:362`（live_callback）、`app/live_hub.py`、`app/live_router.py`
 
@@ -146,7 +146,7 @@
 |---|------|------|------|
 | 2a | `append_batch` 增 `return_state`，turn/start 写锁内第二次 `persistence.load` 改为复用内存投影（+`reconcile_status` 保等价） | `app/persistence_host.py`、`app/live_operations.py:557-578` | 写锁内省掉一次 53MB 级 DB 读取+解析 |
 | 2b | 前端 `request()` 加超时（默认 30s；resume/turn/start 60s），超时 reject 并清理 pending | `ui/src/appServer/client.ts`、`store.ts` | "卡死"变为可见错误，不再无限挂起 |
-| 5a | 投影窗口化：`selectCoreWorkbenchMessagesWindow` 只构建最近 N=150 条消息（`tailWindow`），控制器维护窗口 + `loadMoreHistory()`，App.vue 顶部"加载更早消息"按钮（滚动锚定） | `ui/src/appServer/workbenchProjection.ts`、`useCoreWorkbenchProjectionController.ts`、`demo/App.vue` | 进大会话 DOM 渲染从全量（2802 items）降为窗口内；流式/缓存语义不变 |
+| 5a | 投影窗口化：`selectCoreWorkbenchMessagesWindow` 只构建最近 N=150 条消息（`tailWindow`），控制器维护窗口 + `loadMoreHistory()`，App.vue 顶部"加载更早消息"按钮（滚动锚定） | `ui/src/appServer/workbenchProjection.ts`、`useCoreWorkbenchProjectionController.ts`、`app/LamToolsApp.vue` | 进大会话 DOM 渲染从全量（2802 items）降为窗口内；流式/缓存语义不变 |
 | 4a | `backup_file` 跳过 >200MB 文件（`MAX_BACKUP_FILE_BYTES`）；每会话主链仅保留最近 6 节点自动剪枝（`MAX_CHECKPOINTS_PER_SESSION`，`_prune_mainline`），回滚后旧未来/被放弃分支被清理（"切回去发新消息后回不去"） | `checkpoint.py` | 防 911MB 级大文件版本再次堆积；时间线节点数与 blob 不再无限增长 |
 | 数据 | 全清 checkpoint 体系（615 checkpoint / 214 manifest / 44104 blob / 6 restore）+ blob 目录 + `VACUUM` | 运维操作 | 释放磁盘 ~24.1GB + DB 6.08GB→490MB；**回滚功能整体失效**（manifest 累积引用机制下部分清会导致脏引用，故全清）；当前工作区文件不受影响 |
 

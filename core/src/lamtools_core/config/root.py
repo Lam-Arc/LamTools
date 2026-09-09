@@ -140,6 +140,11 @@ def ensure_projects_root() -> Path:
     return root
 
 
+def fallback_project_root() -> Path:
+    """Return the mandatory fallback workspace beside the application."""
+    return (default_projects_root().resolve().parent / "MyProject").resolve()
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------

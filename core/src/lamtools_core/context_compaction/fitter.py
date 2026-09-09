@@ -8,13 +8,11 @@ from dataclasses import replace
 from lamtools_core.llm import ChatMessage
 from lamtools_core.tokens import estimate_text_tokens
 
-from .fallback import compress_structured_compaction_summary
 from .formatting import truncate_text_to_tokens
 from .models import (
     CompactionBudgetExceeded,
     CompactionFitInput,
     CompactionFitResult,
-    CompactionSummary,
     CompactionTokenEstimator,
 )
 from .planner import _semantic_message_groups
@@ -22,10 +20,6 @@ from .planner import _semantic_message_groups
 
 _logger = logging.getLogger(__name__)
 MAX_FIT_ATTEMPTS = 8
-
-
-def _minimal_compaction_summary() -> str:
-    return CompactionSummary().render()
 
 
 class CompactionFitter:
@@ -150,9 +144,7 @@ class CompactionFitter:
             return content, list(recent)
         next_budget = max(1, current_text_tokens - max(1, current_text_tokens // 3))
         next_budget = min(next_budget, available_tokens)
-        next_content = compress_structured_compaction_summary(content, next_budget)
-        if next_content == content or estimate_text_tokens(next_content) >= current_text_tokens:
-            next_content = truncate_text_to_tokens(content, next_budget)
+        next_content = truncate_text_to_tokens(content, next_budget)
         return next_content, list(recent)
 
     def _drop_oldest_recent_turn(
@@ -186,9 +178,7 @@ class CompactionFitter:
         best = ""
         while low <= high:
             middle = (low + high) // 2
-            candidate_content = compress_structured_compaction_summary(content, middle)
-            if estimate_text_tokens(candidate_content) > middle:
-                candidate_content = truncate_text_to_tokens(candidate_content, middle)
+            candidate_content = truncate_text_to_tokens(content, middle)
             candidate = [
                 *prefix,
                 ChatMessage(role="system", content=candidate_content),
@@ -210,7 +200,7 @@ class CompactionFitter:
         target_tokens: int,
     ) -> tuple[str, list[ChatMessage]]:
         _ = content, prefix, target_tokens
-        return _minimal_compaction_summary(), list(recent)
+        return "", list(recent)
 
     def _latest_user_only(
         self,
@@ -221,7 +211,7 @@ class CompactionFitter:
         target_tokens: int,
     ) -> tuple[str, list[ChatMessage]]:
         _ = content, prefix, target_tokens
-        return _minimal_compaction_summary(), self._required_recent_messages(recent)
+        return "", self._required_recent_messages(recent)
 
 
 __all__ = [

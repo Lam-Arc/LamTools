@@ -90,6 +90,7 @@ class ToolResult:
     artifacts: list[ToolArtifact] = field(default_factory=list)
     usage: LLMUsage | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    error_code: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -100,6 +101,8 @@ class ToolResult:
         }
         if self.error:
             d["error"] = self.error
+        if self.error_code:
+            d["error_code"] = self.error_code
         if self.artifacts:
             d["artifacts"] = [a.to_dict() for a in self.artifacts]
         if self.usage is not None:

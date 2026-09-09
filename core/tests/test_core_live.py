@@ -306,6 +306,102 @@ async def test_core_live_command_action_receives_arguments_without_reparsing(tmp
 
 
 @pytest.mark.asyncio
+async def test_core_live_command_execute_rejects_stale_revision_before_action(tmp_path):
+    engine, context = await _context(tmp_path)
+    called = False
+
+    class Hooks(DefaultCoreLiveMemberHooks):
+        def command_action_handlers(self):
+            async def echo(**_kwargs):
+                nonlocal called
+                called = True
+                return {"ok": True}
+
+            return {"echo": echo}
+
+    context.host.member_hooks = Hooks()
+    try:
+        outcome = await handle_command_execute_operation(
+            request_id=1,
+            params={
+                "thread_id": "thread-cas",
+                "command": "echo",
+                "expected_revision": 1,
+                "include_snapshot": False,
+            },
+            context=context,
+        )
+        assert outcome.response["error"]["data"] == {
+            "code": "REVISION_CONFLICT",
+            "thread_id": "thread-cas",
+            "expected_revision": 1,
+            "current_revision": 0,
+        }
+        assert called is False
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_core_live_command_execute_is_non_queued_per_session_but_allows_other_sessions(tmp_path):
+    engine, context = await _context(tmp_path)
+    started: dict[str, asyncio.Event] = {}
+    release: dict[str, asyncio.Event] = {}
+    calls: list[str] = []
+
+    class Hooks(DefaultCoreLiveMemberHooks):
+        def command_action_handlers(self):
+            async def wait_action(*, thread_id: str, **_kwargs):
+                calls.append(thread_id)
+                started.setdefault(thread_id, asyncio.Event()).set()
+                await release.setdefault(thread_id, asyncio.Event()).wait()
+                return {"thread_id": thread_id}
+
+            return {"wait": wait_action}
+
+    context.host.member_hooks = Hooks()
+    try:
+        first = asyncio.create_task(context.host.execute(
+            "command.execute",
+            request_id=1,
+            params={"thread_id": "thread-a", "command": "wait", "include_snapshot": False},
+            context=context,
+        ))
+        await asyncio.wait_for(started.setdefault("thread-a", asyncio.Event()).wait(), timeout=1)
+
+        same_session = await context.host.execute(
+            "command.execute",
+            request_id=2,
+            params={"thread_id": "thread-a", "command": "wait", "include_snapshot": False},
+            context=context,
+        )
+        assert same_session.response["error"]["data"] == {
+            "code": "SESSION_BUSY",
+            "reason": "active_operation_exists",
+        }
+
+        other = asyncio.create_task(context.host.execute(
+            "command.execute",
+            request_id=3,
+            params={"thread_id": "thread-b", "command": "wait", "include_snapshot": False},
+            context=context,
+        ))
+        await asyncio.wait_for(started.setdefault("thread-b", asyncio.Event()).wait(), timeout=1)
+        release["thread-a"].set()
+        release["thread-b"].set()
+        first_result, other_result = await asyncio.gather(first, other)
+        assert first_result.response["result"]["result"] == {"thread_id": "thread-a"}
+        assert other_result.response["result"]["result"] == {"thread_id": "thread-b"}
+        assert calls == ["thread-a", "thread-b"]
+    finally:
+        for event in release.values():
+            event.set()
+        if not first.done():
+            await first
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_core_compact_command_failure_persists_terminal_projection(tmp_path):
     engine, context = await _context(tmp_path)
 
@@ -528,6 +624,8 @@ async def test_core_compact_command_rejects_overlapping_compaction_and_releases_
             context=context,
         )
         assert overlapping.response["error"]["message"] == "A context compaction is already running"
+        assert overlapping.response["error"]["data"]["code"] == "SESSION_BUSY"
+        assert overlapping.response["error"]["data"]["reason"] == "active_turn_exists"
         assert calls == 1
 
         release_first.set()

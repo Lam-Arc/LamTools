@@ -9,10 +9,13 @@ import CoreProjectPicker from '../src/components/CoreProjectPicker.vue'
 import SessionSidebar from '../src/components/SessionSidebar.vue'
 import ContextMenuHost from '../src/components/context-menu/ContextMenuHost.vue'
 import { closeContextMenu } from '../src/components/context-menu/context-menu'
+import { createFakeTransport } from './fake-transport'
+
+const transport = createFakeTransport()
 
 describe('CoreProjectCreate', () => {
   it('submits name and path without a Git option', async () => {
-    const wrapper = mount(CoreProjectCreate, { global: { stubs: { Teleport: true } } })
+    const wrapper = mount(CoreProjectCreate, { props: { transport }, global: { stubs: { Teleport: true } } })
 
     await wrapper.get('[data-project-name]').setValue('Docs')
     await wrapper.get('[data-project-root]').setValue('E:\\docs')
@@ -23,7 +26,7 @@ describe('CoreProjectCreate', () => {
   })
 
   it('submits an empty optional name when only a path is provided', async () => {
-    const wrapper = mount(CoreProjectCreate, { global: { stubs: { Teleport: true } } })
+    const wrapper = mount(CoreProjectCreate, { props: { transport }, global: { stubs: { Teleport: true } } })
 
     await wrapper.get('[data-project-root]').setValue('E:\\path-only')
     await wrapper.get('form').trigger('submit')
@@ -32,7 +35,7 @@ describe('CoreProjectCreate', () => {
   })
 
   it('reserves this dialog for creating projects', () => {
-    const wrapper = mount(CoreProjectCreate, { global: { stubs: { Teleport: true } } })
+    const wrapper = mount(CoreProjectCreate, { props: { transport }, global: { stubs: { Teleport: true } } })
 
     expect(wrapper.get('#core-project-dialog-title').text()).toBe('新建项目')
     expect(wrapper.get('[data-project-submit]').text()).toBe('创建项目')
@@ -40,7 +43,7 @@ describe('CoreProjectCreate', () => {
 
   it('keeps invalid and loading submissions disabled while exposing errors', async () => {
     const wrapper = mount(CoreProjectCreate, {
-      props: { loading: true, error: '目录不可用' },
+      props: { transport, loading: true, error: '目录不可用' },
       global: { stubs: { Teleport: true } },
     })
 
@@ -48,7 +51,7 @@ describe('CoreProjectCreate', () => {
     expect(wrapper.get('[role="alert"]').text()).toBe('目录不可用')
 
     const idleWrapper = mount(CoreProjectCreate, {
-      props: { error: '目录不可用' },
+      props: { transport, error: '目录不可用' },
       global: { stubs: { Teleport: true } },
     })
     expect(idleWrapper.get('[data-project-submit]').attributes('disabled')).toBeDefined()
@@ -58,7 +61,7 @@ describe('CoreProjectCreate', () => {
   })
 
   it('owns the directory action and writes the selected path into the shared field', async () => {
-    const wrapper = mount(CoreProjectCreate, { global: { stubs: { Teleport: true } } })
+    const wrapper = mount(CoreProjectCreate, { props: { transport }, global: { stubs: { Teleport: true } } })
 
     // The browse button is always available; without a native picker it opens
     // the in-browser folder dialog
@@ -69,13 +72,13 @@ describe('CoreProjectCreate', () => {
   })
 
   it('uses a modal backdrop and blocks dismissal while creation is running', async () => {
-    const wrapper = mount(CoreProjectCreate, { global: { stubs: { Teleport: true } } })
+    const wrapper = mount(CoreProjectCreate, { props: { transport }, global: { stubs: { Teleport: true } } })
     expect(wrapper.get('[role="dialog"]').attributes('aria-modal')).toBe('true')
     await wrapper.get('[data-project-backdrop]').trigger('mousedown')
     expect(wrapper.emitted('cancel')).toEqual([[]])
 
     const loadingWrapper = mount(CoreProjectCreate, {
-      props: { loading: true },
+      props: { transport, loading: true },
       global: { stubs: { Teleport: true } },
     })
     await loadingWrapper.get('[data-project-backdrop]').trigger('mousedown')
@@ -83,7 +86,7 @@ describe('CoreProjectCreate', () => {
   })
 
   it('can cancel the project dialog while the directory browser is open', async () => {
-    const wrapper = mount(CoreProjectCreate, { global: { stubs: { Teleport: true } } })
+    const wrapper = mount(CoreProjectCreate, { props: { transport }, global: { stubs: { Teleport: true } } })
 
     await wrapper.get('[data-project-browse]').trigger('click')
     await wrapper.get('[data-project-cancel]').trigger('click')
@@ -119,7 +122,7 @@ describe('CoreAgentsEditor', () => {
   })
 })
 
-describe('SessionSidebar compatibility groups', () => {
+describe('SessionSidebar project groups', () => {
   let contextMenuHost: ReturnType<typeof mount> | null = null
 
   beforeEach(() => {
@@ -130,26 +133,6 @@ describe('SessionSidebar compatibility groups', () => {
     closeContextMenu()
     contextMenuHost?.unmount()
     contextMenuHost = null
-  })
-
-  it('does not expose project actions for an unassigned compatibility group', () => {
-    const wrapper = mount(SessionSidebar, {
-      props: {
-        allowProjectDelete: true,
-        allowProjectClick: true,
-        allowProjectContextMenu: true,
-        projectGroups: [{
-          id: 'unassigned',
-          name: 'Unassigned',
-          canManage: false,
-          sessions: [{ id: 'legacy-1', title: 'Legacy session' }],
-        }],
-      },
-    })
-
-    expect(wrapper.find('.project-action.add').exists()).toBe(false)
-    expect(wrapper.find('.project-action.remove').exists()).toBe(false)
-    expect(wrapper.find('.project-name').classes()).not.toContain('clickable')
   })
 
   it('provides keyboard project management and disables only busy project creation', async () => {
@@ -182,25 +165,25 @@ describe('SessionSidebar compatibility groups', () => {
 
 describe('Core project narrow layout contract', () => {
   it('exposes the existing project creation flow from the sidebar primary area', () => {
-    const demoSource = readFileSync(resolve(process.cwd(), 'src/demo/App.vue'), 'utf8')
+    const appSource = readFileSync(resolve(process.cwd(), 'src/app/LamToolsApp.vue'), 'utf8')
 
-    expect(demoSource).toMatch(/<template #primary>[\s\S]*data-sidebar-primary-action[\s\S]*@click="invokeSidebarPrimaryAction"/)
-    expect(demoSource).toMatch(/<template #empty>[\s\S]*data-sidebar-empty-projects[\s\S]*sidebar-empty-backdrop[\s\S]*>暂无<\/div>/)
-    expect(demoSource).not.toContain('data-sidebar-empty-create-project')
-    expect(demoSource).toContain(':show-sidebar-header="false"')
-    expect(demoSource).toContain(':show-sidebar-header-action="false"')
-    expect(demoSource).not.toContain('core-project-header-action')
+    expect(appSource).toMatch(/<template #primary>[\s\S]*data-sidebar-primary-action[\s\S]*@click="invokeSidebarPrimaryAction"/)
+    expect(appSource).toMatch(/<template #empty>[\s\S]*data-sidebar-empty-projects[\s\S]*sidebar-empty-backdrop[\s\S]*>暂无<\/div>/)
+    expect(appSource).not.toContain('data-sidebar-empty-create-project')
+    expect(appSource).toContain(':show-sidebar-header="false"')
+    expect(appSource).toContain(':show-sidebar-header-action="false"')
+    expect(appSource).not.toContain('core-project-header-action')
   })
 
   it('owns a viewport-safe centered dialog instead of a sidebar popover', () => {
     const createSource = readFileSync(resolve(process.cwd(), 'src/components/CoreProjectCreate.vue'), 'utf8')
-    const demoSource = readFileSync(resolve(process.cwd(), 'src/demo/App.vue'), 'utf8')
+    const appSource = readFileSync(resolve(process.cwd(), 'src/app/LamToolsApp.vue'), 'utf8')
 
     // Mounts to a configurable target (defaults to body) so hosts without a
     // workspace shell still render the dialog (audit 19 S3).
     expect(createSource).toMatch(/<Teleport :to="teleportTarget">/)
     expect(createSource).toMatch(/\.core-project-dialog-backdrop\s*\{[\s\S]*?position:\s*fixed;[\s\S]*?place-items:\s*center;/)
     expect(createSource).toMatch(/\.core-project-dialog\s*\{[\s\S]*?width:\s*min\(520px,\s*100%\);[\s\S]*?max-height:\s*calc\(100dvh\s*-\s*48px\);/)
-    expect(demoSource).not.toContain('core-project-create-popover')
+    expect(appSource).not.toContain('core-project-create-popover')
   })
 })

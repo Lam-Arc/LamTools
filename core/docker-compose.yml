@@ -1,0 +1,49 @@
+name: lamtools
+
+services:
+  lamtools-server:
+    image: lamtools/server:0.1.0
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_PATH: /data/lamtools.db
+      LAMTOOLS_RELAY_BIND: 0.0.0.0:8787
+      REGISTRATION_MODE: ${REGISTRATION_MODE:-open}
+      RUST_LOG: ${RUST_LOG:-info}
+    volumes:
+      - lamtools_data:/data
+    expose:
+      - "8787"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8787/healthz"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    security_opt:
+      - no-new-privileges:true
+
+  caddy:
+    image: caddy:2.10.2-alpine
+    restart: unless-stopped
+    depends_on:
+      lamtools-server:
+        condition: service_healthy
+    environment:
+      LAMTOOLS_DOMAIN: ${LAMTOOLS_DOMAIN:?Set LAMTOOLS_DOMAIN to the public DNS name}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - lamtools_caddy_data:/data
+      - lamtools_caddy_config:/config
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  lamtools_data:
+  lamtools_caddy_data:
+  lamtools_caddy_config:

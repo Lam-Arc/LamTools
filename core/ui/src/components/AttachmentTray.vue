@@ -80,15 +80,14 @@ import {
   X,
 } from 'lucide-vue-next';
 import type { CoreAttachment } from '../types';
+import type { LamToolsTransport, TransportHttpResponse } from '../transport';
 import { isNativeContextTarget, openContextMenu } from './context-menu/context-menu';
 import type { ContextMenuEntry } from './context-menu/types';
 
-const props = withDefaults(defineProps<{
+const props = defineProps<{
   attachments: CoreAttachment[];
-  apiBase?: string;
-}>(), {
-  apiBase: '',
-});
+  transport: LamToolsTransport;
+}>();
 const thumbnailUrls = reactive<Record<string, string>>({});
 
 const emit = defineEmits<{
@@ -169,18 +168,24 @@ function blobDataUrl(blob: Blob): Promise<string> {
 }
 
 async function loadThumbnail(item: CoreAttachment): Promise<void> {
-  if (!props.apiBase || !isDisplayImage(item) || thumbnailUrls[item.id]) return;
+  if (!isDisplayImage(item) || thumbnailUrls[item.id]) return;
   try {
-    const response = await fetch(`${props.apiBase}/attachments/${encodeURIComponent(item.id)}/download`);
-    if (!response.ok) return;
-    thumbnailUrls[item.id] = await blobDataUrl(await response.blob());
+    const response = await props.transport.request<TransportHttpResponse>({
+      kind: 'http',
+      method: 'GET',
+      path: `/attachments/${encodeURIComponent(item.id)}/download`,
+    });
+    if (response.status < 200 || response.status >= 300) return;
+    thumbnailUrls[item.id] = await blobDataUrl(new Blob([Uint8Array.from(response.body)], {
+      type: response.headers['content-type'] || item.mime_type || 'application/octet-stream',
+    }));
   } catch {
     // Keep the neutral image placeholder if the local attachment is unavailable.
   }
 }
 
 watch(
-  () => [props.apiBase, ...props.attachments.map(item => `${item.id}:${item.status || ''}`)],
+  () => [props.transport, ...props.attachments.map(item => `${item.id}:${item.status || ''}`)],
   () => {
     const activeIds = new Set(props.attachments.map(item => item.id));
     for (const id of Object.keys(thumbnailUrls)) {

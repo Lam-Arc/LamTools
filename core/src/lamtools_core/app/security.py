@@ -26,6 +26,9 @@ _DEFAULT_ORIGINS = frozenset({
     "http://127.0.0.1:5172",
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    # mobile web/dev shell
+    "http://localhost:5180",
+    "http://127.0.0.1:5180",
     # Tauri WebView (v1 / v2)
     "tauri://localhost",
     "http://tauri.localhost",

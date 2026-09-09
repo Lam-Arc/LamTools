@@ -1,0 +1,14 @@
+{
+  "model": "gpt-5.6-terra",
+  "base_url": "https://api.codex666ai.com",
+  "fixture": "real_near_threshold_01.json",
+  "fixture_is_immutable": true,
+  "production_database_used": false,
+  "api_key_written": false,
+  "stream_disabled": false,
+  "policy": {
+    "window": 236000,
+    "trigger": 188800,
+    "limit": 141600
+  }
+}

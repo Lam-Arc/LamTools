@@ -14,6 +14,7 @@ export type {
   SettingsSectionDef,
   CoreApiMapper,
   CoreSessionListItem,
+  CoreSessionExportFormat,
   CoreMessage,
   CoreSubAgentRun,
   CoreAttachmentStatus,
@@ -50,14 +51,10 @@ export type {
 export type { CoreGoal, CoreArrangeJob } from './durable/types';
 
 export {
-  listGoals,
-  updateGoal,
-  createGoal,
-  listArrangeJobs,
-  updateArrangeJob,
-  renameArrangeJob,
-  editArrangeJob,
-  listArrangeOccurrences,
+  createDurableApi,
+  type CoreArrangeOccurrence,
+  type CoreDurableApi,
+  type CoreDurableRequest,
 } from './durable/api';
 
 export { WORKSPACE_SLOT_NAMES } from './types';
@@ -72,13 +69,16 @@ export { selectCoreSubAgentRuns } from './agents/subAgentProjection';
 
 // Components
 export { default as WorkspaceShell } from './components/WorkspaceShell.vue';
+export { default as LamToolsApp } from './app/LamToolsApp.vue';
 export { default as LeftSidebarShell } from './components/LeftSidebarShell.vue';
 export { default as SessionSidebar } from './components/SessionSidebar.vue';
 export { default as ChatThread } from './components/ChatThread.vue';
 export { default as ComposerBar } from './components/ComposerBar.vue';
 export { default as CoreSendStopButton } from './components/CoreSendStopButton.vue';
+export { default as MobileTopBar } from './components/MobileTopBar.vue';
 export { default as CoreExecutionControls } from './components/CoreExecutionControls.vue';
 export { default as CoreRuntimeMenu } from './components/CoreRuntimeMenu.vue';
+export { default as CoreWorkspaceMenu } from './components/CoreWorkspaceMenu.vue';
 export { default as CoreModelThinkingMenu } from './components/CoreModelThinkingMenu.vue';
 export { default as CoreSubAgentPanel } from './components/CoreSubAgentPanel.vue';
 export { default as CoreSubAgentDialog } from './components/CoreSubAgentDialog.vue';
@@ -94,6 +94,7 @@ export { default as SettingsShell } from './components/SettingsShell.vue';
 export { default as ThemeEditor } from './components/ThemeEditor.vue';
 export { default as ThemeAreaEditor } from './components/ThemeAreaEditor.vue';
 export { default as CoreSettings } from './components/CoreSettings.vue';
+export { default as MobileControlPanel } from './components/MobileControlPanel.vue';
 export { default as PluginsShell } from './components/PluginsShell.vue';
 export { default as PluginModeHost } from './components/PluginModeHost.vue';
 export { default as CoreProjectSettings } from './components/CoreProjectSettings.vue';
@@ -159,6 +160,15 @@ export type {
   CoreSettingsProvider,
   CoreSettingsProviderPayload,
 } from './components/CoreSettings.vue';
+export type {
+  MobileControlAccountContext,
+  MobileControlAccountDevice,
+  MobileControlAccountPayload,
+  MobileControlAccountStatus,
+  MobileControlGatewayStatus,
+  MobileControlPairing,
+  MobileControlTrustedDevice,
+} from './components/MobileControlPanel.vue';
 
 // Helpers
 export {
@@ -265,6 +275,30 @@ export {
 export { usePendingAttachments } from './composables/usePendingAttachments';
 export { useComposerCommandPalette } from './composables/useComposerCommandPalette';
 
+// Shared Workbench runtime
+export {
+  createWorkbench,
+  createWorkbenchClient,
+  type WorkbenchClientOptions,
+  type WorkbenchConnectionState,
+  type WorkbenchClientFactory,
+  type WorkbenchRuntimeOptions,
+  type WorkbenchRuntime,
+  type WorkbenchSessionApi,
+  type WorkbenchComposerCallbacks,
+} from './workbench';
+
+export {
+  createLamToolsRuntime,
+  type CreateLamToolsRuntimeOptions,
+  type LamToolsPlatform,
+  type LamToolsRuntime,
+  type RuntimeCapabilities,
+  type RuntimeFileCapabilities,
+  type RuntimeWorkspaceControl,
+  type RuntimeWorkspaceOption,
+} from './app/runtime';
+
 export {
   useShellLayout,
   type DensityMode,
@@ -317,10 +351,8 @@ export {
 } from './composer/execution';
 
 export {
-  appServerUrl,
   CoreAppServerClient,
   CoreAppServerClosedError,
-  fetchAppServerToken,
   hydrateSnapshot,
   coreAppItemInputPreview,
   coreAppItemPartLabel,
@@ -342,6 +374,7 @@ export {
   selectQueueTray,
   createCoreAppServerRuntimeController,
   createCoreAppServerRuntimeState,
+  applyCoreAppEvent,
   coreAppServerDecision,
   coreDecisionSelectionPlan,
   coreComposerActionMode,
@@ -376,6 +409,7 @@ export {
   type CoreDecisionSelectionPayload,
   type CoreDecisionSelectionPlan,
   type CoreAppServerRuntimeState,
+  type CoreAppServerThreadSwitchOptions,
   type CoreComposerActionMode,
   type CoreWorkbenchMessageOptions,
   type CoreWorkbenchTurnStatus,
@@ -385,6 +419,22 @@ export {
   type SubmitCoreComposerTaskOptions,
   type SubmitCoreComposerTaskResult,
 } from './appServer';
+
+// Transport
+export {
+  DirectTransport,
+  createDirectTransport,
+  type DirectTransportOptions,
+  isLamToolsTransport,
+  type LamToolsTransport,
+  type TransportConnectionState,
+  type TransportHttpRequest,
+  type TransportHttpResponse,
+  type TransportMessage,
+  type TransportMessageType,
+  type TransportRequest,
+  type TransportRpcRequest,
+} from './transport';
 
 // Styles
 import './styles/variables.css';

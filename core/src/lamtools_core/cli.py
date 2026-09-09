@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import copy
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit, urlunsplit
 import asyncio
 import hashlib
 import json
@@ -10,6 +10,7 @@ import logging
 import os
 import sys
 import time
+import tempfile
 import uuid
 from dataclasses import dataclass, field, replace
 from datetime import datetime
@@ -1306,6 +1307,25 @@ def build_parser(
     update_check = update_sub.add_parser("check", help="Check GitHub Releases for a newer version")
     update_check.add_argument("--json", action="store_true", help="Print the raw check result as JSON")
     update_check.set_defaults(func=cmd_update_check)
+
+    mobile = sub.add_parser("mobile", help="Manage desktop mobile control")
+    mobile_sub = mobile.add_subparsers(dest="mobile_command", required=True)
+    for action in ("start", "stop", "status"):
+        command = mobile_sub.add_parser(action, help=f"{action.title()} the desktop mobile-control gateway")
+        command.set_defaults(func=cmd_mobile_control, mobile_action=action)
+    pairing = mobile_sub.add_parser("pairing", help="Create a one-time pairing QR payload")
+    pairing.set_defaults(func=cmd_mobile_control, mobile_action="pairing")
+    devices = mobile_sub.add_parser("devices", help="List trusted mobile devices")
+    devices.set_defaults(func=cmd_mobile_control, mobile_action="devices")
+    revoke = mobile_sub.add_parser("revoke", help="Revoke a trusted mobile device")
+    revoke.add_argument("device_id")
+    revoke.set_defaults(func=cmd_mobile_control, mobile_action="revoke")
+    account = mobile_sub.add_parser("account", help="Bind the desktop Core Agent to a Relay account")
+    account.add_argument("--mode", choices=("login", "register"), default="login")
+    account.add_argument("--base-url", required=True, help="Relay server base URL")
+    account.add_argument("--username", required=True)
+    account.add_argument("--password", required=True)
+    account.set_defaults(func=cmd_mobile_control, mobile_action="account")
 
     artifact = sub.add_parser("artifact", help="Manage project artifacts (.lam/artifact/)")
     artifact_sub = artifact.add_subparsers(dest="artifact_command", required=True)
@@ -2977,6 +2997,142 @@ async def cmd_imagegen_config(args: argparse.Namespace) -> int:
     print(f"[imagegen] saved: enabled={bool(value.get('enabled'))} api_url={value.get('api_url') or ''} "
           f"api_key={_mask_api_key(str(value.get('api_key') or ''))} model={value.get('model') or ''}")
     return 0
+
+
+async def cmd_mobile_control(args: argparse.Namespace) -> int:
+    discovery_path = Path(tempfile.gettempdir()) / "lamtools-remote-control.json"
+    if not discovery_path.is_file():
+        raise RuntimeError("LamTools 桌面端未运行")
+    try:
+        discovery = json.loads(discovery_path.read_text(encoding="utf-8"))
+        port = int(discovery["port"])
+        token = str(discovery["token"])
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("LamTools 桌面控制通道不可用") from exc
+    action = str(args.mobile_action)
+    if action == "account":
+        method, path = "POST", "/account"
+    elif action == "revoke":
+        method, path = "DELETE", f"/devices/{quote(str(args.device_id), safe='')}"
+    else:
+        method, path = {
+            "start": ("POST", "/start"),
+            "stop": ("POST", "/stop"),
+            "status": ("GET", "/status"),
+            "pairing": ("POST", "/pairing"),
+            "devices": ("GET", "/devices"),
+        }[action]
+    try:
+        # This endpoint is always loopback-only.  Ignore inherited HTTP(S)
+        # proxy variables so a corporate proxy cannot turn a local status
+        # check into a 502 or leak the control token off-host.
+        async with httpx.AsyncClient(timeout=5.0, trust_env=False) as client:
+            if action == "account":
+                base_url = normalize_remote_server_base_url(str(args.base_url))
+                auth_response = await client.post(
+                    f"{base_url}/v1/auth/{args.mode}",
+                    headers={"Accept": "application/json", "Content-Type": "application/json"},
+                    json={"username": str(args.username).strip(), "password": str(args.password)},
+                )
+                auth_response.raise_for_status()
+                auth_payload = auth_response.json()
+                identity_response = await client.post(
+                    f"http://127.0.0.1:{port}/identity",
+                    headers={
+                        "Accept": "application/json",
+                        "Content-Type": "application/json",
+                        "X-LamTools-Control": token,
+                    },
+                    json={
+                        "serverId": auth_payload["serverId"],
+                        "username": str(args.username).strip(),
+                    },
+                )
+                identity_response.raise_for_status()
+                identity_payload = identity_response.json()
+                node_response = await client.post(
+                    f"{base_url}/v1/nodes/register",
+                    headers={
+                        "Accept": "application/json",
+                        "Authorization": f"Bearer {auth_payload['accessToken']}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "nodeId": identity_payload["nodeId"],
+                        "publicKey": identity_payload["publicKey"],
+                        "displayName": "LamTools Desktop",
+                        "platform": "desktop",
+                        "capabilities": ["workspace_host", "agent_runtime", "filesystem", "terminal"],
+                    },
+                )
+                node_response.raise_for_status()
+                node_payload = node_response.json()
+                bound_tokens = node_payload.get("tokens") or auth_payload
+                session = {
+                    "baseUrl": base_url,
+                    "serverId": bound_tokens["serverId"],
+                    "username": str(args.username).strip(),
+                    "nodeId": node_payload["node"]["nodeId"],
+                    "publicKey": node_payload["node"]["publicKey"],
+                    "accessToken": bound_tokens["accessToken"],
+                    "refreshToken": bound_tokens["refreshToken"],
+                    "accessExpiresAtMs": bound_tokens["accessExpiresAtMs"],
+                    "refreshExpiresAtMs": bound_tokens["refreshExpiresAtMs"],
+                }
+                response = await client.post(
+                    f"http://127.0.0.1:{port}/account",
+                    headers={
+                        "Accept": "application/json",
+                        "Content-Type": "application/json",
+                        "X-LamTools-Control": token,
+                    },
+                    json=session,
+                )
+                response.raise_for_status()
+                await client.post(
+                    f"http://127.0.0.1:{port}/start",
+                    headers={"X-LamTools-Control": token},
+                )
+            else:
+                response = await client.request(
+                    method,
+                    f"http://127.0.0.1:{port}{path}",
+                    headers={"X-LamTools-Control": token},
+                )
+    except httpx.HTTPError as exc:
+        if action == "account":
+            raise RuntimeError("Relay 服务器请求失败") from exc
+        # A crashed/force-closed desktop can leave the short-lived discovery
+        # file behind.  Remove it only when it is byte-for-byte unchanged so
+        # a concurrently restarted instance cannot lose its new credentials.
+        try:
+            current = json.loads(discovery_path.read_text(encoding="utf-8"))
+            if current == discovery:
+                discovery_path.unlink(missing_ok=True)
+        except (OSError, ValueError, TypeError):
+            pass
+        raise RuntimeError("LamTools 桌面端未运行") from exc
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise RuntimeError("LamTools 桌面控制响应无效") from exc
+    if response.status_code >= 400:
+        raise RuntimeError(str(payload.get("error") or f"请求失败（{response.status_code}）"))
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def normalize_remote_server_base_url(value: str) -> str:
+    parsed = urlsplit(value.strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise RuntimeError("Relay 服务器地址格式无效")
+    path = parsed.path
+    marker = path.find("/v1/")
+    if marker >= 0:
+        path = path[:marker]
+    elif path.endswith("/v1"):
+        path = path[:-3]
+    return urlunsplit((parsed.scheme, parsed.netloc, path.rstrip("/"), "", ""))
 
 
 async def cmd_update_check(args: argparse.Namespace) -> int:

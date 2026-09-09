@@ -1,8 +1,8 @@
 <template>
   <button
     ref="buttonElement"
-    class="send core-send-stop-button"
-    :class="{ 'send--stop': visualMode === 'stop' }"
+    class="core-send-stop-button"
+    :class="{ 'core-send-stop-button--stop': visualMode === 'stop' }"
     :data-state="visualMode"
     type="submit"
     :disabled="disabled"
@@ -301,7 +301,7 @@ onUnmounted(() => {
   display: grid;
   place-items: center;
   flex: 0 0 28px;
-  color: var(--theme-control-background);
+  color: var(--theme-control-solid, var(--panel-2));
   background: var(--theme-control-text);
   box-shadow: var(--shadow-sm);
   font-size: 0;
@@ -347,18 +347,18 @@ onUnmounted(() => {
   will-change: transform, opacity;
 }
 
-.core-send-stop-button.send--stop {
-  color: var(--theme-control-background);
+.core-send-stop-button--stop {
+  color: var(--theme-control-solid, var(--panel-2));
   background: var(--theme-control-text);
   border-radius: var(--radius-sm);
 }
 
-.core-send-stop-button.send--stop:hover:not(:disabled),
-.core-send-stop-button.send--stop:active:not(:disabled) {
+.core-send-stop-button--stop:hover:not(:disabled),
+.core-send-stop-button--stop:active:not(:disabled) {
   background: var(--theme-control-text);
 }
 
-.core-send-stop-button.send--stop::before {
+.core-send-stop-button--stop::before {
   width: 11px;
   height: 11px;
   border-radius: var(--space-1);
@@ -414,7 +414,7 @@ onUnmounted(() => {
     height: 17px;
   }
 
-  .core-send-stop-button.send--stop::before {
+  .core-send-stop-button--stop::before {
     width: 14px;
     height: 14px;
   }

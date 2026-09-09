@@ -1,4 +1,5 @@
 import type { CoreAppEvent, CoreAppSnapshot } from './protocol'
+import type { LamToolsTransport, TransportConnectionState, TransportMessage } from '../transport'
 
 export interface JsonRpcRequest {
   id?: number | string
@@ -18,7 +19,7 @@ export interface JsonRpcClientResponse {
 }
 
 export interface CoreAppServerClientOptions {
-  url: string
+  transport: LamToolsTransport
   clientInfo: { name: string; title?: string; version?: string }
   onEvent?: (event: CoreAppEvent) => void
   onSnapshot?: (snapshot: CoreAppSnapshot) => void
@@ -27,161 +28,166 @@ export interface CoreAppServerClientOptions {
 
 export class CoreAppServerClosedError extends Error {
   constructor() {
-    super('Core App Server socket closed')
+    super('Core App Server transport closed')
     this.name = 'AbortError'
   }
 }
 
 export class CoreAppServerClient {
-  private socket: WebSocket | null = null
-  private nextId = 1
-  private pending = new Map<number | string, {
-    resolve: (value: Record<string, unknown>) => void
-    reject: (error: Error) => void
-  }>()
-  private serverRequestIds = new Map<string, number | string>()
+  private readonly transport: LamToolsTransport
+  private removeMessageListener: (() => void) | null = null
+  private removeStateListener: (() => void) | null = null
+  private readonly serverRequestIds = new Map<string, number | string>()
+  private closed = false
+  private initialized = false
+  private connectionGeneration = 0
+  private connectPromise: Promise<void> | null = null
+  private lastConnectParams: { threadId?: string; lastSeenSeq?: number } = {}
+  private lastNotifiedConnectionState: 'connecting' | 'open' | 'closed' | 'error' | undefined
 
-  constructor(private readonly options: CoreAppServerClientOptions) {}
+  constructor(private readonly options: CoreAppServerClientOptions) {
+    this.transport = options.transport
+  }
 
   async connect(params: { threadId?: string; lastSeenSeq?: number } = {}): Promise<void> {
-    this.options.onConnectionState?.('connecting')
-    this.socket = new WebSocket(this.options.url)
-    await new Promise<void>((resolve, reject) => {
-      if (!this.socket) {
-        reject(new Error('WebSocket was not created'))
-        return
-      }
-      this.socket.onopen = () => {
-        this.options.onConnectionState?.('open')
-        resolve()
-      }
-      this.socket.onerror = () => {
-        this.options.onConnectionState?.('error')
-        reject(new Error('Core App Server socket failed'))
-      }
-      this.socket.onclose = () => {
-        this.options.onConnectionState?.('closed')
-      }
-      this.socket.onmessage = (message) => this.handleMessage(message.data)
-    })
+    this.lastConnectParams = params
+    if (this.connectPromise) return await this.connectPromise
 
-    await this.request('initialize', {
-      clientInfo: this.options.clientInfo,
-      threadId: params.threadId,
-      lastSeenSeq: params.lastSeenSeq,
+    this.closed = false
+    this.installListeners()
+    const generation = ++this.connectionGeneration
+    const operation = (async () => {
+      await this.transport.connect()
+      if (this.closed || this.connectionGeneration !== generation) {
+        throw new CoreAppServerClosedError()
+      }
+      if (this.initialized) return
+
+      await this.requestRaw('initialize', {
+        clientInfo: this.options.clientInfo,
+        threadId: params.threadId,
+        lastSeenSeq: params.lastSeenSeq,
+      })
+      if (this.closed || this.connectionGeneration !== generation) {
+        throw new CoreAppServerClosedError()
+      }
+      this.initialized = true
+      this.notifyConnectionState('open')
+      this.notify('initialized', {})
+    })()
+    const pending = operation.finally(() => {
+      if (this.connectPromise === pending) this.connectPromise = null
     })
-    this.notify('initialized', {})
+    this.connectPromise = pending
+    return await pending
   }
 
   close(): void {
-    this.socket?.close()
-    this.socket = null
+    const wasClosed = this.closed
+    this.closed = true
+    this.initialized = false
+    this.connectionGeneration += 1
+    this.connectPromise = null
+    this.removeMessageListener?.()
+    this.removeMessageListener = null
+    this.removeStateListener?.()
+    this.removeStateListener = null
+    void this.transport.close()
     this.serverRequestIds.clear()
-    for (const pending of this.pending.values()) {
-      pending.reject(new CoreAppServerClosedError())
-    }
-    this.pending.clear()
+    if (!wasClosed) this.notifyConnectionState('closed')
   }
 
-  request(method: string, params: Record<string, unknown> = {}, timeoutMs = 30_000): Promise<Record<string, unknown>> {
-    const id = this.nextId++
-    const payload: JsonRpcRequest = { id, method, params }
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id)
-        reject(new Error(`Core App Server request timed out: ${method} (${timeoutMs}ms)`))
-      }, timeoutMs)
-      this.pending.set(id, {
-        resolve: (value) => {
-          clearTimeout(timer)
-          resolve(value)
-        },
-        reject: (error) => {
-          clearTimeout(timer)
-          reject(error)
-        },
-      })
-      try {
-        this.send(payload)
-      } catch (error) {
-        clearTimeout(timer)
-        this.pending.delete(id)
-        reject(error instanceof Error ? error : new Error(String(error)))
-      }
+  async request(method: string, params: Record<string, unknown> = {}, timeoutMs = 30_000): Promise<Record<string, unknown>> {
+    if (this.closed) throw new CoreAppServerClosedError()
+    // A transport can publish `connected` before this protocol client has
+    // completed initialize. Every business RPC shares the current initialize
+    // promise so reconnect callbacks cannot overtake the handshake.
+    if (method !== 'initialize' && !this.initialized) {
+      await this.connect(this.lastConnectParams)
+      if (this.closed || !this.initialized) throw new CoreAppServerClosedError()
+    }
+    return await this.requestRaw(method, params, timeoutMs)
+  }
+
+  private async requestRaw(method: string, params: Record<string, unknown>, timeoutMs = 30_000): Promise<Record<string, unknown>> {
+    const result = await this.transport.request<Record<string, unknown>>({
+      kind: 'rpc',
+      method,
+      params,
+      timeoutMs,
     })
+    return result && typeof result === 'object' ? result : {}
   }
 
   notify(method: string, params: Record<string, unknown> = {}): void {
-    this.send({ method, params })
+    this.transport.send({ type: 'notification', channel: 'rpc', method, params })
   }
 
   respondServerRequest(requestId: string, result: Record<string, unknown>): boolean {
     const rpcId = this.serverRequestIds.get(requestId)
     if (rpcId === undefined) return false
     this.serverRequestIds.delete(requestId)
-    this.send({ id: rpcId, result })
+    this.transport.send({ type: 'response', channel: 'rpc', id: rpcId, result })
     return true
   }
 
-  private send(payload: JsonRpcRequest | JsonRpcClientResponse): void {
-    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
-      throw new Error('Core App Server socket is not open')
-    }
-    this.socket.send(JSON.stringify(payload))
+  private installListeners(): void {
+    this.removeMessageListener?.()
+    this.removeStateListener?.()
+    this.removeMessageListener = this.transport.subscribe((message) => this.handleMessage(message))
+
+    // Some transports invoke onState synchronously while registering; that is
+    // only an initial snapshot, not a transition. Track registration explicitly
+    // so a transport without an immediate callback still reports its first real
+    // connecting transition.
+    let registering = true
+    this.removeStateListener = this.transport.onState((state) => {
+      if (registering) return
+      const normalized = mapTransportState(state)
+      if (normalized === 'closed' || normalized === 'error') this.initialized = false
+      // Socket-open is only a transport state. The App Server connection is
+      // ready after initialize succeeds below in connect().
+      this.notifyConnectionState(normalized === 'open' && !this.initialized ? 'connecting' : normalized)
+    })
+    registering = false
+    this.lastNotifiedConnectionState = undefined
+    this.notifyConnectionState(this.initialized ? 'open' : 'connecting')
   }
 
-  private handleMessage(raw: string): void {
-    const message = JSON.parse(raw) as JsonRpcResponse & { method?: string; params?: unknown }
-    if (message.id !== undefined && typeof message.method === 'string') {
-      if (message.params && typeof message.params === 'object') {
-        const event = message.params as CoreAppEvent
-        const requestId = typeof event.payload?.request_id === 'string' ? event.payload.request_id : String(message.id)
-        this.serverRequestIds.set(requestId, message.id)
-        this.options.onEvent?.(event)
-      }
+  private notifyConnectionState(state: 'connecting' | 'open' | 'closed' | 'error'): void {
+    if (this.lastNotifiedConnectionState === state) return
+    this.lastNotifiedConnectionState = state
+    this.options.onConnectionState?.(state)
+  }
+
+  private handleMessage(message: TransportMessage): void {
+    if (message.channel !== 'rpc') return
+    if (message.type === 'response') return
+
+    const params = message.params
+    if (message.type === 'request' && message.id !== undefined && params) {
+      const event = params as unknown as CoreAppEvent
+      const requestId = typeof event.payload?.request_id === 'string'
+        ? event.payload.request_id
+        : String(message.id)
+      this.serverRequestIds.set(requestId, message.id)
+      this.options.onEvent?.(event)
       return
     }
 
-    if (message.id !== undefined) {
-      const pending = this.pending.get(message.id)
-      if (!pending) return
-      this.pending.delete(message.id)
-      if (message.error) {
-        pending.reject(new Error(message.error.message))
-      } else {
-        pending.resolve(message.result ?? {})
-      }
-      return
-    }
-
-    if (typeof message.method === 'string' && message.params && typeof message.params === 'object') {
+    if ((message.type === 'notification' || message.type === 'event') && params) {
       if (message.method === 'thread/snapshot') {
-        this.options.onSnapshot?.(message.params as CoreAppSnapshot)
+        this.options.onSnapshot?.(params as unknown as CoreAppSnapshot)
         return
       }
-      this.options.onEvent?.(message.params as CoreAppEvent)
+      this.options.onEvent?.(params as unknown as CoreAppEvent)
     }
   }
 }
 
-export async function fetchAppServerToken(apiBase: string, tokenPath = '/api/app-server-token'): Promise<string> {
-  const response = await fetch(`${apiBase || ''}${tokenPath}`)
-  if (!response.ok) {
-    throw new Error('App Server token request failed')
-  }
-  const body = await response.json() as { token?: string }
-  if (!body.token) {
-    throw new Error('App Server token response is missing token')
-  }
-  return body.token
-}
-
-export function appServerUrl(apiBase: string, options: { path?: string; token?: string } = {}): string {
-  const base = apiBase || (typeof window !== 'undefined' && (window as any).__LAMTOOLS_API_BASE__) || window.location.origin
-  const url = new URL(options.path || '/api/core/app-server', base)
-  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
-  if (options.token) {
-    url.searchParams.set('token', options.token)
-  }
-  return url.toString()
+function mapTransportState(state: TransportConnectionState): 'connecting' | 'open' | 'closed' | 'error' {
+  if (state === 'connected') return 'open'
+  if (state === 'failed') return 'error'
+  if (state === 'disconnected') return 'closed'
+  return 'connecting'
 }
