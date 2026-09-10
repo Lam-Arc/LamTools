@@ -4,6 +4,7 @@ import pytest
 
 from lamtools_core.app.base_agent import CoreBaseAgentConfig, CoreBaseAgentKit
 from lamtools_core.kernel import KernelStep, KernelTurn, VerificationResult
+from lamtools_core.llm import ChatMessage
 from lamtools_core.runtime import RuntimeState, RuntimeToolStep, RuntimeTurnInput
 from lamtools_core.prompt import PromptContext
 from lamtools_core.tool import ToolArtifact, ToolCall, ToolResult
@@ -59,6 +60,52 @@ async def test_base_agent_system_prompt_names_current_command_shell(monkeypatch,
     )
 
     assert "run_command uses Git Bash" in str(request.messages[0].content)
+
+
+@pytest.mark.asyncio
+async def test_active_plan_is_appended_after_history_without_changing_cached_prefix(tmp_path):
+    kit = CoreBaseAgentKit(work_root=tmp_path, toolbox=_CapturingToolbox())  # type: ignore[arg-type]
+    history = [
+        ChatMessage(role="user", content="prepare the report"),
+        ChatMessage(role="assistant", content="working on it"),
+    ]
+
+    def state_with_status(status: str) -> RuntimeState:
+        return RuntimeState(
+            session_id="plan-cache-prefix",
+            metadata={
+                "active_plan": {
+                    "plan_summary": "Prepare the quarterly report",
+                    "plan_files": ["report.docx"],
+                    "plan_steps": [
+                        {"id": "step-1", "status": status, "description": "Draft report"},
+                    ],
+                },
+            },
+        )
+
+    first = await kit.build_model_request(
+        state_with_status("pending"),
+        PromptContext(session_id="plan-cache-prefix", history=history),
+    )
+    second = await kit.build_model_request(
+        state_with_status("completed"),
+        PromptContext(session_id="plan-cache-prefix", history=history),
+    )
+
+    assert first.messages[0].role == "system"
+    assert "[当前计划" not in str(first.messages[0].content)
+    assert first.messages[1:3] == history
+    assert first.messages[-1].role == "system"
+    assert "Summary: Prepare the quarterly report" in str(first.messages[-1].content)
+    assert "Planned files: report.docx" in str(first.messages[-1].content)
+    assert "[step-1] (pending) Draft report" in str(first.messages[-1].content)
+    assert sum("[当前计划" in str(message.content) for message in first.messages) == 1
+
+    # A checklist-only update changes only the trailing runtime context, leaving
+    # the system + conversation prefix eligible for provider prompt caching.
+    assert first.messages[:-1] == second.messages[:-1]
+    assert first.messages[-1].content != second.messages[-1].content
 
 
 @pytest.mark.asyncio

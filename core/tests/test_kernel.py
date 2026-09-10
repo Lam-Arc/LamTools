@@ -36,7 +36,12 @@ from lamtools_core.tool import ToolCall, ToolResult
 
 
 def _is_compaction_request(request: LLMRequest) -> bool:
-    return bool(request.messages and request.messages[0].content == COMPACTION_PROMPT)
+    return bool(
+        request.messages
+        and request.messages[-1].role == "user"
+        and request.messages[-1].metadata.get("key") == "context_compaction_instruction"
+        and COMPACTION_PROMPT in str(request.messages[-1].content)
+    )
 
 
 def test_partial_tool_arguments_do_not_emit_content_streaming_placeholder():
@@ -3484,8 +3489,8 @@ class TestKernelContextCompaction:
         assert llm.last_request is not None
         assert llm.last_request.metadata["context_compacted"] is True
         assert llm.last_request.metadata["context_tokens_after_compaction"] <= 1_200
-        summary_prompt = llm.requests[0].messages[-1].content
-        assert "CURRENT_TOOL_RESULT_SENTINEL" in str(summary_prompt)
+        summary_context = "\n".join(str(message.content) for message in llm.requests[0].messages)
+        assert "CURRENT_TOOL_RESULT_SENTINEL" in summary_context
         raw_messages = [
             str(message.content)
             for message in llm.last_request.messages

@@ -154,8 +154,10 @@ dist-plugins/
 /playwright-test/
 /output/
 /0.1.0/
+/0.1.1/
 /0.3.0/
 /0.3.1/
+/0.3.2/
 
 # codex-workflow-managed-start
 .codex_workflow_hidden_resources/

@@ -6,7 +6,7 @@ from lamtools_core.context_compaction_budget import TokenBudget
 from lamtools_core.llm import ChatMessage
 from lamtools_core.tokens import estimate_message_tokens
 
-from .formatting import format_messages_for_compaction, truncate_text_to_tokens
+from .formatting import truncate_text_to_tokens
 from .models import (
     COMPACTION_PROMPT,
     CompactionPlan,
@@ -152,13 +152,24 @@ def _semantic_message_groups(messages: list[ChatMessage]) -> list[list[ChatMessa
     return groups
 
 
-def _compaction_request_tokens(messages: list[ChatMessage], existing_summary: str = "") -> int:
-    transcript = format_messages_for_compaction(messages, existing_summary=existing_summary)
+def _compaction_instruction(existing_summary: str = "") -> ChatMessage:
+    content = COMPACTION_PROMPT
+    if existing_summary.strip():
+        content += f"\n\nExisting compacted summary to preserve:\n{existing_summary.strip()}"
+    return ChatMessage(
+        role="user",
+        content=content,
+        metadata={"key": "context_compaction_instruction"},
+    )
+
+
+def _compaction_request_tokens(
+    messages: list[ChatMessage],
+    existing_summary: str = "",
+    prefix_messages: list[ChatMessage] | None = None,
+) -> int:
     return estimate_message_tokens(
-        [
-            ChatMessage(role="system", content=COMPACTION_PROMPT).to_dict(),
-            ChatMessage(role="user", content=transcript).to_dict(),
-        ]
+        [message.to_dict() for message in [*(prefix_messages or []), *messages, _compaction_instruction(existing_summary)]]
     )
 
 
@@ -167,10 +178,15 @@ def _split_compaction_messages(
     *,
     input_limit_tokens: int,
     existing_summary: str,
+    prefix_messages: list[ChatMessage] | None = None,
 ) -> list[list[ChatMessage]]:
     if not messages:
         return [[]]
-    if input_limit_tokens <= 0 or _compaction_request_tokens(messages, existing_summary) <= input_limit_tokens:
+    if input_limit_tokens <= 0 or _compaction_request_tokens(
+        messages,
+        existing_summary,
+        prefix_messages,
+    ) <= input_limit_tokens:
         return [list(messages)]
 
     chunks: list[list[ChatMessage]] = []
@@ -178,7 +194,7 @@ def _split_compaction_messages(
     semantic_groups: list[list[ChatMessage]] = []
     for group in _semantic_message_groups(messages):
         group_existing = existing_summary if not semantic_groups else ""
-        if _compaction_request_tokens(group, group_existing) > input_limit_tokens:
+        if _compaction_request_tokens(group, group_existing, prefix_messages) > input_limit_tokens:
             semantic_groups.extend(_split_oversized_semantic_group(group))
         else:
             semantic_groups.append(group)
@@ -186,13 +202,13 @@ def _split_compaction_messages(
     for group in semantic_groups:
         candidate = [*current, *group]
         candidate_existing = existing_summary if not chunks else ""
-        if current and _compaction_request_tokens(candidate, candidate_existing) > input_limit_tokens:
+        if current and _compaction_request_tokens(candidate, candidate_existing, prefix_messages) > input_limit_tokens:
             chunks.append(current)
             current = list(group)
         else:
             current = candidate
         current_existing = existing_summary if not chunks else ""
-        if _compaction_request_tokens(current, current_existing) > input_limit_tokens:
+        if _compaction_request_tokens(current, current_existing, prefix_messages) > input_limit_tokens:
             raise ContextCompactionError(
                 "Context compaction failed: one complete conversation turn exceeds the model input limit"
             )
@@ -252,6 +268,7 @@ def _pair_compaction_messages(
 __all__ = [
     "CompactionPlanner",
     "MAX_COMPACTION_SEGMENT_INPUT_TOKENS",
+    "_compaction_instruction",
     "compaction_segment_input_limit",
     "select_context_compaction_layout",
 ]

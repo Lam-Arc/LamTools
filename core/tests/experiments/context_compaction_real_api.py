@@ -131,7 +131,12 @@ class ObservedOpenAIChatClient:
 
     def _record_base(self, request: LLMRequest, assembled: dict[str, Any], *, stream: bool) -> dict[str, Any]:
         messages = list(request.messages)
-        is_compaction = bool(messages and messages[0].content == COMPACTION_PROMPT)
+        is_compaction = bool(
+            messages
+            and messages[-1].role == "user"
+            and messages[-1].metadata.get("key") == "context_compaction_instruction"
+            and COMPACTION_PROMPT in str(messages[-1].content)
+        )
         return {
             "started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "endpoint": assembled["endpoint"],

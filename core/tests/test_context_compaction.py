@@ -426,7 +426,12 @@ async def test_compact_context_auto_preserves_prefix_and_latest_user_message():
     assert result.replacement_messages[0].content == "stable system prefix"
     assert result.replacement_messages[1].metadata["key"] == "context_compaction_summary"
     assert result.replacement_messages[-1].content == "latest user request"
-    assert "old user instruction" in str(llm.last_request.messages[-1].content)
+    assert llm.last_request.messages[:-1] == messages[:3]
+    assert llm.last_request.messages[-1].role == "user"
+    assert llm.last_request.messages[-1].metadata["key"] == "context_compaction_instruction"
+    assert "old user instruction" in "\n".join(
+        str(message.content) for message in llm.last_request.messages[:-1]
+    )
     raw_replacement = "\n".join(
         str(message.content)
         for message in result.replacement_messages
@@ -493,7 +498,9 @@ async def test_model_compaction_requests_the_continuation_contract_from_the_adap
         )
     )
 
-    prompt = str(llm.last_request.messages[0].content)
+    assert llm.last_request.messages[-1].role == "user"
+    assert llm.last_request.messages[-1].metadata["key"] == "context_compaction_instruction"
+    prompt = str(llm.last_request.messages[-1].content)
     assert "Compact for continuation" in prompt
     assert "2. Active User Instructions" in prompt
     assert "3. External Action Authorization" in prompt
@@ -535,9 +542,9 @@ async def test_compact_context_manual_reuses_same_entry_and_retains_tail_message
         "recent user 2",
         "recent assistant 3",
     ]
-    transcript = str(llm.last_request.messages[-1].content)
-    assert "## Existing Compacted Summary" in transcript
-    assert "previous compacted summary" in transcript
+    instruction = str(llm.last_request.messages[-1].content)
+    assert "Existing compacted summary to preserve" in instruction
+    assert "previous compacted summary" in instruction
     assert result.display_payload["type"] == "compaction"
     assert result.display_payload["trigger"] == "manual"
     assert result.display_payload["compacted_messages"] == 2
@@ -954,15 +961,19 @@ async def test_auto_compaction_transcript_includes_prior_summary_and_excludes_re
 
     assert result.status == "compacted"
     assert result.summary == llm.summary
-    transcript = str(llm.last_request.messages[-1].content)
+    source_context = "\n".join(
+        str(message.content) for message in llm.last_request.messages[:-1]
+    )
     # The prior summary is part of the compacted span (a) and is fed to the
     # compaction model as a regular message; the retained span (c) is excluded.
-    assert "[Compacted Context]" in transcript
-    assert "Use Kimi-K2.6 without thinking." in transcript
-    assert "old instruction to compress" in transcript
-    assert "recent user 2" not in transcript
-    assert "recent assistant 3" not in transcript
-    assert "latest request" not in transcript
+    assert llm.last_request.messages[0] == messages[0]
+    assert llm.last_request.messages[-1].metadata["key"] == "context_compaction_instruction"
+    assert "[Compacted Context]" in source_context
+    assert "Use Kimi-K2.6 without thinking." in source_context
+    assert "old instruction to compress" in source_context
+    assert "recent user 2" not in source_context
+    assert "recent assistant 3" not in source_context
+    assert "latest request" not in source_context
 
 
 def test_preserves_leading_system_prefix():

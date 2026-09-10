@@ -44,6 +44,13 @@ and multi-client response ownership are in place.
 - LamTools design audit: 69 files scanned, 0 deviations.
 - `git diff --check` passes.
 
+## Office retest process-audit closure (2026-09-10)
+
+- Deployment `office_retest_process_audit` is complete. The Office retest process audit is documented in `core/docs/office-skills-internal-evaluation-2026-09-10.md`.
+- Verified scores: directness/planning 5.8/10, failure/problem control 6.4/10, speed/efficiency 5.5/10, instruction adherence 8.9/10; overall 6.7/10.
+- Microsoft FY25 Q4 wall time was 641.384 s; customer handover was 241.735 s (baseline 140.720 s). The two retest logs retained high cache rates and were sharply smaller; no code or Skill changes were made by this closure.
+- Evidence is retained under `.tmp/office-skills-evaluation/2026-09-10-retest/{02-microsoft-fy25q4,07-customer-handover}/run/`. The process audit did not run the newcomer-onboarding scenario and does not clear the finance footer/page-number visual defect.
+
 ## Next Milestone
 
 Run real-device LAN/Relay pairing and reconnect validation when deployment

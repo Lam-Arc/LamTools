@@ -444,6 +444,7 @@ async def compact_context(request: ContextCompactionRequest) -> ContextCompactio
             input_limit_tokens=request.input_limit_tokens,
             summary_budget=request.summary_budget,
             existing_summary=request.existing_summary,
+            prefix_messages=layout.prefix_messages,
             on_delta=request.on_delta,
             on_event=lambda payload: _emit_compaction_event(request, payload),
             model_retries=request.model_retries,

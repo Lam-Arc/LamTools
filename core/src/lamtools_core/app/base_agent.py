@@ -301,7 +301,10 @@ class CoreBaseAgentKit:
         context_parts = self._build_project_context_parts()
         for part in context_parts:
             system_lines.extend(["", part.content])
-        # Inject active plan from state metadata
+        # Keep the mutable checklist out of the leading system message. Provider
+        # prompt caches are prefix-based, so changing the plan there would
+        # invalidate the otherwise-stable system prompt and complete history.
+        runtime_system_lines: list[str] = []
         if "active_plan" in (state.metadata or {}):
             ap = state.metadata["active_plan"]
             plan_lines = []
@@ -316,7 +319,7 @@ class CoreBaseAgentKit:
                     status = s.get("status", "pending")
                     plan_lines.append(f"  [{sid}] ({status}) {desc}")
             if plan_lines:
-                system_lines.extend(["", "[当前计划 — 逐步执行]", "\n".join(plan_lines)])
+                runtime_system_lines.extend(["[当前计划 — 逐步执行]", "\n".join(plan_lines)])
         if self.verification_policy.required:
             verification_state = self._verification_state(state)
             system_lines.extend([
@@ -343,6 +346,13 @@ class CoreBaseAgentKit:
             ),
             *context.history,
         ]
+        if runtime_system_lines:
+            messages.append(
+                ChatMessage(
+                    role="system",
+                    content="\n".join(runtime_system_lines),
+                )
+            )
         return LLMRequest(
             messages=messages,
             model=self.config.model_id,

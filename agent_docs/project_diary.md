@@ -27,3 +27,14 @@ logs.
 - Transport reconnects replace only the physical tunnel. The shared Workbench,
   conversation projection, and composer state remain alive across LAN/Relay
   route changes.
+- Treat Office/runtime capability discovery as reusable runtime state rather
+  than letting each Agent task spend many model rounds searching program paths.
+  Model latency dominates these workflows, so eliminating discovery rounds is
+  more valuable than shaving milliseconds from individual tools.
+- Do not pipe validation/build commands into filters unless failure status is
+  preserved. A successful pipeline exit can hide a failing Python process and
+  make tool-failure metrics materially undercount real process errors.
+- Keep structural, textual, and visual verification claims distinct. Geometry
+  and text extraction cannot prove pixel-level layout quality; footer/page-number
+  collisions are a concrete case that passed structural checks but failed human
+  visual review.

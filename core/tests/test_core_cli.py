@@ -14,6 +14,7 @@ from lamtools_core import cli as core_cli
 from lamtools_core.app.core_db import CoreHandoffContext, CoreHistoryEntry, open_core_app_db
 from lamtools_core.export import build_handoff_context
 from lamtools_core.cli import CoreCliRunOptions, build_parser, load_llm_config, main, run_core_cli_task
+from lamtools_core.event import CoreEvent
 from lamtools_core.llm import LLMRequest, LLMResponse, LLMStreamEvent, LLMToolCall, LLMUsage
 from lamtools_core.llm.shallow_thinking import SHALLOW_THINKING_PROMPT
 
@@ -863,11 +864,29 @@ async def test_core_cli_run_uses_core_kernel_tool_loop(tmp_path: Path) -> None:
     assert summary["proof"]["tool_names"] == ["write_file"]
     assert summary["proof"]["response_indexes"] == [0, 1]
     assert summary["proof"]["document_line_count"] == 11
+    assert summary["execution"]["llm_rounds"] == 2
+    assert summary["execution"]["tool_calls"] == 1
+    assert summary["execution"]["tool_calls_by_name"] == {"write_file": 1}
+    assert summary["execution"]["failed_tool_calls"] == 0
+    assert summary["execution"]["repeated_exact_tool_calls"] == 0
     assert Path(summary["proof"]["document_path"]).read_text(encoding="utf-8").count("\n") >= 10
     assert len(llm.requests) == 2
     assert {tool["function"]["name"] for tool in llm.requests[0].tools or []} >= {"read_file", "write_file"}
     assert "write_document" not in {tool["function"]["name"] for tool in llm.requests[0].tools or []}
     assert {tool["function"]["name"] for tool in llm.requests[1].tools or []} >= {"read_file", "write_file"}
+
+    diagnostic_events = json.loads(
+        Path(summary["artifacts"]["events_redacted_json"]).read_text(encoding="utf-8")
+    )
+    assert all(event.get("metadata", {}).get("delivery") != "transient" for event in diagnostic_events)
+    tool_input_parts = [
+        event
+        for event in diagnostic_events
+        if event.get("payload", {}).get("part_type") == "tool_input_delta"
+    ]
+    assert tool_input_parts
+    assert all("arguments_text" not in event["payload"] for event in tool_input_parts)
+    assert all("arguments_text_sha256" in event["payload"] for event in tool_input_parts)
 
     with sqlite3.connect(core_db) as con:
         tables = {row[0] for row in con.execute("select name from sqlite_master where type='table'")}
@@ -1039,6 +1058,41 @@ async def test_core_cli_run_success_is_not_tied_to_document_proof(tmp_path: Path
     assert summary["proof"]["has_text_block"] is True
     assert summary["proof"]["has_tool_call_block"] is False
     assert summary["proof"]["document_line_count"] == 0
+
+
+def test_core_cli_redacted_event_removes_embedded_data_and_compacts_large_arguments() -> None:
+    data_url = "data:image/png;base64," + ("A" * 20_000)
+    event = CoreEvent(
+        name="runtime.tool.finished",
+        category="tool",
+        payload={
+            "tool_name": "read_file",
+            "status": "ok",
+            "artifacts": [{"metadata": {"image_data_url": data_url}}],
+        },
+    )
+
+    redacted = core_cli._redact_event(event)
+
+    compact = redacted["payload"]["artifacts"][0]["metadata"]["image_data_url"]
+    assert compact["redacted"] == "embedded_data_url"
+    assert compact["media_type"] == "image/png"
+    assert compact["chars"] == len(data_url)
+    assert event.payload["artifacts"][0]["metadata"]["image_data_url"] == data_url
+
+    started = CoreEvent(
+        name="runtime.tool.started",
+        category="tool",
+        payload={
+            "tool_name": "write_file",
+            "arguments": {"path": "large.txt", "content": "x" * 20_000},
+        },
+    )
+    compact_started = core_cli._redact_event(started)
+    content = compact_started["payload"]["arguments"]["content"]
+    assert content["redacted"] == "large_text"
+    assert content["chars"] == 20_000
+    assert content["prefix"] == "x" * 256
 
 
 @pytest.mark.asyncio

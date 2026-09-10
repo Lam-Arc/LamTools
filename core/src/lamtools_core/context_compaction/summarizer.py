@@ -16,14 +16,14 @@ from lamtools_core.llm.retry import (
 )
 from lamtools_core.tokens import estimate_message_tokens, estimate_text_tokens
 
-from .formatting import format_messages_for_compaction, truncate_text_to_tokens
+from .formatting import truncate_text_to_tokens
 from .models import (
-    COMPACTION_PROMPT,
     CompactionDeltaSink,
     CompactionEventSink,
     ContextCompactionError,
 )
 from .planner import (
+    _compaction_instruction,
     _pair_compaction_messages,
     _split_compaction_messages,
     _summary_output_limit,
@@ -40,6 +40,7 @@ async def summarize_context_messages(
     input_limit_tokens: int = 0,
     summary_budget: SummaryTokenBudget | None = None,
     existing_summary: str = "",
+    prefix_messages: list[ChatMessage] | None = None,
     on_delta: CompactionDeltaSink | None = None,
     on_event: CompactionEventSink | None = None,
     model_retries: int = 1,
@@ -56,11 +57,28 @@ async def summarize_context_messages(
     summary_output_tokens = _summary_output_limit(limit_tokens)
     if summary_budget is not None:
         summary_output_tokens = min(summary_output_tokens, summary_budget.output_tokens)
-    chunks = _split_compaction_messages(
-        messages,
-        input_limit_tokens=summary_input_limit,
-        existing_summary=existing_summary,
-    )
+    effective_prefix = list(prefix_messages or [])
+    try:
+        chunks = _split_compaction_messages(
+            messages,
+            input_limit_tokens=summary_input_limit,
+            existing_summary=existing_summary,
+            prefix_messages=effective_prefix,
+        )
+    except ContextCompactionError:
+        if not effective_prefix:
+            raise
+        # Very small context windows can leave room for the source and
+        # instruction but not the otherwise cacheable system prefix. Preserve
+        # successful compaction in that edge case; production-sized windows
+        # keep the prefix and receive the cache benefit.
+        effective_prefix = []
+        chunks = _split_compaction_messages(
+            messages,
+            input_limit_tokens=summary_input_limit,
+            existing_summary=existing_summary,
+            prefix_messages=None,
+        )
     segment_count = len(chunks)
     summaries: list[str] = []
     for index, chunk in enumerate(chunks, start=1):
@@ -83,6 +101,7 @@ async def summarize_context_messages(
             output_tokens=summary_output_tokens,
             input_limit_tokens=summary_input_limit,
             existing_summary=existing_summary if index == 1 else "",
+            prefix_messages=effective_prefix,
             on_delta=on_delta,
             on_event=on_event,
             phase="segment",
@@ -137,6 +156,7 @@ async def summarize_context_messages(
                     output_tokens=summary_output_tokens,
                     input_limit_tokens=summary_input_limit,
                     existing_summary="",
+                    prefix_messages=None,
                     on_delta=on_delta,
                     on_event=on_event,
                     phase="merge",
@@ -165,6 +185,7 @@ async def _summarize_compaction_chunk(
     output_tokens: int,
     input_limit_tokens: int,
     existing_summary: str,
+    prefix_messages: list[ChatMessage] | None,
     on_delta: CompactionDeltaSink | None,
     on_event: CompactionEventSink | None,
     phase: str,
@@ -175,14 +196,14 @@ async def _summarize_compaction_chunk(
     retry_policy: RetryPolicy | None,
     on_model_retry: ModelRetrySink | None,
 ) -> str:
-    transcript = format_messages_for_compaction(messages, existing_summary=existing_summary)
     content = ""
     emitted_delta = False
     if llm_client is not None:
         summary_request = LLMRequest(
             messages=[
-                ChatMessage(role="system", content=COMPACTION_PROMPT),
-                ChatMessage(role="user", content=transcript),
+                *(prefix_messages or []),
+                *messages,
+                _compaction_instruction(existing_summary),
             ],
             model=model,
             temperature=0,
