@@ -49,6 +49,18 @@ be added once in shared UI/Workbench. Any future connection path should be
 implemented behind RemoteTransport/ConnectionManager without adding a second
 mobile UI.
 
+## Provider cancellation and retry visibility
+
+- Codex666 AI connectivity is valid at the models endpoint, but real completion
+  is slow and streaming is unstable (including upstream 502 responses).
+- Model retry projection now retains the error/backoff details, and all process
+  rendering paths show them while retrying.
+- Live Stop now cancels provider I/O before SQLite persistence and keeps the run
+  claim until terminal state is durable. A real provider run measured 102 ms for
+  the server-side cancel RPC and about 240 ms until the cancelled terminal event.
+- Verification: 238 targeted Python tests, 78 targeted UI tests, UI typecheck,
+  design-token audit, and `git diff --check` pass.
+
 ## Office retest process-audit handoff
 
 - Task/deployment: `office_retest_process_audit`; state: `complete`.

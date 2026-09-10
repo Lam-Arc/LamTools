@@ -841,6 +841,54 @@ def test_runtime_projection_preserves_compaction_display_metadata():
     assert run_items[0].payload["trigger"] == "auto"
 
 
+def test_runtime_projection_preserves_model_retry_failure_details():
+    fact = RuntimeProjectionInput(
+        id="retry-event-1",
+        thread_id="thread-1",
+        group="runtime",
+        source="core",
+        phase="runtime.part",
+        status="retrying",
+        sequence=10,
+        summary="模型请求重试中 (2/9)",
+        preview="模型请求重试中 (2/9)",
+        full_text="模型请求重试中 (2/9)",
+        metadata={
+            "payload": {
+                "turn_id": "turn-1",
+                "part_id": "turn-1:model-retry:0",
+                "part_type": "status",
+                "status": "retrying",
+                "content": "模型请求重试中 (2/9)",
+                "label": "模型请求重试中 (2/9)",
+                "detail": "2s 后重试：ReadTimeout",
+                "attempt": 2,
+                "max_retries": 9,
+                "delay_seconds": 2,
+                "error_kind": "retryable",
+                "error": "ReadTimeout",
+            }
+        },
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+
+    run_items = runtime_projection_to_run_item_events(fact)
+
+    assert len(run_items) == 1
+    assert run_items[0].payload == {
+        "type": "status",
+        "content": "模型请求重试中 (2/9)",
+        "label": "模型请求重试中 (2/9)",
+        "detail": "2s 后重试：ReadTimeout",
+        "message": "2s 后重试：ReadTimeout",
+        "attempt": 2,
+        "max_retries": 9,
+        "delay_seconds": 2,
+        "error_kind": "retryable",
+        "error": "ReadTimeout",
+    }
+
+
 def test_runtime_event_name_helpers_are_member_neutral():
     assert runtime_group_from_event_name("runtime.tool.started") == "tool"
     assert runtime_group_from_event_name("runtime.verification") == "verification"

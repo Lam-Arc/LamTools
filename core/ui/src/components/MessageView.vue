@@ -286,6 +286,24 @@
                           </div>
                           </Transition>
                         </div>
+                        <div
+                          v-else-if="isModelRetryPart(part)"
+                          class="model-retry-bar"
+                          role="status"
+                          aria-live="polite"
+                          :title="modelRetryDetail(part)"
+                        >
+                          <span class="model-retry-bar__label">重试中 {{ modelRetryCounts(part).attempt }}/{{ modelRetryCounts(part).maxRetries }}</span>
+                          <div class="model-retry-bar__track" aria-hidden="true">
+                            <div
+                              v-for="i in modelRetryCounts(part).maxRetries"
+                              :key="i"
+                              class="model-retry-bar__segment"
+                              :class="{ 'model-retry-bar__segment--filled': i <= modelRetryCounts(part).attempt }"
+                            />
+                          </div>
+                          <span v-if="modelRetryDetail(part)" class="model-retry-bar__detail">{{ modelRetryDetail(part) }}</span>
+                        </div>
                       </div>
                     </div>
                     </Transition>
@@ -432,9 +450,15 @@
                     </Transition>
                   </div>
 
-                  <div v-else-if="isModelRetryPart(group.part)" class="model-retry-bar">
+                  <div
+                    v-else-if="isModelRetryPart(group.part)"
+                    class="model-retry-bar"
+                    role="status"
+                    aria-live="polite"
+                    :title="modelRetryDetail(group.part)"
+                  >
                     <span class="model-retry-bar__label">重试中 {{ modelRetryCounts(group.part).attempt }}/{{ modelRetryCounts(group.part).maxRetries }}</span>
-                    <div class="model-retry-bar__track">
+                    <div class="model-retry-bar__track" aria-hidden="true">
                       <div
                         v-for="i in modelRetryCounts(group.part).maxRetries"
                         :key="i"
@@ -442,6 +466,7 @@
                         :class="{ 'model-retry-bar__segment--filled': i <= modelRetryCounts(group.part).attempt }"
                       />
                     </div>
+                    <span v-if="modelRetryDetail(group.part)" class="model-retry-bar__detail">{{ modelRetryDetail(group.part) }}</span>
                   </div>
 
                   <div v-else-if="group.part.partType === 'status'" class="process-step process-step--info" :class="'process-step--' + group.part.status">
@@ -1141,6 +1166,16 @@ function modelRetryCounts(part: MessagePart): { attempt: number; maxRetries: num
     return { attempt: parseInt(match[1], 10) || 0, maxRetries: parseInt(match[2], 10) || 0 }
   }
   return { attempt: 1, maxRetries: 0 }
+}
+
+function modelRetryDetail(part: MessagePart): string {
+  const detail = String(part.detail || '').trim()
+  if (detail) return detail
+  const meta = (part.metadata || {}) as Record<string, unknown>
+  const error = typeof meta.error === 'string' ? meta.error.trim() : ''
+  const delay = typeof meta.delay_seconds === 'number' ? meta.delay_seconds : null
+  if (error && delay !== null) return `${delay}s 后重试：${error}`
+  return error
 }
 
 function isSubLinePart(part: MessagePart): boolean {

@@ -892,7 +892,7 @@ async def test_core_live_turn_start_accepts_input_before_runtime_completion(tmp_
 
         resumed = await handle_thread_resume_operation(
             request_id=2,
-            params={"thread_id": "thread-1", "last_seen_seq": 0},
+            params={"thread_id": "thread-1", "last_seen_seq": 0, "include_snapshot": False},
             context=context,
         )
         methods = [event["method"] for event in resumed.response["result"]["events"]]
@@ -1334,7 +1334,15 @@ async def test_live_turn_reuses_accepted_id_for_core_events_terminal_and_task_re
             context=context,
         )
         result = resumed.response["result"]
-        core_events = [event for event in result["events"] if event["method"] == "core/runItem"]
+        delta = await handle_thread_resume_operation(
+            request_id=3,
+            params={"thread_id": "thread-live-id", "last_seen_seq": 0, "include_snapshot": False},
+            context=context,
+        )
+        core_events = [
+            event for event in delta.response["result"]["events"]
+            if event["method"] == "core/runItem"
+        ]
 
         assert core_events
         assert {event["turn_id"] for event in core_events} == {accepted_turn_id}
@@ -1390,7 +1398,7 @@ async def test_live_turn_steer_reaches_the_next_model_call_before_a_no_tool_fina
         assert any(message.content == "use the safer path" for message in llm.requests[1].messages)
         resumed = await handle_thread_resume_operation(
             request_id=3,
-            params={"thread_id": "thread-steer-live", "last_seen_seq": 0},
+            params={"thread_id": "thread-steer-live", "last_seen_seq": 0, "include_snapshot": False},
             context=context,
         )
         assert any(event["method"] == "turn/steered" for event in resumed.response["result"]["events"])
@@ -1632,6 +1640,66 @@ async def test_core_live_turn_cancel_publishes_interrupting_status(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_core_live_turn_cancel_interrupts_provider_before_persistence_roundtrip(
+    tmp_path,
+    monkeypatch,
+):
+    engine, context = await _context(tmp_path)
+    _register_blocking_turn_start(context)
+    task = None
+    cancel_task = None
+    release_write = asyncio.Event()
+    write_entered = asyncio.Event()
+    try:
+        started = await handle_turn_start_operation(
+            request_id=1,
+            params={
+                "thread_id": "thread-fast-stop",
+                "client_message_id": "client-fast-stop",
+                "input": [{"type": "text", "text": "hello"}],
+            },
+            context=context,
+        )
+        turn_id = started.response["result"]["runtime_start"]["turn_id"]
+        task = context.runtime_task_registry.task("thread-fast-stop", run_id=turn_id)
+        assert task is not None
+
+        original_write = context.persistence.write
+        first_write = True
+
+        async def delayed_first_write(callback):
+            nonlocal first_write
+            if first_write:
+                first_write = False
+                write_entered.set()
+                await release_write.wait()
+            return await original_write(callback)
+
+        monkeypatch.setattr(context.persistence, "write", delayed_first_write)
+        cancel_task = asyncio.create_task(handle_turn_cancel_operation(
+            request_id=2,
+            params={"thread_id": "thread-fast-stop", "turn_id": turn_id, "include_snapshot": False},
+            context=context,
+        ))
+
+        await asyncio.wait_for(write_entered.wait(), timeout=1)
+        await asyncio.sleep(0)
+        assert task.cancelling() > 0 or task.done()
+
+        release_write.set()
+        await asyncio.wait_for(cancel_task, timeout=2)
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        release_write.set()
+        if cancel_task is not None and not cancel_task.done():
+            cancel_task.cancel()
+        if task is not None and not task.done():
+            task.cancel()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_core_live_turn_cancel_closes_persisted_run_without_live_task(tmp_path):
     engine, context = await _context(tmp_path)
     _register_blocking_turn_start(context)
@@ -1667,7 +1735,6 @@ async def test_core_live_turn_cancel_closes_persisted_run_without_live_task(tmp_
             "core/runItem",
         ]
         assert result["events"][-1]["payload"]["status"] == "cancelled"
-        assert result["snapshot"]["turns"][turn_id]["status"] == "cancelled"
         assert result["snapshot"]["core"]["turns"][turn_id]["status"] == "cancelled"
     finally:
         if task is not None and not task.done():
@@ -1767,9 +1834,14 @@ async def test_force_cancel_persists_and_publishes_cancelled_terminal(tmp_path):
             context=context,
         )
         result = resumed.response["result"]
+        delta = await handle_thread_resume_operation(
+            request_id=4,
+            params={"thread_id": thread_id, "last_seen_seq": 0, "include_snapshot": False},
+            context=context,
+        )
         cancelled_events = [
             event
-            for event in result["events"]
+            for event in delta.response["result"]["events"]
             if event["method"] == "core/runItem"
             and event["payload"].get("kind") == "status"
             and event["payload"].get("status") == "cancelled"
@@ -1780,7 +1852,6 @@ async def test_force_cancel_persists_and_publishes_cancelled_terminal(tmp_path):
 
         assert len(cancelled_events) == 1
         assert cancelled_events[0]["turn_id"] == turn_id
-        assert result["snapshot"]["turns"][turn_id]["status"] == "cancelled"
         assert result["snapshot"]["core"]["turns"][turn_id]["status"] == "cancelled"
         assert result["snapshot"]["status"] == "cancelled"
         assert result["snapshot"]["core"]["status"] == "cancelled"
@@ -1796,8 +1867,8 @@ async def test_force_cancel_persists_and_publishes_cancelled_terminal(tmp_path):
         runtime_state.status = "running"
         await context.host.runtime_state_store.save(runtime_state)
         await handle_thread_resume_operation(
-            request_id=4,
-            params={"thread_id": thread_id, "last_seen_seq": 0},
+            request_id=5,
+            params={"thread_id": thread_id, "last_seen_seq": 0, "include_snapshot": False},
             context=context,
         )
         reconciled_state = await context.host.runtime_state_store.get(thread_id)
@@ -1835,7 +1906,7 @@ async def test_internal_cancelled_error_is_failed_not_user_interrupted(tmp_path)
 
         resumed = await handle_thread_resume_operation(
             request_id=2,
-            params={"thread_id": thread_id, "last_seen_seq": 0},
+            params={"thread_id": thread_id, "last_seen_seq": 0, "include_snapshot": False},
             context=context,
         )
         events = resumed.response["result"]["events"]
@@ -1889,10 +1960,15 @@ async def test_cancelled_terminal_fallback_is_idempotent(tmp_path):
             params={"thread_id": thread_id, "last_seen_seq": 0},
             context=context,
         )
+        delta = await handle_thread_resume_operation(
+            request_id=4,
+            params={"thread_id": thread_id, "last_seen_seq": 0, "include_snapshot": False},
+            context=context,
+        )
 
         cancelled_events = [
             event
-            for event in second.response["result"]["events"]
+            for event in delta.response["result"]["events"]
             if event["method"] == "core/runItem" and event["payload"].get("status") == "cancelled"
         ]
         assert len(cancelled_events) == 1

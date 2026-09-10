@@ -53,6 +53,33 @@ describe('ChatThread process cards', () => {
     expect(wrapper.get('[role="alert"]').text()).toContain('invalid tool arguments');
   });
 
+  it('shows the provider error and backoff while a model retry is active', () => {
+    const wrapper = mountChatThread({
+      props: {
+        messages: [{
+          id: 'retrying-turn',
+          role: 'assistant',
+          content: '',
+          timestamp: '',
+          metadata: { timeline: true, live: true },
+          parts: [{
+            id: 'retrying-turn:model-retry:0',
+            partType: 'status',
+            status: 'running',
+            content: '模型请求重试中 (2/9)',
+            detail: '2s 后重试：ReadTimeout',
+            label: '模型请求重试中 (2/9)',
+          }],
+        }],
+      },
+    });
+
+    const retry = wrapper.get('.model-retry-bar');
+    expect(retry.attributes('role')).toBe('status');
+    expect(retry.text()).toContain('重试中 2/9');
+    expect(retry.text()).toContain('2s 后重试：ReadTimeout');
+  });
+
   it('renders assistant Markdown through the shared default renderer', () => {
     const wrapper = mountChatThread( {
       props: {

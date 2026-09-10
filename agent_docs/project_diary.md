@@ -38,3 +38,7 @@ logs.
   and text extraction cannot prove pixel-level layout quality; footer/page-number
   collisions are a concrete case that passed structural checks but failed human
   visual review.
+- Treat provider health as layered: a successful models endpoint proves only
+  DNS/authentication/model discovery, not usable completion or streaming. Stop
+  must cancel provider I/O before any persistence round-trip, while retaining
+  the active-run claim until the cancelled terminal event is durable.

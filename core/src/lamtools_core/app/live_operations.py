@@ -1352,10 +1352,27 @@ async def handle_turn_cancel_operation(
         expected_revision = _expected_revision(params)
     except ValueError as exc:
         return CoreLiveOperationOutcome(response=rpc_error(request_id, code=INVALID_REQUEST, message=str(exc)))
+    requested_turn_id = str(params.get("turn_id") or params.get("turnId") or "")
+    registry = context.host.runtime_task_registry
+    live_turn_id = registry.active_run_id(thread_id) or ""
+    preempted_live_task = False
+    request_cancel = getattr(registry, "request_cancel", None)
+    if (
+        callable(request_cancel)
+        and live_turn_id
+        and (not requested_turn_id or requested_turn_id == live_turn_id)
+    ):
+        # Interrupt provider I/O before waiting for SQLite.  Previously the
+        # task was cancelled only after append_batch/load completed, which made
+        # Stop appear inert for several seconds under write contention.
+        preempted_live_task = request_cancel(
+            thread_id,
+            run_id=live_turn_id,
+            force=True,
+        )
     async def write(db):
         snapshot = await context.persistence.load(db, thread_id)
-        requested_turn_id = str(params.get("turn_id") or params.get("turnId") or "")
-        turn_id = requested_turn_id or latest_active_turn_id(snapshot) or ""
+        turn_id = requested_turn_id or latest_active_turn_id(snapshot) or live_turn_id
         # Fallback to the in-memory registry: when the snapshot has lost the
         # active turn (e.g. a sub-agent DB-lock error rewrote state before the
         # terminal event landed) the background task can still be running. The
@@ -1368,6 +1385,11 @@ async def handle_turn_cancel_operation(
             turn_id = ""
         if not turn_id:
             payload: dict[str, Any] = {"status": "idle", "event": None}
+            if params.get("include_snapshot") is not False:
+                payload["snapshot"] = snapshot
+            return CoreLiveOperationOutcome(response=rpc_result(request_id, payload))
+        if _turn_is_terminal(snapshot, turn_id):
+            payload = {"status": "cancelled", "event": None}
             if params.get("include_snapshot") is not False:
                 payload["snapshot"] = snapshot
             return CoreLiveOperationOutcome(response=rpc_result(request_id, payload))
@@ -1401,8 +1423,15 @@ async def handle_turn_cancel_operation(
     if isinstance(write_result, CoreLiveOperationOutcome):
         return write_result
     interrupted, status, snapshot, turn_id = write_result
-    had_live_task = context.host.runtime_task_registry.active_run_id(thread_id) == turn_id
-    context.host.runtime_task_registry.cancel(thread_id, run_id=turn_id or None, force=True)
+    had_live_task = preempted_live_task or registry.active_run_id(thread_id) == turn_id
+    # request_cancel() already delivered the forceful cancellation.  A second
+    # task.cancel() here can interrupt the runtime's shielded terminal write,
+    # leaving the UI stuck in an intermediate state.
+    registry.cancel(
+        thread_id,
+        run_id=turn_id or None,
+        force=not preempted_live_task,
+    )
     events = [interrupted, status]
     for event in events:
         await context.hub.publish(event)
@@ -2406,10 +2435,15 @@ async def _run_core_turn(*, context: CoreLiveContext, runtime_start: dict[str, A
         )
     except BaseException as exc:
         _elapsed = time_module.time() - _start_ts
-        _logger.exception("[live:_run_core_turn] turn failed thread_id=%s turn_id=%s elapsed=%.2fs",
-                          thread_id, turn_id, _elapsed)
-        cancel_requested = context.host.runtime_task_registry.get_cancel_event(thread_id).is_set()
+        get_cancel_event = getattr(context.host.runtime_task_registry, "get_cancel_event", None)
+        cancel_requested = bool(callable(get_cancel_event) and get_cancel_event(thread_id).is_set())
         if cancel_requested:
+            _logger.info(
+                "[live:_run_core_turn] turn cancelled thread_id=%s turn_id=%s elapsed=%.2fs",
+                thread_id,
+                turn_id,
+                _elapsed,
+            )
             await asyncio.shield(
                 _persist_cancelled_terminal(
                     context=context,
@@ -2418,6 +2452,12 @@ async def _run_core_turn(*, context: CoreLiveContext, runtime_start: dict[str, A
                 )
             )
             raise
+        _logger.exception(
+            "[live:_run_core_turn] turn failed thread_id=%s turn_id=%s elapsed=%.2fs",
+            thread_id,
+            turn_id,
+            _elapsed,
+        )
         await asyncio.shield(
             _fail_runtime_start(
                 context=context,

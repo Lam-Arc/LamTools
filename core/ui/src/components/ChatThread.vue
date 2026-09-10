@@ -450,14 +450,15 @@ const initialMessageIds = new Set(props.messages.map((m) => m.id))
 .model-retry-bar {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-2);
   padding: 3px 0;
+  min-width: 0;
 }
 .model-retry-bar__label {
   flex: 0 0 auto;
   font-size: 11px;
   font-weight: 550;
-  color: color-mix(in srgb, var(--theme-main-text, #fff) 44%, transparent);
+  color: color-mix(in srgb, var(--orange) 70%, var(--theme-main-text));
   white-space: nowrap;
 }
 .model-retry-bar__track {
@@ -465,7 +466,7 @@ const initialMessageIds = new Set(props.messages.map((m) => m.id))
   display: flex;
   gap: 1px;
   height: 4px;
-  background: color-mix(in srgb, var(--theme-main-text, #fff) 6%, transparent);
+  background: color-mix(in srgb, var(--theme-main-text) 8%, transparent);
   border-radius: 2px;
 }
 .model-retry-bar__segment {
@@ -476,7 +477,15 @@ const initialMessageIds = new Set(props.messages.map((m) => m.id))
   transition: background-color 0.2s ease;
 }
 .model-retry-bar__segment--filled {
-  background: color-mix(in srgb, var(--theme-main-text, #fff) 26%, transparent);
+  background: color-mix(in srgb, var(--orange) 70%, var(--theme-main-text));
+}
+.model-retry-bar__detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: color-mix(in srgb, var(--theme-main-text) 65%, transparent);
 }
 .tool-card-header--command .process-step-title {
   grid-area: title;

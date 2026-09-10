@@ -309,6 +309,27 @@ class RuntimeTaskRegistry:
             return None
         return task
 
+    def request_cancel(self, thread_id: str, *, run_id: str | None = None, force: bool = False) -> bool:
+        """Signal cancellation without releasing the active-run claim.
+
+        Stop uses this before its persistence round-trip so a blocked provider
+        request is interrupted immediately.  The regular ``cancel`` method is
+        still responsible for releasing the claim and cleaning up once the
+        interrupting state has been recorded.
+        """
+        self._drop_done_entry(thread_id)
+        entry = self._entries.get(thread_id)
+        if entry is None or (run_id is not None and entry.run_id != run_id):
+            return False
+        task = entry.task
+        self.get_cancel_event(thread_id).set()
+        entry.guidance_open = False
+        entry.guidance.clear()
+        entry.guidance_ids.clear()
+        if force and task is not None and not task.done():
+            task.cancel()
+        return task is not None and not task.done()
+
     def cancel(self, thread_id: str, *, run_id: str | None = None, force: bool = False) -> None:
         self._drop_done_entry(thread_id)
         entry = self._entries.get(thread_id)

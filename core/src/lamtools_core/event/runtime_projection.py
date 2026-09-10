@@ -574,6 +574,24 @@ def runtime_fact_to_run_item_events(
             item_payload["compaction_status"] = str(payload.get("status") or status or "running")
             if "limit_tokens" not in item_payload and "target_tokens" in payload:
                 item_payload["limit_tokens"] = payload["target_tokens"]
+        elif part_type == "status":
+            # Model-retry progress must retain the failure and backoff details
+            # instead of projecting only the generic "retrying n/N" label.
+            # The UI can then explain a timeout/HTTP error while it happens.
+            for key in (
+                "label",
+                "detail",
+                "attempt",
+                "max_retries",
+                "delay_seconds",
+                "error_kind",
+                "error",
+            ):
+                if key in payload:
+                    item_payload[key] = payload[key]
+            detail = str(payload.get("detail") or "").strip()
+            if detail:
+                item_payload["message"] = detail
         content_base = {**base, "event_id": _content_event_id(fact, f"runtime-part-{part_type}", content)}
         return [
             RunItemEvent(

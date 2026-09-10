@@ -185,6 +185,25 @@ class TestRuntimeTaskRegistry:
             await task
 
     @pytest.mark.asyncio
+    async def test_request_cancel_keeps_claim_until_terminal_persistence_releases_it(self):
+        registry = RuntimeTaskRegistry()
+
+        async def long_task():
+            await asyncio.sleep(60)
+
+        task = asyncio.create_task(long_task())
+        registry.register("thread-1", task, run_id="turn-1")
+
+        assert registry.request_cancel("thread-1", run_id="turn-1", force=True) is True
+        assert registry.get_cancel_event("thread-1").is_set() is True
+        assert registry.active_run_id("thread-1") == "turn-1"
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        registry.release_run("thread-1", run_id="turn-1")
+        assert registry.active_run_id("thread-1") is None
+
+    @pytest.mark.asyncio
     async def test_cancel_ignores_mismatched_run_id(self):
         registry = RuntimeTaskRegistry()
 
