@@ -942,7 +942,14 @@ class CoreToolbox:
     ) -> None:
         self.work_root = Path(work_root).resolve()
         self.work_root.mkdir(parents=True, exist_ok=True)
-        self.loaded_skill_roots = {Path(item).resolve() for item in loaded_skill_roots or set()}
+        if loaded_skill_roots is None and skill_registry is None:
+            from lamtools_core.skill_runtime import create_skill_runtime
+
+            skill_runtime = create_skill_runtime()
+            self.loaded_skill_roots = set(skill_runtime.roots)
+            skill_registry = skill_runtime.registry
+        else:
+            self.loaded_skill_roots = {Path(item).resolve() for item in loaded_skill_roots or set()}
         self.loaded_skill_names: set[str] = set()
         self.mcp_caller = mcp_caller
         self.sub_agent_runner = sub_agent_runner

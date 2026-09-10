@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterable
 from dataclasses import replace
 from copy import deepcopy
 from pathlib import Path
@@ -18,6 +19,7 @@ from lamtools_core.runtime import (
     RuntimeStateStore,
     RuntimeTurnInput,
 )
+from lamtools_core.skills import SkillRegistry
 from lamtools_core.sub_agent import SubAgentEventForwardingSink
 from lamtools_core.sub_session import normalize_sub_session_agent_name
 from lamtools_core.tool import ToolCall, ToolSpec
@@ -78,7 +80,8 @@ class KernelSubAgentRunner:
         active_tier: str | None = None,
         tier_tools: dict[str, Any] | None = None,
         runtime_snapshot: dict[str, Any] | None = None,
-        loaded_skill_roots: set[Path] | None = None,
+        loaded_skill_roots: Iterable[Path] | None = None,
+        skill_registry: SkillRegistry | None = None,
         mcp_caller: MCPToolCaller | None = None,
         mcp_tool_specs: list[ToolSpec] | None = None,
         context_window_tokens: int | None = None,
@@ -109,7 +112,19 @@ class KernelSubAgentRunner:
         self.active_tier = active_tier
         self.tier_tools = deepcopy(tier_tools) if isinstance(tier_tools, dict) else tier_tools
         self.runtime_snapshot = deepcopy(runtime_snapshot) if isinstance(runtime_snapshot, dict) else None
-        self.loaded_skill_roots = set(loaded_skill_roots or set())
+        if loaded_skill_roots is None and skill_registry is None:
+            from lamtools_core.skill_runtime import create_skill_runtime
+
+            skill_runtime = create_skill_runtime()
+            self.loaded_skill_roots = skill_runtime.roots
+            self.skill_registry = skill_runtime.registry
+        else:
+            self.loaded_skill_roots = tuple(
+                dict.fromkeys(Path(root).resolve() for root in (loaded_skill_roots or ()))
+            )
+            self.skill_registry = skill_registry or SkillRegistry(
+                explicit_roots=self.loaded_skill_roots
+            )
         self.mcp_caller = mcp_caller
         self.mcp_tool_specs = list(mcp_tool_specs or [])
         self.context_window_tokens = context_window_tokens
@@ -146,6 +161,7 @@ class KernelSubAgentRunner:
             active_tier=self.active_tier,
             tier_tools=self.tier_tools,
             loaded_skill_roots=self.loaded_skill_roots,
+            skill_registry=self.skill_registry,
             mcp_caller=self.mcp_caller,
             mcp_tool_specs=self.mcp_tool_specs,
             disabled_tools=disabled_tools,
@@ -530,6 +546,7 @@ class KernelSubAgentRunner:
             active_tier=self.active_tier,
             tier_tools=self.tier_tools,
             loaded_skill_roots=self.loaded_skill_roots,
+            skill_registry=self.skill_registry,
             mcp_caller=self.mcp_caller,
             mcp_tool_specs=self.mcp_tool_specs,
             disabled_tools=self._disabled_tools(),
@@ -627,6 +644,7 @@ class KernelSubAgentRunner:
             active_tier=self.active_tier,
             tier_tools=self.tier_tools,
             loaded_skill_roots=self.loaded_skill_roots,
+            skill_registry=self.skill_registry,
             mcp_caller=self.mcp_caller,
             mcp_tool_specs=self.mcp_tool_specs,
             disabled_tools=disabled_tools,

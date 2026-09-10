@@ -122,6 +122,31 @@ def _write_mcp_config(path: Path, server: Path) -> None:
     )
 
 
+def test_load_mcp_server_configs_accepts_jsonc_comments_and_trailing_commas(tmp_path: Path):
+    config = tmp_path / "mcp.json"
+    config.write_text(
+        '''/* default config */
+        {
+          "mcpServers": {
+            "local": {
+              "command": "python",
+              "args": [],
+            },
+          },
+        }
+        ''',
+        encoding="utf-8",
+    )
+
+    configs = load_mcp_server_configs(
+        tmp_path,
+        config_files=[config],
+        default_paths=[],
+    )
+
+    assert [(item.name, item.command) for item in configs] == [("local", "python")]
+
+
 @pytest.mark.asyncio
 async def test_core_mcp_registry_loads_config_and_calls_tool(tmp_path: Path):
     server = _write_server(tmp_path)

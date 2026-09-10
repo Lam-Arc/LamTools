@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 import os
 import shutil
@@ -8,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .schemas import MCPServerConfig
+from lamtools_core.plugins._jsonc import load_jsonc_text
 
 _log = logging.getLogger(__name__)
 
@@ -28,8 +28,8 @@ def load_mcp_server_configs(
         if not path.exists():
             continue
         try:
-            data = json.loads(path.read_text(encoding="utf-8-sig"))
-        except (OSError, json.JSONDecodeError):
+            data = load_jsonc_text(path)
+        except (OSError, ValueError):
             # A corrupt or empty mcp.json must never take the whole app down.
             _log.warning("Skipping unreadable MCP config: %s", path)
             continue

@@ -594,6 +594,12 @@ async def run_core_cli_task(
     if plugin_assembly["hook_engine"] is not None:
         plugin_assembly["hook_engine"].set_mcp_caller(mcp_registry if mcp_tool_specs else None)
     from lamtools_core.tool.sub_agent_runner import KernelSubAgentRunner
+    from lamtools_core.skill_runtime import create_skill_runtime
+
+    skill_runtime = create_skill_runtime(
+        plugin_skill_roots=plugin_assembly.get("skill_roots") or []
+    )
+    skill_roots = set(skill_runtime.roots)
 
     async def capture_model_context(state: Any, request: Any) -> None:
         payload = build_handoff_context(getattr(request, "messages", []))
@@ -655,7 +661,8 @@ async def run_core_cli_task(
         active_tier=resolved_permissions.active_tier,
         tier_tools=resolved_permissions.tier_tools,
         runtime_snapshot=runtime_snapshot,
-        loaded_skill_roots=set(plugin_assembly["skill_roots"]),
+        loaded_skill_roots=skill_roots,
+        skill_registry=skill_runtime.registry,
         mcp_caller=mcp_registry if mcp_tool_specs else None,
         mcp_tool_specs=mcp_tool_specs,
         context_window_tokens=context_window_tokens,
@@ -729,7 +736,8 @@ async def run_core_cli_task(
         approval_policy=resolved_permissions.approval_policy,
         active_tier=resolved_permissions.active_tier,
         tier_tools=resolved_permissions.tier_tools,
-        loaded_skill_roots=set(plugin_assembly["skill_roots"]),
+        loaded_skill_roots=skill_roots,
+        skill_registry=skill_runtime.registry,
         mcp_caller=mcp_registry if mcp_tool_specs else None,
         mcp_tool_specs=mcp_tool_specs,
         sub_agent_runner=sub_agent_runner,

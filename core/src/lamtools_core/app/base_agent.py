@@ -1065,8 +1065,7 @@ def build_core_plugin_operation_catalog(
     from lamtools_core.plugins.registry import PluginRegistry, PluginStateStore, default_user_plugin_root
     from lamtools_core.plugins.trust import HookTrustStore
     from lamtools_core.skills import SkillRegistry, SkillStateStore
-    from lamtools_core.config.root import core_skills_root
-    from lamtools_core.composer_commands import default_core_skill_roots
+    from lamtools_core.skill_runtime import create_skill_runtime
 
     # H 组缺口修复（2026-08-16）：空/None 一律回退默认根集合（含用户级根，
     # 与 assemble_core_agent_plugins 同语义）；非空显式列表才按调用方指定。
@@ -1119,13 +1118,7 @@ def build_core_plugin_operation_catalog(
             for root in plugin.skill_roots
             if root.exists()
         ]
-        return SkillRegistry(
-            explicit_roots=[
-                core_skills_root(),
-                *default_core_skill_roots(),
-                *plugin_skill_roots,
-            ],
-        )
+        return create_skill_runtime(plugin_skill_roots=plugin_skill_roots).registry
 
     catalog = build_plugin_operation_catalog(
         plugin_registry=plugin_registry,

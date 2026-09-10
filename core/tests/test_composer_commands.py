@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import lamtools_core.composer_commands as composer_commands
+import lamtools_core.skill_runtime as skill_runtime
 import pytest
 from lamtools_core.composer_commands import (
     build_composer_command_catalog,
@@ -32,9 +33,52 @@ def test_default_core_skill_roots_do_not_expose_the_whole_core_package(monkeypat
     module_path = package_root / "composer_commands.py"
     skill_root = package_root / "resources" / "skills"
     skill_root.mkdir(parents=True)
-    monkeypatch.setattr(composer_commands, "__file__", str(module_path))
+    monkeypatch.setattr(skill_runtime, "__file__", str(module_path))
 
     assert default_core_skill_roots() == [skill_root]
+
+
+def test_builtin_office_skills_are_discoverable_with_trigger_descriptions():
+    registry = SkillRegistry(explicit_roots=default_core_skill_roots())
+    skills = {skill.name: skill for skill in registry.available(None)}
+    expected = {
+        "office-charts",
+        "office-documents",
+        "office-email",
+        "office-files",
+        "office-infographics",
+        "office-meetings",
+        "office-pdf",
+        "office-research",
+        "office-slides",
+        "office-spreadsheets",
+    }
+
+    assert expected <= skills.keys()
+    assert all(
+        any(marker in skills[name].description for marker in ("使用", "用于"))
+        for name in expected
+    )
+
+
+def test_catalog_uses_custom_core_resource_skills_as_builtin(tmp_path: Path):
+    core_root = tmp_path / "custom-core"
+    skill_file = core_root / "skills" / "custom-core-skill" / "SKILL.md"
+    skill_file.parent.mkdir(parents=True)
+    skill_file.write_text(
+        "---\nname: custom-core-skill\ndescription: Custom core skill\n---\nBody\n",
+        encoding="utf-8",
+    )
+
+    catalog = build_composer_command_catalog(
+        core_roots=[core_root],
+        member_roots=[],
+        work_root=tmp_path / "workspace",
+    )
+
+    command = next(item for item in catalog if item.name == "custom-core-skill")
+    assert command.kind == "skill"
+    assert command.source == "core"
 
 
 def test_catalog_loads_core_before_member_and_blocks_overrides(tmp_path: Path):

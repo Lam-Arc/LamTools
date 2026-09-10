@@ -91,10 +91,9 @@ class DefaultCoreLiveMemberHooks:
     def command_skill_registry(self):
         if self._skill_registry_factory is not None:
             return self._skill_registry_factory()
-        from lamtools_core.skills import SkillRegistry
-        from lamtools_core.composer_commands import default_core_skill_roots
+        from lamtools_core.skill_runtime import create_skill_runtime
 
-        return SkillRegistry(explicit_roots=default_core_skill_roots())
+        return create_skill_runtime().registry
 
     def command_skill_state_store(self):
         return self._skill_state_store_factory() if self._skill_state_store_factory is not None else None

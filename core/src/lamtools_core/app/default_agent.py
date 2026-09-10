@@ -21,7 +21,6 @@ from lamtools_core.config.model_store import resolve_model_capability
 from lamtools_core.composer_commands import (
     build_composer_command_catalog,
     default_core_resource_roots,
-    default_core_skill_roots,
     normalize_command_name,
 )
 from lamtools_core.checkpoint import CoreCheckpointCoordinator, register_checkpoint_operations
@@ -44,6 +43,7 @@ from lamtools_core.runtime import (
 from lamtools_core.runtime.goal import GoalCompletionGate, GoalManager, ModelGoalEvaluator
 from lamtools_core.runtime.arrange import ArrangeManager
 from lamtools_core.skills import SkillRegistry, SkillStateStore
+from lamtools_core.skill_runtime import create_skill_runtime
 from lamtools_core.session import InMemorySessionStore, SessionStore
 from lamtools_core.snapshot import InMemorySnapshotStore, SnapshotStore
 from lamtools_core.tool import ToolSpec
@@ -311,16 +311,13 @@ def create_core_agent_operations(
             context=plugin_context,
             plugin_runtimes=getattr(plugin_operations, "plugin_runtimes", []),
         )
-        from lamtools_core.config.root import core_skills_root
-
-        return SkillRegistry(
-            explicit_roots=[
-                core_skills_root(),
+        return create_skill_runtime(
+            plugin_skill_roots=[
                 *resolved_command_member_roots,
-                *resolved_command_core_roots,
                 *plugin_assembly.get("skill_roots", []),
-            ]
-        )
+            ],
+            builtin_skill_roots=resolved_command_core_roots,
+        ).registry
 
     def command_plugin_manifests() -> list[Any]:
         registry = getattr(plugin_operations, "plugin_registry", None)
@@ -1812,6 +1809,16 @@ def create_core_agent_operations(
         """Provide a host-owned sub-agent runner to plugin backends on demand."""
         from lamtools_core.tool.sub_agent_runner import KernelSubAgentRunner
 
+        plugin_registry = getattr(plugin_operations, "plugin_registry", None)
+        plugin_skill_roots = [
+            root
+            for plugin in (plugin_registry.discover() if plugin_registry is not None else [])
+            if plugin.enabled
+            for root in plugin.skill_roots
+            if root.exists()
+        ]
+        skill_runtime = create_skill_runtime(plugin_skill_roots=plugin_skill_roots)
+
         return KernelSubAgentRunner(
             work_root=paths.work_root,
             llm_client=model_provider,
@@ -1819,6 +1826,8 @@ def create_core_agent_operations(
             approval_policy="require",
             session_prefix="plugin-sub-agent",
             state_store=runtime_state_store,
+            loaded_skill_roots=skill_runtime.roots,
+            skill_registry=skill_runtime.registry,
         )
 
     plugin_context = PluginContext(
@@ -2316,13 +2325,10 @@ async def _build_core_runtime_toolbox(
     if hook_engine is not None:
         hook_engine.set_mcp_caller(registry if mcp_tool_specs else None)
     normalized_policy = approval_policy if approval_policy in {"require", "auto_approve"} else "require"
-    from lamtools_core.config.root import core_skills_root
-
-    skill_roots = {
-        core_skills_root(),
-        *default_core_skill_roots(),
-        *(plugin_assembly.get("skill_roots") or []),
-    }
+    skill_runtime = create_skill_runtime(
+        plugin_skill_roots=plugin_assembly.get("skill_roots") or []
+    )
+    skill_roots = set(skill_runtime.roots)
     # Load tools configuration — prefer config dir, then member override, fallback to Core default
     load_tools: LoadTools = default_load_tools()
     from lamtools_core.config.root import core_config_file
@@ -2358,6 +2364,7 @@ async def _build_core_runtime_toolbox(
             active_tier=active_tier,
             tier_tools=tier_tools,
             loaded_skill_roots=skill_roots,
+            skill_registry=skill_runtime.registry,
             mcp_caller=registry if mcp_tool_specs else None,
             mcp_tool_specs=mcp_tool_specs,
             context_window_tokens=context_window_tokens,
@@ -2472,6 +2479,7 @@ async def _build_core_runtime_toolbox(
         work_root=work_root,
         approval_policy=normalized_policy,
         loaded_skill_roots=skill_roots,
+        skill_registry=skill_runtime.registry,
         mcp_caller=registry if mcp_tool_specs else None,
         mcp_tool_specs=mcp_tool_specs,
         sub_agent_runner=sub_agent_runner,

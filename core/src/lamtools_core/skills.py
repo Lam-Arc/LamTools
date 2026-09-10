@@ -139,16 +139,6 @@ class SkillRegistry:
         return tuple(paths)
 
     def _candidate_skill_files(self, work_root: str | Path | None) -> list[Path]:
-        # LamTools skill roots.
-        # Global:  ~/.lam/skills/*/SKILL.md (one level deep)
-        # Project: {work_root}/.lam/**/SKILL.md (recursive)
-        global_roots: list[Path] = []
-        from lamtools_core.config.root import lam_home
-        home_lam = lam_home()
-        if home_lam.is_dir():
-            global_roots.append(home_lam)
-        global_roots.extend(self._explicit_roots)
-
         seen: set[Path] = set()
         results: list[Path] = []
 
@@ -158,23 +148,21 @@ class SkillRegistry:
                 seen.add(resolved)
                 results.append(resolved)
 
-        # Global skills: {root}/skills/*/SKILL.md (one level deep)
-        for root in global_roots:
-            if root.is_dir():
-                for p in root.glob("skills/*/SKILL.md"):
-                    _add_if_skill(p)
-
-        # Explicit roots: {root}/*/SKILL.md — the root IS the skills directory
-        for root in self._explicit_roots:
-            if root.is_dir():
-                for p in root.glob("*/SKILL.md"):
-                    _add_if_skill(p)
-
-        # Project skills: {work_root}/.lam/**/SKILL.md (recursive)
+        # Workspace skills have the highest precedence.  The runtime assembler
+        # orders all remaining sources as user, plugin, then built-in.
         if work_root:
             lam_dir = Path(work_root).resolve() / ".lam"
             if lam_dir.is_dir():
                 for p in lam_dir.rglob("SKILL.md"):
+                    _add_if_skill(p)
+
+        # An explicit root may be either a skills directory or a resource root
+        # containing a skills/ directory.  Preserve both supported forms.
+        for root in self._explicit_roots:
+            if root.is_dir():
+                for p in root.glob("skills/*/SKILL.md"):
+                    _add_if_skill(p)
+                for p in root.glob("*/SKILL.md"):
                     _add_if_skill(p)
 
         return results

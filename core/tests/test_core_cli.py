@@ -96,6 +96,32 @@ class ScriptedCoreCliReadLLM:
         yield LLMStreamEvent(kind="done")
 
 
+class ScriptedCoreCliLoadSkillLLM:
+    def __init__(self, *, skill_name: str) -> None:
+        self.skill_name = skill_name
+        self.requests: list[LLMRequest] = []
+
+    async def complete(self, request: LLMRequest) -> LLMResponse:
+        raise AssertionError("core CLI should use streaming when available")
+
+    async def stream(self, request: LLMRequest):
+        self.requests.append(request)
+        if len(self.requests) == 1:
+            yield LLMStreamEvent(
+                kind="done",
+                tool_calls=[
+                    LLMToolCall(
+                        id="call-load-skill",
+                        name="load_skill",
+                        arguments={"name": self.skill_name},
+                    )
+                ],
+            )
+            return
+        yield LLMStreamEvent(kind="content_delta", content=f"Loaded {self.skill_name}.")
+        yield LLMStreamEvent(kind="done")
+
+
 class ScriptedCoreCliAnswerOnlyLLM:
     async def complete(self, request: LLMRequest) -> LLMResponse:
         raise AssertionError("core CLI should use streaming when available")
@@ -1096,6 +1122,28 @@ async def test_core_cli_run_loads_plugin_skill_roots(tmp_path: Path) -> None:
     assert summary["result"]["decision"] == "done"
     assert "plugin skill resource" in events
     assert Path(summary["artifacts"]["core_db"]).parent == tmp_path
+
+
+@pytest.mark.asyncio
+async def test_core_cli_run_loads_builtin_office_skill_outside_repo(tmp_path: Path) -> None:
+    llm = ScriptedCoreCliLoadSkillLLM(skill_name="office-documents")
+
+    summary = await run_core_cli_task(
+        CoreCliRunOptions(
+            message="write a weekly report",
+            model_id="fake-model",
+            work_root=tmp_path / "external-workspace",
+            run_dir=tmp_path / "run",
+            core_db=tmp_path / "core.db",
+        ),
+        llm_client=llm,
+    )
+
+    events = json.loads(Path(summary["artifacts"]["events_redacted_json"]).read_text(encoding="utf-8"))
+    assert summary["result"]["decision"] == "done"
+    event_contents = [str(event.get("payload", {}).get("content", "")) for event in events]
+    assert any('<skill_content name="office-documents">' in content for content in event_contents)
+    assert all('Skill "office-documents" not found' not in content for content in event_contents)
 
 
 def test_core_cli_memory_dream_config_writes_settings_jsonc(isolated_config_root: Path) -> None:

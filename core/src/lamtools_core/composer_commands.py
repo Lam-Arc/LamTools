@@ -26,11 +26,9 @@ def default_core_resource_roots() -> list[Path]:
 
 
 def default_core_skill_roots() -> list[Path]:
-    return [
-        skill_root
-        for root in default_core_resource_roots()
-        if (skill_root := root / "skills").is_dir()
-    ]
+    from lamtools_core.skill_runtime import builtin_core_skill_roots
+
+    return list(builtin_core_skill_roots())
 
 
 @dataclass(frozen=True)
@@ -95,7 +93,15 @@ def build_composer_command_catalog(
 ) -> list[ComposerCommandDefinition]:
     """Return one Core-owned catalog for built-ins, member declarations, and skills."""
     commands = load_command_catalog(core_roots=core_roots, member_roots=member_roots)
-    registry = skill_registry or SkillRegistry(explicit_roots=[*member_roots, *core_roots])
+    if skill_registry is None:
+        from lamtools_core.skill_runtime import create_skill_runtime
+
+        registry = create_skill_runtime(
+            plugin_skill_roots=member_roots,
+            builtin_skill_roots=core_roots,
+        ).registry
+    else:
+        registry = skill_registry
     reserved_names = {item.name for item in _load_definitions(core_roots, source="core")}
     reserved_names.update(item.name for item in commands)
     reserved_names.update(load_disabled_core_commands(member_roots))
@@ -170,7 +176,12 @@ def prepare_composer_input(
     skill_state_store: SkillStateStore | None = None,
 ) -> PreparedComposerInput:
     """Prepare visible and runtime input while preserving attachment items."""
-    registry = skill_registry or SkillRegistry()
+    if skill_registry is None:
+        from lamtools_core.skill_runtime import create_skill_runtime
+
+        registry = create_skill_runtime().registry
+    else:
+        registry = skill_registry
     visible_items: list[dict[str, Any]] = []
     runtime_items: list[dict[str, Any]] = []
     visible_parts: list[str] = []
