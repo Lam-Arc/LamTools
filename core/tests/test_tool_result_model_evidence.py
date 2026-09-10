@@ -165,6 +165,30 @@ async def test_failed_tool_result_exposes_existing_execution_evidence_without_ad
 
 
 @pytest.mark.asyncio
+async def test_edit_context_diagnostic_is_forwarded_to_model(tmp_path):
+    kit = CoreBaseAgentKit(work_root=tmp_path)
+    call = ToolCall(id="call-edit-context", name="edit_file")
+    result = ToolResult(
+        call_id=call.id,
+        name=call.name,
+        status="failed",
+        error="Context did not match; after_context received the literal string \"null\".",
+        error_code="context_mismatch",
+        metadata={
+            "old_string_match_count": 1,
+            "suspected_null_string_fields": ["after_context"],
+        },
+    )
+
+    message = await kit.format_tool_result_for_model(RuntimeState(session_id="s-null"), call, result)
+    content = str(message.content)
+
+    assert "error_code: context_mismatch" in content
+    assert "old_string_match_count: 1" in content
+    assert "suspected_null_string_fields: ['after_context']" in content
+
+
+@pytest.mark.asyncio
 async def test_tool_evidence_is_redacted_and_truncated(tmp_path):
     kit = CoreBaseAgentKit(work_root=tmp_path)
     call = ToolCall(id="call-2", name="run_command")

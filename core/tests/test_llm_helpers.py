@@ -108,6 +108,14 @@ class TestParseToolCallArguments:
         # pyright: ignore
         assert parse_tool_call_arguments(None) == {}  # type: ignore[arg-type]
 
+    def test_json_null_is_preserved_and_literal_null_stays_text(self):
+        result = parse_tool_call_arguments(
+            '{"before_context": null, "after_context": "null"}'
+        )
+
+        assert result["before_context"] is None
+        assert result["after_context"] == "null"
+
     def test_complex_nested_json(self):
         s = json.dumps({"outer": {"inner": [1, 2, 3]}})
         assert parse_tool_call_arguments(s) == {"outer": {"inner": [1, 2, 3]}}

@@ -157,6 +157,35 @@ def _failed_result(
     )
 
 
+def _context_mismatch_result(
+    call: ToolCall,
+    path_str: str,
+    matches: list[tuple[int, int]],
+    before_context: str | None,
+    after_context: str | None,
+) -> ToolResult:
+    suspected_null_string_fields = [
+        field_name
+        for field_name, value in (
+            ("before_context", before_context),
+            ("after_context", after_context),
+        )
+        if value == "null"
+    ]
+    metadata: dict[str, Any] = {"old_string_match_count": len(matches)}
+    if suspected_null_string_fields:
+        metadata["suspected_null_string_fields"] = suspected_null_string_fields
+        fields = ", ".join(suspected_null_string_fields)
+        message = (
+            f"Context did not match any occurrence of old_string in {path_str}; "
+            f"{fields} received the literal string \"null\". "
+            "Pass JSON null (without quotes) or omit that field when no context constraint is intended."
+        )
+    else:
+        message = f"Context did not match any occurrence of old_string in {path_str}"
+    return _failed_result(call, "context_mismatch", message, metadata=metadata)
+
+
 def _find_non_overlapping_occurrences(content: str, needle: str) -> list[tuple[int, int]]:
     positions: list[tuple[int, int]] = []
     offset = 0
@@ -849,10 +878,12 @@ async def edit_file_tool(
             if not has_context or _context_matches(content, start, end, before_context, after_context)
         ]
         if has_context and not candidates:
-            return _failed_result(
+            return _context_mismatch_result(
                 call,
-                "context_mismatch",
-                f"Context did not match any occurrence of old_string in {path_str}",
+                path_str,
+                matches,
+                before_context,
+                after_context,
             )
         if occurrence is not None:
             if occurrence > len(candidates):

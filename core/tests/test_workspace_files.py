@@ -886,6 +886,65 @@ async def test_edit_file_context_and_content_hash_target_the_exact_match(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_edit_file_diagnoses_literal_null_context_without_writing(tmp_path):
+    work_root = tmp_path / "project"
+    work_root.mkdir()
+    target = work_root / "literal-null.txt"
+    original = b"prefix\nold\nsuffix\n"
+    target.write_bytes(original)
+
+    result = await edit_file_tool(
+        ToolCall(
+            id="edit-literal-null-context",
+            name="edit_file",
+            arguments={
+                "path": "literal-null.txt",
+                "old_string": "old",
+                "new_string": "new",
+                "before_context": "null",
+                "after_context": "null",
+                "occurrence": 1,
+            },
+        ),
+        work_root=work_root,
+    )
+
+    assert result.status == "failed"
+    assert result.error_code == "context_mismatch"
+    assert "literal string \"null\"" in result.error
+    assert "JSON null" in result.error
+    assert result.metadata["old_string_match_count"] == 1
+    assert result.metadata["suspected_null_string_fields"] == ["before_context", "after_context"]
+    assert target.read_bytes() == original
+
+
+@pytest.mark.asyncio
+async def test_edit_file_keeps_literal_null_context_matchable(tmp_path):
+    work_root = tmp_path / "project"
+    work_root.mkdir()
+    target = work_root / "literal-null-match.txt"
+    target.write_bytes(b"nulloldnull\n")
+
+    result = await edit_file_tool(
+        ToolCall(
+            id="edit-literal-null-match",
+            name="edit_file",
+            arguments={
+                "path": "literal-null-match.txt",
+                "old_string": "old",
+                "new_string": "new",
+                "before_context": "null",
+                "after_context": "null",
+            },
+        ),
+        work_root=work_root,
+    )
+
+    assert result.status == "ok"
+    assert target.read_bytes() == b"nullnewnull\n"
+
+
+@pytest.mark.asyncio
 async def test_edit_file_expected_hash_conflict_and_content_hash_conflict_keep_file(tmp_path):
     work_root = tmp_path / "project"
     work_root.mkdir()

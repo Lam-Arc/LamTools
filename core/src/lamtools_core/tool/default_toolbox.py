@@ -342,7 +342,9 @@ DEFAULT_TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
         "description": (
             "Replace one exact UTF-8 text segment in an existing file. Matching is case-sensitive and preserves "
             "all whitespace and line endings. The edit must be unique unless occurrence (1-based) or exact "
-            "before_context/after_context makes it unique; never guess among multiple matches."
+            "before_context/after_context makes it unique; never guess among multiple matches. "
+            "When no context constraint is needed, omit those fields or pass JSON null without quotes; the "
+            "string \"null\" is treated as four literal characters."
         ),
         "input_schema": _schema(
             {
@@ -359,11 +361,17 @@ DEFAULT_TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
                 },
                 "before_context": {
                     "type": ["string", "null"],
-                    "description": "Exact text immediately before old_string, or null",
+                    "description": (
+                        "Exact text immediately before old_string, or JSON null (without quotes) when unused; "
+                        "the string \"null\" is literal text"
+                    ),
                 },
                 "after_context": {
                     "type": ["string", "null"],
-                    "description": "Exact text immediately after old_string, or null",
+                    "description": (
+                        "Exact text immediately after old_string, or JSON null (without quotes) when unused; "
+                        "the string \"null\" is literal text"
+                    ),
                 },
                 "expected_content_hash": {
                     "type": ["string", "null"],

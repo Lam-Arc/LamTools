@@ -256,6 +256,9 @@ def test_core_toolbox_exposes_generic_tool_specs(tmp_path):
     assert specs["edit_file"].input_schema["properties"]["occurrence"]["type"] == ["integer", "null"]
     assert "before_context" in specs["edit_file"].input_schema["properties"]
     assert "expected_content_hash" in specs["edit_file"].input_schema["properties"]
+    assert 'JSON null without quotes' in specs["edit_file"].description
+    assert 'the string "null" is literal text' in specs["edit_file"].input_schema["properties"]["before_context"]["description"]
+    assert 'the string "null" is literal text' in specs["edit_file"].input_schema["properties"]["after_context"]["description"]
     assert specs["write_file"].metadata["recovery"]
 
 

@@ -59,6 +59,8 @@ _MODEL_EVIDENCE_KEYS = (
     "current_file_hash",
     "content_hash",
     "current_content_hash",
+    "old_string_match_count",
+    "suspected_null_string_fields",
     "start",
     "end",
     "occurrence",
