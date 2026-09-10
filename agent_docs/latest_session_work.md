@@ -60,6 +60,13 @@ mobile UI.
   the server-side cancel RPC and about 240 ms until the cancelled terminal event.
 - Verification: 238 targeted Python tests, 78 targeted UI tests, UI typecheck,
   design-token audit, and `git diff --check` pass.
+- Follow-up raw capture showed standard `data: ` framing. A minimal request
+  completed in about 9 seconds on one run and 40 seconds on another; an actual
+  CLI-assembled 33,147-byte/24-tool request completed in about 12.7 seconds.
+  This narrows the incident to high provider latency variance and intermittent
+  upstream errors rather than a stable request incompatibility. The client now
+  also accepts valid `data:value` SSE framing; its focused profile suite passes
+  40/40 tests.
 
 ## Office retest process-audit handoff
 

@@ -42,3 +42,6 @@ logs.
   DNS/authentication/model discovery, not usable completion or streaming. Stop
   must cancel provider I/O before any persistence round-trip, while retaining
   the active-run claim until the cancelled terminal event is durable.
+- Parse SSE `data:` fields with or without the optional separator space. Do not
+  attribute a provider incident to this compatibility edge unless raw response
+  evidence shows that form was actually used.

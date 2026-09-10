@@ -353,9 +353,13 @@ class CoreHttpLLMClient:
                         response.headers,
                     )
                 async for line in response.aiter_lines():
-                    if not line or not line.startswith("data: "):
+                    if not line or not line.startswith("data:"):
                         continue
-                    data = line[6:]
+                    # SSE permits either ``data:value`` or ``data: value``;
+                    # strip at most the single optional separator space.
+                    data = line[5:]
+                    if data.startswith(" "):
+                        data = data[1:]
                     if data == "[DONE]":
                         yield LLMStreamEvent(
                             kind="done",

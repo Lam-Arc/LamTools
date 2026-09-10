@@ -1054,11 +1054,11 @@ async def test_core_http_llm_client_complete_sends_profile_payload_and_keeps_pro
 async def test_core_http_llm_client_stream_accumulates_state_and_emits_done_after_done_marker(monkeypatch):
     requests: list[dict[str, object]] = []
     sse = "\n".join([
-        'data: {"choices":[{"delta":{"reasoning_content":"think"}}]}',
+        'data:{"choices":[{"delta":{"reasoning_content":"think"}}]}',
         'data: {"choices":[{"delta":{"content":"answer"}}]}',
         'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
         'data: {"choices":[],"usage":{"prompt_tokens":4,"completion_tokens":3,"total_tokens":7}}',
-        "data: [DONE]",
+        "data:[DONE]",
         "",
     ])
 
